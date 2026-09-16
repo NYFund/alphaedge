@@ -8,13 +8,13 @@ from core.api.base import BaseDataAPI
 from core.config import (
     API_LOG_FILE_LEVEL,
     API_LOGS_DIR_PATH,
-    MARGIN_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
+from core.dao.connection import connect_sqlite
+from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.utils.log_manager import LogManager
 
-"""Stock margin trading API: query SQLite margin table（融資融券餘額，單位：張）"""
+"""Stock margin trading API: query margin table through StockMarginDAO（融資融券餘額，單位：張）"""
 
 
 class StockMarginAPI(BaseDataAPI):
@@ -25,13 +25,17 @@ class StockMarginAPI(BaseDataAPI):
         self.conn: Optional[sqlite3.Connection] = conn
         self.owns_conn: bool = conn is None
 
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        self.dao: Optional[StockMarginDAO] = None
+
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Data API"""
 
         if self.owns_conn:
-            self.conn = sqlite3.connect(TW_STOCK_DB_PATH)
+            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
+        self.dao = StockMarginDAO(conn=self.conn)
         LogManager.setup_logger(
             "stock_margin_api.log",
             log_dir=API_LOGS_DIR_PATH,
@@ -41,18 +45,7 @@ class StockMarginAPI(BaseDataAPI):
     def get(self, date: datetime.date) -> pd.DataFrame:
         """取得所有股票指定日期的信用交易資料"""
 
-        query: str = f"""
-        SELECT * FROM {MARGIN_TABLE_NAME}
-        WHERE date = ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(
-                date,
-            ),
-        )
-        return df
+        return self.dao.get_by_date(date)
 
     def get_range(
         self,
@@ -61,19 +54,7 @@ class StockMarginAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得所有股票日期範圍內的信用交易資料"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        query: str = f"""
-        SELECT * FROM {MARGIN_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(start_date, end_date),
-        )
-        return df
+        return self.dao.get_range(start_date, end_date)
 
     def get_stock_margin(
         self,
@@ -83,37 +64,12 @@ class StockMarginAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得指定個股的信用交易資料"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        query: str = f"""
-        SELECT * FROM {MARGIN_TABLE_NAME}
-        WHERE stock_id = ?
-        AND date BETWEEN ? AND ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(stock_id, start_date, end_date),
-        )
-        return df
+        return self.dao.get_by_stock(stock_id, start_date, end_date)
 
     def get_short_balance(self, date: datetime.date) -> pd.DataFrame:
         """取得所有股票指定日期的融券餘額與券資比（券源檢核用）"""
 
-        query: str = f"""
-        SELECT date, stock_id, 證券名稱, 融券今日餘額, 融券限額, 券資比, 註記
-        FROM {MARGIN_TABLE_NAME}
-        WHERE date = ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(
-                date,
-            ),
-        )
-        return df
+        return self.dao.get_short_balance(date)
 
     def get_short_balance_map(self, date: datetime.date) -> Dict[str, int]:
         """
@@ -131,9 +87,7 @@ class StockMarginAPI(BaseDataAPI):
                 `{stock_id: 融券今日餘額（張）}`；查無資料時為空 dict
         """
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=MARGIN_TABLE_NAME
-        ):
+        if not self.dao.table_exists():
             return {}
 
         df: pd.DataFrame = self.get_short_balance(date)
@@ -168,16 +122,7 @@ class StockMarginAPI(BaseDataAPI):
                 融券今日餘額（張）；查無資料時回傳 None（呼叫端須自行決定是否跳過檢核）
         """
 
-        query: str = f"""
-        SELECT 融券今日餘額 FROM {MARGIN_TABLE_NAME}
-        WHERE stock_id = ?
-        AND date = ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(stock_id, date),
-        )
+        df: pd.DataFrame = self.dao.get_stock_short_balance(stock_id, date)
 
         if df.empty:
             return None

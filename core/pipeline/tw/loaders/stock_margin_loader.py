@@ -5,19 +5,32 @@ from typing import List, Optional, Set
 import pandas as pd
 from loguru import logger
 
-from core.config import MARGIN_DOWNLOADS_PATH, MARGIN_TABLE_NAME, TW_STOCK_DB_PATH
+from core.config import MARGIN_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 
 class StockMarginLoader(BaseDataLoader):
     """Stock Margin Loader"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[StockMarginDAO] = None) -> None:
+        """
+        - Description:
+            建立 margin loader
+        - Parameters:
+            - dao: Optional[StockMarginDAO]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；
+                未指定時 loader 自行建立，入庫完成即關閉
+        """
+
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[StockMarginDAO] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.margin_dir: Path = MARGIN_DOWNLOADS_PATH
@@ -37,75 +50,53 @@ class StockMarginLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+        if self.dao is None:
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+            self.dao = StockMarginDAO(db_path=TW_STOCK_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
 
     def create_db(self) -> None:
         """創建信用交易（融資融券餘額）db"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        # 數量單位一律為張；券資比為 %（融券今日餘額 / 融資今日餘額）
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {MARGIN_TABLE_NAME}(
-            "date" TEXT NOT NULL,
-            "stock_id" TEXT NOT NULL,
-            "證券名稱" TEXT NOT NULL,
-            "融資買進" INT NOT NULL,
-            "融資賣出" INT NOT NULL,
-            "融資現金償還" INT NOT NULL,
-            "融資前日餘額" INT NOT NULL,
-            "融資今日餘額" INT NOT NULL,
-            "融資限額" INT NOT NULL,
-            "融券買進" INT NOT NULL,
-            "融券賣出" INT NOT NULL,
-            "融券現券償還" INT NOT NULL,
-            "融券前日餘額" INT NOT NULL,
-            "融券今日餘額" INT NOT NULL,
-            "融券限額" INT NOT NULL,
-            "資券互抵" INT NOT NULL,
-            "券資比" REAL NOT NULL,
-            "註記" TEXT,
-            PRIMARY KEY ("date", "stock_id")
-        );
-        """
-        cursor.execute(create_table_query)
-
-        # 檢查是否成功建立 table
-        cursor.execute(f"PRAGMA table_info('{MARGIN_TABLE_NAME}')")
-        if cursor.fetchall():
-            logger.info(f"Table {MARGIN_TABLE_NAME} create successfully!")
-        else:
-            logger.warning(f"Table {MARGIN_TABLE_NAME} create unsuccessfully!")
-
-        self.conn.commit()
+        self.dao.create_table()
 
     def create_missing_tables(self) -> None:
-        """確保信用交易資料表存在"""
+        """確保信用交易資料表與 `(stock_id, date)` 索引存在"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=MARGIN_TABLE_NAME
-        ):
-            self.create_db()
-
-        # 主鍵是 (date, stock_id, ...)，「某一檔的整段歷史」查不到索引
-        self.create_symbol_date_index(self.conn, MARGIN_TABLE_NAME)
+        self.dao.ensure_table()
 
     def add_to_db(
         self,
         remove_files: bool = False,
         only_dates: Optional[Set[str]] = None,
     ) -> None:
-        """將資料夾中的所有 CSV 檔存入指定 SQLite 資料庫中的指定資料表"""
+        """
+        - Description:
+            將資料夾中的所有 CSV 檔入庫；有任何檔案失敗就拋 `DataLoadError`
 
-        if self.conn is None:
+            **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾。
+            少了這層，前面已寫入的列會被迴圈結束後的 `commit()` 一起寫進去，
+            資料表多出半份檔案，回報卻說這個檔案失敗。
+        - Parameters:
+            - remove_files: bool
+                全部成功後是否刪除 downloads 目錄
+            - only_dates: Optional[Set[str]]
+                只處理這些日期（`YYYYMMDD`）的檔案；None 表示整個目錄
+        """
+
+        if self.dao is None:
             self.connect()
 
         # Ensure Database Table Exists
@@ -121,9 +112,10 @@ class StockMarginLoader(BaseDataLoader):
                 df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
                 # 空字串的註記在 read_csv 後會變成 NaN，統一還原為空字串
                 df["註記"] = df["註記"].fillna("")
-                inserted, skipped = self.insert_dataframe(
-                    self.conn, MARGIN_TABLE_NAME, df
-                )
+                inserted: int
+                skipped: int
+                with self.dao.savepoint():
+                    inserted, skipped = self.dao.insert_or_ignore(df)
                 if inserted == 0 and skipped > 0:
                     # 整檔已在資料庫中：loader 每次都掃全目錄，重跑必然走到這裡
                     skipped_cnt += 1
@@ -136,7 +128,7 @@ class StockMarginLoader(BaseDataLoader):
                 logger.warning(f"Error saving {file_path}: {e}")
                 failed_files.append(str(file_path))
 
-        self.conn.commit()
+        self.dao.commit()
         self.disconnect()
 
         self.finish_load(

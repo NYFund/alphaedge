@@ -6,6 +6,9 @@ from typing import List, Set, Tuple
 
 import pytest
 
+from core.dao.tw.stock_chip_dao import StockChipDAO
+from core.dao.tw.stock_margin_dao import StockMarginDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared import date_planner as date_planner_module
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
@@ -45,8 +48,7 @@ def test_middle_gap_is_planned_again(tmp_path: Path) -> None:
     make_table(conn, ["2024-01-01", "2024-01-02", "2024-01-04", "2024-01-05"])
 
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="price",
+        dao=StockPriceDAO(conn=conn),
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 1, 5),
     )
@@ -62,8 +64,7 @@ def test_existing_dates_are_not_requested_again(tmp_path: Path) -> None:
     make_table(conn, ["2024-01-01", "2024-01-02"])
 
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="price",
+        dao=StockPriceDAO(conn=conn),
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 1, 2),
     )
@@ -79,8 +80,7 @@ def test_weekends_are_excluded_by_default(tmp_path: Path) -> None:
     make_table(conn, [])
 
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="price",
+        dao=StockPriceDAO(conn=conn),
         start_date=datetime.date(2024, 1, 6),  # 週六
         end_date=datetime.date(2024, 1, 7),  # 週日
     )
@@ -100,8 +100,7 @@ def test_confirmed_no_data_dates_are_skipped(tmp_path: Path) -> None:
     make_table(conn, [])
 
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="price",
+        dao=StockPriceDAO(conn=conn),
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 1, 2),
         no_data_dates={datetime.date(2024, 1, 1)},
@@ -122,15 +121,14 @@ def test_calendar_dates_cover_traded_weekends(tmp_path: Path) -> None:
     make_table(conn, ["2024-01-06"])  # 週六補行交易日
 
     calendar: Set[datetime.date] = DatePlanner.get_trading_dates(
-        conn, "price", datetime.date(2024, 1, 1), datetime.date(2024, 1, 6)
+        StockPriceDAO(conn=conn), datetime.date(2024, 1, 1), datetime.date(2024, 1, 6)
     )
     conn.execute("CREATE TABLE margin (date TEXT)")
     conn.commit()
 
     # 迄日就是日曆最後一天，故不會觸發尾端補平日（那條另有測試）
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="margin",
+        dao=StockMarginDAO(conn=conn),
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 1, 6),
         calendar_dates=calendar,
@@ -167,6 +165,7 @@ def test_price_requests_traded_weekends_known_to_other_tables(
         return CrawlResult.no_data("站方回覆查無資料")
 
     updater = StockPriceUpdater.__new__(StockPriceUpdater)  # 跳過 __init__ 的連線
+    updater.dao = StockPriceDAO(conn=conn)
     updater.conn = conn
     updater.crawler = SimpleNamespace(crawl_twse_price=crawl, crawl_tpex_price=crawl)
     updater.loader = SimpleNamespace(add_to_db=lambda **_: None)
@@ -192,8 +191,7 @@ def test_weekend_dates_ignore_missing_tables(tmp_path: Path) -> None:
 
     assert (
         DatePlanner.get_weekend_dates(
-            conn,
-            ["chip", "margin"],
+            [StockChipDAO(conn=conn), StockMarginDAO(conn=conn)],
             datetime.date(2017, 6, 1),
             datetime.date(2017, 6, 4),
         )
@@ -208,8 +206,7 @@ def test_missing_table_is_not_an_error(tmp_path: Path) -> None:
     conn = sqlite3.connect(tmp_path / "test.db")
 
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="not_created_yet",
+        dao=StockChipDAO(conn=conn),
         start_date=datetime.date(2024, 1, 1),
         end_date=datetime.date(2024, 1, 2),
     )
@@ -282,8 +279,7 @@ def test_incomplete_day_is_requested_again_even_though_data_exists(
     make_table(conn, ["2024-01-02"])  # 只有上市那半入庫
 
     candidates: List[datetime.date] = DatePlanner.plan(
-        conn=conn,
-        table_name="price",
+        dao=StockPriceDAO(conn=conn),
         start_date=datetime.date(2024, 1, 2),
         end_date=datetime.date(2024, 1, 2),
         incomplete_dates={datetime.date(2024, 1, 2)},

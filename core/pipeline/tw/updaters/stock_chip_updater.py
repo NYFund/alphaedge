@@ -6,14 +6,15 @@ from typing import List, Optional, Set
 
 from loguru import logger
 
-from core.config import CHIP_TABLE_NAME, PRICE_TABLE_NAME, TW_STOCK_DB_PATH
+from core.config import TW_STOCK_DB_PATH
+from core.dao.tw.stock_chip_dao import StockChipDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.tw.cleaners.stock_chip_cleaner import StockChipCleaner
 from core.pipeline.tw.crawlers.stock_chip_crawler import StockChipCrawler
 from core.pipeline.tw.loaders.stock_chip_loader import StockChipLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -42,22 +43,28 @@ class StockChipUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        # **讀（日期規劃）與寫（loader）共用同一個 DAO**：舊版 updater 與 loader 各開
+        # 一條連線到同一個 DB，updater 那條從不關閉，兩條連線還會互搶寫入鎖
+        self.dao: StockChipDAO = StockChipDAO(db_path=TW_STOCK_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
 
         # ETL
         self.crawler: StockChipCrawler = StockChipCrawler()
         self.cleaner: StockChipCleaner = StockChipCleaner()
-        self.loader: StockChipLoader = StockChipLoader()
+        self.loader: StockChipLoader = StockChipLoader(dao=self.dao)
 
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
         LogManager.setup_logger("update_chip.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def load_batch(self, batch_dates: List[str]) -> None:
         """
@@ -101,12 +108,12 @@ class StockChipUpdater(BaseDataUpdater):
 
         # Step 1: Crawl
         progress: DateProgressStore = DateProgressStore("chip")
+        # 日曆來源（`price`）與目標表同庫，共用本 updater 的連線
         calendar_dates: Set[datetime.date] = DatePlanner.get_trading_dates(
-            self.conn, PRICE_TABLE_NAME, start_date, end_date
+            StockPriceDAO(conn=self.dao.conn), start_date, end_date
         )
         dates: List[datetime.date] = DatePlanner.plan(
-            conn=self.conn,
-            table_name=CHIP_TABLE_NAME,
+            dao=self.dao,
             start_date=start_date,
             end_date=end_date,
             no_data_dates=progress.no_data,
@@ -183,11 +190,7 @@ class StockChipUpdater(BaseDataUpdater):
         self.report_cleaner_failures(cleaner_failures)
 
         # 更新後重新取得Table最新的日期
-        table_latest_date: str = SQLiteUtils.get_table_latest_value(
-            conn=self.conn,
-            table_name=CHIP_TABLE_NAME,
-            col_name="date",
-        )
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
         if table_latest_date:
             logger.info(
                 f"Stock chip data updated. Latest available date: {table_latest_date}"

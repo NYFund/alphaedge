@@ -1,14 +1,13 @@
 import datetime
 import json
-import sqlite3
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
 from loguru import logger
 
 from core.config import DOWNLOADS_METADATA_DIR_PATH
+from core.dao.base import BaseDAO
 from core.pipeline.shared.base_crawler import CrawlStatus
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 「這次要向站方請求哪些日期」的共用決策
@@ -188,8 +187,7 @@ class DatePlanner:
 
     @staticmethod
     def get_existing_dates(
-        conn: sqlite3.Connection,
-        table_name: str,
+        dao: BaseDAO,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> Set[datetime.date]:
@@ -197,10 +195,8 @@ class DatePlanner:
         - Description:
             取得目標資料表在區間內已有的日期
         - Parameters:
-            - conn: sqlite3.Connection
-                資料庫連線
-            - table_name: str
-                目標資料表
+            - dao: BaseDAO
+                目標資料表的 DAO
             - start_date / end_date: datetime.date
                 查詢區間
         - Return:
@@ -208,20 +204,14 @@ class DatePlanner:
                 表不存在時為空集合（初次更新的正常狀態）
         """
 
-        if not SQLiteUtils.check_table_exist(conn=conn, table_name=table_name):
+        if not dao.table_exists():
             return set()
 
-        rows = conn.execute(
-            f"SELECT DISTINCT date FROM {table_name} WHERE date BETWEEN ? AND ?",
-            (start_date.isoformat(), end_date.isoformat()),
-        ).fetchall()
-
-        return {datetime.date.fromisoformat(str(raw)[:10]) for (raw,) in rows if raw}
+        return set(dao.get_distinct_dates(start_date, end_date))
 
     @staticmethod
     def get_trading_dates(
-        conn: sqlite3.Connection,
-        table_name: str,
+        dao: BaseDAO,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> Set[datetime.date]:
@@ -236,10 +226,8 @@ class DatePlanner:
             `price` 通常比 chip／margin 早一步更新，若完全以它為準，
             最新的那幾天會等到下一次執行才被請求。
         - Parameters:
-            - conn: sqlite3.Connection
-                資料庫連線
-            - table_name: str
-                作為日曆來源的資料表
+            - dao: BaseDAO
+                作為日曆來源的資料表 DAO
             - start_date / end_date: datetime.date
                 查詢區間
         - Return:
@@ -247,12 +235,11 @@ class DatePlanner:
                 有資料的日期；表不存在時為空集合
         """
 
-        return DatePlanner.get_existing_dates(conn, table_name, start_date, end_date)
+        return DatePlanner.get_existing_dates(dao, start_date, end_date)
 
     @staticmethod
     def get_weekend_dates(
-        conn: sqlite3.Connection,
-        table_names: Iterable[str],
+        daos: Iterable[BaseDAO],
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> Set[datetime.date]:
@@ -267,10 +254,8 @@ class DatePlanner:
             **已知限制**：尚未出現在任何一張表的新補行交易日仍然補不到（日曆尾端只補
             平日）。台股自 2019 年起已無補行交易日，實務影響低。
         - Parameters:
-            - conn: sqlite3.Connection
-                資料庫連線
-            - table_names: Iterable[str]
-                作為來源的資料表；不存在的表視為沒有日期
+            - daos: Iterable[BaseDAO]
+                作為來源的資料表 DAO；不存在的表視為沒有日期
             - start_date / end_date: datetime.date
                 查詢區間
         - Return:
@@ -279,12 +264,10 @@ class DatePlanner:
         """
 
         weekends: Set[datetime.date] = set()
-        for table_name in table_names:
+        for dao in daos:
             weekends |= {
                 date
-                for date in DatePlanner.get_existing_dates(
-                    conn, table_name, start_date, end_date
-                )
+                for date in DatePlanner.get_existing_dates(dao, start_date, end_date)
                 if date.weekday() >= SATURDAY
             }
         return weekends
@@ -338,8 +321,7 @@ class DatePlanner:
 
     @staticmethod
     def plan(
-        conn: sqlite3.Connection,
-        table_name: str,
+        dao: BaseDAO,
         start_date: datetime.date,
         end_date: datetime.date,
         no_data_dates: Optional[Iterable[datetime.date]] = None,
@@ -351,10 +333,8 @@ class DatePlanner:
         - Description:
             算出這次要請求的日期清單（見模組說明的差集公式）
         - Parameters:
-            - conn: sqlite3.Connection
-                資料庫連線
-            - table_name: str
-                目標資料表
+            - dao: BaseDAO
+                目標資料表的 DAO
             - start_date / end_date: datetime.date
                 更新區間
             - no_data_dates: Optional[Iterable[datetime.date]]
@@ -385,8 +365,9 @@ class DatePlanner:
         universe = {date for date in universe if start_date <= date <= end_date}
 
         existing: Set[datetime.date] = DatePlanner.get_existing_dates(
-            conn, table_name, start_date, end_date
+            dao, start_date, end_date
         )
+        table_name: str = dao.TABLE_NAME
         retry: Set[datetime.date] = {
             date for date in (incomplete_dates or ()) if start_date <= date <= end_date
         }

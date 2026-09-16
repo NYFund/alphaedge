@@ -7,6 +7,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Type
 import pandas as pd
 import pytest
 
+from core.dao.base import BaseDAO
+from core.dao.tw.stock_chip_dao import StockChipDAO
+from core.dao.tw.stock_margin_dao import StockMarginDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared import date_planner as date_planner_module
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
@@ -49,6 +53,13 @@ DAILY_UPDATERS: List[Tuple[Type[BaseDataUpdater], str]] = [
     (StockChipUpdater, "chip"),
     (StockMarginUpdater, "margin"),
 ]
+
+# 各日頻 updater 持有的 DAO；`__new__` 跳過 `__init__` 時要自行注入
+DAILY_DAOS: Dict[str, Type[BaseDAO]] = {
+    "price": StockPriceDAO,
+    "chip": StockChipDAO,
+    "margin": StockMarginDAO,
+}
 
 
 def raw_table() -> pd.DataFrame:
@@ -106,6 +117,7 @@ def make_daily_updater(
         return clean
 
     updater = updater_cls.__new__(updater_cls)  # 跳過 __init__ 的正式連線與 log 設定
+    updater.dao = DAILY_DAOS[kind](conn=conn)
     updater.conn = conn
     updater.crawler = SimpleNamespace(
         **{
