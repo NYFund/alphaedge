@@ -3,21 +3,17 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from loguru import logger
 
 from core.api.base import BaseDataAPI
-from core.config import (
-    API_LOG_FILE_LEVEL,
-    API_LOGS_DIR_PATH,
-    FUTURES_PRICE_DAILY_TABLE_NAME,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
+from core.dao.connection import connect_sqlite
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.utils.constant import FuturesSession
 from core.utils.log_manager import LogManager
 
 """
-Futures Price API: query SQLite futures_price_daily table
+Futures Price API: query futures_price_daily table through FuturesPriceDAO
 
 **只讀 `tw_futures.db`，不讀 `downloads/` 下的中繼檔**：中繼檔只是 crawler 到
 loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才是唯一的真相來源。
@@ -43,13 +39,17 @@ class FuturesPriceAPI(BaseDataAPI):
         self.conn: Optional[sqlite3.Connection] = conn
         self.owns_conn: bool = conn is None
 
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        self.dao: Optional[FuturesPriceDAO] = None
+
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Data API"""
 
         if self.owns_conn:
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
+        self.dao = FuturesPriceDAO(conn=self.conn)
         LogManager.setup_logger(
             "futures_price_api.log",
             log_dir=API_LOGS_DIR_PATH,
@@ -57,12 +57,10 @@ class FuturesPriceAPI(BaseDataAPI):
         )
 
     @staticmethod
-    def build_session_filter(
-        session: Optional[FuturesSession],
-    ) -> tuple[str, List[Any]]:
+    def to_session_value(session: Optional[FuturesSession]) -> Optional[str]:
         """
         - Description:
-            組出交易時段的 SQL 條件
+            把交易時段 Enum 轉成 DAO 收的字串值
 
             `session=None` 代表**不過濾**，日盤與夜盤都回傳——那是「我知道自己
             要處理兩筆」的明確表態，不是預設值。
@@ -70,21 +68,11 @@ class FuturesPriceAPI(BaseDataAPI):
             - session: Optional[FuturesSession]
                 交易時段；None 表示不過濾
         - Return:
-            - tuple[str, List[Any]]
-                （附加在 WHERE 之後的條件片段, 對應的參數）
+            - Optional[str]
+                `day`／`night`；None 表示不過濾
         """
 
-        if session is None:
-            return "", []
-        return " AND session = ?", [session.value]
-
-    @staticmethod
-    def build_product_filter(product: Optional[str]) -> tuple[str, List[Any]]:
-        """組出商品代碼的 SQL 條件；`product=None` 表示不過濾（回傳所有商品）"""
-
-        if product is None:
-            return "", []
-        return " AND product = ?", [product]
+        return None if session is None else session.value
 
     def get(
         self,
@@ -110,18 +98,8 @@ class FuturesPriceAPI(BaseDataAPI):
                 依 `expiry` 排序的行情；查無資料時為空 DataFrame
         """
 
-        product_clause, product_params = self.build_product_filter(product)
-        session_clause, session_params = self.build_session_filter(session)
-
-        query: str = f"""
-        SELECT * FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        WHERE date = ?{product_clause}{session_clause}
-        ORDER BY product, expiry
-        """
-        return pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(date, *product_params, *session_params),
+        return self.dao.get_by_date(
+            date, product=product, session=self.to_session_value(session)
         )
 
     def get_range(
@@ -133,23 +111,11 @@ class FuturesPriceAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得日期範圍內的行情（所有到期月）；參數語意同 `get()`"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        product_clause, product_params = self.build_product_filter(product)
-        session_clause, session_params = self.build_session_filter(session)
-
-        query: str = f"""
-        SELECT * FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?{product_clause}{session_clause}
-        ORDER BY date, product, expiry
-        """
-        return pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(
-                start_date, end_date, *product_params, *session_params
-            ),
+        return self.dao.get_range(
+            start_date,
+            end_date,
+            product=product,
+            session=self.to_session_value(session),
         )
 
     def get_contract_price(
@@ -180,24 +146,12 @@ class FuturesPriceAPI(BaseDataAPI):
                 依日期排序的行情；查無資料時為空 DataFrame
         """
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        session_clause, session_params = self.build_session_filter(session)
-
-        query: str = f"""
-        SELECT * FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        WHERE product = ?
-        AND expiry = ?
-        AND date BETWEEN ? AND ?{session_clause}
-        ORDER BY date
-        """
-        return pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(
-                product, expiry, start_date, end_date, *session_params
-            ),
+        return self.dao.get_contract_price(
+            product,
+            expiry,
+            start_date,
+            end_date,
+            session=self.to_session_value(session),
         )
 
     def get_trading_days(
@@ -215,6 +169,8 @@ class FuturesPriceAPI(BaseDataAPI):
             期貨交易日曆見 `FuturesCalendar`，本方法只是「表內有哪些日期」的直接回答。
 
             **不過濾 session**：夜盤成交的那一天同樣是交易日。
+
+            表不存在時回空清單（全新環境的正常狀態），其他查詢錯誤往外拋。
         - Parameters:
             - start_date / end_date: datetime.date
                 查詢區間（含頭含尾）
@@ -225,35 +181,7 @@ class FuturesPriceAPI(BaseDataAPI):
                 區間內的交易日；無資料時為空 list
         """
 
-        if start_date > end_date:
-            return []
-
-        product_clause, product_params = self.build_product_filter(product)
-
-        query: str = f"""
-        SELECT DISTINCT date FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?{product_clause}
-        ORDER BY date
-        """
-        try:
-            df: pd.DataFrame = pd.read_sql_query(
-                query,
-                self.conn,
-                params=self.sql_params(start_date, end_date, *product_params),
-            )
-        except pd.errors.DatabaseError:
-            # 表還不存在＝尚未跑過 `--target futures_price`。**回空清單而不是拋錯**：
-            # 「還沒有資料」與「查詢寫錯」是兩件事，前者在全新環境（CI、剛 clone）
-            # 是正常狀態，讓它中斷只會讓人以為程式壞了
-            logger.warning(
-                f"[Futures Price] {FUTURES_PRICE_DAILY_TABLE_NAME} 不存在，"
-                f"回傳空交易日清單（請先執行 --target futures_price）"
-            )
-            return []
-
-        if df.empty:
-            return []
-        return pd.to_datetime(df["date"]).dt.date.tolist()
+        return self.dao.get_trading_days(start_date, end_date, product=product)
 
     def get_expiries(
         self,
@@ -280,36 +208,14 @@ class FuturesPriceAPI(BaseDataAPI):
                 到期月清單；查無資料時為空 list
         """
 
-        session_clause, session_params = self.build_session_filter(session)
-
-        query: str = f"""
-        SELECT DISTINCT expiry FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        WHERE date = ?
-        AND product = ?{session_clause}
-        ORDER BY expiry
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(date, product, *session_params),
+        return self.dao.get_expiries(
+            date, product, session=self.to_session_value(session)
         )
-
-        if df.empty:
-            return []
-        return df["expiry"].astype(str).tolist()
 
     def get_products(self) -> List[str]:
         """取得表內有資料的所有商品代碼（已排序）"""
 
-        query: str = f"""
-        SELECT DISTINCT product FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        ORDER BY product
-        """
-        df: pd.DataFrame = pd.read_sql_query(query, self.conn)
-
-        if df.empty:
-            return []
-        return df["product"].astype(str).tolist()
+        return self.dao.get_products()
 
     # === 具名查詢：下游一律走這一組，不要自行操作 DataFrame 欄位 ===
     @staticmethod

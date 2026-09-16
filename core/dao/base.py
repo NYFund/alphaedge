@@ -198,6 +198,7 @@ class BaseDAO:
         self,
         conn: Optional[sqlite3.Connection] = None,
         db_path: Optional[Union[str, Path]] = None,
+        read_only: bool = False,
     ) -> None:
         """
         - Description:
@@ -209,6 +210,9 @@ class BaseDAO:
                 自行開連線時的資料庫路徑；None 取 `DEFAULT_DB_PATH`。
                 保留這個參數是為了讓呼叫端在**呼叫當下**決定路徑——既有測試以
                 monkeypatch 改寫 loader 模組的路徑常數，寫死在 DAO 裡就改不到
+            - read_only: bool
+                自行開連線時以唯讀模式開啟（跨庫只讀的場合，例如期貨 ETL 讀台股交易日曆）；
+                指定 `conn` 時不使用
         """
 
         self.owns_conn: bool = conn is None
@@ -220,7 +224,7 @@ class BaseDAO:
                 raise ValueError(
                     f"{type(self).__name__} 未指定 conn，也沒有 DEFAULT_DB_PATH 可用"
                 )
-            self.conn = connect_sqlite(path)
+            self.conn = connect_sqlite(path, read_only=read_only)
 
     # === 查詢 ===
     def table_exists(self) -> bool:
