@@ -43,6 +43,8 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.config", 0, "共用層／設定", False),
     ("core.utils", 1, "共用層", False),
     ("core.models", 2, "領域層", False),
+    # DAO 只 import core.config；與領域層同級但互不相依（同層互相 import 會被列出）
+    ("core.dao", 2, "資料存取層（DAO）", False),
     ("core.api", 3, "資料層", False),
     ("core.adapters", 3, "資料層", False),
     ("core.pipeline", 3, "資料層（ETL）", False),
@@ -108,6 +110,7 @@ _INSTRUMENT_AXIS_DIRS: Set[str] = {"stock", "futures", "option", "options"}
 _MARKET_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/api",
     "core/adapters",
+    "core/dao",
     "core/backtest/datafeed",
     "core/pipeline",
 )

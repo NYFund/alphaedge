@@ -412,9 +412,13 @@ def main() -> None:
                 from_date=from_date,
             )
             stock_price_updater: StockPriceUpdater = StockPriceUpdater()
-            stock_price_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
+            try:
+                stock_price_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                stock_price_updater.close()
 
     if DataType.CHIP.name.lower() in targets:
         with target_guard("chip", failed_targets):

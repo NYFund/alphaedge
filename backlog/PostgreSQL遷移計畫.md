@@ -31,6 +31,14 @@
 >
 > 各步驟的產出欄已依此更新。
 
+> **2026-09-16：資料存取層改由 [DAO資料存取層重構.md](DAO資料存取層重構.md) 先行。**
+> 該文件新增 `core/dao/`（一張表一個 DAO，集中 SQL、連線與交易），完成後本計畫的調整如下：
+> - Phase1-1 的連線入口改放 `core/dao/connection.py`，不另建 `core/db/`。
+> - Phase1-2、Phase2-1~Phase2-3 縮減為「改寫 `core/dao/` 內部」，API、loader、updater 不必再逐檔改。
+> - Phase2-3 內含的欄位 Enum 下沉到 `core/config/schema.py`，由 DAO 文件 Phase0-1 提前完成。
+>
+> 本文件各步驟的產出欄暫不改寫，等 DAO 重構完成時再依實際結果重新盤點。
+
 ## 進度追蹤表
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |

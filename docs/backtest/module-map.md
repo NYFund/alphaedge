@@ -202,7 +202,7 @@ sequenceDiagram
 
 1. **不要在 `core/backtest/__init__.py`、`core/strategies/__init__.py` 與 `core/backtest/datafeed/__init__.py` 加 re-export。** 三處都會因套件層 eager import 造成循環；呼叫端一律用完整模組路徑。
 2. **策略不要自己 `StockPriceAPI()`。** API 實例由 `DataFeed` 統一持有，`setup_apis(feed)` 只是取用；自行建立會讓單次回測開出多條互不相干的連線。
-3. **策略層不得出現資料庫欄位字面值。** 資料表欄位是中文（`"收盤價"`、`"成交股數"`），只有 `core/api/` 可以引用（常數定義在 `core/pipeline/utils/constant.py` 的 `PriceColumn`／`ChipColumn`）。策略一律呼叫具名查詢方法：
+3. **策略層不得出現資料庫欄位字面值。** 資料表欄位是中文（`"收盤價"`、`"成交股數"`），只有 `core/dao/`、`core/api/`、`core/adapters/` 可以引用（常數定義在 `core/config/schema.py` 的 `PriceColumn`／`ChipColumn`）。策略一律呼叫具名查詢方法：
 
    | 方法 | 用途 |
    |------|------|

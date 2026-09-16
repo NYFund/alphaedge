@@ -9,10 +9,10 @@ import pytest
 from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollPlanner
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
+from core.config.schema import FuturesPriceColumn
 from core.pipeline.tw.updaters.futures_continuous_updater import (
     FuturesContinuousUpdater,
 )
-from core.pipeline.utils.constant import FuturesPriceColumn
 from core.utils import FuturesAdjustMethod, FuturesRollRule
 
 """

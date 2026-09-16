@@ -4,7 +4,7 @@ from typing import Dict, List, Tuple
 
 import pytest
 
-from core.pipeline.utils.constant import ChipColumn, PriceColumn
+from core.config.schema import ChipColumn, PriceColumn
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 

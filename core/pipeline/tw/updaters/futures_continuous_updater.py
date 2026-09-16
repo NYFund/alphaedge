@@ -8,9 +8,9 @@ from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollPlanner
 from core.config import DEFAULT_FUTURES_START_DATE, FUTURES_TARGET_PRODUCTS
+from core.config.schema import FuturesPriceColumn
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.loaders.futures_continuous_loader import FuturesContinuousLoader
-from core.pipeline.utils.constant import FuturesPriceColumn
 from core.pipeline.utils.exceptions import DataLoadError, UnbuildableSeriesError
 from core.utils import FuturesAdjustMethod, FuturesRollRule, FuturesSession
 from core.utils.log_manager import LogManager

@@ -4,6 +4,8 @@ from typing import Any, Optional, Tuple
 
 from loguru import logger
 
+from core.dao.base import table_exists
+
 """
 SQLite 共用操作：表存在檢查、最早／最新值查詢、刪表
 
@@ -19,11 +21,9 @@ SQLite 共用操作：表存在檢查、最早／最新值查詢、刪表
 class SQLiteUtils:
     @staticmethod
     def check_table_exist(conn: sqlite3.Connection, table_name: str) -> bool:
-        """檢查 SQLite3 Database 中的 table 是否存在"""
+        """檢查 table 是否存在（實作在 `core.dao.base.table_exists()`，呼叫端改走 DAO 後刪除）"""
 
-        query: str = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?"
-        result: Tuple[int] = conn.execute(query, (table_name,)).fetchone()
-        return result[0] == 1
+        return table_exists(conn, table_name)
 
     @staticmethod
     def get_table_earliest_value(

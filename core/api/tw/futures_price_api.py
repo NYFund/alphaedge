@@ -12,7 +12,7 @@ from core.config import (
     FUTURES_PRICE_DAILY_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
-from core.pipeline.utils.constant import FuturesPriceColumn
+from core.config.schema import FuturesPriceColumn
 from core.utils.constant import FuturesSession
 from core.utils.log_manager import LogManager
 

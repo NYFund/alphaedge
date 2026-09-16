@@ -1,9 +1,10 @@
-import datetime
 import sqlite3
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
+
+from core.dao.base import table_exists, to_sql_params
 
 """Abstract base class for data access APIs. Provides a common interface for querying data from the database"""
 
@@ -25,12 +26,8 @@ class BaseDataAPI(ABC):
         - Description:
             把查詢參數轉成 SQLite 收得下的型別；`date`／`datetime` 轉 ISO 字串
 
-            **不轉的話是靠 Python 3.12 已 deprecated 的預設 date adapter**：
-            那個 adapter 隨時可能被移除，屆時每一支 API 都會
-            在同一天壞掉，而且錯誤訊息只會說「型別不支援」。
-
-            資料表的 `date` 欄一律是 `TEXT`（`YYYY-MM-DD`），ISO 字串本來就是
-            正確的比較對象；`datetime` 只取日期部分，與欄位格式對齊。
+            實作在 `core.dao.base.to_sql_params()`；尚未改走 DAO 的 API 仍呼叫本方法，
+            全部改完後刪除。
         - Parameters:
             - values: Any
                 查詢參數；非日期型別原樣通過
@@ -39,15 +36,7 @@ class BaseDataAPI(ABC):
                 可直接傳給 `params=` 的 tuple
         """
 
-        converted: List[Any] = []
-        for value in values:
-            if isinstance(value, datetime.datetime):
-                converted.append(value.date().isoformat())
-            elif isinstance(value, datetime.date):
-                converted.append(value.isoformat())
-            else:
-                converted.append(value)
-        return tuple(converted)
+        return to_sql_params(*values)
 
     @staticmethod
     def check_table_exist(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -55,15 +44,8 @@ class BaseDataAPI(ABC):
         - Description:
             檢查資料表是否存在
 
-            **這支存在的理由是「表還沒建」與「查詢出錯」必須分得開**：舊版四支期貨
-            相關 API 用 `except sqlite3.OperationalError: return None` 收掉整類錯誤，
-            於是「尚未跑過 ETL」（正常）與「資料庫被鎖住、schema 壞掉、欄名打錯」
-            （不正常）長得一模一樣。後者在回測期間只會讓策略拿到 `None`——
-            **沒有任何錯誤，只是少開幾筆倉**（健檢第四輪 S1，與 F-056 同型）。
-
-            行為與 `core/pipeline/utils/sqlite_utils.py` 的同名方法一致。
-            **兩邊各有一份是刻意的**：讀取層不該為了一個五行的查詢反向相依 ETL
-            套件（F-007 已登記 `core/api` → `core/pipeline` 這條相依待移除）。
+            實作在 `core.dao.base.table_exists()`（「表還沒建」與「查詢出錯」為何要分開，
+            見該函式說明）；尚未改走 DAO 的 API 仍呼叫本方法，全部改完後刪除。
         - Parameters:
             - conn: sqlite3.Connection
                 資料庫連線
@@ -74,9 +56,7 @@ class BaseDataAPI(ABC):
                 資料表存在為 True
         """
 
-        query: str = "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?"
-        result: Tuple[int] = conn.execute(query, (table_name,)).fetchone()
-        return result[0] == 1
+        return table_exists(conn, table_name)
 
     @staticmethod
     def build_column_map(df: pd.DataFrame, column: str) -> Dict[str, Any]:

@@ -9,7 +9,7 @@ import pytest
 from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import CHIP_TABLE_NAME, PRICE_TABLE_NAME
-from core.pipeline.utils.constant import ChipColumn, PriceColumn
+from core.config.schema import ChipColumn, PriceColumn
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 

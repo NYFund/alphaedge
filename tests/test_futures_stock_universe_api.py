@@ -251,7 +251,7 @@ def test_stock_futures_quotes_are_never_price_adjusted() -> None:
     """
 
     from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
-    from core.pipeline.utils.constant import FuturesPriceColumn
+    from core.config.schema import FuturesPriceColumn
     from core.utils import Scale
 
     df: pd.DataFrame = pd.DataFrame(

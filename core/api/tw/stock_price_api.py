@@ -6,17 +6,14 @@ import pandas as pd
 
 from core.api.base import BaseDataAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
-from core.config import (
-    API_LOG_FILE_LEVEL,
-    API_LOGS_DIR_PATH,
-    PRICE_TABLE_NAME,
-    TW_STOCK_DB_PATH,
-)
-from core.pipeline.utils.constant import PriceColumn
+from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
+from core.config.schema import PriceColumn
+from core.dao.connection import connect_sqlite
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.utils.constant import Units
 from core.utils.log_manager import LogManager
 
-"""Stock Price API: query SQLite price table"""
+"""Stock Price API: query price table through StockPriceDAO"""
 
 
 class StockPriceAPI(BaseDataAPI):
@@ -34,13 +31,17 @@ class StockPriceAPI(BaseDataAPI):
         # 還原價專用；只有 get_adjusted_* 系列會用到，故延遲建立
         self.dividend_api: Optional[StockDividendAPI] = dividend_api
 
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        self.dao: Optional[StockPriceDAO] = None
+
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Data API"""
 
         if self.owns_conn:
-            self.conn = sqlite3.connect(TW_STOCK_DB_PATH)
+            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
+        self.dao = StockPriceDAO(conn=self.conn)
         LogManager.setup_logger(
             "stock_price_api.log",
             log_dir=API_LOGS_DIR_PATH,
@@ -57,17 +58,7 @@ class StockPriceAPI(BaseDataAPI):
     def get(self, date: datetime.date) -> pd.DataFrame:
         """取得所有股票指定日期的 Price"""
 
-        query: str = f"""
-        SELECT * FROM {PRICE_TABLE_NAME}
-        WHERE date = ?
-        """
-        return pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(
-                date,
-            ),
-        )
+        return self.dao.get_by_date(date)
 
     def get_range(
         self,
@@ -76,19 +67,7 @@ class StockPriceAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得所有股票指定日期範圍的 Price"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        query: str = f"""
-        SELECT * FROM {PRICE_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(start_date, end_date),
-        )
-        return df
+        return self.dao.get_range(start_date, end_date)
 
     def get_stock_price(
         self,
@@ -98,20 +77,7 @@ class StockPriceAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得指定個股的 Price"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        query: str = f"""
-        SELECT * FROM {PRICE_TABLE_NAME}
-        WHERE stock_id = ?
-        AND date BETWEEN ? AND ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(stock_id, start_date, end_date),
-        )
-        return df
+        return self.dao.get_by_stock(stock_id, start_date, end_date)
 
     def get_trading_days(
         self,
@@ -136,23 +102,7 @@ class StockPriceAPI(BaseDataAPI):
                 區間內的交易日；無資料時回傳空 list
         """
 
-        if start_date > end_date:
-            return []
-
-        query: str = f"""
-        SELECT DISTINCT date FROM {PRICE_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?
-        ORDER BY date
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(start_date, end_date),
-        )
-
-        if df.empty:
-            return []
-        return pd.to_datetime(df["date"]).dt.date.tolist()
+        return self.dao.get_trading_days(start_date, end_date)
 
     # === 具名查詢：策略層一律走這一組，不要自行操作 DataFrame 欄位 ===
     def get_close_map(self, date: datetime.date) -> Dict[str, Any]:
