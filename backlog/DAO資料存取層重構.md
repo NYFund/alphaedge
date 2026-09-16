@@ -42,7 +42,7 @@
 | Phase2-4 | 試點：`corporate_action_detector` 的 price 讀取改走 DAO | `core/pipeline/tw/cleaners/corporate_action_detector.py` | `tests/test_corporate_action.py` 通過 | ✅ | 2026-09-16 完成：唯讀連線改走 `connect_sqlite`；相依 Phase2-1；dividend／corporate_action 的讀取留到 Phase3-2 |
 | Phase2-5 | 試點回歸驗證 | — | `./scripts/run_regression.sh` 雙線通過；`pytest -m "not slow"` 通過 | ✅ | 2026-09-16 完成：回歸雙線通過（SHORT 6、LONG 1）、`pytest -m "not slow"` 1061 passed、`-m slow` 19 passed、分層違規 0；相依 Phase2-2~Phase2-4；**通過後才推廣** |
 | Phase3-1 | 推廣：chip、margin（含 `DatePlanner` 改吃 DAO） | `core/dao/tw/`、對應 API／loader／updater、`core/pipeline/shared/date_planner.py` | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockChipDAO`／`StockMarginDAO`；`DatePlanner` 改收 DAO，三支日頻 updater 以共用連線建日曆 DAO；`tests/test_dao_stock_chip_margin.py` 11 項、`pytest -m "not slow"` 1072 passed、回歸雙線通過、分層違規 0；相依 Phase2-5 |
-| Phase3-2 | 推廣：dividend、corporate_action | 同上 | 對應測試＋回歸 | ⬜ | 相依 Phase2-5；兩份 `dedup_by_source_priority` 收斂為一份 |
+| Phase3-2 | 推廣：dividend、corporate_action | 同上 | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockDividendDAO`／`CorporateActionDAO` 與底座 `insert_or_replace`；去重收斂到 `core/pipeline/shared/source_priority.py`；`tests/test_dao_stock_dividend_corporate_action.py` 9 項、`not slow` 1081 passed、`slow` 19 passed、回歸雙線通過、分層違規 0 |
 | Phase3-3 | 推廣：monthly_revenue | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；修 `get_range` 跨年查詢錯誤 |
 | Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；股票清單查詢與 FinMind 共用 |
 | Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ⬜ | 相依 Phase2-5；驗證 `commit=False` 是否被 `to_sql` 蓋掉；`common.py` 吞錯誤 |
@@ -296,12 +296,22 @@ class BaseDAO:
 > - chip／margin loader 保留原本的 `partial_files` 回報（price 試點已拿掉），維持行為不變。
 > - `tasks/update_db.py` 的 chip／margin 分支補上 `try/finally: close()`。
 
-### Phase3-2. dividend、corporate_action ⬜
+### Phase3-2. dividend、corporate_action ✅
 
 - **做法**：新增 `StockDividendDAO`、`CorporateActionDAO`。兩份 `dedup_by_source_priority` 比對差異後收斂成一份，放在 `core/pipeline/shared/`（屬清洗規則，不放 DAO）。`StockDividendAPI` 的係數快取留在 API。`corporate_action_detector._drop_explained()` 改走 DAO。
 - **產出**：對應 DAO、API、loader、updater、detector。
 - **驗證方式**：`pytest tests/test_adjusted_price_api.py tests/test_corporate_action.py` 通過；回歸雙線通過。
 - **相依**：Phase2-5。
+
+> **完成紀錄（2026-09-16）**
+> - 兩份去重的差異：dividend 版對未列入優先序的來源與缺「資料來源」欄會發警告，corporate_action 版不會；
+>   勝出規則（優先序最高、同序取最後出現、結果依鍵排序）兩者相同。收斂後採 dividend 版並以 `label` 區分日誌。
+>   loader 上的 `dedup_by_source_priority` 方法刪除，測試改呼叫共用函式。
+> - 底座新增 `insert_or_replace()`（偏離〈底座 API〉：原規格只有 `insert_or_ignore`）：兩表的來源是區間查詢，
+>   站方更正過的值必須蓋掉舊值。loader 的整批 upsert 包在 savepoint 內，並以 `try/finally` 保證自有連線關閉
+>   （舊版寫入拋錯時連線不關）。
+> - `StockDividendAPI` 同時持有 `dao` 與 `corporate_action_dao`（共用 API 的連線）；`corporate_action_detector`
+>   的 `_drop_explained()` 改走兩個 DAO，全檔不再 import `SQLiteUtils`。
 
 ### Phase3-3. monthly_revenue ⬜
 

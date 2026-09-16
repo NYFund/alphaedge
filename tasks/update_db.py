@@ -457,9 +457,13 @@ def main() -> None:
                 from_date=from_date,
             )
             stock_dividend_updater: StockDividendUpdater = StockDividendUpdater()
-            stock_dividend_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
+            try:
+                stock_dividend_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                stock_dividend_updater.close()
 
     if DataType.CORPORATE_ACTION.name.lower() in targets:
         with target_guard("corporate_action", failed_targets):
@@ -468,9 +472,13 @@ def main() -> None:
                 from_date=from_date,
             )
             corporate_action_updater: CorporateActionUpdater = CorporateActionUpdater()
-            corporate_action_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
+            try:
+                corporate_action_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                corporate_action_updater.close()
 
     if DataType.FUTURES_PRICE.name.lower() in targets:
         with target_guard("futures_price", failed_targets):

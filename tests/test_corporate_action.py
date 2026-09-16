@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from core.config import CORPORATE_ACTION_TABLE_NAME
+from core.pipeline.shared.source_priority import dedup_by_source_priority
 from core.pipeline.tw.cleaners.corporate_action_cleaner import (
     OUTPUT_COLUMNS,
     CorporateActionCleaner,
@@ -363,7 +364,9 @@ def test_exchange_source_wins_over_detected(loader: CorporateActionLoader) -> No
         [make_row("detected", ratio=2.0), make_row("twse", ratio=3.0)]
     )
 
-    deduped: pd.DataFrame = loader.dedup_by_source_priority(merged)
+    deduped: pd.DataFrame = dedup_by_source_priority(
+        merged, loader.SOURCE_PRIORITY, label="corporate_action"
+    )
 
     assert len(deduped) == 1
     assert deduped.iloc[0]["資料來源"] == "twse"

@@ -7,7 +7,8 @@ from typing import Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from core.config import CORPORATE_ACTION_TABLE_NAME, TW_STOCK_DB_PATH
+from core.config import TW_STOCK_DB_PATH
+from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.tw.cleaners.corporate_action_cleaner import (
@@ -16,7 +17,6 @@ from core.pipeline.tw.cleaners.corporate_action_cleaner import (
 )
 from core.pipeline.tw.crawlers.corporate_action_crawler import CorporateActionCrawler
 from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -42,20 +42,26 @@ class CorporateActionUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        self.conn: Optional[sqlite3.Connection] = None
+        # 讀（最新日期）與寫（loader）共用同一個 DAO，一次更新只開一條連線
+        self.dao: CorporateActionDAO = CorporateActionDAO(db_path=TW_STOCK_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
 
         self.crawler: CorporateActionCrawler = CorporateActionCrawler()
         self.cleaner: CorporateActionCleaner = CorporateActionCleaner()
-        self.loader: CorporateActionLoader = CorporateActionLoader()
+        self.loader: CorporateActionLoader = CorporateActionLoader(dao=self.dao)
 
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            self.conn = sqlite3.connect(TW_STOCK_DB_PATH)
         LogManager.setup_logger("update_corporate_action.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def update(
         self,
@@ -120,11 +126,7 @@ class CorporateActionUpdater(BaseDataUpdater):
 
         self.loader.add_to_db(remove_files=False)
 
-        table_latest_date: str = SQLiteUtils.get_table_latest_value(
-            conn=self.conn,
-            table_name=CORPORATE_ACTION_TABLE_NAME,
-            col_name="date",
-        )
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
         if table_latest_date:
             logger.info(
                 "Corporate action data updated. "
