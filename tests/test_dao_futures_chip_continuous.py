@@ -12,6 +12,7 @@ from core.config import (
 )
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
 
 """
 期貨籌碼三表與連續合約表 DAO
@@ -163,19 +164,29 @@ def test_chip_loader_failed_insert_rolls_back(
     assert loader.count_rows(FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME) == 1
 
 
-def test_trading_day_check_treats_missing_price_table_as_trading(chip_updater) -> None:
+def test_trading_day_check_treats_missing_price_table_as_trading(
+    chip_updater, dao_factory
+) -> None:
     """行情表還沒建時一律視為有交易日（寧可重試，也不要把被擋當成沒資料）"""
 
     day: datetime.date = datetime.date(2026, 8, 28)
     assert chip_updater.has_trading_days(day, day) is True
 
-    chip_updater.conn.execute(
-        f"CREATE TABLE {FUTURES_PRICE_DAILY_TABLE_NAME} (date TEXT, product TEXT)"
-    )
+    price_dao = dao_factory(FuturesPriceDAO, conn=chip_updater.conn)
     assert chip_updater.has_trading_days(day, day) is False
 
-    chip_updater.conn.execute(
-        f"INSERT INTO {FUTURES_PRICE_DAILY_TABLE_NAME} VALUES ('2026-08-28', 'TX')"
+    price_dao.insert_or_ignore(
+        pd.DataFrame(
+            [
+                {
+                    "date": "2026-08-28",
+                    "product": "TX",
+                    "expiry": "202609",
+                    "session": "day",
+                    "成交量": 1,
+                }
+            ]
+        )
     )
     assert chip_updater.has_trading_days(day, day) is True
 

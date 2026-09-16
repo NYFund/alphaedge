@@ -2,12 +2,13 @@ import datetime
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
 
 import pandas as pd
 import pytest
 
 from core.dao.base import BaseDAO
+from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
@@ -74,6 +75,7 @@ def make_daily_updater(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     results: Dict[datetime.date, Tuple[CrawlResult, CrawlResult]],
+    dao_factory: Callable[..., BaseDAO],
 ) -> Tuple[Any, List[Set[str]], List[Tuple[str, datetime.date]]]:
     """
     - Description:
@@ -89,6 +91,8 @@ def make_daily_updater(
             用來把進度檔改寫到暫存目錄
         - results: Dict[datetime.date, Tuple[CrawlResult, CrawlResult]]
             各日期的（TWSE, TPEX）爬取結果
+        - dao_factory: Callable[..., BaseDAO]
+            以正式 schema 建表的 DAO 工廠
     - Return:
         - Tuple
             （updater, 每次入庫的日期集合, 清洗呼叫紀錄）
@@ -98,13 +102,18 @@ def make_daily_updater(
 
     conn: sqlite3.Connection = sqlite3.connect(tmp_path / "test.db")
     # chip／margin 以 price 為交易日曆；price 自己則以平日為母集合，表內不可先有這兩天
-    conn.execute("CREATE TABLE price (date TEXT, stock_id TEXT)")
-    if kind != "price":
-        conn.executemany(
-            "INSERT INTO price VALUES (?, '2330')",
-            [(DAY_OK.isoformat(),), (DAY_PARTIAL.isoformat(),)],
-        )
-    conn.commit()
+    dao_factory(
+        StockPriceDAO,
+        records=(
+            []
+            if kind == "price"
+            else [
+                {"date": DAY_OK.isoformat(), "stock_id": "2330"},
+                {"date": DAY_PARTIAL.isoformat(), "stock_id": "2330"},
+            ]
+        ),
+        conn=conn,
+    )
 
     loaded: List[Set[str]] = []
     cleaned: List[Tuple[str, datetime.date]] = []
@@ -153,6 +162,7 @@ def test_day_with_a_failed_market_is_not_loaded(
     kind: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """
     上櫃沒問到的那天，上市那半也不能入庫
@@ -169,7 +179,7 @@ def test_day_with_a_failed_market_is_not_loaded(
         ),
     }
     updater, loaded, cleaned = make_daily_updater(
-        updater_cls, kind, tmp_path, monkeypatch, results
+        updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
 
     updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
@@ -187,6 +197,7 @@ def test_day_with_a_failed_cleaner_is_not_loaded(
     kind: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """
     兩邊都爬到、但上櫃清洗失敗時同樣整天不入庫
@@ -199,7 +210,7 @@ def test_day_with_a_failed_cleaner_is_not_loaded(
         DAY_PARTIAL: (CrawlResult.ok(raw_table()), CrawlResult.ok(raw_table())),
     }
     updater, loaded, _ = make_daily_updater(
-        updater_cls, kind, tmp_path, monkeypatch, results
+        updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
     # 只讓第二天的上櫃清洗失敗
     clean_tpex = getattr(updater.cleaner, f"clean_tpex_{kind}")
@@ -227,6 +238,7 @@ def test_day_with_one_market_no_data_is_not_loaded(
     no_data_market: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """
     一邊回覆查無資料、另一邊有資料的那天，同樣整天不入庫
@@ -242,7 +254,7 @@ def test_day_with_one_market_no_data_is_not_loaded(
         DAY_PARTIAL: (no_data, ok) if no_data_market == "TWSE" else (ok, no_data),
     }
     updater, loaded, cleaned = make_daily_updater(
-        updater_cls, kind, tmp_path, monkeypatch, results
+        updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
 
     updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
@@ -261,6 +273,7 @@ def test_complete_days_are_still_loaded(
     kind: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """防止改過頭：兩個市場都問到，照常入庫"""
 
@@ -269,7 +282,7 @@ def test_complete_days_are_still_loaded(
         DAY_PARTIAL: (CrawlResult.ok(raw_table()), CrawlResult.ok(raw_table())),
     }
     updater, loaded, _ = make_daily_updater(
-        updater_cls, kind, tmp_path, monkeypatch, results
+        updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
 
     updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
@@ -284,6 +297,7 @@ def test_day_with_both_markets_no_data_is_holiday(
     kind: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """防止改過頭：兩個市場都回覆查無資料仍記為休市，不列入待重試"""
 
@@ -295,7 +309,7 @@ def test_day_with_both_markets_no_data_is_holiday(
         ),
     }
     updater, _, _ = make_daily_updater(
-        updater_cls, kind, tmp_path, monkeypatch, results
+        updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
 
     updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
@@ -385,21 +399,31 @@ def test_fs_crawler_returns_both_markets_on_success(
 
 # === 財報三表：年季續跑 ===
 def make_fs_updater(
-    tmp_path: Path, year_seasons: List[Tuple[int, int]]
+    tmp_path: Path,
+    year_seasons: List[Tuple[int, int]],
+    dao_factory: Callable[..., BaseDAO],
 ) -> FinancialStatementUpdater:
     """建一支只連暫存 DB 的財報 updater，資產負債表預先放入指定年季"""
 
     conn: sqlite3.Connection = sqlite3.connect(tmp_path / "test.db")
-    conn.execute("CREATE TABLE balance_sheet (year INT, season INT, stock_id TEXT)")
-    conn.executemany("INSERT INTO balance_sheet VALUES (?, ?, '2330')", year_seasons)
-    conn.commit()
+    dao_factory(
+        FinancialStatementDAO,
+        records=[
+            {"year": year, "season": season, "stock_id": "2330", "公司名稱": "台積電"}
+            for year, season in year_seasons
+        ],
+        conn=conn,
+        table_name="balance_sheet",
+    )
 
     updater = FinancialStatementUpdater.__new__(FinancialStatementUpdater)
     updater.conn = conn
     return updater
 
 
-def test_fs_season_gap_is_planned_again(tmp_path: Path) -> None:
+def test_fs_season_gap_is_planned_again(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """
     中間缺的年季要重新進入候選
 
@@ -408,7 +432,7 @@ def test_fs_season_gap_is_planned_again(tmp_path: Path) -> None:
     """
 
     updater: FinancialStatementUpdater = make_fs_updater(
-        tmp_path, [(2024, 1), (2024, 3)]
+        tmp_path, [(2024, 1), (2024, 3)], dao_factory
     )
 
     pending: List[Tuple[int, int]] = updater.plan_pending_year_seasons(

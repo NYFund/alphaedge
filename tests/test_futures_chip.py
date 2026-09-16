@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 import pytest
@@ -13,6 +13,8 @@ from core.config import (
     FUTURES_PUT_CALL_RATIO_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
+from core.dao.base import BaseDAO
+from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 
@@ -157,26 +159,24 @@ def test_numeric_columns_are_numeric(cleaner) -> None:
 
 # === 前視偏差對齊 ===
 @pytest.fixture
-def chip_api(tmp_path: Path) -> FuturesChipAPI:
+def chip_api(dao_factory: Callable[..., BaseDAO]) -> FuturesChipAPI:
     """建一個只有兩天籌碼的記憶體資料庫"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    conn.execute(
-        f"CREATE TABLE {FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME} "
-        f'("date" TEXT NOT NULL, "product_name" TEXT NOT NULL, '
-        f'"investor" TEXT NOT NULL, "多空未平倉口數淨額" REAL, '
-        f'PRIMARY KEY ("date", "product_name", "investor"))'
-    )
-    conn.executemany(
-        f"INSERT INTO {FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME} VALUES (?, ?, ?, ?)",
-        [
-            ("2026-08-27", "臺股期貨", "外資及陸資", -80000),
-            ("2026-08-28", "臺股期貨", "外資及陸資", -83655),
+    chip_dao = dao_factory(
+        FuturesChipDAO,
+        records=[
+            {
+                "date": date,
+                "product_name": "臺股期貨",
+                "investor": "外資及陸資",
+                "多空未平倉口數淨額": net,
+            }
+            for date, net in (("2026-08-27", -80000), ("2026-08-28", -83655))
         ],
+        table_name=FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
     )
-    conn.commit()
 
-    return FuturesChipAPI(conn=conn)
+    return FuturesChipAPI(conn=chip_dao.conn)
 
 
 def test_available_data_excludes_the_same_day(chip_api: FuturesChipAPI) -> None:
