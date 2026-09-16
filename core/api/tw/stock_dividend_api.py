@@ -11,14 +11,15 @@ from core.config import (
     API_LOG_FILE_LEVEL,
     API_LOGS_DIR_PATH,
     CORPORATE_ACTION_TABLE_NAME,
-    DIVIDEND_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
+from core.dao.connection import connect_sqlite
+from core.dao.tw.corporate_action_dao import CorporateActionDAO
+from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.utils.log_manager import LogManager
 
 """
-Stock dividend API: query SQLite dividend table（除權除息計算結果表）
+Stock dividend API: query dividend table through StockDividendDAO（除權除息計算結果表）
 
 本表同時服務兩個互不相同的需求，取值時務必分清楚：
 - **價格序列還原**：用「還原係數」
@@ -41,13 +42,19 @@ class StockDividendAPI(BaseDataAPI):
         # 回測會逐日呼叫，每次重掃全表不划算，故整表只載入一次
         self.factor_cache: Optional[Dict[str, Tuple[np.ndarray, np.ndarray]]] = None
 
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        self.dao: Optional[StockDividendDAO] = None
+        self.corporate_action_dao: Optional[CorporateActionDAO] = None
+
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Data API"""
 
         if self.owns_conn:
-            self.conn = sqlite3.connect(TW_STOCK_DB_PATH)
+            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
+        self.dao = StockDividendDAO(conn=self.conn)
+        self.corporate_action_dao = CorporateActionDAO(conn=self.conn)
         LogManager.setup_logger(
             "stock_dividend_api.log",
             log_dir=API_LOGS_DIR_PATH,
@@ -57,18 +64,7 @@ class StockDividendAPI(BaseDataAPI):
     def get(self, date: datetime.date) -> pd.DataFrame:
         """取得所有股票指定日期的除權除息資料"""
 
-        query: str = f"""
-        SELECT * FROM {DIVIDEND_TABLE_NAME}
-        WHERE date = ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(
-                date,
-            ),
-        )
-        return df
+        return self.dao.get_by_date(date)
 
     def get_range(
         self,
@@ -77,19 +73,7 @@ class StockDividendAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得所有股票日期範圍內的除權除息資料"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        query: str = f"""
-        SELECT * FROM {DIVIDEND_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(start_date, end_date),
-        )
-        return df
+        return self.dao.get_range(start_date, end_date)
 
     def get_stock_dividend(
         self,
@@ -99,21 +83,7 @@ class StockDividendAPI(BaseDataAPI):
     ) -> pd.DataFrame:
         """取得指定個股的除權除息資料（依日期排序，供還原係數累乘使用）"""
 
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        query: str = f"""
-        SELECT * FROM {DIVIDEND_TABLE_NAME}
-        WHERE stock_id = ?
-        AND date BETWEEN ? AND ?
-        ORDER BY date
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(stock_id, start_date, end_date),
-        )
-        return df
+        return self.dao.get_by_stock(stock_id, start_date, end_date)
 
     def get_adjust_factor_map(self, date: datetime.date) -> Dict[str, float]:
         """
@@ -253,16 +223,11 @@ class StockDividendAPI(BaseDataAPI):
                 欄位 `date`／`stock_id`／`還原係數`，已依 `(stock_id, date)` 排序
         """
 
-        dividend_df: pd.DataFrame = pd.read_sql_query(
-            f"SELECT date, stock_id, 還原係數 FROM {DIVIDEND_TABLE_NAME}",
-            self.conn,
-        )
+        dividend_df: pd.DataFrame = self.dao.get_adjust_factors()
 
         # `corporate_action` 是 2026-09 才建的表，舊環境可能還沒有——
         # 查不到時只用除權息，行為與加入本表之前完全相同
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=CORPORATE_ACTION_TABLE_NAME
-        ):
+        if not self.corporate_action_dao.table_exists():
             logger.warning(
                 f"[dividend] 找不到 {CORPORATE_ACTION_TABLE_NAME}，還原價僅涵蓋除權息；"
                 "減資與分割的假跳空不會被消除。"
@@ -270,10 +235,8 @@ class StockDividendAPI(BaseDataAPI):
             )
             return dividend_df.sort_values(["stock_id", "date"], kind="stable")
 
-        action_df: pd.DataFrame = pd.read_sql_query(
-            f"SELECT date, stock_id, 調整倍率 AS 還原係數 "
-            f"FROM {CORPORATE_ACTION_TABLE_NAME}",
-            self.conn,
+        action_df: pd.DataFrame = self.corporate_action_dao.get_adjust_ratios().rename(
+            columns={"調整倍率": "還原係數"}
         )
 
         merged: pd.DataFrame = pd.concat([dividend_df, action_df], ignore_index=True)
@@ -361,20 +324,4 @@ class StockDividendAPI(BaseDataAPI):
     ) -> List[datetime.date]:
         """取得日期範圍內所有出現除權息的交易日（已排序、去重）"""
 
-        if start_date > end_date:
-            return []
-
-        query: str = f"""
-        SELECT DISTINCT date FROM {DIVIDEND_TABLE_NAME}
-        WHERE date BETWEEN ? AND ?
-        ORDER BY date
-        """
-        df: pd.DataFrame = pd.read_sql_query(
-            query,
-            self.conn,
-            params=self.sql_params(start_date, end_date),
-        )
-
-        if df.empty:
-            return []
-        return pd.to_datetime(df["date"]).dt.date.tolist()
+        return self.dao.get_ex_dividend_dates(start_date, end_date)

@@ -6,6 +6,7 @@ import pytest
 
 from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
+from core.pipeline.shared.source_priority import dedup_by_source_priority
 from core.pipeline.utils import ColumnLayoutError
 from core.pipeline.utils.data_utils import DataUtils
 from core.utils import Scale
@@ -168,8 +169,10 @@ def test_dividend_dedup_prefers_the_highest_priority_source(
     loader = loader_module.StockDividendLoader()
 
     # twse 排在最前面出現，仍應勝出（它的優先序最高）
-    result: pd.DataFrame = loader.dedup_by_source_priority(
-        make_dividend_rows(["twse", "tpex", "finmind"])
+    result: pd.DataFrame = dedup_by_source_priority(
+        make_dividend_rows(["twse", "tpex", "finmind"]),
+        loader.SOURCE_PRIORITY,
+        label="dividend",
     )
 
     assert len(result) == 1
@@ -188,6 +191,8 @@ def test_dividend_dedup_falls_back_when_source_column_missing(
     loader = loader_module.StockDividendLoader()
 
     df: pd.DataFrame = make_dividend_rows(["twse", "tpex"]).drop(columns=["資料來源"])
-    result: pd.DataFrame = loader.dedup_by_source_priority(df)
+    result: pd.DataFrame = dedup_by_source_priority(
+        df, loader.SOURCE_PRIORITY, label="dividend"
+    )
 
     assert len(result) == 1

@@ -1,19 +1,16 @@
 import datetime
 import sqlite3
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    CORPORATE_ACTION_TABLE_NAME,
-    DIVIDEND_TABLE_NAME,
-    TW_STOCK_DB_PATH,
-)
+from core.config import TW_STOCK_DB_PATH
 from core.dao.connection import connect_sqlite
+from core.dao.tw.corporate_action_dao import CorporateActionDAO
+from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 由行情反推公司行動候選（`detected` 來源）
@@ -175,17 +172,16 @@ def _drop_explained(conn: sqlite3.Connection, candidates: pd.DataFrame) -> pd.Da
             過濾後的候選
     """
 
-    for table, label in (
-        (DIVIDEND_TABLE_NAME, "除權息"),
-        (CORPORATE_ACTION_TABLE_NAME, "公司行動"),
-    ):
-        if not SQLiteUtils.check_table_exist(conn=conn, table_name=table):
-            logger.warning(f"[detector] {table} 不存在，不以{label}過濾候選")
+    event_daos: List[Tuple[Union[StockDividendDAO, CorporateActionDAO], str]] = [
+        (StockDividendDAO(conn=conn), "除權息"),
+        (CorporateActionDAO(conn=conn), "公司行動"),
+    ]
+    for dao, label in event_daos:
+        if not dao.table_exists():
+            logger.warning(f"[detector] {dao.TABLE_NAME} 不存在，不以{label}過濾候選")
             continue
 
-        known: pd.DataFrame = pd.read_sql_query(
-            f"SELECT date, stock_id FROM {table}", conn
-        )
+        known: pd.DataFrame = dao.get_event_keys()
         if known.empty:
             continue
 

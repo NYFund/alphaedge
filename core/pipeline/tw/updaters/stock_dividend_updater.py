@@ -7,13 +7,13 @@ from typing import List, Optional
 import pandas as pd
 from loguru import logger
 
-from core.config import DIVIDEND_TABLE_NAME, TW_STOCK_DB_PATH
+from core.config import TW_STOCK_DB_PATH
+from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.tw.cleaners.stock_dividend_cleaner import StockDividendCleaner
 from core.pipeline.tw.crawlers.stock_dividend_crawler import StockDividendCrawler
 from core.pipeline.tw.loaders.stock_dividend_loader import StockDividendLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -39,22 +39,27 @@ class StockDividendUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        # 讀（最新日期）與寫（loader）共用同一個 DAO，一次更新只開一條連線
+        self.dao: StockDividendDAO = StockDividendDAO(db_path=TW_STOCK_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
 
         # ETL
         self.crawler: StockDividendCrawler = StockDividendCrawler()
         self.cleaner: StockDividendCleaner = StockDividendCleaner()
-        self.loader: StockDividendLoader = StockDividendLoader()
+        self.loader: StockDividendLoader = StockDividendLoader(dao=self.dao)
 
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
         LogManager.setup_logger("update_dividend.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def update(
         self,
@@ -131,11 +136,7 @@ class StockDividendUpdater(BaseDataUpdater):
         self.loader.add_to_db(remove_files=False)
 
         # 更新後重新取得Table最新的日期
-        table_latest_date: str = SQLiteUtils.get_table_latest_value(
-            conn=self.conn,
-            table_name=DIVIDEND_TABLE_NAME,
-            col_name="date",
-        )
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
         if table_latest_date:
             logger.info(
                 f"Stock dividend data updated. Latest available date: {table_latest_date}"

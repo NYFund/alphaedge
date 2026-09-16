@@ -120,6 +120,42 @@ def insert_or_ignore(
     return inserted, len(df) - inserted
 
 
+def insert_or_replace(
+    conn: sqlite3.Connection, table_name: str, df: pd.DataFrame
+) -> int:
+    """
+    - Description:
+        以 `INSERT OR REPLACE` 寫入，回傳送出的列數；**不 commit**
+
+        給「同鍵的新值應該蓋掉舊值」的表用（除權息、公司行動）：來源是區間查詢，
+        每次回補都會把同一段再取一次，站方更正過的值要進得來；
+        `INSERT OR IGNORE` 會把更正擋在門外。
+    - Parameters:
+        - conn: sqlite3.Connection
+            目標資料庫連線
+        - table_name: str
+            目標資料表
+        - df: pd.DataFrame
+            欄位需與資料表一致；應先在呼叫端去重
+    - Return:
+        - int
+            送出的列數（含覆蓋既有列）
+    """
+
+    if df.empty:
+        return 0
+
+    columns: List[str] = list(df.columns)
+    quoted: str = ",".join(f'"{col}"' for col in columns)
+    placeholders: str = ",".join("?" * len(columns))
+
+    conn.executemany(
+        f"INSERT OR REPLACE INTO {table_name} ({quoted}) VALUES ({placeholders})",
+        df.itertuples(index=False, name=None),
+    )
+    return len(df)
+
+
 def create_symbol_date_index(conn: sqlite3.Connection, table_name: str) -> None:
     """
     - Description:
@@ -288,6 +324,11 @@ class BaseDAO:
         """以 `INSERT OR IGNORE` 寫入本表，回傳（寫入列數, 跳過列數）；不 commit"""
 
         return insert_or_ignore(self.conn, self.TABLE_NAME, df)
+
+    def insert_or_replace(self, df: pd.DataFrame) -> int:
+        """以 `INSERT OR REPLACE` 寫入本表，回傳送出的列數；不 commit"""
+
+        return insert_or_replace(self.conn, self.TABLE_NAME, df)
 
     @contextmanager
     def savepoint(self, name: str = "dao_write") -> Iterator[None]:
