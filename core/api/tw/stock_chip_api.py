@@ -11,7 +11,7 @@ from core.config import (
     CHIP_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
-from core.pipeline.utils.constant import ChipColumn
+from core.config.schema import ChipColumn
 from core.utils.log_manager import LogManager
 
 """Institutional investors chip API: query SQLite chip table"""

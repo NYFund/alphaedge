@@ -12,13 +12,13 @@ from core.config import (
     PRICE_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.tw.cleaners.stock_price_cleaner import StockPriceCleaner
 from core.pipeline.tw.crawlers.stock_price_crawler import StockPriceCrawler
 from core.pipeline.tw.loaders.stock_price_loader import StockPriceLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -49,22 +49,28 @@ class StockPriceUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        # **讀（日期規劃）與寫（loader）共用同一個 DAO**：舊版 updater 與 loader 各開
+        # 一條連線到同一個 DB，updater 那條從不關閉，兩條連線還會互搶寫入鎖
+        self.dao: StockPriceDAO = StockPriceDAO(db_path=TW_STOCK_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
 
         # ETL
         self.crawler: StockPriceCrawler = StockPriceCrawler()
         self.cleaner: StockPriceCleaner = StockPriceCleaner()
-        self.loader: StockPriceLoader = StockPriceLoader()
+        self.loader: StockPriceLoader = StockPriceLoader(dao=self.dao)
 
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
         LogManager.setup_logger("update_price.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def load_batch(self, batch_dates: List[str]) -> None:
         """
@@ -193,12 +199,11 @@ class StockPriceUpdater(BaseDataUpdater):
         stats.report("price")
         self.report_cleaner_failures(cleaner_failures)
 
-        # 更新後重新取得Table最新的日期
-        table_latest_date: str = SQLiteUtils.get_table_latest_value(
-            conn=self.conn,
-            table_name=PRICE_TABLE_NAME,
-            col_name="date",
-        )
+        # 更新後重新取得Table最新的日期；
+        # 測試會以 `__new__` 跳過 `__init__` 只注入 `conn`，故就地以該連線建 DAO
+        table_latest_date: Optional[str] = StockPriceDAO(
+            conn=self.conn
+        ).get_latest_date()
         if table_latest_date:
             logger.info(
                 f"Stock price data updated. Latest available date: {table_latest_date}"

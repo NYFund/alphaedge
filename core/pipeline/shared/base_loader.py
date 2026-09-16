@@ -7,6 +7,7 @@ from typing import Any, List, Optional, Set, Tuple
 import pandas as pd
 from loguru import logger
 
+from core.dao.base import create_symbol_date_index, insert_or_ignore
 from core.pipeline.utils.exceptions import DataLoadError
 
 """Abstract base class for all data loaders that write processed data to a storage system"""
@@ -53,14 +54,10 @@ class BaseDataLoader(ABC):
     def create_symbol_date_index(conn: "sqlite3.Connection", table_name: str) -> None:
         """
         - Description:
-            建立 `(stock_id, date)` 索引
+            建立 `(stock_id, date)` 索引並 commit
 
-            四張日更表的主鍵都是 `(date, stock_id, ...)`，**date 在前**，所以
-            「某一天的全市場」很快，「某一檔的整段歷史」卻要掃過整個 date 範圍。
-            而策略研究問的幾乎都是後者。
-
-            `IF NOT EXISTS` ＋ 放在 `create_missing_tables()` 裡：既有資料庫
-            下次跑更新時會自動補上，不需要另外寫遷移腳本。
+            實作在 `core.dao.base.create_symbol_date_index()`（為什麼需要這個索引見該函式）；
+            loader 全部改走 DAO 後刪除。
         - Parameters:
             - conn: sqlite3.Connection
                 資料庫連線
@@ -68,11 +65,7 @@ class BaseDataLoader(ABC):
                 目標資料表
         """
 
-        conn.execute(
-            f"CREATE INDEX IF NOT EXISTS idx_{table_name}_stock_id_date "
-            f"ON {table_name} (stock_id, date)"
-        )
-        conn.commit()
+        create_symbol_date_index(conn, table_name)
 
     @staticmethod
     def select_csv_files(
@@ -112,15 +105,10 @@ class BaseDataLoader(ABC):
     ) -> Tuple[int, int]:
         """
         - Description:
-            以 `INSERT OR IGNORE` 寫入，回傳實際寫入與被跳過的列數
+            以 `INSERT OR IGNORE` 寫入，回傳實際寫入與被跳過的列數；不 commit
 
-            **為什麼不用 `df.to_sql(if_exists="append")`**：loader 每次都掃整個
-            downloads 目錄，已入庫的檔案會再送一次；`append` 會因主鍵衝突整批拋錯，
-            使「重跑」與「真的出錯」無法區分。`INSERT OR IGNORE` 讓重複列靜靜跳過，
-            真正的錯誤（欄位不符、檔案損毀）才會拋出。
-
-            回傳「跳過幾列」而不是丟掉這個資訊，是為了讓呼叫端能分辨三種情況：
-            全部跳過（重跑，正常）、部分跳過（同鍵不同值，值得警告）、全部寫入（新資料）。
+            實作在 `core.dao.base.insert_or_ignore()`（為什麼不用 `to_sql` 見該函式）；
+            loader 全部改走 DAO 後刪除。
         - Parameters:
             - conn: sqlite3.Connection
                 目標資料庫連線
@@ -133,19 +121,7 @@ class BaseDataLoader(ABC):
                 （實際寫入列數, 因主鍵重複被跳過的列數）
         """
 
-        if df.empty:
-            return 0, 0
-
-        columns: List[str] = list(df.columns)
-        quoted: str = ",".join(f'"{col}"' for col in columns)
-        placeholders: str = ",".join("?" * len(columns))
-
-        cursor = conn.executemany(
-            f"INSERT OR IGNORE INTO {table_name} ({quoted}) VALUES ({placeholders})",
-            df.itertuples(index=False, name=None),
-        )
-        inserted: int = cursor.rowcount
-        return inserted, len(df) - inserted
+        return insert_or_ignore(conn, table_name, df)
 
     @staticmethod
     def finish_load(

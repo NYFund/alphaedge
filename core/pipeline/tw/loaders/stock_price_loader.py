@@ -5,19 +5,32 @@ from typing import List, Optional, Set
 import pandas as pd
 from loguru import logger
 
-from core.config import PRICE_DOWNLOADS_PATH, PRICE_TABLE_NAME, TW_STOCK_DB_PATH
+from core.config import PRICE_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 
 class StockPriceLoader(BaseDataLoader):
     """Stock Price Loader"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[StockPriceDAO] = None) -> None:
+        """
+        - Description:
+            建立 price loader
+        - Parameters:
+            - dao: Optional[StockPriceDAO]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；
+                未指定時 loader 自行建立，入庫完成即關閉
+        """
+
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[StockPriceDAO] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.price_dir: Path = PRICE_DOWNLOADS_PATH
@@ -37,63 +50,32 @@ class StockPriceLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+        if self.dao is None:
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+            self.dao = StockPriceDAO(db_path=TW_STOCK_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
 
     def create_db(self) -> None:
         """Create New Database"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {PRICE_TABLE_NAME}(
-            "date" TEXT NOT NULL,
-            "stock_id" TEXT NOT NULL,
-            "證券名稱" TEXT NOT NULL,
-            "開盤價" REAL,
-            "最高價" REAL,
-            "最低價" REAL,
-            "收盤價" REAL,
-            "漲跌價差" REAL,
-            "成交股數" INTEGER,
-            "成交金額" INTEGER,
-            "成交筆數" INTEGER,
-            "最後揭示買價" REAL,
-            "最後揭示買量" INTEGER,
-            "最後揭示賣價" REAL,
-            "最後揭示賣量" INTEGER,
-            "本益比" REAL,
-            PRIMARY KEY ("date", "stock_id", "證券名稱")
-        );
-        """
-        cursor.execute(create_table_query)
-
-        # 檢查是否成功建立 table
-        cursor.execute(f"PRAGMA table_info('{PRICE_TABLE_NAME}')")
-        if cursor.fetchall():
-            logger.info(f"Table {PRICE_TABLE_NAME} create successfully!")
-        else:
-            logger.warning(f"Table {PRICE_TABLE_NAME} create unsuccessfully!")
-
-        self.conn.commit()
+        self.dao.create_table()
 
     def create_missing_tables(self) -> None:
-        """確保股票價格資料表存在"""
+        """確保股票價格資料表與 `(stock_id, date)` 索引存在"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=PRICE_TABLE_NAME
-        ):
-            self.create_db()
-
-        # 主鍵是 (date, stock_id, ...)，「某一檔的整段歷史」查不到索引
-        self.create_symbol_date_index(self.conn, PRICE_TABLE_NAME)
+        self.dao.ensure_table()
 
     def add_to_db(
         self,
@@ -108,10 +90,14 @@ class StockPriceLoader(BaseDataLoader):
             跑完照樣印一行 summary 就結束，行程結束碼是 0。
             這與 2026-08-16 margin 事故是同一個形狀：缺的列要事後逐日比對才會發現。
 
-            **去重改走 `INSERT OR IGNORE`**：舊版每批都把整張 `price` 表的主鍵
+            **去重走 `INSERT OR IGNORE`**：舊版每批都把整張 `price` 表的主鍵
             （近 1,300 萬列）讀進記憶體建 set。改用資料庫自己的主鍵約束，
             記憶體不再隨資料量成長，且「重跑」與「真的出錯」仍分得開——
             重複列靜靜跳過，欄位不符、檔案損毀才會拋出。
+
+            **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾。
+            少了這層，前面已寫入的列會被迴圈結束後的 `commit()` 一起寫進去，
+            資料表多出半份檔案，回報卻說這個檔案失敗。
         - Parameters:
             - remove_files: bool
                 全部成功後是否刪除 downloads 目錄
@@ -122,7 +108,7 @@ class StockPriceLoader(BaseDataLoader):
                 有任何檔案入庫失敗
         """
 
-        if self.conn is None:
+        if self.dao is None:
             self.connect()
 
         # Ensure Database Table Exists
@@ -157,7 +143,7 @@ class StockPriceLoader(BaseDataLoader):
                 # 但先去掉才數得準「這檔到底寫進去幾列」
                 original_count: int = len(df)
                 df = df.drop_duplicates(
-                    subset=["date", "stock_id", "證券名稱"], keep="first"
+                    subset=list(StockPriceDAO.PRIMARY_KEY_COLUMNS), keep="first"
                 )
                 if len(df) < original_count:
                     logger.debug(
@@ -167,9 +153,8 @@ class StockPriceLoader(BaseDataLoader):
 
                 inserted: int
                 ignored: int
-                inserted, ignored = self.insert_dataframe(
-                    self.conn, PRICE_TABLE_NAME, df
-                )
+                with self.dao.savepoint():
+                    inserted, ignored = self.dao.insert_or_ignore(df)
             except Exception as e:
                 logger.error(f"Error saving {file_path.name}: {e}")
                 failed_files.append(file_path.name)
@@ -193,7 +178,7 @@ class StockPriceLoader(BaseDataLoader):
                 logger.info(f"Saved {file_path.name} into database ({inserted} rows)")
             succeeded += 1
 
-        self.conn.commit()
+        self.dao.commit()
         self.disconnect()
 
         self.finish_load(

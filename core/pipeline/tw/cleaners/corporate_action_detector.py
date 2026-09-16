@@ -9,9 +9,10 @@ from loguru import logger
 from core.config import (
     CORPORATE_ACTION_TABLE_NAME,
     DIVIDEND_TABLE_NAME,
-    PRICE_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
+from core.dao.connection import connect_sqlite
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
@@ -80,20 +81,10 @@ def detect_unexplained_moves(
 
     owns_conn: bool = conn is None
     if owns_conn:
-        conn = sqlite3.connect(f"file:{TW_STOCK_DB_PATH}?mode=ro", uri=True)
+        conn = connect_sqlite(TW_STOCK_DB_PATH, read_only=True)
 
     try:
-        date_filter: str = ""
-        params: List[str] = []
-        if start_date is not None:
-            date_filter = "WHERE date >= ?"
-            params.append(str(start_date))
-
-        prices: pd.DataFrame = pd.read_sql_query(
-            f"SELECT date, stock_id, 收盤價 FROM {PRICE_TABLE_NAME} {date_filter}",
-            conn,
-            params=params or None,
-        )
+        prices: pd.DataFrame = StockPriceDAO(conn=conn).get_close_prices(start_date)
         if prices.empty:
             return _empty_result()
 

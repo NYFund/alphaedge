@@ -5,8 +5,8 @@ from typing import Any, Callable, List, Optional
 import pandas as pd
 
 from core.api.tw.futures_price_api import FuturesPriceAPI
+from core.config.schema import FuturesPriceColumn
 from core.models import FuturesQuote
-from core.pipeline.utils.constant import FuturesPriceColumn
 from core.utils import FuturesSession, Scale
 from core.utils.constant import FUTURES_MULTIPLIER
 
