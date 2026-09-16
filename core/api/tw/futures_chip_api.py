@@ -13,6 +13,8 @@ from core.config import (
     FUTURES_PUT_CALL_RATIO_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
+from core.dao.connection import connect_sqlite
+from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.utils.log_manager import LogManager
 
 """
@@ -33,6 +35,8 @@ Futures Chip API: 三大法人、大額交易人與選擇權 PCR
 |------|------|:--------:|
 | `get_available(date)` | 該日**之前**最近一次公布的籌碼 | ✅ |
 | `get_on_date(date)` | 該日當天公布的籌碼 | ❌（前視） |
+
+`table=` 參數只接受三張籌碼表（白名單由 `FuturesChipDAO` 把關），其他值一律 `ValueError`。
 """
 
 
@@ -44,18 +48,40 @@ class FuturesChipAPI(BaseDataAPI):
         self.conn: Optional[sqlite3.Connection] = conn
         self.owns_conn: bool = conn is None
 
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        self.daos: Dict[str, FuturesChipDAO] = {}
+
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Data API"""
 
         if self.owns_conn:
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
         LogManager.setup_logger(
             "futures_chip_api.log",
             log_dir=API_LOGS_DIR_PATH,
             level=API_LOG_FILE_LEVEL,
         )
+
+    def get_dao(self, table: str) -> FuturesChipDAO:
+        """
+        - Description:
+            取得指定籌碼表的 DAO（共用本 API 的連線，依表名快取）
+        - Parameters:
+            - table: str
+                籌碼表名稱
+        - Return:
+            - FuturesChipDAO
+                該表的 DAO
+        - Raise:
+            - ValueError
+                表名不是三張籌碼表之一（舊版沒有檢查就組進 SQL）
+        """
+
+        if table not in self.daos:
+            self.daos[table] = FuturesChipDAO(table, conn=self.conn)
+        return self.daos[table]
 
     # === 前視偏差對齊：回測一律走這一組 ===
     def get_available(
@@ -83,13 +109,7 @@ class FuturesChipAPI(BaseDataAPI):
         if latest is None:
             return pd.DataFrame()
 
-        return pd.read_sql_query(
-            f"SELECT * FROM {table} WHERE date = ?",
-            self.conn,
-            params=self.sql_params(
-                latest,
-            ),
-        )
+        return self.get_dao(table).get_by_date(latest)
 
     def get_latest_available_date(
         self,
@@ -98,16 +118,9 @@ class FuturesChipAPI(BaseDataAPI):
     ) -> Optional[str]:
         """該日之前最近一個有籌碼的日期（**嚴格小於**，見 `get_available()`）"""
 
-        # 表還沒建（尚未跑過籌碼 ETL）才回 None；其餘 sqlite 錯誤一律上拋，
-        # 否則「資料庫被鎖住」會被當成「這天之前沒有籌碼」而靜默少開倉（S1）
-        if not self.check_table_exist(conn=self.conn, table_name=table):
-            return None
-
-        row = self.conn.execute(
-            f"SELECT MAX(date) FROM {table} WHERE date < ?", (str(date),)
-        ).fetchone()
-
-        return row[0] if row and row[0] else None
+        # 表還沒建（尚未跑過籌碼 ETL）才回 None；其餘錯誤一律上拋，
+        # 否則「資料庫被鎖住」會被當成「這天之前沒有籌碼」而靜默少開倉
+        return self.get_dao(table).get_latest_date_before(date)
 
     # === 研究用：看某一天實際公布了什麼 ===
     def get_on_date(
@@ -122,16 +135,9 @@ class FuturesChipAPI(BaseDataAPI):
         前視偏差。回測請走 `get_available()`。
         """
 
-        try:
-            return pd.read_sql_query(
-                f"SELECT * FROM {table} WHERE date = ?",
-                self.conn,
-                params=self.sql_params(
-                    str(date),
-                ),
-            )
-        except pd.errors.DatabaseError:
-            return pd.DataFrame()
+        # 舊版 `except pd.errors.DatabaseError` 一律回空表，連「被鎖住」也吞；
+        # 改為只有表不存在時回空表
+        return self.get_dao(table).get_by_date(date)
 
     # === 具名查詢 ===
     def get_institutional_net(
@@ -207,11 +213,8 @@ class FuturesChipAPI(BaseDataAPI):
     ) -> Optional[Dict[str, str]]:
         """該表的資料涵蓋範圍（供人工確認回補進度）"""
 
-        if not self.check_table_exist(conn=self.conn, table_name=table):
-            return None
+        covered = self.get_dao(table).get_covered_date_range()
 
-        row = self.conn.execute(f"SELECT MIN(date), MAX(date) FROM {table}").fetchone()
-
-        if row is None or row[0] is None:
+        if covered is None:
             return None
-        return {"earliest": row[0], "latest": row[1]}
+        return {"earliest": covered[0], "latest": covered[1]}

@@ -49,7 +49,7 @@
 | Phase5-1 | 推廣：futures_price | `core/dao/tw/`、對應 API／loader／updater | 對應測試＋期貨回測測試 | ✅ | 2026-09-16 完成：新增 `FuturesPriceDAO`；續跑起點與 `get_trading_days` 不再吞錯誤；補行交易日改用唯讀 `StockPriceDAO`（底座新增 `read_only`）；`tests/test_dao_futures_price.py` 8 項、`not slow` 1118 passed、`slow` 19 passed、回歸雙線通過 |
 | Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesStockUniverseDAO`；快照日查詢收斂為一份、`get_contract_size` 以 `per_product` 區分兩種查法；updater 五處自開連線改共用 DAO；`tests/test_dao_futures_stock_universe.py` 9 項、`not slow` 1127 passed、`slow` 19 passed、回歸雙線通過 |
 | Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesMarginDAO`（兩表）；生效日查詢收斂為 `inclusive` 參數，`<` 確認為刻意；`from_api()` 改為必須傳入 `api`；連正式 DB 的測試改用暫存 DB；`tests/test_dao_futures_margin.py` 10 項、`not slow` 1138 passed、`slow` 18 passed、回歸雙線通過 |
-| Phase5-4 | 推廣：futures_chip 三表、futures_continuous | 同上 | 對應測試 | ⬜ | 相依 Phase5-1；`FuturesChipAPI` 的 `table=` 補白名單 |
+| Phase5-4 | 推廣：futures_chip 三表、futures_continuous | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesChipDAO`（三表白名單）、`FuturesContinuousDAO`；兩支 loader 不再自行 commit，由 updater 控制；`get_on_date`／`has_trading_days` 不再吞錯誤；`tests/test_dao_futures_chip_continuous.py` 9 項、`not slow` 1147 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase6-1 | 測試共用 DAO fixture | `tests/conftest.py`、直接 `sqlite3.connect` 的測試檔 | `pytest` 通過 | ⬜ | 相依 Phase3~Phase5 |
 | Phase6-2 | 收斂：刪除舊工具、分層檢查禁止 DAO 以外 `import sqlite3` | `core/pipeline/utils/sqlite_utils.py`、`core/api/base.py`、`scripts/check_layer_deps.py`、`tasks/delete_price_data.py`、`strategy_lab/**`、`scripts/manual/*` | 分層檢查違規 0；全域 `grep "import sqlite3"` 只剩 `core/dao/` 與測試 | ⬜ | 相依 Phase6-1 |
 | Phase6-3 | 更新文件 | `docs/backtest/module-map.md`、`docs/pipeline/etl-ingestion.md`、`docs/dev/naming-axes.md` | 文件描述與程式一致 | ⬜ | 相依 Phase6-2 |
@@ -431,12 +431,22 @@ class BaseDAO:
 > - 發現但不在本步驟處理：`update_history()` 的 `loaded_dates` 與 `stats["skipped_existing"]` 從未被用來跳過已入庫的公告，
 >   每次回補都會重新下載全部附件（約數百次請求）。
 
-### Phase5-4. futures_chip 三表、futures_continuous ⬜
+### Phase5-4. futures_chip 三表、futures_continuous ✅
 
 - **做法**：新增 `FuturesChipDAO`（三表以白名單參數化）、`FuturesContinuousDAO`。`FuturesChipAPI` 的 `table=` 參數不在白名單時拋 `ValueError`。loader 每次呼叫就 commit 的行為改由 updater 控制。
 - **產出**：對應 DAO、`core/api/tw/futures_chip_api.py`、兩組 loader／updater。
 - **驗證方式**：`pytest tests/test_futures_chip.py tests/test_futures_continuous.py tests/test_sqlite_error_semantics.py` 通過；新增白名單測試。
 - **相依**：Phase5-1。
+
+> **完成紀錄（2026-09-16）**
+> - `FuturesChipDAO(table_name)`：`PRIMARY_KEYS` 同時是白名單，建構時就擋下；API 以 `get_dao(table)` 依表名快取。
+> - commit 時點：籌碼 updater 每個月批次寫完 commit 一次；連續合約 updater 對同一組（商品, 換月規則）的所有調整方式
+>   包一個 savepoint、寫完才 commit——中途失敗時整組回滾，不會被下一個商品的 commit 帶進去。
+> - 順手修的吞錯誤：`FuturesChipAPI.get_on_date()` 原本 `except pd.errors.DatabaseError` 回空表、
+>   `FuturesChipUpdater.has_trading_days()` 原本 `except Exception` 回 True，兩者都改為只判斷表存不存在。
+> - 籌碼 updater 持有 `tw_futures.db` 連線，loader（`conn=`）與 `FuturesPriceAPI` 共用；連續合約 updater 持有
+>   `FuturesContinuousDAO`，行情 API 以它的連線建立。舊版兩支 updater 各開兩條連線到同一個 DB。
+> - 至此 `core/` 內除 `core/pipeline/utils/sqlite_utils.py` 本身外已無 `SQLiteUtils` 的使用端。
 
 ---
 

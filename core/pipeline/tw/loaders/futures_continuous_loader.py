@@ -5,11 +5,8 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FUTURES_CONTINUOUS_DOWNLOADS_PATH,
-    FUTURES_CONTINUOUS_TABLE_NAME,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import FUTURES_CONTINUOUS_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
+from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
 """
@@ -26,16 +23,32 @@ Futures Continuous Loader
 **欄位語言沿用來源**（中文 OHLC）：本表的數字直接來自 `futures_price_daily`，
 欄名跟著來源走；
 主鍵與旗標欄則一律英文。
+
+**本 loader 不 commit**：updater 對同一組（商品, 換月規則）的各種調整方式寫完才 commit 一次，
+讓一條序列的幾種調整結果要嘛一起落地、要嘛一起不落地。
 """
 
 
 class FuturesContinuousLoader(BaseDataLoader):
     """把建好的連續合約序列寫進 `futures_continuous`"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[FuturesContinuousDAO] = None) -> None:
+        """
+        - Description:
+            建立連續合約 loader
+        - Parameters:
+            - dao: Optional[FuturesContinuousDAO]
+                共用的 DAO（通常由 updater 傳入）。指定時 loader 不擁有它，
+                `disconnect()` 不會關閉
+        """
+
         super().__init__()
 
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[FuturesContinuousDAO] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端以它判斷連線狀態（指向 tw_futures.db）
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
         self.continuous_dir: Path = FUTURES_CONTINUOUS_DOWNLOADS_PATH
 
         self.setup()
@@ -50,76 +63,48 @@ class FuturesContinuousLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
+        if self.dao is None:
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
             TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.dao = FuturesContinuousDAO(db_path=TW_FUTURES_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
 
     def create_db(self) -> None:
         """Create New Database Table"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        # `expiry` 是**當天實際採用的契約**，不是主鍵的一部分——同一天在同一組
-        # （method, roll_rule）之下只會有一個當家契約。把它存下來是為了讓
-        # 換月接點可被稽核：`roll_flag = 1` 的那幾天，`expiry` 必定與前一天不同。
-        #
-        # `adj_factor` 是**已套用的調整量**，存下來才能還原回真實價格：
-        # BACKWARD 為加減量（原始價 ＝ 調整價 − adj_factor），
-        # RATIO 為乘數（原始價 ＝ 調整價 ÷ adj_factor），NONE 恆為 0。
-        # 最新一段的 adj_factor 為 0／1——逆向調整以最新為基準，那一段就是真實價。
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {FUTURES_CONTINUOUS_TABLE_NAME}(
-            "date" TEXT NOT NULL,
-            "product" TEXT NOT NULL,
-            "session" TEXT NOT NULL,
-            "method" TEXT NOT NULL,
-            "roll_rule" TEXT NOT NULL,
-            "expiry" TEXT NOT NULL,
-            "開盤價" REAL,
-            "最高價" REAL,
-            "最低價" REAL,
-            "收盤價" REAL,
-            "成交量" INT,
-            "結算價" REAL,
-            "未沖銷契約量" INT,
-            "roll_flag" INT NOT NULL,
-            "roll_gap" REAL,
-            "adj_factor" REAL,
-            PRIMARY KEY ("date", "product", "session", "method", "roll_rule")
-        );
-        """
-        cursor.execute(create_table_query)
-
-        # 最常見的查詢是「某商品某組設定的整段序列」，主鍵前綴是 date，幫不上忙
-        cursor.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_futures_continuous_series
-            ON {FUTURES_CONTINUOUS_TABLE_NAME}
-            ("product", "session", "method", "roll_rule", "date");
-            """
-        )
-        self.conn.commit()
+        self.dao.ensure_table()
 
     def create_missing_tables(self) -> None:
         """Ensure Database Tables Exist"""
 
-        self.create_db()
+        self.dao.ensure_table()
+
+    def commit(self) -> None:
+        """提交目前的交易（由 updater 決定時點）"""
+
+        self.dao.commit()
 
     def add_to_db(self, df: pd.DataFrame) -> int:
         """
         - Description:
-            寫入連續合約序列
+            寫入連續合約序列；**不 commit**
 
             **用 `INSERT OR REPLACE` 而不是 `IGNORE`**：本表是衍生表，
             重建時同一組主鍵的值**應該**被新的結果覆蓋——調整方式的實作修正後，
             舊值若被 `IGNORE` 留著，表裡會混著兩代結果且無從分辨。
+            寫入包在 savepoint 內，失敗時只回滾這一批。
         - Parameters:
             - df: pd.DataFrame
                 已建好的序列
@@ -132,19 +117,12 @@ class FuturesContinuousLoader(BaseDataLoader):
             logger.warning("[Futures Continuous] 沒有資料可寫入")
             return 0
 
-        columns: str = ", ".join(f'"{column}"' for column in df.columns)
-        placeholders: str = ", ".join("?" for _ in df.columns)
-        query: str = (
-            f"INSERT OR REPLACE INTO {FUTURES_CONTINUOUS_TABLE_NAME} "
-            f"({columns}) VALUES ({placeholders})"
-        )
+        written: int
+        with self.dao.savepoint("futures_continuous"):
+            written = self.dao.insert_or_replace(df)
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-        cursor.executemany(query, df.itertuples(index=False, name=None))
-        self.conn.commit()
-
-        logger.info(f"[Futures Continuous] 寫入 {len(df)} 列")
-        return len(df)
+        logger.info(f"[Futures Continuous] 寫入 {written} 列")
+        return written
 
     def save_csv(self, df: pd.DataFrame, file_name: str) -> Optional[Path]:
         """
