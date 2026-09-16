@@ -126,7 +126,7 @@ CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `cor
 | 護欄 | 何處執行 | 說明 |
 |------|----------|------|
 | `ruff check` / `ruff format --check` | CI ＋ pre-commit | 版本釘死，與 `.pre-commit-config.yaml` 的 rev 一致——不釘的話 CI 裝最新版，格式規則一變就出現「本機綠、CI 紅」，而那種紅燈與程式碼品質無關，只會訓練大家忽略 CI |
-| `scripts/check_layer_deps.py` | CI ＋ pre-commit | 反向 import、循環 import、市場語意洩漏、跨軸目錄污染 |
+| `scripts/check_layer_deps.py` | CI ＋ pre-commit | 反向 import、循環 import、市場語意洩漏、跨軸目錄污染、`core/dao/` 以外 import `sqlite3` |
 | SHORT 回歸線 | CI ＋ 本機 | 純記憶體、不需要資料庫 |
 | **LONG 回歸線與 `slow` 測試** | **只在本機** | 需要 `data/db/tw_stock.db`、`tw_futures.db` 或外部 API |
 

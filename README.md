@@ -149,6 +149,7 @@ graph TB
 | [非除權息的公司行動](docs/pipeline/corporate-action.md) | `corporate_action` 表的資料源、調整倍率與假跳空護欄 |
 | [程式碼品質工具鏈](docs/dev/code-quality.md) | pyproject／ruff／CI／pre-commit 設定與 lint ignore 理由 |
 | [命名軸線](docs/dev/naming-axes.md) | 市場軸與商品類別軸的目錄命名定案，以及哪些目錄不分市場 |
+| [資料存取層（DAO）](docs/dev/data-access-layer.md) | `core/dao/` 的分層、連線所有權、savepoint 與 commit 時點、錯誤語意與新增資料表檢查表 |
 | [執行期產物](docs/dev/runtime-artifacts.md) | `data/`／`results/`／`logs/` 的目錄約定、日誌分桶與保留策略 |
 
 ---

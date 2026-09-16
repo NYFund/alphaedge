@@ -153,6 +153,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Corporate Actions](docs/pipeline/corporate-action.md)  | `corporate_action` table: sources, adjustment ratios and the false-gap guard |
 | [Code Quality](docs/dev/code-quality.md)                | Tooling (pyproject / ruff / CI / pre-commit) and lint ignore rationale |
 | [Naming Axes](docs/dev/naming-axes.md)                  | Directory naming decision for the market axis vs the instrument-type axis |
+| [Data Access Layer](docs/dev/data-access-layer.md)      | `core/dao/` layering, connection ownership, savepoints and commit timing, error semantics, new-table checklist |
 | [Runtime Artifacts](docs/dev/runtime-artifacts.md)      | Conventions for `data/` / `results/` / `logs/`, log bucketing and retention |
 
 

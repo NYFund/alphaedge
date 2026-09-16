@@ -21,9 +21,9 @@
 
 ---
 
-> **2026-09-16：連線層位置調整。** [DAO資料存取層重構.md](DAO資料存取層重構.md) 立項後，
-> 資料存取統一放在 `core/dao/`。本文件 Phase1-1 的 `core/db/timescale.py` 改為 `core/dao/timescale.py`，
-> 分層登記沿用 DAO 文件的 `("core.dao", 2, ...)`；`StockTickLoader`／`StockTickAPI` 的 SQL
+> **2026-09-16：連線層位置調整。** 資料存取層已統一放在 `core/dao/`（設計見 [資料存取層](../docs/dev/data-access-layer.md)）。
+> 本文件 Phase1-1 的 `core/db/timescale.py` 改為 `core/dao/timescale.py`，
+> 分層登記沿用既有的 `("core.dao", 2, ...)`；`StockTickLoader`／`StockTickAPI` 的 SQL
 > 改收進 `core/dao/tw/stock_tick_dao.py`，〈資料表設計〉與〈讀取介面契約〉不變。
 
 ## 進度追蹤表
