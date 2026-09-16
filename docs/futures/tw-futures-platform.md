@@ -299,7 +299,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 | 跳動點只登錄已查證的台指期系列 | 其他商品需在建構時明確指定 `tick_size` | 逐商品查證後改為查表 |
 | 2017-05-15 之前仍會查詢夜盤 | 回補時多打約一成的請求並記大量 `No valid futures price rows` warning（資料正確） | crawler 或 updater 在該日前跳過夜盤查詢 |
 | 對標序列是近月拼接 | 報表的期貨對標曲線在換月接點有假跳空 | 改讀 `futures_continuous` |
-| 保證金歷史回補每次重抓全部公告 | `FuturesMarginUpdater.update_history()` 算了已入庫的生效日（`loaded_dates`）卻沒拿來跳過，統計的「已存在跳過」恆為 0；每次回補都重新下載全部附件（約數百次請求），資料因 `INSERT OR REPLACE` 而正確 | 以 `source='announcement'` 的生效日跳過已入庫的公告（注意同一則公告可能同時有金額與比例兩張表的列） |
+| 保證金歷史回補每次重抓全部公告 | `FuturesMarginUpdater.update_history()` 算了已入庫的生效日（`loaded_dates`）卻沒拿來跳過，統計的「已存在跳過」恆為 0；每次回補都重新下載全部附件（約數百次請求），資料因 `INSERT OR REPLACE` 而正確 | [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S2 |
 
 ## 相關文件
 

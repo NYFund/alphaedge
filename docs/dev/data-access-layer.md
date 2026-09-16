@@ -173,8 +173,8 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 | 項目 | 影響 | 解除條件 |
 |------|------|----------|
 | DAO 內部仍是 `sqlite3` | 換 PostgreSQL 時要改寫 `core/dao/` 內部（API、loader、updater 不必改） | [PostgreSQL遷移計畫](../../backlog/PostgreSQL遷移計畫.md) |
-| `pd.read_sql_query` 失敗會 rollback 整條連線 | 共用連線上「寫入後、commit 前」的查詢一旦失敗，未 commit 的寫入會消失 | 維持 §4.3 的 commit 時點；換驅動時一併確認 |
-| 部分測試仍以 `DataFrame.to_sql` 推導 schema 建表 | `test_api_public_interfaces`、`test_finmind_api`、`test_corporate_action`（偵測器只需三欄的最小 `price`）、`backtest/test_reporting`、`backtest/conftest`；它們沒有抄 schema，但不會隨正式 schema 改動而同步 | 動到這些測試時改用 `dao_factory` |
+| `pd.read_sql_query` 失敗會 rollback 整條連線 | 共用連線上「寫入後、commit 前」的查詢一旦失敗，未 commit 的寫入會消失 | 目前維持 §4.3 的 commit 時點；結構性修正（`query_df` 改用 cursor）見 [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S1 |
+| 部分測試仍以 `DataFrame.to_sql` 推導 schema 建表 | `test_api_public_interfaces`、`test_finmind_api`、`test_stock_data_api`、`test_corporate_action`（偵測器只需三欄的最小 `price`）、`backtest/test_reporting`，以及 DAO 測試中的 `test_dao_financial_statement`（最小 `taiwan_stock_info`）、`test_dao_stock_dividend_corporate_action`（偵測器用的最小 `price`）；它們沒有抄 schema，但不會隨正式 schema 改動而同步 | [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S3 |
 | 台股表名缺 `stock_` 前綴、識別欄仍是 `stock_id` | 與期貨表、`symbol` 命名不對稱 | 歸 PostgreSQL 遷移的 schema 批次 |
 
 ## 相關文件
