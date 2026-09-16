@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set
 import pandas as pd
 import pytest
 
+from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
@@ -50,23 +51,12 @@ RAW_TABLES: List[pd.DataFrame] = [pd.DataFrame({"會計項目": ["期初餘額"]
 
 
 def make_db(tmp_path: Path) -> sqlite3.Connection:
-    """建一張與正式 schema 相同（含主鍵）的暫存 equity_change 表"""
+    """以正式 schema（含主鍵）建一張暫存 equity_change 表"""
 
     conn: sqlite3.Connection = sqlite3.connect(tmp_path / "test.db")
-    conn.execute(
-        """
-        CREATE TABLE equity_change (
-            "year" INT NOT NULL,
-            "season" INT NOT NULL,
-            "stock_id" TEXT NOT NULL,
-            "權益項目" TEXT NOT NULL,
-            "變動原因" TEXT NOT NULL,
-            "金額" REAL,
-            PRIMARY KEY ("year", "season", "stock_id", "權益項目", "變動原因")
-        )
-        """
+    FinancialStatementDAO("equity_change", conn=conn).ensure_table(
+        EQUITY_CHANGE_COLUMNS
     )
-    conn.commit()
     return conn
 
 

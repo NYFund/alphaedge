@@ -1,17 +1,19 @@
 import datetime
 import sqlite3
-from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 import pytest
 
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_price_api import StockPriceAPI
+from core.dao.base import BaseDAO
+from core.dao.tw.stock_dividend_dao import StockDividendDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 
 """
 還原價（後復權）查詢測試
 
-以合成的 price ＋ dividend 資料驗證還原邏輯，不連網路、不碰正式 DB。
+以合成的 price ＋ dividend 資料驗證還原邏輯（建表走 DAO 的正式 schema），不連網路、不碰正式 DB。
 
 核心性質（後復權的定義）：
 1. 除權息**之前**的價格不變 —— 這正是選後復權而非前復權的理由：歷史價格穩定，
@@ -45,58 +47,43 @@ SECOND_FACTOR: float = 901.0 / 896.99
 
 
 @pytest.fixture
-def price_api(tmp_path: Path) -> StockPriceAPI:
-    """以暫存 SQLite 建出 price 與 dividend 兩張表，並回傳共用連線的 API"""
+def price_api(
+    dao_factory: Callable[..., BaseDAO], memory_conn: sqlite3.Connection
+) -> StockPriceAPI:
+    """以正式 schema 建出 price 與 dividend 兩張表，並回傳共用連線的 API"""
 
-    db_path: Path = tmp_path / "test.db"
-    conn: sqlite3.Connection = sqlite3.connect(db_path)
-    cursor: sqlite3.Cursor = conn.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE price(
-            "date" TEXT NOT NULL,
-            "stock_id" TEXT NOT NULL,
-            "證券名稱" TEXT NOT NULL,
-            "開盤價" REAL,
-            "最高價" REAL,
-            "最低價" REAL,
-            "收盤價" REAL,
-            "成交股數" INTEGER,
-            PRIMARY KEY ("date", "stock_id", "證券名稱")
-        )
-        """
-    )
-    cursor.execute(
-        """
-        CREATE TABLE dividend(
-            "date" TEXT NOT NULL,
-            "stock_id" TEXT NOT NULL,
-            "除權息前收盤價" REAL NOT NULL,
-            "除權息參考價" REAL NOT NULL,
-            "還原係數" REAL NOT NULL,
-            PRIMARY KEY ("date", "stock_id")
-        )
-        """
-    )
-    cursor.executemany(
-        "INSERT INTO price VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [
+    dao_factory(
+        StockPriceDAO,
+        records=[
             # OHLC 以收盤價代入即可，本測試只驗證還原價的掛載與退回行為
-            (date, STOCK_ID, "台積電", close, close, close, close, 1_000_000)
+            {
+                "date": date,
+                "stock_id": STOCK_ID,
+                "證券名稱": "台積電",
+                "開盤價": close,
+                "最高價": close,
+                "最低價": close,
+                "收盤價": close,
+                "成交股數": 1_000_000,
+            }
             for date, close in PRICE_ROWS
         ],
     )
-    cursor.executemany(
-        "INSERT INTO dividend VALUES (?, ?, ?, ?, ?)",
-        [
-            (date, STOCK_ID, before, reference, reference / before)
+    dao_factory(
+        StockDividendDAO,
+        records=[
+            {
+                "date": date,
+                "stock_id": STOCK_ID,
+                "除權息前收盤價": before,
+                "除權息參考價": reference,
+                "還原係數": reference / before,
+            }
             for date, before, reference in DIVIDEND_ROWS
         ],
     )
-    conn.commit()
 
-    return StockPriceAPI(conn=conn)
+    return StockPriceAPI(conn=memory_conn)
 
 
 def test_price_before_ex_date_is_unchanged(price_api: StockPriceAPI) -> None:
@@ -215,7 +202,9 @@ def test_single_and_cumulative_factor_maps_differ(price_api: StockPriceAPI) -> N
     )
 
 
-def test_factor_cache_is_reset_after_update(price_api: StockPriceAPI) -> None:
+def test_factor_cache_is_reset_after_update(
+    price_api: StockPriceAPI, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """快取在整個 process 內有效；更新 dividend 表後須以 reset 讓新資料生效"""
 
     dividend_api: StockDividendAPI = price_api.get_dividend_api()
@@ -225,12 +214,19 @@ def test_factor_cache_is_reset_after_update(price_api: StockPriceAPI) -> None:
         FIRST_FACTOR * SECOND_FACTOR
     )
 
-    cursor: sqlite3.Cursor = dividend_api.conn.cursor()
-    cursor.execute(
-        "INSERT INTO dividend VALUES (?, ?, ?, ?, ?)",
-        ("2024-12-12", STOCK_ID, 1045.0, 1041.0, 1041.0 / 1045.0),
+    dao_factory(
+        StockDividendDAO,
+        records=[
+            {
+                "date": "2024-12-12",
+                "stock_id": STOCK_ID,
+                "除權息前收盤價": 1045.0,
+                "除權息參考價": 1041.0,
+                "還原係數": 1041.0 / 1045.0,
+            }
+        ],
+        conn=dividend_api.conn,
     )
-    dividend_api.conn.commit()
 
     # 尚未 reset：仍讀到快取值
     assert dividend_api.get_cumulative_factor(STOCK_ID, date) == pytest.approx(

@@ -1,13 +1,16 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import pandas as pd
 import pytest
 
 from core.api.tw.futures_stock_universe_api import FuturesStockUniverseAPI
 from core.config import TW_FUTURES_DB_PATH
+from core.dao.base import BaseDAO
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 
 """
 股票期貨標的池 API 與乘數測試
@@ -24,133 +27,82 @@ from core.config import TW_FUTURES_DB_PATH
 """
 
 
+UNIVERSE_COLUMNS: List[str] = [
+    "snapshot_date",
+    "product_id",
+    "base_code",
+    "product_type",
+    "underlying_stock_id",
+    "underlying_name",
+    "underlying_listing_board",
+    "contract_size",
+    "day_session_time",
+    "night_session_time",
+]
+
+
 @pytest.fixture
-def universe_api() -> FuturesStockUniverseAPI:
+def universe_api(
+    dao_factory: Callable[..., BaseDAO], memory_conn: sqlite3.Connection
+) -> FuturesStockUniverseAPI:
     """建一個含兩份快照的記憶體標的池（模擬除權息後契約單位被調整）"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    conn.execute(
-        """
-        CREATE TABLE futures_stock_universe (
-            snapshot_date TEXT NOT NULL,
-            product_id TEXT NOT NULL,
-            base_code TEXT,
-            product_type TEXT,
-            underlying_stock_id TEXT,
-            underlying_name TEXT,
-            underlying_listing_board TEXT,
-            contract_size INT,
-            day_session_time TEXT,
-            night_session_time TEXT,
-            PRIMARY KEY (snapshot_date, product_id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE futures_price_daily (
-            date TEXT, product TEXT, expiry TEXT, session TEXT,
-            開盤價 REAL, 最高價 REAL, 最低價 REAL, 收盤價 REAL,
-            成交量 INT, 結算價 REAL, 未沖銷契約量 INT
-        )
-        """
-    )
-    rows = [
-        (
-            "2026-08-01",
-            "CDF",
-            "CD",
-            "個股期貨",
-            "2330",
-            "台積電",
-            "上市",
-            2000,
-            "",
-            None,
-        ),
-        (
-            "2026-08-01",
-            "NYF",
-            "NY",
-            "ETF期貨",
-            "0050",
-            "元大台灣50",
-            "上市",
-            10000,
-            "",
-            None,
-        ),
-        (
-            "2026-08-01",
-            "XYF",
-            "XY",
-            "小型個股期貨",
-            "2603",
-            "長榮",
-            "上市",
-            100,
-            "",
-            None,
-        ),
-        # 除權息後契約單位被調整（2,000 → 2,150）
-        (
-            "2026-08-29",
-            "CDF",
-            "CD",
-            "個股期貨",
-            "2330",
-            "台積電",
-            "上市",
-            2150,
-            "",
-            None,
-        ),
-        (
-            "2026-08-29",
-            "NYF",
-            "NY",
-            "ETF期貨",
-            "0050",
-            "元大台灣50",
-            "上市",
-            10000,
-            "",
-            None,
-        ),
-        (
-            "2026-08-29",
-            "XYF",
-            "XY",
-            "小型個股期貨",
-            "2603",
-            "長榮",
-            "上市",
-            100,
-            "",
-            None,
-        ),
+    contracts = [
+        ("CDF", "CD", "個股期貨", "2330", "台積電"),
+        ("NYF", "NY", "ETF期貨", "0050", "元大台灣50"),
+        ("XYF", "XY", "小型個股期貨", "2603", "長榮"),
     ]
-    conn.executemany(
-        "INSERT INTO futures_stock_universe VALUES (?,?,?,?,?,?,?,?,?,?)", rows
-    )
-    prices = [
-        # CDF 天天有量、NYF 量少、XYF 只有一天（樣本不足）
-        *[
-            (f"2026-08-{day:02d}", "CDF", "202609", "day", 1, 1, 1, 1, 5000, 1, 1)
-            for day in range(4, 12)
+    # 除權息後 CDF 的契約單位被調整（2,000 → 2,150），其餘兩檔不變
+    sizes = {
+        "2026-08-01": {"CDF": 2000, "NYF": 10000, "XYF": 100},
+        "2026-08-29": {"CDF": 2150, "NYF": 10000, "XYF": 100},
+    }
+    dao_factory(
+        FuturesStockUniverseDAO,
+        records=[
+            dict(
+                zip(
+                    UNIVERSE_COLUMNS,
+                    (
+                        snapshot_date,
+                        product_id,
+                        base_code,
+                        product_type,
+                        stock_id,
+                        name,
+                        "上市",
+                        sizes[snapshot_date][product_id],
+                        "",
+                        None,
+                    ),
+                )
+            )
+            for snapshot_date in sizes
+            for product_id, base_code, product_type, stock_id, name in contracts
         ],
-        *[
-            (f"2026-08-{day:02d}", "NYF", "202609", "day", 1, 1, 1, 1, 100, 1, 1)
-            for day in range(4, 12)
-        ],
-        ("2026-08-04", "XYF", "202609", "day", 1, 1, 1, 1, 999999, 1, 1),
-    ]
-    conn.executemany(
-        "INSERT INTO futures_price_daily VALUES (?,?,?,?,?,?,?,?,?,?,?)", prices
     )
-    conn.commit()
 
-    return FuturesStockUniverseAPI(conn=conn)
+    # CDF 天天有量、NYF 量少、XYF 只有一天（樣本不足）
+    prices = [
+        *[(f"2026-08-{day:02d}", "CDF", 5000) for day in range(4, 12)],
+        *[(f"2026-08-{day:02d}", "NYF", 100) for day in range(4, 12)],
+        ("2026-08-04", "XYF", 999999),
+    ]
+    dao_factory(
+        FuturesPriceDAO,
+        records=[
+            {
+                "date": date,
+                "product": product,
+                "expiry": "202609",
+                "session": "day",
+                "成交量": volume,
+            }
+            for date, product, volume in prices
+        ],
+    )
+
+    return FuturesStockUniverseAPI(conn=memory_conn)
 
 
 # === 快照語意 ===

@@ -50,7 +50,7 @@
 | Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesStockUniverseDAO`；快照日查詢收斂為一份、`get_contract_size` 以 `per_product` 區分兩種查法；updater 五處自開連線改共用 DAO；`tests/test_dao_futures_stock_universe.py` 9 項、`not slow` 1127 passed、`slow` 19 passed、回歸雙線通過 |
 | Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesMarginDAO`（兩表）；生效日查詢收斂為 `inclusive` 參數，`<` 確認為刻意；`from_api()` 改為必須傳入 `api`；連正式 DB 的測試改用暫存 DB；`tests/test_dao_futures_margin.py` 10 項、`not slow` 1138 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase5-4 | 推廣：futures_chip 三表、futures_continuous | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesChipDAO`（三表白名單）、`FuturesContinuousDAO`；兩支 loader 不再自行 commit，由 updater 控制；`get_on_date`／`has_trading_days` 不再吞錯誤；`tests/test_dao_futures_chip_continuous.py` 9 項、`not slow` 1147 passed、`slow` 18 passed、回歸雙線通過 |
-| Phase6-1 | 測試共用 DAO fixture | `tests/conftest.py`、直接 `sqlite3.connect` 的測試檔 | `pytest` 通過 | ⬜ | 相依 Phase3~Phase5 |
+| Phase6-1 | 測試共用 DAO fixture | `tests/conftest.py`、直接 `sqlite3.connect` 的測試檔 | `pytest` 通過 | ✅ | 2026-09-16 完成：`conftest.py` 新增 `memory_conn`／`dao_factory`（含 `complete_rows()` 補齊 NOT NULL 欄）；11 個檔案的手寫 DDL 改走 DAO，剩下的 `CREATE TABLE` 全是刻意壞掉的 schema、鎖庫與底座測試；`not slow` 1147 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase6-2 | 收斂：刪除舊工具、分層檢查禁止 DAO 以外 `import sqlite3` | `core/pipeline/utils/sqlite_utils.py`、`core/api/base.py`、`scripts/check_layer_deps.py`、`tasks/delete_price_data.py`、`strategy_lab/**`、`scripts/manual/*` | 分層檢查違規 0；全域 `grep "import sqlite3"` 只剩 `core/dao/` 與測試 | ⬜ | 相依 Phase6-1 |
 | Phase6-3 | 更新文件 | `docs/backtest/module-map.md`、`docs/pipeline/etl-ingestion.md`、`docs/dev/naming-axes.md` | 文件描述與程式一致 | ⬜ | 相依 Phase6-2 |
 
@@ -452,13 +452,26 @@ class BaseDAO:
 
 ## Phase 6：測試與收斂
 
-### Phase6-1. 測試共用 DAO fixture ⬜
+### Phase6-1. 測試共用 DAO fixture ✅
 
 - **目的**：31 個測試檔各自 `sqlite3.connect` 建表，schema 改一次要改很多份。
 - **做法**：`tests/conftest.py` 新增 fixture：`memory_conn`，以及可指定 DAO 類別、呼叫 `ensure_table()` 建表的 `dao_factory`。測試灌資料改用 DAO 的 `insert_or_ignore`，不再手寫 DDL。需要特殊 schema 的測試（例如故意缺欄位）維持手寫。
 - **產出**：`tests/conftest.py`、各測試檔。
 - **驗證方式**：`pytest -m "not slow"` 通過；`grep -rln "CREATE TABLE" tests` 只剩刻意手寫 schema 的檔案。
 - **相依**：Phase3~Phase5。
+
+> **完成紀錄（2026-09-16）**
+> - `dao_factory(dao_cls, records=..., conn=..., columns=..., **dao_kwargs)`：依 DAO 自己的建表方法建表
+>   （`ensure_table()`／`ensure_table(columns)`／`ensure_table(df)`／`ensure_tables()` 自動判斷），
+>   再以 `complete_rows()` 讀 `PRAGMA table_info` 補齊沒給值的 NOT NULL／主鍵欄後寫入。測試只寫它在意的欄位。
+> - 改寫：`test_date_gap_backfill`、`test_partial_market_guard`、`test_stock_data_api`、`test_futures_stock_universe_api`、
+>   `test_adjusted_price_api`、`test_futures_chip`、`test_equity_change_interruption`、`test_entrypoint_and_logging`，
+>   以及 Phase3~5 新增的三個 DAO 測試檔中的 `price`／`futures_price_daily` 最小表。
+> - 刻意保留的 `CREATE TABLE`：故意缺欄的 schema（DAO 測試 7 處）、`test_sqlite_error_semantics` 的鎖庫與空庫、
+>   `test_dao_base` 的底座通用表、`test_loader_failure_reporting` 的 `SQLiteUtils` 測試（Phase6-2 隨 `SQLiteUtils` 一併刪除）。
+> - **未處理**（驗收只看手寫 DDL）：以 `DataFrame.to_sql` 推導 schema 建表的測試仍有 `test_api_public_interfaces`、
+>   `test_finmind_api`、`test_corporate_action`（偵測器只需三欄的最小 `price` 表）、`backtest/test_reporting`、
+>   `backtest/conftest`；它們沒有抄 schema，schema 改動時多半仍能跑，留待需要時再換。
 
 ### Phase6-2. 收斂 ⬜
 

@@ -210,7 +210,7 @@ def test_sql_params_converts_dates_to_iso() -> None:
     assert params == ("2330", "2024-01-02", "2024-01-03", 5)
 
 
-def test_get_net_chip_no_longer_raises(tmp_path) -> None:
+def test_get_net_chip_no_longer_raises(dao_factory) -> None:
     """
     `get_net_chip()` 一被呼叫就 `TypeError`
 
@@ -218,21 +218,24 @@ def test_get_net_chip_no_longer_raises(tmp_path) -> None:
     全專案沒有呼叫端，所以壞了也沒人發現，但 API 門面看起來是可用的。
     """
 
-    import sqlite3
-
     from core.api.tw.stock_chip_api import StockChipAPI
+    from core.dao.tw.stock_chip_dao import StockChipDAO
 
-    conn = sqlite3.connect(tmp_path / "test.db")
-    conn.execute(
-        'CREATE TABLE chip ("date" TEXT, stock_id TEXT, "證券名稱" TEXT, '
-        '"外資買賣超股數" INTEGER, "投信買賣超股數" INTEGER, "自營商買賣超股數" INTEGER)'
+    chip_dao = dao_factory(
+        StockChipDAO,
+        records=[
+            {
+                "date": "2024-01-02",
+                "stock_id": "2330",
+                "證券名稱": "台積電",
+                "外資買賣超股數": 100,
+                "投信買賣超股數": 200,
+                "自營商買賣超股數": 300,
+            }
+        ],
     )
-    conn.execute(
-        "INSERT INTO chip VALUES ('2024-01-02', '2330', '台積電', 100, 200, 300)"
-    )
-    conn.commit()
 
-    api: StockChipAPI = StockChipAPI(conn=conn)
+    api: StockChipAPI = StockChipAPI(conn=chip_dao.conn)
     df = api.get_net_chip(datetime.date(2024, 1, 1), datetime.date(2024, 1, 31))
 
     assert len(df) == 1
@@ -244,24 +247,17 @@ def test_get_net_chip_no_longer_raises(tmp_path) -> None:
         "投信買賣超股數",
         "自營商買賣超股數",
     ]
-    conn.close()
 
 
-def test_get_net_chip_returns_empty_without_data(tmp_path) -> None:
+def test_get_net_chip_returns_empty_without_data(dao_factory) -> None:
     """查無資料時回空表，不可在取欄位時炸掉"""
 
-    import sqlite3
-
     from core.api.tw.stock_chip_api import StockChipAPI
+    from core.dao.tw.stock_chip_dao import StockChipDAO
 
-    conn = sqlite3.connect(tmp_path / "test.db")
-    conn.execute('CREATE TABLE chip ("date" TEXT, stock_id TEXT)')
-    conn.commit()
-
-    api: StockChipAPI = StockChipAPI(conn=conn)
+    api: StockChipAPI = StockChipAPI(conn=dao_factory(StockChipDAO).conn)
 
     assert api.get_net_chip(datetime.date(2024, 1, 1), datetime.date(2024, 1, 31)).empty
-    conn.close()
 
 
 def test_financial_statement_table_name_is_whitelisted() -> None:

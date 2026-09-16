@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 
 """
 股期標的池（`futures_stock_universe` 表）DAO
@@ -201,14 +202,16 @@ def test_underlying_match_without_stock_db(updater, tmp_path: Path) -> None:
 
 
 def test_underlying_match_reads_price_table(
-    updater, tmp_path: Path, captured_logs: List[str]
+    updater, tmp_path: Path, captured_logs: List[str], dao_factory
 ) -> None:
     """有 price 表時回報對得上的檔數"""
 
     stock_conn: sqlite3.Connection = sqlite3.connect(tmp_path / "tw_stock.db")
-    stock_conn.execute("CREATE TABLE price (date TEXT, stock_id TEXT)")
-    stock_conn.execute("INSERT INTO price VALUES ('2026-08-01', '2330')")
-    stock_conn.commit()
+    dao_factory(
+        StockPriceDAO,
+        records=[{"date": "2026-08-01", "stock_id": "2330"}],
+        conn=stock_conn,
+    )
     stock_conn.close()
 
     updater.log_underlying_match(

@@ -177,15 +177,20 @@ def test_traded_weekends_without_stock_db(updater, tmp_path: Path) -> None:
     assert not (tmp_path / "tw_stock.db").exists()
 
 
-def test_traded_weekends_come_from_read_only_price_dao(updater, tmp_path: Path) -> None:
+def test_traded_weekends_come_from_read_only_price_dao(
+    updater, tmp_path: Path, dao_factory
+) -> None:
     """補行交易日取自 `price` 表的週末；連線唯讀且由 updater 的 `close()` 關閉"""
 
     stock_conn: sqlite3.Connection = sqlite3.connect(tmp_path / "tw_stock.db")
-    stock_conn.execute("CREATE TABLE price (date TEXT, stock_id TEXT)")
-    stock_conn.executemany(
-        "INSERT INTO price VALUES (?, '2330')", [("2017-06-02",), ("2017-06-03",)]
+    dao_factory(
+        StockPriceDAO,
+        records=[
+            {"date": "2017-06-02", "stock_id": "2330"},
+            {"date": "2017-06-03", "stock_id": "2330"},
+        ],
+        conn=stock_conn,
     )
-    stock_conn.commit()
     stock_conn.close()
 
     weekends = updater.get_traded_weekend_dates(
@@ -196,7 +201,7 @@ def test_traded_weekends_come_from_read_only_price_dao(updater, tmp_path: Path) 
 
     stock_price_dao: StockPriceDAO = updater.stock_price_dao
     with pytest.raises(sqlite3.OperationalError):
-        stock_price_dao.conn.execute("INSERT INTO price VALUES ('2017-06-04', '2330')")
+        stock_price_dao.conn.execute("DELETE FROM price")
 
     updater.close()
     assert updater.stock_price_dao is None

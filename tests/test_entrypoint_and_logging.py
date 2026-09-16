@@ -1,8 +1,11 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Set
+from typing import Callable, List, Set
 
 import pytest
+
+from core.dao.base import BaseDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 
 """
 入口與日誌的四個坑，共通點是**平常不會有人發現**
@@ -49,29 +52,35 @@ def test_all_still_includes_every_tick_target() -> None:
 
 
 # === delete_price_data 預設不刪 ===
-def make_price_db(tmp_path: Path) -> Path:
-    """建一個只有 price 表的暫存 DB"""
+def make_price_db(tmp_path: Path, dao_factory: Callable[..., BaseDAO]) -> Path:
+    """以正式 schema 建一個只有 price 表的暫存 DB"""
 
     db_path: Path = tmp_path / "test.db"
     conn = sqlite3.connect(db_path)
-    conn.execute("CREATE TABLE price (date TEXT, stock_id TEXT)")
-    conn.executemany(
-        "INSERT INTO price VALUES (?, ?)",
-        [("2025-07-13", "2330"), ("2025-07-13", "2317"), ("2025-07-14", "2330")],
+    dao_factory(
+        StockPriceDAO,
+        records=[
+            {"date": date, "stock_id": stock_id}
+            for date, stock_id in (
+                ("2025-07-13", "2330"),
+                ("2025-07-13", "2317"),
+                ("2025-07-14", "2330"),
+            )
+        ],
+        conn=conn,
     )
-    conn.commit()
     conn.close()
     return db_path
 
 
 def test_delete_price_data_defaults_to_preview(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """沒有 --apply 時一列都不能刪"""
 
     import tasks.delete_price_data as module
 
-    db_path: Path = make_price_db(tmp_path)
+    db_path: Path = make_price_db(tmp_path, dao_factory)
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(db_path))
 
     module.delete_price_data_by_date("2025-07-13")
@@ -82,13 +91,13 @@ def test_delete_price_data_defaults_to_preview(
 
 
 def test_delete_price_data_requires_confirmation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """--apply 但沒有 --yes 且無法互動時不可刪除"""
 
     import tasks.delete_price_data as module
 
-    db_path: Path = make_price_db(tmp_path)
+    db_path: Path = make_price_db(tmp_path, dao_factory)
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(db_path))
     monkeypatch.setattr(module.sys.stdin, "isatty", lambda: False)
 
@@ -100,13 +109,13 @@ def test_delete_price_data_requires_confirmation(
 
 
 def test_delete_price_data_applies_with_yes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """--apply --yes 才真的刪，且只刪指定那天"""
 
     import tasks.delete_price_data as module
 
-    db_path: Path = make_price_db(tmp_path)
+    db_path: Path = make_price_db(tmp_path, dao_factory)
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(db_path))
 
     module.delete_price_data_by_date("2025-07-13", apply=True, assume_yes=True)

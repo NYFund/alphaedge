@@ -2,10 +2,11 @@ import datetime
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Set, Tuple
+from typing import Callable, List, Set, Tuple
 
 import pytest
 
+from core.dao.base import BaseDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
@@ -24,19 +25,22 @@ from core.utils import TimeUtils
 """
 
 
-def make_table(conn: sqlite3.Connection, dates: List[str]) -> None:
-    """建立一張只有 date 欄的資料表並填入指定日期"""
+def make_table(
+    dao_factory: Callable[..., BaseDAO], conn: sqlite3.Connection, dates: List[str]
+) -> None:
+    """以正式 schema 建 `price` 表，並在指定日期各放一列 2330"""
 
-    conn.execute("CREATE TABLE IF NOT EXISTS price (date TEXT, stock_id TEXT)")
-    conn.executemany(
-        "INSERT INTO price (date, stock_id) VALUES (?, '2330')",
-        [(date,) for date in dates],
+    dao_factory(
+        StockPriceDAO,
+        records=[{"date": date, "stock_id": "2330"} for date in dates],
+        conn=conn,
     )
-    conn.commit()
 
 
 # === 缺口偵測 ===
-def test_middle_gap_is_planned_again(tmp_path: Path) -> None:
+def test_middle_gap_is_planned_again(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """
     S4 的驗收點：刪掉中間一天，該日必須重新進入候選
 
@@ -45,7 +49,9 @@ def test_middle_gap_is_planned_again(tmp_path: Path) -> None:
 
     conn = sqlite3.connect(tmp_path / "test.db")
     # 2024-01-01（一）~ 01-05（五）皆為平日，刻意缺 01-03
-    make_table(conn, ["2024-01-01", "2024-01-02", "2024-01-04", "2024-01-05"])
+    make_table(
+        dao_factory, conn, ["2024-01-01", "2024-01-02", "2024-01-04", "2024-01-05"]
+    )
 
     candidates: List[datetime.date] = DatePlanner.plan(
         dao=StockPriceDAO(conn=conn),
@@ -57,11 +63,13 @@ def test_middle_gap_is_planned_again(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_existing_dates_are_not_requested_again(tmp_path: Path) -> None:
+def test_existing_dates_are_not_requested_again(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """已有的日期不重抓，否則每晚都會重跑整段歷史"""
 
     conn = sqlite3.connect(tmp_path / "test.db")
-    make_table(conn, ["2024-01-01", "2024-01-02"])
+    make_table(dao_factory, conn, ["2024-01-01", "2024-01-02"])
 
     candidates: List[datetime.date] = DatePlanner.plan(
         dao=StockPriceDAO(conn=conn),
@@ -73,11 +81,13 @@ def test_existing_dates_are_not_requested_again(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_weekends_are_excluded_by_default(tmp_path: Path) -> None:
+def test_weekends_are_excluded_by_default(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """沒有日曆時以平日為母集合；週末不送請求"""
 
     conn = sqlite3.connect(tmp_path / "test.db")
-    make_table(conn, [])
+    make_table(dao_factory, conn, [])
 
     candidates: List[datetime.date] = DatePlanner.plan(
         dao=StockPriceDAO(conn=conn),
@@ -89,7 +99,9 @@ def test_weekends_are_excluded_by_default(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_confirmed_no_data_dates_are_skipped(tmp_path: Path) -> None:
+def test_confirmed_no_data_dates_are_skipped(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """
     已確認沒有資料的日期不再重問
 
@@ -97,7 +109,7 @@ def test_confirmed_no_data_dates_are_skipped(tmp_path: Path) -> None:
     """
 
     conn = sqlite3.connect(tmp_path / "test.db")
-    make_table(conn, [])
+    make_table(dao_factory, conn, [])
 
     candidates: List[datetime.date] = DatePlanner.plan(
         dao=StockPriceDAO(conn=conn),
@@ -110,7 +122,9 @@ def test_confirmed_no_data_dates_are_skipped(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_calendar_dates_cover_traded_weekends(tmp_path: Path) -> None:
+def test_calendar_dates_cover_traded_weekends(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """
     以 `price` 表為日曆時，補行交易日（開市的週六）必須被納入
 
@@ -118,13 +132,12 @@ def test_calendar_dates_cover_traded_weekends(tmp_path: Path) -> None:
     """
 
     conn = sqlite3.connect(tmp_path / "test.db")
-    make_table(conn, ["2024-01-06"])  # 週六補行交易日
+    make_table(dao_factory, conn, ["2024-01-06"])  # 週六補行交易日
 
     calendar: Set[datetime.date] = DatePlanner.get_trading_dates(
         StockPriceDAO(conn=conn), datetime.date(2024, 1, 1), datetime.date(2024, 1, 6)
     )
-    conn.execute("CREATE TABLE margin (date TEXT)")
-    conn.commit()
+    dao_factory(StockMarginDAO, conn=conn)
 
     # 迄日就是日曆最後一天，故不會觸發尾端補平日（那條另有測試）
     candidates: List[datetime.date] = DatePlanner.plan(
@@ -139,7 +152,9 @@ def test_calendar_dates_cover_traded_weekends(tmp_path: Path) -> None:
 
 
 def test_price_requests_traded_weekends_known_to_other_tables(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """
     `chip` 有、`price` 沒有的補行交易日，`price` 要重新請求
@@ -151,12 +166,15 @@ def test_price_requests_traded_weekends_known_to_other_tables(
     monkeypatch.setattr(date_planner_module, "DOWNLOADS_METADATA_DIR_PATH", tmp_path)
 
     conn = sqlite3.connect(tmp_path / "test.db")
-    make_table(conn, ["2017-06-02"])  # 週五有、週六補行交易日缺
-    conn.execute("CREATE TABLE chip (date TEXT, stock_id TEXT)")
-    conn.executemany(
-        "INSERT INTO chip VALUES (?, '2330')", [("2017-06-02",), ("2017-06-03",)]
+    make_table(dao_factory, conn, ["2017-06-02"])  # 週五有、週六補行交易日缺
+    dao_factory(
+        StockChipDAO,
+        records=[
+            {"date": "2017-06-02", "stock_id": "2330"},
+            {"date": "2017-06-03", "stock_id": "2330"},
+        ],
+        conn=conn,
     )
-    conn.commit()
 
     requested: List[datetime.date] = []
 
@@ -265,7 +283,7 @@ def test_today_is_never_written_to_the_permanent_no_data_list(tmp_path: Path) ->
 
 
 def test_incomplete_day_is_requested_again_even_though_data_exists(
-    tmp_path: Path,
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """
     同一天的多個來源只成功了一半時，下次一定要重來
@@ -276,7 +294,7 @@ def test_incomplete_day_is_requested_again_even_though_data_exists(
     """
 
     conn = sqlite3.connect(tmp_path / "test.db")
-    make_table(conn, ["2024-01-02"])  # 只有上市那半入庫
+    make_table(dao_factory, conn, ["2024-01-02"])  # 只有上市那半入庫
 
     candidates: List[datetime.date] = DatePlanner.plan(
         dao=StockPriceDAO(conn=conn),
