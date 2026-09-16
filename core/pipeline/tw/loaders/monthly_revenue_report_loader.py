@@ -8,27 +8,35 @@ from loguru import logger
 from core.config import (
     MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH,
     MONTHLY_REVENUE_REPORT_META_DIR_PATH,
-    MONTHLY_REVENUE_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
+from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import DataType
 from core.pipeline.utils.data_utils import DataUtils
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 
 class MonthlyRevenueReportLoader(BaseDataLoader):
     """TWSE & TPEX Monthly Revenue Report Loader"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[MonthlyRevenueDAO] = None) -> None:
+        """
+        - Description:
+            建立月營收 loader
+        - Parameters:
+            - dao: Optional[MonthlyRevenueDAO]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；
+                未指定時 loader 自行建立，入庫完成即關閉
+        """
+
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[MonthlyRevenueDAO] = dao
+        self.owns_dao: bool = dao is None
 
-        # Specify column data types
-        self.text_not_null_cols: List[str] = ["stock_id", "公司名稱"]
-        self.int_not_null_cols: List[str] = ["year", "month"]
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.mrr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH
@@ -56,72 +64,58 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+        if self.dao is None:
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+            self.dao = MonthlyRevenueDAO(db_path=TW_STOCK_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
+
+    def load_cleaned_columns(self) -> List[str]:
+        """讀取清洗器產出的欄位清單（建表用）"""
+
+        return DataUtils.load_json(
+            file_path=self.monthly_revenue_report_cleaned_cols_path
+        )
 
     def create_db(self) -> None:
         """Create New Database"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        # Step 1: 讀取欄位定義 JSON
-        cols: List[str] = DataUtils.load_json(
-            file_path=self.monthly_revenue_report_cleaned_cols_path
-        )
-        col_defs: List[str] = []
-
-        # Step 2: 指定欄位型別
-        for col in cols:
-            col_name: str = f'"{col}"'
-
-            if col in self.text_not_null_cols:
-                col_defs.append(f"{col_name} TEXT NOT NULL")
-            elif col in self.int_not_null_cols:
-                col_defs.append(f"{col_name} INT NOT NULL")
-            else:
-                col_defs.append(f"{col_name} REAL")
-
-        # Step 3: 加 PRIMARY KEY
-        col_defs.append('PRIMARY KEY ("year", "month", "stock_id", "公司名稱")')
-
-        # Step 4: 組建 SQL
-        col_defs_sql: str = ",\n            ".join(col_defs)
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {MONTHLY_REVENUE_TABLE_NAME}(
-            {col_defs_sql}
-        )
-        """
-        cursor.execute(create_table_query)
-
-        # 檢查是否成功建立 table
-        cursor.execute(f"PRAGMA table_info('{MONTHLY_REVENUE_TABLE_NAME}')")
-        if cursor.fetchall():
-            logger.info(f"Table {MONTHLY_REVENUE_TABLE_NAME} create successfully!")
-            logger.info(create_table_query)
-        else:
-            logger.warning(f"Table {MONTHLY_REVENUE_TABLE_NAME} create unsuccessfully!")
-
-        self.conn.commit()
+        self.dao.create_table(self.load_cleaned_columns())
 
     def create_missing_tables(self) -> None:
         """確保月營收資料表存在"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=MONTHLY_REVENUE_TABLE_NAME
-        ):
+        if not self.dao.table_exists():
             self.create_db()
 
     def add_to_db(self, remove_files: bool = False) -> None:
-        """Add Data into Database"""
+        """
+        - Description:
+            將 downloads 內的月營收 CSV 入庫；有任何檔案失敗就拋 `DataLoadError`
 
-        if self.conn is None:
+            **去重走 `INSERT OR IGNORE`**：舊版每個 CSV 都把整張表的主鍵讀進記憶體、
+            以 merge 找出新列再 `to_sql` 追加——表越大越慢，且同一檔內自己重複的列
+            會讓 `to_sql` 撞主鍵、整檔失敗。改用資料庫自己的主鍵約束後兩者皆免。
+
+            **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾，
+            不會被迴圈結束後的 `commit()` 一起寫進去。
+        - Parameters:
+            - remove_files: bool
+                全部成功後是否刪除 downloads 目錄
+        """
+
+        if self.dao is None:
             self.connect()
 
         # Ensure Database Table Exists
@@ -137,67 +131,34 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
             try:
                 df: pd.DataFrame = pd.read_csv(file_path)
 
-                # 檢查並過濾掉已存在的記錄
-                if not df.empty:
+                if df.empty:
+                    logger.warning(f"Skip {file_path}: file is empty")
+                else:
                     # 確保 stock_id 是字串型別，避免與資料庫中的 TEXT 型別不一致
                     if "stock_id" in df.columns:
                         df["stock_id"] = df["stock_id"].astype(str)
 
-                    # 查詢資料庫中已存在的記錄
-                    existing_query: str = f"""
-                    SELECT year, month, stock_id, "公司名稱"
-                    FROM {MONTHLY_REVENUE_TABLE_NAME}
-                    """
-                    existing_df: pd.DataFrame = pd.read_sql_query(
-                        existing_query, self.conn
-                    )
+                    inserted: int
+                    skipped: int
+                    with self.dao.savepoint():
+                        inserted, skipped = self.dao.insert_or_ignore(df)
 
-                    # 確保 existing_df 的 stock_id 也是字串型別
-                    if not existing_df.empty and "stock_id" in existing_df.columns:
-                        existing_df["stock_id"] = existing_df["stock_id"].astype(str)
-
-                    if not existing_df.empty:
-                        # 合併 DataFrame 來找出重複的記錄
-                        df_merged: pd.DataFrame = df.merge(
-                            existing_df,
-                            on=["year", "month", "stock_id", "公司名稱"],
-                            how="left",
-                            indicator=True,
-                        )
-                        # 只保留不存在於資料庫中的記錄
-                        df_new: pd.DataFrame = df_merged[
-                            df_merged["_merge"] == "left_only"
-                        ].drop(columns=["_merge"])
-                        # 還原原始欄位（移除合併時可能產生的重複欄位）
-                        df_new = df_new[df.columns]
-                    else:
-                        df_new: pd.DataFrame = df
-
-                    # 只插入新記錄
-                    if not df_new.empty:
-                        df_new.to_sql(
-                            MONTHLY_REVENUE_TABLE_NAME,
-                            self.conn,
-                            if_exists="append",
-                            index=False,
-                        )
+                    if inserted:
                         logger.info(
                             f"Save {file_path} into database "
-                            f"({len(df_new)} new records, {len(df) - len(df_new)} duplicates skipped)"
+                            f"({inserted} new records, {skipped} duplicates skipped)"
                         )
                     else:
                         logger.info(
                             f"Skip {file_path}: all records already exist in database"
                         )
-                else:
-                    logger.warning(f"Skip {file_path}: file is empty")
 
                 file_cnt += 1
             except Exception as e:
                 logger.warning(f"Error saving {file_path}: {e}")
                 failed_files.append(str(file_path))
 
-        self.conn.commit()
+        self.dao.commit()
         self.disconnect()
 
         self.finish_load(
