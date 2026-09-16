@@ -33,7 +33,7 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "scripts",
     "tests",
 )
-_SCAN_FILES: Tuple[str, ...] = ("CLAUDE.md", "README.md")
+_SCAN_FILES: Tuple[str, ...] = ("CLAUDE.md", "README.md", "README_en.md")
 
 # 排除的目錄
 _EXCLUDE_PARTS: Set[str] = {".venv", "__pycache__", "node_modules", ".git"}

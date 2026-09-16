@@ -1,41 +1,41 @@
-[English](#) | [Chinese (中文版)](README_zh.md)
+[English](README_en.md) | [Chinese (中文版)](#)
 
-> `README_zh.md` is the source of truth; this file is its English translation. Edit the Chinese version first, then sync this one.
+> 本檔為權威版本；`README_en.md` 為其英譯。改動時先改本檔，再同步英文版。
 
 # AlphaEdge
 
-AlphaEdge is a strategy research and trading framework focused on Taiwan market workflows (backtest + reporting + data update pipeline + Streamlit result viewer).
+AlphaEdge 是一個聚焦台灣市場工作流程的策略研究與交易框架（回測 + 報表 + 資料更新流程 + Streamlit 結果檢視器）。
 
-## Architecture Overview
+## 架構總覽
 
 ```mermaid
 graph TB
-    subgraph entry ["Entry Layer"]
+    subgraph entry ["入口層"]
         RunPy["run.py"]
         Tasks["tasks/update_db.py"]
     end
 
-    subgraph strategy_layer ["Strategy Layer"]
-        Strategies["core/strategies<br/>(declares market + instrument_type)"]
+    subgraph strategy_layer ["策略層"]
+        Strategies["core/strategies<br/>（宣告 market ＋ instrument_type）"]
         Loader["strategy_loader.py"]
     end
 
-    subgraph engine_layer ["Backtest Engine (market-agnostic)"]
-        Factory["core/backtest/factory.py<br/>(only 'if market ==' in repo)"]
+    subgraph engine_layer ["回測引擎層（市場無關）"]
+        Factory["core/backtest/factory.py<br/>（全專案唯一 if market ==）"]
         Backtester["core/backtest/backtester.py"]
-        BTModels["core/backtest/models<br/>InstrumentSpec / FillModel<br/>CostModel / SettlementModel"]
+        BTModels["core/backtest/models<br/>InstrumentSpec／FillModel<br/>CostModel／SettlementModel"]
         Feed["core/backtest/datafeed"]
         Managers["core/managers"]
         Report["core/backtest/report"]
     end
 
-    subgraph domain_layer ["Domain & Shared"]
-        Models["core/models<br/>(base/ + stock/ + futures/)"]
+    subgraph domain_layer ["領域與共用層"]
+        Models["core/models<br/>（base/ ＋ stock/ ＋ futures/）"]
         Utils["core/utils"]
-        Config["core/config<br/>(paths / schema / settings)"]
+        Config["core/config<br/>（paths／schema／settings）"]
     end
 
-    subgraph data_layer ["Data & Pipeline"]
+    subgraph data_layer ["資料與流程層"]
         API["core/api"]
         Adapters["core/adapters"]
         Pipeline["core/pipeline"]
@@ -43,11 +43,11 @@ graph TB
         Data["data/downloads"]
     end
 
-    subgraph output_layer ["Backtest Outputs"]
+    subgraph output_layer ["回測輸出層"]
         Results["results"]
     end
 
-    subgraph frontend_layer ["Frontend (Streamlit)"]
+    subgraph frontend_layer ["前端層（Streamlit）"]
         FrontendApp["frontend/app.py"]
         FrontendService["frontend/services/report_loader.py"]
         FrontendConfig["frontend/config.py"]
@@ -84,89 +84,84 @@ graph TB
     FrontendDocker --> FrontendApp
 ```
 
-`Backtester` is the **only** backtest engine: market-agnostic, no subclasses. All market-specific behavior is injected as five pluggable models (`InstrumentSpec`, `FillModel`, `CostModel`, `SettlementModel`, `DataFeed`) assembled by `factory.py` from the `market` + `instrument_type` a strategy declares. Adding a (market, instrument) combination does not require changing `backtester.py`. See [Multi-Market Engine](docs/backtest/multi-market-engine.md) and [Module Map](docs/backtest/module-map.md).
+`Backtester` 是**唯一的回測引擎，市場無關、沒有子類**。市場差異全部下沉為五個可插拔的 model（`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed`），由 `factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝。新增一個（市場, 商品）組合不需要修改 `backtester.py` 一行。詳見[多市場回測引擎架構](docs/backtest/multi-market-engine.md)與[模組使用關係](docs/backtest/module-map.md)。
 
+## 回測支援範圍
 
+一次回測跑一個（市場, 商品）組合，由策略基底宣告、`factory.py` 分派；方向（LONG／SHORT）與商品類別是兩條獨立的軸，
+記帳一律看每一張訂單的 `position_type`，策略的 `allowed_directions` 只是方向白名單。
 
-## Backtest Coverage
+表中的資料區間是 2026-09-15 盤點 `data/db` 的結果，更新資料後會跟著變動。
 
-Each backtest runs one (market, instrument) combination, declared by the strategy base and dispatched by `factory.py`. Direction (LONG / SHORT) and instrument type are independent axes: accounting always follows each order's `position_type`, and the strategy's `allowed_directions` is only a direction whitelist.
+| 市場 × 商品 | 狀態 | 範圍與資料區間 | K 棒級別 | 方向 | 策略基底 |
+| ----------- | ---- | -------------- | -------- | ---- | -------- |
+| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-15（最新交易日 2,392 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-14 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
+| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；更新至 2026-09-01～09-03<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
+| 股票期貨／ETF 期貨 | ❌ 目前無法回測 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），快照只有 2026-08-29～09-02；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料<br>**程式阻斷**：`FuturesPositionManager.open_position()` 以 `FUTURES_MULTIPLIER` 查乘數，股期不在表內，**第一筆開倉就 `KeyError`**，查表與比率兩種保證金模式皆然（DataFeed 已改查標的池，部位管理層沒接上）<br>**其餘缺口**：個股期貨保證金在比例表，查表模式只讀金額表，開倉會中止（ETF 期貨 NYF 在金額表，2020-07-22 起）；契約單位只回溯到 2026-08-29 的快照 | 僅 `DAY` | 設計上同台指數期貨，實際開倉即中斷 | `BaseFuturesStrategy` |
+| 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
 
-Data ranges below reflect an inventory of `data/db` taken on 2026-09-15 and will move as the data is updated.
+> - 多空並存要宣告 `allowed_directions = {LONG, SHORT}`；做多當沖需自行宣告 `bar_execution_order = OPEN_THEN_CLOSE`。
+> - SHORT 策略的 `enable_intraday` 預設為 `True`，會自動走 `DAY_TRADE`；要留倉放空必須設為 `False` 再指定 `short_method`。
+> - 期貨跨月份價差部位兩腿各繳全額保證金（價差保證金未模擬）。
 
-| Market × Instrument | Status | Scope and data range | Bar scale | Directions | Strategy base |
-| ------------------- | ------ | -------------------- | --------- | ---------- | ------------- |
-| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-09-15 (2,392 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-09-14 | `DAY`, `TICK` (ticks live in DolphinDB, not `data/db`; needs the `[tick]` extra) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
-| TW index futures (`TW` × `FUTURE`) | ✅ Supported | TX, MTX, TMF, TE, ZEF, TF, ZFF; automatic contract roll<br>**Day-session prices** (`DAY`): TX / MTX / TE / TF from 2015-01-05 (backfill start), ZEF from 2021-06-28, ZFF from 2021-12-06, TMF from 2024-07-29 (listing dates); updated to 2026-09-01 – 09-03<br>**Night-session prices** (`NIGHT` / `COMBINED`): TX / MTX from 2017-05-16, TE from 2018-11-20, ZEF from 2021-06-29, TMF from 2024-07-30; **TF / ZFF only from 2025-06-24**<br>**Margin** (lookup mode): TX / MTX from 2020-03-13, TE / TF from 2020-07-22, ZEF from 2021-08-12, ZFF from 2022-01-26, TMF from 2024-08-09 | `DAY` only | **LONG / SHORT**: the same margin trading, daily mark-to-market and margin call; no borrow availability or borrow fees<br>Long and short can coexist across contracts; opposite positions in the same contract are rejected | `BaseFuturesStrategy` |
-| Stock futures / ETF futures | ❌ Not backtestable yet | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), snapshots only for 2026-08-29 – 09-02; prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session)<br>**Code blocker**: `FuturesPositionManager.open_position()` looks up the multiplier in `FUTURES_MULTIPLIER`, which has no stock futures, so **the first open raises `KeyError`** in both lookup and ratio margin modes (the DataFeed already reads the universe; the position manager does not)<br>**Other gaps**: single-stock futures margin lives in the rate table while lookup mode only reads the amount table, so opens abort (ETF future NYF is in the amount table from 2020-07-22); contract sizes only go back to the 2026-08-29 snapshot | `DAY` only | Designed like TW index futures, but aborts on the first open | `BaseFuturesStrategy` |
-| US market, options | ❌ Not supported | `Market.US` and `InstrumentType.OPTION` are defined only; the factory raises `ValueError` | — | — | — |
+### 主要限制
 
-> - Holding both directions requires `allowed_directions = {LONG, SHORT}`; a LONG intraday strategy must declare `bar_execution_order = OPEN_THEN_CLOSE` itself.
-> - `enable_intraday` defaults to `True`, so a SHORT strategy goes through `DAY_TRADE` automatically; to hold shorts overnight, set it to `False` and pick a `short_method`.
-> - Futures calendar-spread legs each pay full margin (spread margin is not modeled).
+- 期貨 Tick 級別回測未實作（`TwFuturesDataFeed.get_quotes()` 回空 list）。
+- 期貨保證金查表的起點依商品而異（最早 2020-03，見上表）；早於起點的區間只能用 `FuturesMarginConfig.ratio()` 近似，可開口數與追繳門檻會失真。
+- 期貨跳動點只登錄台指期系列（1 點）；TE／ZEF／TF／ZFF 若以跳動點數設定滑價會失真（預設滑價為 0，不受影響）。
+- 同一次回測無法同時持有台股與台期貨（跨市場組合／避險）。
+- 台股平盤下放空限制與每日可當沖清單尚未接上撮合，會高估放空與當沖機會。
+- `--mode live` 實盤路徑未實作。
 
-### Main limitations
+細節見[放空回測框架規格](docs/backtest/short-selling-framework.md)與[台期貨平台](docs/futures/tw-futures-platform.md)。
 
-- Tick-level futures backtests are not implemented (`TwFuturesDataFeed.get_quotes()` returns an empty list).
-- The futures margin lookup start date differs per product (earliest 2020-03, see the table); earlier periods can only use the `FuturesMarginConfig.ratio()` approximation, which distorts tradable lots and margin-call thresholds.
-- Futures tick size is only registered for the TAIEX futures family (1 point); TE / ZEF / TF / ZFF are distorted if slippage is set in ticks (default slippage is 0, so unaffected).
-- A single backtest cannot hold TW stocks and TW futures at the same time (cross-market portfolios / hedging).
-- The TW stock below-reference-price short restriction and the daily day-trade whitelist are not wired into matching yet, so short and day-trade opportunities are overestimated.
-- The `--mode live` path is not implemented.
+## 模組說明
 
-See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW Futures Platform](docs/futures/tw-futures-platform.md) for details.
-
-## Module Guide
-
-
-| Module          | Description                                                                                                                     |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `core/`         | Core trading domain code (strategies, managers, models, adapters, API, ETL, backtest engine; outputs land in the top-level `results/`) |
-| `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
-| `tasks/`        | Data maintenance and database update scripts                                                                                    |
-| `tests/`        | Unit/integration tests and the backtest regression lines (`tests/backtest/`)                                                    |
-| `scripts/`      | Guardrail checks (layer deps, doc paths, orphan API methods), regression script and manual scripts                              |
-| `docs/`         | Usage and architecture docs (setup, commands, deployment, data, backtest and ETL design)                                       |
-| `strategy_lab/` | Research workspace organized by concept (`strategies/`, `data_analysis/`, `notebooks/`, `ideas/`); see `strategy_lab/README.md` |
-| `backlog/`      | Internal notes and future work items                                                                                            |
-
+| 模組            | 說明                                                                  |
+| --------------- | --------------------------------------------------------------------- |
+| `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
+| `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
+| `tasks/`        | 資料維護與資料庫更新腳本                                              |
+| `tests/`        | 單元／整合測試與回測回歸線（`tests/backtest/`）                       |
+| `scripts/`      | 護欄檢查（分層相依、文件路徑、API 孤兒方法）、回歸腳本與人工執行腳本   |
+| `docs/`         | 使用與架構說明文件（安裝、指令、部署、資料、回測與 ETL 設計）          |
+| `strategy_lab/` | 策略研究工作區，依概念分為 `strategies/`、`data_analysis/`、`notebooks/`、`ideas/`；見 `strategy_lab/README.md` |
+| `backlog/`      | 內部規劃與待辦筆記                                                    |
 
 ---
 
-## Documentation
+## 文件
 
-
-| Document                                                | Description                                                   |
-| ------------------------------------------------------- | ------------------------------------------------------------- |
-| [Dev Setup](docs/setup/dev-setup.md)                    | Python environment, dependencies, formatting, env vars        |
-| [Dev Deployment](docs/deployment/dev-deployment.md)     | Day-to-day local flow: update data, run a backtest, view results |
-| [Prod Deployment](docs/deployment/prod-deployment.md)   | Building Docker images, running containers, role separation   |
-| [Data Coverage](docs/exchanges/data_coverage.md)        | Data sources, API mapping, start dates and price adjustment   |
-| [Command Usage](docs/commands/command-usage.md)         | Full `update_db` target reference and runnable examples       |
-| [Strategy Development Guide](core/strategies/README.md) | How to implement strategies in this project                   |
-| [Multi-Market Engine](docs/backtest/multi-market-engine.md) | Backtest engine architecture: one engine, five pluggable models |
-| [Module Map](docs/backtest/module-map.md)               | Who calls whom on the backtest path, per-file responsibilities |
-| [Short-Selling Framework](docs/backtest/short-selling-framework.md) | Direction-driven accounting, costs, margin call, forced cover |
-| [TW Futures Platform](docs/futures/tw-futures-platform.md) | Futures tables and commands; mark-to-market, margin, contract roll and session semantics; known limits |
-| [ETL Ingestion](docs/pipeline/etl-ingestion.md)         | Batching, idempotency and failure semantics of the data-load stage; per-updater checklist |
-| [Equity Change Data](docs/pipeline/equity-change.md)    | `equity_change` data shape, known limits and throttling       |
-| [Corporate Actions](docs/pipeline/corporate-action.md)  | `corporate_action` table: sources, adjustment ratios and the false-gap guard |
-| [Code Quality](docs/dev/code-quality.md)                | Tooling (pyproject / ruff / CI / pre-commit) and lint ignore rationale |
-| [Naming Axes](docs/dev/naming-axes.md)                  | Directory naming decision for the market axis vs the instrument-type axis |
-| [Runtime Artifacts](docs/dev/runtime-artifacts.md)      | Conventions for `data/` / `results/` / `logs/`, log bucketing and retention |
-
+| 文件                                               | 說明                                            |
+| -------------------------------------------------- | ----------------------------------------------- |
+| [開發環境設定](docs/setup/dev-setup.md)            | Python 環境、相依套件、格式化工具、環境變數     |
+| [開發部署](docs/deployment/dev-deployment.md)      | 本機更新資料、執行回測、檢視結果的日常流程      |
+| [正式環境部署](docs/deployment/prod-deployment.md) | Docker 映像建置、容器執行與角色切分             |
+| [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
+| [指令教學](docs/commands/command-usage.zh-TW.md)   | `update_db` target 對照與完整執行範例           |
+| [策略開發指南](core/strategies/README.md)          | 本專案策略實作方式                              |
+| [多市場回測引擎架構](docs/backtest/multi-market-engine.md) | 單一引擎 ＋ 五個可插拔 model 的設計與已知簡化 |
+| [模組使用關係](docs/backtest/module-map.md)        | 回測路徑上誰呼叫誰、逐檔案職責與輸出檔案        |
+| [放空回測框架規格](docs/backtest/short-selling-framework.md) | 方向驅動的記帳、成本、維持率追繳與強制回補 |
+| [台期貨平台](docs/futures/tw-futures-platform.md) | 期貨資料表與指令、盯市／保證金／換月／日夜盤語意與已知限制 |
+| [ETL 入庫約定](docs/pipeline/etl-ingestion.md) | 入庫階段的分批時機、冪等性與失敗語意；新增 updater 的檢查表 |
+| [權益變動表資料](docs/pipeline/equity-change.md) | `equity_change` 的資料形狀、已知限制與節流設定 |
+| [非除權息的公司行動](docs/pipeline/corporate-action.md) | `corporate_action` 表的資料源、調整倍率與假跳空護欄 |
+| [程式碼品質工具鏈](docs/dev/code-quality.md) | pyproject／ruff／CI／pre-commit 設定與 lint ignore 理由 |
+| [命名軸線](docs/dev/naming-axes.md) | 市場軸與商品類別軸的目錄命名定案，以及哪些目錄不分市場 |
+| [執行期產物](docs/dev/runtime-artifacts.md) | `data/`／`results/`／`logs/` 的目錄約定、日誌分桶與保留策略 |
 
 ---
 
-## Environment Setup
+## 環境建立
 
-First time here? Go in order: **prepare the database → pick one of the three ways to run → (if needed) set environment variables**.
-Section 4 is only for changing the code.
+第一次使用請照順序做：**準備資料庫 → 從三種執行方式挑一種 → （需要時）設定環境變數**。
+第 4 節只有要修改程式碼時才需要。
 
-### 1. Prepare the database
+### 1. 準備資料庫
 
-Backtests and the frontend need the SQLite3 databases. Download them from [Google Drive](https://drive.google.com/drive/folders/1iKTpnfECyHIgVj9SJ2al5BKBwceXr_ZE?usp=share_link)
-and put them in `data/db/` under the project root (the code expects `data/db/tw_stock.db` and `data/db/tw_futures.db`).
+回測與前端都需要 SQLite3 資料庫，請先到 [Google Drive](https://drive.google.com/drive/folders/1iKTpnfECyHIgVj9SJ2al5BKBwceXr_ZE?usp=share_link) 下載，
+並放到專案根目錄的 `data/db/` 中（程式預期的路徑為 `data/db/tw_stock.db`、`data/db/tw_futures.db`）。
 
 ```text
 AlphaEdge/
@@ -176,32 +171,32 @@ AlphaEdge/
         └── tw_futures.db
 ```
 
-To bring the data up to date afterwards, see "Update database" under Command Usage below.
+之後要更新到最新資料，見下方〈指令教學〉的「更新資料庫」。
 
-### 2. Choose how to run it (pick one)
+### 2. 選擇執行方式（三選一）
 
-All three run the same code — **pick one and follow it**; you do not need all of them:
+三種方式跑的是同一套程式，**挑一種照做即可**，不需要全部裝：
 
-| Option | Best for | Install first | Where backtest results go |
-| ------ | -------- | ------------- | ------------------------- |
-| Option 1: Local Python (recommended) | Writing strategies, changing code | Python 3.12+ | `results/` at the project root |
-| Option 2: Docker Compose | No Python install; one command to backtest and view results | Docker | Docker volume `alphaedge_results` |
-| Option 3: Docker Container | Controlling the backtest and frontend containers separately | Docker | `results/` at the project root (mounted) |
+| 方式 | 適合 | 需要先安裝 | 回測結果存放位置 |
+| ---- | ---- | ---------- | ---------------- |
+| 方式 1：本機 Python（推薦） | 要寫策略、改程式碼 | Python 3.12 以上 | 專案根目錄的 `results/` |
+| 方式 2：Docker Compose | 不想裝 Python，只想一個指令跑回測並看結果 | Docker | Docker volume `alphaedge_results` |
+| 方式 3：Docker Container | 想分開控制回測與前端兩個容器 | Docker | 專案根目錄的 `results/`（掛載） |
 
-#### Option 1: Local Python (recommended)
+#### 方式 1：本機 Python（推薦）
 
-**Step 1: Create a virtualenv and install**
+**步驟 1：建立虛擬環境並安裝**
 
-macOS / Linux:
+macOS / Linux：
 
 ```bash
-python3 -m venv .venv                       # create the virtualenv
-source .venv/bin/activate                   # activate it
+python3 -m venv .venv                       # 建立虛擬環境
+source .venv/bin/activate                   # 啟用虛擬環境
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt   # install dependencies and the project itself
+python -m pip install -r requirements.txt   # 安裝相依套件與專案本身
 ```
 
-Windows (PowerShell or CMD):
+Windows（PowerShell 或 CMD）：
 
 ```powershell
 python -m venv .venv
@@ -210,64 +205,62 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-The last line of `requirements.txt` is `-e .`, so the same command installs the project too, and
-`core` / `tasks` / `tests` are importable from any directory. Activate the virtualenv in every new
-terminal; run `deactivate` to leave it.
+`requirements.txt` 最後一行是 `-e .`，所以同一個指令會一併把專案裝好，之後在任何目錄都能
+import `core`／`tasks`／`tests`。之後每開一個新的終端機都要先啟用虛擬環境；要離開時執行 `deactivate`。
 
-**Step 2: Run a backtest**
+**步驟 2：執行回測**
 
 ```bash
 python run.py --strategy MomentumStrategy1
 ```
 
-- `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
-- Optional: `--show` opens charts in a browser; `--mode live` is not implemented (exits with code 1).
-- Results are written to `results/` at the project root.
+- `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
+- 選用參數：`--show` 在瀏覽器開圖；`--mode live` 尚未實作（以結束碼 1 結束）。
+- 結果會寫到專案根目錄的 `results/`。
 
-**Step 3: Open the frontend to view results**
+**步驟 3：開啟前端檢視結果**
 
-The frontend packages are not in the base install, so add them once:
+前端套件不在基本安裝裡，第一次要先補裝：
 
 ```bash
-python -m pip install -e ".[frontend]"   # one-time
+python -m pip install -e ".[frontend]"   # 只需裝一次
 streamlit run frontend/app.py
 ```
 
-Open `http://localhost:8501`. Leave the frontend running and use another terminal tab (with the virtualenv activated) to keep running backtests.
+在瀏覽器開啟 `http://localhost:8501`。前端可以開著不關，另開一個終端機分頁（同樣先啟用虛擬環境）繼續跑回測。
 
-#### Option 2: Docker Compose
+#### 方式 2：Docker Compose
 
-One command builds and starts two containers: `core` runs one backtest and exits, `frontend` keeps serving the page.
+一個指令建好並啟動兩個容器：`core` 跑完一次回測就結束，`frontend` 會持續提供網頁。
 
 ```bash
-# Build images and start (default strategy: MomentumStrategy1)
+# 建立映像並啟動（預設策略為 MomentumStrategy1）
 docker compose up --build
 
-# Use a different strategy
+# 換成其他策略
 STRATEGY=MomentumFuturesStrategy docker compose up
 
-# Run in the background / stop and remove containers
+# 在背景執行／停止並移除容器
 docker compose up -d
 docker compose down
 ```
 
-Open `http://localhost:8501`. After changing code, add `--build` so the images pick up the change.
+在瀏覽器開啟 `http://localhost:8501`。改過程式碼後要加 `--build` 重建映像，變更才會進到容器裡。
 
-> The images contain **no database**; compose mounts the host's `./data` **read-only**. Skip
-> "1. Prepare the database" and the backtest fails at `sqlite3.connect`. Read-only is deliberate:
-> the container only runs backtests and must not write to the host database.
-> Backtest results go to the `alphaedge_results` volume; logs go to the host's `./logs`.
+> 映像裡**不含資料庫**，compose 會把本機的 `./data` 以**唯讀**掛進容器；沒有先做〈1. 準備資料庫〉，
+> 回測會在 `sqlite3.connect` 當場失敗。唯讀是刻意的：容器只跑回測，不該寫到本機資料庫。
+> 回測結果存在 `alphaedge_results` volume，日誌寫到本機的 `./logs`。
 
-#### Option 3: Docker Container
+#### 方式 3：Docker Container
 
-**Step 1: Build the images**
+**步驟 1：建立映像**
 
 ```bash
 docker build -f core/Dockerfile -t alphaedge-core .
 docker build -f frontend/Dockerfile -t alphaedge-frontend .
 ```
 
-**Step 2: Run a backtest**
+**步驟 2：執行回測**
 
 ```bash
 docker run --rm \
@@ -276,158 +269,155 @@ docker run --rm \
   alphaedge-core --strategy MomentumStrategy1
 ```
 
-The image has no database, so mount the host `data/` read-only; results are written back to the host
-`results/`, otherwise they vanish when the container exits. To type commands inside the container
-instead, use `--entrypoint /bin/bash` with `-it`, then run `python run.py --help`.
+映像不含資料庫，所以要唯讀掛入本機 `data/`；結果寫回本機 `results/`，否則容器結束時會跟著消失。
+想進容器手動下指令，改用 `--entrypoint /bin/bash` 並加上 `-it`，進去後執行 `python run.py --help`。
 
-**Step 3: Start the frontend**
+**步驟 3：啟動前端**
 
 ```bash
 docker run --rm -p 8501:8501 -v "$(pwd)/results:/results:ro" alphaedge-frontend
 ```
 
-Open `http://localhost:8501`. The frontend reads the mounted `results/`; without the mount it shows no backtests.
+在瀏覽器開啟 `http://localhost:8501`。前端讀的是掛進去的 `results/`，沒掛就看不到任何回測結果。
 
-### 3. Set environment variables (optional)
+### 3. 設定環境變數（選用）
 
-**Skip this if you only run daily backtests.** To update data or use ticks, copy the template and fill in what you need:
+**只跑日線回測可以跳過這一步。** 要更新資料或使用 tick 時，複製範本並填入需要的欄位：
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable | Purpose | Needed when |
-| -------- | ------- | ----------- |
-| `DDB_PATH`, `DDB_HOST`, `DDB_PORT`, `DDB_USER`, `DDB_PASSWORD` | DolphinDB connection | Accessing tick data, running tick backtests |
-| `API_KEY`, `API_SECRET_KEY` | Sinopac Shioaji API | Crawling tick data |
-| `FINMIND_API_TOKEN` | FinMind API | Updating FinMind data (stock overview, brokers, broker branches) |
+| 變數 | 用途 | 什麼時候需要 |
+| ---- | ---- | ------------ |
+| `DDB_PATH`、`DDB_HOST`、`DDB_PORT`、`DDB_USER`、`DDB_PASSWORD` | DolphinDB 連線 | 存取 tick 資料、跑 tick 回測 |
+| `API_KEY`、`API_SECRET_KEY` | 永豐 Shioaji API | 爬 tick 資料 |
+| `FINMIND_API_TOKEN` | FinMind API | 更新 FinMind 資料（台股總覽、證券商、券商分點） |
 
-`.env` is read by the local code; the Docker images do not include it. Details in [Dev Setup](docs/setup/dev-setup.md).
+`.env` 由本機程式讀取；Docker 映像不會帶入這個檔。細節見[開發環境設定](docs/setup/dev-setup.md)。
 
-### 4. Developer tools (when changing code)
+### 4. 開發工具（要修改程式碼時）
 
-Inside the Option 1 virtualenv, add the dev extras:
+在方式 1 的虛擬環境裡加裝 dev 相依：
 
 ```bash
-python -m pip install -e ".[dev]"   # pytest, pytest-timeout, pytest-cov, ruff
+python -m pip install -e ".[dev]"   # pytest、pytest-timeout、pytest-cov、ruff
 ```
 
-Other optional extras: `tick` (DolphinDB tick storage), `lab` (`strategy_lab` report output); the backtest and ETL paths run without them.
+其他選用相依：`[tick]` DolphinDB tick 儲存、`[lab]` `strategy_lab` 報告輸出；回測與 ETL 主流程不需要它們。
 
-**Lint, format and tests**
+**Lint、格式與測試**
 
 ```bash
-ruff check .            # CLAUDE.md §2.5 / §2.10, configured in pyproject.toml
+ruff check .            # 設定於 pyproject.toml，對應 CLAUDE.md §2.5／§2.10
 ruff format .
-pytest -m "not slow"    # skips tests needing tw_stock.db or API credentials
-pytest                  # full suite (needs data/db/tw_stock.db)
-./scripts/run_regression.sh   # LONG + SHORT regression, must stay row-identical
+pytest -m "not slow"    # 略過需要 tw_stock.db 或 API 憑證的測試
+pytest                  # 全部（需 data/db/tw_stock.db）
+./scripts/run_regression.sh   # LONG ＋ SHORT 回歸，必須逐筆相同
 ```
 
-**Pre-commit checks**: run ruff, the layer-dependency gate and the doc path check automatically before each commit (tests and the API orphan-method check are left to CI).
+**commit 前自動檢查**：每次 commit 前自動跑 ruff、分層相依檢查與文件路徑檢查（測試與 API 死介面檢查留給 CI）。
 
 ```bash
 pip install pre-commit
-pre-commit install       # one-time; installs the git hook
+pre-commit install       # 只需執行一次，安裝 git hook
 pre-commit run --all-files
 ```
 
-**CI**: on every push GitHub Actions runs, in order: `ruff check`, `ruff format --check`, the
-layer-dependency gate (`scripts/check_layer_deps.py`), the doc path check
-(`scripts/check_doc_paths.py`), the API orphan-method check
-(`scripts/check_api_orphan_methods.py`), the SHORT regression line, and
-`pytest -m "not slow"`, finishing with a coverage report under `continue-on-error`
-(see `.github/workflows/ci.yml`). **The LONG regression line needs
-`data/db/tw_stock.db`, which CI does not have, so it only runs locally.**
+**CI**：每次 push 時 GitHub Actions 會依序跑 `ruff check`、`ruff format --check`、
+分層相依檢查（`scripts/check_layer_deps.py`）、文件路徑檢查（`scripts/check_doc_paths.py`）、
+API 死介面檢查（`scripts/check_api_orphan_methods.py`）、SHORT 回歸線與
+`pytest -m "not slow"`，最後以 `continue-on-error` 產出覆蓋率報告
+（見 `.github/workflows/ci.yml`）。**LONG 回歸線需要 `data/db/tw_stock.db`，
+CI 沒有該檔，只能在本機跑。**
 
-## Command Usage
+## 指令教學
 
-### Update database
+### 更新資料庫
 
-For full target reference and single/multi-target examples, see [Command Usage](docs/commands/command-usage.md).
+完整 target 對照表與單一/組合範例請見：[指令教學](docs/commands/command-usage.zh-TW.md)。
 
 ```bash
 python -m tasks.update_db --target no_tick
 ```
 
-### Run backtest
+### 執行回測
 
-Replace `<StrategyClassName>` with your strategy class name. More command scenarios are documented in [Command Usage](docs/commands/command-usage.md).
+將 `<StrategyClassName>` 換成你的策略類別名稱；更多指令情境可參考同一份[指令教學](docs/commands/command-usage.zh-TW.md)。
 
 ```bash
 python run.py --strategy <StrategyClassName>
-# optional: --show opens charts in a browser; --mode live is not implemented (exits with code 1)
+# 選用：--show 在瀏覽器開圖；--mode live 尚未實作（以結束碼 1 結束）
 ```
 
-## Project Structure
+## 專案結構
 
 ```text
 AlphaEdge/
-├── core/                    # trading domain modules
-│   ├── strategies/            # strategy implementations
-│   │   ├── base.py            # BaseStrategy (market-agnostic)
-│   │   ├── strategy_loader.py # auto-scans every instrument-type sub-package (stock / futures)
-│   │   ├── ridge.py           # ridge signal shared by research and production (a module on purpose)
-│   │   ├── stock/             # BaseStockStrategy + concrete stock strategies
-│   │   └── futures/           # BaseFuturesStrategy + TW futures strategies
-│   ├── api/                   # data access APIs (SQLite / DolphinDB)
-│   ├── adapters/              # data adapters / integrations
-│   │   └── tw/                # StockQuoteAdapter (day/tick → StockQuote), FuturesQuoteAdapter
-│   ├── managers/              # position managers (base/ + stock/ + futures/)
-│   ├── models/                # domain models (base/ + stock/ + futures/)
-│   ├── utils/                 # shared helpers (enums, time, logging, Shioaji account)
-│   ├── config/                # paths, table schema and settings constants (lowest layer)
-│   ├── pipeline/              # ETL/update pipeline
-│   │   ├── shared/           # cross-market: four layer bases, HTTP helpers, date/season diffing
-│   │   ├── tw/               # TW equity/futures ETL (crawlers/cleaners/loaders/updaters)
-│   │   │   └── utils/        # TW-only helpers (URL table, tick metadata)
-│   │   └── utils/            # cross-market: constants, DataFrame and SQLite helpers, exceptions
-│   ├── backtest/              # backtest engine
-│   │   ├── README.md          # bar scales, price basis, fill assumptions, performance metrics
-│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses
-│   │   ├── factory.py         # assembles the model set from (market, instrument_type)
-│   │   ├── models/            # InstrumentSpec / FillModel / CostModel / SettlementModel
-│   │   ├── datafeed/          # data loading, quote conversion, trading calendar, futures roll
-│   │   ├── report/            # trading report, direction summary, charts
-│   │   └── analysis/          # performance metrics (`risk_metrics.py` holds pure risk-adjusted return functions, currently called by the frontend)
-├── data/                      # runtime data (git-ignored): db/ (tw_stock.db, tw_futures.db) + downloads/
-├── results/                   # per-strategy backtest outputs (csv / png), git-ignored
-├── logs/                      # api/ pipeline/ backtest/, git-ignored
-├── frontend/                  # Streamlit docker image
-│   ├── app.py                 # Streamlit entrypoint
-│   ├── config.py              # frontend configuration
-│   ├── services/              # data loading and metrics (no Streamlit calls, so testable)
-│   │   ├── report_loader.py   # load backtest report files
-│   │   ├── metrics.py         # stock report metrics (Sharpe / Sortino via `risk_metrics.py`)
-│   │   └── futures_metrics.py # futures-only metrics (margin, lot exposure)
-│   ├── static/theme.css       # page styles
-│   ├── requirements.txt       # frontend image dependencies
-│   ├── Dockerfile             # frontend container image
-│   ├── README.md              # frontend usage notes
+├── core/                    # 交易領域模組
+│   ├── strategies/            # 策略實作
+│   │   ├── base.py            # BaseStrategy（市場無關）
+│   │   ├── strategy_loader.py # 自動掃描所有商品類別子套件（stock／futures）
+│   │   ├── ridge.py           # 研究版與成品版共用的 ridge 訊號（刻意為模組，不是子套件）
+│   │   ├── stock/             # BaseStockStrategy ＋ 各支台股策略
+│   │   └── futures/           # BaseFuturesStrategy 與台期貨策略
+│   ├── api/                   # 資料存取 API（SQLite／DolphinDB）
+│   ├── adapters/              # 資料介接 / 整合層
+│   │   └── tw/               # StockQuoteAdapter（日線/Tick → StockQuote）、FuturesQuoteAdapter
+│   ├── managers/              # 倉位管理器（base/ ＋ stock/ ＋ futures/）
+│   ├── models/                # 領域模型（base/ ＋ stock/ ＋ futures/）
+│   ├── utils/                 # 共用工具（enum、時間、日誌、Shioaji 帳號）
+│   ├── config/                # 路徑、資料表 schema 與設定常數（全專案最底層）
+│   ├── pipeline/              # ETL / 更新流程
+│   │   ├── shared/           # 跨市場共用：四層 base ＋ HTTP 工具、日期／年季差集
+│   │   ├── tw/               # 台股／台期貨 ETL（crawlers／cleaners／loaders／updaters）
+│   │   │   └── utils/        # 只有台股用得到的工具（URL 總表、tick metadata）
+│   │   └── utils/            # 跨市場通用：常數、DataFrame 與 SQLite 工具、例外類別
+│   ├── backtest/              # 回測引擎
+│   │   ├── README.md          # 回測級別、價格口徑、成交假設、績效指標
+│   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類
+│   │   ├── factory.py         # 依（market, instrument_type）組合組裝 model 組合
+│   │   ├── models/            # InstrumentSpec／FillModel／CostModel／SettlementModel
+│   │   ├── datafeed/          # 資料載入、報價轉換、交易日曆、期貨換月
+│   │   ├── report/            # 交易報表、多空統計、圖表
+│   │   └── analysis/          # 績效指標（`risk_metrics.py` 為風險調整後報酬的純函式，目前由前端呼叫）
+├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db）＋ downloads/
+├── results/                   # 各策略回測輸出（csv／png），不進版控
+├── logs/                      # api/、pipeline/、backtest/ 三桶，不進版控
+├── frontend/                  # Streamlit Docker 映像
+│   ├── app.py                 # Streamlit 入口
+│   ├── config.py              # frontend 設定
+│   ├── services/              # 資料載入與指標計算（不含 Streamlit 呼叫，測試得到）
+│   │   ├── report_loader.py   # 載入回測報表檔案
+│   │   ├── metrics.py         # 股票報表指標（Sharpe／Sortino 走 `risk_metrics.py`）
+│   │   └── futures_metrics.py # 期貨專屬指標（保證金、口數曝險）
+│   ├── static/theme.css       # 版面樣式
+│   ├── requirements.txt       # frontend 映像的相依
+│   ├── Dockerfile             # frontend 容器映像
+│   ├── README.md              # frontend 使用說明
 │   └── __init__.py
-├── strategy_lab/              # research workspace (strategies/ / data_analysis/ / notebooks/ / ideas/)
-├── tasks/                     # data update and maintenance entrypoints (update_db, delete_price_data, clean_logs)
-├── tests/                     # test suites (`backtest/` holds engine and regression lines; `temp/`, `database/`, `downloads/` are runtime artifacts)
-├── backlog/                   # internal planning notes
-├── docs/                      # project docs
-│   ├── backtest/              # engine architecture, module map, short-selling spec
-│   ├── dev/                   # code quality, naming axes, runtime artifacts
-│   ├── futures/               # TW futures platform: data, backtest semantics, known limits
-│   ├── pipeline/              # ETL ingestion contract, equity change, corporate actions
-│   ├── setup/                 # dev environment setup
-│   ├── deployment/            # dev and prod deployment
-│   ├── exchanges/             # data coverage
-│   └── commands/              # command usage (zh-TW / en)
-├── scripts/                   # guardrail checks and one-off tools
-│   ├── run_regression.sh      # SHORT + LONG regression guardrail (run before/after engine changes)
-│   ├── check_layer_deps.py    # layer deps, import cycles, market-semantics leaks, cross-axis directory pollution (CI + pre-commit)
-│   ├── check_doc_paths.py     # file paths in docs that no longer resolve (stale after a move; CI + pre-commit)
-│   ├── check_api_orphan_methods.py  # public methods in `core/api` with zero callers and zero tests (CI)
-│   ├── clean_pycache.sh/.ps1  # remove __pycache__ and .pyc (macOS/Linux, Windows)
-│   └── manual/                # scripts needing credentials or a database (see its README)
-├── docker-compose.yml         # compose: core + frontend + shared results volume
+├── strategy_lab/              # 策略研究工作區（strategies/ / data_analysis/ / notebooks/ / ideas/）
+├── tasks/                     # 資料更新與維運入口（update_db、delete_price_data、clean_logs）
+├── tests/                     # 測試套件（`backtest/` 為引擎與回歸線；`temp/`、`database/`、`downloads/` 為執行期產物）
+├── backlog/                   # 內部規劃筆記
+├── docs/                      # 專案文件
+│   ├── backtest/              # 引擎架構、模組使用關係、放空框架規格
+│   ├── dev/                   # 程式碼品質、命名軸線、執行期產物
+│   ├── futures/               # 台期貨平台：資料、回測語意與已知限制
+│   ├── pipeline/              # ETL 入庫約定、權益變動表、公司行動
+│   ├── setup/                 # 開發環境設定
+│   ├── deployment/            # 開發與正式環境部署
+│   ├── exchanges/             # 資料覆蓋範圍
+│   └── commands/              # 指令教學（中文／英文）
+├── scripts/                   # 護欄檢查與一次性工具
+│   ├── run_regression.sh      # 回歸雙線護欄（動回測引擎前後都要跑）
+│   ├── check_layer_deps.py    # 分層相依、循環 import、市場語意洩漏、跨軸目錄污染（CI 與 pre-commit 皆跑）
+│   ├── check_doc_paths.py     # 文件裡指不到的檔案路徑（搬家後沒更新的引用；CI 與 pre-commit 皆跑）
+│   ├── check_api_orphan_methods.py  # `core/api` 零呼叫零測試的公開方法（CI 跑）
+│   ├── clean_pycache.sh／.ps1 # 清除 __pycache__ 與 .pyc（macOS／Linux、Windows）
+│   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
+├── docker-compose.yml         # compose：core + frontend + 共用 results volume
 ├── run.py
-├── README.md
-└── README_zh.md
+├── README.md                  # 中文（權威版本）
+└── README_en.md               # 英譯
 ```
-
