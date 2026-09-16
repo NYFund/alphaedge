@@ -569,12 +569,15 @@ def main() -> None:
                 from_date=from_date,
             )
             fs_updater: FinancialStatementUpdater = FinancialStatementUpdater()
-            fs_updater.update(
-                start_year=time_config["start_year"],
-                end_year=time_config["end_year"],
-                start_season=time_config["start_season"],
-                end_season=time_config["end_season"],
-            )
+            try:
+                fs_updater.update(
+                    start_year=time_config["start_year"],
+                    end_year=time_config["end_year"],
+                    start_season=time_config["start_season"],
+                    end_season=time_config["end_season"],
+                )
+            finally:
+                fs_updater.close()
 
     if DataType.MRR.name.lower() in targets:
         with target_guard("mrr", failed_targets):

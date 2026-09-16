@@ -15,9 +15,11 @@ from core.config import (
     COMPREHENSIVE_INCOME_TABLE_NAME,
     EQUITY_CHANGE_TABLE_NAME,
     FINANCIAL_STATEMENT_DOWNLOADS_PATH,
-    STOCK_INFO_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
+from core.dao.connection import connect_sqlite
+from core.dao.tw.financial_statement_dao import FinancialStatementDAO
+from core.dao.tw.stock_info_dao import StockInfoDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
@@ -30,7 +32,6 @@ from core.pipeline.tw.crawlers.financial_statement_crawler import (
 from core.pipeline.tw.loaders.financial_statement_loader import FinancialStatementLoader
 from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.exceptions import DataLoadError
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -207,13 +208,15 @@ class FinancialStatementUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        # **讀（年季規劃、逐檔 resume）與寫（loader）共用同一條連線**：舊版 updater 與
+        # loader 各開一條連線到同一個 DB，updater 那條從不關閉。四張表各有一個 DAO，
+        # 故由 updater 持有連線、需要時以 `get_dao()` 就地建 DAO
+        self.conn: Optional[sqlite3.Connection] = connect_sqlite(TW_STOCK_DB_PATH)
 
         # ETL
         self.crawler: FinancialStatementCrawler = FinancialStatementCrawler()
         self.cleaner: FinancialStatementCleaner = FinancialStatementCleaner()
-        self.loader: FinancialStatementLoader = FinancialStatementLoader()
+        self.loader: FinancialStatementLoader = FinancialStatementLoader(conn=self.conn)
 
         # Data directories for each report
         self.fs_dir: Path = FINANCIAL_STATEMENT_DOWNLOADS_PATH
@@ -239,12 +242,42 @@ class FinancialStatementUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        # DB Connect
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
-
         # 設定 log 檔案儲存路徑
         LogManager.setup_logger("update_financial_statement.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一條連線，一併結束）"""
+
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
+
+    def get_dao(self, table_name: str) -> FinancialStatementDAO:
+        """取得指定財報表的 DAO（共用本 updater 的連線）"""
+
+        return FinancialStatementDAO(table_name, conn=self.conn)
+
+    def log_latest_year_season(self, table_name: str, label: str) -> None:
+        """
+        - Description:
+            入庫後回報表內最新的年季
+        - Parameters:
+            - table_name: str
+                財報表名稱
+            - label: str
+                日誌用的報表名稱
+        """
+
+        latest: Optional[Tuple[int, int]] = self.get_dao(
+            table_name
+        ).get_latest_year_season()
+        if latest is None:
+            logger.warning(f"No {label} data in database after update")
+            return
+
+        logger.info(
+            f"{label} data updated. Latest available date: {latest[0]}Q{latest[1]}"
+        )
 
     def update(
         self,
@@ -330,19 +363,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
         )
 
         # 重新取得更新後的最新年度跟季度
-        latest_year: Optional[int]
-        latest_season: Optional[int]
-        latest_year, latest_season = SQLiteUtils.get_max_secondary_value_by_primary(
-            conn=self.conn,
-            table_name=BALANCE_SHEET_TABLE_NAME,
-            primary_col="year",
-            secondary_col="season",
-            default_primary_value=start_year,
-            default_secondary_value=start_season,
-        )
-        logger.info(
-            f"Balance sheet data updated. Latest available date: {latest_year}Q{latest_season}"
-        )
+        self.log_latest_year_season(BALANCE_SHEET_TABLE_NAME, "Balance sheet")
 
     def update_comprehensive_income(
         self,
@@ -405,18 +426,8 @@ class FinancialStatementUpdater(BaseDataUpdater):
         )
 
         # 重新取得更新後的最新年度跟季度
-        latest_year: Optional[int]
-        latest_season: Optional[int]
-        latest_year, latest_season = SQLiteUtils.get_max_secondary_value_by_primary(
-            conn=self.conn,
-            table_name=COMPREHENSIVE_INCOME_TABLE_NAME,
-            primary_col="year",
-            secondary_col="season",
-            default_primary_value=start_year,
-            default_secondary_value=start_season,
-        )
-        logger.info(
-            f"Comprehensive income data updated. Latest available date: {latest_year}Q{latest_season}"
+        self.log_latest_year_season(
+            COMPREHENSIVE_INCOME_TABLE_NAME, "Comprehensive income"
         )
 
     def update_cash_flow(
@@ -478,19 +489,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
         )
 
         # 重新取得更新後的最新年度跟季度
-        latest_year: Optional[int]
-        latest_season: Optional[int]
-        latest_year, latest_season = SQLiteUtils.get_max_secondary_value_by_primary(
-            conn=self.conn,
-            table_name=CASH_FLOW_TABLE_NAME,
-            primary_col="year",
-            secondary_col="season",
-            default_primary_value=start_year,
-            default_secondary_value=start_season,
-        )
-        logger.info(
-            f"Cash flow data updated. Latest available date: {latest_year}Q{latest_season}"
-        )
+        self.log_latest_year_season(CASH_FLOW_TABLE_NAME, "Cash flow")
 
     def update_equity_changes(
         self,
@@ -635,19 +634,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
             )
 
         # 重新取得更新後的最新年度跟季度
-        latest_year: Optional[int]
-        latest_season: Optional[int]
-        latest_year, latest_season = SQLiteUtils.get_max_secondary_value_by_primary(
-            conn=self.conn,
-            table_name=EQUITY_CHANGE_TABLE_NAME,
-            primary_col="year",
-            secondary_col="season",
-            default_primary_value=start_year,
-            default_secondary_value=start_season,
-        )
-        logger.info(
-            f"Equity changes data updated. Latest available date: {latest_year}Q{latest_season}"
-        )
+        self.log_latest_year_season(EQUITY_CHANGE_TABLE_NAME, "Equity changes")
 
         # 入庫失敗**跑完才拋**：單一批次失敗不該中止其餘幾十小時的回補，
         # 但整段結束後必須讓行程非零結束，否則缺漏要靠事後對帳才會發現
@@ -1112,46 +1099,20 @@ class FinancialStatementUpdater(BaseDataUpdater):
         return []
 
     def get_target_stock_ids(self) -> List[str]:
-        """取得要逐檔爬取權益變動表的股票清單（上市櫃普通股，排除 ETF 與興櫃）"""
+        """
+        - Description:
+            取得要逐檔爬取權益變動表的股票清單（上市櫃普通股，排除 ETF 與興櫃）
 
-        query: str = f"""
-        SELECT stock_id FROM {STOCK_INFO_TABLE_NAME}
-        WHERE type IN ('twse', 'tpex')
-          AND industry_category NOT LIKE '%ETF%'
-          AND stock_id GLOB '[0-9][0-9][0-9][0-9]'
-        ORDER BY stock_id
+            `taiwan_stock_info` 不存在時回空清單；其他查詢錯誤往外拋（舊版一律吞掉
+            回空清單，「DB 被鎖住」會變成「沒有目標股票，略過」，行程照樣成功結束）。
         """
 
-        try:
-            df: pd.DataFrame = pd.read_sql_query(query, self.conn)
-        except Exception as e:
-            logger.error(f"Failed to get target stocks for equity changes: {e}")
-            return []
-
-        return df["stock_id"].astype(str).tolist()
+        return StockInfoDAO(conn=self.conn).get_listed_common_stock_ids()
 
     def get_crawled_stock_ids(self, year: int, season: int) -> Set[str]:
-        """取得指定年季已入庫的 stock_id，供逐檔爬取的中斷續跑使用"""
+        """取得指定年季已入庫的 stock_id，供逐檔爬取的中斷續跑使用；查詢錯誤往外拋"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=EQUITY_CHANGE_TABLE_NAME
-        ):
-            return set()
-
-        query: str = f"""
-        SELECT DISTINCT stock_id FROM {EQUITY_CHANGE_TABLE_NAME}
-        WHERE year = ? AND season = ?
-        """
-
-        try:
-            df: pd.DataFrame = pd.read_sql_query(
-                query, self.conn, params=(year, season)
-            )
-        except Exception as e:
-            logger.error(f"Failed to get crawled stocks on {year}Q{season}: {e}")
-            return set()
-
-        return set(df["stock_id"].astype(str))
+        return self.get_dao(EQUITY_CHANGE_TABLE_NAME).get_stock_ids(year, season)
 
     def plan_pending_year_seasons(
         self,
@@ -1216,10 +1177,4 @@ class FinancialStatementUpdater(BaseDataUpdater):
     def get_existing_year_seasons(self, table_name: str) -> Set[Tuple[int, int]]:
         """表內已有的 (year, season)；表不存在時為空集合（初次更新的正常狀態）"""
 
-        if not SQLiteUtils.check_table_exist(conn=self.conn, table_name=table_name):
-            return set()
-
-        rows: List[Tuple[int, int]] = self.conn.execute(
-            f"SELECT DISTINCT year, season FROM {table_name}"
-        ).fetchall()
-        return {(int(year), int(season)) for year, season in rows}
+        return self.get_dao(table_name).get_existing_year_seasons()

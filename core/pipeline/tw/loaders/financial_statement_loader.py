@@ -10,56 +10,31 @@ from core.config import (
     FINANCIAL_STATEMENT_META_DIR_PATH,
     TW_STOCK_DB_PATH,
 )
+from core.dao.connection import connect_sqlite
+from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.data_utils import DataUtils
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 
 class FinancialStatementLoader(BaseDataLoader):
     """Financial Statement Loader"""
 
-    # 各報表的主鍵。其他三張是「一家公司一列」，權益變動表攤平成長表後
-    # 一家公司一季有數十列，必須把攤平出來的兩個維度一起納入主鍵才唯一；
-    # 且來源端點（逐檔查詢）不回傳公司名稱，故該表不含 `公司名稱`
-    PRIMARY_KEYS: dict[str, List[str]] = {
-        FinancialStatementType.BALANCE_SHEET: [
-            "year",
-            "season",
-            "stock_id",
-            "公司名稱",
-        ],
-        FinancialStatementType.COMPREHENSIVE_INCOME: [
-            "year",
-            "season",
-            "stock_id",
-            "公司名稱",
-        ],
-        FinancialStatementType.CASH_FLOW: ["year", "season", "stock_id", "公司名稱"],
-        FinancialStatementType.EQUITY_CHANGE: [
-            "year",
-            "season",
-            "stock_id",
-            "權益項目",
-            "變動原因",
-        ],
-    }
+    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+        """
+        - Description:
+            建立財報 loader
+        - Parameters:
+            - conn: Optional[sqlite3.Connection]
+                共用連線（通常由 updater 傳入，讓讀寫走同一條連線）。
+                四張表共用一條連線，故收連線而不是單一 DAO；指定時 loader 不擁有它，
+                `disconnect()` 不會關閉；未指定時 loader 自行建立，入庫完成即關閉
+        """
 
-    def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
-
-        # Specify column data types
-        self.text_not_null_cols: List[str] = [
-            "date",
-            "stock_id",
-            "公司名稱",
-            "權益項目",
-            "變動原因",
-        ]
-        self.int_not_null_cols: List[str] = ["year", "season"]
+        self.conn: Optional[sqlite3.Connection] = conn
+        self.owns_conn: bool = conn is None
 
         # Reports Cleaned Columns Path
         self.balance_sheet_cleaned_cols_path: Path = (
@@ -126,63 +101,38 @@ class FinancialStatementLoader(BaseDataLoader):
         """Connect to the Database"""
 
         if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
+            self.owns_conn = True
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用連線由建立者關閉"""
 
-        if self.conn:
+        if not self.owns_conn:
+            return
+
+        if self.conn is not None:
             self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+            self.conn = None
 
-    def create_db(
-        self,
-        table_name: str,
-        cleaned_cols_path: Path,
-        primary_keys: Optional[List[str]] = None,
-    ) -> None:
-        """Create New Database"""
+    def get_dao(self, table_name: str) -> FinancialStatementDAO:
+        """取得指定財報表的 DAO（共用本 loader 的連線）"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
+        return FinancialStatementDAO(table_name, conn=self.conn)
 
-        # Step 1: 讀取欄位定義 JSON
-        cols: List[str] = DataUtils.load_json(file_path=cleaned_cols_path)
-        col_defs: List[str] = []
-
-        # Step 2: 指定欄位型別
-        for col in cols:
-            col_name: str = f'"{col}"'
-
-            if col in self.text_not_null_cols:
-                col_defs.append(f"{col_name} TEXT NOT NULL")
-            elif col in self.int_not_null_cols:
-                col_defs.append(f"{col_name} INT NOT NULL")
-            else:
-                col_defs.append(f"{col_name} REAL")
-
-        # Step 3: 加 PRIMARY KEY
-        pk_cols: List[str] = primary_keys or ["year", "season", "stock_id", "公司名稱"]
-        pk_sql: str = ", ".join(f'"{col}"' for col in pk_cols)
-        col_defs.append(f"PRIMARY KEY ({pk_sql})")
-
-        # Step 4: 組建 SQL
-        col_defs_sql: str = ",\n            ".join(col_defs)
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {table_name}(
-            {col_defs_sql}
-        )
+    def create_db(self, table_name: str, cleaned_cols_path: Path) -> None:
         """
-        cursor.execute(create_table_query)
+        - Description:
+            依清洗器產出的欄位清單建立財報表
+        - Parameters:
+            - table_name: str
+                財報表名稱
+            - cleaned_cols_path: Path
+                `*_cleaned_columns.json` 路徑
+        """
 
-        # 檢查是否成功建立 table
-        cursor.execute(f"PRAGMA table_info('{table_name}')")
-        if cursor.fetchall():
-            logger.info(f"Table {table_name} create successfully!")
-            logger.info(create_table_query)
-        else:
-            logger.warning(f"Table {table_name} create unsuccessfully!")
-
-        self.conn.commit()
+        cols: List[str] = DataUtils.load_json(file_path=cleaned_cols_path)
+        self.get_dao(table_name).create_table(cols)
 
     def create_missing_tables(self) -> None:
         """確保所有財報類型的資料表存在"""
@@ -199,11 +149,9 @@ class FinancialStatementLoader(BaseDataLoader):
                 )
                 continue
 
-            if not SQLiteUtils.check_table_exist(conn=self.conn, table_name=table_name):
+            if not self.get_dao(table_name).table_exists():
                 self.create_db(
-                    table_name=table_name,
-                    cleaned_cols_path=cleaned_cols_path,
-                    primary_keys=self.PRIMARY_KEYS[fs_type],
+                    table_name=table_name, cleaned_cols_path=cleaned_cols_path
                 )
 
     def add_to_db(
@@ -215,7 +163,10 @@ class FinancialStatementLoader(BaseDataLoader):
     ) -> None:
         """
         - Description:
-            Add Data into Database
+            Add Data into Database；有任何檔案失敗就拋 `DataLoadError`
+
+            **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾，
+            不會被迴圈結束後的 `commit()` 一起寫進去。
 
             `only_files` 給分批入庫用：權益變動表是逐檔查詢，整段回補會落地上千個
             CSV，若每一批都掃整個目錄，重複讀取的成本會隨批次數線性長大。
@@ -236,6 +187,7 @@ class FinancialStatementLoader(BaseDataLoader):
         # Ensure Database Table Exists
         self.create_missing_tables()
 
+        dao: FinancialStatementDAO = self.get_dao(table_name)
         file_cnt: int = 0
 
         failed_files: List[str] = []
@@ -250,7 +202,10 @@ class FinancialStatementLoader(BaseDataLoader):
                 continue
             try:
                 df: pd.DataFrame = pd.read_csv(file_path)
-                inserted, skipped = self.insert_dataframe(self.conn, table_name, df)
+                inserted: int
+                skipped: int
+                with dao.savepoint():
+                    inserted, skipped = dao.insert_or_ignore(df)
                 if inserted == 0 and skipped > 0:
                     # 整檔已在資料庫中：loader 每次都掃全目錄，重跑必然走到這裡
                     skipped_cnt += 1
@@ -263,7 +218,7 @@ class FinancialStatementLoader(BaseDataLoader):
                 logger.warning(f"Error saving {file_path}: {e}")
                 failed_files.append(str(file_path))
 
-        self.conn.commit()
+        dao.commit()
         self.disconnect()
 
         self.finish_load(

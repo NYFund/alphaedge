@@ -232,6 +232,11 @@ class BaseDAO:
         """
         - Description:
             執行查詢並回傳 DataFrame；日期參數自動轉 ISO 字串
+
+            ⚠️ **查詢失敗時 pandas 會對整條連線 `rollback()`**，再把錯誤包成
+            `pandas.errors.DatabaseError` 拋出。共用連線上若有尚未 commit 的寫入，
+            會跟著一起被丟掉——loader 一律在 `add_to_db()` 結尾 commit，
+            不要在寫入與 commit 之間夾查詢。
         - Parameters:
             - sql: str
                 查詢語句，值一律用 `?` 佔位
