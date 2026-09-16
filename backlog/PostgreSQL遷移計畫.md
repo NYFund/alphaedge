@@ -282,4 +282,4 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
      壓成單一目錄名），程式碼側已是 `pipeline/tw/`（每層只承載一條軸）。純目錄名的
      `tw/stock/` 才與程式碼側同構，但那是第二次資料搬遷，不值得為一致性單獨做——
      **本計畫或下次動 `downloads/` 時順手收斂**。
-- **相關 backlog**：[美股ETL與回測架構規劃.md](美股ETL與回測架構規劃.md)（美股資料量較大，建議本計畫先收斂；`us_` 表名前綴同樣以單一資料庫為前提）
+- **相關 backlog**：[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md)（2026-09-16 立項，tick 改落地 TimescaleDB；與本計畫共用 `postgres` service（TimescaleDB image）、driver 與 `core/db/`，先做的建立、後做的沿用）；[美股ETL與回測架構規劃.md](美股ETL與回測架構規劃.md)（美股資料量較大，建議本計畫先收斂；`us_` 表名前綴同樣以單一資料庫為前提）
