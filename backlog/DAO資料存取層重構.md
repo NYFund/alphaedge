@@ -44,7 +44,7 @@
 | Phase3-1 | 推廣：chip、margin（含 `DatePlanner` 改吃 DAO） | `core/dao/tw/`、對應 API／loader／updater、`core/pipeline/shared/date_planner.py` | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockChipDAO`／`StockMarginDAO`；`DatePlanner` 改收 DAO，三支日頻 updater 以共用連線建日曆 DAO；`tests/test_dao_stock_chip_margin.py` 11 項、`pytest -m "not slow"` 1072 passed、回歸雙線通過、分層違規 0；相依 Phase2-5 |
 | Phase3-2 | 推廣：dividend、corporate_action | 同上 | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockDividendDAO`／`CorporateActionDAO` 與底座 `insert_or_replace`；去重收斂到 `core/pipeline/shared/source_priority.py`；`tests/test_dao_stock_dividend_corporate_action.py` 9 項、`not slow` 1081 passed、`slow` 19 passed、回歸雙線通過、分層違規 0 |
 | Phase3-3 | 推廣：monthly_revenue | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `MonthlyRevenueDAO`，`get_range` 跨年查詢修正；loader 改 `insert_or_ignore`＋savepoint；另修續跑起點吞錯誤與「表空時跳過一個月」；`tests/test_dao_monthly_revenue.py` 10 項、`not slow` 1091 passed、回歸雙線通過 |
-| Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；股票清單查詢與 FinMind 共用 |
+| Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FinancialStatementDAO`（表名白名單）與 `StockInfoDAO`（先放股票清單兩個查詢，其餘留給 Phase4-1）；`get_range` 跨年查詢一併修正；兩處吞錯誤改為往外拋；`tests/test_dao_financial_statement.py` 11 項、`not slow` 1102 passed、回歸雙線通過 |
 | Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ⬜ | 相依 Phase2-5；驗證 `commit=False` 是否被 `to_sql` 蓋掉；`common.py` 吞錯誤 |
 | Phase5-1 | 推廣：futures_price | `core/dao/tw/`、對應 API／loader／updater | 對應測試＋期貨回測測試 | ⬜ | 相依 Phase2-5；修 `with sqlite3.connect` 洩漏與 `sqlite3.Error` 被吞 |
 | Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ⬜ | 相依 Phase5-1；收斂重複的快照查詢、`get_contract_size` |
@@ -329,12 +329,23 @@ class BaseDAO:
 > - loader 改 `insert_or_ignore` 後，同一檔內重複的列不再讓 `to_sql` 撞主鍵、整檔失敗。
 > - `MonthlyRevenueReportAPI.get_range()` 公開參數順序不變（`start_year, end_year, start_month, end_month`），DAO 端改為（起始年月, 結束年月）。
 
-### Phase3-4. 財報四表 ⬜
+### Phase3-4. 財報四表 ✅
 
 - **做法**：新增 `FinancialStatementDAO`，以表名白名單參數化（沿用 `FinancialStatementAPI.ALLOWED_TABLES`）。`financial_statement_updater.py` 的股票清單查詢移到 Phase4-1 的 `StockInfoDAO`；`except Exception: return []` 改成讓錯誤往外拋，只有表不存在時回空。
 - **產出**：對應 DAO、API、loader、updater。
 - **驗證方式**：`pytest tests/test_equity_change_interruption.py` 與財報相關測試通過。
 - **相依**：Phase2-5；股票清單部分相依 Phase4-1。
+
+> **完成紀錄（2026-09-16）**
+> - **偏離原規格**：股票清單原定等 Phase4-1 的 `StockInfoDAO`，改為本步驟先建 `StockInfoDAO`，只放
+>   `get_stock_ids()`（FinMind 用）與 `get_listed_common_stock_ids()`（財報用）兩個查詢；建表與寫入留給 Phase4-1。
+> - 四張表共用一條連線：updater 持有連線（`close()` 關閉），以 `get_dao(table_name)` 就地建 DAO；
+>   loader 收 `conn=` 而非單一 DAO。既有測試以 `__new__` 只注入 `conn`，不必改。
+> - **範圍外、順手修的**：`FinancialStatementAPI.get_range()` 與月營收同樣是年、季各自 `BETWEEN`，
+>   改為 `year * 10 + season`，公開參數順序不變；`get_crawled_stock_ids()` 的 `except Exception` 一併拿掉。
+> - 實作時發現：`pd.read_sql_query` 查詢失敗會對整條連線 `rollback()`，共用連線上未 commit 的寫入會一起消失。
+>   目前各 loader 都在 `add_to_db()` 結尾 commit、沒有「寫入後、commit 前查詢」的路徑，暫無影響；已寫進
+>   `BaseDAO.query_df()` 的 docstring，Phase4-1（`commit=False` 的 broker_trading）要特別確認。
 
 ### Phase4-1. FinMind 四表 ⬜
 
