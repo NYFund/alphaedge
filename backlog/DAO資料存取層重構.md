@@ -43,7 +43,7 @@
 | Phase2-5 | 試點回歸驗證 | — | `./scripts/run_regression.sh` 雙線通過；`pytest -m "not slow"` 通過 | ✅ | 2026-09-16 完成：回歸雙線通過（SHORT 6、LONG 1）、`pytest -m "not slow"` 1061 passed、`-m slow` 19 passed、分層違規 0；相依 Phase2-2~Phase2-4；**通過後才推廣** |
 | Phase3-1 | 推廣：chip、margin（含 `DatePlanner` 改吃 DAO） | `core/dao/tw/`、對應 API／loader／updater、`core/pipeline/shared/date_planner.py` | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockChipDAO`／`StockMarginDAO`；`DatePlanner` 改收 DAO，三支日頻 updater 以共用連線建日曆 DAO；`tests/test_dao_stock_chip_margin.py` 11 項、`pytest -m "not slow"` 1072 passed、回歸雙線通過、分層違規 0；相依 Phase2-5 |
 | Phase3-2 | 推廣：dividend、corporate_action | 同上 | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockDividendDAO`／`CorporateActionDAO` 與底座 `insert_or_replace`；去重收斂到 `core/pipeline/shared/source_priority.py`；`tests/test_dao_stock_dividend_corporate_action.py` 9 項、`not slow` 1081 passed、`slow` 19 passed、回歸雙線通過、分層違規 0 |
-| Phase3-3 | 推廣：monthly_revenue | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；修 `get_range` 跨年查詢錯誤 |
+| Phase3-3 | 推廣：monthly_revenue | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `MonthlyRevenueDAO`，`get_range` 跨年查詢修正；loader 改 `insert_or_ignore`＋savepoint；另修續跑起點吞錯誤與「表空時跳過一個月」；`tests/test_dao_monthly_revenue.py` 10 項、`not slow` 1091 passed、回歸雙線通過 |
 | Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；股票清單查詢與 FinMind 共用 |
 | Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ⬜ | 相依 Phase2-5；驗證 `commit=False` 是否被 `to_sql` 蓋掉；`common.py` 吞錯誤 |
 | Phase5-1 | 推廣：futures_price | `core/dao/tw/`、對應 API／loader／updater | 對應測試＋期貨回測測試 | ⬜ | 相依 Phase2-5；修 `with sqlite3.connect` 洩漏與 `sqlite3.Error` 被吞 |
@@ -313,12 +313,21 @@ class BaseDAO:
 > - `StockDividendAPI` 同時持有 `dao` 與 `corporate_action_dao`（共用 API 的連線）；`corporate_action_detector`
 >   的 `_drop_explained()` 改走兩個 DAO，全檔不再 import `SQLiteUtils`。
 
-### Phase3-3. monthly_revenue ⬜
+### Phase3-3. monthly_revenue ✅
 
 - **做法**：新增 `MonthlyRevenueDAO`。`get_range` 改成以 `year * 100 + month BETWEEN ? AND ?` 查詢，修正跨年區間，並新增測試（2023-11～2024-02 應回 4 個月）。loader「每個 CSV 讀一次整表主鍵」改用 `insert_or_ignore`。
 - **產出**：對應 DAO、API、loader、updater。
 - **驗證方式**：新增的跨年測試通過；既有 MRR 測試通過。
 - **相依**：Phase2-5。
+
+> **完成紀錄（2026-09-16）**
+> - 建表欄位清單仍存在清洗器的 `*_cleaned_columns.json`：讀檔留在 loader（`load_cleaned_columns()`），
+>   DAO 的 `ensure_table(columns)`／`create_table(columns)` 只負責欄名到 SQL 型別的對應。
+> - **範圍外、順手修的兩個問題**（〈掃描發現〉未列）：
+>   1. `get_actual_update_start_year_month()` 原本 `except Exception` 後回預設值，查詢錯誤會被當成「表是空的」從預設起點重跑；改為往外拋。
+>   2. 舊版表存在但為空時，`get_max_secondary_value_by_primary()` 回傳預設年月後又被 +1，會跳過預設起始月；改為直接回傳預設年月（與 docstring 一致）。
+> - loader 改 `insert_or_ignore` 後，同一檔內重複的列不再讓 `to_sql` 撞主鍵、整檔失敗。
+> - `MonthlyRevenueReportAPI.get_range()` 公開參數順序不變（`start_year, end_year, start_month, end_month`），DAO 端改為（起始年月, 結束年月）。
 
 ### Phase3-4. 財報四表 ⬜
 

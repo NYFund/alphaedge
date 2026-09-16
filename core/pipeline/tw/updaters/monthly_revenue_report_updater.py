@@ -7,11 +7,8 @@ from typing import List, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH,
-    MONTHLY_REVENUE_TABLE_NAME,
-    TW_STOCK_DB_PATH,
-)
+from core.config import MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.tw.cleaners.monthly_revenue_report_cleaner import (
@@ -23,7 +20,6 @@ from core.pipeline.tw.crawlers.monthly_revenue_report_crawler import (
 from core.pipeline.tw.loaders.monthly_revenue_report_loader import (
     MonthlyRevenueReportLoader,
 )
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -45,13 +41,16 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        # 讀（最新年月）與寫（loader）共用同一個 DAO，一次更新只開一條連線
+        self.dao: MonthlyRevenueDAO = MonthlyRevenueDAO(db_path=TW_STOCK_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
 
         # ETL
         self.crawler: MonthlyRevenueReportCrawler = MonthlyRevenueReportCrawler()
         self.cleaner: MonthlyRevenueReportCleaner = MonthlyRevenueReportCleaner()
-        self.loader: MonthlyRevenueReportLoader = MonthlyRevenueReportLoader()
+        self.loader: MonthlyRevenueReportLoader = MonthlyRevenueReportLoader(
+            dao=self.dao
+        )
 
         # Data Directory
         self.mmr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH
@@ -61,11 +60,14 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
-
         # 設定 log 檔案儲存路徑
         LogManager.setup_logger("update_monthly_revenue_report.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def update(
         self,
@@ -136,20 +138,11 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         self.loader.add_to_db(remove_files=False)
 
         # 更新後重新取得最新年月
-        latest_year: Optional[int]
-        latest_month: Optional[int]
-        latest_year, latest_month = SQLiteUtils.get_max_secondary_value_by_primary(
-            conn=self.conn,
-            table_name=MONTHLY_REVENUE_TABLE_NAME,
-            primary_col="year",
-            secondary_col="month",
-            default_primary_value=start_year,
-            default_secondary_value=start_month,
-        )
+        latest: Optional[Tuple[int, int]] = self.dao.get_latest_year_month()
 
-        if latest_year and latest_month:
+        if latest is not None:
             logger.info(
-                f"Monthly revenue data updated. Latest available date: {latest_year}/{latest_month}"
+                f"Monthly revenue data updated. Latest available date: {latest[0]}/{latest[1]}"
             )
         else:
             logger.warning("No new monthly revenue data was updated")
@@ -159,23 +152,30 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         default_year: int = 2025,
         default_month: int = 1,
     ) -> Tuple[int, int]:
-        """回傳下一筆應更新的 (year, month)，若無資料則回傳預設值"""
+        """
+        - Description:
+            回傳下一筆應更新的 (year, month)；表不存在或為空時回傳預設值
 
-        # Step 1: 先取得資料表中最新的 year
-        try:
-            latest_year: Optional[int]
-            latest_month: Optional[int]
-            latest_year, latest_month = SQLiteUtils.get_max_secondary_value_by_primary(
-                conn=self.conn,
-                table_name=MONTHLY_REVENUE_TABLE_NAME,
-                primary_col="year",
-                secondary_col="month",
-                default_primary_value=default_year,
-                default_secondary_value=default_month,
-            )
-        except Exception as e:
-            logger.error(f"Failed to get latest (year, month): {e}")
+            **查詢錯誤一律往外拋**：舊版 `except Exception` 後回傳預設值，
+            「DB 被鎖住、欄位打錯」會被當成「表是空的」，從預設起點靜默重跑整段回補。
+        - Parameters:
+            - default_year: int
+                無資料時的起始年
+            - default_month: int
+                無資料時的起始月
+        - Return:
+            - Tuple[int, int]
+                下一個要更新的（year, month）
+        """
+
+        # Step 1: 先取得資料表中最新的（year, month）
+        latest: Optional[Tuple[int, int]] = self.dao.get_latest_year_month()
+        if latest is None:
             return default_year, default_month
+
+        latest_year: int
+        latest_month: int
+        latest_year, latest_month = latest
 
         # Step 2: 計算下一個月份（處理進位）
         if latest_month == 12:

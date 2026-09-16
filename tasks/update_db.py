@@ -583,12 +583,15 @@ def main() -> None:
                 from_date=from_date,
             )
             mrr_updater: MonthlyRevenueReportUpdater = MonthlyRevenueReportUpdater()
-            mrr_updater.update(
-                start_year=time_config["start_year"],
-                end_year=time_config["end_year"],
-                start_month=time_config["start_month"],
-                end_month=time_config["end_month"],
-            )
+            try:
+                mrr_updater.update(
+                    start_year=time_config["start_year"],
+                    end_year=time_config["end_year"],
+                    start_month=time_config["start_month"],
+                    end_month=time_config["end_month"],
+                )
+            finally:
+                mrr_updater.close()
 
     # FinMind 資料更新
     if DataType.FINMIND.name.lower() in targets:
