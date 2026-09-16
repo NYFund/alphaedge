@@ -7,8 +7,13 @@ from loguru import logger
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollPlanner
-from core.config import DEFAULT_FUTURES_START_DATE, FUTURES_TARGET_PRODUCTS
+from core.config import (
+    DEFAULT_FUTURES_START_DATE,
+    FUTURES_TARGET_PRODUCTS,
+    TW_FUTURES_DB_PATH,
+)
 from core.config.schema import FuturesPriceColumn
+from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.loaders.futures_continuous_loader import FuturesContinuousLoader
 from core.pipeline.utils.exceptions import DataLoadError, UnbuildableSeriesError
@@ -59,6 +64,8 @@ class FuturesContinuousUpdater(BaseDataUpdater):
 
         self.price_api: Optional[FuturesPriceAPI] = None
         self.loader: Optional[FuturesContinuousLoader] = None
+        # 行情讀取與序列寫入同在 tw_futures.db，共用同一個 DAO 的連線，由本 updater 關閉
+        self.dao: Optional[FuturesContinuousDAO] = None
 
         self.setup()
 
@@ -66,16 +73,17 @@ class FuturesContinuousUpdater(BaseDataUpdater):
         """Set Up the Config of Updater"""
 
         LogManager.setup_logger("futures_continuous_updater.log")
-        self.price_api = FuturesPriceAPI()
-        self.loader = FuturesContinuousLoader()
+        TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.dao = FuturesContinuousDAO(db_path=TW_FUTURES_DB_PATH)
+        self.price_api = FuturesPriceAPI(conn=self.dao.conn)
+        self.loader = FuturesContinuousLoader(dao=self.dao)
 
     def close(self) -> None:
-        """關閉資料連線"""
+        """關閉資料連線（行情 API 與 loader 共用同一條，一併結束）"""
 
-        if self.price_api is not None:
-            self.price_api.close()
-        if self.loader is not None:
-            self.loader.disconnect()
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
 
     def update(
         self,
@@ -183,19 +191,23 @@ class FuturesContinuousUpdater(BaseDataUpdater):
 
         series: pd.DataFrame = self.build_series(price_df, schedule)
 
+        # 同一組（商品, 換月規則）的各種調整方式一起落地：中途失敗時整組回滾，
+        # 表裡不會只有 BACKWARD 是新的、RATIO 還是上一代，也不會被下一個商品的 commit 帶進去
         total: int = 0
-        for method in methods:
-            adjusted: pd.DataFrame = self.apply_adjustment(series.copy(), method)
-            adjusted.insert(1, "product", product)
-            adjusted.insert(2, "session", session.value)
-            adjusted.insert(3, "method", method.value)
-            adjusted.insert(4, "roll_rule", roll_rule.value)
+        with self.loader.dao.savepoint("futures_continuous_series"):
+            for method in methods:
+                adjusted: pd.DataFrame = self.apply_adjustment(series.copy(), method)
+                adjusted.insert(1, "product", product)
+                adjusted.insert(2, "session", session.value)
+                adjusted.insert(3, "method", method.value)
+                adjusted.insert(4, "roll_rule", roll_rule.value)
 
-            total += self.loader.add_to_db(adjusted)
-            self.loader.save_csv(
-                adjusted,
-                f"{product}_{session.value}_{method.value}_{roll_rule.value}.csv",
-            )
+                total += self.loader.add_to_db(adjusted)
+                self.loader.save_csv(
+                    adjusted,
+                    f"{product}_{session.value}_{method.value}_{roll_rule.value}.csv",
+                )
+        self.loader.commit()
 
         logger.info(
             f"[Futures Continuous] {product} / {roll_rule.value}："

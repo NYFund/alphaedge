@@ -5,15 +5,10 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FUTURES_CHIP_DOWNLOADS_PATH,
-    FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
-    FUTURES_LARGE_TRADER_TABLE_NAME,
-    FUTURES_PUT_CALL_RATIO_TABLE_NAME,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import FUTURES_CHIP_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
+from core.dao.connection import connect_sqlite
+from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 台期貨籌碼 Loader（三張表）
@@ -28,26 +23,31 @@ from core.pipeline.utils.sqlite_utils import SQLiteUtils
 | `futures_large_trader` | (date, product, expiry, trader_type) | 約 1,400 |
 | `futures_put_call_ratio` | (date) | 1 |
 
-**建表用 `CREATE TABLE ... AS` 的變體**：這三個來源的欄位數多且會隨交易所調整
-（三大法人 15 欄、大額 10 欄），逐欄寫死 schema 會在來源加欄位時整批失敗。
-故以第一次入庫的 DataFrame 推導欄位，只把**主鍵與型別**釘死。
+**建表以第一次入庫的 DataFrame 推導欄位**，只把主鍵與型別釘死（見 `FuturesChipDAO`）。
+
+**本 loader 不 commit**：寫入包在 savepoint 內，何時落地由 updater 決定
+（每個月批次寫完 commit 一次）。舊版每次 `add_to_db()` 都自己 commit，
+呼叫端無從把幾次寫入綁成一個交易。
 """
 
 
 class FuturesChipLoader(BaseDataLoader):
     """把清洗後的籌碼資料寫進 tw_futures.db"""
 
-    # {表名: 主鍵欄位}
-    PRIMARY_KEYS: dict = {
-        FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME: ("date", "product_name", "investor"),
-        FUTURES_LARGE_TRADER_TABLE_NAME: ("date", "product", "expiry", "trader_type"),
-        FUTURES_PUT_CALL_RATIO_TABLE_NAME: ("date",),
-    }
+    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+        """
+        - Description:
+            建立期貨籌碼 loader
+        - Parameters:
+            - conn: Optional[sqlite3.Connection]
+                共用連線（通常由 updater 傳入）。三張表共用一條連線，故收連線而不是單一 DAO；
+                指定時 loader 不擁有它，`disconnect()` 不會關閉
+        """
 
-    def __init__(self) -> None:
         super().__init__()
 
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: Optional[sqlite3.Connection] = conn
+        self.owns_conn: bool = conn is None
         self.chip_dir: Path = FUTURES_CHIP_DOWNLOADS_PATH
 
         self.setup()
@@ -62,46 +62,36 @@ class FuturesChipLoader(BaseDataLoader):
         """Connect to the Database"""
 
         if self.conn is None:
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
             TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
+            self.owns_conn = True
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用連線由建立者關閉"""
 
-        if self.conn:
+        if not self.owns_conn:
+            return
+
+        if self.conn is not None:
             self.conn.close()
             self.conn = None
 
+    def get_dao(self, table: str) -> FuturesChipDAO:
+        """取得指定籌碼表的 DAO（共用本 loader 的連線；表名不在白名單時 `ValueError`）"""
+
+        return FuturesChipDAO(table, conn=self.conn)
+
+    def commit(self) -> None:
+        """提交目前的交易（由 updater 決定時點）"""
+
+        if self.conn is not None:
+            self.conn.commit()
+
     def create_db(self, table: str, df: pd.DataFrame) -> None:
-        """
-        - Description:
-            依 DataFrame 的欄位建表（若不存在）
+        """依 DataFrame 的欄位建表（若不存在）；主鍵寫死、欄位由資料推導"""
 
-            **欄位由資料推導、主鍵寫死**：三個來源的欄位數多且會隨交易所調整，
-            逐欄寫死會在來源加欄位時整批入庫失敗；但主鍵不能推導——推錯會讓
-            重跑產生重複列而不是被擋下。
-        - Parameters:
-            - table: str
-                表名
-            - df: pd.DataFrame
-                本次要寫入的資料（用來推導欄位）
-        """
-
-        keys: tuple = self.PRIMARY_KEYS[table]
-        columns: list = []
-        for column in df.columns:
-            # 主鍵與名稱類欄位存文字，其餘存數值
-            is_text: bool = column in keys or column.endswith("_name")
-            columns.append(
-                f'"{column}" {"TEXT NOT NULL" if column in keys else ("TEXT" if is_text else "REAL")}'
-            )
-
-        primary_key: str = ", ".join(f'"{key}"' for key in keys)
-        self.conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(columns)}, "
-            f"PRIMARY KEY ({primary_key}));"
-        )
-        self.conn.commit()
+        self.get_dao(table).ensure_table(df)
 
     def create_missing_tables(self) -> None:
         """三張表的欄位要等第一批資料才知道，故建表延後到 `add_to_db()`"""
@@ -111,10 +101,10 @@ class FuturesChipLoader(BaseDataLoader):
     def add_to_db(self, table: str, df: pd.DataFrame) -> int:
         """
         - Description:
-            寫入單一資料集
+            寫入單一資料集；**不 commit**
 
             **用 `INSERT OR IGNORE`**：籌碼是既成事實，同一天重跑不該產生第二份，
-            也不該覆蓋——與行情表同一種語意。
+            也不該覆蓋——與行情表同一種語意。寫入包在 savepoint 內，失敗時整批回滾。
         - Parameters:
             - table: str
                 目標表名
@@ -129,46 +119,26 @@ class FuturesChipLoader(BaseDataLoader):
             return 0
 
         self.connect()
-        self.create_db(table, df)
+        dao: FuturesChipDAO = self.get_dao(table)
+        dao.ensure_table(df)
 
-        columns: str = ", ".join(f'"{column}"' for column in df.columns)
-        placeholders: str = ", ".join("?" for _ in df.columns)
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        before: int = self.count_rows(table)
-        cursor.executemany(
-            f"INSERT OR IGNORE INTO {table} ({columns}) VALUES ({placeholders})",
-            df.astype(object)
-            .where(pd.notna(df), None)
-            .itertuples(index=False, name=None),
-        )
-        self.conn.commit()
-        inserted: int = self.count_rows(table) - before
+        inserted: int
+        with dao.savepoint("futures_chip"):
+            inserted = dao.insert_new_rows(df)
 
         logger.info(f"[Futures Chip] {table}：新增 {inserted} 列（共 {len(df)} 列）")
         return inserted
 
     def count_rows(self, table: str) -> int:
-        """表內列數；表還不存在時為 0"""
+        """表內列數；表還不存在時為 0，其他查詢錯誤往外拋"""
 
-        # 只有「表還沒建」才回 0。舊版連查詢錯誤一起吞，而 `add_to_db()` 是用
-        # 「入庫後列數 − 入庫前列數」算新增筆數——後一次查詢失敗就會印出負數列數
-        if not SQLiteUtils.check_table_exist(conn=self.conn, table_name=table):
-            return 0
-        return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        return self.get_dao(table).count_rows()
 
     def get_latest_date(self, table: str) -> Optional[str]:
-        """表內最新的資料日期；供 updater 續跑（表不存在時為 None）"""
+        """表內最新的資料日期；供 updater 續跑（表不存在時為 None，其他錯誤往外拋）"""
 
         self.connect()
-        # **這裡回 None 的代價是整段重爬**：`futures_chip_updater.resolve_start_date()`
-        # 拿到 None 就退回 `DEFAULT_START_DATE`。舊版把 `database is locked`
-        # 也吞成 None，於是背景有另一支 ETL 在寫同一個 DB 時，續跑會從預設起日
-        # 重來好幾個小時，而 log 只顯示一個看起來正常的起始日期（S1、F-056 同型）
-        if not SQLiteUtils.check_table_exist(conn=self.conn, table_name=table):
-            return None
-        row = self.conn.execute(f"SELECT MAX(date) FROM {table}").fetchone()
-        return row[0] if row else None
+        return self.get_dao(table).get_latest_date()
 
     def save_csv(self, df: pd.DataFrame, file_name: str) -> Optional[Path]:
         """留一份中繼檔供稽核（與其他 ETL 一致）"""

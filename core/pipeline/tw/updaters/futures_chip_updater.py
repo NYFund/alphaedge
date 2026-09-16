@@ -1,5 +1,6 @@
 import datetime
 import random
+import sqlite3
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -11,7 +12,9 @@ from core.config import (
     FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
     FUTURES_LARGE_TRADER_TABLE_NAME,
     FUTURES_PUT_CALL_RATIO_TABLE_NAME,
+    TW_FUTURES_DB_PATH,
 )
+from core.dao.connection import connect_sqlite
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
@@ -85,8 +88,10 @@ class FuturesChipUpdater(BaseDataUpdater):
         self.crawler: Optional[FuturesChipCrawler] = None
         self.cleaner: Optional[FuturesChipCleaner] = None
         self.loader: Optional[FuturesChipLoader] = None
-        # 判斷「被擋」還是「真的沒資料」要靠交易日，來源是行情表
+        # 判斷「被擋」還是「真的沒資料」要靠交易日，來源是同庫的行情表
         self.price_api: Optional[FuturesPriceAPI] = None
+        # 籌碼寫入與行情讀取同在 tw_futures.db，共用一條連線，由本 updater 關閉
+        self.conn: Optional[sqlite3.Connection] = None
 
         self.setup()
 
@@ -96,16 +101,17 @@ class FuturesChipUpdater(BaseDataUpdater):
         LogManager.setup_logger("futures_chip_updater.log")
         self.crawler = FuturesChipCrawler()
         self.cleaner = FuturesChipCleaner()
-        self.loader = FuturesChipLoader()
-        self.price_api = FuturesPriceAPI()
+        TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
+        self.loader = FuturesChipLoader(conn=self.conn)
+        self.price_api = FuturesPriceAPI(conn=self.conn)
 
     def close(self) -> None:
-        """關閉資料連線"""
+        """關閉資料連線（loader 與行情 API 共用同一條，一併結束）"""
 
-        if self.loader is not None:
-            self.loader.disconnect()
-        if self.price_api is not None:
-            self.price_api.close()
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def get_datasets(self) -> List[Tuple[str, str, Callable, Callable]]:
         """三個資料集的 (表名, 標籤, crawl, clean)"""
@@ -284,6 +290,8 @@ class FuturesChipUpdater(BaseDataUpdater):
 
             self.loader.save_csv(df, f"{label}_{window_start.strftime('%Y%m')}.csv")
             inserted += self.loader.add_to_db(table, df)
+            # 每個月批次寫完就落地：中斷時已入庫的月份不必重抓
+            self.loader.commit()
             self.throttle()
 
         if blocked_windows:
@@ -347,12 +355,14 @@ class FuturesChipUpdater(BaseDataUpdater):
 
         **這是「被擋」與「真的沒資料」的唯一判準**。行情表本身還沒建立時
         一律回 True（寧可多重試幾次，也不要把被擋當成沒資料）。
+
+        舊版以 `except Exception: return True` 表達「表不存在」，連 `database is locked`
+        也一起吞；改為只判斷表存不存在，其他錯誤往外拋。
         """
 
-        try:
-            return bool(self.price_api.get_trading_days(start_date, end_date))
-        except Exception:
+        if not self.price_api.dao.table_exists():
             return True
+        return bool(self.price_api.get_trading_days(start_date, end_date))
 
     @staticmethod
     def split_months(
