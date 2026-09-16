@@ -50,7 +50,7 @@
 | Phase4-2 | 補齊核心路徑測試覆蓋 | `tests/` | `update_db` 各 target、FinMind loader/updater、API 查詢、去重與主鍵衝突 | ⬜ | 相依 Phase4-1 |
 | Phase5-1 | 灰度：開發環境全面改 PostgreSQL，保留 SQLite fallback | — | 觀察期內無資料不一致 | ⬜ | 相依 Phase4-2 |
 | Phase5-2 | 移除 SQLite 專屬程式碼與舊路徑 | 全專案 | 全域搜尋無 `import sqlite3` 殘留 | ⬜ | 相依 Phase5-1；至少保留一個版本週期後再執行 |
-| Phase5-3 | 更新 README 與部署文件 | `README.md`、`README_zh.md`、`docs/deployment/`、`docs/setup/dev-setup.md` | 團隊可依文件重現部署 | ⬜ | 相依 Phase5-2 |
+| Phase5-3 | 更新 README 與部署文件 | `README.md`、`README_en.md`、`docs/deployment/`、`docs/setup/dev-setup.md` | 團隊可依文件重現部署 | ⬜ | 相依 Phase5-2 |
 
 ---
 
@@ -248,7 +248,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 ### Phase5-3. 更新文件與部署配置 ⬜
 
 - **目的**：讓團隊可重現部署。
-- **做法**：更新 `README.md` / `README_zh.md`、`docs/deployment/`、`docs/setup/dev-setup.md`、[資料覆蓋範圍](../docs/exchanges/data_coverage.md)的資料表位置。
+- **做法**：更新 `README.md` / `README_en.md`、`docs/deployment/`、`docs/setup/dev-setup.md`、[資料覆蓋範圍](../docs/exchanges/data_coverage.md)的資料表位置。
 - **產出**：上述文件。
 - **驗證方式**：依文件從零建置一次可成功。
 - **相依**：Phase5-2。
