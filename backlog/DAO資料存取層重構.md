@@ -45,7 +45,7 @@
 | Phase3-2 | 推廣：dividend、corporate_action | 同上 | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockDividendDAO`／`CorporateActionDAO` 與底座 `insert_or_replace`；去重收斂到 `core/pipeline/shared/source_priority.py`；`tests/test_dao_stock_dividend_corporate_action.py` 9 項、`not slow` 1081 passed、`slow` 19 passed、回歸雙線通過、分層違規 0 |
 | Phase3-3 | 推廣：monthly_revenue | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `MonthlyRevenueDAO`，`get_range` 跨年查詢修正；loader 改 `insert_or_ignore`＋savepoint；另修續跑起點吞錯誤與「表空時跳過一個月」；`tests/test_dao_monthly_revenue.py` 10 項、`not slow` 1091 passed、回歸雙線通過 |
 | Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FinancialStatementDAO`（表名白名單）與 `StockInfoDAO`（先放股票清單兩個查詢，其餘留給 Phase4-1）；`get_range` 跨年查詢一併修正；兩處吞錯誤改為往外拋；`tests/test_dao_financial_statement.py` 11 項、`not slow` 1102 passed、回歸雙線通過 |
-| Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ⬜ | 相依 Phase2-5；驗證 `commit=False` 是否被 `to_sql` 蓋掉；`common.py` 吞錯誤 |
+| Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ✅ | 2026-09-16 完成：實測 pandas 3.0.2 的 `to_sql` 確實自行 commit，改走 `insert_or_ignore` 後 `commit=False` 才生效；`schema.py` 刪除、DDL 進 DAO；清單查詢不再吞錯誤；`tests/test_dao_finmind.py` 8 項、`not slow` 1110 passed、回歸雙線通過 |
 | Phase5-1 | 推廣：futures_price | `core/dao/tw/`、對應 API／loader／updater | 對應測試＋期貨回測測試 | ⬜ | 相依 Phase2-5；修 `with sqlite3.connect` 洩漏與 `sqlite3.Error` 被吞 |
 | Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ⬜ | 相依 Phase5-1；收斂重複的快照查詢、`get_contract_size` |
 | Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ⬜ | 相依 Phase5-2；統一 `<`／`<=`；修 `FuturesMarginConfig.from_api()` 暗開連線 |
@@ -347,12 +347,25 @@ class BaseDAO:
 >   目前各 loader 都在 `add_to_db()` 結尾 commit、沒有「寫入後、commit 前查詢」的路徑，暫無影響；已寫進
 >   `BaseDAO.query_df()` 的 docstring，Phase4-1（`commit=False` 的 broker_trading）要特別確認。
 
-### Phase4-1. FinMind 四表 ⬜
+### Phase4-1. FinMind 四表 ✅
 
 - **做法**：新增 `StockInfoDAO`（含 with_warrant）、`SecuritiesTraderInfoDAO`、`BrokerTradingDAO`。先寫測試確認 `to_sql` 在目前的 pandas 版本是否會自行 commit：會的話改用 `insert_or_ignore`，讓 `commit=False` 真正生效。`finmind/common.py` 的吞錯誤比照 Phase3-4。FinMind updater 與 loader 共用 DAO 之後，`broker_trading_updater.py` 先 commit loader 連線來避開鎖的寫法可以移除。
 - **產出**：對應 DAO、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater。
 - **驗證方式**：`pytest tests/test_finmind_api.py tests/test_finmind_loader_broker_trading.py` 等 FinMind 測試通過。
 - **相依**：Phase2-5。
+
+> **完成紀錄（2026-09-16）**
+> - **驗證結果**：pandas 3.0.2 的 `DataFrame.to_sql`（sqlite3 連線）寫完即 commit，`commit=False` 從來沒生效；
+>   另外 `pd.read_sql_query` 查詢失敗會對整條連線 `rollback()`。兩件事都有測試釘住（`test_commit_false_really_defers_commit`）。
+> - DAO：`StockInfoDAO`／`StockInfoWithWarrantDAO`（子類別只換表名）、`SecuritiesTraderInfoDAO`、`BrokerTradingDAO`。
+>   `loaders/finmind/schema.py` 刪除；參考表 spec 的 `table_name`＋`key_column` 改為 `dao_class`（鍵欄由 DAO 的 `KEY_COLUMN` 提供）。
+> - 兩條入庫路徑都不再先把「已存在的鍵」查回記憶體，改交給主鍵約束；逐批／逐檔包 savepoint。
+> - **提交時點**：參考表與 CSV 路徑沿用舊版 `to_sql` 的持久化時點（每張表／整個目錄處理完即 commit），否則 `DataLoadError`
+>   拋出時門面走不到最後那次 commit，先成功的表會跟著消失。
+> - **偏離原規格**：「先 commit loader 連線避開鎖」的寫法沒有移除，理由改寫——讀寫已共用連線不會互鎖，但 metadata 重建
+>   查詢一旦失敗，pandas 會 rollback 整條連線；配額用盡等待前也補了一次 commit。
+> - loader／updater 共用連線：`FinMindUpdater` 持有連線並新增 `close()`，`FinMindLoader(conn=...)` 不擁有它；
+>   `tasks/update_db.py` 五個 FinMind 分支都以 `try/finally` 關閉。
 
 ### Phase5-1. futures_price ⬜
 

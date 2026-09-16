@@ -263,7 +263,8 @@ def test_write_csv_flag_does_not_change_loaded_rows(updater) -> None:
     一起略過，loader 雖然也會去重，但 cleaner 回傳的列數就會對不上。
     """
 
-    from core.pipeline.tw.loaders.finmind import broker_trading_loader, schema
+    from core.dao.tw.broker_trading_dao import BrokerTradingDAO
+    from core.pipeline.tw.loaders.finmind import broker_trading_loader
 
     stub = make_crawler_stub([])
     raw_df: pd.DataFrame = pd.concat(
@@ -282,7 +283,7 @@ def test_write_csv_flag_does_not_change_loaded_rows(updater) -> None:
             raw_df.copy(), write_csv=write_csv
         )
         conn: sqlite3.Connection = sqlite3.connect(":memory:")
-        schema.create_broker_trading_daily_report_table(conn)
+        BrokerTradingDAO(conn=conn).ensure_table()
         broker_trading_loader.load_from_dataframe(conn, cleaned_df.copy())
         loaded[write_csv] = pd.read_sql_query(
             f"SELECT * FROM {STOCK_TRADING_DAILY_REPORT_TABLE_NAME} "

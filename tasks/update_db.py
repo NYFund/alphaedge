@@ -604,25 +604,40 @@ def main() -> None:
                 from_date=from_date,
             )
             finmind_updater: FinMindUpdater = FinMindUpdater()
-            finmind_updater.update_all(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
+            try:
+                finmind_updater.update_all(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                finmind_updater.close()
 
     # FinMind 子類型更新
     if FinMindDataType.STOCK_INFO.value.lower() in targets:
         with target_guard("stock_info", failed_targets):
             finmind_updater: FinMindUpdater = FinMindUpdater()
-            finmind_updater.update(data_type=FinMindDataType.STOCK_INFO)
+            try:
+                finmind_updater.update(data_type=FinMindDataType.STOCK_INFO)
+            finally:
+                finmind_updater.close()
 
     if FinMindDataType.STOCK_INFO_WITH_WARRANT.value.lower() in targets:
         with target_guard("stock_info_with_warrant", failed_targets):
             finmind_updater: FinMindUpdater = FinMindUpdater()
-            finmind_updater.update(data_type=FinMindDataType.STOCK_INFO_WITH_WARRANT)
+            try:
+                finmind_updater.update(
+                    data_type=FinMindDataType.STOCK_INFO_WITH_WARRANT
+                )
+            finally:
+                finmind_updater.close()
 
     if FinMindDataType.BROKER_INFO.value.lower() in targets:
         with target_guard("broker_info", failed_targets):
             finmind_updater: FinMindUpdater = FinMindUpdater()
-            finmind_updater.update(data_type=FinMindDataType.BROKER_INFO)
+            try:
+                finmind_updater.update(data_type=FinMindDataType.BROKER_INFO)
+            finally:
+                finmind_updater.close()
 
     if FinMindDataType.BROKER_TRADING.value.lower() in targets:
         with target_guard("broker_trading", failed_targets):
@@ -631,10 +646,13 @@ def main() -> None:
                 from_date=from_date,
             )
             finmind_updater: FinMindUpdater = FinMindUpdater()
-            finmind_updater.update_broker_trading_daily_report(
-                start_date=time_config["start_date"],
-                end_date=time_config["end_date"],
-            )
+            try:
+                finmind_updater.update_broker_trading_daily_report(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                finmind_updater.close()
 
     # **一定要在結束碼判斷之前**：失敗的那幾天正是 `logs/api/` 長最多的時候，
     # 放在 `sys.exit(1)` 之後等於永遠跑不到

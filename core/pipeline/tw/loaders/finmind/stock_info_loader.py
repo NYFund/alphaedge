@@ -1,7 +1,8 @@
 import sqlite3
 from pathlib import Path
+from typing import List
 
-from core.config import STOCK_INFO_TABLE_NAME, STOCK_INFO_WITH_WARRANT_TABLE_NAME
+from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
 from core.pipeline.tw.loaders.finmind.reference_table_loader import (
     ReferenceTableSpec,
     load_reference_table,
@@ -16,7 +17,7 @@ from core.pipeline.utils import FinMindDataType
 """
 
 # 欄位順序須與 crawler schema 註解一致
-STOCK_INFO_COLUMN_ORDER = [
+STOCK_INFO_COLUMN_ORDER: List[str] = [
     "industry_category",
     "stock_id",
     "stock_name",
@@ -27,8 +28,7 @@ STOCK_INFO_COLUMN_ORDER = [
 STOCK_INFO_SPEC: ReferenceTableSpec = ReferenceTableSpec(
     data_type=FinMindDataType.STOCK_INFO,
     csv_name="taiwan_stock_info.csv",
-    table_name=STOCK_INFO_TABLE_NAME,
-    key_column="stock_id",
+    dao_class=StockInfoDAO,
     column_order=STOCK_INFO_COLUMN_ORDER,
     label="stock info",
 )
@@ -36,8 +36,7 @@ STOCK_INFO_SPEC: ReferenceTableSpec = ReferenceTableSpec(
 STOCK_INFO_WITH_WARRANT_SPEC: ReferenceTableSpec = ReferenceTableSpec(
     data_type=FinMindDataType.STOCK_INFO_WITH_WARRANT,
     csv_name="taiwan_stock_info_with_warrant.csv",
-    table_name=STOCK_INFO_WITH_WARRANT_TABLE_NAME,
-    key_column="stock_id",
+    dao_class=StockInfoWithWarrantDAO,
     column_order=STOCK_INFO_COLUMN_ORDER,
     label="stock info with warrant",
 )

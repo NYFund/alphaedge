@@ -43,7 +43,6 @@ class BrokerInfoUpdater:
         # 確保 loader 有連接
         self.context.ensure_loader_connected()
         self.context.loader.load_broker_info()
-        if self.context.loader.conn:
-            self.context.loader.conn.commit()
+        self.context.loader.commit()
 
         logger.info("✅ Broker Info updated successfully")

@@ -6,21 +6,17 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FINMIND_DOWNLOADS_PATH,
-    SECURITIES_TRADER_INFO_TABLE_NAME,
-    STOCK_INFO_TABLE_NAME,
-    STOCK_INFO_WITH_WARRANT_TABLE_NAME,
-    TW_STOCK_DB_PATH,
-)
+from core.config import FINMIND_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.connection import connect_sqlite
+from core.dao.tw.broker_trading_dao import BrokerTradingDAO
+from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
+from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.tw.loaders.finmind import (
     broker_info_loader,
     broker_trading_loader,
-    schema,
     stock_info_loader,
 )
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 FinMind Loader
@@ -31,13 +27,23 @@ FinMind Loader
 
 
 class FinMindLoader(BaseDataLoader):
-    """FinMind Loader - 將 FinMind 資料存入 Sqlite3"""
+    """FinMind Loader - 將 FinMind 資料存入資料庫"""
 
-    def __init__(self) -> None:
+    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+        """
+        - Description:
+            建立 FinMind loader
+        - Parameters:
+            - conn: Optional[sqlite3.Connection]
+                共用連線（通常由 updater 傳入，讓讀寫走同一條連線）。
+                四張表共用一條連線，故收連線而不是單一 DAO；指定時 loader 不擁有它，
+                `disconnect()` 不會關閉；未指定時 loader 自行建立，入庫完成即關閉
+        """
+
         super().__init__()
 
-        # SQLite Connection
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: Optional[sqlite3.Connection] = conn
+        self.owns_conn: bool = conn is None
 
         # Downloads directory Path
         self.finmind_dir: Path = FINMIND_DOWNLOADS_PATH
@@ -57,44 +63,38 @@ class FinMindLoader(BaseDataLoader):
         """Connect to the Database"""
 
         if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
+            self.owns_conn = True
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用連線由建立者關閉"""
 
-        if self.conn:
+        if not self.owns_conn:
+            return
+
+        if self.conn is not None:
             self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+            self.conn = None
+
+    def commit(self) -> None:
+        """提交目前的交易（批次更新時由 updater 定期呼叫）"""
+
+        if self.conn is not None:
+            self.conn.commit()
 
     def create_db(self, *args, **kwargs) -> None:
         """Create New Database Tables"""
 
-        # 創建四個資料表
-        schema.create_stock_info_table(self.conn)
-        schema.create_stock_info_with_warrant_table(self.conn)
-        schema.create_broker_info_table(self.conn)
-        schema.create_broker_trading_daily_report_table(self.conn)
+        self.create_missing_tables()
 
     def create_missing_tables(self) -> None:
-        """確保所有 FinMind 資料表存在"""
+        """確保所有 FinMind 資料表存在；券商分點表的索引每次都補（`IF NOT EXISTS`）"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=STOCK_INFO_TABLE_NAME
-        ):
-            schema.create_stock_info_table(self.conn)
-
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=STOCK_INFO_WITH_WARRANT_TABLE_NAME
-        ):
-            schema.create_stock_info_with_warrant_table(self.conn)
-
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=SECURITIES_TRADER_INFO_TABLE_NAME
-        ):
-            schema.create_broker_info_table(self.conn)
-
-        # broker trading 表與索引：每次都呼叫，表已存在時 CREATE TABLE/INDEX IF NOT EXISTS 為 no-op
-        schema.create_broker_trading_daily_report_table(self.conn)
+        StockInfoDAO(conn=self.conn).ensure_table()
+        StockInfoWithWarrantDAO(conn=self.conn).ensure_table()
+        SecuritiesTraderInfoDAO(conn=self.conn).ensure_table()
+        BrokerTradingDAO(conn=self.conn).ensure_table()
 
     def add_to_db(self, remove_files: bool = False) -> None:
         """Add Data into Database from CSV files"""
@@ -138,25 +138,22 @@ class FinMindLoader(BaseDataLoader):
         df: Optional[pd.DataFrame] = None,
         commit: bool = True,
     ) -> Optional[int]:
-        """載入當日券商分點統計表資料到資料庫
+        """
+        - Description:
+            載入當日券商分點統計表資料到資料庫
 
-        如果傳入 df 參數，則直接從 DataFrame 載入；否則從 CSV 檔案載入
-
-        Args:
-            df: 可選的 DataFrame，如果提供則直接載入此 DataFrame
-                必須包含以下欄位：
-                - stock_id
-                - date
-                - securities_trader_id
-                - buy_volume, sell_volume, buy_price, sell_price (可選)
-                - securities_trader (可選)
-                如果為 None，則從 CSV 檔案載入（檔案結構：broker_trading/{broker_id}/{stock_id}.csv）；
-                批量更新不寫這些 CSV，故此路徑不含批量更新抓進 DB 的資料
-            commit: 是否在寫入後立即 commit；若為 False（例如批次更新時由 updater 定期 commit），則不呼叫 conn.commit()
-
-        Returns:
-            int: 如果從 DataFrame 載入，返回成功插入的資料筆數
-            None: 如果從 CSV 檔案載入，不返回值
+            如果傳入 df 參數，則直接從 DataFrame 載入；否則從 CSV 檔案載入
+            （檔案結構：`broker_trading/{broker_id}/{stock_id}.csv`；批量更新不寫這些 CSV，
+            故此路徑不含批量更新抓進 DB 的資料）
+        - Parameters:
+            - df: Optional[pd.DataFrame]
+                必須包含 `stock_id`／`date`／`securities_trader_id`；
+                `buy_volume`／`sell_volume`／`buy_price`／`sell_price`／`securities_trader` 可選
+            - commit: bool
+                DataFrame 路徑是否在寫入後立即 commit；批次更新時由 updater 傳 False 並定期 commit
+        - Return:
+            - Optional[int]
+                DataFrame 路徑回傳新寫入的列數；CSV 路徑回傳 None
         """
         if self.conn is None:
             self.connect()

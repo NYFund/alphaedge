@@ -43,8 +43,7 @@ class StockInfoUpdater:
         # 確保 loader 有連接
         self.context.ensure_loader_connected()
         self.context.loader.load_stock_info()
-        if self.context.loader.conn:
-            self.context.loader.conn.commit()
+        self.context.loader.commit()
 
         logger.info("✅ Taiwan Stock Info updated successfully")
 
@@ -80,7 +79,6 @@ class StockInfoUpdater:
         # 確保 loader 有連接
         self.context.ensure_loader_connected()
         self.context.loader.load_stock_info_with_warrant()
-        if self.context.loader.conn:
-            self.context.loader.conn.commit()
+        self.context.loader.commit()
 
         logger.info("✅ Taiwan Stock Info With Warrant updated successfully")
