@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Optional, Set
 
 import pandas as pd
 from loguru import logger
@@ -11,8 +11,8 @@ from core.config import (
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
+from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 Futures Margin Loader
@@ -43,11 +43,23 @@ ETF 股期給的是每口固定金額，語意與臺股期貨相同，故與指�
 class FuturesMarginLoader(BaseDataLoader):
     """Futures Margin Loader（金額表 ＋ 比例表）"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[FuturesMarginDAO] = None) -> None:
+        """
+        - Description:
+            建立期貨保證金 loader
+        - Parameters:
+            - dao: Optional[FuturesMarginDAO]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；未指定時 loader 自行建立
+        """
+
         super().__init__()
 
-        # SQLite Connection（指向 tw_futures.db）
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[FuturesMarginDAO] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態（指向 tw_futures.db）
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.margin_dir: Path = FUTURES_MARGIN_DOWNLOADS_PATH
@@ -67,109 +79,33 @@ class FuturesMarginLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
+        if self.dao is None:
+            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
             TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.dao = FuturesMarginDAO(db_path=TW_FUTURES_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
 
     def create_db(self) -> None:
         """Create New Database Table"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        # 主鍵為 (effective_date, product)：本表是變動序列，見本檔開頭說明。
-        #
-        # 金額欄為 INT：TAIFEX 的保證金一律是整數元，沒有小數。
-        #
-        # `source` 區分資料來源：`snapshot` 來自現行一覽表、`announcement` 來自
-        # 調整公告（S4）。兩者可能給出同一個 (effective_date, product)，
-        # 屆時先寫入者留存——值相同，故不需要 upsert。
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {FUTURES_MARGIN_HISTORY_TABLE_NAME}(
-            "effective_date" TEXT NOT NULL,
-            "product" TEXT NOT NULL,
-            "product_name" TEXT,
-            "結算保證金" INT,
-            "維持保證金" INT,
-            "原始保證金" INT NOT NULL,
-            "source" TEXT NOT NULL,
-            PRIMARY KEY ("effective_date", "product")
-        );
-        """
-        cursor.execute(create_table_query)
-
-        # 下游最常見的查詢是「某商品在某日生效的保證金」，走
-        # `WHERE product = ? AND effective_date <= ? ORDER BY effective_date DESC`，
-        # 主鍵的前綴是 effective_date，幫不上這種查詢，故另建索引
-        cursor.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_futures_margin_product
-            ON {FUTURES_MARGIN_HISTORY_TABLE_NAME} ("product", "effective_date");
-            """
-        )
-
-        # 比例表（股票股期）。
-        #
-        # **比例欄存的是小數**（`0.1350` 而非 `13.50`）：下游直接乘不必再除以 100，
-        # 而「忘記除 100」會讓保證金差 100 倍卻不會報錯。
-        #
-        # `保證金所屬級距` **可以是 NULL**：處置／注意股票沒有級距但仍有（更高的）
-        # 比例，2026-09-01 實查 296 檔中有 15 檔如此。不可因為級距為空就丟掉該檔。
-        cursor.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS {STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME}(
-                "effective_date" TEXT NOT NULL,
-                "product_id" TEXT NOT NULL,
-                -- 公告來源不提供標的證券代號，故可為 NULL；
-                -- 一覽表（snapshot）來源一定有值
-                "underlying_stock_id" TEXT,
-                "product_name" TEXT,
-                "保證金所屬級距" TEXT,
-                "結算保證金適用比例" REAL,
-                "維持保證金適用比例" REAL,
-                "原始保證金適用比例" REAL NOT NULL,
-                "source" TEXT NOT NULL,
-                PRIMARY KEY ("effective_date", "product_id")
-            );
-            """
-        )
-        cursor.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_stock_futures_margin_product
-            ON {STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME}
-            ("product_id", "effective_date");
-            """
-        )
-
-        for table in (
-            FUTURES_MARGIN_HISTORY_TABLE_NAME,
-            STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
-        ):
-            cursor.execute(f"PRAGMA table_info('{table}')")
-            if cursor.fetchall():
-                logger.info(f"Table {table} create successfully!")
-            else:
-                logger.warning(f"Table {table} create unsuccessfully!")
-
-        self.conn.commit()
+        self.dao.create_tables()
 
     def create_missing_tables(self) -> None:
         """確保兩張保證金資料表都存在"""
 
-        if not all(
-            SQLiteUtils.check_table_exist(conn=self.conn, table_name=table)
-            for table in (
-                FUTURES_MARGIN_HISTORY_TABLE_NAME,
-                STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
-            )
-        ):
-            self.create_db()
+        self.dao.ensure_tables()
 
     def add_to_db(self, df: pd.DataFrame) -> int:
         """
@@ -233,11 +169,10 @@ class FuturesMarginLoader(BaseDataLoader):
     ) -> int:
         """
         - Description:
-            兩張表共用的寫入：`INSERT OR IGNORE`／`INSERT OR REPLACE` ＋ 前後列數差
+            兩張表共用的寫入：`INSERT OR IGNORE`／`INSERT OR REPLACE`，寫完即 commit
 
             同一組保證金重複抓到時整批被忽略，這正是「變動序列」的實現方式，
-            不需要另外判斷有沒有變。**回傳的是實際新增列數而非 `rowcount`**——
-            後者會把被忽略／被覆蓋的也算進去。
+            不需要另外判斷有沒有變。寫入包在 savepoint 內，失敗時整批回滾。
         - Parameters:
             - df: pd.DataFrame
                 要寫入的資料
@@ -256,27 +191,14 @@ class FuturesMarginLoader(BaseDataLoader):
             logger.warning(f"[Futures Margin] 無{label}資料可入庫")
             return 0
 
-        if self.conn is None:
+        if self.dao is None:
             self.connect()
         self.create_missing_tables()
 
-        columns: List[str] = list(df.columns)
-        placeholders: str = ", ".join(["?"] * len(columns))
-        quoted: str = ", ".join(f'"{c}"' for c in columns)
-
-        cursor: sqlite3.Cursor = self.conn.cursor()
-        before: int = self.count_rows(table)
-        conflict: str = "REPLACE" if replace else "IGNORE"
-        cursor.executemany(
-            f"INSERT OR {conflict} INTO {table} ({quoted}) VALUES ({placeholders})",
-            # 第一欄是 datetime.date，轉成 ISO 字串與其他表一致
-            [
-                tuple(str(v) if i == 0 else v for i, v in enumerate(row))
-                for row in df.values
-            ],
-        )
-        self.conn.commit()
-        inserted: int = self.count_rows(table) - before
+        inserted: int
+        with self.dao.savepoint():
+            inserted = self.dao.insert_rows(table, df, replace=replace)
+        self.dao.commit()
 
         if inserted:
             logger.info(f"* 新增 {inserted} 列{label}（共 {len(df)} 列，其餘已存在）")
@@ -288,7 +210,7 @@ class FuturesMarginLoader(BaseDataLoader):
     def count_rows(self, table: str = FUTURES_MARGIN_HISTORY_TABLE_NAME) -> int:
         """指定資料表目前的列數；預設為金額表"""
 
-        return self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        return self.dao.count_rows(table)
 
     def get_effective_dates(
         self,
@@ -303,14 +225,8 @@ class FuturesMarginLoader(BaseDataLoader):
         （2026-09-01 實測踩到，該則的其餘 25 個商品因此全部沒進表）。
         """
 
-        if self.conn is None:
+        if self.dao is None:
             self.connect()
         self.create_missing_tables()
 
-        query: str = f"SELECT DISTINCT effective_date FROM {table}"
-        params: tuple = ()
-        if source is not None:
-            query += " WHERE source = ?"
-            params = (source,)
-
-        return {row[0] for row in self.conn.execute(query, params)}
+        return self.dao.get_effective_dates(table, source=source)

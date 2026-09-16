@@ -2,11 +2,8 @@ import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import pytest
-
 from core.backtest.models.cost_model import FuturesCostConfig, TwFuturesCostModel
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
-from core.config import TW_FUTURES_DB_PATH
 from core.managers.futures.position_manager import (
     FuturesMarginConfig,
     FuturesPositionManager,
@@ -27,7 +24,7 @@ from core.utils.constant import FUTURES_MULTIPLIER
    可動用餘額歸零不等於被追繳；反之浮動獲利可以支撐加碼。
 3. **追繳門檻是維持保證金**，與原始保證金是兩個獨立的公告值，不可用比率互推。
 
-不連網路；用到真實 `tw_futures.db` 的那一條標了 `slow` 並在缺檔時 skip。
+不連網路、不碰正式的 `tw_futures.db`。
 """
 
 INIT_CAPITAL: float = 3_000_000
@@ -440,31 +437,75 @@ def test_ratio_mode_is_not_injected() -> None:
         feed.close()
 
 
-# === 真實資料 ===
-@pytest.mark.slow
-@pytest.mark.skipif(
-    not Path(TW_FUTURES_DB_PATH).exists(), reason="需要 tw_futures.db 才能查保證金"
-)
-def test_real_table_matches_the_announced_adjustment() -> None:
+# === 實際的保證金表（暫存 DB）===
+def test_margin_table_matches_the_announced_adjustment(tmp_path: Path) -> None:
     """
-    以真實表驗證「調整生效日前後的可開口數不同，且與公告一致」
+    以保證金表驗證「調整生效日前後的可開口數不同，且與公告一致」
 
     TX 於 2024-08-09 調為 265,000／口、2024-08-22 再調為 292,000／口。
+    表內數值取自當時的公告，寫進暫存 DB；**不連正式的 tw_futures.db**——
+    舊版這條依賴正式資料，沒有 DB 的機器上永遠被 skip，等於沒有驗收。
     """
 
-    from core.api.tw.futures_margin_api import FuturesMarginAPI
+    import pandas as pd
 
-    api: FuturesMarginAPI = FuturesMarginAPI()
+    from core.api.tw.futures_margin_api import FuturesMarginAPI
+    from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+
+    dao: FuturesMarginDAO = FuturesMarginDAO(db_path=tmp_path / "tw_futures.db")
+    dao.ensure_tables()
+    dao.insert_rows(
+        FuturesMarginDAO.TABLE_NAME,
+        pd.DataFrame(
+            [
+                [
+                    "2024-08-09",
+                    "TX",
+                    "臺股期貨",
+                    204000,
+                    204000,
+                    265000,
+                    "announcement",
+                ],
+                [
+                    "2024-08-22",
+                    "TX",
+                    "臺股期貨",
+                    224000,
+                    224000,
+                    292000,
+                    "announcement",
+                ],
+            ],
+            columns=[
+                "effective_date",
+                "product",
+                "product_name",
+                "結算保證金",
+                "維持保證金",
+                "原始保證金",
+                "source",
+            ],
+        ),
+    )
+    dao.commit()
+
+    api: FuturesMarginAPI = FuturesMarginAPI(conn=dao.conn)
     try:
         before: Optional[int] = api.get_initial_margin("TX", datetime.date(2024, 8, 20))
+        on_the_day: Optional[int] = api.get_initial_margin(
+            "TX", datetime.date(2024, 8, 22)
+        )
         after: Optional[int] = api.get_initial_margin("TX", datetime.date(2024, 8, 23))
         maintenance: Optional[int] = api.get_maintenance_margin(
             "TX", datetime.date(2024, 8, 23)
         )
     finally:
-        api.close()
+        dao.close()
 
     assert before == 265000
+    # 生效日當天即適用新值（`effective_date <= 該日`）
+    assert on_the_day == 292000
     assert after == 292000
     # 維持保證金是另一個公告值，不是原始的固定比例
     assert maintenance == 224000

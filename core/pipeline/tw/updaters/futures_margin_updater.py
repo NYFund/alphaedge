@@ -6,11 +6,8 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FUTURES_MARGIN_HISTORY_TABLE_NAME,
-    STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import TW_FUTURES_DB_PATH
+from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.crawlers.futures_margin_crawler import FuturesMarginCrawler
@@ -60,23 +57,28 @@ class FuturesMarginUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection（tw_futures.db；供 log_summary 查詢用）
-        self.conn: Optional[sqlite3.Connection] = None
+        # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一個 DAO**（tw_futures.db）
+        TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.dao: FuturesMarginDAO = FuturesMarginDAO(db_path=TW_FUTURES_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
 
         # ETL
         self.crawler: FuturesMarginCrawler = FuturesMarginCrawler()
         self.cleaner: FuturesMarginCleaner = FuturesMarginCleaner()
-        self.loader: FuturesMarginLoader = FuturesMarginLoader()
+        self.loader: FuturesMarginLoader = FuturesMarginLoader(dao=self.dao)
 
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
         LogManager.setup_logger("update_futures_margin.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def update(self) -> None:
         """
@@ -183,23 +185,10 @@ class FuturesMarginUpdater(BaseDataUpdater):
         **新增 0 列是正常狀態不是失敗**：保證金沒調整時本來就不會有新列。
         """
 
-        for table, key in (
-            (FUTURES_MARGIN_HISTORY_TABLE_NAME, "product"),
-            (STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME, "product_id"),
-        ):
-            total: int = self.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[
-                0
-            ]
-            products: int = self.conn.execute(
-                f"SELECT COUNT(DISTINCT {key}) FROM {table}"
-            ).fetchone()[0]
-            date_range = self.conn.execute(
-                f"SELECT MIN(effective_date), MAX(effective_date) FROM {table}"
-            ).fetchone()
-
+        for table, total, products, earliest, latest in self.dao.get_table_summaries():
             logger.info(
                 f"* {table}：{total} 列、{products} 個商品，"
-                f"生效日範圍 {date_range[0]} ~ {date_range[1]}"
+                f"生效日範圍 {earliest} ~ {latest}"
             )
 
     # === 歷史回補 ===
@@ -387,16 +376,15 @@ class FuturesMarginUpdater(BaseDataUpdater):
         """
         取得該商品在 `effective_date` **之前**最後生效的原始保證金
 
-        用 `<` 而非 `<=`：要問的是「這次調整之前是多少」。
+        **用 `<` 而非 `<=` 是刻意的**（`inclusive=False`）：要問的是「這次調整之前是多少」。
+        比對發生在本次公告入庫之前，但表內仍可能已有同一生效日的列——現行一覽表
+        （`source='snapshot'`）與公告同日生效，或重跑回補時本次公告前一輪已經寫入。
+        `<=` 會拿到那一列的**調整後**數值，與公告的「調整前」必然不符，缺口判斷整個失真。
+        回測與試算問的是「這一天適用多少」，才用 `<=`（見 `FuturesMarginAPI.get_margin()`）。
         """
 
-        row = self.conn.execute(
-            f"SELECT 原始保證金 FROM {FUTURES_MARGIN_HISTORY_TABLE_NAME} "
-            f"WHERE product = ? AND effective_date < ? "
-            f"ORDER BY effective_date DESC LIMIT 1",
-            (product, effective_date),
-        ).fetchone()
-        return None if row is None else row[0]
+        row = self.dao.get_margin_in_effect(product, effective_date, inclusive=False)
+        return None if row is None else row[2]
 
     def check_announcement_consistency(
         self, df: pd.DataFrame
@@ -460,13 +448,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 完全接得上時為空 list
         """
 
-        rows = self.conn.execute(
-            f"SELECT effective_date, 原始保證金 "
-            f"FROM {FUTURES_MARGIN_HISTORY_TABLE_NAME} "
-            f"WHERE product = ? AND source = 'announcement' "
-            f"ORDER BY effective_date",
-            (product,),
-        ).fetchall()
+        rows: List[Tuple[str, int]] = self.dao.get_announcement_margins(product)
 
         breaks: List[Tuple[str, int, int]] = []
         for i in range(1, len(rows)):
@@ -483,13 +465,9 @@ class FuturesMarginUpdater(BaseDataUpdater):
         # 2026-09-01 實測：TAIFEX 自 2026/04/21 起把標題措辭由「保證金金額」改為
         # 「保證金」，只查前者會從那天起靜默漏掉每一次調整，而漏掉的部分**不會**
         # 在上面的相鄰比對中出現（沒有下一筆可比），只有與 snapshot 對照才看得出來。
-        snapshot = self.conn.execute(
-            f"SELECT effective_date, 原始保證金 "
-            f"FROM {FUTURES_MARGIN_HISTORY_TABLE_NAME} "
-            f"WHERE product = ? AND source = 'snapshot' "
-            f"ORDER BY effective_date DESC LIMIT 1",
-            (product,),
-        ).fetchone()
+        snapshot: Optional[Tuple[str, int]] = self.dao.get_latest_snapshot_margin(
+            product
+        )
         if rows and snapshot is not None and snapshot[0] > rows[-1][0]:
             if snapshot[1] != rows[-1][1]:
                 breaks.append((snapshot[0], rows[-1][1], snapshot[1]))

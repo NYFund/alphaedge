@@ -570,7 +570,10 @@ def main() -> None:
             # 保證金是「現行一覽表」，一次請求就結束，沒有回補區間，故不取 time_config；
             # 沒有調整時不會新增列（主鍵相同被 INSERT OR IGNORE 擋掉），那是正常狀態
             futures_margin_updater: FuturesMarginUpdater = FuturesMarginUpdater()
-            futures_margin_updater.update()
+            try:
+                futures_margin_updater.update()
+            finally:
+                futures_margin_updater.close()
 
     if DataType.FS.name.lower() in targets:
         with target_guard("fs", failed_targets):
