@@ -48,7 +48,7 @@
 | Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ✅ | 2026-09-16 完成：實測 pandas 3.0.2 的 `to_sql` 確實自行 commit，改走 `insert_or_ignore` 後 `commit=False` 才生效；`schema.py` 刪除、DDL 進 DAO；清單查詢不再吞錯誤；`tests/test_dao_finmind.py` 8 項、`not slow` 1110 passed、回歸雙線通過 |
 | Phase5-1 | 推廣：futures_price | `core/dao/tw/`、對應 API／loader／updater | 對應測試＋期貨回測測試 | ✅ | 2026-09-16 完成：新增 `FuturesPriceDAO`；續跑起點與 `get_trading_days` 不再吞錯誤；補行交易日改用唯讀 `StockPriceDAO`（底座新增 `read_only`）；`tests/test_dao_futures_price.py` 8 項、`not slow` 1118 passed、`slow` 19 passed、回歸雙線通過 |
 | Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesStockUniverseDAO`；快照日查詢收斂為一份、`get_contract_size` 以 `per_product` 區分兩種查法；updater 五處自開連線改共用 DAO；`tests/test_dao_futures_stock_universe.py` 9 項、`not slow` 1127 passed、`slow` 19 passed、回歸雙線通過 |
-| Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ⬜ | 相依 Phase5-2；統一 `<`／`<=`；修 `FuturesMarginConfig.from_api()` 暗開連線 |
+| Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesMarginDAO`（兩表）；生效日查詢收斂為 `inclusive` 參數，`<` 確認為刻意；`from_api()` 改為必須傳入 `api`；連正式 DB 的測試改用暫存 DB；`tests/test_dao_futures_margin.py` 10 項、`not slow` 1138 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase5-4 | 推廣：futures_chip 三表、futures_continuous | 同上 | 對應測試 | ⬜ | 相依 Phase5-1；`FuturesChipAPI` 的 `table=` 補白名單 |
 | Phase6-1 | 測試共用 DAO fixture | `tests/conftest.py`、直接 `sqlite3.connect` 的測試檔 | `pytest` 通過 | ⬜ | 相依 Phase3~Phase5 |
 | Phase6-2 | 收斂：刪除舊工具、分層檢查禁止 DAO 以外 `import sqlite3` | `core/pipeline/utils/sqlite_utils.py`、`core/api/base.py`、`scripts/check_layer_deps.py`、`tasks/delete_price_data.py`、`strategy_lab/**`、`scripts/manual/*` | 分層檢查違規 0；全域 `grep "import sqlite3"` 只剩 `core/dao/` 與測試 | ⬜ | 相依 Phase6-1 |
@@ -408,7 +408,7 @@ class BaseDAO:
 > - 順手處理 Phase5-1 留下的 `FuturesPriceUpdater.resolve_stock_futures_products()`：改為實例方法、共用 updater 的連線。
 > - `tasks/update_db.py` 的 futures_stock_universe 分支以 `try/finally` 關閉連線。
 
-### Phase5-3. futures_margin 兩表 ⬜
+### Phase5-3. futures_margin 兩表 ✅
 
 - **做法**：新增 `FuturesMarginDAO`：
   - 「生效日」查詢收斂成一個方法，以參數 `inclusive: bool` 區分 `<` 與 `<=`，updater 與 API 各自明確傳入；確認 updater 用 `<` 是否刻意，結論寫進 docstring。
@@ -416,6 +416,20 @@ class BaseDAO:
 - **產出**：對應 DAO、`core/api/tw/futures_margin_api.py`、`core/managers/futures/position_manager.py`、loader、updater。
 - **驗證方式**：`pytest tests/test_futures_margin_control.py tests/test_futures_position_manager.py` 通過；`tests/test_futures_margin_control.py:457` 不再連正式 DB。
 - **相依**：Phase5-2。
+
+> **完成紀錄（2026-09-16）**
+> - **`<` 是刻意的，結論**：updater 的 `get_margin_in_effect()` 問的是「這次調整之前是多少」，用來比對公告載明的
+>   「調整前」。比對當下表內可能已有同一生效日的列——現行一覽表（`snapshot`）與公告同日生效，或重跑回補時
+>   前一輪已寫入本次公告（`update_history()` 算了 `loaded_dates` 卻不據以跳過，重跑會重處理每一則）。
+>   `<=` 會拿到調整後的值、比對必然不符。API 問「這一天適用多少」，維持 `<=`。兩處都寫進 docstring，並有測試釘住。
+> - `FuturesMarginDAO` 同時管金額表（`TABLE_NAME`）與比例表（`RATE_TABLE_NAME`），以表名為參數的方法走白名單。
+>   loader 的 `count_rows()`／`get_effective_dates()` 保留介面、委派 DAO；寫入包 savepoint 後 commit。
+> - `FuturesMarginConfig.from_api()` 全專案沒有呼叫端，直接改為 `api` 必填（偏離原規格的「或由 DataFeed 提供共用連線」選項——
+>   DataFeed 已經透過 `default()` 注入 API，不需要第二條路）。
+> - `test_real_table_matches_the_announced_adjustment` 改為 `test_margin_table_matches_the_announced_adjustment`：公告數值寫進暫存 DB，
+>   拿掉 `slow`／`skipif`，並補上「生效日當天即適用新值」的斷言；`-m slow` 因此由 19 項變 18 項。
+> - 發現但不在本步驟處理：`update_history()` 的 `loaded_dates` 與 `stats["skipped_existing"]` 從未被用來跳過已入庫的公告，
+>   每次回補都會重新下載全部附件（約數百次請求）。
 
 ### Phase5-4. futures_chip 三表、futures_continuous ⬜
 

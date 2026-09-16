@@ -95,15 +95,27 @@ class FuturesMarginConfig:
 
     @staticmethod
     def from_api(
-        api: Optional[FuturesMarginAPI] = None,
+        api: FuturesMarginAPI,
         fallback_to_earliest: bool = False,
     ) -> "FuturesMarginConfig":
-        """建立查表模式的設定；未指定 `api` 時自行建立一個（會自帶一條連線）"""
+        """
+        - Description:
+            以既有的 `FuturesMarginAPI` 建立查表模式的設定
 
-        return FuturesMarginConfig(
-            api=api or FuturesMarginAPI(),
-            fallback_to_earliest=fallback_to_earliest,
-        )
+            **`api` 必須由呼叫端傳入**：舊版未指定時自行 `FuturesMarginAPI()`，暗中開了一條
+            沒有人負責關閉的連線。API 的連線應與 DataFeed 共用、由 DataFeed 關閉；
+            只要預設查表模式、不自己持有 API 的話用 `default()`，由 DataFeed 注入。
+        - Parameters:
+            - api: FuturesMarginAPI
+                查保證金用的 API（通常共用 DataFeed 的連線）
+            - fallback_to_earliest: bool
+                查詢日早於表內所有列時是否退回最早一列
+        - Return:
+            - FuturesMarginConfig
+                查表模式的設定
+        """
+
+        return FuturesMarginConfig(api=api, fallback_to_earliest=fallback_to_earliest)
 
 
 class FuturesPositionManager(BasePositionManager):

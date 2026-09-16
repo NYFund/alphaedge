@@ -998,6 +998,7 @@ def make_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     updater = FuturesMarginUpdater.__new__(FuturesMarginUpdater)
     updater.loader = FuturesMarginLoader()
+    updater.dao = updater.loader.dao
     updater.conn = updater.loader.conn
     updater.ANNOUNCEMENT_DELAY_SECONDS = 0
     return updater
