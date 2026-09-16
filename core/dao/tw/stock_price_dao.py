@@ -6,7 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
-from core.dao.base import BaseDAO, create_symbol_date_index
+from core.dao.base import BaseDAO, create_symbol_date_index, to_sql_params
 
 """台股日 K（`price` 表）的資料存取"""
 
@@ -185,6 +185,68 @@ class StockPriceDAO(BaseDAO):
             tuple(stock_ids),
         )
         return {row[0] for row in rows}
+
+    def get_high_close_by_stocks(
+        self,
+        stock_ids: List[str],
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> pd.DataFrame:
+        """
+        - Description:
+            批次取得多檔股票在區間內的最高價與收盤價（研究用的價格面板）
+        - Parameters:
+            - stock_ids: List[str]
+                股票代號；空清單回空表
+            - start_date / end_date: datetime.date
+                區間（含頭含尾）
+        - Return:
+            - pd.DataFrame
+                欄位 `date`／`stock_id`／`最高價`／`收盤價`，依 `stock_id, date` 排序
+        """
+
+        if not stock_ids:
+            return pd.DataFrame(columns=["date", "stock_id", "最高價", "收盤價"])
+
+        placeholders: str = ",".join("?" * len(stock_ids))
+        return self.query_df(
+            f"""
+            SELECT date, stock_id, 最高價, 收盤價
+            FROM {self.TABLE_NAME}
+            WHERE stock_id IN ({placeholders})
+              AND date BETWEEN ? AND ?
+            ORDER BY stock_id, date
+            """,
+            (*stock_ids, start_date, end_date),
+        )
+
+    # === 維護 ===
+    def count_by_date(self, date: datetime.date) -> int:
+        """指定日期的列數"""
+
+        row: Optional[Tuple[Any, ...]] = self.fetch_one(
+            f"SELECT COUNT(*) FROM {self.TABLE_NAME} WHERE date = ?", (date,)
+        )
+        return int(row[0]) if row else 0
+
+    def delete_by_date(self, date: datetime.date) -> int:
+        """
+        - Description:
+            刪除指定日期的全部列，回傳刪除列數；**不 commit**
+
+            不可逆的操作一律由呼叫端確認後自行 `commit()`——DAO 不替它決定。
+        - Parameters:
+            - date: datetime.date
+                要刪除的日期
+        - Return:
+            - int
+                刪除的列數
+        """
+
+        cursor = self.conn.execute(
+            f"DELETE FROM {self.TABLE_NAME} WHERE date = ?", to_sql_params(date)
+        )
+        return cursor.rowcount
 
     def get_latest_date(self) -> Optional[Any]:
         """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""

@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -13,7 +12,7 @@ from core.config import (
     FUTURES_PUT_CALL_RATIO_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.utils.log_manager import LogManager
 
@@ -43,9 +42,9 @@ Futures Chip API: 三大法人、大額交易人與選擇權 PCR
 class FuturesChipAPI(BaseDataAPI):
     """Futures Chip API（三張籌碼表）"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為

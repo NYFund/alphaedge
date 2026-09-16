@@ -1,5 +1,4 @@
 import shutil
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import FINMIND_DOWNLOADS_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
@@ -29,12 +28,12 @@ FinMind Loader
 class FinMindLoader(BaseDataLoader):
     """FinMind Loader - 將 FinMind 資料存入資料庫"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         """
         - Description:
             建立 FinMind loader
         - Parameters:
-            - conn: Optional[sqlite3.Connection]
+            - conn: Optional[DBConnection]
                 共用連線（通常由 updater 傳入，讓讀寫走同一條連線）。
                 四張表共用一條連線，故收連線而不是單一 DAO；指定時 loader 不擁有它，
                 `disconnect()` 不會關閉；未指定時 loader 自行建立，入庫完成即關閉
@@ -42,7 +41,7 @@ class FinMindLoader(BaseDataLoader):
 
         super().__init__()
 
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # Downloads directory Path

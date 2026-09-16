@@ -1,6 +1,5 @@
 import datetime
 import random
-import sqlite3
 import time
 from typing import List, Optional
 
@@ -8,6 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
@@ -41,7 +41,7 @@ class StockDividendUpdater(BaseDataUpdater):
 
         # 讀（最新日期）與寫（loader）共用同一個 DAO，一次更新只開一條連線
         self.dao: StockDividendDAO = StockDividendDAO(db_path=TW_STOCK_DB_PATH)
-        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+        self.conn: Optional[DBConnection] = self.dao.conn
 
         # ETL
         self.crawler: StockDividendCrawler = StockDividendCrawler()

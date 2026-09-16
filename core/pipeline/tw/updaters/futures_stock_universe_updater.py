@@ -1,11 +1,11 @@
 import datetime
-import sqlite3
 from typing import List, Optional, Set
 
 import pandas as pd
 from loguru import logger
 
 from core.config import PRICE_TABLE_NAME, TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
@@ -56,7 +56,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         self.dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
             db_path=TW_FUTURES_DB_PATH
         )
-        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+        self.conn: Optional[DBConnection] = self.dao.conn
 
         self.crawler: FuturesStockUniverseCrawler = FuturesStockUniverseCrawler()
         self.cleaner: FuturesStockUniverseCleaner = FuturesStockUniverseCleaner()

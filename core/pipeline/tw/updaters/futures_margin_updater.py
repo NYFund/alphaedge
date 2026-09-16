@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -7,6 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import TW_FUTURES_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
@@ -60,7 +60,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
         # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一個 DAO**（tw_futures.db）
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.dao: FuturesMarginDAO = FuturesMarginDAO(db_path=TW_FUTURES_DB_PATH)
-        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+        self.conn: Optional[DBConnection] = self.dao.conn
 
         # ETL
         self.crawler: FuturesMarginCrawler = FuturesMarginCrawler()

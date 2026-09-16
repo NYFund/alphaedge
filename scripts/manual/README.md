@@ -1,6 +1,6 @@
 # 手動腳本（`scripts/manual/`）
 
-這裡的 9 支腳本是**人工執行的檢查與探測工具，不是測試**。
+這裡的腳本是**人工執行的檢查與探測工具，不是測試**。
 
 ## 為什麼從 `tests/` 搬過來
 
@@ -36,15 +36,20 @@
 
 | 腳本 | 用途 | 是否碰 production DB |
 |------|------|:---:|
-| `manual_db_tables.py` | 檢查 `tw_stock.db` 的資料表是否存在並抽樣查詢 | 唯讀 |
-| `manual_broker_trading_db_query.py` | 券商分點資料的抽樣查詢 | 唯讀 |
-| `manual_broker_trading_updater.py` | 券商分點 updater 的手動驗證 | 寫入 |
+| `manual_db_tables.py` | 檢查 `tw_stock.db` 的 FinMind 參考表是否存在，`--broker-trading` 抽樣券商分點（查詢走 DAO、唯讀連線） | 唯讀 |
 | `manual_finmind_api.py` | 逐一呼叫 `FinMindAPI` 的每個方法 | 唯讀 |
-| `manual_finmind_pipeline.py` | FinMind 爬取→清洗→入庫的整段驗證 | 寫入 |
-| `manual_finmind_updater.py` | FinMind updater 的手動驗證 | 寫入 |
 | `manual_init_tick_metadata.py` | 初始化 tick metadata | 寫入 |
 | `manual_tick_crawler.py` | tick 爬蟲的手動驗證（需 Shioaji 金鑰） | — |
 | `manual_tick_updater.py` | tick updater 的手動驗證（需 DolphinDB） | 寫入 |
+
+**已刪除的腳本**（2026-09-16，DAO 資料存取層收斂時）：
+
+- `manual_broker_trading_db_query.py`：與 `manual_db_tables.py --broker-trading` 重複。
+- `manual_broker_trading_updater.py`、`manual_finmind_pipeline.py`、`manual_finmind_updater.py`：以 mock 改寫
+  `core.config` 後自己開臨時 SQLite 驗證，且已跟不上現行介面（例如呼叫已不存在的
+  `get_actual_update_start_date()`）。同樣的行為已由真的會跑的測試守著：
+  `tests/test_finmind_broker_trading_batch.py`、`tests/test_dao_finmind.py`、
+  `tests/test_finmind_reference_table_loader.py`、`tests/test_finmind_loader_broker_trading.py`。
 
 ⚠️ **會寫入的那幾支請先確認沒有背景回補在跑**。同一個 SQLite 檔同時被兩個
 行程寫入會互相搶鎖；MOPS 與 FinMind 另有各自的節流，同時跑兩支爬蟲會讓

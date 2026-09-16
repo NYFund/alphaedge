@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
@@ -6,6 +5,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import CORPORATE_ACTION_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.shared.source_priority import dedup_by_source_priority
@@ -47,7 +47,7 @@ class CorporateActionLoader(BaseDataLoader):
         self.owns_dao: bool = dao is None
 
         # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
-        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
+        self.conn: Optional[DBConnection] = dao.conn if dao else None
         self.corporate_action_dir: Path = CORPORATE_ACTION_DOWNLOADS_PATH
 
         self.setup()

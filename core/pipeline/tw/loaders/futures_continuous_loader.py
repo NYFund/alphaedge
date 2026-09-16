@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -6,6 +5,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import FUTURES_CONTINUOUS_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
@@ -48,7 +48,7 @@ class FuturesContinuousLoader(BaseDataLoader):
         self.owns_dao: bool = dao is None
 
         # 保留 `conn` 屬性：既有呼叫端以它判斷連線狀態（指向 tw_futures.db）
-        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
+        self.conn: Optional[DBConnection] = dao.conn if dao else None
         self.continuous_dir: Path = FUTURES_CONTINUOUS_DOWNLOADS_PATH
 
         self.setup()

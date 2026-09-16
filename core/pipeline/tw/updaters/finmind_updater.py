@@ -1,12 +1,11 @@
 import datetime
-import sqlite3
 from pathlib import Path
 from typing import Dict, Optional, Union
 
 from loguru import logger
 
 from core.config import BROKER_TRADING_METADATA_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.finmind_cleaner import FinMindCleaner
 from core.pipeline.tw.crawlers.finmind_crawler import FinMindCrawler
@@ -41,7 +40,7 @@ class FinMindUpdater(BaseDataUpdater):
         # **讀（股票／券商清單、metadata 重建）與寫（loader）共用同一條連線**：舊版各開
         # 一條連線到同一個 DB，券商分點批次更新前還得先 commit loader 那條，
         # 否則 updater 的 SELECT 會被寫入鎖卡住
-        self.conn: Optional[sqlite3.Connection] = connect_sqlite(TW_STOCK_DB_PATH)
+        self.conn: Optional[DBConnection] = connect_sqlite(TW_STOCK_DB_PATH)
 
         # ETL
         self.crawler: FinMindCrawler = FinMindCrawler()

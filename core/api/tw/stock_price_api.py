@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -8,7 +7,7 @@ from core.api.base import BaseDataAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
 from core.config.schema import PriceColumn
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.utils.constant import Units
 from core.utils.log_manager import LogManager
@@ -21,11 +20,11 @@ class StockPriceAPI(BaseDataAPI):
 
     def __init__(
         self,
-        conn: Optional[sqlite3.Connection] = None,
+        conn: Optional[DBConnection] = None,
         dividend_api: Optional[StockDividendAPI] = None,
     ) -> None:
         # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # 還原價專用；只有 get_adjusted_* 系列會用到，故延遲建立

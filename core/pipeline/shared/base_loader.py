@@ -1,13 +1,10 @@
 import shutil
-import sqlite3
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, List, Optional, Set
 
-import pandas as pd
 from loguru import logger
 
-from core.dao.base import create_symbol_date_index, insert_or_ignore
 from core.pipeline.utils.exceptions import DataLoadError
 
 """Abstract base class for all data loaders that write processed data to a storage system"""
@@ -51,23 +48,6 @@ class BaseDataLoader(ABC):
         pass
 
     @staticmethod
-    def create_symbol_date_index(conn: "sqlite3.Connection", table_name: str) -> None:
-        """
-        - Description:
-            建立 `(stock_id, date)` 索引並 commit
-
-            實作在 `core.dao.base.create_symbol_date_index()`（為什麼需要這個索引見該函式）；
-            loader 全部改走 DAO 後刪除。
-        - Parameters:
-            - conn: sqlite3.Connection
-                資料庫連線
-            - table_name: str
-                目標資料表
-        """
-
-        create_symbol_date_index(conn, table_name)
-
-    @staticmethod
     def select_csv_files(
         directory: Path, only_dates: Optional[Set[str]] = None
     ) -> List[Path]:
@@ -98,30 +78,6 @@ class BaseDataLoader(ABC):
             return files
 
         return [path for path in files if path.stem.split("_")[-1] in only_dates]
-
-    @staticmethod
-    def insert_dataframe(
-        conn: "sqlite3.Connection", table_name: str, df: "pd.DataFrame"
-    ) -> Tuple[int, int]:
-        """
-        - Description:
-            以 `INSERT OR IGNORE` 寫入，回傳實際寫入與被跳過的列數；不 commit
-
-            實作在 `core.dao.base.insert_or_ignore()`（為什麼不用 `to_sql` 見該函式）；
-            loader 全部改走 DAO 後刪除。
-        - Parameters:
-            - conn: sqlite3.Connection
-                目標資料庫連線
-            - table_name: str
-                目標資料表
-            - df: pd.DataFrame
-                欄位需與資料表一致
-        - Return:
-            - Tuple[int, int]
-                （實際寫入列數, 因主鍵重複被跳過的列數）
-        """
-
-        return insert_or_ignore(conn, table_name, df)
 
     @staticmethod
     def finish_load(

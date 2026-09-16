@@ -1,4 +1,3 @@
-import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Type, Union
@@ -6,6 +5,7 @@ from typing import List, Type, Union
 import pandas as pd
 from loguru import logger
 
+from core.dao.connection import DBConnection
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
 from core.pipeline.utils import FinMindDataType
@@ -41,7 +41,7 @@ class ReferenceTableSpec:
 
 
 def load_reference_table(
-    conn: sqlite3.Connection,
+    conn: DBConnection,
     finmind_dir: Path,
     spec: ReferenceTableSpec,
 ) -> None:
@@ -57,7 +57,7 @@ def load_reference_table(
         自行 commit 的持久化時點一致——門面 loader 依序載入三張表，後一張失敗時
         前一張已寫入的資料不可跟著消失。
     - Parameters:
-        - conn: sqlite3.Connection
+        - conn: DBConnection
             資料庫連線（由 `FinMindLoader` 持有並負責開關）
         - finmind_dir: Path
             downloads 底下的 finmind 目錄

@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -6,7 +5,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import FUTURES_CHIP_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
@@ -34,19 +33,19 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 class FuturesChipLoader(BaseDataLoader):
     """把清洗後的籌碼資料寫進 tw_futures.db"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         """
         - Description:
             建立期貨籌碼 loader
         - Parameters:
-            - conn: Optional[sqlite3.Connection]
+            - conn: Optional[DBConnection]
                 共用連線（通常由 updater 傳入）。三張表共用一條連線，故收連線而不是單一 DAO；
                 指定時 loader 不擁有它，`disconnect()` 不會關閉
         """
 
         super().__init__()
 
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
         self.chip_dir: Path = FUTURES_CHIP_DOWNLOADS_PATH
 

@@ -351,13 +351,17 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 > 想知道目前 DB 內有哪些表，可以快速跑：
 >
 > ```python
-> import sqlite3
 > from core.config import TW_STOCK_DB_PATH
+> from core.dao.connection import connect_sqlite
 >
-> with sqlite3.connect(TW_STOCK_DB_PATH) as conn:
->     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
->         print(name)
+> # 唯讀開啟：不會與背景 ETL 搶寫入鎖，檔案不存在時也不會建出空 DB
+> conn = connect_sqlite(TW_STOCK_DB_PATH, read_only=True)
+> for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+>     print(name)
+> conn.close()
 > ```
+>
+> 研究腳本讀資料一律走 `core/api/`（或 API 持有的 `dao`），不要自己 `import sqlite3` 下查詢。
 
 ---
 

@@ -207,8 +207,6 @@ def test_empty_dataframe_is_noop(loader: FuturesPriceLoader) -> None:
     """空 DataFrame 不應寫入任何列，也不應拋錯"""
 
     loader.connect()
-    inserted, skipped = loader.insert_dataframe(
-        loader.conn, FUTURES_PRICE_DAILY_TABLE_NAME, pd.DataFrame()
-    )
+    inserted, skipped = loader.dao.insert_or_ignore(pd.DataFrame())
 
     assert (inserted, skipped) == (0, 0)

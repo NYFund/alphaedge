@@ -1,5 +1,4 @@
 import random
-import sqlite3
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -8,6 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
@@ -43,7 +43,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
 
         # 讀（最新年月）與寫（loader）共用同一個 DAO，一次更新只開一條連線
         self.dao: MonthlyRevenueDAO = MonthlyRevenueDAO(db_path=TW_STOCK_DB_PATH)
-        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+        self.conn: Optional[DBConnection] = self.dao.conn
 
         # ETL
         self.crawler: MonthlyRevenueReportCrawler = MonthlyRevenueReportCrawler()

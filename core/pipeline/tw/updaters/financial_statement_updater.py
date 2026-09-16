@@ -1,6 +1,5 @@
 import datetime
 import random
-import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +16,7 @@ from core.config import (
     FINANCIAL_STATEMENT_DOWNLOADS_PATH,
     TW_STOCK_DB_PATH,
 )
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
@@ -211,7 +210,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
         # **讀（年季規劃、逐檔 resume）與寫（loader）共用同一條連線**：舊版 updater 與
         # loader 各開一條連線到同一個 DB，updater 那條從不關閉。四張表各有一個 DAO，
         # 故由 updater 持有連線、需要時以 `get_dao()` 就地建 DAO
-        self.conn: Optional[sqlite3.Connection] = connect_sqlite(TW_STOCK_DB_PATH)
+        self.conn: Optional[DBConnection] = connect_sqlite(TW_STOCK_DB_PATH)
 
         # ETL
         self.crawler: FinancialStatementCrawler = FinancialStatementCrawler()

@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import List, Optional, Set
 
@@ -6,6 +5,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import MARGIN_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
@@ -30,7 +30,7 @@ class StockMarginLoader(BaseDataLoader):
         self.owns_dao: bool = dao is None
 
         # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
-        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
+        self.conn: Optional[DBConnection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.margin_dir: Path = MARGIN_DOWNLOADS_PATH

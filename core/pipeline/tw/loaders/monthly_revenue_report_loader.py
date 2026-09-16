@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
@@ -10,6 +9,7 @@ from core.config import (
     MONTHLY_REVENUE_REPORT_META_DIR_PATH,
     TW_STOCK_DB_PATH,
 )
+from core.dao.connection import DBConnection
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import DataType
@@ -36,7 +36,7 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
         self.owns_dao: bool = dao is None
 
         # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
-        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
+        self.conn: Optional[DBConnection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.mrr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH

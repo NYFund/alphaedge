@@ -1,283 +1,137 @@
 import argparse
-import sqlite3
 import sys
-from pathlib import Path
+from typing import List, Tuple, Type
 
-# 專案根目錄（供組合資料檔路徑用；原本還兼作 sys.path 注入，已移除）
-project_root: Path = Path(__file__).resolve().parent.parent
+import pandas as pd
 
-# 直接使用表名常數，避免導入 config 時的依賴問題
-STOCK_INFO_TABLE_NAME = "taiwan_stock_info"
-STOCK_INFO_WITH_WARRANT_TABLE_NAME = "taiwan_stock_info_with_warrant"
-SECURITIES_TRADER_INFO_TABLE_NAME = "taiwan_securities_trader_info"
-STOCK_TRADING_DAILY_REPORT_TABLE_NAME = "taiwan_stock_trading_daily_report_secid_agg"
+from core.config import TW_STOCK_DB_PATH
+from core.dao.base import BaseDAO
+from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.tw.broker_trading_dao import BrokerTradingDAO
+from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
+from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
 
-# 嘗試從 config 獲取 TW_STOCK_DB_PATH，如果失敗則使用預設路徑
-try:
-    # 載入 .env 檔案（在導入 config 之前）
-    try:
-        from dotenv import load_dotenv
+"""
+檢查 tw_stock.db 的 FinMind 參考表是否存在，並可抽樣查看券商分點資料
 
-        # 載入專案根目錄的 .env 檔案
-        env_path = project_root / ".env"
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path)
-        else:
-            load_dotenv()
-    except ImportError:
-        pass
+**以唯讀連線開啟**：人工檢查不該寫任何東西，也不該在檔案不存在時替它建出空 DB，
+更不該在背景 ETL 寫入時與它搶寫入鎖。查詢一律走 DAO，本腳本不寫 SQL。
 
-    from core.config import TW_STOCK_DB_PATH
-except (ImportError, ModuleNotFoundError):
-    # 退路指向現行的產物根目錄。**舊值 `core/database/tw_stock.db` 早已不存在**
-    # （2026-08「執行期產物移出 core/」之後），走到這裡只會查一個空路徑然後
-    # 回報「資料表不存在」——那是最難查的一種錯
-    TW_STOCK_DB_PATH = project_root / "data" / "db" / "tw_stock.db"
+使用方法（從專案根目錄執行）：
+    python -m scripts.manual.manual_db_tables
+    python -m scripts.manual.manual_db_tables --broker-trading --limit 10
+"""
+
+# 要檢查的參考表：（顯示名稱, DAO 類別）
+REFERENCE_TABLES: List[Tuple[str, Type[BaseDAO]]] = [
+    ("stock_info", StockInfoDAO),
+    ("stock_info_with_warrant", StockInfoWithWarrantDAO),
+    ("broker_info", SecuritiesTraderInfoDAO),
+]
 
 
-"""測試 tw_stock.db 中是否存在指定資料表"""
-
-
-def check_table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    """檢查資料表是否存在於資料庫中"""
-    cursor: sqlite3.Cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT name FROM sqlite_master
-        WHERE type='table' AND name=?
-        """,
-        (table_name,),
-    )
-    result = cursor.fetchone()
-    return result is not None
-
-
-def get_table_row_count(conn: sqlite3.Connection, table_name: str) -> int:
-    """取得資料表的資料筆數"""
-    cursor: sqlite3.Cursor = conn.cursor()
-    try:
-        cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
-        result = cursor.fetchone()
-        return result[0] if result else 0
-    except sqlite3.Error:
-        return 0
-
-
-def test_db_tables() -> bool:
+def check_reference_tables(conn: DBConnection) -> bool:
     """
-    測試 tw_stock.db 中是否存在指定的資料表
+    - Description:
+        逐一檢查參考表是否存在並列出筆數
+    - Parameters:
+        - conn: DBConnection
+            唯讀連線
+    - Return:
+        - bool
+            所有參考表都存在時為 True
     """
-    print(f"\n{'=' * 60}")
-    print("測試 tw_stock.db 資料表存在性")
-    print(f"{'=' * 60}")
-    print(f"\n資料庫路徑: {TW_STOCK_DB_PATH}")
 
-    # 檢查資料庫檔案是否存在
-    if not TW_STOCK_DB_PATH.exists():
-        print(f"\n[錯誤] 資料庫檔案不存在於 {TW_STOCK_DB_PATH}")
-        return False
+    all_exist: bool = True
+    for display_name, dao_cls in REFERENCE_TABLES:
+        dao: BaseDAO = dao_cls(conn=conn)
+        exists: bool = dao.table_exists()
+        all_exist &= exists
 
-    print("[OK] 資料庫檔案存在")
-
-    # 連接資料庫
-    try:
-        conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
-        print("[OK] 成功連接到資料庫\n")
-    except sqlite3.Error as e:
-        print(f"\n[錯誤] 無法連接到資料庫: {e}")
-        return False
-
-    # 定義要檢查的資料表
-    tables_to_check = [
-        ("stock_info", STOCK_INFO_TABLE_NAME),
-        ("stock_info_with_warrant", STOCK_INFO_WITH_WARRANT_TABLE_NAME),
-        ("broker_info", SECURITIES_TRADER_INFO_TABLE_NAME),
-    ]
-
-    # 檢查每個資料表
-    all_exist = True
-    results = []
-
-    for display_name, table_name in tables_to_check:
-        exists = check_table_exists(conn, table_name)
-        row_count = get_table_row_count(conn, table_name) if exists else 0
-
-        status = "[OK]" if exists else "[X]"
-        results.append((display_name, table_name, exists, row_count))
-
-        print(f"{status} {display_name}")
-        print(f"   表名: {table_name}")
+        print(f"{'[OK]' if exists else '[X]'} {display_name}")
+        print(f"   表名: {dao.TABLE_NAME}")
         print(f"   存在: {'是' if exists else '否'}")
         if exists:
-            print(f"   資料筆數: {row_count:,}")
+            print(f"   資料筆數: {dao.count_rows():,}")
         print()
 
-        if not exists:
-            all_exist = False
-
-    # 關閉資料庫連接
-    conn.close()
-
-    # 顯示總結
-    print(f"{'=' * 60}")
-    if all_exist:
-        print("[OK] 所有資料表都存在！")
-        print(f"{'=' * 60}\n")
-        print("資料表摘要:")
-        for (
-            display_name,
-            table_name,
-            exists,
-            row_count,
-        ) in results:
-            print(f"   - {display_name} ({table_name}): {row_count:,} 筆")
-        return True
-    else:
-        print("[X] 部分資料表不存在！")
-        print(f"{'=' * 60}\n")
-        print("缺失的資料表:")
-        for (
-            display_name,
-            table_name,
-            exists,
-            row_count,
-        ) in results:
-            if not exists:
-                print(f"   - {display_name} ({table_name})")
-        return False
+    print("=" * 60)
+    print("[OK] 所有資料表都存在！" if all_exist else "[X] 部分資料表不存在！")
+    return all_exist
 
 
-def test_broker_trading_data(limit: int = 5) -> None:
+def show_broker_trading_sample(conn: DBConnection, limit: int) -> None:
     """
-    測試 broker_trading 資料表並顯示幾筆資料
-
-    使用方法（從專案根目錄執行）：
-        python -m scripts.manual.manual_db_tables --broker-trading --limit 10
-
-    Args:
-        limit: 要顯示的資料筆數（預設為 5 筆）
+    - Description:
+        列出券商分點表的筆數與最新幾列
+    - Parameters:
+        - conn: DBConnection
+            唯讀連線
+        - limit: int
+            顯示筆數
     """
+
+    dao: BrokerTradingDAO = BrokerTradingDAO(conn=conn)
     print(f"\n{'=' * 60}")
-    print("測試 broker_trading 資料表資料")
-    print(f"{'=' * 60}")
-    print(f"\n資料庫路徑: {TW_STOCK_DB_PATH}")
+    print(f"券商分點資料表：{dao.TABLE_NAME}")
+    print("=" * 60)
 
-    # 檢查資料庫檔案是否存在
-    if not TW_STOCK_DB_PATH.exists():
-        print(f"\n[錯誤] 資料庫檔案不存在於 {TW_STOCK_DB_PATH}")
+    if not dao.table_exists():
+        print("[X] 資料表不存在")
         return
 
-    print("[OK] 資料庫檔案存在")
-
-    # 連接資料庫
-    try:
-        conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
-        print("[OK] 成功連接到資料庫\n")
-    except sqlite3.Error as e:
-        print(f"\n[錯誤] 無法連接到資料庫: {e}")
-        return
-
-    # 檢查資料表是否存在
-    if not check_table_exists(conn, STOCK_TRADING_DAILY_REPORT_TABLE_NAME):
-        print(f"[X] 資料表 {STOCK_TRADING_DAILY_REPORT_TABLE_NAME} 不存在")
-        conn.close()
-        return
-
-    print(f"[OK] 資料表 {STOCK_TRADING_DAILY_REPORT_TABLE_NAME} 存在")
-
-    # 取得資料筆數
-    row_count = get_table_row_count(conn, STOCK_TRADING_DAILY_REPORT_TABLE_NAME)
+    row_count: int = dao.count_rows()
     print(f"[OK] 資料筆數: {row_count:,} 筆\n")
-
     if row_count == 0:
         print("[警告] 資料表中沒有資料")
-        conn.close()
         return
 
-    # 查詢前幾筆資料
-    cursor: sqlite3.Cursor = conn.cursor()
-    try:
-        query = f"""
-        SELECT
-            securities_trader,
-            securities_trader_id,
-            stock_id,
-            date,
-            buy_volume,
-            sell_volume,
-            buy_price,
-            sell_price
-        FROM {STOCK_TRADING_DAILY_REPORT_TABLE_NAME}
-        ORDER BY date DESC, stock_id, securities_trader_id
-        LIMIT {limit}
-        """
-        cursor.execute(query)
-        results = cursor.fetchall()
-
-        # 取得欄位名稱
-        column_names = [description[0] for description in cursor.description]
-
-        print(f"{'=' * 60}")
-        print(f"顯示前 {len(results)} 筆資料:")
-        print(f"{'=' * 60}\n")
-
-        # 顯示資料
-        for idx, row in enumerate(results, 1):
-            print(f"第 {idx} 筆:")
-            for col_name, value in zip(column_names, row):
-                if value is None:
-                    print(f"   {col_name}: None")
-                elif isinstance(value, float):
-                    print(f"   {col_name}: {value:,.2f}")
-                elif isinstance(value, int):
-                    print(f"   {col_name}: {value:,}")
-                else:
-                    print(f"   {col_name}: {value}")
-            print()
-
-        print(f"{'=' * 60}")
-        print(f"[完成] 已顯示 {len(results)} 筆資料（共 {row_count:,} 筆）")
-        print(f"{'=' * 60}\n")
-
-    except sqlite3.Error as e:
-        print(f"[錯誤] 查詢資料時發生錯誤: {e}")
-    finally:
-        conn.close()
+    sample: pd.DataFrame = dao.get_latest_rows(limit)
+    with pd.option_context("display.max_columns", None, "display.width", 200):
+        print(sample.to_string(index=False))
+    print(f"\n[完成] 已顯示 {len(sample)} 筆資料（共 {row_count:,} 筆）")
 
 
 def parse_args() -> argparse.Namespace:
-    """
-    解析命令列參數
+    """解析命令列參數"""
 
-    範例：
-        python -m scripts.manual.manual_db_tables
-        python -m scripts.manual.manual_db_tables --broker-trading
-        python -m scripts.manual.manual_db_tables --broker-trading --limit 10
-    """
-    parser = argparse.ArgumentParser(description="測試 tw_stock.db 資料表與抽樣查詢")
+    parser: argparse.ArgumentParser = argparse.ArgumentParser(
+        description="檢查 tw_stock.db 的 FinMind 參考表與券商分點抽樣"
+    )
     parser.add_argument(
         "--broker-trading",
         action="store_true",
-        help="額外測試 broker_trading 資料表並顯示抽樣資料",
+        help="額外列出券商分點資料表的抽樣資料",
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=5,
-        help="broker_trading 抽樣顯示筆數（預設 5）",
+        help="券商分點抽樣顯示筆數（預設 5）",
     )
     return parser.parse_args()
 
 
+def main() -> int:
+    """執行檢查；資料庫不存在或有參考表缺漏時回傳非零結束碼"""
+
+    args: argparse.Namespace = parse_args()
+
+    print(f"資料庫路徑: {TW_STOCK_DB_PATH}\n")
+    if not TW_STOCK_DB_PATH.exists():
+        print(f"[錯誤] 資料庫檔案不存在於 {TW_STOCK_DB_PATH}")
+        return 1
+
+    conn: DBConnection = connect_sqlite(TW_STOCK_DB_PATH, read_only=True)
+    try:
+        success: bool = check_reference_tables(conn)
+        if args.broker_trading:
+            show_broker_trading_sample(conn, args.limit)
+    finally:
+        conn.close()
+
+    return 0 if success else 1
+
+
 if __name__ == "__main__":
-    args = parse_args()
-    success: bool = test_db_tables()
-
-    if args.broker_trading:
-        test_broker_trading_data(limit=args.limit)
-
-    if success:
-        print("\n[完成] 測試完成！")
-    else:
-        print("\n[警告] 測試未完全成功，請檢查上述輸出")
-        sys.exit(1)
+    sys.exit(main())

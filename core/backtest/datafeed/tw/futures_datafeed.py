@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Callable, Dict, List, Optional, Set
 
 from loguru import logger
@@ -12,6 +11,7 @@ from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
 from core.config import TW_FUTURES_DB_PATH
+from core.dao.connection import DBConnection, connect_sqlite
 from core.managers.futures.position_manager import FuturesMarginConfig
 from core.models import FuturesQuote
 from core.strategies.base import BaseStrategy
@@ -48,7 +48,7 @@ class TwFuturesDataFeed(BaseDataFeed):
         roll_config: Optional[FuturesRollConfig] = None,
     ) -> None:
         # 單次回測共用一條 SQLite 連線：行情與保證金查的是同一個 DB 檔
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: Optional[DBConnection] = None
 
         # 本次回測的保證金設定；`setup()` 會把建好的 API 注入其中，
         # 讓策略層與部位管理層**共用同一個查表來源**（見 `inject_margin_api()`）
@@ -77,11 +77,11 @@ class TwFuturesDataFeed(BaseDataFeed):
         """建立資料 API 並記下策略宣告的商品與時段"""
 
         # **先確保目錄存在再連線**：全新環境（CI、剛 clone 的機器）沒有
-        # `data/db/`，`sqlite3.connect()` 會丟出
+        # `data/db/`，`connect_sqlite()` 會丟出
         # `unable to open database file`——那個訊息完全看不出是「目錄不存在」。
         # 與各 loader 同一種作法；此時開出來的是空 DB，查詢一律回空結果
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+        self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
 
         self.futures_price = FuturesPriceAPI(conn=self.conn)
         self.margin = FuturesMarginAPI(conn=self.conn)

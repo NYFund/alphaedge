@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Set, Tuple
        `if market ==` 只允許出現在 `factory.py`
     4. 跨軸目錄污染：每層目錄只承載一條軸（市場 `tw/`／`us/` 或商品類別 `stock/`／`futures/`）
     5. `sys.path` 注入：專案已可 `pip install -e .`，逐處列出以便複查
+    6. 資料庫驅動外洩：`core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
 - 使用場景:
     python scripts/check_layer_deps.py            # 只印報告，違規時以非零狀態碼結束
     python scripts/check_layer_deps.py --edges     # 另外把所有跨套件的 import 邊倒出來
@@ -383,6 +384,53 @@ def check_strategy_facades(graph: Dict[str, Set[str]]) -> List[str]:
     return problems
 
 
+# 只有 DAO 層可以直接碰資料庫驅動；其餘一律經由 `core.dao`
+_DB_DRIVER_MODULES: Set[str] = {"sqlite3"}
+_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "tasks")
+_DB_DRIVER_ALLOWED_DIR: str = "core/dao"
+
+
+def check_db_driver_imports(files: List[Path]) -> List[str]:
+    """
+    - Description:
+        `core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 import 資料庫驅動
+
+        「SQL、連線與交易只寫在 DAO」原本只是慣例：DAO 重構前 `core/` 有 44 處
+        `sqlite3.connect`、updater 與 loader 各開一條連線且有些從不關閉。慣例擋不住
+        下一個人順手 `import sqlite3`，故改成檢查。型別標註請用 `core.dao.connection`
+        的 `DBConnection`，捕捉錯誤用 `DBError`。以 AST 判定，說明文字裡的字樣不算。
+    - Parameters:
+        - files: List[Path]
+            要掃的檔案
+    - Return:
+        - List[str]
+            `檔案:行號: import 敘述` 清單
+    """
+
+    hits: List[str] = []
+    for path in files:
+        rel: str = path.relative_to(_PROJECT_ROOT).as_posix()
+        if not rel.startswith(tuple(f"{d}/" for d in _DB_DRIVER_GUARDED_DIRS)):
+            continue
+        if rel.startswith(f"{_DB_DRIVER_ALLOWED_DIR}/"):
+            continue
+        try:
+            tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            modules: List[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                modules = [node.module]
+            for module in modules:
+                if module.split(".")[0] in _DB_DRIVER_MODULES:
+                    hits.append(f"{rel}:{node.lineno}: import {module}")
+    return hits
+
+
 def check_sys_path(files: List[Path]) -> List[str]:
     """
     - Description:
@@ -487,6 +535,7 @@ def main() -> int:
     axis: List[str] = check_axis_dirs()
     facades: List[str] = check_strategy_facades(graph)
     sys_path_hits: List[str] = check_sys_path(files)
+    db_driver_hits: List[str] = check_db_driver_imports(files)
 
     def section(title: str, items: List[str]) -> None:
         print(f"\n=== {title}（{len(items)}）===")
@@ -503,6 +552,7 @@ def main() -> int:
     section("D. 市場語意洩漏", leakage)
     section("E. 跨軸目錄污染", axis)
     section("E'. 策略套件門面 eager import 具體策略", facades)
+    section("E''. DAO 以外 import 資料庫驅動（core／tasks）", db_driver_hits)
     section("F. 同層不同套件互相 import（僅列出，需人工判讀）", same_layer)
     section("G. sys.path 注入（僅列出）", sys_path_hits)
     if args.edges:
@@ -515,6 +565,7 @@ def main() -> int:
         + len(leakage)
         + len(axis)
         + len(facades)
+        + len(db_driver_hits)
     )
     print(f"\n違規總數：{violations}")
     return 1 if violations else 0

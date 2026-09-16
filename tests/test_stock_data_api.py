@@ -193,23 +193,6 @@ def test_get_trust_net_shares_map(chip_api: StockChipAPI) -> None:
 
 
 # === API 邊界===
-def test_sql_params_converts_dates_to_iso() -> None:
-    """
-    `date`／`datetime` 一律轉 ISO 字串
-
-    不轉的話是靠 Python 3.12 已 deprecated 的 sqlite date adapter，
-    那個 adapter 隨時可能被移除，屆時每一支 API 都會在同一天壞掉。
-    """
-
-    from core.api.base import BaseDataAPI
-
-    params = BaseDataAPI.sql_params(
-        "2330", datetime.date(2024, 1, 2), datetime.datetime(2024, 1, 3, 13, 30), 5
-    )
-
-    assert params == ("2330", "2024-01-02", "2024-01-03", 5)
-
-
 def test_get_net_chip_no_longer_raises(dao_factory) -> None:
     """
     `get_net_chip()` 一被呼叫就 `TypeError`

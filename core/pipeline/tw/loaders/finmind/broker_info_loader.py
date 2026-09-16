@@ -1,6 +1,6 @@
-import sqlite3
 from pathlib import Path
 
+from core.dao.connection import DBConnection
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.pipeline.tw.loaders.finmind.reference_table_loader import (
     ReferenceTableSpec,
@@ -26,7 +26,7 @@ BROKER_INFO_SPEC: ReferenceTableSpec = ReferenceTableSpec(
 )
 
 
-def load_broker_info(conn: sqlite3.Connection, finmind_dir: Path) -> None:
+def load_broker_info(conn: DBConnection, finmind_dir: Path) -> None:
     """載入證券商資訊表資料到資料庫"""
 
     load_reference_table(conn, finmind_dir, BROKER_INFO_SPEC)
