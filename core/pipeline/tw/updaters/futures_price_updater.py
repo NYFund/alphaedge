@@ -346,32 +346,30 @@ class FuturesPriceUpdater(BaseDataUpdater):
             resume=resume,
         )
 
-    @staticmethod
     def resolve_stock_futures_products(
-        top_n: Optional[int], date: datetime.date
+        self, top_n: Optional[int], date: datetime.date
     ) -> List[str]:
         """
         決定要爬哪些股期：有 `top_n` 就依流動性取前 N 檔，否則取整份標的池
 
         **流動性排序取自已入庫的行情**，故第一次跑（表內還沒有股期行情）時
         會排不出來，此時退回整份標的池並提醒——那是雞生蛋，不是錯誤。
+
+        標的池與行情同在 `tw_futures.db`，故共用本 updater 的連線，不另開一條。
         """
 
-        universe_api: FuturesStockUniverseAPI = FuturesStockUniverseAPI()
-        try:
-            if top_n:
-                liquid: List[str] = universe_api.get_top_liquid_products(
-                    top_n, end_date=date
-                )
-                if liquid:
-                    return liquid
-                logger.warning(
-                    "[Futures Price] 表內還沒有股期行情，排不出流動性；"
-                    "本次改取整份標的池（之後再用 top_n 篩）"
-                )
-            return universe_api.get_products(date)
-        finally:
-            universe_api.close()
+        universe_api: FuturesStockUniverseAPI = FuturesStockUniverseAPI(conn=self.conn)
+        if top_n:
+            liquid: List[str] = universe_api.get_top_liquid_products(
+                top_n, end_date=date
+            )
+            if liquid:
+                return liquid
+            logger.warning(
+                "[Futures Price] 表內還沒有股期行情，排不出流動性；"
+                "本次改取整份標的池（之後再用 top_n 篩）"
+            )
+        return universe_api.get_products(date)
 
     def crawl_and_clean_date(self, product: str, date: datetime.date) -> bool:
         """

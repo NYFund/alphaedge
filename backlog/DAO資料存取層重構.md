@@ -47,7 +47,7 @@
 | Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FinancialStatementDAO`（表名白名單）與 `StockInfoDAO`（先放股票清單兩個查詢，其餘留給 Phase4-1）；`get_range` 跨年查詢一併修正；兩處吞錯誤改為往外拋；`tests/test_dao_financial_statement.py` 11 項、`not slow` 1102 passed、回歸雙線通過 |
 | Phase4-1 | 推廣：FinMind 四表 | `core/dao/tw/`、`core/api/tw/finmind_api.py`、`core/pipeline/tw/loaders/finmind/**`、FinMind updater | 對應測試 | ✅ | 2026-09-16 完成：實測 pandas 3.0.2 的 `to_sql` 確實自行 commit，改走 `insert_or_ignore` 後 `commit=False` 才生效；`schema.py` 刪除、DDL 進 DAO；清單查詢不再吞錯誤；`tests/test_dao_finmind.py` 8 項、`not slow` 1110 passed、回歸雙線通過 |
 | Phase5-1 | 推廣：futures_price | `core/dao/tw/`、對應 API／loader／updater | 對應測試＋期貨回測測試 | ✅ | 2026-09-16 完成：新增 `FuturesPriceDAO`；續跑起點與 `get_trading_days` 不再吞錯誤；補行交易日改用唯讀 `StockPriceDAO`（底座新增 `read_only`）；`tests/test_dao_futures_price.py` 8 項、`not slow` 1118 passed、`slow` 19 passed、回歸雙線通過 |
-| Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ⬜ | 相依 Phase5-1；收斂重複的快照查詢、`get_contract_size` |
+| Phase5-2 | 推廣：futures_stock_universe | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesStockUniverseDAO`；快照日查詢收斂為一份、`get_contract_size` 以 `per_product` 區分兩種查法；updater 五處自開連線改共用 DAO；`tests/test_dao_futures_stock_universe.py` 9 項、`not slow` 1127 passed、`slow` 19 passed、回歸雙線通過 |
 | Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ⬜ | 相依 Phase5-2；統一 `<`／`<=`；修 `FuturesMarginConfig.from_api()` 暗開連線 |
 | Phase5-4 | 推廣：futures_chip 三表、futures_continuous | 同上 | 對應測試 | ⬜ | 相依 Phase5-1；`FuturesChipAPI` 的 `table=` 補白名單 |
 | Phase6-1 | 測試共用 DAO fixture | `tests/conftest.py`、直接 `sqlite3.connect` 的測試檔 | `pytest` 通過 | ⬜ | 相依 Phase3~Phase5 |
@@ -385,7 +385,7 @@ class BaseDAO:
 >   `close()` 一併關閉；`tw_stock.db` 或 `price` 表不存在時照舊跳過週末並警告，其他錯誤往外拋。
 > - `resolve_stock_futures_products()` 仍自開一條 `FuturesStockUniverseAPI` 連線（有正確關閉），留給 Phase5-2 一併處理。
 
-### Phase5-2. futures_stock_universe ⬜
+### Phase5-2. futures_stock_universe ✅
 
 - **做法**：新增 `FuturesStockUniverseDAO`：
   - updater 的五個「每個方法各開一條連線」改用 DAO。
@@ -396,6 +396,17 @@ class BaseDAO:
 - **產出**：對應 DAO、`core/api/tw/futures_stock_universe_api.py`、`futures_margin_api.py`（`get_contract_size`）、loader、updater。
 - **驗證方式**：`pytest tests/test_futures_stock_universe.py tests/test_futures_stock_universe_api.py` 通過。
 - **相依**：Phase5-1。
+
+> **完成紀錄（2026-09-16）**
+> - **`get_contract_size` 兩份的差異與決策**：API 版先解出「全表」該日適用的快照再查商品——快照中沒有該商品就回 None，
+>   回測 DataFeed 因此中斷，這是刻意的（那天不在列，不該拿到乘數）；保證金 API 版查「該商品自己」不晚於該日的最近一份，
+>   沒有就退回它最早的一份——試算只需要合理股數。兩者都保留，以 `per_product` 參數表達，決策寫在 DAO docstring。
+> - 快照日：`get_latest_snapshot_date(date, inclusive)` 一份實作，API 的「退回最早一份」由 `resolve_snapshot_date()` 組合。
+> - 流動性排序查的是行情表，SQL 放進 `FuturesPriceDAO.get_day_session_volume_stats()`；現股代號比對放進
+>   `StockPriceDAO.get_existing_stock_ids()`，以唯讀開 tw_stock.db、檔案或表不存在時略過。
+> - 刪除無呼叫端的 `get_active_products()` 與私有 `table_exists()`。
+> - 順手處理 Phase5-1 留下的 `FuturesPriceUpdater.resolve_stock_futures_products()`：改為實例方法、共用 updater 的連線。
+> - `tasks/update_db.py` 的 futures_stock_universe 分支以 `try/finally` 關閉連線。
 
 ### Phase5-3. futures_margin 兩表 ⬜
 

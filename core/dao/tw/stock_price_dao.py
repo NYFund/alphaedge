@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -162,6 +162,29 @@ class StockPriceDAO(BaseDAO):
             f"SELECT date, stock_id, 收盤價 FROM {self.TABLE_NAME} WHERE date >= ?",
             (start_date,),
         )
+
+    def get_existing_stock_ids(self, stock_ids: List[str]) -> Set[str]:
+        """
+        - Description:
+            傳入的代號中，表內有日 K 的那些（股期標的對照現股用）
+        - Parameters:
+            - stock_ids: List[str]
+                要比對的股票代號
+        - Return:
+            - Set[str]
+                表內找得到的代號；空清單時為空集合
+        """
+
+        if not stock_ids:
+            return set()
+
+        placeholders: str = ",".join("?" * len(stock_ids))
+        rows = self.conn.execute(
+            f"SELECT DISTINCT stock_id FROM {self.TABLE_NAME} "
+            f"WHERE stock_id IN ({placeholders})",
+            tuple(stock_ids),
+        )
+        return {row[0] for row in rows}
 
     def get_latest_date(self) -> Optional[Any]:
         """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""

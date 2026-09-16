@@ -252,6 +252,50 @@ class FuturesPriceDAO(BaseDAO):
             return []
         return df["product"].astype(str).tolist()
 
+    def get_day_session_volume_stats(
+        self,
+        products: List[str],
+        start_date: Optional[datetime.date] = None,
+        end_date: Optional[datetime.date] = None,
+    ) -> pd.DataFrame:
+        """
+        - Description:
+            各商品日盤的交易日數與總成交量（流動性排序用）
+        - Parameters:
+            - products: List[str]
+                要統計的商品；空清單回空表
+            - start_date / end_date: Optional[datetime.date]
+                統計區間（含頭含尾）；None 表示不限
+        - Return:
+            - pd.DataFrame
+                欄位 `product`／`trading_days`／`total_volume`；無資料的商品不出現
+        """
+
+        if not products:
+            return pd.DataFrame(columns=["product", "trading_days", "total_volume"])
+
+        conditions: List[str] = ["session = 'day'"]
+        params: List[Any] = []
+        if start_date is not None:
+            conditions.append("date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            conditions.append("date <= ?")
+            params.append(end_date)
+
+        placeholders: str = ",".join("?" * len(products))
+        params.extend(products)
+
+        return self.query_df(
+            f"""
+            SELECT product, COUNT(DISTINCT date) AS trading_days, SUM(成交量) AS total_volume
+            FROM {self.TABLE_NAME}
+            WHERE {" AND ".join(conditions)} AND product IN ({placeholders})
+            GROUP BY product
+            """,
+            tuple(params),
+        )
+
     def get_latest_date_by_product(self, product: str) -> Optional[str]:
         """
         - Description:
