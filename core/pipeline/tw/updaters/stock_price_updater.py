@@ -6,12 +6,9 @@ from typing import List, Optional, Set
 
 from loguru import logger
 
-from core.config import (
-    CHIP_TABLE_NAME,
-    MARGIN_TABLE_NAME,
-    PRICE_TABLE_NAME,
-    TW_STOCK_DB_PATH,
-)
+from core.config import TW_STOCK_DB_PATH
+from core.dao.tw.stock_chip_dao import StockChipDAO
+from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
@@ -119,11 +116,12 @@ class StockPriceUpdater(BaseDataUpdater):
         # 補回——否則 `price` 被刪掉的補行交易日永遠不會再被請求
         progress: DateProgressStore = DateProgressStore("price")
         traded_weekends: Set[datetime.date] = DatePlanner.get_weekend_dates(
-            self.conn, [CHIP_TABLE_NAME, MARGIN_TABLE_NAME], start_date, end_date
+            [StockChipDAO(conn=self.dao.conn), StockMarginDAO(conn=self.dao.conn)],
+            start_date,
+            end_date,
         )
         dates: List[datetime.date] = DatePlanner.plan(
-            conn=self.conn,
-            table_name=PRICE_TABLE_NAME,
+            dao=self.dao,
             start_date=start_date,
             end_date=end_date,
             no_data_dates=progress.no_data,
@@ -199,11 +197,8 @@ class StockPriceUpdater(BaseDataUpdater):
         stats.report("price")
         self.report_cleaner_failures(cleaner_failures)
 
-        # 更新後重新取得Table最新的日期；
-        # 測試會以 `__new__` 跳過 `__init__` 只注入 `conn`，故就地以該連線建 DAO
-        table_latest_date: Optional[str] = StockPriceDAO(
-            conn=self.conn
-        ).get_latest_date()
+        # 更新後重新取得Table最新的日期
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
         if table_latest_date:
             logger.info(
                 f"Stock price data updated. Latest available date: {table_latest_date}"

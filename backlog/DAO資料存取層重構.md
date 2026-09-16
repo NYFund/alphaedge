@@ -41,7 +41,7 @@
 | Phase2-3 | 試點：`StockPriceLoader`／`StockPriceUpdater` 改走 DAO | `core/pipeline/tw/loaders/stock_price_loader.py`、`core/pipeline/tw/updaters/stock_price_updater.py`、`tasks/update_db.py` | 新增單一連線、壞檔回滾測試；`tests/test_loader_failure_reporting.py` 等通過 | ✅ | 2026-09-16 完成：新增共用連線、共用 DAO 不被關閉、寫到一半失敗整檔回滾 3 項測試；相依 Phase2-1 |
 | Phase2-4 | 試點：`corporate_action_detector` 的 price 讀取改走 DAO | `core/pipeline/tw/cleaners/corporate_action_detector.py` | `tests/test_corporate_action.py` 通過 | ✅ | 2026-09-16 完成：唯讀連線改走 `connect_sqlite`；相依 Phase2-1；dividend／corporate_action 的讀取留到 Phase3-2 |
 | Phase2-5 | 試點回歸驗證 | — | `./scripts/run_regression.sh` 雙線通過；`pytest -m "not slow"` 通過 | ✅ | 2026-09-16 完成：回歸雙線通過（SHORT 6、LONG 1）、`pytest -m "not slow"` 1061 passed、`-m slow` 19 passed、分層違規 0；相依 Phase2-2~Phase2-4；**通過後才推廣** |
-| Phase3-1 | 推廣：chip、margin（含 `DatePlanner` 改吃 DAO） | `core/dao/tw/`、對應 API／loader／updater、`core/pipeline/shared/date_planner.py` | 對應測試＋回歸 | ⬜ | 相依 Phase2-5 |
+| Phase3-1 | 推廣：chip、margin（含 `DatePlanner` 改吃 DAO） | `core/dao/tw/`、對應 API／loader／updater、`core/pipeline/shared/date_planner.py` | 對應測試＋回歸 | ✅ | 2026-09-16 完成：新增 `StockChipDAO`／`StockMarginDAO`；`DatePlanner` 改收 DAO，三支日頻 updater 以共用連線建日曆 DAO；`tests/test_dao_stock_chip_margin.py` 11 項、`pytest -m "not slow"` 1072 passed、回歸雙線通過、分層違規 0；相依 Phase2-5 |
 | Phase3-2 | 推廣：dividend、corporate_action | 同上 | 對應測試＋回歸 | ⬜ | 相依 Phase2-5；兩份 `dedup_by_source_priority` 收斂為一份 |
 | Phase3-3 | 推廣：monthly_revenue | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；修 `get_range` 跨年查詢錯誤 |
 | Phase3-4 | 推廣：財報四表 | 同上 | 對應測試 | ⬜ | 相依 Phase2-5；股票清單查詢與 FinMind 共用 |
@@ -281,12 +281,20 @@ class BaseDAO:
 
 各步驟的做法與 Phase2 相同：新增 DAO → API 改走 DAO → loader／updater 共用 DAO 並加 savepoint → 修該批次列在〈掃描發現〉的問題。以下只列各批次特有的事項。
 
-### Phase3-1. chip、margin ⬜
+### Phase3-1. chip、margin ✅
 
 - **做法**：新增 `StockChipDAO`、`StockMarginDAO`。`DatePlanner` 的 `get_existing_dates`／`get_trading_dates`／`get_weekend_dates`／`plan` 改為接收 DAO（`BaseDAO.get_distinct_dates()`），不再接收 `conn` 與表名，`StockPriceUpdater` 同步改寫。`stock_margin_api.py` 對 `SQLiteUtils` 的 import 移除。
 - **產出**：`core/dao/tw/stock_chip_dao.py`、`stock_margin_dao.py`、`core/api/tw/stock_chip_api.py`、`stock_margin_api.py`、兩支 loader、兩支 updater、`core/pipeline/shared/date_planner.py`。
 - **驗證方式**：`pytest tests/test_date_gap_backfill.py tests/test_partial_market_guard.py tests/test_batched_loading.py tests/test_api_public_interfaces.py` 通過；回歸雙線通過。
 - **相依**：Phase2-5。
+
+> **完成紀錄（2026-09-16）**
+> - `DatePlanner.get_existing_dates`／`get_trading_dates`／`get_weekend_dates`／`plan` 改收 DAO；
+>   日曆來源（`price`）與週末來源（`chip`／`margin`）由 updater 以自己的連線就地建 DAO，不另開連線。
+> - Phase2-5 記下的過渡寫法已移除：`StockPriceUpdater.update()` 改用 `self.dao`，
+>   `test_date_gap_backfill.py`、`test_partial_market_guard.py` 以 `__new__` 建 updater 時改注入 DAO。
+> - chip／margin loader 保留原本的 `partial_files` 回報（price 試點已拿掉），維持行為不變。
+> - `tasks/update_db.py` 的 chip／margin 分支補上 `try/finally: close()`。
 
 ### Phase3-2. dividend、corporate_action ⬜
 

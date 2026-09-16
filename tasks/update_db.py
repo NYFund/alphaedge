@@ -427,9 +427,13 @@ def main() -> None:
                 from_date=from_date,
             )
             stock_chip_updater: StockChipUpdater = StockChipUpdater()
-            stock_chip_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
+            try:
+                stock_chip_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                stock_chip_updater.close()
 
     if DataType.MARGIN.name.lower() in targets:
         with target_guard("margin", failed_targets):
@@ -438,9 +442,13 @@ def main() -> None:
                 from_date=from_date,
             )
             stock_margin_updater: StockMarginUpdater = StockMarginUpdater()
-            stock_margin_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
+            try:
+                stock_margin_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                stock_margin_updater.close()
 
     if DataType.DIVIDEND.name.lower() in targets:
         with target_guard("dividend", failed_targets):
