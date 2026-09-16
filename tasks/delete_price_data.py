@@ -12,13 +12,14 @@
 
 import argparse
 import datetime
-import sqlite3
 import sys
 from typing import List
 
 from loguru import logger
 
-from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
+from core.config import TW_STOCK_DB_PATH
+from core.dao.connection import DBError
+from core.dao.tw.stock_price_dao import StockPriceDAO
 
 
 def parse_date(date_str: str) -> str:
@@ -80,15 +81,12 @@ def delete_price_data_by_date(
         logger.error(f"日期解析失敗: {e}")
         return
 
-    # 連接資料庫
-    conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
-    cursor: sqlite3.Cursor = conn.cursor()
+    # 連接資料庫；路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+    dao: StockPriceDAO = StockPriceDAO(db_path=TW_STOCK_DB_PATH)
 
     try:
         # 先查詢要刪除的資料筆數
-        count_query: str = f'SELECT COUNT(*) FROM "{PRICE_TABLE_NAME}" WHERE date = ?'
-        cursor.execute(count_query, (formatted_date,))
-        count: int = cursor.fetchone()[0]
+        count: int = dao.count_by_date(formatted_date)
 
         if count == 0:
             logger.warning(f"price table 中沒有日期為 {formatted_date} 的資料")
@@ -104,27 +102,23 @@ def delete_price_data_by_date(
             logger.info("未確認，已取消")
             return
 
-        # 刪除資料
-        delete_query: str = f'DELETE FROM "{PRICE_TABLE_NAME}" WHERE date = ?'
-        cursor.execute(delete_query, (formatted_date,))
-
-        # 提交變更
-        conn.commit()
+        # 刪除資料並提交
+        dao.delete_by_date(formatted_date)
+        dao.commit()
 
         # 驗證刪除結果
-        cursor.execute(count_query, (formatted_date,))
-        remaining_count: int = cursor.fetchone()[0]
+        remaining_count: int = dao.count_by_date(formatted_date)
 
         if remaining_count == 0:
             logger.info(f"✅ 成功刪除 {count} 筆資料")
         else:
             logger.warning(f"⚠️ 刪除後仍有 {remaining_count} 筆資料存在")
 
-    except sqlite3.Error as e:
+    except DBError as e:
         logger.error(f"資料庫操作失敗: {e}")
-        conn.rollback()
+        dao.conn.rollback()
     finally:
-        conn.close()
+        dao.close()
 
 
 def main() -> None:

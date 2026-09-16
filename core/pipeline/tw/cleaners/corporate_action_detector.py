@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
@@ -7,7 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import TW_STOCK_DB_PATH
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
@@ -54,7 +53,7 @@ KNOWN_BAD_PRICE_DATES: Set[str] = {"2020-04-14", "2020-04-15"}
 
 
 def detect_unexplained_moves(
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[DBConnection] = None,
     threshold: float = DETECTION_THRESHOLD,
     start_date: Optional[datetime.date] = None,
 ) -> pd.DataFrame:
@@ -65,7 +64,7 @@ def detect_unexplained_moves(
         這同時是 S4 護欄的判定式：事件表補齊後，這裡回傳的每一筆都應該要能
         被解釋掉；解釋不掉的就是新事件或資料錯誤。
     - Parameters:
-        - conn: Optional[sqlite3.Connection]
+        - conn: Optional[DBConnection]
             共用連線；未指定時自行以**唯讀**模式開啟
         - threshold: float
             單日變動的門檻（小數，預設 0.15）
@@ -154,7 +153,7 @@ def _empty_result() -> pd.DataFrame:
     )
 
 
-def _drop_explained(conn: sqlite3.Connection, candidates: pd.DataFrame) -> pd.DataFrame:
+def _drop_explained(conn: DBConnection, candidates: pd.DataFrame) -> pd.DataFrame:
     """
     - Description:
         濾掉能被除權息或已知公司行動解釋的候選
@@ -163,7 +162,7 @@ def _drop_explained(conn: sqlite3.Connection, candidates: pd.DataFrame) -> pd.Da
         那代表尚未跑過除權息 ETL，此時把候選全數保留才是誠實的（濾掉等於
         宣稱「已確認無關」）。
     - Parameters:
-        - conn: sqlite3.Connection
+        - conn: DBConnection
             資料連線
         - candidates: pd.DataFrame
             尚未過濾的候選

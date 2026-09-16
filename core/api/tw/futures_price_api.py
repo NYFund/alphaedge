@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -7,7 +6,7 @@ import pandas as pd
 from core.api.base import BaseDataAPI
 from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.utils.constant import FuturesSession
 from core.utils.log_manager import LogManager
@@ -34,9 +33,9 @@ loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才�
 class FuturesPriceAPI(BaseDataAPI):
     """Futures Price API"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為

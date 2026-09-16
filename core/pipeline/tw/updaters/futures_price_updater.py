@@ -1,6 +1,5 @@
 import datetime
 import random
-import sqlite3
 import time
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -15,6 +14,7 @@ from core.config import (
     TW_FUTURES_DB_PATH,
     TW_STOCK_DB_PATH,
 )
+from core.dao.connection import DBConnection
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
@@ -90,7 +90,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
         # **讀（續跑起點、摘要）與寫（loader）共用同一個 DAO**（tw_futures.db）
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.dao: FuturesPriceDAO = FuturesPriceDAO(db_path=TW_FUTURES_DB_PATH)
-        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+        self.conn: Optional[DBConnection] = self.dao.conn
 
         # 補行交易日取自 tw_stock.db 的 `price` 表；第一次用到才以唯讀開啟，由本 updater 關閉
         self.stock_price_dao: Optional[StockPriceDAO] = None

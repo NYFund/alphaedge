@@ -10,7 +10,6 @@ import pandas as pd
 import pytest
 
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
-from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
 from core.pipeline.tw.cleaners.financial_statement_cleaner import (
@@ -111,7 +110,7 @@ class RecordingLoader:
     """
     把 CSV 寫進暫存 DB 的假 loader
 
-    `insert_dataframe()` 用的是**真的** `BaseDataLoader` 實作，
+    寫入用的是**真的** `FinancialStatementDAO.insert_or_ignore()`，
     對帳測試才驗得到 `INSERT OR IGNORE` 的冪等性。
     """
 
@@ -138,7 +137,7 @@ class RecordingLoader:
                 continue
 
             df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
-            BaseDataLoader.insert_dataframe(self.conn, table_name, df)
+            FinancialStatementDAO(table_name, conn=self.conn).insert_or_ignore(df)
             self.conn.commit()
             self.loaded.append(file_path)
 

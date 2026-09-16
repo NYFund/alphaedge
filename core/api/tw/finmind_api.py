@@ -1,12 +1,11 @@
 import datetime
-import sqlite3
 from typing import Optional
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
 from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
@@ -46,9 +45,9 @@ Usage:
 class FinMindAPI(BaseDataAPI):
     """FinMind 資料 API：台股總覽、證券商資訊、券商分點日報"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         # 由 DataFeed 傳入共用連線；未指定時自行建立（與其他 core/api/tw/ 一致）
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為

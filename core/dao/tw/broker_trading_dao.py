@@ -155,6 +155,18 @@ class BrokerTradingDAO(BaseDAO):
             (securities_trader, date),
         )
 
+    def get_latest_rows(self, limit: int) -> pd.DataFrame:
+        """最新的幾列（依日期由新到舊，人工抽查用）"""
+
+        return self.query_df(
+            f"""
+            SELECT * FROM {self.TABLE_NAME}
+            ORDER BY date DESC, stock_id, securities_trader_id
+            LIMIT ?
+            """,
+            (limit,),
+        )
+
     def get_date_ranges_by_trader_stock(self) -> pd.DataFrame:
         """
         - Description:

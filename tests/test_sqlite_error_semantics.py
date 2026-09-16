@@ -5,7 +5,6 @@ from typing import Dict, Optional
 
 import pytest
 
-from core.api.base import BaseDataAPI
 from core.api.tw.futures_chip_api import FuturesChipAPI
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_stock_universe_api import FuturesStockUniverseAPI
@@ -15,6 +14,7 @@ from core.config import (
     FUTURES_STOCK_UNIVERSE_TABLE_NAME,
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
+from core.dao.base import table_exists
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
 from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
 
@@ -63,17 +63,17 @@ def _make_empty_db(db_path: Path) -> sqlite3.Connection:
 
 
 # -----------------------------------------------------------------------
-# === BaseDataAPI.check_table_exist ===
+# === core.dao.base.table_exists ===
 # -----------------------------------------------------------------------
 
 
-def test_check_table_exist_tells_missing_from_present(tmp_path: Path) -> None:
+def test_table_exists_tells_missing_from_present(tmp_path: Path) -> None:
     """表存在回 True、不存在回 False——這是分流的基礎"""
 
     conn: sqlite3.Connection = _make_empty_db(tmp_path / "tw_futures.db")
 
-    assert BaseDataAPI.check_table_exist(conn=conn, table_name="unrelated") is True
-    assert BaseDataAPI.check_table_exist(conn=conn, table_name="not_there") is False
+    assert table_exists(conn, "unrelated") is True
+    assert table_exists(conn, "not_there") is False
 
 
 # -----------------------------------------------------------------------

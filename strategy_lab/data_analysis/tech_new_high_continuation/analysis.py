@@ -26,7 +26,6 @@ from loguru import logger
 
 from core.api.tw.finmind_api import FinMindAPI
 from core.api.tw.stock_price_api import StockPriceAPI
-from core.config import PRICE_TABLE_NAME
 from core.utils.instrument import StockUtils
 
 _ANALYSIS_DIR = Path(__file__).resolve().parent
@@ -83,16 +82,10 @@ def load_price_panel(
     if not stock_ids:
         return pd.DataFrame()
 
-    placeholders = ",".join("?" * len(stock_ids))
-    query = f"""
-    SELECT date, stock_id, 最高價, 收盤價
-    FROM {PRICE_TABLE_NAME}
-    WHERE stock_id IN ({placeholders})
-      AND date BETWEEN ? AND ?
-    ORDER BY stock_id, date
-    """
-    params = list(stock_ids) + [start_date.isoformat(), end_date.isoformat()]
-    panel = pd.read_sql_query(query, price_api.conn, params=params)
+    # SQL 一律在 DAO；研究腳本不直接拿 `price_api.conn` 下查詢
+    panel = price_api.dao.get_high_close_by_stocks(
+        list(stock_ids), start_date, end_date
+    )
     panel["date"] = pd.to_datetime(panel["date"]).dt.date
     panel["stock_id"] = panel["stock_id"].astype(str)
     logger.info(f"讀取 price 列數: {len(panel):,}")

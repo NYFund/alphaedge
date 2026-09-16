@@ -1,6 +1,5 @@
 import datetime
 import random
-import sqlite3
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -14,7 +13,7 @@ from core.config import (
     FUTURES_PUT_CALL_RATIO_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
@@ -91,7 +90,7 @@ class FuturesChipUpdater(BaseDataUpdater):
         # 判斷「被擋」還是「真的沒資料」要靠交易日，來源是同庫的行情表
         self.price_api: Optional[FuturesPriceAPI] = None
         # 籌碼寫入與行情讀取同在 tw_futures.db，共用一條連線，由本 updater 關閉
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: Optional[DBConnection] = None
 
         self.setup()
 

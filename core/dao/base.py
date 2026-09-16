@@ -19,8 +19,8 @@ DAO 共用底座：連線所有權、查詢、寫入與交易控制
 | API | 公開查詢介面、業務規則（還原係數、保證金公式） | SQL、連線細節 |
 | loader／updater | 讀 CSV、決定日期、逐檔彙報、持有並關閉 DAO | SQL |
 
-模組層級的函式給還沒改成 DAO 的呼叫端委派使用（`BaseDataAPI`、`SQLiteUtils`、
-`BaseDataLoader`），避免同一段 SQL 在三個地方各留一份。
+模組層級的函式（`table_exists`、`insert_or_ignore` 等）是 `BaseDAO` 方法的實作本體，
+也給一次操作多張表、不值得各建一個 DAO 的呼叫端直接使用。
 """
 
 
@@ -231,6 +231,13 @@ class BaseDAO:
         """本 DAO 的資料表是否存在"""
 
         return table_exists(self.conn, self.TABLE_NAME)
+
+    def count_rows(self) -> int:
+        """本表的列數；表不存在時為 0（其他查詢錯誤往外拋）"""
+
+        if not self.table_exists():
+            return 0
+        return self.conn.execute(f"SELECT COUNT(*) FROM {self.TABLE_NAME}").fetchone()[0]
 
     def query_df(self, sql: str, params: Tuple[Any, ...] = ()) -> pd.DataFrame:
         """

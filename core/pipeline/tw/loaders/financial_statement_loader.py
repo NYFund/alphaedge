@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
@@ -10,7 +9,7 @@ from core.config import (
     FINANCIAL_STATEMENT_META_DIR_PATH,
     TW_STOCK_DB_PATH,
 )
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import FinancialStatementType
@@ -20,12 +19,12 @@ from core.pipeline.utils.data_utils import DataUtils
 class FinancialStatementLoader(BaseDataLoader):
     """Financial Statement Loader"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         """
         - Description:
             建立財報 loader
         - Parameters:
-            - conn: Optional[sqlite3.Connection]
+            - conn: Optional[DBConnection]
                 共用連線（通常由 updater 傳入，讓讀寫走同一條連線）。
                 四張表共用一條連線，故收連線而不是單一 DAO；指定時 loader 不擁有它，
                 `disconnect()` 不會關閉；未指定時 loader 自行建立，入庫完成即關閉
@@ -33,7 +32,7 @@ class FinancialStatementLoader(BaseDataLoader):
 
         super().__init__()
 
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # Reports Cleaned Columns Path

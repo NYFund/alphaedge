@@ -8,7 +8,16 @@ from typing import Union
 全專案的 SQLite 連線一律從這裡開：`core/api`、`core/pipeline`、回測 DataFeed
 原本各自 `sqlite3.connect()`，同一次 ETL 對同一個 DB 開兩三條連線、有些從不關閉。
 收斂到一處之後，換資料庫（PostgreSQL）時只需要改這個檔案與 DAO 內部。
+
+**`core/dao/` 以外不 `import sqlite3`**（`scripts/check_layer_deps.py` 會擋）：
+型別標註用 `DBConnection`、捕捉資料庫錯誤用 `DBError`。
 """
+
+# 資料庫連線的型別；DAO 以外的型別標註一律用它，不直接寫 `sqlite3.Connection`
+DBConnection = sqlite3.Connection
+
+# 資料庫錯誤的基底類別；DAO 以外需要捕捉資料庫錯誤時用它
+DBError = sqlite3.Error
 
 
 def connect_sqlite(

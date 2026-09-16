@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -7,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 from loguru import logger
 
+from core.dao.connection import DBConnection
 from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
@@ -58,7 +58,7 @@ class FinMindContext:
         crawler: FinMindCrawler,
         cleaner: FinMindCleaner,
         loader: FinMindLoader,
-        conn: Optional[sqlite3.Connection] = None,
+        conn: Optional[DBConnection] = None,
     ) -> None:
         # ETL
         self.crawler: FinMindCrawler = crawler
@@ -66,7 +66,7 @@ class FinMindContext:
         self.loader: FinMindLoader = loader
 
         # 資料連線（讀取股票／券商清單）；與 loader 寫入共用同一條
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
 
         # API Quota（配額用盡由 FinMindQuotaExhaustedError 處理，此處只記狀態）
         self.api_quota_limit: int = self.DEFAULT_API_QUOTA_LIMIT
@@ -230,11 +230,11 @@ class BrokerTradingMetadataStore:
     def __init__(
         self,
         metadata_path: Path,
-        conn: Optional[sqlite3.Connection] = None,
+        conn: Optional[DBConnection] = None,
     ) -> None:
         # Broker trading metadata 文件路徑（記錄每個 broker_id 和 stock_id 的日期範圍）
         self.metadata_path: Path = metadata_path
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
 
         # Metadata 快取（雙層迴圈內只讀快取，減少重複讀取 JSON；僅在 refresh_from_database 寫入後更新）
         self._cache: Optional[Dict[str, Dict[str, Dict[str, str]]]] = None

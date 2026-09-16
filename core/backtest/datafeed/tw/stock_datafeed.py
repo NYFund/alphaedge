@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Dict, List, Optional, Set
 
 import pandas as pd
@@ -16,6 +15,7 @@ from core.api.tw.stock_tick_api import StockTickAPI
 from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.config import TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection, connect_sqlite
 from core.models import StockQuote
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.strategies.base import BaseStrategy
@@ -41,7 +41,7 @@ class TwStockDataFeed(BaseDataFeed):
     def __init__(self) -> None:
         # 單次回測共用一條 SQLite 連線：四個 API 查的是同一個 DB 檔，
         # 各開一條沒有任何好處，只會讓連線數隨 API 數量線性成長
-        self.conn: Optional[sqlite3.Connection] = None
+        self.conn: Optional[DBConnection] = None
 
         self.tick: Optional[StockTickAPI] = None  # Ticks data
         self.chip: Optional[StockChipAPI] = None  # Chips data
@@ -68,7 +68,7 @@ class TwStockDataFeed(BaseDataFeed):
     def setup(self, strategy: BaseStrategy) -> None:
         """從資料庫載入資料；Tick 級別才建立 DolphinDB 連線"""
 
-        self.conn = sqlite3.connect(TW_STOCK_DB_PATH)
+        self.conn = connect_sqlite(TW_STOCK_DB_PATH)
         self.start_date = strategy.start_date
         self.end_date = strategy.end_date
 

@@ -1,12 +1,12 @@
 import datetime
 import random
-import sqlite3
 import time
 from typing import List, Optional, Set
 
 from loguru import logger
 
 from core.config import TW_STOCK_DB_PATH
+from core.dao.connection import DBConnection
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
@@ -49,7 +49,7 @@ class StockPriceUpdater(BaseDataUpdater):
         # **讀（日期規劃）與寫（loader）共用同一個 DAO**：舊版 updater 與 loader 各開
         # 一條連線到同一個 DB，updater 那條從不關閉，兩條連線還會互搶寫入鎖
         self.dao: StockPriceDAO = StockPriceDAO(db_path=TW_STOCK_DB_PATH)
-        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+        self.conn: Optional[DBConnection] = self.dao.conn
 
         # ETL
         self.crawler: StockPriceCrawler = StockPriceCrawler()

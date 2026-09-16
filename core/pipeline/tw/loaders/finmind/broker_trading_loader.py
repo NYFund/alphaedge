@@ -1,10 +1,10 @@
-import sqlite3
 from pathlib import Path
 from typing import List
 
 import pandas as pd
 from loguru import logger
 
+from core.dao.connection import DBConnection
 from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import FinMindDataType
@@ -41,7 +41,7 @@ def drop_duplicate_keys(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_from_dataframe(
-    conn: sqlite3.Connection, df: pd.DataFrame, commit: bool = True
+    conn: DBConnection, df: pd.DataFrame, commit: bool = True
 ) -> int:
     """
     - Description:
@@ -50,7 +50,7 @@ def load_from_dataframe(
         寫入包在 savepoint 內：本批寫到一半失敗時只回滾本批，同一交易內先前
         尚未 commit 的組合不受影響。
     - Parameters:
-        - conn: sqlite3.Connection
+        - conn: DBConnection
             資料庫連線
         - df: pd.DataFrame
             要載入的 DataFrame
@@ -107,7 +107,7 @@ def load_from_dataframe(
         raise DataLoadError("broker_trading", ["<dataframe>"], succeeded=0) from e
 
 
-def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
+def load_from_files(conn: DBConnection, finmind_dir: Path) -> None:
     """
     - Description:
         載入當日券商分點統計表 CSV 到資料庫；有任何檔案失敗就拋 `DataLoadError`
@@ -116,7 +116,7 @@ def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
         資料夾。每個檔案包在 savepoint 內（壞檔整檔回滾），**全部處理完先 commit
         再彙報**：`finish_load()` 有失敗時會拋出，其他檔案已寫入的資料不可因此不落地。
     - Parameters:
-        - conn: sqlite3.Connection
+        - conn: DBConnection
             資料庫連線
         - finmind_dir: Path
             downloads 底下的 finmind 目錄

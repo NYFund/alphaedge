@@ -1,10 +1,9 @@
-import sqlite3
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from core.dao.base import table_exists, to_sql_params
+from core.dao.connection import DBConnection
 
 """Abstract base class for data access APIs. Provides a common interface for querying data from the database"""
 
@@ -19,44 +18,6 @@ class BaseDataAPI(ABC):
     def setup(self) -> None:
         """Set Up the Config of Data API"""
         pass
-
-    @staticmethod
-    def sql_params(*values: Any) -> Tuple[Any, ...]:
-        """
-        - Description:
-            把查詢參數轉成 SQLite 收得下的型別；`date`／`datetime` 轉 ISO 字串
-
-            實作在 `core.dao.base.to_sql_params()`；尚未改走 DAO 的 API 仍呼叫本方法，
-            全部改完後刪除。
-        - Parameters:
-            - values: Any
-                查詢參數；非日期型別原樣通過
-        - Return:
-            - Tuple[Any, ...]
-                可直接傳給 `params=` 的 tuple
-        """
-
-        return to_sql_params(*values)
-
-    @staticmethod
-    def check_table_exist(conn: sqlite3.Connection, table_name: str) -> bool:
-        """
-        - Description:
-            檢查資料表是否存在
-
-            實作在 `core.dao.base.table_exists()`（「表還沒建」與「查詢出錯」為何要分開，
-            見該函式說明）；尚未改走 DAO 的 API 仍呼叫本方法，全部改完後刪除。
-        - Parameters:
-            - conn: sqlite3.Connection
-                資料庫連線
-            - table_name: str
-                資料表名稱
-        - Return:
-            - bool
-                資料表存在為 True
-        """
-
-        return table_exists(conn, table_name)
 
     @staticmethod
     def build_column_map(df: pd.DataFrame, column: str) -> Dict[str, Any]:
@@ -102,7 +63,7 @@ class BaseDataAPI(ABC):
             # 共用連線由建立者（DataFeed）負責關閉，避免其他持有者拿到已關閉的連線
             return
 
-        conn: Optional[sqlite3.Connection] = getattr(self, "conn", None)
+        conn: Optional[DBConnection] = getattr(self, "conn", None)
         if conn is not None:
             conn.close()
             self.conn = None

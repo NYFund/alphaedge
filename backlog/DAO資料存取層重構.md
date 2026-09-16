@@ -51,7 +51,7 @@
 | Phase5-3 | 推廣：futures_margin 兩表 | 同上、`core/managers/futures/position_manager.py` | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesMarginDAO`（兩表）；生效日查詢收斂為 `inclusive` 參數，`<` 確認為刻意；`from_api()` 改為必須傳入 `api`；連正式 DB 的測試改用暫存 DB；`tests/test_dao_futures_margin.py` 10 項、`not slow` 1138 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase5-4 | 推廣：futures_chip 三表、futures_continuous | 同上 | 對應測試 | ✅ | 2026-09-16 完成：新增 `FuturesChipDAO`（三表白名單）、`FuturesContinuousDAO`；兩支 loader 不再自行 commit，由 updater 控制；`get_on_date`／`has_trading_days` 不再吞錯誤；`tests/test_dao_futures_chip_continuous.py` 9 項、`not slow` 1147 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase6-1 | 測試共用 DAO fixture | `tests/conftest.py`、直接 `sqlite3.connect` 的測試檔 | `pytest` 通過 | ✅ | 2026-09-16 完成：`conftest.py` 新增 `memory_conn`／`dao_factory`（含 `complete_rows()` 補齊 NOT NULL 欄）；11 個檔案的手寫 DDL 改走 DAO，剩下的 `CREATE TABLE` 全是刻意壞掉的 schema、鎖庫與底座測試；`not slow` 1147 passed、`slow` 18 passed、回歸雙線通過 |
-| Phase6-2 | 收斂：刪除舊工具、分層檢查禁止 DAO 以外 `import sqlite3` | `core/pipeline/utils/sqlite_utils.py`、`core/api/base.py`、`scripts/check_layer_deps.py`、`tasks/delete_price_data.py`、`strategy_lab/**`、`scripts/manual/*` | 分層檢查違規 0；全域 `grep "import sqlite3"` 只剩 `core/dao/` 與測試 | ⬜ | 相依 Phase6-1 |
+| Phase6-2 | 收斂：刪除舊工具、分層檢查禁止 DAO 以外 `import sqlite3` | `core/pipeline/utils/sqlite_utils.py`、`core/api/base.py`、`scripts/check_layer_deps.py`、`tasks/delete_price_data.py`、`strategy_lab/**`、`scripts/manual/*` | 分層檢查違規 0；全域 `grep "import sqlite3"` 只剩 `core/dao/` 與測試 | ✅ | 2026-09-16 完成：刪除 `SQLiteUtils` 與四個委派方法；分層檢查新增 E'' 項；44 個檔案改用 `DBConnection` 型別別名；`scripts/manual` 刪 4 支、改寫 1 支；`import sqlite3` 只剩 `core/dao/`、測試與 `scripts/check_layer_deps.py` 的檢查字串；`not slow` 1144 passed、`slow` 18 passed、回歸雙線通過 |
 | Phase6-3 | 更新文件 | `docs/backtest/module-map.md`、`docs/pipeline/etl-ingestion.md`、`docs/dev/naming-axes.md` | 文件描述與程式一致 | ⬜ | 相依 Phase6-2 |
 
 ---
@@ -473,7 +473,7 @@ class BaseDAO:
 >   `test_finmind_api`、`test_corporate_action`（偵測器只需三欄的最小 `price` 表）、`backtest/test_reporting`、
 >   `backtest/conftest`；它們沒有抄 schema，schema 改動時多半仍能跑，留待需要時再換。
 
-### Phase6-2. 收斂 ⬜
+### Phase6-2. 收斂 ✅
 
 - **目的**：把「只有 DAO 能碰 SQLite」從慣例變成檢查。
 - **做法**：
@@ -485,6 +485,23 @@ class BaseDAO:
 - **產出**：上列檔案。
 - **驗證方式**：分層檢查違規 0；`grep -rn "import sqlite3" core tasks` 只剩 `core/dao/`；回歸雙線通過。
 - **相依**：Phase6-1。
+
+> **完成紀錄（2026-09-16）**
+> - 型別別名放在 `core/dao/connection.py`：`DBConnection`（連線型別）、`DBError`（捕捉資料庫錯誤）。
+>   `core/`、`tasks/` 內 44 個檔案的 `sqlite3.Connection` 改用 `DBConnection`，兩支 DataFeed 的 `sqlite3.connect()` 改用 `connect_sqlite()`。
+> - `scripts/check_layer_deps.py` 新增「E''. DAO 以外 import 資料庫驅動」：以 AST 判定，計入違規總數；已以暫時探針檔確認會觸發。
+> - 刪除：`core/pipeline/utils/sqlite_utils.py`、`BaseDataAPI.sql_params()`／`check_table_exist()`、
+>   `BaseDataLoader.insert_dataframe()`／`create_symbol_date_index()`；對應的 3 個重複測試刪除（`test_dao_base.py` 已涵蓋），
+>   `table_exists` 測試改指向 `core.dao.base`。
+> - `tasks/delete_price_data.py` 改用 `StockPriceDAO.count_by_date()`／`delete_by_date()`（後者不 commit，由腳本確認後提交）。
+> - `strategy_lab/.../tech_new_high_continuation/analysis.py` 改呼叫 `StockPriceDAO.get_high_close_by_stocks()`；
+>   `strategy_lab/README.md` 的查表範例改用唯讀 `connect_sqlite()`。
+> - `scripts/manual/`：改寫 `manual_db_tables.py`（唯讀連線、查詢走 DAO，已對正式 DB 實跑）；刪除
+>   `manual_broker_trading_db_query.py`（與前者 `--broker-trading` 重複）、`manual_broker_trading_updater.py`、
+>   `manual_finmind_pipeline.py`、`manual_finmind_updater.py`（mock 改寫 config 後自開臨時 SQLite，且已呼叫不存在的方法；
+>   行為由 FinMind 相關 pytest 涵蓋）。其餘 tick 相關腳本不碰 SQLite，保留。
+> - `BaseDAO` 新增通用 `count_rows()`；`BrokerTradingDAO` 新增 `get_latest_rows()` 給人工抽查用。
+> - 文件內仍提到 `insert_dataframe`／`sqlite_utils.py` 的兩處（`docs/pipeline/etl-ingestion.md`、`docs/dev/naming-axes.md`）留給 Phase6-3。
 
 ### Phase6-3. 更新文件 ⬜
 

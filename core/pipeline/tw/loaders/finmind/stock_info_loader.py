@@ -1,7 +1,7 @@
-import sqlite3
 from pathlib import Path
 from typing import List
 
+from core.dao.connection import DBConnection
 from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
 from core.pipeline.tw.loaders.finmind.reference_table_loader import (
     ReferenceTableSpec,
@@ -42,13 +42,13 @@ STOCK_INFO_WITH_WARRANT_SPEC: ReferenceTableSpec = ReferenceTableSpec(
 )
 
 
-def load_stock_info(conn: sqlite3.Connection, finmind_dir: Path) -> None:
+def load_stock_info(conn: DBConnection, finmind_dir: Path) -> None:
     """載入台股總覽資料到資料庫"""
 
     load_reference_table(conn, finmind_dir, STOCK_INFO_SPEC)
 
 
-def load_stock_info_with_warrant(conn: sqlite3.Connection, finmind_dir: Path) -> None:
+def load_stock_info_with_warrant(conn: DBConnection, finmind_dir: Path) -> None:
     """載入台股總覽(含權證)資料到資料庫"""
 
     load_reference_table(conn, finmind_dir, STOCK_INFO_WITH_WARRANT_SPEC)

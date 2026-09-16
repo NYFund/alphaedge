@@ -438,43 +438,6 @@ def test_finmind_broker_trading_dataframe_path_raises(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_sqlite_utils_does_not_swallow_query_errors(tmp_path: Path) -> None:
-    """
-    表存在但欄位打錯要拋出，不可回 None
-
-    回 None 會讓 updater 以為「表是空的」而從預設起日重跑整段回補。
-    """
-
-    from core.pipeline.utils.sqlite_utils import SQLiteUtils
-
-    conn = sqlite3.connect(tmp_path / "test.db")
-    conn.execute("CREATE TABLE demo (date TEXT)")
-
-    with pytest.raises(sqlite3.Error):
-        SQLiteUtils.get_table_latest_value(
-            conn=conn, table_name="demo", col_name="no_such_column"
-        )
-
-    conn.close()
-
-
-def test_sqlite_utils_returns_none_for_missing_table(tmp_path: Path) -> None:
-    """表還沒建立是**正常**的初次更新狀態，仍回 None"""
-
-    from core.pipeline.utils.sqlite_utils import SQLiteUtils
-
-    conn = sqlite3.connect(tmp_path / "test.db")
-
-    assert (
-        SQLiteUtils.get_table_latest_value(
-            conn=conn, table_name="not_created_yet", col_name="date"
-        )
-        is None
-    )
-
-    conn.close()
-
-
 # === S5：期貨線的「壞檔 → DataLoadError」（健檢第四輪）===
 # 台股線（price／margin／finmind）已在上面涵蓋，期貨線原本一條都沒有。
 # **tick 線不在此列**：`stock_tick_loader.add_to_db()` 根本沒呼叫 `finish_load()`，

@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -13,7 +12,7 @@ from core.config import (
     CORPORATE_ACTION_TABLE_NAME,
     TW_STOCK_DB_PATH,
 )
-from core.dao.connection import connect_sqlite
+from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.utils.log_manager import LogManager
@@ -33,9 +32,9 @@ Stock dividend API: query dividend table through StockDividendDAO（除權除息
 class StockDividendAPI(BaseDataAPI):
     """Stock dividend API"""
 
-    def __init__(self, conn: Optional[sqlite3.Connection] = None) -> None:
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
         # 由 DataFeed 傳入共用連線；未指定時自行建立（與 StockPriceAPI 同慣例）
-        self.conn: Optional[sqlite3.Connection] = conn
+        self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
         # 後復權累乘係數快取：{stock_id: (除權息日 ndarray, 累乘係數 ndarray)}
