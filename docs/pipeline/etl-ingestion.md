@@ -2,9 +2,12 @@
 
 > 本文件描述 `core/pipeline/` **入庫階段**的現行約定：分批時機、冪等性、失敗語意與結束碼。
 >
-> **各項設計的理由寫在程式碼的 docstring**（`BaseDataLoader.insert_dataframe()` /
-> `finish_load()` / `select_csv_files()`、`DataLoadError`、`tasks.update_db.target_guard()`、
+> **各項設計的理由寫在程式碼的 docstring**（`core.dao.base.insert_or_ignore()` / `BaseDAO.savepoint()`、
+> `BaseDataLoader.finish_load()` / `select_csv_files()`、`DataLoadError`、`tasks.update_db.target_guard()`、
 > `core/pipeline/shared/date_planner.py`）。本文件只放**跨檔案的全貌**與新增 updater 時的檢查表。
+>
+> 連線、交易與 SQL 一律在 `core/dao/`，loader／updater 不寫 SQL；連線所有權與 commit 時點的全貌見
+> [資料存取層（DAO）](../dev/data-access-layer.md)。
 
 ---
 
@@ -32,18 +35,18 @@ updater 負責串起流程與決定要處理哪些日期。
 | `StockChipUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockMarginUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockDividendUpdater` | 全部跑完 | **每次都掃整個區間**（一年一次請求） | `INSERT OR REPLACE` | `DataLoadError` |
-| `CorporateActionUpdater` | 全部跑完 | **每次都掃整個區間**（事件是事後公告） | 主鍵 `(date, stock_id)` | `DataLoadError` |
-| `MonthlyRevenueReportUpdater` | 全部跑完 | 年 × 月的差集 | 先查既有鍵再過濾 | `DataLoadError` |
+| `CorporateActionUpdater` | 全部跑完 | **每次都掃整個區間**（事件是事後公告） | `INSERT OR REPLACE` | `DataLoadError` |
+| `MonthlyRevenueReportUpdater` | 全部跑完 | 年 × 月的差集 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinancialStatementUpdater`（前三張報表） | 每種報表一次 | 年 × 季的差集 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinancialStatementUpdater`（equity_change） | **每 100 檔** ＋ 收到中止訊號時 | **差集**（表內已有 ＋ `SeasonProgressStore`） | `INSERT OR IGNORE` | `DataLoadError`（整段跑完才拋） |
-| `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | 先查既有鍵再過濾 | `DataLoadError` |
+| `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockTickUpdater` | 全部跑完 | 固定起日 ＋ `tick_metadata.json` | **無**（`keepDuplicates=ALL`） | `DataLoadError` |
 | `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesStockUniverseUpdater` | 一次（單次請求） | 當日快照是否已入庫 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品最新 `date` +1；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesMarginUpdater` | 一次（單次請求） | 主鍵 `(effective_date, product)` 相同即略過 | `INSERT OR IGNORE` | `DataLoadError` |
-| `FuturesContinuousUpdater` | 整段重建（衍生表，不連網路） | 無 resume（逆向調整量會隨後續換月改變，一律重建） | 整表重建 | `DataLoadError`（有行情卻排不出換月表時） |
-| `FuturesChipUpdater` | 每個資料集跑完 | 三張表各自最新 `date` +1 | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
+| `FuturesContinuousUpdater` | 每組（商品, 換月規則）寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
+| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1 | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
 | `FuturesTickUpdater` | 全部跑完 | 以日線行情表決定契約、預設只爬近月 | **無**（DolphinDB `keepDuplicates=ALL`，寫入路徑尚未實測） | `DataLoadError` |
 
 **未分批的幾個並非疏漏**：dividend／mrr／fs 的量級是十餘年 × 數十個年月或年季，
@@ -140,8 +143,16 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 分批入庫讓「重載已入庫檔案」從偶發變成**每批都會發生**，所以分批與冪等必須成對——
 只做分批不做冪等，每批都會撞鍵。
 
-**用 `INSERT OR IGNORE`，不要用 `to_sql(append)`**：後者整批送出，一列撞鍵就整檔失敗，
-其餘幾百列跟著沒進資料庫。
+**用 DAO 的 `insert_or_ignore()`，不要用 `to_sql(append)`**：後者整批送出，一列撞鍵就整檔失敗，
+其餘幾百列跟著沒進資料庫；而且 pandas 的 `to_sql` 寫完會**自行 commit**，呼叫端無從控制交易。
+
+### 3.1.1 單檔失敗整檔不留、一次執行一條連線
+
+- **每個檔案包在 `dao.savepoint()` 內**：檔案寫到一半出錯時整檔回滾，前面已寫入的列不會被迴圈結束後的
+  `commit()` 一起寫進去——否則資料表多出半份檔案，`finish_load()` 回報的卻是「這個檔案失敗」。
+- **updater 持有 DAO（或連線），loader 共用**：一次更新對同一個 DB 只開一條連線，`updater.close()` 負責關閉；
+  loader 在共用模式下不關連線，updater 入庫後還要用它查最新日期。
+- **查詢錯誤不吞**：只有「表不存在」可以回空值，其餘錯誤往外拋——吞掉會讓 updater 從預設起日靜默重跑整段回補。
 
 ### 3.2 失敗必須浮出來
 
@@ -224,11 +235,13 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 6. **跨期間的來源要逐期間實查，測試 fixture 要涵蓋每一種期間。** MOPS 權益變動表的本期標籤 Q1 是「第N季」、Q2／Q3／Q4 分別是「上半年度／前3季／年度」；只用 Q1 驗證時，測試與實跑會同時漏掉另外三季。
 7. **把暫時性失敗記成 `FAILED`，不要記成「沒有資料」。** 連線失敗、被擋、版面解析不出來都要讓那一天或那一年下次重試；記成 `NO_DATA` 會讓它永遠不再被補。
 8. **多個來源拼成一份的資料，任一來源沒有完整取得就整份不入庫**（§3.5）。只入庫問到的那一邊不會有任何錯誤；同理，resume 不可用 `MAX + 1`，否則失敗的那一期被後面成功的期間越過之後永遠不會再被請求。
+9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 提供 `close()` 並在 `tasks/update_db.py` 以 `try/finally` 呼叫**（§3.1.1）。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
 
 ## 相關文件
 
 - [指令教學](../commands/command-usage.zh-TW.md)——`update_db` 的完整 target 對照與範例
 - [權益變動表](equity-change.md)——`equity_change` 的資料形狀、涵蓋範圍、已知限制與爬取節流
 - [非除權息的公司行動](corporate-action.md)——`corporate_action` 表的資料源與調整倍率
+- [資料存取層（DAO）](../dev/data-access-layer.md)——連線所有權、savepoint、commit 時點與錯誤語意
 - [程式碼品質工具鏈](../dev/code-quality.md)——盲捕 `except Exception` 的收斂方向
 - [資料覆蓋範圍](../exchanges/data_coverage.md)——各資料來源的時間涵蓋與已知限制

@@ -50,7 +50,7 @@
 | `core/strategies/stock/base.py` | `Market.TW` ＋ `InstrumentType.STOCK`；**個別策略不需自己設** |
 | `core/backtest/factory.py` | 分派鍵為 `(strategy.market, strategy.instrument_type)`；未支援的組合拋出含兩軸值的 `ValueError` |
 | `core/backtest/models/` | 實作類別命名即「地區 ＋ 商品」：`TwStockSpec`、`TwStockFillModel`、`TwStockSettlementModel`、`TwFuturesSpec` |
-| `core/api/`、`core/adapters/`、`core/backtest/datafeed/` | **目錄只承載市場一條軸**（`tw/`），商品類別由檔名承載（`stock_price_api.py` vs `futures_price_api.py`）；類別名仍是「地區 ＋ 商品」（`TwStockDataFeed`）。2026-09-02 由台期貨規劃 Phase5-3 收斂 |
+| `core/api/`、`core/adapters/`、`core/backtest/datafeed/`、`core/dao/` | **目錄只承載市場一條軸**（`tw/`），商品類別由檔名承載（`stock_price_api.py` vs `futures_price_api.py`）；類別名仍是「地區 ＋ 商品」（`TwStockDataFeed`）。2026-09-02 由台期貨規劃 Phase5-3 收斂；`core/dao/` 於 2026-09-16 新增時沿用（`base.py`、`connection.py` 是市場無關底座，DAO 放 `tw/`），並登記在 `check_layer_deps.py` 的 `_MARKET_AXIS_PACKAGES` |
 | `core/pipeline/{shared,tw,utils}/` | 目錄**只承載軸 A**（`tw/`，未來 `us/`）；商品類別由檔名承載（`stock_price_crawler.py` vs `futures_price_crawler.py`）。base 類別放 `shared/`，否則 `us/` 會反過來相依 `tw/`。**`utils/` 是層不是軸**，只放跨市場通用的工具；綁定單一市場的工具歸 `tw/utils/`（2026-09-13 收斂，見下）|
 | `core/strategies/`、`core/models/`、`core/managers/` | 子目錄承載**軸 B**（`base/` ＋ `stock/` ＋ `futures/`，2026-09-01 起）。`strategy_loader` 逐一掃描這些子套件，新增商品類別不需改程式 |
 | `data/db/` | 檔名帶軸 A：`tw_stock.db`、`tw_futures.db`（常數 `TW_STOCK_DB_PATH`／`TW_FUTURES_DB_PATH`） |
@@ -103,14 +103,13 @@
 `core/pipeline/tw/utils/`。
 
 **為什麼不在 `utils/` 底下再開 `tw/`／`us/`**：那會讓同一層同時承載「層」與「軸」，
-正是本節要避免的事。`utils/` 只留通用工具（`data_utils.py`、`sqlite_utils.py`、
-`exceptions.py`、`constant.py`），綁定單一市場的一律往該市場目錄放。
+正是本節要避免的事。`utils/` 只留通用工具（`data_utils.py`、`exceptions.py`、`constant.py`），
+綁定單一市場的一律往該市場目錄放。原本的 `sqlite_utils.py` 已於 2026-09-16 隨資料存取層收進 `core/dao/`。
 
-**這次刻意不動 `constant.py`**：裡面的 `ListingBoard`／`IssuerOrigin`／`PriceColumn`／
-`ChipColumn`／`FuturesPriceColumn` 確實只有台股適用，但它們的去向早已定在
-F-007——**欄位 Enum 是資料表 schema 的一部分**，該下沉到 `core/config/schema.py`
-（歸 [PostgreSQL遷移計畫](../../backlog/PostgreSQL遷移計畫.md) Phase2-3）。
-先搬到 `tw/` 等於搬兩次，且會與那批改動撞在同一批檔案上。
+**這次刻意不動 `constant.py`**：裡面的 `ListingBoard`／`IssuerOrigin` 確實只有台股適用，
+但欄位 Enum 的去向另有定案——**欄位 Enum 是資料表 schema 的一部分**：`PriceColumn`／`ChipColumn`／
+`FuturesPriceColumn` 已於 2026-09-16 下沉到 `core/config/schema.py`（`core/dao`、`core/api` 都要用，
+不能留在 pipeline）；`ListingBoard`／`IssuerOrigin` 是爬蟲參數，仍留在 `constant.py`。
 
 **同層的 `shared/payload.py` 也已收斂（2026-09-13）**：原本以為只有 `TYPEK` 是公開資訊
 觀測站專屬、其餘欄位是通用 HTTP payload，故暫緩。**這個前提不成立**——`firstin`／`step`／
@@ -122,8 +121,8 @@ F-007——**欄位 Enum 是資料表 schema 的一部分**，該下沉到 `core
 
 - `BaseDataCrawler.NO_DATA_MARKERS` 是 TWSE／TPEX 的「查無資料」措辭——它是 class 屬性，
   未來 `us/` 的子類直接覆寫即可，不構成反向相依。
-- `BaseDataLoader.create_symbol_date_index()` 寫死 `stock_id` 欄——跟著下方遺留表的
-  `stock_id` → `symbol` 改名一起處理。
+- `core.dao.base.create_symbol_date_index()`（原 `BaseDataLoader` 的同名方法）寫死 `stock_id` 欄——
+  跟著下方遺留表的 `stock_id` → `symbol` 改名一起處理。
 
 ## 遺留與後續
 

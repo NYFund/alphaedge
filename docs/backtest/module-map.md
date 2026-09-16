@@ -23,7 +23,9 @@
               ├── core/managers/             部位進出與帳務
               └── core/backtest/report/      報表與圖表
               │
-資料層      core/api/ ── core/adapters/ ── data/db/
+資料層      core/api/ ── core/adapters/
+              │
+資料存取層  core/dao/（SQL、連線與交易只寫在這裡）── data/db/
               │
 領域層      core/models/（帳戶、訂單、部位、報價、交易紀錄）
 共用層      core/utils/（enum、路徑、時間、日誌、StockUtils）
@@ -109,7 +111,7 @@ sequenceDiagram
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交 | `prev_close`、`intraday_range` |
 | `core/backtest/models/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`） |
 | `core/backtest/models/settlement_model.py` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、維持率追繳、停券回補、除息股利補償 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends` 由 `DataFeed` 每根 bar 推入 |
-| `core/backtest/datafeed/base.py`／`tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB） |
+| `core/backtest/datafeed/base.py`／`tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
 | `core/backtest/datafeed/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日） | `DataFeed`、策略 |
 
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞，model 之間不互相 import：
@@ -130,12 +132,15 @@ sequenceDiagram
 
 | 檔案 | 職責 |
 |------|------|
-| `core/api/base.py` | `BaseDataAPI`：`owns_conn` 決定 `close()` 是否真的關連線（共用連線由 `DataFeed` 負責關）；`build_column_map()` 為具名查詢的共用底座 |
+| `core/api/base.py` | `BaseDataAPI`：`owns_conn` 決定 `close()` 是否真的關連線（共用連線由 `DataFeed` 負責關）；`build_column_map()` 為具名查詢的共用底座。**API 不寫 SQL**：持有連線、以 `conn=` 建自己的 DAO |
 | `core/api/tw/stock_price_api.py` | 日 K 查詢（`get`／`get_range`／`get_stock_price` ＋ 具名查詢） |
 | `core/api/tw/stock_tick_api.py` | 逐筆成交（DolphinDB） |
 | `core/api/tw/stock_chip_api.py`／`stock_margin_api.py` | 三大法人籌碼、融資融券餘額 |
 | `core/api/tw/monthly_revenue_report_api.py`／`financial_statement_api.py` | 月營收、財報 |
 | `core/adapters/tw/stock_quote_adapter.py` | 日 K／Tick 的 `DataFrame` → `StockQuote` 物件 |
+| `core/dao/connection.py` | 連線的單一入口 `connect_sqlite()`（含唯讀模式）；`DBConnection`／`DBError` 型別別名 |
+| `core/dao/base.py` | `BaseDAO`：`owns_conn` 語意、`table_exists()`、`query_df()`、寫入（`insert_or_ignore`／`insert_or_replace`）與 `savepoint()` |
+| `core/dao/tw/*_dao.py` | 一張表（或一組緊密相關的表）一個 DAO；清單與設計見[資料存取層](../dev/data-access-layer.md) |
 
 ### 報表與分析
 
@@ -214,8 +219,9 @@ sequenceDiagram
    `tests/test_strategy_data_access.py` 會在策略層出現欄位字面值時失敗——這類錯誤是**靜默**的（換資料源後策略會安靜地不開倉，報表上只表現為訊號變少）。
 4. **`core/api/` 不可 import `core/utils/instrument.py`。** `StockUtils` 相依 `MarketCalendar`，而後者相依 `StockPriceAPI`；API 層位於其下，反向相依會直接循環。
 5. **回歸雙線不經過 reporter。** `tests/backtest/make_baseline.py` 直接從 `account.trade_records` 組 `DataFrame`，改壞報表欄位兩條線都一樣綠——動 `reporter.py` 時要靠 `test_reporting.py` 與 `test_reporter_timeline.py`。
-6. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
-7. **任何動到 `core/backtest/`、`core/managers/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
+6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`tasks/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
+7. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
+8. **任何動到 `core/backtest/`、`core/managers/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
 
 ---
 
@@ -228,7 +234,7 @@ sequenceDiagram
 | `core/utils/instrument.py` import 引擎層的 `market_calendar` | `StockUtils` 有 pipeline／adapters／strategy_lab 三方使用者，搬進 `core/backtest/` 會讓資料管線反向相依引擎（見 [多市場回測引擎架構 §五](multi-market-engine.md#五已知簡化)） |
 | `core/pipeline/tw/cleaners/futures_tick_cleaner.py` 與 `futures_continuous_*` import `futures_calendar`／`futures_roll` | 交易日曆與換月規則屬「市場結構」，目前住在 `datafeed/` 下；正確歸屬是獨立的市場結構層，待美股進來時一併搬 |
 | 策略層與引擎層互相引用契約：引擎／factory／報表 → 策略契約（三個 `base.py`）→ 引擎的 model 型別 | 圖的用途是說明呼叫序列，改畫相依圖反而難讀；`check_layer_deps.py` 以獨立的「策略契約」等級處理 |
-| `core/api/tw/*` import `core/pipeline/utils`（欄位常數、SQLite 工具），pipeline 又 import api | 套件層互相相依、檔案層無循環；欄位常數應下沉到 `core/config/schema.py`，屬 PostgreSQL 遷移的 schema 批次 |
+| `core/pipeline/tw/updaters/*` import `core/api/tw/*`（期貨行情、標的池 API） | 單向（api 已不再 import pipeline：欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`）；同層不同套件，`check_layer_deps.py` 只列出不擋 |
 | `settlement_model.py` import `futures_roll`（datafeed）、`StockCostModel`、兩個 PositionManager 的具體類別 | 期貨轉倉需要 planner 與 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
 
 ## 相關文件
@@ -236,3 +242,4 @@ sequenceDiagram
 - [多市場回測引擎架構](multi-market-engine.md)——設計決策與已知簡化
 - [放空回測框架規格](short-selling-framework.md)——方向驅動的記帳原則
 - [策略開發指南](../../core/strategies/README.md)——策略怎麼寫
+- [資料存取層（DAO）](../dev/data-access-layer.md)——連線所有權、交易與錯誤語意
