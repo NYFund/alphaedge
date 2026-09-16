@@ -5,12 +5,9 @@ from typing import List, Optional, Set
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FUTURES_STOCK_UNIVERSE_TABLE_NAME,
-    PRICE_TABLE_NAME,
-    TW_FUTURES_DB_PATH,
-    TW_STOCK_DB_PATH,
-)
+from core.config import PRICE_TABLE_NAME, TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_stock_universe_cleaner import (
     FuturesStockUniverseCleaner,
@@ -30,7 +27,7 @@ from core.utils.log_manager import LogManager
 **存在的理由：股期不能像指數期貨那樣把商品清單寫死在 `FUTURES_TARGET_PRODUCTS`**。
 指數期貨 5~15 檔、幾年才動一次，字面值清單完全夠用；股期 320 檔且會隨掛牌／下市
 異動，手寫清單必然過期，也沒有地方放契約單位的歷史序列。故清單改由本表提供，
-下游（股期行情 ETL）以 `get_active_products()` 取得要爬的商品，
+下游（股期行情 ETL）以 `FuturesStockUniverseAPI.get_products()` 取得要爬的商品，
 不必為每一檔手動指定。
 
 1. **一次請求就結束，沒有回補區間**
@@ -53,9 +50,19 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
+        # **讀（快照是否已入庫、前一份快照、差分）與寫（loader）共用同一個 DAO**：
+        # 舊版每個查詢方法各自 `sqlite3.connect()` 一次
+        TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
+            db_path=TW_FUTURES_DB_PATH
+        )
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+
         self.crawler: FuturesStockUniverseCrawler = FuturesStockUniverseCrawler()
         self.cleaner: FuturesStockUniverseCleaner = FuturesStockUniverseCleaner()
-        self.loader: FuturesStockUniverseLoader = FuturesStockUniverseLoader()
+        self.loader: FuturesStockUniverseLoader = FuturesStockUniverseLoader(
+            dao=self.dao
+        )
 
         self.setup()
 
@@ -63,6 +70,12 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         """Set Up the Config of Updater"""
 
         LogManager.setup_logger("futures_stock_universe_updater.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
 
     def update(
         self,
@@ -121,19 +134,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
     def is_snapshot_loaded(self, snapshot_date: datetime.date) -> bool:
         """檢查該日快照是否已入庫"""
 
-        conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
-        try:
-            if not self.table_exists(conn, FUTURES_STOCK_UNIVERSE_TABLE_NAME):
-                return False
-
-            query: str = f"""
-                SELECT COUNT(*) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}
-                WHERE snapshot_date = ?
-            """
-            count: int = conn.execute(query, (str(snapshot_date),)).fetchone()[0]
-            return count > 0
-        finally:
-            conn.close()
+        return self.dao.is_snapshot_loaded(snapshot_date)
 
     def get_latest_snapshot_date(
         self, before: Optional[datetime.date] = None
@@ -141,7 +142,6 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         """
         - Description:
             取得最新一份快照的日期
-
         - Parameters:
             - before: Optional[datetime.date]
                 只看早於此日的快照；None 表示不設限
@@ -150,96 +150,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
                 快照日；表不存在或尚無資料時為 None
         """
 
-        conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
-        try:
-            if not self.table_exists(conn, FUTURES_STOCK_UNIVERSE_TABLE_NAME):
-                return None
-
-            if before is None:
-                query: str = f"SELECT MAX(snapshot_date) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}"
-                row = conn.execute(query).fetchone()
-            else:
-                query: str = f"""
-                    SELECT MAX(snapshot_date) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}
-                    WHERE snapshot_date < ?
-                """
-                row = conn.execute(query, (str(before),)).fetchone()
-
-            return row[0] if row and row[0] else None
-        finally:
-            conn.close()
-
-    @classmethod
-    def get_active_products(
-        cls,
-        product_types: Optional[List[str]] = None,
-        snapshot_date: Optional[str] = None,
-    ) -> List[str]:
-        """
-        - Description:
-            取得最新快照中仍在列的商品代碼（＝ 行情頁的 `commodity_id`）
-
-            **這是股期行情 ETL 的商品清單來源**：股期不走
-            `FUTURES_TARGET_PRODUCTS`，改由本表提供，故新掛牌的標的只要跑過一次
-            標的池更新就會自動進入爬取範圍，不需要為每一檔手動指定。
-
-            ⚠️ **回傳的是「最新快照有的」而不是「歷史上有過的」**：已下市的商品
-            不會出現在這裡。要回補下市商品的歷史行情，須自行以歷史快照取清單。
-        - Parameters:
-            - product_types: Optional[List[str]]
-                只取這些商品類型（見 `StockFuturesType`）；None 表示全部
-            - snapshot_date: Optional[str]
-                指定快照日；None 表示取最新一份
-        - Return:
-            - List[str]
-                商品代碼清單，依代碼排序；表不存在或尚無快照時為空清單
-        """
-
-        conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
-        try:
-            if not cls.table_exists(conn, FUTURES_STOCK_UNIVERSE_TABLE_NAME):
-                logger.warning(
-                    f"[Futures Universe] {FUTURES_STOCK_UNIVERSE_TABLE_NAME} 不存在；"
-                    f"請先執行 --target futures_stock_universe"
-                )
-                return []
-
-            if snapshot_date is None:
-                row = conn.execute(
-                    f"SELECT MAX(snapshot_date) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}"
-                ).fetchone()
-                snapshot_date = row[0] if row and row[0] else None
-
-            if snapshot_date is None:
-                logger.warning("[Futures Universe] 標的池尚無任何快照")
-                return []
-
-            query: str = f"""
-                SELECT product_id FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}
-                WHERE snapshot_date = ?
-            """
-            params: tuple = (snapshot_date,)
-
-            if product_types:
-                placeholders: str = ",".join("?" * len(product_types))
-                query += f" AND product_type IN ({placeholders})"
-                params += tuple(product_types)
-
-            query += " ORDER BY product_id"
-
-            return [row[0] for row in conn.execute(query, params)]
-        finally:
-            conn.close()
-
-    @staticmethod
-    def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-        """檢查資料表是否存在（本類的查詢都可能在建表前被呼叫）"""
-
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table_name,),
-        ).fetchone()
-        return row is not None
+        return self.dao.get_latest_snapshot_date(before, inclusive=False)
 
     @staticmethod
     def log_summary(df: pd.DataFrame) -> None:
@@ -273,19 +184,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
             logger.info("* 這是第一份標的池快照，尚無可比對的前一份")
             return
 
-        conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
-        try:
-            previous_df: pd.DataFrame = pd.read_sql_query(
-                f"""
-                SELECT product_id, underlying_name, contract_size
-                FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}
-                WHERE snapshot_date = ?
-                """,
-                conn,
-                params=(previous_date,),
-            )
-        finally:
-            conn.close()
+        previous_df: pd.DataFrame = self.dao.get_snapshot_contracts(previous_date)
 
         current: Set[str] = set(df["product_id"])
         previous: Set[str] = set(previous_df["product_id"])
@@ -330,6 +229,9 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
             對不上的標的即使行情爬得回來也接不進下游。對不上通常有兩種成因：
             標的是 ETF（現股行情本來就不在 `price` 表的涵蓋範圍內），或是
             上櫃標的尚未回補；兩者都不是錯誤，故記 info 不記 warning。
+
+            `tw_stock.db` 或 `price` 表不存在（只跑期貨的環境）時略過並警告；以唯讀開啟、
+            用完即關，不會替缺檔環境建出空的 `tw_stock.db`。其他查詢錯誤往外拋。
         - Parameters:
             - df: pd.DataFrame
                 本次快照
@@ -339,24 +241,19 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         if not stock_ids:
             return
 
-        conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
-        try:
-            placeholders: str = ",".join("?" * len(stock_ids))
-            matched: Set[str] = {
-                row[0]
-                for row in conn.execute(
-                    f"""
-                    SELECT DISTINCT stock_id FROM {PRICE_TABLE_NAME}
-                    WHERE stock_id IN ({placeholders})
-                    """,
-                    tuple(stock_ids),
-                )
-            }
-        except sqlite3.Error as error:
-            logger.warning(f"[Futures Universe] 無法比對現股代號：{error}")
+        if not TW_STOCK_DB_PATH.exists():
+            logger.warning(
+                f"[Futures Universe] 找不到 {TW_STOCK_DB_PATH}，略過現股代號比對"
+            )
             return
-        finally:
-            conn.close()
+
+        with StockPriceDAO(db_path=TW_STOCK_DB_PATH, read_only=True) as price_dao:
+            if not price_dao.table_exists():
+                logger.warning(
+                    f"[Futures Universe] {PRICE_TABLE_NAME} 表不存在，略過現股代號比對"
+                )
+                return
+            matched: Set[str] = price_dao.get_existing_stock_ids(stock_ids)
 
         unmatched: List[str] = [sid for sid in stock_ids if sid not in matched]
         logger.info(

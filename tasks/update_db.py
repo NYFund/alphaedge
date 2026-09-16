@@ -560,7 +560,10 @@ def main() -> None:
             futures_stock_universe_updater: FuturesStockUniverseUpdater = (
                 FuturesStockUniverseUpdater()
             )
-            futures_stock_universe_updater.update()
+            try:
+                futures_stock_universe_updater.update()
+            finally:
+                futures_stock_universe_updater.close()
 
     if DataType.FUTURES_MARGIN.name.lower() in targets:
         with target_guard("futures_margin", failed_targets):

@@ -5,13 +5,10 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from core.api.base import BaseDataAPI
-from core.config import (
-    API_LOG_FILE_LEVEL,
-    API_LOGS_DIR_PATH,
-    FUTURES_PRICE_DAILY_TABLE_NAME,
-    FUTURES_STOCK_UNIVERSE_TABLE_NAME,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_FUTURES_DB_PATH
+from core.dao.connection import connect_sqlite
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.utils.log_manager import LogManager
 
 """
@@ -48,13 +45,19 @@ class FuturesStockUniverseAPI(BaseDataAPI):
         self.conn: Optional[sqlite3.Connection] = conn
         self.owns_conn: bool = conn is None
 
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        self.dao: Optional[FuturesStockUniverseDAO] = None
+        self.price_dao: Optional[FuturesPriceDAO] = None
+
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Data API"""
 
         if self.owns_conn:
-            self.conn = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
+        self.dao = FuturesStockUniverseDAO(conn=self.conn)
+        self.price_dao = FuturesPriceDAO(conn=self.conn)
         LogManager.setup_logger(
             "futures_stock_universe_api.log",
             log_dir=API_LOGS_DIR_PATH,
@@ -67,35 +70,11 @@ class FuturesStockUniverseAPI(BaseDataAPI):
         取得不晚於 `date` 的最近一份快照日；`date` 為 None 時取最新一份
 
         **本表是快照序列**（每次更新新增一份），故任何「某日的狀態」都要先解出
-        該日適用的快照日，再以它為條件查詢。
+        該日適用的快照日，再以它為條件查詢。查詢日早於第一份快照時退回最早的一份；
+        表還沒建時回 None，被鎖住或 schema 壞掉一律上拋。
         """
 
-        # 表還沒建（尚未跑過標的池 ETL）才回 None；被鎖住或 schema 壞掉一律上拋（S1）
-        if not self.check_table_exist(
-            conn=self.conn, table_name=FUTURES_STOCK_UNIVERSE_TABLE_NAME
-        ):
-            return None
-
-        if date is None:
-            row = self.conn.execute(
-                f"SELECT MAX(snapshot_date) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}"
-            ).fetchone()
-        else:
-            row = self.conn.execute(
-                f"SELECT MAX(snapshot_date) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-                f"WHERE snapshot_date <= ?",
-                (str(date),),
-            ).fetchone()
-
-        if row is None or row[0] is None:
-            # 查詢日早於第一份快照：退回最早的一份。
-            # **這是近似不是事實**——本表只回溯到建表之日（2026-08-29），
-            # 更早的掛牌狀態與契約單位無從得知
-            row = self.conn.execute(
-                f"SELECT MIN(snapshot_date) FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME}"
-            ).fetchone()
-
-        return row[0] if row and row[0] else None
+        return self.dao.resolve_snapshot_date(date)
 
     def get_products(
         self,
@@ -122,20 +101,7 @@ class FuturesStockUniverseAPI(BaseDataAPI):
         if snapshot is None:
             return []
 
-        query: str = (
-            f"SELECT product_id FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-            f"WHERE snapshot_date = ?"
-        )
-        params: tuple = (snapshot,)
-
-        if product_types:
-            placeholders: str = ",".join("?" * len(product_types))
-            query += f" AND product_type IN ({placeholders})"
-            params += tuple(product_types)
-
-        return [
-            row[0] for row in self.conn.execute(query + " ORDER BY product_id", params)
-        ]
+        return self.dao.get_product_ids(snapshot, product_types)
 
     def get_contract_size(
         self, product_id: str, date: Optional[datetime.date] = None
@@ -151,22 +117,15 @@ class FuturesStockUniverseAPI(BaseDataAPI):
             - product_id: str
                 股期代碼（Ex: CDF）
             - date: Optional[datetime.date]
-                查詢日；None 表示最新快照
+                查詢日；None 表示最新快照；**該日適用的快照中沒有這個商品就回 None**
+                （那天不在列，回測不該拿到乘數），與保證金試算的查法不同，見
+                `FuturesStockUniverseDAO.get_contract_size()`
         - Return:
             - Optional[int]
                 契約單位；查無資料時為 None
         """
 
-        snapshot: Optional[str] = self.get_snapshot_date(date)
-        if snapshot is None:
-            return None
-
-        row = self.conn.execute(
-            f"SELECT contract_size FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-            f"WHERE snapshot_date = ? AND product_id = ?",
-            (snapshot, product_id),
-        ).fetchone()
-        return None if row is None else row[0]
+        return self.dao.get_contract_size(product_id, date, per_product=False)
 
     def get_contract_size_history(self, product_id: str) -> pd.DataFrame:
         """
@@ -184,14 +143,7 @@ class FuturesStockUniverseAPI(BaseDataAPI):
                 `snapshot_date` 與 `contract_size`；無變動時只有一列
         """
 
-        df: pd.DataFrame = pd.read_sql_query(
-            f"SELECT snapshot_date, contract_size FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-            f"WHERE product_id = ? ORDER BY snapshot_date",
-            self.conn,
-            params=self.sql_params(
-                product_id,
-            ),
-        )
+        df: pd.DataFrame = self.dao.get_contract_size_series(product_id)
         if df.empty:
             return df
 
@@ -208,13 +160,7 @@ class FuturesStockUniverseAPI(BaseDataAPI):
         if snapshot is None:
             return None
 
-        row = self.conn.execute(
-            f"SELECT underlying_stock_id, underlying_name, product_type "
-            f"FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-            f"WHERE snapshot_date = ? AND product_id = ?",
-            (snapshot, product_id),
-        ).fetchone()
-
+        row = self.dao.get_underlying(snapshot, product_id)
         if row is None:
             return None
         return {
@@ -258,25 +204,9 @@ class FuturesStockUniverseAPI(BaseDataAPI):
         if not universe:
             return []
 
-        conditions: List[str] = ["session = 'day'"]
-        params: List = []
-        if start_date is not None:
-            conditions.append("date >= ?")
-            params.append(str(start_date))
-        if end_date is not None:
-            conditions.append("date <= ?")
-            params.append(str(end_date))
-
-        placeholders: str = ",".join("?" * len(universe))
-        params.extend(universe)
-
-        query: str = f"""
-        SELECT product, COUNT(DISTINCT date) AS trading_days, SUM(成交量) AS total_volume
-        FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
-        WHERE {" AND ".join(conditions)} AND product IN ({placeholders})
-        GROUP BY product
-        """
-        df: pd.DataFrame = pd.read_sql_query(query, self.conn, params=params)
+        df: pd.DataFrame = self.price_dao.get_day_session_volume_stats(
+            universe, start_date, end_date
+        )
 
         if df.empty:
             return []

@@ -7,10 +7,10 @@ from core.config import (
     API_LOG_FILE_LEVEL,
     API_LOGS_DIR_PATH,
     FUTURES_MARGIN_HISTORY_TABLE_NAME,
-    FUTURES_STOCK_UNIVERSE_TABLE_NAME,
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.utils.log_manager import LogManager
 
 """
@@ -229,6 +229,9 @@ class FuturesMarginAPI(BaseDataAPI):
             ⚠️ **快照序列只回溯到本表建立之日**（2026-08-29），更早的日期會取到
             最早那份快照——契約單位在除權息後可能被調整過，那段期間的值不保證正確。
             精確的乘數歷史需另抓 TAIFEX 契約調整公告，目前未接。
+
+            以**該商品自己**的快照序列為準（`per_product=True`），與回測乘數的查法不同，
+            理由見 `FuturesStockUniverseDAO.get_contract_size()`。
         - Parameters:
             - product_id: str
                 股期代碼（Ex: CDF）
@@ -239,23 +242,9 @@ class FuturesMarginAPI(BaseDataAPI):
                 契約單位（股）；查無資料時為 None
         """
 
-        row = self.conn.execute(
-            f"SELECT contract_size FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-            f"WHERE product_id = ? AND snapshot_date <= ? "
-            f"ORDER BY snapshot_date DESC LIMIT 1",
-            (product_id, str(date)),
-        ).fetchone()
-
-        if row is not None:
-            return row[0]
-
-        # 查詢日早於本表第一份快照時退回最早的一份，並非「沒有這個商品」
-        row = self.conn.execute(
-            f"SELECT contract_size FROM {FUTURES_STOCK_UNIVERSE_TABLE_NAME} "
-            f"WHERE product_id = ? ORDER BY snapshot_date LIMIT 1",
-            (product_id,),
-        ).fetchone()
-        return None if row is None else row[0]
+        return FuturesStockUniverseDAO(conn=self.conn).get_contract_size(
+            product_id, date, per_product=True
+        )
 
     def calculate_stock_futures_margin(
         self,

@@ -5,13 +5,9 @@ from typing import List, Optional, Set
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FUTURES_STOCK_UNIVERSE_TABLE_NAME,
-    FUTURES_UNIVERSE_DOWNLOADS_PATH,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import FUTURES_UNIVERSE_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 Futures Stock Universe Loader
@@ -36,11 +32,24 @@ Futures Stock Universe Loader
 class FuturesStockUniverseLoader(BaseDataLoader):
     """Futures Stock Universe Loader"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[FuturesStockUniverseDAO] = None) -> None:
+        """
+        - Description:
+            建立股期標的池 loader
+        - Parameters:
+            - dao: Optional[FuturesStockUniverseDAO]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；
+                未指定時 loader 自行建立，入庫完成即關閉
+        """
+
         super().__init__()
 
-        # SQLite Connection（指向 tw_futures.db）
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[FuturesStockUniverseDAO] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態（指向 tw_futures.db）
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.universe_dir: Path = FUTURES_UNIVERSE_DOWNLOADS_PATH
@@ -60,88 +69,52 @@ class FuturesStockUniverseLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
-            # 期貨與股票分庫，故不是 TW_STOCK_DB_PATH
+        if self.dao is None:
+            # 期貨與股票分庫，故不是 TW_STOCK_DB_PATH；路徑在呼叫當下從本模組讀取，
+            # 測試才能以 monkeypatch 改寫
             TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.dao = FuturesStockUniverseDAO(db_path=TW_FUTURES_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
 
     def create_db(self) -> None:
         """創建股票期貨標的池 db"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        # 主鍵為 (snapshot_date, product_id)：本表是快照序列，見本檔開頭說明。
-        #
-        # `underlying_stock_id` 為 TEXT 且不可改成整數：ETF 標的有 `0050`
-        # （前導 0）與 `00679B`（含英文字母），轉成數字就對不回 tw_stock.db。
-        #
-        # `contract_size` 是**掛牌時的標準契約單位，不是契約乘數**。標的除權息後
-        # TAIFEX 會調整乘數或另掛新契約（代碼帶數字尾碼，如 `EE1`），實際乘數會
-        # 偏離本欄。算 PnL 一律走 `TwFuturesDataFeed.resolve_multiplier()`，不可直接拿本欄當乘數。
-        #
-        # 兩個交易時段欄位允許 NULL：`-` 代表沒有該時段，2026-08-29 實查僅 6 檔
-        # 有盤後交易時段。填空字串會讓「沒有夜盤」與「未知」混為一談。
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {FUTURES_STOCK_UNIVERSE_TABLE_NAME}(
-            "snapshot_date" TEXT NOT NULL,
-            "product_id" TEXT NOT NULL,
-            "base_code" TEXT NOT NULL,
-            "product_type" TEXT NOT NULL,
-            "underlying_stock_id" TEXT NOT NULL,
-            "underlying_name" TEXT NOT NULL,
-            "underlying_listing_board" TEXT,
-            "contract_size" INT NOT NULL,
-            "day_session_time" TEXT,
-            "night_session_time" TEXT,
-            PRIMARY KEY ("snapshot_date", "product_id")
-        );
-        """
-        cursor.execute(create_table_query)
-
-        # 下游最常見的查詢是「某商品的快照歷史」（差分出掛牌／下市與乘數異動），
-        # 主鍵的前綴是 snapshot_date，幫不上這種查詢，故另建索引
-        cursor.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_futures_stock_universe_product
-            ON {FUTURES_STOCK_UNIVERSE_TABLE_NAME} ("product_id", "snapshot_date");
-            """
-        )
-
-        cursor.execute(f"PRAGMA table_info('{FUTURES_STOCK_UNIVERSE_TABLE_NAME}')")
-        if cursor.fetchall():
-            logger.info(
-                f"Table {FUTURES_STOCK_UNIVERSE_TABLE_NAME} create successfully!"
-            )
-        else:
-            logger.warning(
-                f"Table {FUTURES_STOCK_UNIVERSE_TABLE_NAME} create unsuccessfully!"
-            )
-
-        self.conn.commit()
+        self.dao.create_table()
 
     def create_missing_tables(self) -> None:
         """確保股票期貨標的池資料表存在"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=FUTURES_STOCK_UNIVERSE_TABLE_NAME
-        ):
-            self.create_db()
+        self.dao.ensure_table()
 
     def add_to_db(
         self,
         remove_files: bool = False,
         only_dates: Optional[Set[str]] = None,
     ) -> None:
-        """將資料夾中的所有 CSV 檔存入 tw_futures.db 的股票期貨標的池表"""
+        """
+        - Description:
+            將資料夾中的所有 CSV 檔存入 tw_futures.db 的股票期貨標的池表；有任何檔案失敗
+            就拋 `DataLoadError`。每個檔案包在 savepoint 內，寫到一半出錯時整檔回滾
+        - Parameters:
+            - remove_files: bool
+                全部成功後是否刪除 downloads 目錄
+            - only_dates: Optional[Set[str]]
+                只處理這些日期（`YYYYMMDD`）的檔案；None 表示整個目錄
+        """
 
-        if self.conn is None:
+        if self.dao is None:
             self.connect()
 
         self.create_missing_tables()
@@ -175,9 +148,10 @@ class FuturesStockUniverseLoader(BaseDataLoader):
                     keep_default_na=False,
                     na_values=[""],
                 )
-                inserted, skipped = self.insert_dataframe(
-                    self.conn, FUTURES_STOCK_UNIVERSE_TABLE_NAME, df
-                )
+                inserted: int
+                skipped: int
+                with self.dao.savepoint():
+                    inserted, skipped = self.dao.insert_or_ignore(df)
                 if inserted == 0 and skipped > 0:
                     # 整檔已在資料庫中：同一天重跑必然走到這裡
                     skipped_cnt += 1
@@ -190,7 +164,7 @@ class FuturesStockUniverseLoader(BaseDataLoader):
                 logger.warning(f"Error saving {file_path}: {e}")
                 failed_files.append(str(file_path))
 
-        self.conn.commit()
+        self.dao.commit()
         self.disconnect()
 
         self.finish_load(

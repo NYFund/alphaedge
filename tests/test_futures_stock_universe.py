@@ -6,14 +6,12 @@ import pandas as pd
 import pytest
 
 from core.config import FUTURES_STOCK_UNIVERSE_TABLE_NAME
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.pipeline.tw.cleaners.futures_stock_universe_cleaner import (
     FuturesStockUniverseCleaner,
 )
 from core.pipeline.tw.crawlers.futures_stock_universe_crawler import (
     FuturesStockUniverseCrawler,
-)
-from core.pipeline.tw.loaders.futures_stock_universe_loader import (
-    FuturesStockUniverseLoader,
 )
 from core.utils import StockFuturesType
 
@@ -261,26 +259,25 @@ def test_cleaned_columns_match_table_schema() -> None:
     """
     清洗後的欄位須與資料表宣告完全一致（含順序）
 
-    `insert_dataframe` 以欄位名組 SQL，少一欄不會報錯（NOT NULL 才會），
+    `insert_or_ignore` 以欄位名組 SQL，少一欄不會報錯（NOT NULL 才會），
     多一欄或錯字則整批失敗。真正危險的是**順序以外的漂移**：cleaner 加了欄位
     卻忘了改 schema 時，錯誤要到入庫才浮出來，故在這裡就釘住。
 
     建表走記憶體 DB，不碰真正的 tw_futures.db。
     """
 
-    loader: FuturesStockUniverseLoader = FuturesStockUniverseLoader.__new__(
-        FuturesStockUniverseLoader
+    dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
+        conn=sqlite3.connect(":memory:")
     )
-    loader.conn = sqlite3.connect(":memory:")
-    loader.create_db()
+    dao.create_table()
 
     table_cols = [
         row[1]
-        for row in loader.conn.execute(
+        for row in dao.conn.execute(
             f"PRAGMA table_info('{FUTURES_STOCK_UNIVERSE_TABLE_NAME}')"
         )
     ]
-    loader.conn.close()
+    dao.conn.close()
 
     assert FuturesStockUniverseCleaner().universe_cleaned_cols == table_cols
     assert list(crawl_and_clean().columns) == table_cols
