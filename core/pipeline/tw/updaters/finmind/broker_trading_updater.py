@@ -149,9 +149,9 @@ class BrokerTradingUpdater:
                 logger.debug(
                     f"Periodically updating metadata at {processed_count} combinations..."
                 )
-                # 先 commit loader 未提交寫入，避免 self.conn 的 SELECT 被 loader.conn 鎖住
-                if self.context.loader.conn is not None:
-                    self.context.loader.conn.commit()
+                # 先 commit 再重建：讀寫已共用同一條連線、不會互鎖，但 metadata 查詢一旦失敗，
+                # pandas 會對整條連線 rollback，尚未 commit 的組合會跟著消失
+                self.context.loader.commit()
                 self.metadata.refresh_from_database()
 
         for securities_trader_id in securities_trader_list:
@@ -273,6 +273,8 @@ class BrokerTradingUpdater:
                             f"Progress: {processed_count}/{total_combinations}. "
                             f"Current: trader={securities_trader_id}, stock={stock_id}. {e}"
                         )
+                        # 等待前先落地已寫入的組合：等不回來就會直接結束
+                        self.context.loader.commit()
                         self.metadata.refresh_from_database()
                         quota_restored: bool = self.context.wait_for_quota_reset()
                         if not quota_restored:
@@ -295,18 +297,14 @@ class BrokerTradingUpdater:
                     break
 
                 log_progress_and_update_metadata()
-                if (
-                    processed_count % self.BATCH_COMMIT_INTERVAL == 0
-                    and self.context.loader.conn
-                ):
-                    self.context.loader.conn.commit()
+                if processed_count % self.BATCH_COMMIT_INTERVAL == 0:
+                    self.context.loader.commit()
 
             if quota_exhausted:
                 break
 
         # 將尚未 commit 的寫入一次提交，再更新 metadata
-        if self.context.loader.conn:
-            self.context.loader.conn.commit()
+        self.context.loader.commit()
         # 更新 metadata（無論是否完成）
         logger.info("Updating broker trading metadata after batch update...")
         self.metadata.refresh_from_database()

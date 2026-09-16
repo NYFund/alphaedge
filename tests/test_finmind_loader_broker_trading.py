@@ -1,6 +1,7 @@
 """
-測試 `finmind/broker_trading_loader.load_from_dataframe()` 的優化（第 2 點）：
-只查詢本批 df 涉及的 (stock_id, securities_trader_id) 在 DB 中已存在的 key，而非全表掃描。
+測試 `finmind/broker_trading_loader.load_from_dataframe()` 的去重語意：
+重複的 key 不重插、新日期可插入、其他組合不受影響。去重交給資料庫主鍵
+（`INSERT OR IGNORE`），不再先把已存在的 key 查回記憶體。
 
 **資料庫走 pytest 的 `tmp_path`**：本測試原本在 `tests/temp/` 建帶時間戳的 `.db`
 且從不刪除，跑一次留一個 12 MB 的檔——2026-09-13 清理時已累積 560 個、275 MB
@@ -42,7 +43,7 @@ def _make_broker_trading_df(
 
 
 def test_load_broker_trading_from_dataframe_optimization(tmp_path: Path) -> None:
-    """驗證優化 2：只查本批 (stock_id, securities_trader_id) 的已存在 key，且重複不重插、新日期可插入。"""
+    """重複不重插、新日期可插入，且不影響其他 (stock_id, securities_trader_id) 組合"""
 
     temp_db_path: str = str(tmp_path / "tw_stock.db")
 
@@ -98,8 +99,8 @@ def test_load_broker_trading_from_dataframe_optimization(tmp_path: Path) -> None
             total = cur.fetchone()[0]
             assert total == 3, f"表應為 3 筆，實際 {total}"
 
-            # 4) 驗證「只查本批組合」：先手動插入另一組合 (2317, 1020)，再載入僅 (2330, 1020) 的 df，
-            #    另一組合筆數不應被影響（證明 WHERE 只查本批）
+            # 4) 先手動插入另一組合 (2317, 1020)，再載入僅 (2330, 1020) 的 df，
+            #    另一組合筆數不應被影響
             conn = sqlite3.connect(temp_db_path)
             conn.execute(
                 f"""
@@ -136,9 +137,7 @@ def test_load_broker_trading_from_dataframe_optimization(tmp_path: Path) -> None
                 ("2317", "1020"),
             )
             count_2317_after = cur.fetchone()[0]
-            assert count_2317_after == 1, (
-                "另一組合 (2317, 1020) 筆數不應被改動，證明查詢只限本批"
-            )
+            assert count_2317_after == 1, "另一組合 (2317, 1020) 筆數不應被改動"
 
         finally:
             loader.disconnect()

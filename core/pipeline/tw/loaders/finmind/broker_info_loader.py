@@ -1,7 +1,7 @@
 import sqlite3
 from pathlib import Path
 
-from core.config import SECURITIES_TRADER_INFO_TABLE_NAME
+from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.pipeline.tw.loaders.finmind.reference_table_loader import (
     ReferenceTableSpec,
     load_reference_table,
@@ -13,8 +13,7 @@ from core.pipeline.utils import FinMindDataType
 BROKER_INFO_SPEC: ReferenceTableSpec = ReferenceTableSpec(
     data_type=FinMindDataType.BROKER_INFO,
     csv_name="taiwan_securities_trader_info.csv",
-    table_name=SECURITIES_TRADER_INFO_TABLE_NAME,
-    key_column="securities_trader_id",
+    dao_class=SecuritiesTraderInfoDAO,
     # 欄位順序須與 crawler schema 註解一致
     column_order=[
         "securities_trader_id",

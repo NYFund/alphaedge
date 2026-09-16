@@ -11,9 +11,10 @@ from core.config import (
     STOCK_INFO_TABLE_NAME,
     STOCK_INFO_WITH_WARRANT_TABLE_NAME,
 )
+from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
+from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
 from core.pipeline.tw.loaders.finmind import (
     broker_info_loader,
-    schema,
     stock_info_loader,
 )
 from core.pipeline.utils import FinMindDataType
@@ -72,9 +73,9 @@ def env(tmp_path: Path) -> tuple:
     """建好三張表與三份 CSV，回傳 (conn, finmind_dir)"""
 
     conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    schema.create_stock_info_table(conn)
-    schema.create_stock_info_with_warrant_table(conn)
-    schema.create_broker_info_table(conn)
+    StockInfoDAO(conn=conn).ensure_table()
+    StockInfoWithWarrantDAO(conn=conn).ensure_table()
+    SecuritiesTraderInfoDAO(conn=conn).ensure_table()
 
     finmind_dir: Path = tmp_path / "finmind"
     for data_type, csv_name, rows in [
@@ -132,7 +133,7 @@ def test_column_values_land_in_the_right_columns(env) -> None:
     """
     欄位順序錯位不會報錯，只會讓值互換
 
-    `to_sql` 依 DataFrame 的欄位名對應，但這裡先以 `column_order` 重排過；
+    寫入依 DataFrame 的欄位名對應，但這裡先以 `column_order` 重排過；
     順序若被改動，讀回來的值就會對不上。
     """
 

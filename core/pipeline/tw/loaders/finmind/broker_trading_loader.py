@@ -1,11 +1,11 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List
 
 import pandas as pd
 from loguru import logger
 
-from core.config import STOCK_TRADING_DAILY_REPORT_TABLE_NAME
+from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import FinMindDataType
 from core.pipeline.utils.exceptions import DataLoadError
@@ -13,139 +13,94 @@ from core.pipeline.utils.exceptions import DataLoadError
 """
 券商分點統計表的入庫：DataFrame 直入與 CSV 目錄批次兩條路徑
 
-兩條路徑的去重邏輯不同：DataFrame 路徑**只查本批涉及的 (stock_id, securities_trader_id)**
-（updater 每次只帶一個組合，全表掃描會隨資料量線性變慢）；CSV 路徑一次讀進全表的
-主鍵集合，因為它本來就要走遍所有券商資料夾。
+兩條路徑都交給資料庫的主鍵約束去重（`INSERT OR IGNORE`）。舊版先把「已存在的鍵」
+查回記憶體再比對，再以 `DataFrame.to_sql` 追加——**`to_sql` 寫完會自行 commit**，
+於是批次更新傳的 `commit=False` 從來沒有生效；且查詢失敗時 pandas 會對整條連線
+`rollback()`，把尚未 commit 的前幾個組合一起丟掉。
 """
+
+
+def select_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """依 crawler schema 註解的欄位順序排欄，只保留存在的欄位"""
+
+    available_columns: List[str] = [
+        col for col in BrokerTradingDAO.COLUMN_ORDER if col in df.columns
+    ]
+    return df[available_columns]
+
+
+def drop_duplicate_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    去掉同一批內主鍵重複的列（保留第一筆）
+
+    主鍵以字串比對：CSV 讀回來的 `stock_id`／`securities_trader_id` 可能被推斷成整數。
+    """
+
+    keys: pd.DataFrame = df[list(BrokerTradingDAO.PRIMARY_KEY_COLUMNS)].astype(str)
+    return df[~keys.duplicated(keep="first")]
 
 
 def load_from_dataframe(
     conn: sqlite3.Connection, df: pd.DataFrame, commit: bool = True
 ) -> int:
-    """從 DataFrame 載入當日券商分點統計表資料到資料庫
-
-    Args:
-        df: 要載入的 DataFrame
-        commit: 是否在寫入後立即 commit
-
-    Returns:
-        int: 成功插入的資料筆數
     """
+    - Description:
+        從 DataFrame 載入當日券商分點統計表資料到資料庫
+
+        寫入包在 savepoint 內：本批寫到一半失敗時只回滾本批，同一交易內先前
+        尚未 commit 的組合不受影響。
+    - Parameters:
+        - conn: sqlite3.Connection
+            資料庫連線
+        - df: pd.DataFrame
+            要載入的 DataFrame
+        - commit: bool
+            是否在寫入後立即 commit；批次更新時由呼叫端傳 False 並定期 commit
+    - Return:
+        - int
+            實際新寫入的列數（主鍵已存在的列不計）
+    - Raise:
+        - DataLoadError
+            寫入失敗。**不再回 0**：舊版失敗後回 0，呼叫端把 0 當成「本批皆為重複」
+            而回報 SUCCESS，於是入庫失敗被算成成功
+    """
+
     if df is None or df.empty:
         logger.warning("DataFrame is empty, skipping load")
         return 0
 
-    # 從本批 df 取得唯一的 (stock_id, securities_trader_id) 組合，只查這些組合在 DB 中已存在的 key（優化：避免全表掃描）
-    unique_pairs: List[Tuple[str, str]] = [
-        (str(row["stock_id"]), str(row["securities_trader_id"]))
-        for row in df[["stock_id", "securities_trader_id"]]
-        .drop_duplicates()
-        .to_dict("records")
-    ]
-    if not unique_pairs:
-        logger.warning(
-            "DataFrame has no (stock_id, securities_trader_id) pairs, skipping load"
-        )
-        return 0
-
-    # 建構 WHERE 條件：只查詢本批涉及的 (stock_id, securities_trader_id)
-    placeholders: str = " OR ".join(
-        ["(stock_id = ? AND securities_trader_id = ?)"] * len(unique_pairs)
-    )
-    flat_params: List[str] = [p for pair in unique_pairs for p in pair]
-    existing_query: str = f"""
-    SELECT DISTINCT stock_id, date, securities_trader_id
-    FROM {STOCK_TRADING_DAILY_REPORT_TABLE_NAME}
-    WHERE {placeholders}
-    """
     try:
-        existing_df: pd.DataFrame = pd.read_sql_query(
-            existing_query, conn, params=flat_params
-        )
+        dao: BrokerTradingDAO = BrokerTradingDAO(conn=conn)
 
-        if not existing_df.empty:
-            # 建立已存在的鍵集合
-            existing_keys: Set[Tuple[str, str, str]] = set(
-                zip(
-                    existing_df["stock_id"].astype(str),
-                    existing_df["date"].astype(str),
-                    existing_df["securities_trader_id"].astype(str),
-                )
-            )
-        else:
-            existing_keys: Set[Tuple[str, str, str]] = set()
-
-        # 建立當前資料的 key tuple
-        df["_key"] = list(
-            zip(
-                df["stock_id"].astype(str),
-                df["date"].astype(str),
-                df["securities_trader_id"].astype(str),
-            )
-        )
-
-        # 先處理同一個 DataFrame 內的重複資料
         original_count: int = len(df)
-        if df["_key"].duplicated().any():
-            df = df.drop_duplicates(subset=["_key"], keep="first")
+        deduped: pd.DataFrame = drop_duplicate_keys(df)
+        if len(deduped) < original_count:
             logger.debug(
-                f"Removed {original_count - len(df)} duplicate rows within DataFrame"
+                f"Removed {original_count - len(deduped)} duplicate rows within DataFrame"
             )
 
-        # 過濾出新資料
-        if existing_keys:
-            mask: pd.Series = ~df["_key"].isin(existing_keys)
-            new_df: pd.DataFrame = df[mask].drop(columns=["_key"])
-
-            if new_df.empty:
-                logger.debug("All data already exists in database, skipping insert")
-                return 0
-        else:
-            new_df: pd.DataFrame = df.drop(columns=["_key"])
-
-        # 確保欄位順序與 crawler schema 註解一致
-        # 順序：securities_trader, securities_trader_id, stock_id, date, buy_volume, sell_volume, buy_price, sell_price
-        column_order: List[str] = [
-            "securities_trader",
-            "securities_trader_id",
-            "stock_id",
-            "date",
-            "buy_volume",
-            "sell_volume",
-            "buy_price",
-            "sell_price",
-        ]
-        # 只選擇存在的欄位
-        available_columns: List[str] = [
-            col for col in column_order if col in new_df.columns
-        ]
-        new_df = new_df[available_columns]
-
-        # 插入新資料
-        new_df.to_sql(
-            STOCK_TRADING_DAILY_REPORT_TABLE_NAME,
-            conn,
-            if_exists="append",
-            index=False,
-        )
+        inserted: int
+        with dao.savepoint("broker_trading_df"):
+            inserted, _ = dao.insert_or_ignore(select_columns(deduped))
         if commit:
-            conn.commit()
+            dao.commit()
 
-        skipped_rows: int = original_count - len(new_df)
+        if inserted == 0:
+            logger.debug("All data already exists in database, skipping insert")
+            return 0
+
+        skipped_rows: int = original_count - inserted
         if skipped_rows > 0:
             logger.info(
-                f"✅ Saved {len(new_df)} new records to database "
+                f"✅ Saved {inserted} new records to database "
                 f"({skipped_rows} duplicates skipped)"
             )
         else:
-            logger.info(f"✅ Saved {len(new_df)} records to database")
+            logger.info(f"✅ Saved {inserted} records to database")
 
-        return len(new_df)
+        return inserted
 
     except Exception as e:
-        # **不再有 fallback 盲插、也不再回 0**：舊版失敗後回 0，
-        # 呼叫端把 0 當成「本批皆為重複」而回報 SUCCESS，
-        # 於是入庫失敗被算成成功。
         logger.opt(exception=True).error(
             f"Error loading broker trading daily report from DataFrame: {e}",
         )
@@ -153,10 +108,18 @@ def load_from_dataframe(
 
 
 def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
-    """載入當日券商分點統計表資料到資料庫
+    """
+    - Description:
+        載入當日券商分點統計表 CSV 到資料庫；有任何檔案失敗就拋 `DataLoadError`
 
-    新的檔案結構：broker_trading/{broker_id}/{stock_id}.csv
-    會遍歷所有 broker_id 資料夾，讀取每個 stock_id 的 CSV 檔案
+        檔案結構：`broker_trading/{broker_id}/{stock_id}.csv`，會遍歷所有 broker_id
+        資料夾。每個檔案包在 savepoint 內（壞檔整檔回滾），**全部處理完先 commit
+        再彙報**：`finish_load()` 有失敗時會拋出，其他檔案已寫入的資料不可因此不落地。
+    - Parameters:
+        - conn: sqlite3.Connection
+            資料庫連線
+        - finmind_dir: Path
+            downloads 底下的 finmind 目錄
     """
 
     data_type_dir: Path = finmind_dir / FinMindDataType.BROKER_TRADING.value.lower()
@@ -164,25 +127,6 @@ def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
     if not data_type_dir.exists():
         logger.warning(f"Directory not found: {data_type_dir}")
         return
-
-    # 查詢資料庫中已存在的資料（根據複合主鍵）
-    existing_query: str = f"""
-    SELECT stock_id, date, securities_trader_id
-    FROM {STOCK_TRADING_DAILY_REPORT_TABLE_NAME}
-    """
-    existing_df: pd.DataFrame = pd.read_sql_query(existing_query, conn)
-
-    # 建立已存在的 key set
-    existing_keys: Set[Tuple[str, str, str]] = set()
-    if not existing_df.empty:
-        existing_keys = set(
-            zip(
-                existing_df["stock_id"].astype(str),
-                existing_df["date"].astype(str),
-                existing_df["securities_trader_id"].astype(str),
-            )
-        )  # type: ignore
-        logger.info(f"Loaded {len(existing_keys)} existing records from database")
 
     # 遍歷所有 broker_id 資料夾
     broker_dirs: List[Path] = [d for d in data_type_dir.iterdir() if d.is_dir()]
@@ -193,6 +137,7 @@ def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
 
     logger.info(f"Found {len(broker_dirs)} broker directories to process")
 
+    dao: BrokerTradingDAO = BrokerTradingDAO(conn=conn)
     total_new_rows: int = 0
     total_skipped_rows: int = 0
     processed_files: int = 0
@@ -221,89 +166,40 @@ def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
                     skipped_files += 1
                     continue
 
-                # 建立當前資料的 key tuple
-                df["_key"] = list(
-                    zip(
-                        df["stock_id"].astype(str),
-                        df["date"].astype(str),
-                        df["securities_trader_id"].astype(str),
-                    )
-                )
-
                 # 先處理同一個檔案內的重複資料
                 original_count: int = len(df)
-                if df["_key"].duplicated().any():
-                    df = df.drop_duplicates(subset=["_key"], keep="first")
+                df = drop_duplicate_keys(df)
+                if len(df) < original_count:
                     logger.debug(
                         f"Removed {original_count - len(df)} duplicate rows "
                         f"within {broker_id}/{stock_id}.csv"
                     )
 
-                # 過濾出新資料
-                if existing_keys:
-                    mask: pd.Series = ~df["_key"].isin(existing_keys)
-                    new_df: pd.DataFrame = df[mask].drop(columns=["_key"])
+                inserted: int
+                with dao.savepoint("broker_trading_file"):
+                    inserted, _ = dao.insert_or_ignore(select_columns(df))
 
-                    if new_df.empty:
-                        logger.debug(
-                            f"Skipped {broker_id}/{stock_id}.csv "
-                            f"(all data already exists)"
-                        )
-                        skipped_files += 1
-                        continue
-                else:
-                    new_df: pd.DataFrame = df.drop(columns=["_key"])
+                if inserted == 0:
+                    logger.debug(
+                        f"Skipped {broker_id}/{stock_id}.csv (all data already exists)"
+                    )
+                    skipped_files += 1
+                    continue
 
-                # 確保欄位順序與 crawler schema 註解一致
-                # 順序：securities_trader, securities_trader_id, stock_id, date, buy_volume, sell_volume, buy_price, sell_price
-                column_order: List[str] = [
-                    "securities_trader",
-                    "securities_trader_id",
-                    "stock_id",
-                    "date",
-                    "buy_volume",
-                    "sell_volume",
-                    "buy_price",
-                    "sell_price",
-                ]
-                # 只選擇存在的欄位
-                available_columns: List[str] = [
-                    col for col in column_order if col in new_df.columns
-                ]
-                new_df = new_df[available_columns]
-
-                # 插入新資料
-                new_df.to_sql(
-                    STOCK_TRADING_DAILY_REPORT_TABLE_NAME,
-                    conn,
-                    if_exists="append",
-                    index=False,
-                )
-
-                skipped_rows: int = original_count - len(new_df)
-                total_new_rows += len(new_df)
+                skipped_rows: int = original_count - inserted
+                total_new_rows += inserted
                 total_skipped_rows += skipped_rows
 
                 if skipped_rows > 0:
                     logger.debug(
                         f"Saved {broker_id}/{stock_id}.csv into database "
-                        f"({len(new_df)} new rows, {skipped_rows} skipped)"
+                        f"({inserted} new rows, {skipped_rows} skipped)"
                     )
                 else:
                     logger.debug(
                         f"Saved {broker_id}/{stock_id}.csv into database "
-                        f"({len(new_df)} rows)"
+                        f"({inserted} rows)"
                     )
-
-                # 更新 existing_keys，避免後續檔案重複處理相同資料
-                new_keys: Set[Tuple[str, str, str]] = set(
-                    zip(
-                        new_df["stock_id"].astype(str),
-                        new_df["date"].astype(str),
-                        new_df["securities_trader_id"].astype(str),
-                    )
-                )
-                existing_keys.update(new_keys)
 
             except Exception as e:
                 # **失敗不再算成 skipped**：兩者混在一起時，
@@ -315,6 +211,8 @@ def load_from_files(conn: sqlite3.Connection, finmind_dir: Path) -> None:
                 )
                 failed_files.append(f"{broker_id}/{stock_id}.csv")
                 continue
+
+    dao.commit()
 
     # 輸出總結
     logger.info(

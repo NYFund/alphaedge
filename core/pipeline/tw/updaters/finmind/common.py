@@ -7,11 +7,9 @@ from typing import Dict, List, Optional, Set, Tuple
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    SECURITIES_TRADER_INFO_TABLE_NAME,
-    STOCK_INFO_TABLE_NAME,
-    STOCK_TRADING_DAILY_REPORT_TABLE_NAME,
-)
+from core.dao.tw.broker_trading_dao import BrokerTradingDAO
+from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
+from core.dao.tw.stock_info_dao import StockInfoDAO
 from core.pipeline.tw.cleaners.finmind_cleaner import FinMindCleaner
 from core.pipeline.tw.crawlers.finmind_crawler import FinMindCrawler
 from core.pipeline.tw.loaders.finmind_loader import FinMindLoader
@@ -67,8 +65,7 @@ class FinMindContext:
         self.cleaner: FinMindCleaner = cleaner
         self.loader: FinMindLoader = loader
 
-        # SQLite Connection（用於讀取：股票/券商列表、metadata 從 DB 查詢）
-        # 寫入由 self.loader.conn 負責；兩者皆指向同一 TW_STOCK_DB_PATH
+        # 資料連線（讀取股票／券商清單）；與 loader 寫入共用同一條
         self.conn: Optional[sqlite3.Connection] = conn
 
         # API Quota（配額用盡由 FinMindQuotaExhaustedError 處理，此處只記狀態）
@@ -196,34 +193,28 @@ class FinMindContext:
             time.sleep(check_interval_seconds)
 
     def get_stock_list(self) -> List[str]:
-        """從資料庫取得所有股票代碼列表（使用 stock_info，不含權證）"""
+        """
+        - Description:
+            從資料庫取得所有股票代碼列表（使用 stock_info，不含權證）
 
-        try:
-            query: str = f"SELECT DISTINCT stock_id FROM {STOCK_INFO_TABLE_NAME} ORDER BY stock_id"
-            df: pd.DataFrame = pd.read_sql_query(query, self.conn)
-            stock_list: List[str] = df["stock_id"].astype(str).tolist()
-            logger.info(f"Retrieved {len(stock_list)} stocks from database")
-            return stock_list
-        except Exception as e:
-            logger.error(f"Error retrieving stock list: {e}")
-            return []
+            表不存在時回空清單；其他查詢錯誤往外拋（舊版 `except Exception` 回空清單，
+            「DB 被鎖住」會變成「沒有股票，請先更新 stock info」，行程照樣成功結束）。
+        """
+
+        stock_list: List[str] = StockInfoDAO(conn=self.conn).get_stock_ids()
+        logger.info(f"Retrieved {len(stock_list)} stocks from database")
+        return stock_list
 
     def get_securities_trader_list(self) -> List[str]:
-        """從資料庫取得所有券商代碼列表"""
+        """從資料庫取得所有券商代碼列表；表不存在時回空清單，其他查詢錯誤往外拋"""
 
-        try:
-            query: str = f"SELECT DISTINCT securities_trader_id FROM {SECURITIES_TRADER_INFO_TABLE_NAME} ORDER BY securities_trader_id"
-            df: pd.DataFrame = pd.read_sql_query(query, self.conn)
-            securities_trader_list: List[str] = (
-                df["securities_trader_id"].astype(str).tolist()
-            )
-            logger.info(
-                f"Retrieved {len(securities_trader_list)} securities traders from database"
-            )
-            return securities_trader_list
-        except Exception as e:
-            logger.error(f"Error retrieving securities trader list: {e}")
-            return []
+        securities_trader_list: List[str] = SecuritiesTraderInfoDAO(
+            conn=self.conn
+        ).get_trader_ids()
+        logger.info(
+            f"Retrieved {len(securities_trader_list)} securities traders from database"
+        )
+        return securities_trader_list
 
 
 class BrokerTradingMetadataStore:
@@ -284,18 +275,9 @@ class BrokerTradingMetadataStore:
         updated_count: int = 0
         try:
             # 從資料庫查詢每個 (securities_trader_id, stock_id) 組合的日期範圍
-            query: str = f"""
-            SELECT
-                securities_trader_id,
-                stock_id,
-                MIN(date) as earliest_date,
-                MAX(date) as latest_date
-            FROM {STOCK_TRADING_DAILY_REPORT_TABLE_NAME}
-            GROUP BY securities_trader_id, stock_id
-            ORDER BY securities_trader_id, stock_id
-            """
-
-            df: pd.DataFrame = pd.read_sql_query(query, self.conn)
+            df: pd.DataFrame = BrokerTradingDAO(
+                conn=self.conn
+            ).get_date_ranges_by_trader_stock()
 
             if df.empty:
                 logger.info("No broker trading data found in database")

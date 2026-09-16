@@ -6,6 +6,7 @@ from typing import Dict, Optional, Union
 from loguru import logger
 
 from core.config import BROKER_TRADING_METADATA_PATH, TW_STOCK_DB_PATH
+from core.dao.connection import connect_sqlite
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.finmind_cleaner import FinMindCleaner
 from core.pipeline.tw.crawlers.finmind_crawler import FinMindCrawler
@@ -37,14 +38,15 @@ class FinMindUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection（用於讀取：股票/券商列表、metadata 從 DB 查詢）
-        # 寫入由 self.loader.conn 負責（broker trading 等）；兩者皆指向同一 TW_STOCK_DB_PATH
-        self.conn: Optional[sqlite3.Connection] = None
+        # **讀（股票／券商清單、metadata 重建）與寫（loader）共用同一條連線**：舊版各開
+        # 一條連線到同一個 DB，券商分點批次更新前還得先 commit loader 那條，
+        # 否則 updater 的 SELECT 會被寫入鎖卡住
+        self.conn: Optional[sqlite3.Connection] = connect_sqlite(TW_STOCK_DB_PATH)
 
         # ETL
         self.crawler: FinMindCrawler = FinMindCrawler()
         self.cleaner: FinMindCleaner = FinMindCleaner()
-        self.loader: FinMindLoader = FinMindLoader()
+        self.loader: FinMindLoader = FinMindLoader(conn=self.conn)
 
         # Broker trading metadata 文件路徑（記錄每個 broker_id 和 stock_id 的日期範圍）
         self.broker_trading_metadata_path: Path = BROKER_TRADING_METADATA_PATH
@@ -54,8 +56,6 @@ class FinMindUpdater(BaseDataUpdater):
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
         LogManager.setup_logger("update_finmind.log")
 
         # 共用執行環境：四個資料集打的是同一把 token，quota 狀態掛在這裡
@@ -79,6 +79,13 @@ class FinMindUpdater(BaseDataUpdater):
 
         # 動態獲取 API quota 限制
         self.context.refresh_api_quota_limit()
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一條連線，一併結束）"""
+
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     @property
     def api_quota_limit(self) -> int:
