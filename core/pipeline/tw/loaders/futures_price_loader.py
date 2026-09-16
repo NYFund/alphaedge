@@ -5,13 +5,9 @@ from typing import List, Optional, Set
 import pandas as pd
 from loguru import logger
 
-from core.config import (
-    FUTURES_PRICE_DAILY_TABLE_NAME,
-    FUTURES_PRICE_DOWNLOADS_PATH,
-    TW_FUTURES_DB_PATH,
-)
+from core.config import FUTURES_PRICE_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.sqlite_utils import SQLiteUtils
 
 """
 Futures Price Loader
@@ -25,11 +21,24 @@ Futures Price Loader
 class FuturesPriceLoader(BaseDataLoader):
     """Futures Price Loader"""
 
-    def __init__(self) -> None:
+    def __init__(self, dao: Optional[FuturesPriceDAO] = None) -> None:
+        """
+        - Description:
+            建立期貨每日行情 loader
+        - Parameters:
+            - dao: Optional[FuturesPriceDAO]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；
+                未指定時 loader 自行建立，入庫完成即關閉
+        """
+
         super().__init__()
 
-        # SQLite Connection（指向 tw_futures.db）
-        self.conn: Optional[sqlite3.Connection] = None
+        self.dao: Optional[FuturesPriceDAO] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態（指向 tw_futures.db）
+        self.conn: Optional[sqlite3.Connection] = dao.conn if dao else None
 
         # Downloads directory Path
         self.futures_price_dir: Path = FUTURES_PRICE_DOWNLOADS_PATH
@@ -49,78 +58,55 @@ class FuturesPriceLoader(BaseDataLoader):
     def connect(self) -> None:
         """Connect to the Database"""
 
-        if self.conn is None:
-            # 期貨與股票分庫，故不是 TW_STOCK_DB_PATH
+        if self.dao is None:
+            # 期貨與股票分庫，故不是 TW_STOCK_DB_PATH；路徑在呼叫當下從本模組讀取，
+            # 測試才能以 monkeypatch 改寫
             TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
+            self.dao = FuturesPriceDAO(db_path=TW_FUTURES_DB_PATH)
+            self.owns_dao = True
+        self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-        if self.conn:
-            self.conn.close()
-            self.conn: Optional[sqlite3.Connection] = None
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
 
     def create_db(self) -> None:
         """創建台期貨每日行情 db"""
 
-        cursor: sqlite3.Cursor = self.conn.cursor()
-
-        # 價格單位為指數點；成交量與未沖銷契約量單位為口。
-        #
-        # **價格欄位一律允許 NULL**，這與 stock 各表刻意不同：
-        # - 夜盤沒有結算價與未沖銷契約量（那是日結數字，日盤時段才產出）
-        # - 某個契約整個時段沒有成交時，OHLC 本來就不存在
-        # 這些欄位若宣告 NOT NULL，cleaner 就得填 0 才寫得進來，
-        # 而結算價 0 會讓損益與維持率整段歸零且無任何徵兆。
-        #
-        # 主鍵含 session：同一天同一契約的日盤與夜盤是兩筆獨立行情。
-        create_table_query: str = f"""
-        CREATE TABLE IF NOT EXISTS {FUTURES_PRICE_DAILY_TABLE_NAME}(
-            "date" TEXT NOT NULL,
-            "product" TEXT NOT NULL,
-            "expiry" TEXT NOT NULL,
-            "session" TEXT NOT NULL,
-            "開盤價" REAL,
-            "最高價" REAL,
-            "最低價" REAL,
-            "收盤價" REAL,
-            "成交量" INT NOT NULL,
-            "結算價" REAL,
-            "未沖銷契約量" INT,
-            "最後最佳買價" REAL,
-            "最後最佳賣價" REAL,
-            PRIMARY KEY ("date", "product", "expiry", "session")
-        );
-        """
-        cursor.execute(create_table_query)
-
-        cursor.execute(f"PRAGMA table_info('{FUTURES_PRICE_DAILY_TABLE_NAME}')")
-        if cursor.fetchall():
-            logger.info(f"Table {FUTURES_PRICE_DAILY_TABLE_NAME} create successfully!")
-        else:
-            logger.warning(
-                f"Table {FUTURES_PRICE_DAILY_TABLE_NAME} create unsuccessfully!"
-            )
-
-        self.conn.commit()
+        self.dao.create_table()
 
     def create_missing_tables(self) -> None:
         """確保台期貨每日行情資料表存在"""
 
-        if not SQLiteUtils.check_table_exist(
-            conn=self.conn, table_name=FUTURES_PRICE_DAILY_TABLE_NAME
-        ):
-            self.create_db()
+        self.dao.ensure_table()
 
     def add_to_db(
         self,
         remove_files: bool = False,
         only_dates: Optional[Set[str]] = None,
     ) -> None:
-        """將資料夾中的所有 CSV 檔存入 tw_futures.db 的每日行情表"""
+        """
+        - Description:
+            將資料夾中的所有 CSV 檔存入 tw_futures.db 的每日行情表；有任何檔案失敗就拋
+            `DataLoadError`
 
-        if self.conn is None:
+            **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾，
+            不會被迴圈結束後的 `commit()` 一起寫進去。
+        - Parameters:
+            - remove_files: bool
+                全部成功後是否刪除 downloads 目錄
+            - only_dates: Optional[Set[str]]
+                只處理這些日期（`YYYYMMDD`）的檔案；None 表示整個目錄
+        """
+
+        if self.dao is None:
             self.connect()
 
         self.create_missing_tables()
@@ -138,9 +124,10 @@ class FuturesPriceLoader(BaseDataLoader):
                     file_path,
                     dtype={"product": str, "expiry": str, "session": str},
                 )
-                inserted, skipped = self.insert_dataframe(
-                    self.conn, FUTURES_PRICE_DAILY_TABLE_NAME, df
-                )
+                inserted: int
+                skipped: int
+                with self.dao.savepoint():
+                    inserted, skipped = self.dao.insert_or_ignore(df)
                 if inserted == 0 and skipped > 0:
                     # 整檔已在資料庫中：loader 每次都掃全目錄，重跑必然走到這裡
                     skipped_cnt += 1
@@ -153,7 +140,7 @@ class FuturesPriceLoader(BaseDataLoader):
                 logger.warning(f"Error saving {file_path}: {e}")
                 failed_files.append(str(file_path))
 
-        self.conn.commit()
+        self.dao.commit()
         self.disconnect()
 
         self.finish_load(

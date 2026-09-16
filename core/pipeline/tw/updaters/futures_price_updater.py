@@ -2,7 +2,7 @@ import datetime
 import random
 import sqlite3
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -10,13 +10,13 @@ from loguru import logger
 from core.api.tw.futures_stock_universe_api import FuturesStockUniverseAPI
 from core.config import (
     DEFAULT_FUTURES_START_DATE,
-    FUTURES_PRICE_DAILY_TABLE_NAME,
     FUTURES_PRODUCT_LISTING_DATES,
     FUTURES_TARGET_PRODUCTS,
-    PRICE_TABLE_NAME,
     TW_FUTURES_DB_PATH,
     TW_STOCK_DB_PATH,
 )
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_price_cleaner import FuturesPriceCleaner
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
@@ -87,23 +87,35 @@ class FuturesPriceUpdater(BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # SQLite Connection（tw_futures.db）
-        self.conn: Optional[sqlite3.Connection] = None
+        # **讀（續跑起點、摘要）與寫（loader）共用同一個 DAO**（tw_futures.db）
+        TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        self.dao: FuturesPriceDAO = FuturesPriceDAO(db_path=TW_FUTURES_DB_PATH)
+        self.conn: Optional[sqlite3.Connection] = self.dao.conn
+
+        # 補行交易日取自 tw_stock.db 的 `price` 表；第一次用到才以唯讀開啟，由本 updater 關閉
+        self.stock_price_dao: Optional[StockPriceDAO] = None
 
         # ETL
         self.crawler: FuturesPriceCrawler = FuturesPriceCrawler()
         self.cleaner: FuturesPriceCleaner = FuturesPriceCleaner()
-        self.loader: FuturesPriceLoader = FuturesPriceLoader()
+        self.loader: FuturesPriceLoader = FuturesPriceLoader(dao=self.dao)
 
         self.setup()
 
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        if self.conn is None:
-            TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
         LogManager.setup_logger("update_futures_price.log")
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束；含唯讀的台股連線）"""
+
+        self.dao.close()
+        self.conn = None
+
+        if self.stock_price_dao is not None:
+            self.stock_price_dao.close()
+            self.stock_price_dao = None
 
     def get_actual_update_start_date(
         self,
@@ -125,17 +137,9 @@ class FuturesPriceUpdater(BaseDataUpdater):
             - datetime.date
         """
 
-        try:
-            row = self.conn.execute(
-                f"SELECT MAX(date) FROM {FUTURES_PRICE_DAILY_TABLE_NAME} "
-                f"WHERE product = ?",
-                (product,),
-            ).fetchone()
-        except sqlite3.Error as error:
-            logger.warning(f"查詢 {product} 最新日期失敗，改用預設起日：{error}")
-            return default_date
-
-        latest: Optional[str] = row[0] if row else None
+        # **查詢錯誤往外拋**：舊版吞掉 `sqlite3.Error` 後改用預設起日，「DB 被鎖住、
+        # 欄名打錯」會讓該商品從預設起日靜默重跑整段回補（數千次請求）
+        latest: Optional[str] = self.dao.get_latest_date_by_product(product)
         if not latest:
             return default_date
 
@@ -154,6 +158,10 @@ class FuturesPriceUpdater(BaseDataUpdater):
             **已知限制**：`price` 表自 2013 起才有資料，故 **2013 年之前的補行
             交易日無法偵測**，那幾天的期貨資料會缺。補救方式是日後以明確日期
             重跑；不影響絕大多數區間。
+
+            `tw_stock.db` 或 `price` 表不存在（只跑期貨的環境）時一律跳過週末並警告；
+            其他查詢錯誤往外拋。連線以唯讀開啟、由本 updater 持有並在 `close()` 關閉
+            ——舊版每次呼叫都 `with sqlite3.connect(...)`，而 `with` 只 commit 不關閉。
         - Parameters:
             - start_date / end_date: datetime.date
                 查詢區間
@@ -162,25 +170,25 @@ class FuturesPriceUpdater(BaseDataUpdater):
                 區間內開市的週末日期
         """
 
-        try:
-            with sqlite3.connect(TW_STOCK_DB_PATH) as stock_conn:
-                df: pd.DataFrame = pd.read_sql_query(
-                    f"SELECT DISTINCT date FROM {PRICE_TABLE_NAME} "
-                    f"WHERE date BETWEEN ? AND ?",
-                    stock_conn,
-                    params=(start_date, end_date),
+        if self.stock_price_dao is None:
+            if not TW_STOCK_DB_PATH.exists():
+                logger.warning(
+                    f"找不到 {TW_STOCK_DB_PATH}，無法判斷補行交易日，本次一律跳過週末"
                 )
-        except Exception as error:
-            logger.warning(
-                f"無法讀取 price 表判斷補行交易日，本次一律跳過週末：{error}"
+                return set()
+            self.stock_price_dao = StockPriceDAO(
+                db_path=TW_STOCK_DB_PATH, read_only=True
             )
+
+        if not self.stock_price_dao.table_exists():
+            logger.warning("price 表不存在，無法判斷補行交易日，本次一律跳過週末")
             return set()
 
-        if df.empty:
-            return set()
-
-        dates = pd.to_datetime(df["date"]).dt.date
-        return {date for date in dates if date.weekday() >= SATURDAY}
+        return {
+            date
+            for date in self.stock_price_dao.get_trading_days(start_date, end_date)
+            if date.weekday() >= SATURDAY
+        }
 
     def get_candidate_dates(
         self, start_date: datetime.date, end_date: datetime.date
@@ -523,14 +531,12 @@ class FuturesPriceUpdater(BaseDataUpdater):
         """更新後逐商品回報最新日期與列數，讓「有沒有真的補到」一眼可見"""
 
         for product in products:
-            row = self.conn.execute(
-                f"SELECT COUNT(*), MIN(date), MAX(date) "
-                f"FROM {FUTURES_PRICE_DAILY_TABLE_NAME} WHERE product = ?",
-                (product,),
-            ).fetchone()
+            summary: Optional[Tuple[int, str, str]] = self.dao.get_product_summary(
+                product
+            )
 
-            if not row or not row[0]:
+            if summary is None:
                 logger.warning(f"{product}: 表內仍無資料")
                 continue
 
-            logger.info(f"{product}: {row[0]} 列，{row[1]} ~ {row[2]}")
+            logger.info(f"{product}: {summary[0]} 列，{summary[1]} ~ {summary[2]}")
