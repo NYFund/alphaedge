@@ -212,3 +212,6 @@ FUTURES_METADATA_DIR_PATH: Path = get_static_resolved_path(
 BROKER_TRADING_METADATA_PATH: Path = get_static_resolved_path(
     base_dir=BROKER_TRADING_METADATA_DIR_PATH, dir_name="broker_trading_metadata.json"
 )
+FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH: Path = get_static_resolved_path(
+    base_dir=FUTURES_METADATA_DIR_PATH, dir_name="futures_margin_announcements.json"
+)

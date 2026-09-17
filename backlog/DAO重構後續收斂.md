@@ -23,7 +23,7 @@
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
 | S1 | DAO 讀取改用 cursor，查詢失敗不 rollback 連線 | `core/dao/base.py`、`tests/test_dao_base.py`、捕捉 `pd.errors.DatabaseError` 的 7 處測試（4 個 `tests/test_dao_*.py`） | 新增「寫入未 commit → 查詢失敗 → 寫入仍在」測試；既有測試全過 | ✅ | 2026-09-16 完成：`pytest` 快測 1146／慢測 18 全過、回歸雙線通過；兩個正式 DB 每張表與邊界查詢共 78 組比對 `read_sql_query` 結果逐欄相同 |
-| S2 | 保證金歷史回補跳過已入庫公告 | `core/pipeline/tw/updaters/futures_margin_updater.py`、`tests/test_futures_margin.py` | 替身 crawler 記錄請求：已入庫生效日的公告不再下載附件，`skipped_existing` 正確計數 | ⬜ | — |
+| S2 | 保證金歷史回補跳過已入庫公告 | `core/pipeline/tw/updaters/futures_margin_updater.py`、`tests/test_futures_margin.py` | 替身 crawler 記錄請求：已入庫生效日的公告不再下載附件，`skipped_existing` 正確計數 | ✅ | 2026-09-16 完成；**偏離原規格**：以公告連結為鍵另存處理紀錄 JSON，不以生效日判斷（同日常有多則公告）。未對正式來源實跑 |
 | S3 | 以 `to_sql` 建表的測試改走 `dao_factory` | `tests/test_api_public_interfaces.py`、`tests/test_finmind_api.py`、`tests/test_stock_data_api.py`、`tests/test_corporate_action.py`、`tests/backtest/test_reporting.py`、`tests/test_dao_financial_statement.py`、`tests/test_dao_stock_dividend_corporate_action.py` | `grep -rn "\.to_sql(" tests` 無結果；`pytest` 全綠 | ⬜ | — |
 | S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⏸ | 2026-09-16 使用者裁示暫緩：帳號等級 `register` 無券商分點權限，腳本最關鍵的一段無法實跑；帳號升級或確實需要連網檢查時再做 |
 | S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
@@ -49,7 +49,7 @@
   - 新增 `test_failed_query_keeps_uncommitted_writes`、`test_query_df_types_and_empty_columns`；測試中 7 處 `pytest.raises(pd.errors.DatabaseError)` 改為 `sqlite3.OperationalError`（分布在 5 個檔，**偏離原規格**所寫的 4 個檔，數量相同）。
   - `docs/dev/data-access-layer.md` §4.3、§五改寫，〈已知限制〉刪除對應列；券商分點重建 metadata 前 commit 的註解理由改為「反映已落地資料、中斷時不必重抓」。
 
-## S2. 保證金歷史回補跳過已入庫公告 ⬜
+## S2. 保證金歷史回補跳過已入庫公告 ✅
 
 - **目的**：回補只下載尚未入庫的公告附件，不再每次重抓數百則。
 - **做法**：
@@ -60,6 +60,14 @@
 - **產出**：`core/pipeline/tw/updaters/futures_margin_updater.py`、`tests/test_futures_margin.py`；`docs/futures/tw-futures-platform.md`〈已知限制〉刪除對應列。
 - **驗證方式**：替身 crawler 記錄 `crawl_announcement_csv` 的呼叫——第二次回補對已入庫公告零呼叫、`skipped_existing` 等於已入庫則數；`force=True` 時全部重抓。
 - **相依**：無。
+- **完成紀錄（2026-09-16）**：
+  - **偏離原規格**：不以生效日（`loaded_dates`）判斷。實查正式 DB 有 15 個生效日同時出現在金額表與比例表——同一生效日常有指數類、股票類兩則公告，以生效日跳過會把沒入庫的那一則整則漏掉；生效日雖可由標題解析，也有同樣問題。
+  - 改為 `AnnouncementMetadataStore`（`futures_margin_updater.py`）：以公告連結為鍵記錄 `loaded`（含生效日與實際寫入的表）與 `no_futures_rows`，存於 `FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH`；下載失敗、沒有附件的公告不記。
+  - `loaded` 的紀錄要生效日**逐表**確實存在才跳過（資料庫還原時照常重抓）；以兩表聯集判斷的初版被測試抓到會誤判。
+  - 已處理的公告**連明細頁也不再開**（原本只打算省附件下載），但以紀錄中的原始網址參與 `resolve_csv_urls()` 的共用網址判斷。
+  - 新增 `update_history(force=True)`；統計多一項「附件下載失敗」（原本與「無期貨列」混在一起）。
+  - 新增 5 個測試（`tests/test_futures_margin.py`）；`pytest -m "not slow"` 1151 全過。**未對 TAIFEX 實跑**：第一次執行沒有紀錄檔，仍會全量抓一次。
+  - `docs/futures/tw-futures-platform.md` §2.6 補上說明，〈已知限制〉刪除對應列。
 
 ## S3. 以 `to_sql` 建表的測試改走 `dao_factory` ⬜
 

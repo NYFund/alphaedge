@@ -1,17 +1,20 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import pandas as pd
 import pytest
+from loguru import logger
 
 from core.config import (
     FUTURES_MARGIN_HISTORY_TABLE_NAME,
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
+from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
+from core.pipeline.tw.updaters.futures_margin_updater import FuturesMarginUpdater
 from core.utils import FUTURES_MULTIPLIER
 
 """
@@ -1177,3 +1180,188 @@ def test_margin_in_effect_uses_strictly_earlier_dates(
 
     assert updater.get_margin_in_effect("TX", "2024-06-01") == 100
     assert updater.get_margin_in_effect("TX", "2024-01-01") is None
+
+
+# ============================================================
+# 歷史回補只抓未處理的公告
+# ============================================================
+# 只有選擇權列的附件：有 CSV，但沒有期貨列
+ANNOUNCEMENT_OPTIONS_ONLY_CSV: str = """契約中文簡稱,契約代碼,契約ABC值,調整後原始保證金,調整後維持保證金,調整後結算保證金,調整前原始保證金,調整前維持保證金,調整前結算保證金
+臺指選擇權風險保證金,TXO,A,187000,143000,138000,170000,130000,125000
+"""
+
+
+class _RecordingCrawler:
+    """記錄明細頁解析與附件下載次數的公告 crawler 替身"""
+
+    def __init__(self) -> None:
+        # 指數類（金額）與股票類（比例）**同一個生效日**，外加選擇權公告與掃描 PDF
+        self.announcements: List[Dict[str, str]] = [
+            {"date": "2026/04/21", "title": ANNOUNCEMENT_TITLE, "link": "index"},
+            {"date": "2026/04/21", "title": ANNOUNCEMENT_TITLE, "link": "stock"},
+            {"date": "2026/04/21", "title": ANNOUNCEMENT_TITLE, "link": "options"},
+            {"date": "2026/04/21", "title": ANNOUNCEMENT_TITLE, "link": "scan.pdf"},
+        ]
+        self.contents: Dict[str, Optional[str]] = {
+            "https://taifex/attach/index.csv": ANNOUNCEMENT_CSV,
+            "https://taifex/attach/stock.csv": ANNOUNCEMENT_RATE_CSV,
+            "https://taifex/attach/options.csv": ANNOUNCEMENT_OPTIONS_ONLY_CSV,
+        }
+        self.resolved_links: List[str] = []
+        self.downloaded_urls: List[str] = []
+
+    def crawl_announcements(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> List[Dict[str, str]]:
+        """回傳固定的公告清單"""
+
+        return self.announcements
+
+    def resolve_announcement_csv(self, link: str) -> Optional[str]:
+        """PDF 連結沒有附件，其餘組出固定網址"""
+
+        self.resolved_links.append(link)
+        if link.endswith(".pdf"):
+            return None
+        return f"https://taifex/attach/{link}.csv"
+
+    def crawl_announcement_csv(self, csv_url: str) -> Optional[str]:
+        """回傳附件原文；內容設為 None 時模擬下載失敗"""
+
+        self.downloaded_urls.append(csv_url)
+        return self.contents[csv_url]
+
+
+def make_history_updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Tuple[FuturesMarginUpdater, _RecordingCrawler]:
+    """接上公告 crawler 替身、清洗器與暫存處理紀錄的 updater"""
+
+    monkeypatch.setattr(
+        "core.pipeline.tw.cleaners.futures_margin_cleaner.FUTURES_MARGIN_DOWNLOADS_PATH",
+        tmp_path / "margin",
+    )
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
+    crawler: _RecordingCrawler = _RecordingCrawler()
+    updater.crawler = crawler
+    updater.cleaner = FuturesMarginCleaner()
+    updater.announcement_metadata_path = tmp_path / "meta" / "announcements.json"
+    return updater, crawler
+
+
+@pytest.fixture
+def summaries() -> Iterator[List[str]]:
+    """收集回補統計的 log 訊息"""
+
+    messages: List[str] = []
+    sink_id: int = logger.add(
+        lambda message: messages.append(message.record["message"]),
+        filter=lambda record: "回補統計" in record["message"],
+    )
+    yield messages
+    logger.remove(sink_id)
+
+
+def test_second_backfill_skips_processed_announcements(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, summaries: List[str]
+) -> None:
+    """
+    第二次回補不再開明細頁、不再下載附件；沒有 CSV 的公告照常重試
+
+    舊版算了已入庫的生效日卻沒拿來跳過，每次回補都重抓全部附件（約數百次請求）。
+    """
+
+    updater, crawler = make_history_updater(tmp_path, monkeypatch)
+    updater.update_history()
+
+    assert len(crawler.downloaded_urls) == 3
+    assert updater.dao.count_rows() == 2
+    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 2
+
+    crawler.resolved_links.clear()
+    crawler.downloaded_urls.clear()
+    updater.update_history()
+
+    assert crawler.downloaded_urls == []
+    assert crawler.resolved_links == ["scan.pdf"]
+    assert "已存在跳過 3 則" in summaries[-1]
+
+
+def test_same_effective_date_does_not_mark_other_announcements_loaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    同一個生效日的另一則公告沒入庫時，下次回補要補它
+
+    以生效日判斷「已入庫」會把同日的另一則誤判為已處理；這裡指數類已入庫、
+    股票類第一次下載失敗，兩則的生效日相同。
+    """
+
+    updater, crawler = make_history_updater(tmp_path, monkeypatch)
+    crawler.contents["https://taifex/attach/stock.csv"] = None
+    updater.update_history()
+
+    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 0
+
+    crawler.contents["https://taifex/attach/stock.csv"] = ANNOUNCEMENT_RATE_CSV
+    crawler.downloaded_urls.clear()
+    updater.update_history()
+
+    assert crawler.downloaded_urls == ["https://taifex/attach/stock.csv"]
+    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 2
+
+
+def test_record_is_ignored_when_the_database_lost_the_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """處理紀錄說已入庫、但資料庫沒有那個生效日（被還原或重建）時要重抓"""
+
+    updater, crawler = make_history_updater(tmp_path, monkeypatch)
+    updater.update_history()
+
+    updater.conn.execute(f"DELETE FROM {FuturesMarginDAO.TABLE_NAME}")
+    updater.conn.commit()
+    crawler.downloaded_urls.clear()
+    updater.update_history()
+
+    assert crawler.downloaded_urls == ["https://taifex/attach/index.csv"]
+    assert updater.dao.count_rows() == 2
+
+
+def test_force_backfill_downloads_everything_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`force=True` 忽略處理紀錄全部重抓（站方更正附件內容時用）"""
+
+    updater, crawler = make_history_updater(tmp_path, monkeypatch)
+    updater.update_history()
+
+    crawler.downloaded_urls.clear()
+    updater.update_history(force=True)
+
+    assert len(crawler.downloaded_urls) == 3
+
+
+def test_processed_announcements_still_take_part_in_shared_url_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    已處理的公告不重開明細頁，但仍要參與「共用同一個網址」的判斷
+
+    只解析新公告時，較早的新公告若與較晚、已處理的公告共用網址，
+    會被當成專屬檔名而下載到被覆寫過的內容。
+    """
+
+    updater, crawler = make_history_updater(tmp_path, monkeypatch)
+    announcements: List[Dict[str, str]] = [
+        {"date": "2022/04/14", "link": "old", "title": "t"},
+        {"date": "2026/03/31", "link": "new", "title": "t"},
+    ]
+
+    resolved: List[Tuple[Dict[str, str], Optional[str]]] = updater.resolve_csv_urls(
+        announcements, known_urls={"new": "https://taifex/attach/old.csv"}
+    )
+
+    assert crawler.resolved_links == ["old"]
+    assert resolved[0][1] is None
+    assert resolved[1][1] == "https://taifex/attach/old.csv"
