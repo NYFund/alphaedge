@@ -57,6 +57,28 @@ class StockPriceCleaner(BaseDataCleaner):
         # Generate downloads directory
         self.price_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def apply_change_sign(sign: pd.Series, change: pd.Series) -> pd.Series:
+        """
+        - Description:
+            把 TWSE 的 `漲跌(+/-)` 欄併進 `漲跌價差`
+
+            來源的符號欄有三種值：`+`、`-`、`X`（除權息，該列價差為 0）。
+            只有 `-` 需要轉負，其餘原樣。
+        - Parameters:
+            - sign: pd.Series
+                `漲跌(+/-)` 欄
+            - change: pd.Series
+                `漲跌價差` 欄（絕對值）
+        - Return:
+            - pd.Series
+                帶正負號的漲跌價差
+        """
+
+        values: pd.Series = pd.to_numeric(change, errors="coerce").abs()
+        is_down: pd.Series = sign.astype(str).str.strip() == "-"
+        return values.where(~is_down, -values)
+
     def clean_twse_price(
         self,
         df: pd.DataFrame,
@@ -70,6 +92,12 @@ class StockPriceCleaner(BaseDataCleaner):
 
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.droplevel(0)
+
+        # **正負號只在 `漲跌(+/-)` 這一欄**：`漲跌價差` 本身是絕對值，直接丟掉
+        # 這一欄會讓下跌日在庫裡變成上漲。上櫃的 `漲跌價差` 自帶正負號，
+        # 不先併進來，同一張表的上市、上櫃語意就不一樣。
+        # （`X` 代表除權息，該列的 `漲跌價差` 一律是 0，不受影響）
+        df["漲跌價差"] = self.apply_change_sign(df["漲跌(+/-)"], df["漲跌價差"])
 
         df: pd.DataFrame = (
             df.drop(columns=["漲跌(+/-)"])
