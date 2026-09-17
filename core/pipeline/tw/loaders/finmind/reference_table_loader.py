@@ -89,7 +89,7 @@ def load_reference_table(
             logger.warning(f"Skipped {csv_path.name} (file is empty)")
             return
 
-        dao = spec.dao_class(conn=conn)
+        dao: Union[StockInfoDAO, SecuritiesTraderInfoDAO] = spec.dao_class(conn=conn)
 
         # 先處理同一個檔案內的重複資料：`INSERT OR IGNORE` 也擋得掉，
         # 但先去掉才數得準「這檔到底寫進去幾列」，且保留第一筆的語意寫在這裡

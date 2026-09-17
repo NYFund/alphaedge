@@ -83,7 +83,7 @@ def load_price_panel(
         return pd.DataFrame()
 
     # SQL 一律在 DAO；研究腳本不直接拿 `price_api.conn` 下查詢
-    panel = price_api.dao.get_high_close_by_stocks(
+    panel: pd.DataFrame = price_api.dao.get_high_close_by_stocks(
         list(stock_ids), start_date, end_date
     )
     panel["date"] = pd.to_datetime(panel["date"]).dt.date

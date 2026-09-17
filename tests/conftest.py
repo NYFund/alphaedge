@@ -1,6 +1,6 @@
 import inspect
 import sqlite3
-from typing import Any, Callable, Dict, Iterator, List, Optional, Type
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Type
 
 import pandas as pd
 import pytest
@@ -111,13 +111,17 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
         columns: Optional[List[str]] = None,
         **dao_kwargs: Any,
     ) -> BaseDAO:
+        """建立 `dao_cls` 實例，以其自身的建表方法建表並寫入補齊欄位的 `records`"""
+
         dao: BaseDAO = dao_cls(conn=conn or memory_conn, **dao_kwargs)
         records = records or []
 
         if hasattr(dao, "ensure_tables"):
             dao.ensure_tables()
         else:
-            parameters = inspect.signature(dao.ensure_table).parameters
+            parameters: Mapping[str, inspect.Parameter] = inspect.signature(
+                dao.ensure_table
+            ).parameters
             if not parameters:
                 dao.ensure_table()
             elif "df" in parameters:

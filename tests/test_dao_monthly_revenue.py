@@ -1,11 +1,17 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Tuple
+from typing import Callable, List, Tuple
 
 import pandas as pd
 import pytest
 
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
+from core.pipeline.tw.loaders.monthly_revenue_report_loader import (
+    MonthlyRevenueReportLoader,
+)
+from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
+    MonthlyRevenueReportUpdater,
+)
 from core.pipeline.utils.exceptions import DataLoadError
 
 """
@@ -110,14 +116,12 @@ def test_latest_year_month_orders_numerically() -> None:
 
 
 # === updater 續跑起點 ===
-def make_updater(conn: sqlite3.Connection):
+def make_updater(conn: sqlite3.Connection) -> MonthlyRevenueReportUpdater:
     """跳過 `__init__`（正式連線與 log 設定），只注入 DAO"""
 
-    from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
-        MonthlyRevenueReportUpdater,
+    updater: MonthlyRevenueReportUpdater = MonthlyRevenueReportUpdater.__new__(
+        MonthlyRevenueReportUpdater
     )
-
-    updater = MonthlyRevenueReportUpdater.__new__(MonthlyRevenueReportUpdater)
     updater.dao = MonthlyRevenueDAO(conn=conn)
     updater.conn = conn
     return updater
@@ -127,7 +131,7 @@ def test_start_year_month_uses_default_when_table_is_empty() -> None:
     """表不存在或為空時從預設年月開始，不可先跳過一個月"""
 
     conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    updater = make_updater(conn)
+    updater: MonthlyRevenueReportUpdater = make_updater(conn)
 
     assert updater.get_actual_update_start_year_month(2013, 1) == (2013, 1)
 
@@ -139,7 +143,7 @@ def test_start_year_month_rolls_over_december(dao: MonthlyRevenueDAO) -> None:
     """最新為 2024/12 時下一個是 2025/1"""
 
     dao.insert_or_ignore(make_mrr_rows([(2024, 12)]))
-    updater = make_updater(dao.conn)
+    updater: MonthlyRevenueReportUpdater = make_updater(dao.conn)
 
     assert updater.get_actual_update_start_year_month(2013, 1) == (2025, 1)
 
@@ -150,14 +154,16 @@ def test_start_year_month_query_error_is_raised() -> None:
     conn: sqlite3.Connection = sqlite3.connect(":memory:")
     # 故意缺 month 欄
     conn.execute("CREATE TABLE monthly_revenue (year INT, stock_id TEXT)")
-    updater = make_updater(conn)
+    updater: MonthlyRevenueReportUpdater = make_updater(conn)
 
     with pytest.raises(sqlite3.OperationalError):
         updater.get_actual_update_start_year_month(2013, 1)
 
 
 # === loader ===
-def make_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def make_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Tuple[MonthlyRevenueReportLoader, Path]:
     """建立指向暫存 DB 與暫存 downloads 的月營收 loader"""
 
     import core.pipeline.tw.loaders.monthly_revenue_report_loader as loader_module
@@ -169,7 +175,7 @@ def make_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         loader_module, "MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH", downloads
     )
 
-    loader = loader_module.MonthlyRevenueReportLoader()
+    loader: MonthlyRevenueReportLoader = loader_module.MonthlyRevenueReportLoader()
     loader.mrr_dir = downloads
     return loader, downloads
 
@@ -216,10 +222,12 @@ def test_loader_failed_file_leaves_no_partial_rows(
         downloads / "mrr_202402.csv", index=False
     )
 
-    original_insert = MonthlyRevenueDAO.insert_or_ignore
+    original_insert: Callable[..., int] = MonthlyRevenueDAO.insert_or_ignore
 
-    def insert_then_fail(self: MonthlyRevenueDAO, df: pd.DataFrame):
-        result = original_insert(self, df)
+    def insert_then_fail(self: MonthlyRevenueDAO, df: pd.DataFrame) -> int:
+        """照常寫入後，遇到 2 月的檔案就模擬寫到一半失敗"""
+
+        result: int = original_insert(self, df)
         if (df["month"] == 2).any():
             raise OSError("disk I/O error")
         return result
@@ -248,7 +256,7 @@ def test_updater_and_loader_share_one_connection(
     )
     monkeypatch.setattr(updater_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
 
-    updater = updater_module.MonthlyRevenueReportUpdater()
+    updater: MonthlyRevenueReportUpdater = updater_module.MonthlyRevenueReportUpdater()
 
     assert updater.loader.dao is updater.dao
     assert updater.loader.conn is updater.conn

@@ -1,7 +1,9 @@
 import datetime
+import importlib
 import sqlite3
 from pathlib import Path
-from typing import List, Type
+from types import ModuleType
+from typing import Any, Callable, List, Type
 
 import pandas as pd
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from core.dao.base import BaseDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
+from core.pipeline.tw.loaders.stock_margin_loader import StockMarginLoader
 from core.pipeline.utils.exceptions import DataLoadError
 
 """
@@ -148,12 +151,10 @@ def test_updater_and_loader_share_one_connection(
 ) -> None:
     """updater 與其 loader 必須是同一條連線，`close()` 後一併關閉"""
 
-    import importlib
-
-    loader_module = importlib.import_module(
+    loader_module: ModuleType = importlib.import_module(
         f"core.pipeline.tw.loaders.stock_{kind}_loader"
     )
-    updater_module = importlib.import_module(
+    updater_module: ModuleType = importlib.import_module(
         f"core.pipeline.tw.updaters.stock_{kind}_updater"
     )
 
@@ -162,7 +163,8 @@ def test_updater_and_loader_share_one_connection(
     )
     monkeypatch.setattr(updater_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
 
-    updater = getattr(updater_module, f"Stock{kind.capitalize()}Updater")()
+    # 參數化的 updater 類別只能以名稱取得，型別依 `kind` 而定
+    updater: Any = getattr(updater_module, f"Stock{kind.capitalize()}Updater")()
 
     assert updater.loader.dao is updater.dao
     assert updater.loader.conn is updater.conn
@@ -173,8 +175,6 @@ def test_updater_and_loader_share_one_connection(
 
 def test_margin_loader_keeps_shared_dao_open_after_load(tmp_path: Path) -> None:
     """共用 DAO 下入庫完成不可關連線：updater 接著還要用它查最新日期"""
-
-    from core.pipeline.tw.loaders.stock_margin_loader import StockMarginLoader
 
     downloads: Path = tmp_path / "margin"
     downloads.mkdir()
@@ -215,17 +215,19 @@ def test_margin_failed_file_leaves_no_partial_rows(
         downloads / "twse_20240103.csv", index=False
     )
 
-    original_insert = StockMarginDAO.insert_or_ignore
+    original_insert: Callable[..., int] = StockMarginDAO.insert_or_ignore
 
-    def insert_then_fail(self: StockMarginDAO, df: pd.DataFrame):
-        result = original_insert(self, df)
+    def insert_then_fail(self: StockMarginDAO, df: pd.DataFrame) -> int:
+        """照常寫入後，遇到 2024-01-03 的檔案就模擬寫到一半失敗"""
+
+        result: int = original_insert(self, df)
         if (df["date"] == "2024-01-03").any():
             raise OSError("disk I/O error")
         return result
 
     monkeypatch.setattr(StockMarginDAO, "insert_or_ignore", insert_then_fail)
 
-    loader = loader_module.StockMarginLoader()
+    loader: StockMarginLoader = loader_module.StockMarginLoader()
     loader.margin_dir = downloads
 
     with pytest.raises(DataLoadError) as exc_info:

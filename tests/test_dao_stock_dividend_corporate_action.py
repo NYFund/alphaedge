@@ -2,7 +2,8 @@ import datetime
 import importlib
 import sqlite3
 from pathlib import Path
-from typing import Dict, List
+from types import ModuleType
+from typing import Any, Callable, Dict, List
 
 import pandas as pd
 import pytest
@@ -10,6 +11,7 @@ import pytest
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.pipeline.shared.source_priority import dedup_by_source_priority
+from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoader
 
 """
 `dividend`／`corporate_action` 表 DAO
@@ -184,15 +186,18 @@ def test_updater_and_loader_share_one_connection(
 ) -> None:
     """updater 與其 loader 必須是同一條連線，`close()` 後一併關閉"""
 
-    loader_module = importlib.import_module(f"core.pipeline.tw.loaders.{kind}_loader")
-    updater_module = importlib.import_module(
+    loader_module: ModuleType = importlib.import_module(
+        f"core.pipeline.tw.loaders.{kind}_loader"
+    )
+    updater_module: ModuleType = importlib.import_module(
         f"core.pipeline.tw.updaters.{kind}_updater"
     )
 
     monkeypatch.setattr(loader_module, downloads_attr, tmp_path / kind)
     monkeypatch.setattr(updater_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
 
-    updater = getattr(updater_module, updater_cls_name)()
+    # 參數化的 updater 類別只能以名稱取得，型別依 `kind` 而定
+    updater: Any = getattr(updater_module, updater_cls_name)()
 
     assert updater.loader.dao is updater.dao
     assert updater.loader.conn is updater.conn
@@ -220,15 +225,17 @@ def test_failed_upsert_leaves_no_partial_rows(
         [make_action_row("2024-01-02", "2330"), make_action_row("2024-01-03", "2317")]
     ).to_csv(downloads / "twse_2024.csv", index=False)
 
-    original_replace = CorporateActionDAO.insert_or_replace
+    original_replace: Callable[..., int] = CorporateActionDAO.insert_or_replace
 
     def replace_then_fail(self: CorporateActionDAO, df: pd.DataFrame) -> int:
+        """照常寫入後模擬寫到一半失敗"""
+
         original_replace(self, df)
         raise OSError("disk I/O error")
 
     monkeypatch.setattr(CorporateActionDAO, "insert_or_replace", replace_then_fail)
 
-    loader = loader_module.CorporateActionLoader()
+    loader: CorporateActionLoader = loader_module.CorporateActionLoader()
     loader.corporate_action_dir = downloads
 
     with pytest.raises(OSError):

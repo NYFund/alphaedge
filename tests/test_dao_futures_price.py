@@ -1,13 +1,16 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import Any, Callable, Iterator, List, Set, Tuple
 
 import pandas as pd
 import pytest
 
+from core.dao.base import BaseDAO
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
+from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import DataLoadError
 
 """
@@ -119,7 +122,9 @@ def test_trading_days_query_error_is_raised() -> None:
 
 # === updater ===
 @pytest.fixture
-def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[FuturesPriceUpdater]:
     """DB 與 downloads 都指向暫存區的 updater"""
 
     import core.pipeline.tw.loaders.futures_price_loader as loader_module
@@ -133,12 +138,12 @@ def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         loader_module, "FUTURES_PRICE_DOWNLOADS_PATH", tmp_path / "price"
     )
 
-    futures_updater = updater_module.FuturesPriceUpdater()
+    futures_updater: FuturesPriceUpdater = updater_module.FuturesPriceUpdater()
     yield futures_updater
     futures_updater.close()
 
 
-def test_start_date_query_error_is_raised(updater) -> None:
+def test_start_date_query_error_is_raised(updater: FuturesPriceUpdater) -> None:
     """
     查續跑起點失敗時往外拋
 
@@ -156,7 +161,7 @@ def test_start_date_query_error_is_raised(updater) -> None:
         updater.get_actual_update_start_date("TX", datetime.date(1998, 7, 21))
 
 
-def test_updater_and_loader_share_one_connection(updater) -> None:
+def test_updater_and_loader_share_one_connection(updater: FuturesPriceUpdater) -> None:
     """updater 與其 loader 必須是同一條連線，`close()` 後一併關閉"""
 
     assert updater.loader.dao is updater.dao
@@ -166,10 +171,12 @@ def test_updater_and_loader_share_one_connection(updater) -> None:
     assert updater.dao.conn is None
 
 
-def test_traded_weekends_without_stock_db(updater, tmp_path: Path) -> None:
+def test_traded_weekends_without_stock_db(
+    updater: FuturesPriceUpdater, tmp_path: Path
+) -> None:
     """只跑期貨的環境沒有 tw_stock.db：跳過週末，且不可替它建出一個空檔案"""
 
-    weekends = updater.get_traded_weekend_dates(
+    weekends: Set[datetime.date] = updater.get_traded_weekend_dates(
         datetime.date(2017, 6, 1), datetime.date(2017, 6, 4)
     )
 
@@ -178,7 +185,7 @@ def test_traded_weekends_without_stock_db(updater, tmp_path: Path) -> None:
 
 
 def test_traded_weekends_come_from_read_only_price_dao(
-    updater, tmp_path: Path, dao_factory
+    updater: FuturesPriceUpdater, tmp_path: Path, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """補行交易日取自 `price` 表的週末；連線唯讀且由 updater 的 `close()` 關閉"""
 
@@ -193,7 +200,7 @@ def test_traded_weekends_come_from_read_only_price_dao(
     )
     stock_conn.close()
 
-    weekends = updater.get_traded_weekend_dates(
+    weekends: Set[datetime.date] = updater.get_traded_weekend_dates(
         datetime.date(2017, 6, 1), datetime.date(2017, 6, 4)
     )
 
@@ -227,24 +234,26 @@ def test_loader_failed_file_leaves_no_partial_rows(
         downloads / "futures_price_20260828.csv", index=False
     )
 
-    original_insert = FuturesPriceDAO.insert_or_ignore
+    original_insert: Callable[..., int] = FuturesPriceDAO.insert_or_ignore
 
-    def insert_then_fail(self: FuturesPriceDAO, df: pd.DataFrame):
-        result = original_insert(self, df)
+    def insert_then_fail(self: FuturesPriceDAO, df: pd.DataFrame) -> int:
+        """照常寫入後，遇到 2026-08-28 的檔案就模擬寫到一半失敗"""
+
+        result: int = original_insert(self, df)
         if (df["date"] == "2026-08-28").any():
             raise OSError("disk I/O error")
         return result
 
     monkeypatch.setattr(FuturesPriceDAO, "insert_or_ignore", insert_then_fail)
 
-    loader = loader_module.FuturesPriceLoader()
+    loader: FuturesPriceLoader = loader_module.FuturesPriceLoader()
     loader.futures_price_dir = downloads
 
     with pytest.raises(DataLoadError):
         loader.add_to_db()
 
     conn: sqlite3.Connection = sqlite3.connect(tmp_path / "tw_futures.db")
-    dates = conn.execute(
+    dates: List[Tuple[Any, ...]] = conn.execute(
         f"SELECT DISTINCT date FROM {FuturesPriceDAO.TABLE_NAME}"
     ).fetchall()
     conn.close()

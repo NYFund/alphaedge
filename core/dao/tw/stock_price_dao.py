@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 from pathlib import Path
 from typing import Any, List, Optional, Set, Tuple
 
@@ -179,7 +180,7 @@ class StockPriceDAO(BaseDAO):
             return set()
 
         placeholders: str = ",".join("?" * len(stock_ids))
-        rows = self.conn.execute(
+        rows: sqlite3.Cursor = self.conn.execute(
             f"SELECT DISTINCT stock_id FROM {self.TABLE_NAME} "
             f"WHERE stock_id IN ({placeholders})",
             tuple(stock_ids),
@@ -243,7 +244,7 @@ class StockPriceDAO(BaseDAO):
                 刪除的列數
         """
 
-        cursor = self.conn.execute(
+        cursor: sqlite3.Cursor = self.conn.execute(
             f"DELETE FROM {self.TABLE_NAME} WHERE date = ?", to_sql_params(date)
         )
         return cursor.rowcount
