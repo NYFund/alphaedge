@@ -1,11 +1,14 @@
 import datetime
 import sqlite3
-from typing import Dict, Iterator, List
+from pathlib import Path
+from typing import Callable, Dict, Iterator, List
 
 import pandas as pd
 import pytest
 
 from core.config import CORPORATE_ACTION_TABLE_NAME
+from core.dao.base import BaseDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.source_priority import dedup_by_source_priority
 from core.pipeline.tw.cleaners.corporate_action_cleaner import (
     OUTPUT_COLUMNS,
@@ -420,7 +423,9 @@ def test_table_has_expected_schema(loader: CorporateActionLoader) -> None:
 
 
 # === 偵測器 ===
-def test_detector_flags_leveraged_etf(tmp_path) -> None:
+def test_detector_flags_leveraged_etf(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
     """
     槓桿與反向 ETF 的漲跌幅上限是 ±20%，會被 15% 門檻誤報
 
@@ -433,16 +438,18 @@ def test_detector_flags_leveraged_etf(tmp_path) -> None:
         detect_unexplained_moves,
     )
 
-    db_path = tmp_path / "price.db"
-    conn = sqlite3.connect(db_path)
-    pd.DataFrame(
-        [
+    db_path: Path = tmp_path / "price.db"
+    conn: sqlite3.Connection = sqlite3.connect(db_path)
+    dao_factory(
+        StockPriceDAO,
+        conn=conn,
+        records=[
             {"date": "2025-04-02", "stock_id": "00631L", "收盤價": 200.30},
             {"date": "2025-04-07", "stock_id": "00631L", "收盤價": 160.25},
             {"date": "2025-06-10", "stock_id": "0050", "收盤價": 188.65},
             {"date": "2025-06-18", "stock_id": "0050", "收盤價": 47.57},
-        ]
-    ).to_sql("price", conn, index=False)
+        ],
+    )
 
     result: pd.DataFrame = detect_unexplained_moves(conn=conn)
     conn.close()

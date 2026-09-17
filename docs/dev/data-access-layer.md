@@ -163,7 +163,9 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 4. **updater 持有 DAO／連線並提供 `close()`**，`tasks/update_db.py` 以 `try/finally` 呼叫。
 5. **API 以 `conn=` 建 DAO**，公開方法只做業務轉換，不寫 SQL。
 6. **測試建表走 `tests/conftest.py` 的 `dao_factory`**：以 DAO 自己的建表方法建出正式 schema，
-   `complete_rows()` 補齊沒給值的 NOT NULL／主鍵欄。只有刻意壞掉的 schema（缺欄位、被鎖住）才手寫 `CREATE TABLE`。
+   `complete_rows()` 補齊沒給值的 NOT NULL／主鍵欄，**給了 schema 沒有的欄位直接報錯**（欄名打錯或 schema 改名時測試會紅）。
+   一個 DAO 管多張表時以 `records_table=` 指定寫入哪一張。只有刻意壞掉的 schema（缺欄位、被鎖住）才手寫 `CREATE TABLE`；
+   測試不以 `DataFrame.to_sql` 建表——它依資料推導欄位型別，不會隨正式 schema 改動而同步。
 7. 新增 DAO 測試至少涵蓋：建表冪等、查詢區間邊界、表不存在、查詢錯誤外拋、共用連線不被 loader 關掉、寫到一半失敗整檔回滾。
 
 ---
@@ -173,7 +175,6 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 | 項目 | 影響 | 解除條件 |
 |------|------|----------|
 | DAO 內部仍是 `sqlite3` | 換 PostgreSQL 時要改寫 `core/dao/` 內部（API、loader、updater 不必改） | [PostgreSQL遷移計畫](../../backlog/PostgreSQL遷移計畫.md) |
-| 部分測試仍以 `DataFrame.to_sql` 推導 schema 建表 | `test_api_public_interfaces`、`test_finmind_api`、`test_stock_data_api`、`test_corporate_action`（偵測器只需三欄的最小 `price`）、`backtest/test_reporting`，以及 DAO 測試中的 `test_dao_financial_statement`（最小 `taiwan_stock_info`）、`test_dao_stock_dividend_corporate_action`（偵測器用的最小 `price`）；它們沒有抄 schema，但不會隨正式 schema 改動而同步 | [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S3 |
 | 台股表名缺 `stock_` 前綴、識別欄仍是 `stock_id` | 與期貨表、`symbol` 命名不對稱 | 歸 PostgreSQL 遷移的 schema 批次 |
 
 ## 相關文件

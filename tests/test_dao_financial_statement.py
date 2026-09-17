@@ -5,6 +5,7 @@ from typing import Any, Callable, List, Tuple
 import pandas as pd
 import pytest
 
+from core.dao.base import BaseDAO
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
 from core.pipeline.tw.loaders.financial_statement_loader import FinancialStatementLoader
@@ -157,23 +158,25 @@ def test_crawled_stock_ids_query_error_is_raised() -> None:
 
 
 # === 股票清單 ===
-def test_stock_info_listed_common_stocks() -> None:
+def test_stock_info_listed_common_stocks(
+    dao_factory: Callable[..., BaseDAO], memory_conn: sqlite3.Connection
+) -> None:
     """只取上市櫃、非 ETF 的四碼代號；表不存在回空清單"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    stock_info_dao: StockInfoDAO = StockInfoDAO(conn=conn)
+    stock_info_dao: StockInfoDAO = StockInfoDAO(conn=memory_conn)
     assert stock_info_dao.get_listed_common_stock_ids() == []
     assert stock_info_dao.get_stock_ids() == []
 
-    pd.DataFrame(
-        [
+    dao_factory(
+        StockInfoDAO,
+        records=[
             {"stock_id": "2330", "type": "twse", "industry_category": "半導體業"},
             {"stock_id": "6488", "type": "tpex", "industry_category": "半導體業"},
             {"stock_id": "0050", "type": "twse", "industry_category": "ETF"},
             {"stock_id": "7777", "type": "emerging", "industry_category": "其他"},
             {"stock_id": "00631L", "type": "twse", "industry_category": "其他"},
-        ]
-    ).to_sql("taiwan_stock_info", conn, index=False)
+        ],
+    )
 
     assert stock_info_dao.get_listed_common_stock_ids() == ["2330", "6488"]
     assert stock_info_dao.get_stock_ids() == ["0050", "00631L", "2330", "6488", "7777"]

@@ -1,18 +1,16 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Iterator
+from typing import Callable
 
 import pandas as pd
 import pytest
 
 from core.api.tw.finmind_api import FinMindAPI
-from core.config import (
-    SECURITIES_TRADER_INFO_TABLE_NAME,
-    STOCK_INFO_TABLE_NAME,
-    STOCK_INFO_WITH_WARRANT_TABLE_NAME,
-    STOCK_TRADING_DAILY_REPORT_TABLE_NAME,
-)
+from core.dao.base import BaseDAO
+from core.dao.tw.broker_trading_dao import BrokerTradingDAO
+from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
+from core.dao.tw.stock_info_dao import StockInfoDAO, StockInfoWithWarrantDAO
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
@@ -33,13 +31,14 @@ DAY_2: str = "2024-01-03"
 
 
 @pytest.fixture
-def conn() -> Iterator[sqlite3.Connection]:
+def conn(
+    dao_factory: Callable[..., BaseDAO], memory_conn: sqlite3.Connection
+) -> sqlite3.Connection:
     """建立含四張 FinMind 資料表樣本的 in-memory SQLite"""
 
-    connection: sqlite3.Connection = sqlite3.connect(":memory:")
-
-    pd.DataFrame(
-        [
+    dao_factory(
+        StockInfoDAO,
+        records=[
             {
                 "stock_id": "2330",
                 "stock_name": "台積電",
@@ -54,11 +53,12 @@ def conn() -> Iterator[sqlite3.Connection]:
                 "type": "twse",
                 "date": DAY_1,
             },
-        ]
-    ).to_sql(STOCK_INFO_TABLE_NAME, connection, index=False)
+        ],
+    )
 
-    pd.DataFrame(
-        [
+    dao_factory(
+        StockInfoWithWarrantDAO,
+        records=[
             {
                 "stock_id": "2330",
                 "stock_name": "台積電",
@@ -73,11 +73,12 @@ def conn() -> Iterator[sqlite3.Connection]:
                 "type": "twse",
                 "date": DAY_1,
             },
-        ]
-    ).to_sql(STOCK_INFO_WITH_WARRANT_TABLE_NAME, connection, index=False)
+        ],
+    )
 
-    pd.DataFrame(
-        [
+    dao_factory(
+        SecuritiesTraderInfoDAO,
+        records=[
             {
                 "securities_trader_id": "9A00",
                 "securities_trader": "永豐金證券",
@@ -85,40 +86,40 @@ def conn() -> Iterator[sqlite3.Connection]:
                 "address": "台北市",
                 "phone": "02-0000-0000",
             },
-        ]
-    ).to_sql(SECURITIES_TRADER_INFO_TABLE_NAME, connection, index=False)
+        ],
+    )
 
-    pd.DataFrame(
-        [
+    dao_factory(
+        BrokerTradingDAO,
+        records=[
             {
                 "date": DAY_1,
                 "stock_id": "2330",
                 "securities_trader": "永豐金證券",
                 "securities_trader_id": "9A00",
-                "buy": 1000,
-                "sell": 200,
+                "buy_volume": 1000,
+                "sell_volume": 200,
             },
             {
                 "date": DAY_2,
                 "stock_id": "2330",
                 "securities_trader": "永豐金證券",
                 "securities_trader_id": "9A00",
-                "buy": 500,
-                "sell": 900,
+                "buy_volume": 500,
+                "sell_volume": 900,
             },
             {
                 "date": DAY_1,
                 "stock_id": "2317",
                 "securities_trader": "元大證券",
                 "securities_trader_id": "9800",
-                "buy": 300,
-                "sell": 100,
+                "buy_volume": 300,
+                "sell_volume": 100,
             },
-        ]
-    ).to_sql(STOCK_TRADING_DAILY_REPORT_TABLE_NAME, connection, index=False)
+        ],
+    )
 
-    yield connection
-    connection.close()
+    return memory_conn
 
 
 @pytest.fixture
@@ -234,7 +235,7 @@ def test_get_broker_trading_for_stock(api: FinMindAPI) -> None:
     )
 
     assert len(on_date) == 1
-    assert on_date.iloc[0]["buy"] == 1000
+    assert on_date.iloc[0]["buy_volume"] == 1000
     assert len(in_range) == 2
     assert api.get_broker_trading_for_stock_in_range(
         "2330", datetime.date(2024, 1, 31), datetime.date(2024, 1, 1)

@@ -24,7 +24,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | S1 | DAO 讀取改用 cursor，查詢失敗不 rollback 連線 | `core/dao/base.py`、`tests/test_dao_base.py`、捕捉 `pd.errors.DatabaseError` 的 7 處測試（4 個 `tests/test_dao_*.py`） | 新增「寫入未 commit → 查詢失敗 → 寫入仍在」測試；既有測試全過 | ✅ | 2026-09-16 完成：`pytest` 快測 1146／慢測 18 全過、回歸雙線通過；兩個正式 DB 每張表與邊界查詢共 78 組比對 `read_sql_query` 結果逐欄相同 |
 | S2 | 保證金歷史回補跳過已入庫公告 | `core/pipeline/tw/updaters/futures_margin_updater.py`、`tests/test_futures_margin.py` | 替身 crawler 記錄請求：已入庫生效日的公告不再下載附件，`skipped_existing` 正確計數 | ✅ | 2026-09-16 完成；**偏離原規格**：以公告連結為鍵另存處理紀錄 JSON，不以生效日判斷（同日常有多則公告）。未對正式來源實跑 |
-| S3 | 以 `to_sql` 建表的測試改走 `dao_factory` | `tests/test_api_public_interfaces.py`、`tests/test_finmind_api.py`、`tests/test_stock_data_api.py`、`tests/test_corporate_action.py`、`tests/backtest/test_reporting.py`、`tests/test_dao_financial_statement.py`、`tests/test_dao_stock_dividend_corporate_action.py` | `grep -rn "\.to_sql(" tests` 無結果；`pytest` 全綠 | ⬜ | — |
+| S3 | 以 `to_sql` 建表的測試改走 `dao_factory` | `tests/test_api_public_interfaces.py`、`tests/test_finmind_api.py`、`tests/test_stock_data_api.py`、`tests/test_corporate_action.py`、`tests/backtest/test_reporting.py`、`tests/test_dao_financial_statement.py`、`tests/test_dao_stock_dividend_corporate_action.py` | `grep -rn "\.to_sql(" tests` 無結果；`pytest` 全綠 | ✅ | 2026-09-16 完成；另讓 `complete_rows()` 遇到 schema 沒有的欄位直接報錯，當場抓到 `test_finmind_api` 用了不存在的 `buy`／`sell` 欄 |
 | S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⏸ | 2026-09-16 使用者裁示暫緩：帳號等級 `register` 無券商分點權限，腳本最關鍵的一段無法實跑；帳號升級或確實需要連網檢查時再做 |
 | S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
 | S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ✅ | 2026-09-16 完成：未使用的 `api` 是早期草稿殘留，改為斷言回推次數等於上界 |
@@ -69,13 +69,19 @@
   - 新增 5 個測試（`tests/test_futures_margin.py`）；`pytest -m "not slow"` 1151 全過。**未對 TAIFEX 實跑**：第一次執行沒有紀錄檔，仍會全量抓一次。
   - `docs/futures/tw-futures-platform.md` §2.6 補上說明，〈已知限制〉刪除對應列。
 
-## S3. 以 `to_sql` 建表的測試改走 `dao_factory` ⬜
+## S3. 以 `to_sql` 建表的測試改走 `dao_factory` ✅
 
 - **目的**：測試資料表一律是正式 schema，schema 改動時測試跟著變。
 - **做法**：逐檔把 `DataFrame(...).to_sql(table, conn)` 換成 `dao_factory(DAO, records=[...])`（`tests/conftest.py`）。偵測器測試（`test_corporate_action.py`、`test_dao_stock_dividend_corporate_action.py`）只需要 `date`／`stock_id`／`收盤價` 三欄，`dao_factory` 的 `complete_rows()` 會補齊其餘 NOT NULL 欄，可以直接換。`test_stock_data_api.py` 的 fixture 餵的是 API 的具名查詢，換完要確認數值型別（`to_sql` 推導的欄型與正式 schema 的 `REAL`／`INTEGER` 可能不同）不影響斷言。
 - **產出**：上表 S3 列出的 7 個測試檔；`docs/dev/data-access-layer.md`〈已知限制〉刪除對應列。
 - **驗證方式**：`grep -rn "\.to_sql(" tests` 無結果（註解裡提到 `to_sql` 的不算）；`pytest -m "not slow"` 全綠。
 - **相依**：無。
+- **完成紀錄（2026-09-16）**：
+  - 7 個檔共 17 處改走 `dao_factory`；`grep -rn "\.to_sql(" tests` 無結果，`pytest` 快測 1151／慢測 18 全過。
+  - `dao_factory` 新增 `records_table=`（期貨保證金 DAO 管金額表與比例表兩張）。
+  - **超出原規格**：`complete_rows()` 遇到 schema 沒有的欄位改為直接 `ValueError`——原本會默默丟掉。這條護欄當場抓到 `test_finmind_api` 的券商分點樣本用了不存在的 `buy`／`sell` 欄（正式欄名是 `buy_volume`／`sell_volume`），`to_sql` 推導建表時看不出來。
+  - `test_stock_data_api` 的「同一檔重複時取第一筆」：`price` 主鍵含 `證券名稱`，兩筆樣本改給不同名稱（改名當天兩筆並存）才寫得進去，測試仍有意義。
+  - `docs/dev/data-access-layer.md` 補上欄位檢查與 `records_table=` 說明，〈已知限制〉刪除對應列。
 
 ## S4. FinMind 連網冒煙檢查腳本 ⏸
 
