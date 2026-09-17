@@ -1,11 +1,11 @@
 import inspect
 import sqlite3
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Type
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Type
 
 import pandas as pd
 import pytest
 
-from core.dao.base import BaseDAO
+from core.dao.base import BaseDAO, insert_or_ignore
 from core.utils.log_manager import LogManager
 
 """
@@ -58,6 +58,9 @@ def complete_rows(
 
         `NOT NULL` 或主鍵欄沒給值時補預設值（文字欄 `""`、其餘 `0`）；可為 NULL 的欄位
         不補。測試只需要寫出它在意的欄位，其餘交給 schema 決定，schema 改了也不必跟著改。
+
+        **給了 schema 沒有的欄位直接報錯**：默默丟掉的話，欄名打錯或 schema 改名時
+        測試照樣綠，驗的卻是一張少了那一欄的表。
     - Parameters:
         - conn: sqlite3.Connection
             已建表的連線
@@ -71,8 +74,12 @@ def complete_rows(
     """
 
     info: List[tuple] = conn.execute(f"PRAGMA table_info('{table}')").fetchall()
+    known_columns: Set[str] = {column[1] for column in info}
     rows: List[Dict[str, Any]] = []
     for record in records:
+        unknown: Set[str] = set(record) - known_columns
+        if unknown:
+            raise ValueError(f"{table} 沒有這些欄位：{sorted(unknown)}")
         row: Dict[str, Any] = {}
         for _, name, col_type, not_null, _, primary_key in info:
             if name in record:
@@ -102,6 +109,8 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
         建立 DAO → 呼叫它自己的建表方法 → 以 `complete_rows()` 補齊欄位後寫入 → commit。
         預設用 `memory_conn`；要寫進檔案 DB（例如 updater 會以路徑重開）時傳 `conn=`。
         表名參數化的 DAO（財報、期貨籌碼）以 `table_name=` 傳入。
+        一個 DAO 管多張表時（期貨保證金的金額表／比例表），以 `records_table=` 指定
+        `records` 寫進哪一張；未指定時寫進 `TABLE_NAME`。
     """
 
     def make(
@@ -109,6 +118,7 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
         records: Optional[List[Dict[str, Any]]] = None,
         conn: Optional[sqlite3.Connection] = None,
         columns: Optional[List[str]] = None,
+        records_table: Optional[str] = None,
         **dao_kwargs: Any,
     ) -> BaseDAO:
         """建立 `dao_cls` 實例，以其自身的建表方法建表並寫入補齊欄位的 `records`"""
@@ -132,7 +142,8 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
                 dao.ensure_table(columns or list(records[0].keys()))
 
         if records:
-            dao.insert_or_ignore(complete_rows(dao.conn, dao.TABLE_NAME, records))
+            table: str = records_table or dao.TABLE_NAME
+            insert_or_ignore(dao.conn, table, complete_rows(dao.conn, table, records))
         dao.commit()
         return dao
 

@@ -1,7 +1,6 @@
 import datetime
-import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 import pytest
@@ -12,13 +11,16 @@ from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
 from core.config import (
-    CHIP_TABLE_NAME,
-    DIVIDEND_TABLE_NAME,
     FUTURES_LARGE_TRADER_TABLE_NAME,
-    FUTURES_STOCK_UNIVERSE_TABLE_NAME,
-    MARGIN_TABLE_NAME,
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
+from core.dao.base import BaseDAO
+from core.dao.tw.futures_chip_dao import FuturesChipDAO
+from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.dao.tw.stock_chip_dao import StockChipDAO
+from core.dao.tw.stock_dividend_dao import StockDividendDAO
+from core.dao.tw.stock_margin_dao import StockMarginDAO
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
@@ -43,12 +45,12 @@ DAY_3: str = "2024-01-04"
 
 # === dividend ===
 @pytest.fixture
-def dividend_api() -> Iterator[StockDividendAPI]:
+def dividend_api(dao_factory: Callable[..., BaseDAO]) -> StockDividendAPI:
     """建立含兩檔、三個除權息日的 in-memory dividend 表"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame(
-        [
+    dao: BaseDAO = dao_factory(
+        StockDividendDAO,
+        records=[
             {
                 "date": DAY_1,
                 "stock_id": "2330",
@@ -78,11 +80,10 @@ def dividend_api() -> Iterator[StockDividendAPI]:
                 "配股率": 0.1,
                 "還原係數": 0.97,
             },
-        ]
-    ).to_sql(DIVIDEND_TABLE_NAME, conn, index=False)
+        ],
+    )
 
-    yield StockDividendAPI(conn=conn)
-    conn.close()
+    return StockDividendAPI(conn=dao.conn)
 
 
 def test_get_stock_dividend_returns_sorted_range(
@@ -146,12 +147,12 @@ def test_get_ex_dividend_dates_are_sorted_and_deduped(
 
 # === margin ===
 @pytest.fixture
-def margin_api() -> Iterator[StockMarginAPI]:
+def margin_api(dao_factory: Callable[..., BaseDAO]) -> StockMarginAPI:
     """建立含融券餘額樣本的 in-memory margin 表"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame(
-        [
+    dao: BaseDAO = dao_factory(
+        StockMarginDAO,
+        records=[
             {
                 "date": DAY_1,
                 "stock_id": "2330",
@@ -179,11 +180,10 @@ def margin_api() -> Iterator[StockMarginAPI]:
                 "券資比": 0.0,
                 "註記": "",
             },
-        ]
-    ).to_sql(MARGIN_TABLE_NAME, conn, index=False)
+        ],
+    )
 
-    yield StockMarginAPI(conn=conn)
-    conn.close()
+    return StockMarginAPI(conn=dao.conn)
 
 
 def test_get_stock_margin_returns_range(margin_api: StockMarginAPI) -> None:
@@ -218,12 +218,12 @@ def test_get_stock_short_balance_distinguishes_zero_from_missing(
 
 # === chip ===
 @pytest.fixture
-def chip_api() -> Iterator[StockChipAPI]:
+def chip_api(dao_factory: Callable[..., BaseDAO]) -> StockChipAPI:
     """建立含三大法人買賣超與額外欄位的 in-memory chip 表"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame(
-        [
+    dao: BaseDAO = dao_factory(
+        StockChipDAO,
+        records=[
             {
                 "date": DAY_1,
                 "stock_id": "2330",
@@ -243,11 +243,10 @@ def chip_api() -> Iterator[StockChipAPI]:
                 "自營商買賣超股數": 0,
                 "外資買進股數": 2_000_000,
             },
-        ]
-    ).to_sql(CHIP_TABLE_NAME, conn, index=False)
+        ],
+    )
 
-    yield StockChipAPI(conn=conn)
-    conn.close()
+    return StockChipAPI(conn=dao.conn)
 
 
 def test_get_stock_net_chip_keeps_only_net_columns(chip_api: StockChipAPI) -> None:
@@ -273,12 +272,13 @@ def test_get_stock_net_chip_keeps_only_net_columns(chip_api: StockChipAPI) -> No
 
 # === futures large trader ===
 @pytest.fixture
-def futures_chip_api() -> Iterator[FuturesChipAPI]:
+def futures_chip_api(dao_factory: Callable[..., BaseDAO]) -> FuturesChipAPI:
     """建立含大額交易人樣本的 in-memory futures_large_trader 表"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame(
-        [
+    dao: BaseDAO = dao_factory(
+        FuturesChipDAO,
+        table_name=FUTURES_LARGE_TRADER_TABLE_NAME,
+        records=[
             {
                 "date": DAY_1,
                 "product": "TX",
@@ -301,11 +301,10 @@ def futures_chip_api() -> Iterator[FuturesChipAPI]:
                 "trader_type": "0",
                 "多方前五大交易人合計": 8000,
             },
-        ]
-    ).to_sql(FUTURES_LARGE_TRADER_TABLE_NAME, conn, index=False)
+        ],
+    )
 
-    yield FuturesChipAPI(conn=conn)
-    conn.close()
+    return FuturesChipAPI(conn=dao.conn)
 
 
 def test_get_large_trader_defaults_to_all_contracts_top_traders(
@@ -350,12 +349,13 @@ def test_get_large_trader_returns_none_for_unknown_product(
 
 # === stock futures margin ===
 @pytest.fixture
-def futures_margin_api() -> Iterator[FuturesMarginAPI]:
+def futures_margin_api(dao_factory: Callable[..., BaseDAO]) -> FuturesMarginAPI:
     """建立含股期適用比例與契約單位的 in-memory 表"""
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame(
-        [
+    margin_dao: BaseDAO = dao_factory(
+        FuturesMarginDAO,
+        records_table=STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
+        records=[
             {
                 "product_id": "CDF",
                 "effective_date": "2023-01-01",
@@ -370,20 +370,20 @@ def futures_margin_api() -> Iterator[FuturesMarginAPI]:
                 "維持保證金適用比例": 0.1533,
                 "原始保證金適用比例": 0.2,
             },
-        ]
-    ).to_sql(STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME, conn, index=False)
-    pd.DataFrame(
-        [
+        ],
+    )
+    dao_factory(
+        FuturesStockUniverseDAO,
+        records=[
             {
                 "product_id": "CDF",
                 "snapshot_date": "2023-01-01",
                 "contract_size": 2000,
             },
-        ]
-    ).to_sql(FUTURES_STOCK_UNIVERSE_TABLE_NAME, conn, index=False)
+        ],
+    )
 
-    yield FuturesMarginAPI(conn=conn)
-    conn.close()
+    return FuturesMarginAPI(conn=margin_dao.conn)
 
 
 def test_calculate_stock_futures_margin(

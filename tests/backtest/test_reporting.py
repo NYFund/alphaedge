@@ -8,6 +8,9 @@ import pytest
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.backtest.report.reporter import StockBacktestReporter
+from core.dao.base import BaseDAO
+from core.dao.tw.corporate_action_dao import CorporateActionDAO
+from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.models import StockAccount, StockOrder, StockTradeRecord
 from core.utils import Action, PositionType, ShortMethod
 
@@ -195,7 +198,9 @@ def test_direction_summary_and_event_report(
 
 
 # === 分割調整：已由 corporate_action 經還原係數統一處理（還原價 S3）===
-def test_adjustment_factor_covers_splits_and_reductions() -> None:
+def test_adjustment_factor_covers_splits_and_reductions(
+    dao_factory: Callable[..., BaseDAO],
+) -> None:
     """
     分割與減資都要進累乘係數，不再靠一份只認得 0050 的過渡表
 
@@ -205,33 +210,30 @@ def test_adjustment_factor_covers_splits_and_reductions() -> None:
     改由 `get_adjusted_close_series()` 一次處理完。
     """
 
-    import sqlite3
-
     from core.api.tw.stock_dividend_api import StockDividendAPI
-    from core.config import CORPORATE_ACTION_TABLE_NAME, DIVIDEND_TABLE_NAME
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame([{"date": "2025-03-01", "stock_id": "0050", "還原係數": 0.98}]).to_sql(
-        DIVIDEND_TABLE_NAME, conn, index=False
+    dividend_dao: BaseDAO = dao_factory(
+        StockDividendDAO,
+        records=[{"date": "2025-03-01", "stock_id": "0050", "還原係數": 0.98}],
     )
-    pd.DataFrame(
-        [
+    dao_factory(
+        CorporateActionDAO,
+        records=[
             {
                 "date": "2025-06-18",
                 "stock_id": "0050",
                 "調整倍率": 0.25,  # 一拆四：價格變四分之一
             }
-        ]
-    ).to_sql(CORPORATE_ACTION_TABLE_NAME, conn, index=False)
+        ],
+    )
 
-    api: StockDividendAPI = StockDividendAPI(conn=conn)
+    api: StockDividendAPI = StockDividendAPI(conn=dividend_dao.conn)
 
     before: float = api.get_cumulative_factor("0050", datetime.date(2025, 6, 10))
     after: float = api.get_cumulative_factor("0050", datetime.date(2025, 6, 18))
 
     # 分割後的係數應為分割前的 4 倍（1 / 0.25），才能把 −75% 的假跌幅補回來
     assert after / before == pytest.approx(4.0)
-    conn.close()
 
 
 def test_reporter_no_longer_double_adjusts() -> None:

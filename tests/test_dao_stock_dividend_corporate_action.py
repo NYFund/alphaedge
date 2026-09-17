@@ -8,8 +8,10 @@ from typing import Any, Callable, Dict, List
 import pandas as pd
 import pytest
 
+from core.dao.base import BaseDAO
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.source_priority import dedup_by_source_priority
 from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoader
 
@@ -251,22 +253,25 @@ def test_failed_upsert_leaves_no_partial_rows(
 
 
 # === 公司行動偵測 ===
-def test_detector_drops_jumps_explained_by_known_events() -> None:
+def test_detector_drops_jumps_explained_by_known_events(
+    dao_factory: Callable[..., BaseDAO],
+) -> None:
     """停牌區間內有已知公司行動的跳空會被解釋掉，沒有事件的留下"""
 
     from core.pipeline.tw.cleaners.corporate_action_detector import (
         detect_unexplained_moves,
     )
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    pd.DataFrame(
-        [
+    price_dao: BaseDAO = dao_factory(
+        StockPriceDAO,
+        records=[
             {"date": "2024-01-02", "stock_id": "2330", "收盤價": 100.0},
             {"date": "2024-01-10", "stock_id": "2330", "收盤價": 400.0},
             {"date": "2024-01-02", "stock_id": "2317", "收盤價": 100.0},
             {"date": "2024-01-03", "stock_id": "2317", "收盤價": 50.0},
-        ]
-    ).to_sql("price", conn, index=False)
+        ],
+    )
+    conn: sqlite3.Connection = price_dao.conn
 
     action_dao: CorporateActionDAO = CorporateActionDAO(conn=conn)
     action_dao.ensure_table()
@@ -274,7 +279,6 @@ def test_detector_drops_jumps_explained_by_known_events() -> None:
     action_dao.commit()
 
     result: pd.DataFrame = detect_unexplained_moves(conn=conn)
-    conn.close()
 
     remaining: List[str] = result["stock_id"].tolist()
     assert remaining == ["2317"]

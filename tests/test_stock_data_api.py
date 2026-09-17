@@ -1,17 +1,17 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator
+from typing import Any, Callable, Dict
 
 import pandas as pd
 import pytest
 
 from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_price_api import StockPriceAPI
-from core.config import CHIP_TABLE_NAME, PRICE_TABLE_NAME
 from core.config.schema import ChipColumn, PriceColumn
 from core.dao.base import BaseDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
@@ -26,13 +26,14 @@ DAY_2: str = "2024-01-03"
 
 
 @pytest.fixture
-def conn() -> Iterator[sqlite3.Connection]:
+def conn(
+    dao_factory: Callable[..., BaseDAO], memory_conn: sqlite3.Connection
+) -> sqlite3.Connection:
     """建立含 price 與 chip 樣本的 in-memory SQLite"""
 
-    connection: sqlite3.Connection = sqlite3.connect(":memory:")
-
-    price_df: pd.DataFrame = pd.DataFrame(
-        [
+    dao_factory(
+        StockPriceDAO,
+        records=[
             # 正常樣本
             {
                 "date": DAY_1,
@@ -54,16 +55,18 @@ def conn() -> Iterator[sqlite3.Connection]:
                 PriceColumn.CLOSE.value: 1000.0,
                 PriceColumn.SHARES.value: None,
             },
-            # 同一檔重複出現：應取第一筆
+            # 同一檔同一天兩筆：主鍵含證券名稱，改名當天兩筆並存，應取第一筆
             {
                 "date": DAY_1,
                 "stock_id": "1101",
+                "證券名稱": "台泥",
                 PriceColumn.CLOSE.value: 30.0,
                 PriceColumn.SHARES.value: 5_000_000,
             },
             {
                 "date": DAY_1,
                 "stock_id": "1101",
+                "證券名稱": "台灣水泥",
                 PriceColumn.CLOSE.value: 99.0,
                 PriceColumn.SHARES.value: 9_000_000,
             },
@@ -74,12 +77,11 @@ def conn() -> Iterator[sqlite3.Connection]:
                 PriceColumn.CLOSE.value: 600.0,
                 PriceColumn.SHARES.value: 30_000_000,
             },
-        ]
+        ],
     )
-    price_df.to_sql(PRICE_TABLE_NAME, connection, index=False)
-
-    chip_df: pd.DataFrame = pd.DataFrame(
-        [
+    dao_factory(
+        StockChipDAO,
+        records=[
             {
                 "date": DAY_1,
                 "stock_id": "2330",
@@ -90,13 +92,10 @@ def conn() -> Iterator[sqlite3.Connection]:
                 "stock_id": "2317",
                 ChipColumn.TRUST_NET_SHARES.value: -800_000,
             },
-        ]
+        ],
     )
-    chip_df.to_sql(CHIP_TABLE_NAME, connection, index=False)
 
-    yield connection
-
-    connection.close()
+    return memory_conn
 
 
 @pytest.fixture
