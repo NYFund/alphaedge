@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterator
+from typing import Any, Callable, Dict, Iterator
 
 import pandas as pd
 import pytest
@@ -10,6 +10,8 @@ from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import CHIP_TABLE_NAME, PRICE_TABLE_NAME
 from core.config.schema import ChipColumn, PriceColumn
+from core.dao.base import BaseDAO
+from core.dao.tw.stock_chip_dao import StockChipDAO
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
@@ -193,7 +195,7 @@ def test_get_trust_net_shares_map(chip_api: StockChipAPI) -> None:
 
 
 # === API 邊界===
-def test_get_net_chip_no_longer_raises(dao_factory) -> None:
+def test_get_net_chip_no_longer_raises(dao_factory: Callable[..., BaseDAO]) -> None:
     """
     `get_net_chip()` 一被呼叫就 `TypeError`
 
@@ -201,10 +203,7 @@ def test_get_net_chip_no_longer_raises(dao_factory) -> None:
     全專案沒有呼叫端，所以壞了也沒人發現，但 API 門面看起來是可用的。
     """
 
-    from core.api.tw.stock_chip_api import StockChipAPI
-    from core.dao.tw.stock_chip_dao import StockChipDAO
-
-    chip_dao = dao_factory(
+    chip_dao: StockChipDAO = dao_factory(
         StockChipDAO,
         records=[
             {
@@ -232,11 +231,10 @@ def test_get_net_chip_no_longer_raises(dao_factory) -> None:
     ]
 
 
-def test_get_net_chip_returns_empty_without_data(dao_factory) -> None:
+def test_get_net_chip_returns_empty_without_data(
+    dao_factory: Callable[..., BaseDAO],
+) -> None:
     """查無資料時回空表，不可在取欄位時炸掉"""
-
-    from core.api.tw.stock_chip_api import StockChipAPI
-    from core.dao.tw.stock_chip_dao import StockChipDAO
 
     api: StockChipAPI = StockChipAPI(conn=dao_factory(StockChipDAO).conn)
 

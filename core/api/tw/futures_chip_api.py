@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -212,7 +212,8 @@ class FuturesChipAPI(BaseDataAPI):
     ) -> Optional[Dict[str, str]]:
         """該表的資料涵蓋範圍（供人工確認回補進度）"""
 
-        covered = self.get_dao(table).get_covered_date_range()
+        dao: FuturesChipDAO = self.get_dao(table)
+        covered: Optional[Tuple[str, str]] = dao.get_covered_date_range()
 
         if covered is None:
             return None

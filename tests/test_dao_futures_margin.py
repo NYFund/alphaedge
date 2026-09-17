@@ -1,12 +1,13 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 
 import pandas as pd
 import pytest
 
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.pipeline.tw.updaters.futures_margin_updater import FuturesMarginUpdater
 
 """
 期貨保證金兩張表 DAO
@@ -93,7 +94,7 @@ def test_updater_consistency_check_uses_the_exclusive_query(
 ) -> None:
     """updater 的「調整前」查詢走 `<`：同日已有一覽表列時不可拿到新值"""
 
-    updater = make_updater(tmp_path, monkeypatch)
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
     updater.dao.insert_rows(
         FuturesMarginDAO.TABLE_NAME,
         make_margin(
@@ -159,7 +160,9 @@ def test_table_name_whitelist(dao: FuturesMarginDAO) -> None:
 
 
 # === updater／loader／設定 ===
-def make_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def make_updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> FuturesMarginUpdater:
     """DB 與 downloads 都指向暫存區的保證金 updater"""
 
     import core.pipeline.tw.loaders.futures_margin_loader as loader_module
@@ -179,7 +182,7 @@ def test_updater_and_loader_share_one_connection(
 ) -> None:
     """updater 與其 loader 必須是同一條連線，`close()` 後一併關閉"""
 
-    updater = make_updater(tmp_path, monkeypatch)
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
 
     assert updater.loader.dao is updater.dao
     assert updater.loader.conn is updater.conn
@@ -193,10 +196,14 @@ def test_loader_failed_insert_leaves_no_partial_rows(
 ) -> None:
     """寫到一半失敗時整批回滾，例外往外拋"""
 
-    updater = make_updater(tmp_path, monkeypatch)
-    original_insert = FuturesMarginDAO.insert_rows
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
+    original_insert: Callable[..., int] = FuturesMarginDAO.insert_rows
 
-    def insert_then_fail(self, table, df, replace=False):
+    def insert_then_fail(
+        self: FuturesMarginDAO, table: str, df: pd.DataFrame, replace: bool = False
+    ) -> int:
+        """照常寫入後模擬寫到一半失敗"""
+
         original_insert(self, table, df, replace=replace)
         raise OSError("disk I/O error")
 

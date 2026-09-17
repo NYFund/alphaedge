@@ -162,7 +162,7 @@ def test_numeric_columns_are_numeric(cleaner) -> None:
 def chip_api(dao_factory: Callable[..., BaseDAO]) -> FuturesChipAPI:
     """建一個只有兩天籌碼的記憶體資料庫"""
 
-    chip_dao = dao_factory(
+    chip_dao: FuturesChipDAO = dao_factory(
         FuturesChipDAO,
         records=[
             {

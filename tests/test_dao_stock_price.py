@@ -1,12 +1,14 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import Callable, List
 
 import pandas as pd
 import pytest
 
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.pipeline.tw.loaders.stock_price_loader import StockPriceLoader
+from core.pipeline.tw.updaters.stock_price_updater import StockPriceUpdater
 from core.pipeline.utils.exceptions import DataLoadError
 
 """
@@ -157,7 +159,7 @@ def test_updater_and_loader_share_one_connection(
     make_downloads(tmp_path, monkeypatch)
     monkeypatch.setattr(updater_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
 
-    updater = updater_module.StockPriceUpdater()
+    updater: StockPriceUpdater = updater_module.StockPriceUpdater()
 
     assert updater.loader.dao is updater.dao
     assert updater.loader.conn is updater.conn
@@ -170,8 +172,6 @@ def test_loader_keeps_shared_dao_open_after_load(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """共用 DAO 下入庫完成不可關連線：updater 接著還要用它查最新日期"""
-
-    from core.pipeline.tw.loaders.stock_price_loader import StockPriceLoader
 
     downloads: Path = make_downloads(tmp_path, monkeypatch)
     make_price_rows("2024-01-02", ["2330"]).to_csv(
@@ -209,17 +209,19 @@ def test_failed_file_leaves_no_partial_rows(
         downloads / "twse_20240103.csv", index=False
     )
 
-    original_insert = StockPriceDAO.insert_or_ignore
+    original_insert: Callable[..., int] = StockPriceDAO.insert_or_ignore
 
-    def insert_then_fail(self: StockPriceDAO, df: pd.DataFrame):
-        result = original_insert(self, df)
+    def insert_then_fail(self: StockPriceDAO, df: pd.DataFrame) -> int:
+        """照常寫入後，遇到 2024-01-03 的檔案就模擬寫到一半失敗"""
+
+        result: int = original_insert(self, df)
         if (df["date"] == "2024-01-03").any():
             raise OSError("disk I/O error")
         return result
 
     monkeypatch.setattr(StockPriceDAO, "insert_or_ignore", insert_then_fail)
 
-    loader = loader_module.StockPriceLoader()
+    loader: StockPriceLoader = loader_module.StockPriceLoader()
     loader.price_dir = downloads
 
     with pytest.raises(DataLoadError) as exc_info:

@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import Any, Callable, Iterator, List, Tuple
 
 import pandas as pd
 import pytest
@@ -8,6 +8,7 @@ import pytest
 from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
+from core.pipeline.tw.updaters.finmind.common import FinMindContext
 from core.pipeline.utils import FinMindDataType
 from core.pipeline.utils.exceptions import DataLoadError
 
@@ -53,7 +54,7 @@ def count_rows(db_path: Path, table: str) -> int:
 
 
 @pytest.fixture
-def db(tmp_path: Path):
+def db(tmp_path: Path) -> Iterator[Tuple[sqlite3.Connection, Path]]:
     """已建好券商分點表的暫存檔案 DB，回傳 (conn, db_path)"""
 
     db_path: Path = tmp_path / "tw_stock.db"
@@ -64,7 +65,9 @@ def db(tmp_path: Path):
 
 
 # === 券商分點：提交時點與回滾 ===
-def test_commit_false_really_defers_commit(db) -> None:
+def test_commit_false_really_defers_commit(
+    db: Tuple[sqlite3.Connection, Path],
+) -> None:
     """`commit=False` 時其他連線看不到，呼叫端 commit 之後才看得到"""
 
     from core.pipeline.tw.loaders.finmind import broker_trading_loader
@@ -84,7 +87,7 @@ def test_commit_false_really_defers_commit(db) -> None:
 
 
 def test_failed_batch_does_not_discard_earlier_uncommitted_batches(
-    db, monkeypatch: pytest.MonkeyPatch
+    db: Tuple[sqlite3.Connection, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """
     第二批寫到一半失敗：只回滾第二批，第一批（尚未 commit）照樣留著
@@ -100,9 +103,11 @@ def test_failed_batch_does_not_discard_earlier_uncommitted_batches(
         conn, make_broker_rows("2330", "1020", ["2024-01-02"]), commit=False
     )
 
-    original_insert = BrokerTradingDAO.insert_or_ignore
+    original_insert: Callable[..., int] = BrokerTradingDAO.insert_or_ignore
 
-    def insert_then_fail(self: BrokerTradingDAO, df: pd.DataFrame):
+    def insert_then_fail(self: BrokerTradingDAO, df: pd.DataFrame) -> int:
+        """照常寫入後模擬寫到一半失敗"""
+
         original_insert(self, df)
         raise OSError("disk I/O error")
 
@@ -114,7 +119,7 @@ def test_failed_batch_does_not_discard_earlier_uncommitted_batches(
         )
 
     conn.commit()
-    rows = conn.execute(
+    rows: List[Tuple[Any, ...]] = conn.execute(
         f"SELECT stock_id FROM {BrokerTradingDAO.TABLE_NAME}"
     ).fetchall()
     assert rows == [("2330",)]
@@ -148,7 +153,7 @@ def test_csv_path_commits_good_files_before_reporting_failure(tmp_path: Path) ->
     assert count_rows(db_path, BrokerTradingDAO.TABLE_NAME) == 1
 
 
-def test_date_ranges_and_index(db) -> None:
+def test_date_ranges_and_index(db: Tuple[sqlite3.Connection, Path]) -> None:
     """metadata 重建用的日期範圍，以及 `GROUP BY` 用的索引"""
 
     conn, _ = db
@@ -227,10 +232,8 @@ def test_reference_table_failure_keeps_earlier_tables(
 
 
 # === 股票／券商清單 ===
-def make_context(conn: sqlite3.Connection):
+def make_context(conn: sqlite3.Connection) -> FinMindContext:
     """只帶連線的 FinMindContext（清單查詢用不到 ETL 三件組）"""
-
-    from core.pipeline.tw.updaters.finmind.common import FinMindContext
 
     return FinMindContext(crawler=None, cleaner=None, loader=None, conn=conn)
 
@@ -238,7 +241,7 @@ def make_context(conn: sqlite3.Connection):
 def test_lists_are_empty_when_tables_are_missing() -> None:
     """尚未跑過 stock_info／broker_info 是正常狀態：回空清單，不拋錯"""
 
-    context = make_context(sqlite3.connect(":memory:"))
+    context: FinMindContext = make_context(sqlite3.connect(":memory:"))
 
     assert context.get_stock_list() == []
     assert context.get_securities_trader_list() == []
@@ -256,7 +259,7 @@ def test_list_query_errors_are_raised() -> None:
     # 兩張表都故意缺主鍵欄
     conn.execute(f"CREATE TABLE {StockInfoDAO.TABLE_NAME} (stock_name TEXT)")
     conn.execute(f"CREATE TABLE {SecuritiesTraderInfoDAO.TABLE_NAME} (phone TEXT)")
-    context = make_context(conn)
+    context: FinMindContext = make_context(conn)
 
     with pytest.raises(pd.errors.DatabaseError):
         context.get_stock_list()

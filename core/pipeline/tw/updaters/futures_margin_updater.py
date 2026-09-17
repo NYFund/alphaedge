@@ -1,6 +1,6 @@
 import datetime
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -383,7 +383,9 @@ class FuturesMarginUpdater(BaseDataUpdater):
         回測與試算問的是「這一天適用多少」，才用 `<=`（見 `FuturesMarginAPI.get_margin()`）。
         """
 
-        row = self.dao.get_margin_in_effect(product, effective_date, inclusive=False)
+        row: Optional[Tuple[Any, ...]] = self.dao.get_margin_in_effect(
+            product, effective_date, inclusive=False
+        )
         return None if row is None else row[2]
 
     def check_announcement_consistency(

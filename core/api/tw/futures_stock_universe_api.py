@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -159,7 +159,7 @@ class FuturesStockUniverseAPI(BaseDataAPI):
         if snapshot is None:
             return None
 
-        row = self.dao.get_underlying(snapshot, product_id)
+        row: Optional[Tuple[Any, ...]] = self.dao.get_underlying(snapshot, product_id)
         if row is None:
             return None
         return {

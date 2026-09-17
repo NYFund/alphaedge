@@ -237,7 +237,10 @@ class BaseDAO:
 
         if not self.table_exists():
             return 0
-        return self.conn.execute(f"SELECT COUNT(*) FROM {self.TABLE_NAME}").fetchone()[0]
+        count: int = self.conn.execute(
+            f"SELECT COUNT(*) FROM {self.TABLE_NAME}"
+        ).fetchone()[0]
+        return count
 
     def query_df(self, sql: str, params: Tuple[Any, ...] = ()) -> pd.DataFrame:
         """

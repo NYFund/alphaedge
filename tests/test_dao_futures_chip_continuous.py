@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import Callable, Iterator, List
 
 import pandas as pd
 import pytest
@@ -10,9 +10,15 @@ from core.config import (
     FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
     FUTURES_PRICE_DAILY_TABLE_NAME,
 )
+from core.dao.base import BaseDAO
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
+from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
+from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+from core.pipeline.tw.updaters.futures_continuous_updater import (
+    FuturesContinuousUpdater,
+)
 
 """
 期貨籌碼三表與連續合約表 DAO
@@ -87,7 +93,9 @@ def test_chip_api_on_date_only_hides_missing_table() -> None:
 
 # === 籌碼 loader／updater ===
 @pytest.fixture
-def chip_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def chip_updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[FuturesChipUpdater]:
     """DB 與 downloads 都指向暫存區的籌碼 updater"""
 
     import core.pipeline.tw.loaders.futures_chip_loader as loader_module
@@ -98,12 +106,12 @@ def chip_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(loader_module, "FUTURES_CHIP_DOWNLOADS_PATH", tmp_path / "chip")
 
-    updater = updater_module.FuturesChipUpdater()
+    updater: FuturesChipUpdater = updater_module.FuturesChipUpdater()
     yield updater
     updater.close()
 
 
-def test_chip_updater_shares_one_connection(chip_updater) -> None:
+def test_chip_updater_shares_one_connection(chip_updater: FuturesChipUpdater) -> None:
     """loader 與行情 API 都用 updater 的連線，`close()` 一併關閉"""
 
     assert chip_updater.loader.conn is chip_updater.conn
@@ -115,7 +123,9 @@ def test_chip_updater_shares_one_connection(chip_updater) -> None:
         conn.execute("SELECT 1")
 
 
-def test_chip_loader_leaves_commit_to_the_updater(chip_updater, tmp_path: Path) -> None:
+def test_chip_loader_leaves_commit_to_the_updater(
+    chip_updater: FuturesChipUpdater, tmp_path: Path
+) -> None:
     """loader 寫完不 commit，另一條連線看不到；updater 呼叫 `commit()` 後才落地"""
 
     inserted: int = chip_updater.loader.add_to_db(
@@ -139,18 +149,20 @@ def test_chip_loader_leaves_commit_to_the_updater(chip_updater, tmp_path: Path) 
 
 
 def test_chip_loader_failed_insert_rolls_back(
-    chip_updater, monkeypatch: pytest.MonkeyPatch
+    chip_updater: FuturesChipUpdater, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """寫到一半失敗時只回滾這一批，同一交易內先前的批次不受影響"""
 
-    loader = chip_updater.loader
+    loader: FuturesChipLoader = chip_updater.loader
     loader.add_to_db(
         FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME, make_institutional(["2026-08-27"])
     )
 
-    original_insert = FuturesChipDAO.insert_new_rows
+    original_insert: Callable[..., int] = FuturesChipDAO.insert_new_rows
 
     def insert_then_fail(self: FuturesChipDAO, df: pd.DataFrame) -> int:
+        """照常寫入後模擬寫到一半失敗"""
+
         original_insert(self, df)
         raise OSError("disk I/O error")
 
@@ -165,14 +177,14 @@ def test_chip_loader_failed_insert_rolls_back(
 
 
 def test_trading_day_check_treats_missing_price_table_as_trading(
-    chip_updater, dao_factory
+    chip_updater: FuturesChipUpdater, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """行情表還沒建時一律視為有交易日（寧可重試，也不要把被擋當成沒資料）"""
 
     day: datetime.date = datetime.date(2026, 8, 28)
     assert chip_updater.has_trading_days(day, day) is True
 
-    price_dao = dao_factory(FuturesPriceDAO, conn=chip_updater.conn)
+    price_dao: FuturesPriceDAO = dao_factory(FuturesPriceDAO, conn=chip_updater.conn)
     assert chip_updater.has_trading_days(day, day) is False
 
     price_dao.insert_or_ignore(
@@ -191,7 +203,9 @@ def test_trading_day_check_treats_missing_price_table_as_trading(
     assert chip_updater.has_trading_days(day, day) is True
 
 
-def test_trading_day_check_raises_on_query_error(chip_updater) -> None:
+def test_trading_day_check_raises_on_query_error(
+    chip_updater: FuturesChipUpdater,
+) -> None:
     """行情表存在但查詢出錯時往外拋（舊版 `except Exception` 一律回 True）"""
 
     # 故意缺 date 欄
@@ -206,7 +220,9 @@ def test_trading_day_check_raises_on_query_error(chip_updater) -> None:
 
 # === 連續合約 ===
 @pytest.fixture
-def continuous_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def continuous_updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[FuturesContinuousUpdater]:
     """DB 與 downloads 都指向暫存區的連續合約 updater"""
 
     import core.pipeline.tw.loaders.futures_continuous_loader as loader_module
@@ -219,12 +235,14 @@ def continuous_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         loader_module, "FUTURES_CONTINUOUS_DOWNLOADS_PATH", tmp_path / "continuous"
     )
 
-    updater = updater_module.FuturesContinuousUpdater()
+    updater: FuturesContinuousUpdater = updater_module.FuturesContinuousUpdater()
     yield updater
     updater.close()
 
 
-def test_continuous_updater_shares_one_connection(continuous_updater) -> None:
+def test_continuous_updater_shares_one_connection(
+    continuous_updater: FuturesContinuousUpdater,
+) -> None:
     """行情 API 與 loader 都用 updater 的 DAO 連線"""
 
     assert continuous_updater.loader.dao is continuous_updater.dao
@@ -235,7 +253,9 @@ def test_continuous_updater_shares_one_connection(continuous_updater) -> None:
 
 
 def test_continuous_series_is_all_or_nothing(
-    continuous_updater, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    continuous_updater: FuturesContinuousUpdater,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
     同一組（商品, 換月規則）的幾種調整方式要嘛一起落地、要嘛一起不落地
@@ -287,10 +307,12 @@ def test_continuous_series_is_all_or_nothing(
     )
     monkeypatch.setattr(continuous_updater, "build_series", lambda df, schedule: series)
 
-    original_add = FuturesContinuousLoader.add_to_db
+    original_add: Callable[..., int] = FuturesContinuousLoader.add_to_db
     calls: List[int] = []
 
     def add_then_fail_on_second(self: FuturesContinuousLoader, df: pd.DataFrame) -> int:
+        """第一個商品照常寫入，第二個商品寫入時模擬失敗"""
+
         calls.append(1)
         if len(calls) == 2:
             raise OSError("disk I/O error")

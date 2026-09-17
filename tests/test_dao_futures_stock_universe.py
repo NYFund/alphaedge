@@ -1,13 +1,18 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List
+from typing import Callable, Iterator, List
 
 import pandas as pd
 import pytest
 
+from core.dao.base import BaseDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
+from core.pipeline.tw.updaters.futures_stock_universe_updater import (
+    FuturesStockUniverseUpdater,
+)
 
 """
 股期標的池（`futures_stock_universe` 表）DAO
@@ -156,7 +161,9 @@ def test_margin_api_uses_per_product_contract_size(
 
 # === updater／loader ===
 @pytest.fixture
-def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def updater(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[FuturesStockUniverseUpdater]:
     """DB 與 downloads 都指向暫存區的標的池 updater"""
 
     import core.pipeline.tw.loaders.futures_stock_universe_loader as loader_module
@@ -170,12 +177,16 @@ def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         loader_module, "FUTURES_UNIVERSE_DOWNLOADS_PATH", tmp_path / "universe"
     )
 
-    universe_updater = updater_module.FuturesStockUniverseUpdater()
+    universe_updater: FuturesStockUniverseUpdater = (
+        updater_module.FuturesStockUniverseUpdater()
+    )
     yield universe_updater
     universe_updater.close()
 
 
-def test_updater_and_loader_share_one_connection(updater) -> None:
+def test_updater_and_loader_share_one_connection(
+    updater: FuturesStockUniverseUpdater,
+) -> None:
     """updater 與其 loader 必須是同一條連線，`close()` 後一併關閉"""
 
     assert updater.loader.dao is updater.dao
@@ -193,7 +204,9 @@ def test_updater_and_loader_share_one_connection(updater) -> None:
     assert updater.dao.conn is None
 
 
-def test_underlying_match_without_stock_db(updater, tmp_path: Path) -> None:
+def test_underlying_match_without_stock_db(
+    updater: FuturesStockUniverseUpdater, tmp_path: Path
+) -> None:
     """只跑期貨的環境沒有 tw_stock.db：略過比對，且不替它建出空檔"""
 
     updater.log_underlying_match(make_snapshot("2026-08-01", [("CDF", "2330", 2000)]))
@@ -202,7 +215,10 @@ def test_underlying_match_without_stock_db(updater, tmp_path: Path) -> None:
 
 
 def test_underlying_match_reads_price_table(
-    updater, tmp_path: Path, captured_logs: List[str], dao_factory
+    updater: FuturesStockUniverseUpdater,
+    tmp_path: Path,
+    captured_logs: List[str],
+    dao_factory: Callable[..., BaseDAO],
 ) -> None:
     """有 price 表時回報對得上的檔數"""
 
@@ -222,13 +238,15 @@ def test_underlying_match_reads_price_table(
 
 
 @pytest.fixture
-def captured_logs() -> List[str]:
+def captured_logs() -> Iterator[List[str]]:
     """收集 loguru 訊息"""
 
     from loguru import logger
 
     messages: List[str] = []
-    sink_id = logger.add(lambda message: messages.append(message.record["message"]))
+    sink_id: int = logger.add(
+        lambda message: messages.append(message.record["message"])
+    )
     yield messages
     logger.remove(sink_id)
 
@@ -247,7 +265,7 @@ def test_stock_futures_resolver_uses_the_updater_connection(
     monkeypatch.setattr(
         price_loader_module, "FUTURES_PRICE_DOWNLOADS_PATH", tmp_path / "price"
     )
-    price_updater = price_updater_module.FuturesPriceUpdater()
+    price_updater: FuturesPriceUpdater = price_updater_module.FuturesPriceUpdater()
 
     universe_dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
         conn=price_updater.conn

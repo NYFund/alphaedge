@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pytest
@@ -47,13 +47,13 @@ def universe_api(
 ) -> FuturesStockUniverseAPI:
     """建一個含兩份快照的記憶體標的池（模擬除權息後契約單位被調整）"""
 
-    contracts = [
+    contracts: List[Tuple[str, str, str, str, str]] = [
         ("CDF", "CD", "個股期貨", "2330", "台積電"),
         ("NYF", "NY", "ETF期貨", "0050", "元大台灣50"),
         ("XYF", "XY", "小型個股期貨", "2603", "長榮"),
     ]
     # 除權息後 CDF 的契約單位被調整（2,000 → 2,150），其餘兩檔不變
-    sizes = {
+    sizes: Dict[str, Dict[str, int]] = {
         "2026-08-01": {"CDF": 2000, "NYF": 10000, "XYF": 100},
         "2026-08-29": {"CDF": 2150, "NYF": 10000, "XYF": 100},
     }

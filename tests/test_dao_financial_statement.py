@@ -1,12 +1,16 @@
 import sqlite3
 from pathlib import Path
-from typing import List, Tuple
+from typing import Any, Callable, List, Tuple
 
 import pandas as pd
 import pytest
 
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
+from core.pipeline.tw.loaders.financial_statement_loader import FinancialStatementLoader
+from core.pipeline.tw.updaters.financial_statement_updater import (
+    FinancialStatementUpdater,
+)
 from core.pipeline.utils.exceptions import DataLoadError
 
 """
@@ -82,7 +86,9 @@ def test_equity_change_primary_key_includes_flattened_dimensions() -> None:
     fs_dao.ensure_table(EQUITY_CHANGE_COLUMNS)
     fs_dao.ensure_table(EQUITY_CHANGE_COLUMNS)
 
-    info = fs_dao.conn.execute("PRAGMA table_info('equity_change')").fetchall()
+    info: List[Tuple[Any, ...]] = fs_dao.conn.execute(
+        "PRAGMA table_info('equity_change')"
+    ).fetchall()
     primary_keys: List[str] = [
         row[1] for row in sorted(info, key=lambda r: r[5]) if row[5]
     ]
@@ -181,15 +187,13 @@ def test_target_stock_ids_query_error_is_raised() -> None:
     「沒有目標股票，略過」，整段權益變動表回補一檔都沒跑，行程照樣成功結束。
     """
 
-    from core.pipeline.tw.updaters.financial_statement_updater import (
-        FinancialStatementUpdater,
-    )
-
     conn: sqlite3.Connection = sqlite3.connect(":memory:")
     # 故意缺 type 欄
     conn.execute("CREATE TABLE taiwan_stock_info (stock_id TEXT)")
 
-    updater = FinancialStatementUpdater.__new__(FinancialStatementUpdater)
+    updater: FinancialStatementUpdater = FinancialStatementUpdater.__new__(
+        FinancialStatementUpdater
+    )
     updater.conn = conn
 
     # pandas 把 `sqlite3.OperationalError` 包成自己的 DatabaseError
@@ -198,7 +202,9 @@ def test_target_stock_ids_query_error_is_raised() -> None:
 
 
 # === loader／updater ===
-def make_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def make_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Tuple[FinancialStatementLoader, Path]:
     """建立指向暫存 DB 與暫存 downloads 的財報 loader"""
 
     import core.pipeline.tw.loaders.financial_statement_loader as loader_module
@@ -207,7 +213,7 @@ def make_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(loader_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setattr(loader_module, "FINANCIAL_STATEMENT_DOWNLOADS_PATH", downloads)
 
-    loader = loader_module.FinancialStatementLoader()
+    loader: FinancialStatementLoader = loader_module.FinancialStatementLoader()
     return loader, downloads / "balance_sheet"
 
 
@@ -220,10 +226,12 @@ def test_loader_failed_file_leaves_no_partial_rows(
     make_balance_rows([(2024, 1)]).to_csv(balance_dir / "bs_2024Q1.csv", index=False)
     make_balance_rows([(2024, 2)]).to_csv(balance_dir / "bs_2024Q2.csv", index=False)
 
-    original_insert = FinancialStatementDAO.insert_or_ignore
+    original_insert: Callable[..., int] = FinancialStatementDAO.insert_or_ignore
 
-    def insert_then_fail(self: FinancialStatementDAO, df: pd.DataFrame):
-        result = original_insert(self, df)
+    def insert_then_fail(self: FinancialStatementDAO, df: pd.DataFrame) -> int:
+        """照常寫入後，遇到第 2 季的檔案就模擬寫到一半失敗"""
+
+        result: int = original_insert(self, df)
         if (df["season"] == 2).any():
             raise OSError("disk I/O error")
         return result
@@ -239,7 +247,9 @@ def test_loader_failed_file_leaves_no_partial_rows(
     assert loader.conn is None
 
     conn: sqlite3.Connection = sqlite3.connect(tmp_path / "test.db")
-    rows = conn.execute("SELECT year, season FROM balance_sheet").fetchall()
+    rows: List[Tuple[Any, ...]] = conn.execute(
+        "SELECT year, season FROM balance_sheet"
+    ).fetchall()
     conn.close()
 
     assert rows == [(2024, 1)]
@@ -257,7 +267,7 @@ def test_updater_and_loader_share_one_connection(
     monkeypatch.setattr(loader_module, "FINANCIAL_STATEMENT_DOWNLOADS_PATH", downloads)
     monkeypatch.setattr(updater_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
 
-    updater = updater_module.FinancialStatementUpdater()
+    updater: FinancialStatementUpdater = updater_module.FinancialStatementUpdater()
     assert updater.loader.conn is updater.conn
 
     make_balance_rows([(2024, 1)]).to_csv(

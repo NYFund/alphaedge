@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from core.api.base import BaseDataAPI
 from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_FUTURES_DB_PATH
@@ -100,7 +100,7 @@ class FuturesMarginAPI(BaseDataAPI):
         # 表不存在（尚未跑過保證金 ETL）：與「查無該商品」同樣回 None，
         # 由呼叫端決定要中止還是退回比率近似。**只判斷表存不存在**——
         # 舊版連 `database is locked` 一起吞，會讓回測誤用比率近似值
-        row = self.dao.get_margin_in_effect(
+        row: Optional[Tuple[Any, ...]] = self.dao.get_margin_in_effect(
             product,
             date,
             inclusive=True,
@@ -175,7 +175,7 @@ class FuturesMarginAPI(BaseDataAPI):
 
         # 表不存在時與 `get_margin()` 同樣回 None：**更舊的版本只有 `get_margin()`
         # 有這段**，於是同一個「還沒跑 ETL」的環境下，查金額回 None、查比例卻直接拋例外
-        row = self.dao.get_rates_in_effect(
+        row: Optional[Tuple[Any, ...]] = self.dao.get_rates_in_effect(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )
 
@@ -258,7 +258,7 @@ class FuturesMarginAPI(BaseDataAPI):
 
         # 表還不存在＝尚未跑過 `--target futures_margin`；那是「還沒有資料」
         # 不是查詢寫錯，全新環境（CI、剛 clone）本來就會走到這裡
-        covered = self.dao.get_covered_date_range(product)
+        covered: Optional[Tuple[str, str]] = self.dao.get_covered_date_range(product)
 
         if covered is None:
             return None
