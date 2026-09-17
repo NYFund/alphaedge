@@ -1,5 +1,5 @@
 ---
-description: 在 AlphaEdge 開發／撰寫／新增交易策略時使用。當使用者提到「開發策略」、「寫一個策略」、「新增策略」、「策略邏輯」、「策略回測」，或要在 core/strategies/stock/ 底下新增/修改繼承 BaseStockStrategy 的策略類別時套用此規則。
+description: 在 AlphaEdge 開發／撰寫／新增交易策略時使用。當使用者提到「開發策略」、「寫一個策略」、「新增策略」、「策略邏輯」、「策略回測」，或要在 core/strategies/{stock,futures}/ 底下新增/修改繼承 BaseStockStrategy 或 BaseFuturesStrategy 的策略類別時套用此規則。
 alwaysApply: false
 ---
 

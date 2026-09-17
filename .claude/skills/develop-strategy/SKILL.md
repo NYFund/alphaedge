@@ -1,5 +1,5 @@
 ---
-description: 在 AlphaEdge 專案中開發／撰寫／新增交易策略時使用。當使用者提到「開發策略」、「寫一個策略」、「新增策略」、「策略邏輯」、「策略回測」，或要在 core/strategies/stock/ 底下新增/修改繼承 BaseStockStrategy 的策略類別時觸發，不需要使用者明講「去讀 README」。
+description: 在 AlphaEdge 專案中開發／撰寫／新增交易策略時使用。當使用者提到「開發策略」、「寫一個策略」、「新增策略」、「策略邏輯」、「策略回測」，或要在 core/strategies/{stock,futures}/ 底下新增/修改繼承 BaseStockStrategy 或 BaseFuturesStrategy 的策略類別時觸發，不需要使用者明講「去讀 README」。
 when_to_use: 使用者想要新增一支新策略、修改既有策略的開倉/平倉/停損邏輯、詢問策略要怎麼寫、詢問策略參數/資料 API 怎麼用、或要用 run.py --strategy 執行回測時。
 ---
 

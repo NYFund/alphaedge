@@ -308,6 +308,9 @@ python run.py --strategy <StrategyName>
 
 - `--mode`: 執行模式，可選 `backtest` 或 `live`，預設為 `backtest`
 - `--strategy`: 指定要使用的策略類別名稱（必填）
+- `--show` / `--no-show`: 回測結束後要不要在瀏覽器開圖。**預設不開**——圖本來就會
+  存成 PNG，批次掃參數時一次開幾十個分頁，無頭環境（CI、容器、`nohup`）更會直接失敗。
+  未指定時依環境變數 `ALPHAEDGE_SHOW_FIGURES`
 
 ### 使用範例
 
@@ -322,7 +325,8 @@ python run.py --mode live --strategy MomentumStrategy1
 ### 注意事項
 
 - Strategy Name 是 Class 的名稱
-- 策略會自動從 `core/strategies/stock/` 目錄載入
+- 策略由 `strategy_loader` 逐一掃描 `core/strategies/` 底下的商品類別子目錄
+  （`stock/`、`futures/`）載入，新增商品類別不需要改程式
 - 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
 - 回測結果會儲存在 `results/<StrategyName>/` 目錄
 

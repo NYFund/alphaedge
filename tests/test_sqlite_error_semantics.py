@@ -37,7 +37,7 @@ from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
 )
 
 """
-「表還沒建」與「查詢失敗」必須分得開（健檢第四輪 S1，與 F-056 同型）
+「表還沒建」與「查詢失敗」必須分得開
 
 期貨線原本有 8 處寫成 `except sqlite3.OperationalError: return None`，
 於是三種完全不同的狀況長得一模一樣：

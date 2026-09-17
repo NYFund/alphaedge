@@ -113,6 +113,9 @@ python -m tasks.update_db --target no_tick
 python -m tasks.update_db
 ```
 
+For the other futures targets (continuous contracts, margin, chip, tick) and their
+backfill caveats, see [TW Futures Platform](../futures/tw-futures-platform.md), section 〈指令〉.
+
 ### Multi-Target Examples
 
 ```bash

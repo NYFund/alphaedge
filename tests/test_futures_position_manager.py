@@ -621,7 +621,7 @@ def test_costs_are_deducted_when_configured() -> None:
 
 
 # ============================================================
-# 查表模式：接上 FuturesMarginAPI（S5）
+# 查表模式：接上 FuturesMarginAPI
 # ============================================================
 
 
