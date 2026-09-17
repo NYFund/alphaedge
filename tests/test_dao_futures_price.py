@@ -114,7 +114,7 @@ def test_trading_days_query_error_is_raised() -> None:
     # 故意缺 date 欄
     conn.execute(f"CREATE TABLE {FuturesPriceDAO.TABLE_NAME} (product TEXT)")
 
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         FuturesPriceDAO(conn=conn).get_trading_days(
             datetime.date(2026, 1, 1), datetime.date(2026, 12, 31)
         )

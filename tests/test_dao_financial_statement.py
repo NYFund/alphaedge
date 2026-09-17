@@ -152,7 +152,7 @@ def test_crawled_stock_ids_query_error_is_raised() -> None:
     # 故意缺 season 欄
     conn.execute("CREATE TABLE equity_change (year INT, stock_id TEXT)")
 
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         FinancialStatementDAO("equity_change", conn=conn).get_stock_ids(2024, 1)
 
 
@@ -196,8 +196,7 @@ def test_target_stock_ids_query_error_is_raised() -> None:
     )
     updater.conn = conn
 
-    # pandas 把 `sqlite3.OperationalError` 包成自己的 DatabaseError
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         updater.get_target_stock_ids()
 
 

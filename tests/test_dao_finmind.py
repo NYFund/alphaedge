@@ -261,9 +261,9 @@ def test_list_query_errors_are_raised() -> None:
     conn.execute(f"CREATE TABLE {SecuritiesTraderInfoDAO.TABLE_NAME} (phone TEXT)")
     context: FinMindContext = make_context(conn)
 
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         context.get_stock_list()
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         context.get_securities_trader_list()
 
 

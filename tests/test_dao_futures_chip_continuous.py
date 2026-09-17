@@ -87,7 +87,7 @@ def test_chip_api_on_date_only_hides_missing_table() -> None:
     conn.execute(
         f"CREATE TABLE {FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME} (investor TEXT)"
     )
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         api.get_on_date(datetime.date(2026, 9, 1))
 
 
@@ -214,7 +214,7 @@ def test_trading_day_check_raises_on_query_error(
     )
     day: datetime.date = datetime.date(2026, 8, 28)
 
-    with pytest.raises(pd.errors.DatabaseError):
+    with pytest.raises(sqlite3.OperationalError):
         chip_updater.has_trading_days(day, day)
 
 

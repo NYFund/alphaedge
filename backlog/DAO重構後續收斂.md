@@ -22,16 +22,16 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| S1 | DAO 讀取改用 cursor，查詢失敗不 rollback 連線 | `core/dao/base.py`、`tests/test_dao_base.py`、捕捉 `pd.errors.DatabaseError` 的 7 處測試（4 個 `tests/test_dao_*.py`） | 新增「寫入未 commit → 查詢失敗 → 寫入仍在」測試；既有測試全過 | ⬜ | 優先做：這是唯一會靜默丟資料的一項 |
+| S1 | DAO 讀取改用 cursor，查詢失敗不 rollback 連線 | `core/dao/base.py`、`tests/test_dao_base.py`、捕捉 `pd.errors.DatabaseError` 的 7 處測試（4 個 `tests/test_dao_*.py`） | 新增「寫入未 commit → 查詢失敗 → 寫入仍在」測試；既有測試全過 | ✅ | 2026-09-16 完成：`pytest` 快測 1146／慢測 18 全過、回歸雙線通過；兩個正式 DB 每張表與邊界查詢共 78 組比對 `read_sql_query` 結果逐欄相同 |
 | S2 | 保證金歷史回補跳過已入庫公告 | `core/pipeline/tw/updaters/futures_margin_updater.py`、`tests/test_futures_margin.py` | 替身 crawler 記錄請求：已入庫生效日的公告不再下載附件，`skipped_existing` 正確計數 | ⬜ | — |
 | S3 | 以 `to_sql` 建表的測試改走 `dao_factory` | `tests/test_api_public_interfaces.py`、`tests/test_finmind_api.py`、`tests/test_stock_data_api.py`、`tests/test_corporate_action.py`、`tests/backtest/test_reporting.py`、`tests/test_dao_financial_statement.py`、`tests/test_dao_stock_dividend_corporate_action.py` | `grep -rn "\.to_sql(" tests` 無結果；`pytest` 全綠 | ⬜ | — |
-| S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⬜ | 是否需要需使用者確認；不需要則標 ⏸ |
+| S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⏸ | 2026-09-16 使用者裁示暫緩：帳號等級 `register` 無券商分點權限，腳本最關鍵的一段無法實跑；帳號升級或確實需要連網檢查時再做 |
 | S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
 | S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ⬜ | — |
 | S7 | FinMind 券商分點 crawler 不再把錯誤當成沒有資料 | `core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py` | 替身 API 拋一般例外時組合記為 `ERROR`、整批跑完拋 `DataLoadError`；回空表時仍是 `NO_DATA` | ⬜ | 2026-09-16 實跑發現（帳號等級 `register` 無此資料集權限） |
 | S8 | 入庫摘要區分「新寫入」與「整檔已存在」 | `core/pipeline/tw/loaders/stock_dividend_loader.py`、`corporate_action_loader.py`、`monthly_revenue_report_loader.py` 與對應測試 | 重跑同一批 CSV 時摘要為「新寫入 0 檔、已存在跳過 N 檔」 | ⬜ | 2026-09-16 實跑發現 |
 
-## S1. DAO 讀取改用 cursor，查詢失敗不 rollback 連線 ⬜
+## S1. DAO 讀取改用 cursor，查詢失敗不 rollback 連線 ✅
 
 - **目的**：讓「查詢失敗」不會連帶丟掉同一條連線上尚未 commit 的寫入，把目前的約定變成結構保證。
 - **做法**：
@@ -43,6 +43,11 @@
 - **產出**：`core/dao/base.py`、`tests/test_dao_base.py`、`tests/test_dao_*.py` 中 7 處錯誤型別斷言、`docs/dev/data-access-layer.md`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py` 的註解。
 - **驗證方式**：新增測試「insert 未 commit → `query_df()` 查不存在的欄 → 拋 `sqlite3.OperationalError` → commit 後列仍在」；`pytest -m "not slow"`、`-m slow` 全綠；回歸雙線逐筆相同。
 - **相依**：無。
+- **完成紀錄（2026-09-16）**：
+  - `query_df()` 以 `conn.execute()` 取 cursor，再以 `DataFrame.from_records(..., coerce_float=True)` 組表——與 pandas 3.0.2 `read_sql_query` 內部的組表方式相同。
+  - 對 `tw_stock.db`、`tw_futures.db` 每張表（前 3000 列、零列、最後一列）與 NULL／混合型別／重複欄名等查詢，共 78 組以 `assert_frame_equal` 比對兩種寫法，全數相同。
+  - 新增 `test_failed_query_keeps_uncommitted_writes`、`test_query_df_types_and_empty_columns`；測試中 7 處 `pytest.raises(pd.errors.DatabaseError)` 改為 `sqlite3.OperationalError`（分布在 5 個檔，**偏離原規格**所寫的 4 個檔，數量相同）。
+  - `docs/dev/data-access-layer.md` §4.3、§五改寫，〈已知限制〉刪除對應列；券商分點重建 metadata 前 commit 的註解理由改為「反映已落地資料、中斷時不必重抓」。
 
 ## S2. 保證金歷史回補跳過已入庫公告 ⬜
 
@@ -64,7 +69,7 @@
 - **驗證方式**：`grep -rn "\.to_sql(" tests` 無結果（註解裡提到 `to_sql` 的不算）；`pytest -m "not slow"` 全綠。
 - **相依**：無。
 
-## S4. FinMind 連網冒煙檢查腳本 ⬜
+## S4. FinMind 連網冒煙檢查腳本 ⏸
 
 - **目的**：補回「真的打 FinMind API、真的寫進 DB」的手動檢查，但不再用 mock 改寫 `core.config`。
 - **做法**：新增 `scripts/manual/manual_finmind_smoke.py`：
@@ -77,6 +82,7 @@
 - **產出**：`scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md`。
 - **驗證方式**：有 token 時實跑一次，三個資料集列數皆 > 0；無 token 時結束碼非零且訊息清楚。
 - **相依**：無。**需使用者確認是否需要**；不需要則本步驟標 ⏸ 並註明原因。
+- **暫緩（2026-09-16）**：使用者裁示暫緩。FinMind 帳號等級為 `register`，無券商分點資料集權限，腳本最關鍵的單一組合寫入無法實跑。**解除條件**：帳號升級，或確實需要可重複執行的連網檢查。
 
 ## S5. PostgreSQL 遷移計畫重新盤點改動面 ⬜
 

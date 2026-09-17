@@ -107,9 +107,9 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 | 期貨籌碼 | loader 不 commit，updater 每個月批次寫完 commit |
 | 連續合約 | 同一組（商品, 換月規則）的各種調整方式包一個 savepoint，寫完才 commit |
 
-⚠️ **`pd.read_sql_query` 查詢失敗時會對整條連線 `rollback()`**，再把錯誤包成
-`pandas.errors.DatabaseError`。共用連線上若有未 commit 的寫入會一起消失——
-**不要在寫入與 commit 之間夾查詢**；必須夾的（券商分點重建 metadata）先 commit。
+**查詢失敗不會動到交易**：`BaseDAO.query_df()` 以 cursor 執行，而不是 `pd.read_sql_query`——
+後者查詢失敗時會對整條連線 `rollback()`，共用連線上尚未 commit 的寫入會一起消失。
+因此「寫入後、commit 前」夾查詢是安全的；**DAO 內不要再引入 `pd.read_sql_query`**。
 
 ---
 
@@ -127,8 +127,8 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 | 逐檔 resume（權益變動表） | 整季被當成「一檔都還沒爬」，重打兩千多次請求 |
 | 交易日（期貨籌碼判斷「被擋」） | 被擋的月份被記成「那幾個月沒有籌碼」 |
 
-注意 pandas 會把 `sqlite3.OperationalError` 包成 `pandas.errors.DatabaseError`；
-走 `query_df()` 的查詢拋的是後者，走 `fetch_one()`／`conn.execute()` 的拋的是前者。
+所有讀取（`query_df()`、`fetch_one()`、`conn.execute()`）失敗時拋的都是 `sqlite3.Error` 的子類別
+（呼叫端以 `DBError` 別名捕捉），不會被 pandas 包成其他型別。
 
 ---
 
@@ -173,7 +173,6 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 | 項目 | 影響 | 解除條件 |
 |------|------|----------|
 | DAO 內部仍是 `sqlite3` | 換 PostgreSQL 時要改寫 `core/dao/` 內部（API、loader、updater 不必改） | [PostgreSQL遷移計畫](../../backlog/PostgreSQL遷移計畫.md) |
-| `pd.read_sql_query` 失敗會 rollback 整條連線 | 共用連線上「寫入後、commit 前」的查詢一旦失敗，未 commit 的寫入會消失 | 目前維持 §4.3 的 commit 時點；結構性修正（`query_df` 改用 cursor）見 [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S1 |
 | 部分測試仍以 `DataFrame.to_sql` 推導 schema 建表 | `test_api_public_interfaces`、`test_finmind_api`、`test_stock_data_api`、`test_corporate_action`（偵測器只需三欄的最小 `price`）、`backtest/test_reporting`，以及 DAO 測試中的 `test_dao_financial_statement`（最小 `taiwan_stock_info`）、`test_dao_stock_dividend_corporate_action`（偵測器用的最小 `price`）；它們沒有抄 schema，但不會隨正式 schema 改動而同步 | [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S3 |
 | 台股表名缺 `stock_` 前綴、識別欄仍是 `stock_id` | 與期貨表、`symbol` 命名不對稱 | 歸 PostgreSQL 遷移的 schema 批次 |
 
