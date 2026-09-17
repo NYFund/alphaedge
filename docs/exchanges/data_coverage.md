@@ -111,6 +111,9 @@ python -m tasks.update_db --target <targets...>
   爬取清單取自 `taiwan_stock_info` 現況，**不含已下市公司與興櫃**（倖存者偏誤來源）；
   另有少數公司的 2013~2014 年季站方導向「採 IFRSs 前」的另一組端點、本表沒有。
   詳見 [權益變動表](../pipeline/equity-change.md)〈已知限制〉。
+- **`balance_sheet`、`comprehensive_income`、`cash_flow` 的主鍵含 `公司名稱`**：來源在公司名稱後加註 `*`，
+  或公司更名後重爬，同一檔同一年季就會多一列（例如 `5904` 的 `寶雅`／`寶雅*`）。以 `stock_id` 聚合的查詢需自行去重；
+  改主鍵屬 schema 變更，排在 [PostgreSQL 遷移計畫](../../backlog/PostgreSQL遷移計畫.md) 評估。
 - `tick` 依賴 DolphinDB 環境與對應連線參數，未設定時無法使用 tick 相關流程。
 
 ### 指數期貨日行情
