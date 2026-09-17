@@ -28,7 +28,7 @@
 | S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⏸ | 2026-09-16 使用者裁示暫緩：帳號等級 `register` 無券商分點權限，腳本最關鍵的一段無法實跑；帳號升級或確實需要連網檢查時再做 |
 | S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
 | S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ✅ | 2026-09-16 完成：未使用的 `api` 是早期草稿殘留，改為斷言回推次數等於上界 |
-| S7 | FinMind 券商分點 crawler 不再把錯誤當成沒有資料 | `core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py` | 替身 API 拋一般例外時組合記為 `ERROR`、整批跑完拋 `DataLoadError`；回空表時仍是 `NO_DATA` | ⬜ | 2026-09-16 實跑發現（帳號等級 `register` 無此資料集權限） |
+| S7 | FinMind 券商分點 crawler 不再把錯誤當成沒有資料 | `core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py` | 替身 API 拋一般例外時組合記為 `ERROR`、整批跑完拋 `DataLoadError`；回空表時仍是 `NO_DATA` | ✅ | 2026-09-16 完成；權限不足在第一個組合即中止整批，已以真實 API 確認歸類為 `FinMindPermissionError` |
 | S8 | 入庫摘要區分「新寫入」與「整檔已存在」 | `core/pipeline/tw/loaders/stock_dividend_loader.py`、`corporate_action_loader.py`、`monthly_revenue_report_loader.py` 與對應測試 | 重跑同一批 CSV 時摘要為「新寫入 0 檔、已存在跳過 N 檔」 | ⬜ | 2026-09-16 實跑發現 |
 
 ## S1. DAO 讀取改用 cursor，查詢失敗不 rollback 連線 ✅
@@ -115,7 +115,7 @@
 - **相依**：無。
 - **完成紀錄（2026-09-16）**：`api`（`_EmptyAPI` 實例）是早期草稿殘留——`get_last_trading_date()` 以 `isinstance(api, StockPriceAPI)` 分派，測試後來改用 `_Typed` 子類別，替身就沒再用到。刪除替身，改在 `has_data` 替身記錄被查的日期，斷言「恰好查滿 `MAX_LOOKBACK_DAYS` 天就停」，把測試名稱承諾的「有界」直接驗掉。`ruff check --select F core tasks tests scripts strategy_lab` 零警告。
 
-## S7. FinMind 券商分點 crawler 不再把錯誤當成沒有資料 ⬜
+## S7. FinMind 券商分點 crawler 不再把錯誤當成沒有資料 ✅
 
 - **目的**：權限不足、連線失敗、FinMind 回傳非預期格式時，讓那個組合記成失敗、行程非零結束，而不是安靜地記成「沒有資料」。
 - **做法**：
@@ -126,6 +126,13 @@
 - **產出**：`core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py`。
 - **驗證方式**：替身 API 拋 `Exception("Your level is register")` 時，組合狀態為 `ERROR`、`update()` 拋 `DataLoadError`；替身回空 DataFrame 時仍為 `NO_DATA`；配額用盡仍走等待重試。
 - **相依**：無；S4 的冒煙腳本在帳號等級不足時應能據此給出清楚錯誤。
+- **完成紀錄（2026-09-16）**：
+  - 新增 `FinMindRequestError`（一般呼叫失敗）與其子類 `FinMindPermissionError`（帳號等級不足，以訊息關鍵字 `your level is`／`update your user level` 判斷）。
+  - `FinMindCrawler` 四個 `crawl_*` 方法全部改為經 `to_request_error()` 歸類後往外拋，只有 API 正常回傳空表才回 None；日期參數型別檢查移出 `try`，不再被包成請求錯誤。
+  - `BrokerTradingUpdater`：`FinMindPermissionError` 由批次迴圈攔下並**在第一個組合就中止**（採「遇到即中止」而非事前探測，效果相同且不多打一次請求），commit 已寫入的資料後拋 `DataLoadError`；一般請求錯誤記 `ERROR`、其餘組合照跑。
+  - **超出原規格**：台股總覽、證券商資訊的 updater 遇到配額用盡原本 `return`（結束碼 0），改為往外拋；log 的 `%s` 格式（loguru 不支援）一併改為 f-string。
+  - 新增 5 個測試（`tests/test_finmind_broker_trading_batch.py`）；以真實 API（帳號等級 `register`）單次請求確認券商分點錯誤歸類為 `FinMindPermissionError`。
+  - **未處理**：FinMind 1.9.8 對非 200 回應一律拋 `Exception("FinMind API unexpected response: <msg>")`，配額用盡的實際訊息是否仍含 `is_quota_error()` 的關鍵字（`402`、`quota`、`exceeded`…）未實測；若不含，配額用盡會被歸為 `FinMindRequestError`（記 `ERROR` 而非等待重試）——比舊版記成 `NO_DATA` 明顯，但等待機制不會生效。
 
 ## S8. 入庫摘要區分「新寫入」與「整檔已存在」 ⬜
 

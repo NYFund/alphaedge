@@ -10,6 +10,7 @@ from core.pipeline.tw.updaters.finmind.common import (
 )
 from core.pipeline.utils import (
     DataLoadError,
+    FinMindPermissionError,
     FinMindQuotaExhaustedError,
     UpdateStatus,
 )
@@ -126,6 +127,8 @@ class BrokerTradingUpdater:
         # Loop: 券商 -> 股票
         processed_count: int = 0
         quota_exhausted: bool = False
+        # 帳號等級不足：每個組合都會失敗，遇到第一次就中止整批
+        permission_error: Optional[FinMindPermissionError] = None
 
         # 統計各種狀態
         stats: Dict[str, int] = {
@@ -286,6 +289,10 @@ class BrokerTradingUpdater:
                         logger.info(
                             f"🔄 Quota restored. Retrying current combination: trader={securities_trader_id}, stock={stock_id}"
                         )
+                    except FinMindPermissionError as e:
+                        stats[UpdateStatus.ERROR.value] += 1
+                        permission_error = e
+                        break
                     except Exception as e:
                         stats[UpdateStatus.ERROR.value] += 1
                         logger.opt(exception=True).error(
@@ -293,14 +300,14 @@ class BrokerTradingUpdater:
                         )
                         break
 
-                if quota_exhausted:
+                if quota_exhausted or permission_error is not None:
                     break
 
                 log_progress_and_update_metadata()
                 if processed_count % self.BATCH_COMMIT_INTERVAL == 0:
                     self.context.loader.commit()
 
-            if quota_exhausted:
+            if quota_exhausted or permission_error is not None:
                 break
 
         # 將尚未 commit 的寫入一次提交，再更新 metadata
@@ -316,7 +323,7 @@ class BrokerTradingUpdater:
                 f"Processed {processed_count}/{total_combinations} combinations. "
                 f"Please wait for quota reset and resume from where it stopped."
             )
-        else:
+        elif permission_error is None:
             logger.info(
                 f"✅ Batch update completed. Processed {processed_count} combinations"
             )
@@ -335,7 +342,16 @@ class BrokerTradingUpdater:
         # 整批（其餘組合仍該更新），但跑完之後不能當作沒發生。
         error_count: int = stats[UpdateStatus.ERROR.value]
         failures: List[str] = []
-        if error_count:
+        if permission_error is not None:
+            logger.error(
+                f"❌ FinMind 帳號等級不足，券商分點批次更新中止"
+                f"（處理到 {processed_count}/{total_combinations}）：{permission_error}"
+            )
+            failures.append(
+                f"FinMind 帳號等級不足，無券商分點資料集權限，批次在第 "
+                f"{processed_count}/{total_combinations} 個組合中止"
+            )
+        elif error_count:
             failures.append(f"{error_count} 個 (券商, 股票) 組合更新失敗，詳見上方 log")
 
         # **配額等不回來也是「這次沒跑完」**：舊版只記 warning，於是一次只做了
@@ -434,8 +450,8 @@ class BrokerTradingUpdater:
                 logger.info("✅ Broker trading daily report updated successfully.")
             return UpdateStatus.SUCCESS
 
-        except FinMindQuotaExhaustedError:
-            # 配額用盡：不在此處處理，向上拋出由批次迴圈統一等待／中斷
+        except (FinMindQuotaExhaustedError, FinMindPermissionError):
+            # 配額用盡、帳號等級不足：不在此處處理，向上拋出由批次迴圈統一等待／中斷
             raise
         except Exception as e:
             logger.opt(exception=True).error(

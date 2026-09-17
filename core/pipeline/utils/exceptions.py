@@ -21,7 +21,7 @@ Usage:
         ...
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # -----------------------------------------------------------------------------
 # Pipeline 通用（未來可擴充 CrawlerError, LoaderError 等）
@@ -112,6 +112,45 @@ class FinMindQuotaExhaustedError(FinMindError):
     """
 
     pass
+
+
+class FinMindRequestError(FinMindError):
+    """
+    FinMind API 呼叫失敗（配額用盡以外的原因：連線錯誤、非預期回應）
+
+    **存在的理由是「失敗不可被當成沒有資料」**：crawler 舊版一律回 None，
+    updater 分不出「API 回空表」與「請求根本沒成功」，失敗會被記成 `NO_DATA`，
+    行程以結束碼 0 成功結束。
+    """
+
+    pass
+
+
+class FinMindPermissionError(FinMindRequestError):
+    """
+    FinMind 帳號等級不足，沒有該資料集的權限
+
+    FinMind 套件把這種回應包成一般 `Exception`，訊息形如
+    `FinMind API unexpected response: Your level is register. Please update your user level.`。
+    **與其他請求錯誤分開**，是因為它對每一次請求都會失敗：批次更新遇到它應該立即中止，
+    而不是讓數十萬個組合各失敗一次。
+    """
+
+    PERMISSION_KEYWORDS: Tuple[str, ...] = ("your level is", "update your user level")
+
+    @classmethod
+    def is_permission_error(cls, exc: BaseException) -> bool:
+        """判斷例外（含 `__cause__` 鏈）是否為帳號等級不足"""
+
+        err: Optional[BaseException] = exc
+        seen: Set[int] = set()
+        while err is not None and id(err) not in seen:
+            seen.add(id(err))
+            message: str = str(err).lower()
+            if any(keyword in message for keyword in cls.PERMISSION_KEYWORDS):
+                return True
+            err = err.__cause__
+        return False
 
 
 # -----------------------------------------------------------------------------
