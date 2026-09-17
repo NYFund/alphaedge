@@ -8,6 +8,7 @@ from loguru import logger
 
 from core.config import CORPORATE_ACTION_DOWNLOADS_PATH
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
+from core.pipeline.utils.exceptions import ColumnLayoutError
 from core.utils import TimeUtils
 
 """
@@ -114,6 +115,9 @@ class CorporateActionCleaner(BaseDataCleaner):
         - Return:
             - Optional[pd.DataFrame]
                 清洗後的資料；無有效列時為 None
+        - Raise:
+            - ColumnLayoutError
+                欄名對不上（來源版面改制）
         """
 
         if df is None or df.empty:
@@ -125,10 +129,14 @@ class CorporateActionCleaner(BaseDataCleaner):
 
         missing: List[str] = [key for key in column_map if key not in df.columns]
         if missing:
-            # 欄名對不上代表版面改制。**回 None 而不是硬取位置**：欄位錯位是
-            # 靜默的錯，會一路錯到還原價
-            logger.warning(f"[corporate_action] {source} 缺欄位 {missing}，本批不清洗")
-            return None
+            # 欄名對不上代表版面改制。**不硬取位置**：欄位錯位是靜默的錯，會一路錯到
+            # 還原價。也不回 None：那在 updater 端與「區間內沒有事件」長得一樣
+            raise ColumnLayoutError(
+                f"[corporate_action] {source} 缺欄位 {missing}",
+                expected=len(column_map),
+                actual=len(column_map) - len(missing),
+                columns=list(df.columns),
+            )
 
         work: pd.DataFrame = df.rename(columns=column_map).copy()
 

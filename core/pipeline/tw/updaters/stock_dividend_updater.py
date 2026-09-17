@@ -14,6 +14,7 @@ from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.tw.cleaners.stock_dividend_cleaner import StockDividendCleaner
 from core.pipeline.tw.crawlers.stock_dividend_crawler import StockDividendCrawler
 from core.pipeline.tw.loaders.stock_dividend_loader import StockDividendLoader
+from core.pipeline.utils.exceptions import CleanFailureError, ColumnLayoutError
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -92,6 +93,7 @@ class StockDividendUpdater(BaseDataUpdater):
         # TWSE：以年為單位請求，一年一次
         years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
         stats: UpdateStats = UpdateStats()
+        layout_failures: List[str] = []
 
         for year in years:
             year_start: datetime.date = max(start_date, datetime.date(year, 1, 1))
@@ -106,23 +108,28 @@ class StockDividendUpdater(BaseDataUpdater):
             stats.record(twse, tpex)
 
             # Step 2: Clean
-            if twse.is_ok:
-                cleaned_twse_df: Optional[pd.DataFrame] = (
-                    self.cleaner.clean_twse_dividend(
-                        twse.data, file_name=f"twse_{period}"
+            # 版面改制逐年隔離：其餘年份照樣清洗入庫，但收尾必須非零結束——
+            # 除權息是還原價的輸入，靜靜停止更新不會有任何錯誤訊息
+            for result, source in ((twse, "twse"), (tpex, "tpex")):
+                if not result.is_ok:
+                    continue
+                clean = getattr(self.cleaner, f"clean_{source}_dividend")
+                try:
+                    cleaned: Optional[pd.DataFrame] = clean(
+                        result.data, file_name=f"{source}_{period}"
                     )
-                )
-                if cleaned_twse_df is None or cleaned_twse_df.empty:
-                    logger.warning(f"Cleaned TWSE dataframe empty for {year}")
+                except ColumnLayoutError as error:
+                    logger.error(
+                        f"[dividend] {source.upper()} {year} 版面改制：{error}"
+                    )
+                    layout_failures.append(f"{source} {year}")
+                    stats.count_clean_failure()
+                    continue
 
-            if tpex.is_ok:
-                cleaned_tpex_df: Optional[pd.DataFrame] = (
-                    self.cleaner.clean_tpex_dividend(
-                        tpex.data, file_name=f"tpex_{period}"
+                if cleaned is None or cleaned.empty:
+                    logger.warning(
+                        f"Cleaned {source.upper()} dataframe empty for {year}"
                     )
-                )
-                if cleaned_tpex_df is None or cleaned_tpex_df.empty:
-                    logger.warning(f"Cleaned TPEX dataframe empty for {year}")
 
             delay: int = random.randint(
                 self.YEAR_REQUEST_DELAY_MIN, self.YEAR_REQUEST_DELAY_MAX
@@ -133,6 +140,7 @@ class StockDividendUpdater(BaseDataUpdater):
         stats.report("dividend（單位：年）")
 
         # Step 3: Load
+        # **先入庫再拋**：沒改制的年份已經清洗好了，不入庫等於這次白跑
         self.loader.add_to_db(remove_files=False)
 
         # 更新後重新取得Table最新的日期
@@ -143,3 +151,6 @@ class StockDividendUpdater(BaseDataUpdater):
             )
         else:
             logger.warning("No new stock dividend data was updated")
+
+        if layout_failures:
+            raise CleanFailureError("dividend", layout_failures)

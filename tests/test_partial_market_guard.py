@@ -20,14 +20,17 @@ from core.pipeline.tw.crawlers import financial_statement_crawler as fs_crawler_
 from core.pipeline.tw.crawlers.financial_statement_crawler import (
     FinancialStatementCrawler,
 )
+from core.pipeline.tw.updaters.corporate_action_updater import CorporateActionUpdater
 from core.pipeline.tw.updaters.financial_statement_updater import (
     FinancialStatementUpdater,
 )
 from core.pipeline.tw.updaters.stock_chip_updater import StockChipUpdater
+from core.pipeline.tw.updaters.stock_dividend_updater import StockDividendUpdater
 from core.pipeline.tw.updaters.stock_margin_updater import StockMarginUpdater
 from core.pipeline.tw.updaters.stock_price_updater import StockPriceUpdater
 from core.pipeline.tw.utils.mops_payload import Payload
 from core.pipeline.utils import ListingBoard
+from core.pipeline.utils.exceptions import CleanFailureError, ColumnLayoutError
 
 """
 多來源拼成的一份資料：要嘛全部入庫、要嘛全部不入庫
@@ -226,6 +229,68 @@ def test_day_with_a_failed_cleaner_is_not_loaded(
 
     assert loaded_dates(loaded) == {"20240102"}
     assert DateProgressStore(kind).incomplete == {DAY_PARTIAL}
+
+
+@pytest.mark.parametrize(("updater_cls", "kind"), DAILY_UPDATERS)
+def test_day_with_an_empty_cleaner_result_is_not_loaded(
+    updater_cls: Type[BaseDataUpdater],
+    kind: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
+) -> None:
+    """
+    清洗回 `None`（版面不符、過濾後無有效列）與拋例外同樣算整天失敗
+
+    舊行為只記一行 warning 就回報成功：站方明明有回資料、清洗後一列都不剩，
+    當天卻被記為完成，之後差集判定表內已有這天，永遠不會回頭補。
+    """
+
+    results: Dict[datetime.date, Tuple[CrawlResult, CrawlResult]] = {
+        DAY_OK: (CrawlResult.ok(raw_table()), CrawlResult.ok(raw_table())),
+        DAY_PARTIAL: (CrawlResult.ok(raw_table()), CrawlResult.ok(raw_table())),
+    }
+    updater, loaded, _ = make_daily_updater(
+        updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
+    )
+
+    def empty_clean(raw: pd.DataFrame, date: datetime.date) -> Optional[pd.DataFrame]:
+        return None if date == DAY_PARTIAL else raw
+
+    setattr(updater.cleaner, f"clean_tpex_{kind}", empty_clean)
+
+    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+
+    assert loaded_dates(loaded) == {"20240102"}
+    assert DateProgressStore(kind).incomplete == {DAY_PARTIAL}
+
+
+def test_price_day_with_too_few_raw_rows_is_not_loaded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dao_factory: Callable[..., BaseDAO],
+) -> None:
+    """
+    原始表列數不足門檻時整天不入庫
+
+    `price` 對列數過少的原始表跳過清洗（只剩表頭或合計列時硬清會炸），舊行為
+    跳過之後照常入庫另一個市場，於是當天只有半個市場、且被記為完成。
+    """
+
+    tiny: pd.DataFrame = pd.DataFrame({"證券代號": ["2330"]})
+    results: Dict[datetime.date, Tuple[CrawlResult, CrawlResult]] = {
+        DAY_OK: (CrawlResult.ok(raw_table()), CrawlResult.ok(raw_table())),
+        DAY_PARTIAL: (CrawlResult.ok(tiny), CrawlResult.ok(raw_table())),
+    }
+    updater, loaded, cleaned = make_daily_updater(
+        StockPriceUpdater, "price", tmp_path, monkeypatch, results, dao_factory
+    )
+
+    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+
+    assert loaded_dates(loaded) == {"20240102"}
+    assert ("TWSE", DAY_PARTIAL) not in cleaned
+    assert DateProgressStore("price").incomplete == {DAY_PARTIAL}
 
 
 @pytest.mark.parametrize(("updater_cls", "kind"), DAILY_UPDATERS)
@@ -461,3 +526,79 @@ def test_fs_missing_table_plans_every_season(tmp_path: Path) -> None:
     )
 
     assert pending == [(2024, 3), (2024, 4), (2025, 1)]
+
+
+# === 年度來源（除權息、公司行動）===
+def make_yearly_updater(
+    updater_cls: Type[BaseDataUpdater],
+    crawl_names: Tuple[str, str],
+    clean: Any,
+    tmp_path: Path,
+    dao_factory: Callable[..., BaseDAO],
+) -> Any:
+    """建一支不連網路、不碰正式 DB 的年度 updater（除權息／公司行動共用）"""
+
+    conn: sqlite3.Connection = sqlite3.connect(tmp_path / "test.db")
+    updater = updater_cls.__new__(updater_cls)  # 跳過 __init__ 的正式連線與 log 設定
+    updater.dao = SimpleNamespace(get_latest_date=lambda: None)
+    updater.conn = conn
+    updater.crawler = SimpleNamespace(
+        **{name: lambda start, end: CrawlResult.ok(raw_table()) for name in crawl_names}
+    )
+    updater.cleaner = clean
+    updater.loader = SimpleNamespace(add_to_db=lambda **_: None)
+    updater.YEAR_REQUEST_DELAY_MIN = 0
+    updater.YEAR_REQUEST_DELAY_MAX = 0
+
+    return updater
+
+
+def test_dividend_layout_change_fails_the_run(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
+    """
+    除權息版面改制時整批更新以失敗收尾
+
+    這張表每輪重掃整個區間，所以資料不會永久缺漏——但清洗一直失敗的話，
+    它會**無聲地停止更新**，而除權息是還原價的輸入。
+    """
+
+    def raise_layout(df: pd.DataFrame, file_name: str) -> pd.DataFrame:
+        raise ColumnLayoutError("TWSE dividend", expected=15, actual=14)
+
+    updater = make_yearly_updater(
+        StockDividendUpdater,
+        ("crawl_twse_dividend", "crawl_tpex_dividend"),
+        SimpleNamespace(
+            clean_twse_dividend=raise_layout, clean_tpex_dividend=raise_layout
+        ),
+        tmp_path,
+        dao_factory,
+    )
+
+    with pytest.raises(CleanFailureError):
+        updater.update(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 12, 31)
+        )
+
+
+def test_corporate_action_layout_change_fails_the_run(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
+    """公司行動版面改制時整批更新以失敗收尾（理由同除權息）"""
+
+    def raise_layout(df: pd.DataFrame, source: str, file_name: str) -> pd.DataFrame:
+        raise ColumnLayoutError("[corporate_action] twse", expected=11, actual=2)
+
+    updater = make_yearly_updater(
+        CorporateActionUpdater,
+        ("crawl_twse_capital_reduction", "crawl_tpex_capital_reduction"),
+        SimpleNamespace(clean=raise_layout),
+        tmp_path,
+        dao_factory,
+    )
+
+    with pytest.raises(CleanFailureError):
+        updater.update(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 12, 31)
+        )

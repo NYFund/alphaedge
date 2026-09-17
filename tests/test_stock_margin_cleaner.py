@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from core.pipeline.tw.cleaners.stock_margin_cleaner import StockMarginCleaner
+from core.pipeline.utils.exceptions import ColumnLayoutError
 
 """
 信用交易（融資融券餘額）清洗測試
@@ -125,12 +126,18 @@ def test_short_ratio_and_types(cleaner: StockMarginCleaner) -> None:
         assert pd.api.types.is_integer_dtype(df[col])
 
 
-def test_unexpected_column_count_returns_none(cleaner: StockMarginCleaner) -> None:
-    """來源版面改制（欄位數不符）時回傳 None，不讓錯位資料入庫"""
+def test_unexpected_column_count_raises(cleaner: StockMarginCleaner) -> None:
+    """
+    來源版面改制（欄位數不符）時拋例外，不讓錯位資料入庫
+
+    **不回 None**：回 None 在 updater 端與「這天沒有資料」長得一樣，
+    當天會被記為完成、只入庫另一個市場。
+    """
 
     raw: pd.DataFrame = read_raw(TWSE_RAW_CSV).drop(columns=[15])
 
-    assert cleaner.clean_twse_margin(raw, DATE) is None
+    with pytest.raises(ColumnLayoutError):
+        cleaner.clean_twse_margin(raw, DATE)
 
 
 def test_csv_written_to_downloads_dir(

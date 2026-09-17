@@ -17,6 +17,7 @@ from core.pipeline.tw.cleaners.corporate_action_cleaner import (
 )
 from core.pipeline.tw.crawlers.corporate_action_crawler import CorporateActionCrawler
 from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoader
+from core.pipeline.utils.exceptions import CleanFailureError, ColumnLayoutError
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -88,6 +89,7 @@ class CorporateActionUpdater(BaseDataUpdater):
 
         years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
         stats: UpdateStats = UpdateStats()
+        layout_failures: List[str] = []
 
         for year in years:
             year_start: datetime.date = max(start_date, datetime.date(year, 1, 1))
@@ -105,12 +107,22 @@ class CorporateActionUpdater(BaseDataUpdater):
             )
             stats.record(twse, tpex)
 
+            # 版面改制逐年隔離，但收尾必須非零結束：減資與股票分割同樣是還原價的輸入
             for result, source in ((twse, "twse"), (tpex, "tpex")):
                 if not result.is_ok:
                     continue
-                cleaned: Optional[pd.DataFrame] = self.cleaner.clean(
-                    result.data, source=source, file_name=f"{source}_{period}.csv"
-                )
+                try:
+                    cleaned: Optional[pd.DataFrame] = self.cleaner.clean(
+                        result.data, source=source, file_name=f"{source}_{period}.csv"
+                    )
+                except ColumnLayoutError as error:
+                    logger.error(
+                        f"[corporate_action] {source.upper()} {year} 版面改制：{error}"
+                    )
+                    layout_failures.append(f"{source} {year}")
+                    stats.count_clean_failure()
+                    continue
+
                 if cleaned is None or cleaned.empty:
                     logger.warning(
                         f"Cleaned {source.upper()} dataframe empty for {year}"
@@ -124,6 +136,7 @@ class CorporateActionUpdater(BaseDataUpdater):
         # `requested` 的單位是「年」而不是「天」：本來源支援區間查詢，一年一次請求
         stats.report("corporate_action（單位：年）")
 
+        # **先入庫再拋**：沒改制的年份已經清洗好了，不入庫等於這次白跑
         self.loader.add_to_db(remove_files=False)
 
         table_latest_date: Optional[str] = self.dao.get_latest_date()
@@ -134,6 +147,9 @@ class CorporateActionUpdater(BaseDataUpdater):
             )
         else:
             logger.warning("No new corporate action data was updated")
+
+        if layout_failures:
+            raise CleanFailureError("corporate_action", layout_failures)
 
     def load_detected_events(
         self, events: List[Dict[str, object]], file_name: str = "detected.csv"

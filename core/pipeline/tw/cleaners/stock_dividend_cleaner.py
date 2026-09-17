@@ -8,6 +8,7 @@ from loguru import logger
 from core.config import DIVIDEND_DOWNLOADS_PATH
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
 from core.pipeline.utils.data_utils import DataUtils
+from core.pipeline.utils.exceptions import ColumnLayoutError
 from core.utils import TimeUtils
 
 """
@@ -132,18 +133,16 @@ class StockDividendCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         file_name: str,
     ) -> Optional[pd.DataFrame]:
-        """Clean TWSE Stock Dividend Data"""
+        """Clean TWSE Stock Dividend Data；版面改制時拋 `ColumnLayoutError`"""
 
         if df is None or df.empty:
             return None
 
-        # 欄位數不符代表來源版面改制，直接中止避免錯位入庫
-        if df.shape[1] != len(self.TWSE_RAW_COLS):
-            logger.warning(
-                f"Unexpected TWSE dividend table structure: "
-                f"{df.shape[1]} columns (expected {len(self.TWSE_RAW_COLS)})"
-            )
-            return None
+        # 欄位數不符代表來源版面改制。拋例外而不是回 None：回 None 在 updater 端
+        # 與「區間內沒有除權息」長得一樣，除權息表會無聲地停止更新
+        self.check_column_count(
+            df, len(self.TWSE_RAW_COLS), f"TWSE dividend {file_name}"
+        )
 
         df = df.copy()
         df.columns = self.TWSE_RAW_COLS
@@ -156,7 +155,7 @@ class StockDividendCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         file_name: str,
     ) -> Optional[pd.DataFrame]:
-        """Clean TPEX Stock Dividend Data（櫃買中心）"""
+        """Clean TPEX Stock Dividend Data（櫃買中心）；缺欄位時拋 `ColumnLayoutError`"""
 
         if df is None or df.empty:
             return None
@@ -165,8 +164,12 @@ class StockDividendCleaner(BaseDataCleaner):
             col for col in self.TPEX_FIELD_MAP if col not in df.columns
         ]
         if missing_cols:
-            logger.warning(f"Missing TPEX dividend fields: {missing_cols}")
-            return None
+            raise ColumnLayoutError(
+                f"TPEX dividend {file_name} 缺欄位 {missing_cols}",
+                expected=len(self.TPEX_FIELD_MAP),
+                actual=len(self.TPEX_FIELD_MAP) - len(missing_cols),
+                columns=list(df.columns),
+            )
 
         df = df.rename(columns=self.TPEX_FIELD_MAP).copy()
         df["date"] = df["資料日期"].apply(self.parse_roc_slash_date)
@@ -324,7 +327,9 @@ class StockDividendCleaner(BaseDataCleaner):
             day: str = rest.replace("日", "")
             year: int = int(TimeUtils.convert_roc_to_ad_year(roc_year))
             return datetime.date(year, int(month), int(day))
-        except Exception:
+        except (ValueError, TypeError):
+            # 只收「這個字串不是日期」（拆不出段、非數字、日期超出範圍）；
+            # 其餘錯誤是程式或 schema 問題，不該被清成 None
             return None
 
     @staticmethod
@@ -335,5 +340,7 @@ class StockDividendCleaner(BaseDataCleaner):
             roc_year, month, day = str(value).strip().split("/")
             year: int = int(TimeUtils.convert_roc_to_ad_year(roc_year))
             return datetime.date(year, int(month), int(day))
-        except Exception:
+        except (ValueError, TypeError):
+            # 只收「這個字串不是日期」（拆不出段、非數字、日期超出範圍）；
+            # 其餘錯誤是程式或 schema 問題，不該被清成 None
             return None
