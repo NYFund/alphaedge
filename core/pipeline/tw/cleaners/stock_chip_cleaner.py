@@ -66,6 +66,27 @@ class StockChipCleaner(BaseDataCleaner):
         # Generate downloads directory
         self.chip_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def combine_dealer_columns(df: pd.DataFrame) -> None:
+        """
+        - Description:
+            把自營商的「自行買賣」與「避險」兩欄相加成合計欄（就地修改）
+
+            **拆分欄不存在時完全不動**：改制前的來源直接給合計欄，
+            蓋成 0 會讓買進、賣出兩欄失去資料，而買賣超欄仍是對的。
+        - Parameters:
+            - df: pd.DataFrame
+                已標準化欄名的原始表
+        """
+
+        for action in ("買進", "賣出"):
+            self_trade: str = f"自營商{action}股數(自行買賣)"
+            hedge: str = f"自營商{action}股數(避險)"
+            if self_trade not in df.columns and hedge not in df.columns:
+                continue
+
+            df[f"自營商{action}股數"] = df.get(self_trade, 0) + df.get(hedge, 0)
+
     def clean_twse_chip(
         self,
         df: pd.DataFrame,
@@ -80,13 +101,12 @@ class StockChipCleaner(BaseDataCleaner):
         df.columns = [DataUtils.standardize_column_name(col) for col in df.columns]
         df.insert(0, "date", date)
         df = df.rename(columns={"證券代號": "stock_id"})
-        # 合併自營商自行買賣與避險欄位
-        df["自營商買進股數"] = df.get("自營商買進股數(自行買賣)", 0) + df.get(
-            "自營商買進股數(避險)", 0
-        )
-        df["自營商賣出股數"] = df.get("自營商賣出股數(自行買賣)", 0) + df.get(
-            "自營商賣出股數(避險)", 0
-        )
+        # 合併自營商自行買賣與避險欄位。
+        # **只在拆分欄存在時才相加**：第一次改制（2014-12-01）之前的來源沒有
+        # 「自行買賣／避險」兩欄，直接相加會是 `0 + 0`，把來源原本就給的
+        # `自營商買進股數` 蓋成 0——而買賣超欄不受影響，於是庫裡出現
+        # 「買賣皆 0、買賣超非 0」這種不可能的組合（2330 在 2013-06-03 即如此）
+        self.combine_dealer_columns(df)
 
         # 第二次格式改制前
         if date < self.twse_second_reform_date:
