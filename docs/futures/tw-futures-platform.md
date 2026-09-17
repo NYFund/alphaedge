@@ -142,6 +142,10 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 - **兩條寫入路徑**：`--target futures_margin` 抓現行一覽表（`source='snapshot'`，保證金沒變就新增 0 列）；
   歷史走調整公告，須直接呼叫 `FuturesMarginUpdater.update_history(start_date=..., end_date=...)`
   （`source='announcement'`）。同主鍵時**公告覆蓋 snapshot**——公告明載生效日與調整前後值，比一覽表權威。
+- **回補只抓未處理的公告**：已處理的公告記在 `data/downloads/tw_futures/meta/futures_margin_announcements.json`
+  （以公告連結為鍵），重跑時不再開明細頁、不再下載附件；站方更正附件內容時以 `update_history(force=True)` 全部重抓。
+  以連結而不以生效日判斷，是因為同一個生效日常有指數類與股票類兩則公告；紀錄說已入庫、但它寫過的表內沒有
+  那個生效日（資料庫被還原）時照常重抓。下載失敗與沒有附件的公告不記，下次重試。
 - **「查不到」有兩種成因**：查詢日早於 2020-03（來源限制），或該商品從未被調整過——公告只列有調整的商品，
   級距穩定的股期整段只有一覽表那一列。兩者無法區分，故 `fallback_to_earliest=True`（取最早一列當近似）預設關閉。
 - **鏈式比對只記缺口、不拒收**：同一商品第 N 則公告的「調整前」應等於第 N−1 則的「調整後」（`check_margin_chain()`）。
@@ -299,7 +303,6 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 | 跳動點只登錄已查證的台指期系列 | 其他商品需在建構時明確指定 `tick_size` | 逐商品查證後改為查表 |
 | 2017-05-15 之前仍會查詢夜盤 | 回補時多打約一成的請求並記大量 `No valid futures price rows` warning（資料正確） | crawler 或 updater 在該日前跳過夜盤查詢 |
 | 對標序列是近月拼接 | 報表的期貨對標曲線在換月接點有假跳空 | 改讀 `futures_continuous` |
-| 保證金歷史回補每次重抓全部公告 | `FuturesMarginUpdater.update_history()` 算了已入庫的生效日（`loaded_dates`）卻沒拿來跳過，統計的「已存在跳過」恆為 0；每次回補都重新下載全部附件（約數百次請求），資料因 `INSERT OR REPLACE` 而正確 | [DAO重構後續收斂](../../backlog/DAO重構後續收斂.md) S2 |
 
 ## 相關文件
 

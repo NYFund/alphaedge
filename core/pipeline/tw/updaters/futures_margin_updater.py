@@ -1,17 +1,19 @@
 import datetime
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
-from core.config import TW_FUTURES_DB_PATH
+from core.config import FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH, TW_FUTURES_DB_PATH
 from core.dao.connection import DBConnection
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.crawlers.futures_margin_crawler import FuturesMarginCrawler
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
+from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import DataLoadError
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
@@ -45,6 +47,96 @@ ETF 股期 08/12），故三條路徑各自帶自己的 `effective_date`，不�
 """
 
 
+class AnnouncementMetadataStore:
+    """
+    保證金調整公告的處理紀錄：哪些公告已經處理過、不必再下載
+
+    **以公告連結為鍵，不以生效日**：同一個生效日常有多則公告（指數類與股票類
+    分開公告，2026-09-16 實查正式 DB 有 15 個生效日同時出現在金額表與比例表），
+    以生效日判斷會把「同日的另一則」誤判成已入庫而整則漏掉。生效日要下載附件
+    才知道，資料表也沒有記公告身分，所以另存這份紀錄。
+
+    結構為 `{link: {"announcement_date", "csv_url", "status", "effective_date", "tables"}}`：
+    - `status="loaded"`：附件有期貨列且已寫入；`effective_date` 為其生效日，
+      `tables` 為實際寫入的表（金額表、比例表或兩者）
+    - `status="no_futures_rows"`：附件下載成功但沒有期貨列（選擇權、部位限制公告）
+
+    **下載失敗、沒有附件的公告不記**，下次照常重試。`csv_url` 存的是解析出的原始
+    網址（未經共用網址排除），跳過解析時仍能參與「共用同一個網址」的判斷。
+    """
+
+    STATUS_LOADED: str = "loaded"
+    STATUS_NO_FUTURES_ROWS: str = "no_futures_rows"
+
+    def __init__(self, metadata_path: Path) -> None:
+        self.metadata_path: Path = metadata_path
+        self.records: Dict[str, Dict[str, Any]] = self.load()
+
+    def load(self) -> Dict[str, Dict[str, Any]]:
+        """讀取紀錄；檔案不存在時為空"""
+
+        if not self.metadata_path.exists():
+            return {}
+        records: Optional[Dict[str, Dict[str, Any]]] = DataUtils.load_json(
+            self.metadata_path
+        )
+        return records or {}
+
+    def save(self) -> None:
+        """寫回紀錄檔"""
+
+        DataUtils.save_json(self.records, self.metadata_path)
+
+    def record(
+        self,
+        link: str,
+        announcement_date: datetime.date,
+        csv_url: str,
+        status: str,
+        effective_date: Optional[str] = None,
+        tables: Optional[List[str]] = None,
+    ) -> None:
+        """記下一則已處理的公告並立即寫檔（回補中途中斷時，已處理的不必重抓）"""
+
+        self.records[link] = {
+            "announcement_date": announcement_date.isoformat(),
+            "csv_url": csv_url,
+            "status": status,
+            "effective_date": effective_date,
+            "tables": tables or [],
+        }
+        self.save()
+
+    def is_processed(self, link: str, loaded_dates: Dict[str, Set[str]]) -> bool:
+        """
+        - Description:
+            該則公告是否已處理過、可以跳過
+
+            `loaded` 的公告還要**生效日確實在它寫過的每一張表內**才算：紀錄檔與
+            資料庫是兩份檔案，資料庫被還原或重建時紀錄會過時，照紀錄跳過就會讓表內
+            永遠缺那一則。**逐表核對而不看兩表聯集**：同日常有另一則公告寫進另一張表，
+            聯集會把「這張表的列不見了」誤判成還在。
+        - Parameters:
+            - link: str
+                公告連結
+            - loaded_dates: Dict[str, Set[str]]
+                資料表名稱 → 該表 `source='announcement'` 的生效日
+        - Return:
+            - bool
+                可以跳過時為 True
+        """
+
+        record: Optional[Dict[str, Any]] = self.records.get(link)
+        if record is None:
+            return False
+        if record["status"] == self.STATUS_NO_FUTURES_ROWS:
+            return True
+        return bool(record["tables"]) and all(
+            record["effective_date"] in loaded_dates.get(table, set())
+            for table in record["tables"]
+        )
+
+
 class FuturesMarginUpdater(BaseDataUpdater):
     """Futures Margin Updater"""
 
@@ -56,6 +148,11 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
     def __init__(self) -> None:
         super().__init__()
+
+        # 歷史回補已處理過的公告（`update_history()` 用來跳過）
+        self.announcement_metadata_path: Path = (
+            FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH
+        )
 
         # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一個 DAO**（tw_futures.db）
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -196,6 +293,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
         self,
         start_date: Optional[datetime.date] = None,
         end_date: Optional[datetime.date] = None,
+        force: bool = False,
     ) -> None:
         """
         - Description:
@@ -204,9 +302,14 @@ class FuturesMarginUpdater(BaseDataUpdater):
             **只補得到 2020/03 起**：更早的公告附件是掃描影像（無文字層），
             取不到數值。沒有 CSV 附件的公告會被跳過
             並在收尾統計，**不可當成「那天沒有調整」**。
+
+            **已處理過的公告不再開明細頁、也不再下載附件**（見
+            `AnnouncementMetadataStore`），重跑只抓新公告與上次失敗的公告。
         - Parameters:
             - start_date / end_date: Optional[datetime.date]
                 查詢區間；未指定時為 2020-01-01 ~ 今天
+            - force: bool
+                忽略處理紀錄、全部重抓（站方更正附件內容時用）
         """
 
         start: datetime.date = start_date or self.ANNOUNCEMENT_START_DATE
@@ -222,14 +325,33 @@ class FuturesMarginUpdater(BaseDataUpdater):
             return
 
         # **必須限定 source**：snapshot 恰好同一天時會讓該則公告被整則跳過
-        resolved: List[Tuple[Dict[str, str], Optional[str]]] = self.resolve_csv_urls(
-            announcements
+        loaded_dates: Dict[str, Set[str]] = {
+            table: self.loader.get_effective_dates(table, source="announcement")
+            for table in (FuturesMarginDAO.TABLE_NAME, FuturesMarginDAO.RATE_TABLE_NAME)
+        }
+        store: AnnouncementMetadataStore = AnnouncementMetadataStore(
+            self.announcement_metadata_path
         )
-        loaded_dates: set = self.loader.get_effective_dates(source="announcement")
+        processed_links: Set[str] = (
+            set()
+            if force
+            else {
+                announcement["link"]
+                for announcement in announcements
+                if store.is_processed(announcement["link"], loaded_dates)
+            }
+        )
+        resolved: List[Tuple[Dict[str, str], Optional[str]]] = self.resolve_csv_urls(
+            announcements,
+            known_urls={
+                link: store.records[link]["csv_url"] for link in processed_links
+            },
+        )
         stats: Dict[str, int] = {
             "loaded": 0,
             "loaded_rates": 0,
             "skipped_existing": 0,
+            "download_failed": 0,
             "no_csv": 0,
             "no_futures_rows": 0,
             "chain_gaps": 0,
@@ -240,6 +362,10 @@ class FuturesMarginUpdater(BaseDataUpdater):
             announcement_date: datetime.date = TimeUtils.to_date(
                 announcement["date"].replace("/", "-")
             )
+
+            if announcement["link"] in processed_links:
+                stats["skipped_existing"] += 1
+                continue
 
             if csv_url is None:
                 # 2015~2019 的掃描 PDF、以及新商品上市的 SPAN 參數公告
@@ -254,9 +380,20 @@ class FuturesMarginUpdater(BaseDataUpdater):
                     text, announcement["title"], announcement_date
                 )
             )
+            if text is None:
+                # 下載失敗不記進處理紀錄，下次回補重試
+                stats["download_failed"] += 1
+                time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
+                continue
             if cleaned is None:
                 # 選擇權或部位限制公告：有 CSV 但沒有期貨列，不是解析失敗
                 stats["no_futures_rows"] += 1
+                store.record(
+                    announcement["link"],
+                    announcement_date,
+                    csv_url,
+                    AnnouncementMetadataStore.STATUS_NO_FUTURES_ROWS,
+                )
                 time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
                 continue
 
@@ -303,13 +440,29 @@ class FuturesMarginUpdater(BaseDataUpdater):
                     f"{len(rate_df)} 檔、新增 {inserted} 列"
                 )
 
-            loaded_dates.add(effective_date)
+            # 寫入後才記：loader 每次寫入即 commit，紀錄不會領先資料庫
+            store.record(
+                announcement["link"],
+                announcement_date,
+                csv_url,
+                AnnouncementMetadataStore.STATUS_LOADED,
+                effective_date,
+                [
+                    table
+                    for table, df in (
+                        (FuturesMarginDAO.TABLE_NAME, margin_df),
+                        (FuturesMarginDAO.RATE_TABLE_NAME, rate_df),
+                    )
+                    if df is not None
+                ],
+            )
             time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
 
         logger.info(
             f"📊 回補統計：金額新增 {stats['loaded']} 列、比例新增 "
             f"{stats['loaded_rates']} 列、已存在跳過 {stats['skipped_existing']} 則、"
-            f"無 CSV 附件 {stats['no_csv']} 則、無期貨列 {stats['no_futures_rows']} 則"
+            f"無 CSV 附件 {stats['no_csv']} 則、無期貨列 {stats['no_futures_rows']} 則、"
+            f"附件下載失敗 {stats['download_failed']} 則"
         )
         if stats["chain_gaps"]:
             logger.warning(
@@ -320,7 +473,9 @@ class FuturesMarginUpdater(BaseDataUpdater):
         self.log_summary()
 
     def resolve_csv_urls(
-        self, announcements: List[Dict[str, str]]
+        self,
+        announcements: List[Dict[str, str]],
+        known_urls: Optional[Dict[str, Optional[str]]] = None,
     ) -> List[Tuple[Dict[str, str], Optional[str]]]:
         """
         - Description:
@@ -332,9 +487,14 @@ class FuturesMarginUpdater(BaseDataUpdater):
             只有最新那則的內容可信**，較早的一律視為沒有附件。
 
             這是結構性的判斷，不依賴數值大小，也不必事先列舉檔名。
+
+            **已處理過的公告不重開明細頁，但仍參與共用網址的判斷**：若只解析新公告，
+            舊公告與新公告共用網址時就看不出來，新公告會被當成專屬檔名。
         - Parameters:
             - announcements: List[Dict[str, str]]
                 依日期排序的公告清單
+            - known_urls: Optional[Dict[str, Optional[str]]]
+                已知附件網址的公告（連結 → 網址），不再開明細頁
         - Return:
             - List[Tuple[Dict[str, str], Optional[str]]]
                 每則公告與其可信的附件網址（不可信或沒有時為 None）
@@ -342,8 +502,12 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
         logger.info(f"* 解析 {len(announcements)} 則公告的附件網址…")
 
+        known: Dict[str, Optional[str]] = known_urls or {}
         urls: List[Optional[str]] = []
         for announcement in announcements:
+            if announcement["link"] in known:
+                urls.append(known[announcement["link"]])
+                continue
             urls.append(self.crawler.resolve_announcement_csv(announcement["link"]))
             time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
 
