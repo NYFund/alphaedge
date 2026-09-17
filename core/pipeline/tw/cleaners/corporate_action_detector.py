@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -38,18 +38,6 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 
 # 台股單日漲跌幅上限 ±10%，超過這個門檻必然不是正常交易
 DETECTION_THRESHOLD: float = 0.15
-
-# **已確認為錯誤資料的日期**，一律排除，否則它們會淹掉真訊號。
-#
-# `2020-04-14` 整批是 `2020-12-18` 的內容：台積電當天顯示開 508／高 512／低 507／
-# 收 510、成交股數 40,625,502，與 2020-12-18 **位元級相同**，而前後兩日分別是
-# 278.5 與 287.5。這是「重播批次」的樣式：清洗端蓋的是請求參數的日期，而不是來源頁面內的日期
-# （內容相同、日期不同的批次由 `tests/test_trading_calendar_guard.py` 盯住）。
-# 該日 715 檔、次日 630 檔被判為跳空——**次日是被前一日的壞收盤拖累的**，
-# 本身資料正確，故一併排除。
-#
-# ⚠️ 這是**資料本身要修**，不是護欄該長期容忍的事；修好後請把日期從這裡刪掉。
-KNOWN_BAD_PRICE_DATES: Set[str] = {"2020-04-14", "2020-04-15"}
 
 
 def detect_unexplained_moves(
@@ -100,11 +88,6 @@ def detect_unexplained_moves(
 
         if candidates.empty:
             return _empty_result()
-
-        bad: pd.Series = candidates["date"].astype(str).isin(KNOWN_BAD_PRICE_DATES)
-        if bad.any():
-            logger.info(f"[detector] 排除已知錯誤日期的 {int(bad.sum())} 筆候選")
-            candidates = candidates[~bad]
 
         # 停牌日數：公司行動多半伴隨停止買賣，這是與「資料錯誤」的區別線索之一
         candidates["停牌日數"] = (

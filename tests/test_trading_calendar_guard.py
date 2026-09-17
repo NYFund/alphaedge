@@ -1,6 +1,7 @@
 import hashlib
 import sqlite3
 import statistics
+from itertools import combinations
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
@@ -49,6 +50,11 @@ COMMON_RANGE_END: str = "2026-06-18"
 # 內容指紋取「絕對值最大的 N 筆」。取極端值是因為它們最不可能巧合相同：
 # 買賣超為 0 或個位數張的個股每天都有一大票，拿來當指紋會誤報
 FINGERPRINT_SIZE: int = 50
+
+# 重播判準（`price`）：前 50 大裡有幾筆完全相同就算重播。被重播的常常只有半個
+# 市場，另一半是當天真實的資料，故不能要求整份相同——修正前的 2020-04-14 與
+# 2020-12-18 實測重疊 47 筆。取 40（八成）落在「半個市場被重播」與正常日之間
+REPLAY_OVERLAP_THRESHOLD: int = 40
 
 # 市場軸判準（測試 3）。`taiwan_stock_info.type` 的其餘值（`emerging`）與查不到的
 # 代號都不列入，它們在日頻表裡佔比不到 1%，納入只會讓分母抖動
@@ -155,6 +161,60 @@ def test_no_stale_replayed_batches() -> None:
     ]
 
     assert not collisions, f"以下日期共用同一份籌碼內容（過期頁被重播）：{collisions}"
+
+
+@pytest.mark.skipif(
+    not Path(TW_STOCK_DB_PATH).exists(),
+    reason="需要 tw_stock.db 才能比對行情內容指紋",
+)
+def test_no_stale_replayed_price_batches() -> None:
+    """沒有兩個日期共用同一份行情內容
+
+    與籌碼那條同源，但**壞法更隱蔽**：`price` 是交易日曆與還原價的來源，
+    被重播的那天整批收盤價都是別天的，而價格看起來完全合理。實際發生過：
+    `2020-04-14` 的 TWSE 半邊是 `2020-12-18` 的重播，2330 兩天皆為開 508、
+    收 510（前後兩日分別是 278.5 與 287.5），2,007 列中有 1,129 列完全相同。
+
+    **判準是「重疊筆數」而不是整份指紋的雜湊**：被重播的往往只有半個市場，
+    另外半邊是當天真實的資料，整份雜湊因此不會碰撞——以修正前的資料實測，
+    兩天的前 50 大有 47 筆完全相同，雜湊卻不同。改看重疊筆數就抓得到。
+    """
+
+    conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+    try:
+        rows: List[Tuple[str, str, float, int]] = conn.execute(
+            f"SELECT date, stock_id, 收盤價, 成交股數 FROM {PRICE_TABLE_NAME} "
+            f"WHERE 成交股數 > 0"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_date: Dict[str, List[Tuple[int, str, float]]] = {}
+    for date, stock_id, close, volume in rows:
+        by_date.setdefault(date, []).append((volume, stock_id, close))
+
+    # 每個「(個股, 收盤價, 成交股數)」對應到哪些日期；真實行情裡這種三元組
+    # 幾乎不可能在兩天重複，重複就代表其中一天是另一天的重播
+    dates_by_entry: Dict[Tuple[str, float, int], List[str]] = {}
+    for date, entries in by_date.items():
+        for volume, stock_id, close in sorted(entries, reverse=True)[:FINGERPRINT_SIZE]:
+            dates_by_entry.setdefault((stock_id, close, volume), []).append(date)
+
+    shared: Dict[Tuple[str, str], int] = {}
+    for dates in dates_by_entry.values():
+        for first, second in combinations(sorted(set(dates)), 2):
+            shared[(first, second)] = shared.get((first, second), 0) + 1
+
+    collisions: List[Tuple[str, str, int]] = sorted(
+        (first, second, count)
+        for (first, second), count in shared.items()
+        if count >= REPLAY_OVERLAP_THRESHOLD
+    )
+
+    assert not collisions, (
+        f"以下日期的前 {FINGERPRINT_SIZE} 大成交量內容高度重疊（過期頁被重播）："
+        f"{collisions}"
+    )
 
 
 @pytest.mark.skipif(
