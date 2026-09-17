@@ -4,6 +4,7 @@ from typing import Callable, List, Tuple
 
 import pandas as pd
 import pytest
+from loguru import logger
 
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.tw.loaders.monthly_revenue_report_loader import (
@@ -263,3 +264,33 @@ def test_updater_and_loader_share_one_connection(
 
     updater.close()
     assert updater.dao.conn is None
+
+
+def test_rerun_summary_counts_existing_files_as_skipped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    同一批 CSV 入庫兩次：第二次摘要為「新寫入 0 檔、已存在跳過 N 檔」
+
+    舊版整檔已存在也計入「新寫入」——2026-09-16 實跑月營收 14 個 CSV 全部
+    `all records already exist`，摘要卻是「新寫入 14 檔、已存在跳過 0 檔」。
+    """
+
+    messages: List[str] = []
+    sink_id: int = logger.add(
+        lambda message: messages.append(message.record["message"]),
+        filter=lambda record: "入庫完成" in record["message"],
+    )
+    try:
+        loader, downloads = make_loader(tmp_path, monkeypatch)
+        make_mrr_rows([(2024, 1)]).to_csv(downloads / "mrr_202401.csv", index=False)
+        make_mrr_rows([(2024, 2)]).to_csv(downloads / "mrr_202402.csv", index=False)
+        loader.add_to_db()
+
+        rerun_loader, _ = make_loader(tmp_path, monkeypatch)
+        rerun_loader.add_to_db()
+    finally:
+        logger.remove(sink_id)
+
+    assert messages[0].endswith("新寫入 2 檔、已存在跳過 0 檔、失敗 0 檔")
+    assert messages[1].endswith("新寫入 0 檔、已存在跳過 2 檔、失敗 0 檔")

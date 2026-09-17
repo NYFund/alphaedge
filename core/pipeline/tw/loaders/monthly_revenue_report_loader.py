@@ -122,6 +122,7 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
         self.create_missing_tables()
 
         file_cnt: int = 0
+        skipped_files: int = 0
 
         failed_files: List[str] = []
         for file_path in self.mrr_dir.iterdir():
@@ -133,26 +134,30 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
 
                 if df.empty:
                     logger.warning(f"Skip {file_path}: file is empty")
-                else:
-                    # 確保 stock_id 是字串型別，避免與資料庫中的 TEXT 型別不一致
-                    if "stock_id" in df.columns:
-                        df["stock_id"] = df["stock_id"].astype(str)
+                    skipped_files += 1
+                    continue
 
-                    inserted: int
-                    skipped: int
-                    with self.dao.savepoint():
-                        inserted, skipped = self.dao.insert_or_ignore(df)
+                # 確保 stock_id 是字串型別，避免與資料庫中的 TEXT 型別不一致
+                if "stock_id" in df.columns:
+                    df["stock_id"] = df["stock_id"].astype(str)
 
-                    if inserted:
-                        logger.info(
-                            f"Save {file_path} into database "
-                            f"({inserted} new records, {skipped} duplicates skipped)"
-                        )
-                    else:
-                        logger.info(
-                            f"Skip {file_path}: all records already exist in database"
-                        )
+                inserted: int
+                skipped: int
+                with self.dao.savepoint():
+                    inserted, skipped = self.dao.insert_or_ignore(df)
 
+                if not inserted:
+                    # 整檔已存在是重跑的正常結果，不算「新寫入」
+                    logger.info(
+                        f"Skip {file_path}: all records already exist in database"
+                    )
+                    skipped_files += 1
+                    continue
+
+                logger.info(
+                    f"Save {file_path} into database "
+                    f"({inserted} new records, {skipped} duplicates skipped)"
+                )
                 file_cnt += 1
             except Exception as e:
                 logger.warning(f"Error saving {file_path}: {e}")
@@ -167,4 +172,5 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
             failed_files=failed_files,
             remove_files=remove_files,
             downloads_path=self.mrr_dir,
+            skipped_files=skipped_files,
         )

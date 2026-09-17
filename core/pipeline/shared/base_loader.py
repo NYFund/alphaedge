@@ -88,6 +88,7 @@ class BaseDataLoader(ABC):
         downloads_path: Optional[Path] = None,
         skipped_files: int = 0,
         partial_files: Optional[List[str]] = None,
+        new_rows: Optional[int] = None,
     ) -> None:
         """
         - Description:
@@ -122,6 +123,10 @@ class BaseDataLoader(ABC):
                 因資料已存在而整檔跳過的檔案數（重跑的正常結果）
             - partial_files: Optional[List[str]]
                 只有部分列被寫入的檔案；代表同鍵不同值，值得檢查
+            - new_rows: Optional[int]
+                跨檔合併後整批寫入的 loader 用：`succeeded` 此時是**讀檔數**，
+                檔案與寫入沒有一對一關係，「新寫入 N 檔」無從算起；改以新增列數摘要，
+                重跑時才看得出「讀了 N 檔、其實沒有新資料」
         - Raise:
             - DataLoadError
                 `failed_files` 非空時拋出
@@ -145,6 +150,12 @@ class BaseDataLoader(ABC):
 
         if remove_files and downloads_path is not None:
             shutil.rmtree(downloads_path)
+
+        if new_rows is not None:
+            logger.info(
+                f"[{source}] 入庫完成：讀取 {succeeded} 檔、新增 {new_rows} 列、失敗 0 檔"
+            )
+            return
 
         logger.info(
             f"[{source}] 入庫完成：新寫入 {succeeded} 檔、"
