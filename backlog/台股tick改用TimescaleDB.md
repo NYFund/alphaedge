@@ -10,6 +10,7 @@
   - 把雲端上的歷史 CSV 一次匯入並壓縮。
 - **範圍界線**：
   - **不做期貨 tick**：2026-09-15 已裁示不做，`futures_tick_*` 的 DolphinDB 程式原樣保留，去留見 Phase5-2 的裁示。
+  - **DolphinDB 殘留的完整清單**（程式、設定、測試、文件、本機資料）已由 [健檢第五輪收斂.md](健檢第五輪收斂.md) Phase3-7 盤點完成；2026-09-17 使用者裁示由本份規劃的 Phase5-2 一併處理，Phase5-2 施作前直接取用該清單即可，不必重新盤點。
   - **不做**台股日頻資料的 SQLite → PostgreSQL 遷移，那是 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的範圍；本文件只和它共用 PostgreSQL 容器、driver 與連線層。
   - **不改**爬蟲（`StockTickCrawler`）與清洗邏輯（`StockTickCleaner` 的欄位格式），也不改 tick 回測引擎的成交語意。
   - **不做** tick 回補續跑到今天。回補要不要做、做多少是另一個決策，本文件只保證 updater 在新儲存上可以續跑。
