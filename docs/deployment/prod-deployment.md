@@ -24,6 +24,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 | editable 安裝 | 必須是 `-e`，不可一般安裝 | `core/config/paths.py` 以 `__file__` 推算專案根目錄，一般安裝會把程式複製進 site-packages，`results/`、`logs/` 就不會落在 `/app` 底下的掛載點 |
 | core 內含 `chromium` | apt 安裝並設 `BROWSER_PATH=/usr/bin/chromium` | 回測報表存 PNG 走 plotly → kaleido 1.x，它不內建瀏覽器，缺了會在報表最後一步失敗（CSV 已寫出、圖全沒有）。`plotly_get_chrome` 下載的 Chrome for Testing 沒有 linux arm64 版本，故用 Debian 套件 |
 | frontend 相依 | 只裝 `frontend/requirements.txt` | 前端映像不安裝本專案，只 COPY `risk_metrics.py` 那條最小鏈 |
+| frontend 的 `PYTHONPATH=/app` | 寫在 `frontend/Dockerfile` 的 `ENV` | 前端映像不安裝本專案，而 `streamlit run frontend/app.py` 只把 `/app/frontend` 放進 `sys.path`：少了這一行，`from core.backtest.analysis...` 與 `from frontend.config ...` 都會 `ModuleNotFoundError`。本機不出事是因為開發環境有 editable 安裝 |
 | `.dockerignore` | 排除 `data/`、`results/`、`logs/`、`.env*`、`.venv/`、`.git/` | build context 是專案根目錄，不排除會把數 GB 的資料庫與金鑰送進 daemon，日後有人寫 `COPY . .` 還會打包進映像 |
 
 映像大小約 core 2.9 GB（其中 chromium 與 shioaji 佔大宗）、frontend 0.9 GB。
