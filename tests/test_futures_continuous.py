@@ -1,6 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List
 
 import pandas as pd
@@ -10,6 +11,10 @@ from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollPlanner
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
+from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
+from core.pipeline.tw.loaders.futures_continuous_loader import (
+    FuturesContinuousLoader,
+)
 from core.pipeline.tw.updaters.futures_continuous_updater import (
     FuturesContinuousUpdater,
 )
@@ -359,3 +364,77 @@ def test_real_continuous_table_is_consistent() -> None:
             mismatched.append(row["date"])
 
     assert not mismatched, f"換月接點出現假跳空：{mismatched[:5]}"
+
+
+# === 整段重建 ===
+def make_db_updater(tmp_path: Path) -> FuturesContinuousUpdater:
+    """組一支只碰暫存 DB、行情由記憶體提供的 updater"""
+
+    dao: FuturesContinuousDAO = FuturesContinuousDAO(db_path=tmp_path / "test.db")
+    updater: FuturesContinuousUpdater = FuturesContinuousUpdater.__new__(
+        FuturesContinuousUpdater
+    )
+    updater.dao = dao
+    updater.loader = FuturesContinuousLoader(dao=dao)
+    updater.loader.continuous_dir = tmp_path
+    updater.price_api = SimpleNamespace(
+        get_range=lambda start_date, end_date, product=None, session=None: (
+            make_price_df(
+                [
+                    row
+                    for row in PRICES
+                    if start_date
+                    <= datetime.date.fromisoformat(row["date"])
+                    <= end_date
+                ]
+            )
+        ),
+        get_trading_days=lambda start_date, end_date, product=None: [
+            date
+            for date in (datetime.date.fromisoformat(d) for d in TRADING_DAYS)
+            if start_date <= date <= end_date
+        ],
+    )
+    return updater
+
+
+def test_rebuild_removes_rows_before_the_new_start(tmp_path: Path) -> None:
+    """
+    以較晚的起日重建時，起日之前的舊列必須被清掉
+
+    `INSERT OR REPLACE` 只覆寫主鍵相同的列。舊列留著的話，它們帶的是上一代的
+    `adj_factor`——兩代交界那次換月的價差沒有被調整，而序列表面上仍然連續。
+    """
+
+    updater: FuturesContinuousUpdater = make_db_updater(tmp_path)
+    try:
+        updater.update(
+            products=["TX"],
+            start_date=datetime.date(2024, 3, 18),
+            end_date=datetime.date(2024, 3, 22),
+        )
+        first_dates: List[str] = [
+            row[0]
+            for row in updater.dao.conn.execute(
+                f"SELECT DISTINCT date FROM {FUTURES_CONTINUOUS_TABLE_NAME} "
+                f"ORDER BY date"
+            )
+        ]
+
+        updater.update(
+            products=["TX"],
+            start_date=datetime.date(2024, 3, 21),
+            end_date=datetime.date(2024, 3, 22),
+        )
+        rebuilt_dates: List[str] = [
+            row[0]
+            for row in updater.dao.conn.execute(
+                f"SELECT DISTINCT date FROM {FUTURES_CONTINUOUS_TABLE_NAME} "
+                f"ORDER BY date"
+            )
+        ]
+    finally:
+        updater.close()
+
+    assert first_dates[0] == "2024-03-18"
+    assert rebuilt_dates == ["2024-03-21", "2024-03-22"]
