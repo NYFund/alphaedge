@@ -59,6 +59,8 @@ class TwStockDataFeed(BaseDataFeed):
 
         # {融券最後回補日: {stock_id}}；由除權息行事曆推導，整場回測只建一次
         self.force_cover_map: Optional[Dict[datetime.date, Set[str]]] = None
+        # 停券期間（回補日 ~ 除權息交易日前一日）的逐日標的表，同樣只建一次
+        self.short_suspended_map: Optional[Dict[datetime.date, Set[str]]] = None
 
         # 回測區間內的交易日集合；`setup()` 建一次，供 `is_market_open()` 查表。
         # **不建的話每個曆日都會對 price 表做一次 `SELECT *` 只為了判斷空不空**：
@@ -220,6 +222,76 @@ class TwStockDataFeed(BaseDataFeed):
             self.force_cover_map = self.build_force_cover_map()
 
         return self.force_cover_map.get(date, set())
+
+    def get_short_suspended_symbols(self, date: datetime.date) -> Set[str]:
+        """
+        今日處於停券期間（融券最後回補日 ~ 除權息交易日前一交易日）的標的
+
+        引擎只在回補日當天強制回補，這段期間若沒有擋板，留倉放空策略可以在
+        停券期間開新的融券空單並持有跨過除權息。
+        """
+
+        if self.dividend is None or self.price is None:
+            return set()
+
+        if self.short_suspended_map is None:
+            self.short_suspended_map = self.build_short_suspended_map()
+
+        return self.short_suspended_map.get(date, set())
+
+    def build_short_suspended_map(self) -> Dict[datetime.date, Set[str]]:
+        """
+        - Description:
+            把「融券最後回補日 → 除權息交易日」展開成逐日的停券標的表
+
+            回補日本身包含在內（當天已不得新增融券賣出，只能回補），
+            除權息交易日當天不含——該日融券恢復交易。
+
+            整場回測只建一次，與 `build_force_cover_map()` 共用同一份行事曆推導。
+        - Return:
+            - Dict[datetime.date, Set[str]]
+                `{交易日: {stock_id}}`；資料不足時為空 dict
+        """
+
+        if self.start_date is None or self.end_date is None:
+            return {}
+
+        lookahead_end: datetime.date = self.end_date + datetime.timedelta(
+            days=self.FORCE_COVER_LOOKAHEAD_DAYS
+        )
+        trading_days: List[datetime.date] = self.price.get_trading_days(
+            self.start_date, lookahead_end
+        )
+        if not trading_days:
+            return {}
+
+        ex_dividend_df: pd.DataFrame = self.dividend.get_range(
+            self.start_date, lookahead_end
+        )
+        if ex_dividend_df.empty:
+            return {}
+
+        suspended_map: Dict[datetime.date, Set[str]] = {}
+        for ex_date, stock_id in zip(
+            pd.to_datetime(ex_dividend_df["date"]).dt.date,
+            ex_dividend_df["stock_id"].astype(str),
+        ):
+            cover_date: Optional[datetime.date] = MarketCalendar.shift_trading_days(
+                trading_days,
+                ex_date,
+                -self.FORCE_COVER_TRADING_DAYS_BEFORE_EX_DATE,
+            )
+            if cover_date is None:
+                continue
+
+            for trading_day in trading_days:
+                if trading_day < cover_date:
+                    continue
+                if trading_day >= ex_date:
+                    break
+                suspended_map.setdefault(trading_day, set()).add(stock_id)
+
+        return suspended_map
 
     def build_force_cover_map(self) -> Dict[datetime.date, Set[str]]:
         """

@@ -7,10 +7,11 @@ from core.backtest.backtester import new_event_counts
 from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.backtest.models.cost_model import CostConfig, ShortConstraint, StockCostModel
+from core.backtest.models.fill_model import TwStockFillModel
 from core.backtest.models.settlement_model import TwStockSettlementModel
 from core.managers.stock.position_manager import StockPositionManager
-from core.models import StockAccount, StockOrder, StockPosition
-from core.utils import Action, PositionType, ShortMethod
+from core.models import StockAccount, StockOrder, StockPosition, StockQuote
+from core.utils import Action, PositionType, Scale, ShortMethod
 
 """
 放空的市場約束測試：除權息停券強制回補與股利補償
@@ -362,3 +363,146 @@ def test_new_event_counts_contains_dividend_keys() -> None:
     counts: Set[str] = set(new_event_counts())
 
     assert {"dividend_compensation_paid", "dividend_compensation_unknown"} <= counts
+
+
+# === 當沖轉融券留倉的餘額檢查 ===
+def make_day_trade_position(price: float = 500.0, volume: int = 1) -> StockPosition:
+    """建立當沖放空部位（尚未回補）"""
+
+    position: StockPosition = make_short_position(
+        volume=volume, short_method=ShortMethod.DAY_TRADE
+    )
+    position.price = price
+    position.is_day_trade = True
+    return position
+
+
+def test_conversion_is_rejected_when_balance_is_insufficient() -> None:
+    """
+    餘額不足以支應保證金時不可硬轉留倉
+
+    實跑：帳戶 10,000 元、當沖放空 500 元 × 1 張，舊行為轉留倉後餘額 −442,113
+    且沒有任何拒絕或計數；之後的維持率追繳只看單一部位的擔保維持率、
+    不看帳戶現金，負餘額會一路留著。
+    """
+
+    account: StockAccount = StockAccount(10000.0)
+    position: StockPosition = make_day_trade_position()
+    account.positions.append(position)
+    settlement: TwStockSettlementModel = make_settlement(account)
+    event_counts: Dict[str, int] = new_event_counts()
+
+    settlement.convert_to_margin_position(
+        position, account, datetime.date(2024, 1, 4), 500.0, event_counts
+    )
+
+    assert event_counts["forced_cover_insufficient_margin"] == 1
+    assert account.balance >= 0
+    assert account.get_positions(position_type=PositionType.SHORT) == []
+
+
+def test_conversion_proceeds_when_balance_is_enough() -> None:
+    """餘額足夠時照常轉為融券留倉（防止改過頭）"""
+
+    account: StockAccount = StockAccount(1000000.0)
+    position: StockPosition = make_day_trade_position()
+    account.positions.append(position)
+    settlement: TwStockSettlementModel = make_settlement(account)
+    event_counts: Dict[str, int] = new_event_counts()
+
+    settlement.convert_to_margin_position(
+        position, account, datetime.date(2024, 1, 4), 500.0, event_counts
+    )
+
+    assert event_counts["forced_cover_insufficient_margin"] == 0
+    assert position.is_day_trade is False
+    assert position.short_method == ShortMethod.MARGIN
+    assert account.balance >= 0
+
+
+# === 停券期間不得新增融券賣出 ===
+def make_stock_quote() -> StockQuote:
+    """當日有量的正常報價"""
+
+    return StockQuote(
+        stock_id=STOCK_ID,
+        scale=Scale.DAY,
+        date=datetime.date(2024, 1, 4),
+        cur_price=100.0,
+        volume=10_000,
+        open=100.0,
+        high=105.0,
+        low=95.0,
+        close=100.0,
+    )
+
+
+def make_fill_model(suspended: Set[str]) -> TwStockFillModel:
+    """組出帶停券清單的成交模型"""
+
+    fill_model: TwStockFillModel = TwStockFillModel(event_counts=new_event_counts())
+    fill_model.apply_short_suspended_symbols(suspended)
+    return fill_model
+
+
+def make_short_order(
+    short_method: ShortMethod = ShortMethod.MARGIN,
+    action: Action = Action.SELL,
+    position_type: PositionType = PositionType.SHORT,
+) -> StockOrder:
+    """建立放空開倉單"""
+
+    return StockOrder(
+        stock_id=STOCK_ID,
+        date=datetime.date(2024, 1, 4),
+        action=action,
+        position_type=position_type,
+        price=100.0,
+        volume=1,
+        short_method=short_method,
+    )
+
+
+def test_margin_short_is_rejected_during_the_suspension_window() -> None:
+    """
+    停券期間的融券放空開倉被拒並計數
+
+    引擎原本只在「最後回補日」當天強制回補，回補日之後到除權息交易日之間
+    沒有任何擋板，留倉放空策略可以在停券期間開新的融券空單並持有跨過除權息。
+    """
+
+    fill_model: TwStockFillModel = make_fill_model({STOCK_ID})
+    quote: StockQuote = make_stock_quote()
+
+    assert fill_model.fill(make_short_order(), quote) is None
+    assert fill_model.event_counts["rejected_short_suspended"] == 1
+
+
+def test_sbl_short_is_not_affected_by_the_suspension() -> None:
+    """SBL 借券不受停券限制（其跨除息的成本由股利補償反映），不擋"""
+
+    fill_model: TwStockFillModel = make_fill_model({STOCK_ID})
+    order: StockOrder = make_short_order(short_method=ShortMethod.SBL)
+
+    assert fill_model.fill(order, make_stock_quote()) is order
+    assert fill_model.event_counts["rejected_short_suspended"] == 0
+
+
+def test_other_symbols_are_not_affected() -> None:
+    """不在停券清單上的標的照常成交（防止改過頭）"""
+
+    fill_model: TwStockFillModel = make_fill_model({"2317"})
+    order: StockOrder = make_short_order()
+
+    assert fill_model.fill(order, make_stock_quote()) is order
+    assert fill_model.event_counts["rejected_short_suspended"] == 0
+
+
+def test_cover_order_is_not_blocked_during_the_suspension() -> None:
+    """停券期間仍可回補（買進），否則部位會被鎖死在倉裡"""
+
+    fill_model: TwStockFillModel = make_fill_model({STOCK_ID})
+    order: StockOrder = make_short_order(action=Action.BUY)
+
+    assert fill_model.fill(order, make_stock_quote()) is order
+    assert fill_model.event_counts["rejected_short_suspended"] == 0

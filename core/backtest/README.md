@@ -163,6 +163,8 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 | `rejected_volume_cap` | 超過成交量上限且政策為拒單（或上限不足一張） |
 | `truncated_by_volume` | 超過成交量上限被縮量 |
 | `forced_cover_suspended` | 觸及停券強制回補日（除權息推導或手動指定） |
+| `rejected_short_suspended` | 停券期間（回補日 ~ 除權息交易日）的融券放空開倉被拒 |
+| `forced_cover_insufficient_margin` | 當沖轉融券留倉時餘額不足，改為強制回補 |
 | `dividend_compensation_paid` | 跨除息日的空單補償出借方現金股利 |
 | `dividend_compensation_unknown` | 權息並存拆不出現金股利，該筆補償被跳過（成本低估） |
 | `dividend_received` | 跨除息日的做多部位收到現金股利 |

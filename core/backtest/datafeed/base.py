@@ -99,6 +99,24 @@ class BaseDataFeed(ABC):
 
         return set()
 
+    def get_short_suspended_symbols(self, date: datetime.date) -> Set[str]:
+        """
+        - Description:
+            取得今日處於**停券期間**的標的
+
+            與 `get_force_cover_symbols()` 的差別是「一天」與「一段」：後者是
+            融券最後回補日當天，本方法涵蓋從那天起到除權息交易日之間的整段期間，
+            這段期間制度上不得新增融券賣出。
+        - Parameters:
+            - date: datetime.date
+                交易日
+        - Return:
+            - Set[str]
+                `{symbol}`；預設為空集合
+        """
+
+        return set()
+
     def get_cash_dividend_map(self, date: datetime.date) -> Dict[str, float]:
         """
         - Description:

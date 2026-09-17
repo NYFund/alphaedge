@@ -319,7 +319,9 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"[Day Trade Cover] {position.symbol} 全日鎖漲停無法回補，轉為融券留倉"
                 )
                 event_counts["limit_up_cover_failed"] += 1
-                self.convert_to_margin_position(position, account)
+                self.convert_to_margin_position(
+                    position, account, date, quote.close, event_counts
+                )
                 continue
 
             if policy == DayTradeUncoveredPolicy.RAISE:
@@ -331,7 +333,9 @@ class TwStockSettlementModel(BaseSettlementModel):
                 logger.warning(
                     f"[Day Trade Cover] {position.symbol} 未回補，依政策轉為融券留倉"
                 )
-                self.convert_to_margin_position(position, account)
+                self.convert_to_margin_position(
+                    position, account, date, quote.close, event_counts
+                )
                 continue
 
             logger.warning(
@@ -359,7 +363,12 @@ class TwStockSettlementModel(BaseSettlementModel):
         )
 
     def convert_to_margin_position(
-        self, position: StockPosition, account: BaseAccount
+        self,
+        position: StockPosition,
+        account: BaseAccount,
+        date: datetime.date,
+        close_price: float,
+        event_counts: Dict[str, int],
     ) -> None:
         """
         - Description:
@@ -371,11 +380,22 @@ class TwStockSettlementModel(BaseSettlementModel):
             一旦轉為留倉，這筆賣出在現實中就不是當沖，應適用全額稅率。
             漏收會讓「漲停鎖死轉留倉」這種放空最痛的情境成本被系統性低估——
             低估恰好發生在最不該樂觀的地方。
+
+            **餘額不足時不可硬轉**：舊版直接從餘額扣款而不檢查，實跑「帳戶 10,000 元、
+            當沖放空 500 元 × 1 張」轉留倉後餘額是 −442,113 而沒有任何拒絕或計數；
+            之後的維持率追繳只看單一部位的擔保維持率、不看帳戶現金，負餘額會一路留著。
+            現金不夠就是留不了倉，改依既有的追繳政策處理。
         - Parameters:
             - position: StockPosition
                 要轉為留倉的當沖空單
             - account: BaseAccount
                 虛擬帳戶
+            - date: datetime.date
+                當前交易日（餘額不足強制回補時的成交日）
+            - close_price: float
+                當日收盤價（餘額不足強制回補時的成交價）
+            - event_counts: Dict[str, int]
+                事件計數
         """
 
         margin: int = self.cost_model.margin_required(
@@ -389,6 +409,23 @@ class TwStockSettlementModel(BaseSettlementModel):
             short_method=ShortMethod.MARGIN,
         )
         tax_diff: int = self.get_day_trade_tax_top_up(position)
+
+        required: int = margin + borrow_fee + tax_diff
+        if account.balance < required:
+            event_counts["forced_cover_insufficient_margin"] += 1
+            if self.margin_call_policy == MarginCallPolicy.FORCE_COVER:
+                logger.warning(
+                    f"[Day Trade Cover] {position.symbol} 轉融券留倉需 {required} 元，"
+                    f"帳戶只有 {account.balance} 元，改以收盤價 {close_price} 強制回補"
+                )
+                self.force_cover_position(position, date, close_price)
+            else:
+                logger.warning(
+                    f"[Day Trade Cover] {position.symbol} 轉融券留倉需 {required} 元，"
+                    f"帳戶只有 {account.balance} 元；依政策不強制回補，"
+                    f"該部位維持當沖狀態，餘額不會被扣成負數"
+                )
+            return
 
         position.is_day_trade = False
         position.short_method = ShortMethod.MARGIN
