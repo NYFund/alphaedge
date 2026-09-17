@@ -341,18 +341,21 @@ class TwStockSettlementModel(BaseSettlementModel):
             self.force_cover_position(position, date, quote.close)
 
     def check_limit_up_locked(self, quote: StockQuote) -> bool:
-        """判定是否全日鎖漲停（開高低收皆等於漲停價），此時放空無法回補"""
+        """
+        判定是否全日鎖漲停（開高低收皆等於漲停價），此時放空無法回補
 
-        prev_close: Optional[float] = self.prev_close.get(quote.symbol)
-        if not prev_close:
-            return False
+        判定式與成交價驗證共用 `InstrumentSpec.is_locked_at_limit()`——
+        兩邊各寫一份必然漂移。
+        """
 
-        # 帶入報價日期：2015-06-01 前的漲跌停幅度為 7%，非現行的 10%
-        _, limit_up = self.instrument.get_price_limits(
-            prev_close, TimeUtils.to_date(quote.date)
-        )
-        return (
-            quote.close == limit_up and quote.high == limit_up and quote.low == limit_up
+        return self.instrument.is_locked_at_limit(
+            prev_close=self.prev_close.get(quote.symbol),
+            open_price=quote.open,
+            high=quote.high,
+            low=quote.low,
+            close=quote.close,
+            side=Action.BUY,
+            date=TimeUtils.to_date(quote.date),
         )
 
     def convert_to_margin_position(

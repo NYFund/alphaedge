@@ -158,6 +158,8 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 | 事件 | 意義 |
 |------|------|
 | `rejected_no_borrow` | 融券餘額不足，放空開倉被拒 |
+| `rejected_limit_up_locked` | 全日鎖漲停（開高低收皆為漲停價），買進開倉被拒 |
+| `rejected_limit_down_locked` | 全日鎖跌停，放空開倉被拒 |
 | `rejected_volume_cap` | 超過成交量上限且政策為拒單（或上限不足一張） |
 | `truncated_by_volume` | 超過成交量上限被縮量 |
 | `forced_cover_suspended` | 觸及停券強制回補日（除權息推導或手動指定） |

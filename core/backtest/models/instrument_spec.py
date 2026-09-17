@@ -179,6 +179,54 @@ class TwStockSpec(InstrumentSpec):
         limit_down: float = self.round_to_tick(prev_close * (1 - ratio), "up")
         return (limit_down, limit_up)
 
+    def is_locked_at_limit(
+        self,
+        prev_close: Optional[float],
+        open_price: Optional[float],
+        high: Optional[float],
+        low: Optional[float],
+        close: Optional[float],
+        side: Action,
+        date: Optional[datetime.date] = None,
+    ) -> bool:
+        """
+        - Description:
+            判定該日是否**全日鎖死**在漲停（或跌停）
+
+            開高低收四個價都等於漲停價，代表整天沒有人願意在漲停以下賣出——
+            這種標的實務上排隊也買不到，回測若照常成交會系統性偏樂觀；
+            反過來鎖跌停時賣不掉，放空開倉與回補同樣不可能成交。
+
+            **判定只有一份**：成交價驗證（買進開倉拒單）與結算的「漲停鎖死
+            回補不了」共用本方法，兩邊各寫一次必然漂移。
+        - Parameters:
+            - prev_close: Optional[float]
+                漲跌停基準價；None 或 0 時無從判定，一律回 False
+            - open_price / high / low / close: Optional[float]
+                當日四價
+            - side: Action
+                `BUY` 判漲停鎖死、`SELL` 判跌停鎖死
+            - date: Optional[datetime.date]
+                交易日，用於選取當時適用的漲跌停幅度
+        - Return:
+            - bool
+                是否全日鎖死
+        """
+
+        if not prev_close:
+            return False
+
+        limit_down, limit_up = self.get_price_limits(prev_close, date)
+        limit: Optional[float] = limit_up if side == Action.BUY else limit_down
+        if limit is None:
+            return False
+
+        prices: Tuple[Optional[float], ...] = (open_price, high, low, close)
+        if any(price is None or price <= 0 for price in prices):
+            return False
+
+        return all(price == limit for price in prices)
+
 
 class TwFuturesSpec(InstrumentSpec):
     """

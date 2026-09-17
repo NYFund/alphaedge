@@ -236,11 +236,66 @@ class TwStockFillModel(BaseFillModel):
                 self.event_counts["rejected_fill_price"] += 1
                 return False
 
+        if self.is_locked_at_limit(order, quote, prev_close):
+            return False
+
         if self.instrument.round_to_tick(order.price, "nearest") != order.price:
             logger.warning(
                 f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊檔位"
             )
 
+        return True
+
+    def is_locked_at_limit(
+        self, order: BaseOrder, quote: BaseQuote, prev_close: Optional[float]
+    ) -> bool:
+        """
+        - Description:
+            全日鎖死漲停（買進）或跌停（賣出）時拒單，並計入事件
+
+            **這條擋的是開倉**：`validate()` 只跑在開倉路徑上（拒掉平倉單會讓部位
+            被迫留倉，那是更嚴重的失真）。開高低收都等於漲停價，代表整天沒有人
+            願意在漲停以下賣出，實務上排隊也買不到——而 `MomentumStrategy1` 的
+            訊號正是「當日漲幅 ≥ 9%、以收盤價買進」，這類標的大量是鎖漲停，
+            照常成交會讓做多績效系統性偏樂觀，且沒有任何徵兆。
+        - Parameters:
+            - order: BaseOrder
+                待驗證的開倉單
+            - quote: BaseQuote
+                當根 bar 的報價
+            - prev_close: Optional[float]
+                漲跌停基準價
+        - Return:
+            - bool
+                True 表示被鎖死、應拒單
+        """
+
+        # Tick 級別沒有當日四價，無從判定鎖死
+        if not all(hasattr(quote, field) for field in ("open", "high", "low", "close")):
+            return False
+
+        if not self.instrument.is_locked_at_limit(
+            prev_close=prev_close,
+            open_price=quote.open,
+            high=quote.high,
+            low=quote.low,
+            close=quote.close,
+            side=order.action,
+            date=TimeUtils.to_date(quote.date),
+        ):
+            return False
+
+        locked_side: str = "漲停" if order.action == Action.BUY else "跌停"
+        event_key: str = (
+            "rejected_limit_up_locked"
+            if order.action == Action.BUY
+            else "rejected_limit_down_locked"
+        )
+        logger.warning(
+            f"[Validate Fill] {order.symbol} 當日全日鎖{locked_side}"
+            f"（開高低收皆為 {quote.close}），開倉單無法成交，拒單"
+        )
+        self.event_counts[event_key] += 1
         return True
 
     @staticmethod

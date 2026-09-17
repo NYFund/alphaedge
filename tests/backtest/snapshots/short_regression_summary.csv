@@ -1,13 +1,13 @@
-Scenario,Balance,Margin Used,Realized PnL,ROI,Total Commission,Total Tax,Total Transaction Cost,Trade Count,Open Position Count,rejected_direction,rejected_fill_price,fill_price_clamped,close_price_out_of_range,forced_cover_day_trade,forced_cover_margin_call,forced_cover_max_holding,forced_cover_suspended,forced_cover_no_quote,limit_up_cover_failed,rejected_max_holdings,rejected_no_borrow,rejected_volume_cap,truncated_by_volume,dividend_compensation_paid,dividend_compensation_unknown,dividend_received,share_adjustment_applied,forced_exit_no_quote
-day_trade_same_day_cover,1009534.0,0.0,9534.0,0.95,166,300,466,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-margin_swing_10_days,1009094.0,0.0,9094.0,0.91,166,600,906,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-partial_cover_fifo,928191.0,94500.0,23135.0,2.31,333,1215,1865,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-margin_call_force_cover,899029.0,0.0,-100971.0,-10.1,213,600,971,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
-limit_up_locked_convert,900535.0,99000.0,0.0,0.0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0
-day_trade_on_force_cover_date,1001767.0,0.0,1767.0,0.18,83,150,233,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-borrow_fee_sbl,999576.0,0.0,-424.0,-0.04,84,300,424,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-borrow_fee_margin,999541.0,0.0,-459.0,-0.05,84,300,459,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-ex_dividend_force_cover_margin,1001073.0,0.0,1073.0,0.11,169,600,927,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
-ex_dividend_force_cover_sbl,819315.0,180000.0,0.0,0.0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-ex_dividend_compensation_sbl,999200.0,0.0,-800.0,-0.08,168,600,4800,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0
-ex_dividend_compensation_partial_cover,724572.0,270000.0,101.0,0.01,83,300,1899,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0
+Scenario,Balance,Margin Used,Realized PnL,ROI,Total Commission,Total Tax,Total Transaction Cost,Trade Count,Open Position Count,rejected_direction,rejected_fill_price,fill_price_clamped,close_price_out_of_range,forced_cover_day_trade,forced_cover_margin_call,forced_cover_max_holding,forced_cover_suspended,forced_cover_no_quote,limit_up_cover_failed,rejected_max_holdings,rejected_no_borrow,rejected_limit_up_locked,rejected_limit_down_locked,rejected_volume_cap,truncated_by_volume,dividend_compensation_paid,dividend_compensation_unknown,dividend_received,share_adjustment_applied,forced_exit_no_quote
+day_trade_same_day_cover,1009534.0,0.0,9534.0,0.95,166,300,466,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+margin_swing_10_days,1009094.0,0.0,9094.0,0.91,166,600,906,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+partial_cover_fifo,928191.0,94500.0,23135.0,2.31,333,1215,1865,2,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+margin_call_force_cover,899029.0,0.0,-100971.0,-10.1,213,600,971,1,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+limit_up_locked_convert,900535.0,99000.0,0.0,0.0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0
+day_trade_on_force_cover_date,1001767.0,0.0,1767.0,0.18,83,150,233,1,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+borrow_fee_sbl,999576.0,0.0,-424.0,-0.04,84,300,424,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+borrow_fee_margin,999541.0,0.0,-459.0,-0.05,84,300,459,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+ex_dividend_force_cover_margin,1001073.0,0.0,1073.0,0.11,169,600,927,1,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0
+ex_dividend_force_cover_sbl,819315.0,180000.0,0.0,0.0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+ex_dividend_compensation_sbl,999200.0,0.0,-800.0,-0.08,168,600,4800,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0
+ex_dividend_compensation_partial_cover,724572.0,270000.0,101.0,0.01,83,300,1899,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0

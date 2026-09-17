@@ -55,6 +55,8 @@ def new_event_counts() -> Dict[str, int]:
         "limit_up_cover_failed": 0,  # 漲停鎖死無法回補
         "rejected_max_holdings": 0,  # 超過最大持倉檔數被引擎剔除的開倉單
         "rejected_no_borrow": 0,  # 融券餘額不足被拒的放空開倉單
+        "rejected_limit_up_locked": 0,  # 全日鎖漲停、買不到，被拒的買進開倉單
+        "rejected_limit_down_locked": 0,  # 全日鎖跌停、賣不掉，被拒的放空開倉單
         "rejected_volume_cap": 0,  # 超過當日成交量上限被拒的訂單
         "truncated_by_volume": 0,  # 超過當日成交量上限被縮量的訂單
         "dividend_compensation_paid": 0,  # 除息日補償出借方股利的空單
