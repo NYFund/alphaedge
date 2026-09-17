@@ -29,7 +29,7 @@
 | S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
 | S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ✅ | 2026-09-16 完成：未使用的 `api` 是早期草稿殘留，改為斷言回推次數等於上界 |
 | S7 | FinMind 券商分點 crawler 不再把錯誤當成沒有資料 | `core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py` | 替身 API 拋一般例外時組合記為 `ERROR`、整批跑完拋 `DataLoadError`；回空表時仍是 `NO_DATA` | ✅ | 2026-09-16 完成；權限不足在第一個組合即中止整批，已以真實 API 確認歸類為 `FinMindPermissionError` |
-| S8 | 入庫摘要區分「新寫入」與「整檔已存在」 | `core/pipeline/tw/loaders/stock_dividend_loader.py`、`corporate_action_loader.py`、`monthly_revenue_report_loader.py` 與對應測試 | 重跑同一批 CSV 時摘要為「新寫入 0 檔、已存在跳過 N 檔」 | ⬜ | 2026-09-16 實跑發現 |
+| S8 | 入庫摘要區分「新寫入」與「整檔已存在」 | `core/pipeline/tw/loaders/stock_dividend_loader.py`、`corporate_action_loader.py`、`monthly_revenue_report_loader.py` 與對應測試 | 重跑同一批 CSV 時摘要為「新寫入 0 檔、已存在跳過 N 檔」 | ✅ | 2026-09-16 完成；dividend／corporate_action 改報「讀取 N 檔、新增 M 列」 |
 
 ## S1. DAO 讀取改用 cursor，查詢失敗不 rollback 連線 ✅
 
@@ -134,7 +134,7 @@
   - 新增 5 個測試（`tests/test_finmind_broker_trading_batch.py`）；以真實 API（帳號等級 `register`）單次請求確認券商分點錯誤歸類為 `FinMindPermissionError`。
   - **未處理**：FinMind 1.9.8 對非 200 回應一律拋 `Exception("FinMind API unexpected response: <msg>")`，配額用盡的實際訊息是否仍含 `is_quota_error()` 的關鍵字（`402`、`quota`、`exceeded`…）未實測；若不含，配額用盡會被歸為 `FinMindRequestError`（記 `ERROR` 而非等待重試）——比舊版記成 `NO_DATA` 明顯，但等待機制不會生效。
 
-## S8. 入庫摘要區分「新寫入」與「整檔已存在」 ⬜
+## S8. 入庫摘要區分「新寫入」與「整檔已存在」 ✅
 
 - **目的**：`finish_load()` 的摘要要能分辨「真的寫進新資料」與「重跑、全部已存在」，否則讀 log 看不出這次更新有沒有東西進來。
 - **做法**：
@@ -143,3 +143,8 @@
 - **產出**：上述三支 loader 與對應測試（`tests/test_dao_monthly_revenue.py`、`tests/test_dao_stock_dividend_corporate_action.py`）。
 - **驗證方式**：同一批 CSV 入庫兩次，第二次摘要的新寫入為 0；擷取 loguru 訊息斷言摘要字串。
 - **相依**：無。
+- **完成紀錄（2026-09-16）**：
+  - `MonthlyRevenueReportLoader`：整檔 0 列寫入與空檔計入 `skipped_files`，比照 price loader；迴圈多餘的 `else` 巢狀一併攤平。
+  - `BaseDataLoader.finish_load()` 新增 `new_rows=`：給值時摘要為「讀取 N 檔、新增 M 列、失敗 0 檔」。dividend、corporate_action 的 `upsert()` 以寫入前後 `count_rows()` 差回傳新增列數，log 另列覆寫列數。
+  - 新增 `test_rerun_summary_reports_zero_new_rows`（dividend、corporate_action 參數化）、`test_rerun_summary_counts_existing_files_as_skipped`；`pytest` 快測 1159／慢測 18 全過、回歸雙線通過。
+  - `docs/pipeline/etl-ingestion.md` §3.1 補上跨檔合併 loader 的摘要口徑。

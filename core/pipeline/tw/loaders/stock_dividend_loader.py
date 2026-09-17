@@ -143,9 +143,10 @@ class StockDividendLoader(BaseDataLoader):
         )
         logger.info(f"Dividend rows: {row_cnt} -> {len(merged_df)} after dedup")
 
+        new_rows: int
         try:
             with self.dao.savepoint():
-                self.upsert(merged_df)
+                new_rows = self.upsert(merged_df)
             self.dao.commit()
         finally:
             self.disconnect()
@@ -156,16 +157,29 @@ class StockDividendLoader(BaseDataLoader):
             failed_files=failed_files,
             remove_files=remove_files,
             downloads_path=DIVIDEND_DOWNLOADS_PATH,
+            new_rows=new_rows,
         )
 
-    def upsert(self, df: pd.DataFrame) -> None:
+    def upsert(self, df: pd.DataFrame) -> int:
         """
         - Description:
             以 `INSERT OR REPLACE` 寫入（不 commit），讓重跑與跨來源覆蓋成為冪等操作
+
+            新增列數以寫入前後的列數差計算：`INSERT OR REPLACE` 覆寫既有主鍵時
+            列數不變，送出的列數分不出「新資料」與「重跑覆寫」。
         - Parameters:
             - df: pd.DataFrame
                 已去重的除權除息資料
+        - Return:
+            - int
+                新增的列數（覆寫既有主鍵的不計）
         """
 
+        before: int = self.dao.count_rows()
         written: int = self.dao.insert_or_replace(df)
-        logger.info(f"Upserted {written} rows into {self.dao.TABLE_NAME}")
+        new_rows: int = self.dao.count_rows() - before
+        logger.info(
+            f"Upserted {written} rows into {self.dao.TABLE_NAME} "
+            f"({new_rows} new, {written - new_rows} overwritten)"
+        )
+        return new_rows

@@ -3,10 +3,11 @@ import importlib
 import sqlite3
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, Iterator, List
 
 import pandas as pd
 import pytest
+from loguru import logger
 
 from core.dao.base import BaseDAO
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
@@ -282,3 +283,70 @@ def test_detector_drops_jumps_explained_by_known_events(
 
     remaining: List[str] = result["stock_id"].tolist()
     assert remaining == ["2317"]
+
+
+# === 入庫摘要 ===
+@pytest.fixture
+def load_summaries() -> Iterator[List[str]]:
+    """收集 `finish_load()` 的入庫完成摘要"""
+
+    messages: List[str] = []
+    sink_id: int = logger.add(
+        lambda message: messages.append(message.record["message"]),
+        filter=lambda record: "入庫完成" in record["message"],
+    )
+    yield messages
+    logger.remove(sink_id)
+
+
+@pytest.mark.parametrize(
+    ("kind", "downloads_attr", "loader_cls_name", "make_row"),
+    [
+        (
+            "stock_dividend",
+            "DIVIDEND_DOWNLOADS_PATH",
+            "StockDividendLoader",
+            make_dividend_row,
+        ),
+        (
+            "corporate_action",
+            "CORPORATE_ACTION_DOWNLOADS_PATH",
+            "CorporateActionLoader",
+            make_action_row,
+        ),
+    ],
+)
+def test_rerun_summary_reports_zero_new_rows(
+    kind: str,
+    downloads_attr: str,
+    loader_cls_name: str,
+    make_row: Callable[..., Dict[str, object]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    load_summaries: List[str],
+) -> None:
+    """
+    同一批 CSV 入庫兩次：第二次摘要的新增列數為 0
+
+    舊版摘要是「新寫入 N 檔」，N 其實是讀檔數——重跑全部已存在時照樣報
+    「新寫入」，讀 log 看不出這次更新到底有沒有新資料進來。
+    """
+
+    loader_module: ModuleType = importlib.import_module(
+        f"core.pipeline.tw.loaders.{kind}_loader"
+    )
+    downloads: Path = tmp_path / kind
+    downloads.mkdir()
+    monkeypatch.setattr(loader_module, "TW_STOCK_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setattr(loader_module, downloads_attr, downloads)
+    pd.DataFrame(
+        [make_row("2024-01-02", "2330"), make_row("2024-01-03", "2317")]
+    ).to_csv(downloads / "twse_2024.csv", index=False)
+
+    for _ in range(2):
+        # 參數化的 loader 類別只能以名稱取得，型別依 `kind` 而定
+        loader: Any = getattr(loader_module, loader_cls_name)()
+        loader.add_to_db()
+
+    assert load_summaries[0].endswith("讀取 1 檔、新增 2 列、失敗 0 檔")
+    assert load_summaries[1].endswith("讀取 1 檔、新增 0 列、失敗 0 檔")
