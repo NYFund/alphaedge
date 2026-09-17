@@ -211,7 +211,8 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
   （春節連假可順延一週以上，這是不能沿用股票日曆的直接理由）。
   週契約 `YYYYMMWn` 是該月第 n 個星期三，**沒有 W3**（第三週就是月契約）。
 - **夜盤屬於次一營業日**：15:00 開盤、次日 05:00 收盤，凌晨的成交屬於前一天開始的那段夜盤；
-  星期五晚上那一段屬於星期一。cleaner 一律以官方歸屬日為準。
+  星期五晚上那一段屬於星期一。cleaner 一律以官方歸屬日為準，故 `futures_price_daily` 中
+  `session='night'` 那列的 `date` 是該段夜盤**所屬的交易日**（星期一），不是它開始的曆日（星期五）。
 - **2017-05-15 之前沒有夜盤**，那是制度不是資料缺漏。
 - 日曆涵蓋區間比回測結束日多取 45 天，否則末段契約的最後交易日會落在區間外而算不出來。
 
@@ -236,8 +237,9 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 
 ### 3.8 日夜盤整併
 
-- 策略把 `session` 設為 `FuturesSession.COMBINED`，DataFeed 就把「**前一交易日**夜盤 ＋ 當日日盤」合成一根 bar
-  （週一要取到週五，不是前一個曆日）。整併在報價層，不另建整併表。
+- 策略把 `session` 設為 `FuturesSession.COMBINED`，DataFeed 就把「**同一日期**的夜盤 ＋ 日盤」合成一根 bar。
+  行情表的 `night` 列記的是該段夜盤所屬的交易日（見 §3.5），所以取同一天就是「前一交易日 15:00 起
+  到當日 13:45」這一整段；往前取一個交易日會讓整條序列錯開一天。整併在報價層，不另建整併表。
 - **跨盤別跳空被保留**：整併後的 `open` 取夜盤開盤、`low`／`high` 涵蓋夜盤。
 - **`COMBINED` 不是資料表裡的值**：拿它查資料表一律回空表、策略整場零交易而不報錯。
   查歷史行情一律走 `BaseFuturesStrategy.price_query_session`；ETL 迭代時段一律用 `FuturesSession.data_sessions()`。

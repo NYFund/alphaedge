@@ -111,12 +111,12 @@ class FuturesQuoteAdapter:
     ) -> List[FuturesQuote]:
         """
         - Description:
-            把「前一交易日的夜盤 ＋ 當日日盤」整併成一根 bar
+            把「當日夜盤 ＋ 當日日盤」整併成一根 bar
 
-            **為什麼是前一交易日的夜盤**：TAIFEX 的夜盤 15:00 開盤、次日 05:00
-            收盤，制度上屬於**次一交易日**——星期五晚上那一段屬於星期一。
-            資料表忠實記錄來源，把夜盤存在它開始的那個日曆日，
-            整併時因此要往前取一個交易日。
+            **夜盤在前、日盤在後**：TAIFEX 的夜盤前一交易日 15:00 開盤、
+            當日 05:00 收盤，制度上屬於當日——星期五晚上那一段屬於星期一，
+            而行情表記的正是它所屬的交易日（`night` 列的 `date` 就是星期一）。
+            整併時因此取同一個日期，不必往前找。
 
             **跨盤別的跳空被保留在 bar 內**：整併後的 `open` 是**夜盤開盤價**，
             不是日盤開盤價——前一個日盤收盤到夜盤開盤之間的跳空，
@@ -138,7 +138,7 @@ class FuturesQuoteAdapter:
             - date: datetime.date
                 交易日（取其日盤）
             - night_date: Optional[datetime.date]
-                前一交易日（取其夜盤）；None 時只取日盤
+                夜盤所在日期（＝同一個交易日）；None 時只取日盤
             - product: Optional[str]
                 商品代碼；None 表示所有商品
         - Return:
@@ -196,7 +196,7 @@ class FuturesQuoteAdapter:
             - day_quote: FuturesQuote
                 當日日盤報價
             - night_quote: Optional[FuturesQuote]
-                前一交易日的夜盤報價
+                同一交易日的夜盤報價（前一交易日 15:00 開盤的那一段）
         - Return:
             - FuturesQuote
                 整併後的報價

@@ -291,7 +291,8 @@ class FuturesCalendar:
             回傳的結束時間因此可能落在下一天，這是刻意的，不是計算錯誤。
         - Parameters:
             - date: datetime.date
-                交易日（夜盤取其**開始**的那一天，與行情表的 `date` 欄一致）
+                交易日；夜盤取的是**它開始的那一天**，與行情表的 `date` 欄不同
+                （行情表的 `night` 列記的是該段夜盤所屬的次一交易日）
             - session: FuturesSession
                 交易時段
         - Return:

@@ -330,11 +330,13 @@ class TwFuturesDataFeed(BaseDataFeed):
     def get_night_session_date(self, date: datetime.date) -> Optional[datetime.date]:
         """
         - Description:
-            取得要與當日日盤整併的那一段夜盤所在的日期（＝**前一交易日**）
+            取得要與當日日盤整併的那一段夜盤所在的日期（＝**當日**）
 
             夜盤 15:00 開盤、次日 05:00 收盤，制度上屬於次一交易日——星期五晚上
-            那一段屬於星期一。資料表把夜盤存在它開始的那個日曆日，故整併時
-            往前取一個交易日。
+            那一段屬於星期一。**行情表存的是它所屬的交易日、不是它開始的曆日**：
+            TX 第一筆 `night` 列是 2017-05-16（夜盤制度 2017-05-15 晚上上線），
+            且 2023 年起近月樣本中「同日期夜盤開盤 vs 前一交易日日盤收盤」的差距
+            中位數 15 點、對「同日期日盤收盤」則是 158 點。故整併時直接取同一天。
 
             **2017-05-15 之前沒有夜盤**，此時回傳 None，整併結果等於日盤本身。
         - Parameters:
@@ -342,13 +344,13 @@ class TwFuturesDataFeed(BaseDataFeed):
                 交易日
         - Return:
             - Optional[datetime.date]
-                前一交易日；日曆未建立或無夜盤制度時為 None
+                同一個交易日；日曆未建立或無夜盤制度時為 None
         """
 
         if self.calendar is None or not self.calendar.has_night_session(date):
             return None
 
-        return self.calendar.get_previous_trading_day(date)
+        return date
 
     def close(self) -> None:
         """關閉資料連線（回測結束時由引擎呼叫）"""
