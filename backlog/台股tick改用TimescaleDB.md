@@ -10,7 +10,7 @@
   - 把雲端上的歷史 CSV 一次匯入並壓縮。
 - **範圍界線**：
   - **不做期貨 tick**：2026-09-15 已裁示不做，`futures_tick_*` 的 DolphinDB 程式原樣保留，去留見 Phase5-2 的裁示。
-  - **DolphinDB 殘留的完整清單**（程式、設定、測試、文件、本機資料）已由 [健檢第五輪收斂.md](健檢第五輪收斂.md) Phase3-7 盤點完成；2026-09-17 使用者裁示由本份規劃的 Phase5-2 一併處理，Phase5-2 施作前直接取用該清單即可，不必重新盤點。
+  - **DolphinDB 殘留的完整清單**（程式、設定、測試、文件、本機資料）見 Phase5-2，2026-09-17 由健檢第五輪的盤點搬進本文件；施作時照那份走即可，不必重新掃。
   - **不做**台股日頻資料的 SQLite → PostgreSQL 遷移，那是 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的範圍；本文件只和它共用 PostgreSQL 容器、driver 與連線層。
   - **不改**爬蟲（`StockTickCrawler`）與清洗邏輯（`StockTickCleaner` 的欄位格式），也不改 tick 回測引擎的成交語意。
   - **不做** tick 回補續跑到今天。回補要不要做、做多少是另一個決策，本文件只保證 updater 在新儲存上可以續跑。
@@ -483,6 +483,12 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **需使用者裁示：期貨 tick 的 DolphinDB 程式怎麼處理**（`futures_tick_crawler.py`／`cleaner`／`updater`／`loader`、`DDB_PATH`、`futures-tick` extra）：
     - **選項 A（建議）**：一併刪除。期貨 tick 已裁示不做（2026-09-15），這些程式沒有落地目標；日後要做時，比照本文件另立 backlog 改寫成 TimescaleDB 的 `futures_tick` 表。`tasks/update_db.py` 的 `futures_tick` target 與 `DataType.FUTURES_TICK` 一併移除，`tests/test_futures_tick.py` 與 `test_entrypoint_and_logging.py` 的兩個相關測試跟著調整。
     - **選項 B**：原樣保留，`DDB_PATH` 與 `futures-tick` extra 繼續存在，只刪台股的部分。
+- **DolphinDB 殘留的完整盤點**（施作時直接照這份走，不必重新掃）：
+  - **程式**：`core/api/tw/stock_tick_api.py`（本規劃改寫成 TimescaleDB，不刪）；`core/pipeline/tw/crawlers/{stock,futures}_tick_crawler.py`、`cleaners/{stock,futures}_tick_cleaner.py`、`loaders/{stock,futures}_tick_loader.py`、`updaters/{stock,futures}_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`；`core/backtest/datafeed/tw/stock_datafeed.py` 的 `Scale.TICK` 分支；`tasks/update_db.py` 的 `tick`／`futures_tick` target；`scripts/manual/manual_tick_{crawler,updater}.py`、`manual_init_tick_metadata.py`。
+  - **設定**：`core/config/settings.py`（`TICK_UPDATE_START_DATE`、`DDB_*`、tick 爬蟲多帳號 `API_KEYS`）、`core/config/schema.py`（`TICK_DB_*`、`require_tick_db_path()`、`TICK_TABLE_NAME`、`FUTURES_TICK_TABLE_NAME`）、`core/config/__init__.py`、`core/pipeline/utils/constant.py`、`pyproject.toml`（`tick` extra 與 per-file-ignores）、`.env.example`。
+  - **測試**：`tests/test_futures_tick.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_strategy_data_access.py`、`tests/test_api_public_interfaces.py`、`tests/test_config_consistency.py` 的 tick 相關段落。
+  - **文件**：兩份 README、`strategy_lab/README.md`、`scripts/manual/README.md`，以及 `docs/` 下 `pipeline/etl-ingestion.md`、`futures/tw-futures-platform.md`、`setup/dev-setup.md`、`exchanges/data_coverage.md`、`backtest/module-map.md`、`deployment/dev-deployment.md`、`dev/runtime-artifacts.md`、`dev/code-quality.md`、兩份 `commands/command-usage*.md`。
+  - **本機資料**（不在版控）：`data/downloads/tw_stock/tick/` 541 個 CSV 與 `tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core tasks scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
 - **相依**：Phase4-3（確認新儲存資料完整後才刪對照）、Phase5-1。
