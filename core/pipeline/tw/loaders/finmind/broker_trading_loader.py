@@ -15,8 +15,8 @@ from core.pipeline.utils.exceptions import DataLoadError
 
 兩條路徑都交給資料庫的主鍵約束去重（`INSERT OR IGNORE`）。舊版先把「已存在的鍵」
 查回記憶體再比對，再以 `DataFrame.to_sql` 追加——**`to_sql` 寫完會自行 commit**，
-於是批次更新傳的 `commit=False` 從來沒有生效；且查詢失敗時 pandas 會對整條連線
-`rollback()`，把尚未 commit 的前幾個組合一起丟掉。
+於是批次更新傳的 `commit=False` 從來沒有生效；且以 `pd.read_sql_query` 查詢失敗時
+pandas 會對整條連線 `rollback()`，把尚未 commit 的前幾個組合一起丟掉。
 """
 
 

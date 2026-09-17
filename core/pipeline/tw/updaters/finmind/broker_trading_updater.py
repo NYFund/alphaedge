@@ -149,8 +149,8 @@ class BrokerTradingUpdater:
                 logger.debug(
                     f"Periodically updating metadata at {processed_count} combinations..."
                 )
-                # 先 commit 再重建：讀寫已共用同一條連線、不會互鎖，但 metadata 查詢一旦失敗，
-                # pandas 會對整條連線 rollback，尚未 commit 的組合會跟著消失
+                # 先 commit 再重建：metadata 反映的是已落地的資料，
+                # 也讓程式在重建期間意外中斷時，前面的組合不必重抓
                 self.context.loader.commit()
                 self.metadata.refresh_from_database()
 

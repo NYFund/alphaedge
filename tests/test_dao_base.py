@@ -162,6 +162,51 @@ def test_insert_or_ignore_reports_counts() -> None:
     assert dao.insert_or_ignore(make_rows([])) == (0, 0)
 
 
+def test_failed_query_keeps_uncommitted_writes(tmp_path: Path) -> None:
+    """
+    `query_df()` 查詢失敗不可 rollback 連線：先前未 commit 的寫入要留著
+
+    `pd.read_sql_query` 失敗時會對整條連線 `rollback()`；共用連線上
+    「寫入後、commit 前」夾一個失敗的查詢，前面的寫入就會靜默消失。
+    """
+
+    db_path: Path = tmp_path / "test.db"
+    dao: _DemoDAO = _DemoDAO(db_path=db_path)
+    dao.create_table()
+    dao.insert_or_ignore(make_rows(["2024-01-02"]))
+
+    with pytest.raises(sqlite3.OperationalError):
+        dao.query_df("SELECT no_such_column FROM demo")
+
+    assert dao.conn.in_transaction
+    dao.commit()
+    dao.close()
+
+    reader: sqlite3.Connection = sqlite3.connect(db_path)
+    assert count_rows(reader) == 1
+    reader.close()
+
+
+def test_query_df_types_and_empty_columns() -> None:
+    """數值欄推成數值、日期參數轉 ISO 字串；零列時仍帶欄名"""
+
+    dao: _DemoDAO = _DemoDAO(conn=sqlite3.connect(":memory:"))
+    dao.create_table()
+    dao.insert_or_ignore(make_rows(["2024-01-02", "2024-01-03"]))
+
+    df: pd.DataFrame = dao.query_df(
+        "SELECT date, value FROM demo WHERE date >= ?", (datetime.date(2024, 1, 3),)
+    )
+    assert df.to_dict("records") == [{"date": "2024-01-03", "value": 1.0}]
+    assert df["value"].dtype == "float64"
+
+    empty: pd.DataFrame = dao.query_df(
+        "SELECT date, stock_id FROM demo WHERE date = ?", ("1999-01-01",)
+    )
+    assert empty.empty
+    assert list(empty.columns) == ["date", "stock_id"]
+
+
 def test_failed_savepoint_rolls_back_only_its_block(tmp_path: Path) -> None:
     """
     第二個檔案寫到一半出錯：它寫進去的列全部回滾，第一個檔案的列 commit 後仍在

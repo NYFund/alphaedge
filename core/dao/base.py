@@ -247,10 +247,12 @@ class BaseDAO:
         - Description:
             執行查詢並回傳 DataFrame；日期參數自動轉 ISO 字串
 
-            ⚠️ **查詢失敗時 pandas 會對整條連線 `rollback()`**，再把錯誤包成
-            `pandas.errors.DatabaseError` 拋出。共用連線上若有尚未 commit 的寫入，
-            會跟著一起被丟掉——loader 一律在 `add_to_db()` 結尾 commit，
-            不要在寫入與 commit 之間夾查詢。
+            **不用 `pd.read_sql_query`**：它在查詢失敗時會對整條連線 `rollback()`，
+            共用連線上尚未 commit 的寫入會跟著消失（例如批次寫入中途重建 metadata
+            的查詢失敗）。改以 cursor 執行，失敗時只拋 `sqlite3.Error`、交易維持原狀。
+
+            組表方式與 `read_sql_query` 相同（`from_records` + `coerce_float`），
+            欄位型別推斷一致；零列時仍帶欄名。
         - Parameters:
             - sql: str
                 查詢語句，值一律用 `?` 佔位
@@ -261,8 +263,14 @@ class BaseDAO:
                 查詢結果
         """
 
-        converted: Tuple[Any, ...] = to_sql_params(*params)
-        return pd.read_sql_query(sql, self.conn, params=converted or None)
+        cursor: sqlite3.Cursor = self.conn.execute(sql, to_sql_params(*params))
+        try:
+            columns: List[str] = [column[0] for column in cursor.description]
+            return pd.DataFrame.from_records(
+                cursor.fetchall(), columns=columns, coerce_float=True
+            )
+        finally:
+            cursor.close()
 
     def fetch_one(
         self, sql: str, params: Tuple[Any, ...] = ()
