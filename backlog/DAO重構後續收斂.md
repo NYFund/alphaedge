@@ -27,7 +27,7 @@
 | S3 | 以 `to_sql` 建表的測試改走 `dao_factory` | `tests/test_api_public_interfaces.py`、`tests/test_finmind_api.py`、`tests/test_stock_data_api.py`、`tests/test_corporate_action.py`、`tests/backtest/test_reporting.py`、`tests/test_dao_financial_statement.py`、`tests/test_dao_stock_dividend_corporate_action.py` | `grep -rn "\.to_sql(" tests` 無結果；`pytest` 全綠 | ⬜ | — |
 | S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⏸ | 2026-09-16 使用者裁示暫緩：帳號等級 `register` 無券商分點權限，腳本最關鍵的一段無法實跑；帳號升級或確實需要連網檢查時再做 |
 | S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
-| S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ⬜ | — |
+| S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ✅ | 2026-09-16 完成：未使用的 `api` 是早期草稿殘留，改為斷言回推次數等於上界 |
 | S7 | FinMind 券商分點 crawler 不再把錯誤當成沒有資料 | `core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py` | 替身 API 拋一般例外時組合記為 `ERROR`、整批跑完拋 `DataLoadError`；回空表時仍是 `NO_DATA` | ⬜ | 2026-09-16 實跑發現（帳號等級 `register` 無此資料集權限） |
 | S8 | 入庫摘要區分「新寫入」與「整檔已存在」 | `core/pipeline/tw/loaders/stock_dividend_loader.py`、`corporate_action_loader.py`、`monthly_revenue_report_loader.py` 與對應測試 | 重跑同一批 CSV 時摘要為「新寫入 0 檔、已存在跳過 N 檔」 | ⬜ | 2026-09-16 實跑發現 |
 
@@ -92,13 +92,14 @@
 - **驗證方式**：`python scripts/check_doc_paths.py` 通過；文件列出的檔案皆存在；改動面數字與實測指令輸出一致（指令寫進文件）。
 - **相依**：S1（`query_df` 的實作方式會影響遷移時的讀取層改寫）。
 
-## S6. 清掉既有 F841 ⬜
+## S6. 清掉既有 F841 ✅
 
 - **目的**：讓 `ruff check --select F` 在全專案零警告，可以直接當護欄。
 - **做法**：`tests/backtest/test_market_calendar_bounds.py:40` 的 `api` 變數未使用——先確認測試是否本來打算用它做斷言（若是，補上斷言；若否，刪除賦值），不要只為了消警告而刪。
 - **產出**：`tests/backtest/test_market_calendar_bounds.py`。
 - **驗證方式**：`ruff check --select F core tasks tests scripts` 零警告；該測試仍通過。
 - **相依**：無。
+- **完成紀錄（2026-09-16）**：`api`（`_EmptyAPI` 實例）是早期草稿殘留——`get_last_trading_date()` 以 `isinstance(api, StockPriceAPI)` 分派，測試後來改用 `_Typed` 子類別，替身就沒再用到。刪除替身，改在 `has_data` 替身記錄被查的日期，斷言「恰好查滿 `MAX_LOOKBACK_DAYS` 天就停」，把測試名稱承諾的「有界」直接驗掉。`ruff check --select F core tasks tests scripts strategy_lab` 零警告。
 
 ## S7. FinMind 券商分點 crawler 不再把錯誤當成沒有資料 ⬜
 

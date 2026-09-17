@@ -34,13 +34,11 @@ class _FakePriceAPI:
 def test_lookback_raises_after_max_days() -> None:
     """回推上界內找不到交易日即 `LookupError`，訊息要指出可能原因"""
 
-    class _EmptyAPI(_FakePriceAPI):
-        pass
-
-    api: _EmptyAPI = _EmptyAPI(trading_days=[])
-
     # 以 has_data 恆為 False 的路徑模擬「起始日早於資料涵蓋範圍」
-    def always_missing(_api, _date: datetime.date) -> bool:
+    checked_dates: List[datetime.date] = []
+
+    def always_missing(_api, date: datetime.date) -> bool:
+        checked_dates.append(date)
         return False
 
     original = MarketCalendar.check_price_api_has_data
@@ -56,6 +54,9 @@ def test_lookback_raises_after_max_days() -> None:
             MarketCalendar.get_last_trading_date(_Typed(), datetime.date(2013, 1, 2))
     finally:
         MarketCalendar.check_price_api_has_data = original
+
+    # 有界：恰好查滿上界天數就停，不會一路查到 1970 年
+    assert len(checked_dates) == MarketCalendar.MAX_LOOKBACK_DAYS
 
 
 def test_lookback_returns_the_previous_trading_day() -> None:
