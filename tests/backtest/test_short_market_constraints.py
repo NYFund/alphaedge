@@ -7,10 +7,16 @@ from core.backtest.backtester import new_event_counts
 from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.backtest.models.cost_model import CostConfig, ShortConstraint, StockCostModel
-from core.backtest.models.fill_model import TwStockFillModel
+from core.backtest.models.fill_model import FillConfig, TwStockFillModel
 from core.backtest.models.settlement_model import TwStockSettlementModel
 from core.managers.stock.position_manager import StockPositionManager
-from core.models import StockAccount, StockOrder, StockPosition, StockQuote
+from core.models import (
+    StockAccount,
+    StockOrder,
+    StockPosition,
+    StockQuote,
+    StockTradeRecord,
+)
 from core.utils import Action, PositionType, Scale, ShortMethod
 
 """
@@ -506,3 +512,52 @@ def test_cover_order_is_not_blocked_during_the_suspension() -> None:
 
     assert fill_model.fill(order, make_stock_quote()) is order
     assert fill_model.event_counts["rejected_short_suspended"] == 0
+
+
+# === 借券費與強制出場的口徑 ===
+def test_accrued_borrow_fee_is_deducted_from_daily_equity() -> None:
+    """
+    已計提的借券費要從每日權益扣掉
+
+    它逐日累加在部位上、平倉時才結算。不扣的話持有期間的權益偏高、
+    回補日一次掉下來，MDD 與日報酬都失真（股利補償走即時扣款，不在此列）。
+    """
+
+    account: StockAccount = StockAccount(1000000.0)
+    position: StockPosition = make_short_position(short_method=ShortMethod.SBL)
+    account.positions.append(position)
+    settlement: TwStockSettlementModel = make_settlement(account)
+
+    units: int = settlement.instrument.to_units(position.volume)
+    before: float = settlement.mark_position(position, 100.0, units)
+
+    position.accrued_borrow_fee = 500.0
+    after: float = settlement.mark_position(position, 100.0, units)
+
+    assert before - after == 500.0
+
+
+def test_forced_cover_applies_slippage() -> None:
+    """
+    引擎的強制回補同樣吃滑價
+
+    策略自己送的回補單走 `FillModel`、吃滑價，引擎的當沖日終／追繳／無報價
+    強制回補卻以收盤價全量成交——同一支策略兩種口徑。
+    """
+
+    account: StockAccount = StockAccount(1000000.0)
+    position: StockPosition = make_short_position()
+    account.positions.append(position)
+
+    config: FillConfig = FillConfig(slippage_bps_buy=100.0, slippage_bps_sell=100.0)
+    fill_model: TwStockFillModel = TwStockFillModel(
+        event_counts=new_event_counts(), config=config
+    )
+    settlement: TwStockSettlementModel = make_settlement(account)
+    settlement.fill_model = fill_model
+
+    settlement.force_cover_position(position, datetime.date(2024, 1, 4), 100.0)
+
+    record: StockTradeRecord = account.trade_records[-1]
+    # 回補是買進，滑價往上；100 元 ＋ 100 bps 後對齊檔位
+    assert record.buy_price > 100.0

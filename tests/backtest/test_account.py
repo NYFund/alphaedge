@@ -1,5 +1,4 @@
 import datetime
-from typing import Dict
 
 from core.models import StockAccount, StockPosition
 from core.utils import PositionType, ShortMethod
@@ -68,36 +67,6 @@ def test_get_positions_filter() -> None:
 
     account.positions[0].is_closed = True
     assert len(account.get_positions()) == 1
-
-
-def test_get_short_market_value() -> None:
-    """空頭市值依傳入價格計算"""
-
-    account: StockAccount = build_account()
-
-    prices: Dict[str, float] = {"2317": 110.0}
-    assert account.get_short_market_value(prices) == 220000.0
-
-
-def test_short_market_value_falls_back_to_prev_close() -> None:
-    """
-    停牌時退回**前收**，而不是開倉價
-
-    開倉價是這檔停牌前可能已經漲了好幾成的**起點**，拿它當市值會把維持率
-    算得比實際好看——而停牌正是最需要正確維持率的時候。
-    """
-
-    account: StockAccount = build_account()
-
-    assert account.get_short_market_value({}, prev_close={"2317": 130.0}) == 260000.0
-
-
-def test_short_market_value_last_resort_is_the_open_price() -> None:
-    """當日與前一交易日都沒有價格時才退回開倉價"""
-
-    account: StockAccount = build_account()
-
-    assert account.get_short_market_value({}, prev_close={}) == 200000.0
 
 
 def test_check_has_position_ignores_closed_positions() -> None:

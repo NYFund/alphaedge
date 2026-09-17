@@ -132,3 +132,26 @@ def test_new_event_counts_includes_max_holdings_key() -> None:
 
     assert "rejected_max_holdings" in counts
     assert counts["rejected_max_holdings"] == 0
+
+
+def test_adding_to_the_same_symbol_uses_one_slot(
+    make_strategy, make_backtester, make_quote
+) -> None:
+    """
+    同一檔加碼兩次只佔一個名額
+
+    `max_holdings` 的語意在 `BaseStrategy` 與各策略 docstring 都寫「檔數」，
+    舊實作回傳的卻是部位筆數：允許加碼的策略（例如 `MomentumStrategy1`）
+    同一檔加碼兩次就佔掉兩個名額，實際持有檔數比設定少。
+    """
+
+    strategy = make_strategy(
+        max_holdings=2,
+        open_script={DAY_1: [make_open_order("2330"), make_open_order("2330")]},
+    )
+    backtester: Backtester = make_backtester(strategy)
+
+    backtester.execute_bar(DAY_1, [make_quote(stock_id="2330", date=DAY_1)])
+
+    assert backtester.account.get_position_count() == 1
+    assert backtester.event_counts["rejected_max_holdings"] == 0

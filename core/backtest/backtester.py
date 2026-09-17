@@ -601,8 +601,9 @@ class Backtester:
             q for q in quotes if self.account.check_has_position(q.symbol)
         ]
 
+        # 回傳型別是 List，`return` 會給出 None——呼叫端若照標註串接就會炸
         if not positions:
-            return
+            return []
 
         quote_map: Dict[str, BaseQuote] = {q.symbol: q for q in quotes}
 

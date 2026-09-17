@@ -1,3 +1,4 @@
+import copy
 import datetime
 import math
 from abc import ABC, abstractmethod
@@ -7,6 +8,7 @@ from loguru import logger
 
 from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.backtest.models.cost_model import StockCostModel
+from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.instrument_spec import (
     InstrumentSpec,
     TwFuturesSpec,
@@ -86,20 +88,14 @@ class BaseSettlementModel(ABC):
             更新每個部位的連續無報價天數
 
             有報價即歸零，無報價則累加。長期停牌或已下市的標的會持續累加，
-            成為 `check_no_quote_exit()` 的出場依據。
+            成為強制出場的依據。
         - Parameters:
             - quote_map: Dict[str, StockQuote]
                 當日報價對照表
             - positions: List[StockPosition]
                 要更新的部位
         """
-
-        for position in positions:
-            quote: Optional[StockQuote] = quote_map.get(position.symbol)
-            if quote is not None and (quote.close or quote.cur_price):
-                position.no_quote_days = 0
-            else:
-                position.no_quote_days += 1
+        pass
 
     def apply_force_cover_symbols(self, symbols: Set[str]) -> None:
         """
@@ -137,6 +133,7 @@ class BaseSettlementModel(ABC):
 
         pass
 
+    @abstractmethod
     def get_mark_price(
         self, position: BasePosition, quote_map: Dict[str, BaseQuote]
     ) -> float:
@@ -191,9 +188,16 @@ class BaseSettlementModel(ABC):
         position_value: float
 
         if position.position_type == PositionType.SHORT:
-            # 開倉時只扣了保證金與成本，賣出價款留作擔保品
+            # 開倉時只扣了保證金與成本，賣出價款留作擔保品。
+            # **已計提的借券費要扣掉**：它逐日累加在部位上、平倉時才結算，
+            # 不扣的話持有期間的權益偏高、回補日一次掉下來，MDD 與日報酬都失真
+            # （股利補償走的是即時扣款，除息當日就反映在餘額裡，不必在此重複扣）
             position.unrealized_pnl = round((position.price - mark_price) * units, 2)
-            position_value = position.margin + position.unrealized_pnl
+            position_value = (
+                position.margin
+                + position.unrealized_pnl
+                - getattr(position, "accrued_borrow_fee", 0.0)
+            )
         else:
             position.unrealized_pnl = round((mark_price - position.price) * units, 2)
             position_value = mark_price * units
@@ -226,6 +230,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         margin_call_policy: MarginCallPolicy = MarginCallPolicy.FORCE_COVER,
         max_holding_days: Optional[int] = None,
         max_no_quote_days: Optional[int] = None,
+        fill_model: Optional[BaseFillModel] = None,
     ) -> None:
         self.position_manager: StockPositionManager = position_manager
         self.cost_model: StockCostModel = cost_model
@@ -242,6 +247,10 @@ class TwStockSettlementModel(BaseSettlementModel):
         self.margin_call_policy: MarginCallPolicy = margin_call_policy
         self.max_holding_days: Optional[int] = max_holding_days
         self.max_no_quote_days: Optional[int] = max_no_quote_days
+
+        # 引擎強制出場時同樣要走成交假設（滑價），否則同一支策略會有兩種口徑：
+        # 策略自己送的回補單吃滑價、引擎的當沖日終／追繳／無報價強制回補不吃
+        self.fill_model: Optional[BaseFillModel] = fill_model
 
         # 當日市場狀態，由引擎每根 bar 從 DataFeed 推入（本 model 不自行查資料源）
         self.force_cover_symbols: Set[str] = set()  # 今日觸及融券最後回補日的標的
@@ -488,7 +497,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             short_method=position.short_method,
             is_day_trade=position.is_day_trade,
         )
-        return self.position_manager.close_position(order)
+        return self.position_manager.close_position(self.apply_fill_price(order))
 
     def execute_daily_position_check(
         self,
@@ -803,18 +812,48 @@ class TwStockSettlementModel(BaseSettlementModel):
     ) -> None:
         """以指定價格全量賣出做多部位（引擎強制出場用）"""
 
+        order: StockOrder = StockOrder(
+            stock_id=position.symbol,
+            date=date,
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            price=price,
+            volume=position.volume,
+        )
         self.position_manager.close_long_position(
             position=position,
-            stock_order=StockOrder(
-                stock_id=position.symbol,
-                date=date,
-                action=Action.SELL,
-                position_type=PositionType.LONG,
-                price=price,
-                volume=position.volume,
-            ),
+            stock_order=self.apply_fill_price(order),
             close_volume=position.volume,
         )
+
+    def apply_fill_price(self, order: StockOrder) -> StockOrder:
+        """
+        - Description:
+            對引擎自己送出的強制出場單套用滑價
+
+            **不走 `fill()` 而只取成交價**：`fill()` 會做券源檢核與成交量上限，
+            那兩項會拒單或縮量，而強制出場是市場規則強加的——拒掉它等於讓部位
+            違規留倉。這裡只補上「拿不到理想價」這一項。
+
+            未注入 `fill_model`（純記憶體測試）或未設定滑價時原樣回傳。
+        - Parameters:
+            - order: StockOrder
+                引擎產生的強制出場單
+        - Return:
+            - StockOrder
+                含滑價的訂單；未調整時為原物件
+        """
+
+        if self.fill_model is None:
+            return order
+
+        filled_price: float = self.fill_model.get_filled_price(order)
+        if filled_price == order.price:
+            return order
+
+        filled_order: StockOrder = copy.copy(order)
+        filled_order.price = filled_price
+        return filled_order
 
     @staticmethod
     def to_dividend_per_share(value: Any) -> float:

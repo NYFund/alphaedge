@@ -113,6 +113,7 @@ def build_tw_stock_backtester(
         margin_call_policy=strategy.margin_call_policy,
         max_holding_days=strategy.max_holding_days,
         max_no_quote_days=strategy.max_no_quote_days,
+        fill_model=fill_model,
     )
 
     return Backtester(
