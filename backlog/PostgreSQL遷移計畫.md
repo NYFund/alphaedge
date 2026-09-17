@@ -4,7 +4,7 @@
 
 - **背景／問題**：專案以 SQLite3 為主要儲存，分成 `data/db/tw_stock.db`（台股）與 `data/db/tw_futures.db`（台期貨）兩個檔。資料存取層（`core/dao/`）完成後，SQL 與 SQLite 專屬語法已集中在 15 支 DAO 與 `BaseDAO`，`core/dao/` 以外不再 `import sqlite3`（分層檢查強制）；但 DAO 內部仍是 `sqlite3`（`INSERT OR IGNORE／REPLACE`、`SAVEPOINT`、`sqlite_master`、`GLOB`），21 處以 `connect_sqlite()` 開連線，40 個測試檔直接建立 SQLite 連線。
 - **目標**：導入 SQLAlchemy Engine 作為統一資料庫介面，分階段把讀取、寫入、測試與部署路徑遷移到 PostgreSQL（兩個 SQLite 檔併入單一 `alphaedge` 資料庫），並保留可回退方案至少一個版本週期。
-- **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：2026-09-14 已決定往後不再使用 DolphinDB、tick 不回補（見 [爬蟲缺口回補與非交易日批次清理.md](爬蟲缺口回補與非交易日批次清理.md) S7），`StockTickAPI` 等 DolphinDB 程式不遷移。
+- **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：2026-09-14 已決定往後不再使用 DolphinDB、tick 不回補，`StockTickAPI` 等 DolphinDB 程式不遷移。
 - **驗收標準**：主要流程（資料更新、查詢、回測讀取）在 PostgreSQL 可完整執行；核心 smoke ＋ integration 測試在 PostgreSQL 環境通過；文件與部署配置已更新且可重現；SQLite 依賴已降到可移除或已完全移除。
 
 ---

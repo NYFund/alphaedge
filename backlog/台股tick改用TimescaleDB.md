@@ -2,14 +2,14 @@
 
 ## Abstract
 
-- **背景／問題**：台股 tick 目前的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（見 [爬蟲缺口回補與非交易日批次清理.md](爬蟲缺口回補與非交易日批次清理.md) S7）。於是 tick 級回測現在**沒有可用的資料源**。完整歷史 CSV 備份在使用者的 Google 雲端；本機只殘留 541 檔（2024-05-13～05-15）。
+- **背景／問題**：台股 tick 目前的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 tick 級回測現在**沒有可用的資料源**。完整歷史 CSV 備份在使用者的 Google 雲端；本機只殘留 541 檔（2024-05-13～05-15）。
 - **目標**：落地目標改成 TimescaleDB（PostgreSQL extension）：
   - 寫入路徑改用 `COPY`，以「股票 × 交易日」為單位做到冪等寫入。
   - 讀取路徑改用 ConnectorX 直接產生 pandas DataFrame。
   - `StockTickAPI` 的公開方法與回傳欄位不變，`StockDataFeed`／`StockQuoteAdapter`／策略都不用改。
   - 把雲端上的歷史 CSV 一次匯入並壓縮。
 - **範圍界線**：
-  - **不做期貨 tick**：S9 已裁示不做，`futures_tick_*` 的 DolphinDB 程式原樣保留，去留見 Phase5-2 的裁示。
+  - **不做期貨 tick**：2026-09-15 已裁示不做，`futures_tick_*` 的 DolphinDB 程式原樣保留，去留見 Phase5-2 的裁示。
   - **不做**台股日頻資料的 SQLite → PostgreSQL 遷移，那是 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的範圍；本文件只和它共用 PostgreSQL 容器、driver 與連線層。
   - **不改**爬蟲（`StockTickCrawler`）與清洗邏輯（`StockTickCleaner` 的欄位格式），也不改 tick 回測引擎的成交語意。
   - **不做** tick 回補續跑到今天。回補要不要做、做多少是另一個決策，本文件只保證 updater 在新儲存上可以續跑。
@@ -480,7 +480,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `scripts/manual/manual_tick_updater.py`／`manual_tick_crawler.py`：逐支判斷改寫或刪除。
   - `tasks/update_db.py` 說明文字中的 `futures_tick（Shioaji → DolphinDB…）` 依下方裁示結果更新。
   - **需使用者裁示：期貨 tick 的 DolphinDB 程式怎麼處理**（`futures_tick_crawler.py`／`cleaner`／`updater`／`loader`、`DDB_PATH`、`futures-tick` extra）：
-    - **選項 A（建議）**：一併刪除。S9 已裁示不做期貨 tick，這些程式沒有落地目標；日後要做時，比照本文件另立 backlog 改寫成 TimescaleDB 的 `futures_tick` 表。`tasks/update_db.py` 的 `futures_tick` target 與 `DataType.FUTURES_TICK` 一併移除，`tests/test_futures_tick.py` 與 `test_entrypoint_and_logging.py` 的兩個相關測試跟著調整。
+    - **選項 A（建議）**：一併刪除。期貨 tick 已裁示不做（2026-09-15），這些程式沒有落地目標；日後要做時，比照本文件另立 backlog 改寫成 TimescaleDB 的 `futures_tick` 表。`tasks/update_db.py` 的 `futures_tick` target 與 `DataType.FUTURES_TICK` 一併移除，`tests/test_futures_tick.py` 與 `test_entrypoint_and_logging.py` 的兩個相關測試跟著調整。
     - **選項 B**：原樣保留，`DDB_PATH` 與 `futures-tick` extra 繼續存在，只刪台股的部分。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core tasks scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
@@ -529,5 +529,5 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **優先級**：P2（tick 級回測目前沒有資料源；無其他工作被它阻塞）
 - **相關程式**：`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`、`core/pipeline/tw/cleaners/stock_tick_cleaner.py`（不改，欄位契約的來源）、`core/api/tw/stock_tick_api.py`、`core/adapters/tw/stock_quote_adapter.py`、`core/backtest/datafeed/tw/stock_datafeed.py`、`core/config/`、`tasks/update_db.py`
 - **相關 backlog**：
-  - [爬蟲缺口回補與非交易日批次清理.md](爬蟲缺口回補與非交易日批次清理.md) S7：裁示不再使用 DolphinDB，本文件是台股 tick 的新落地方式；S7 列出的「DolphinDB 殘留」中，台股部分由本文件 Phase5-2 處理。S9（期貨 tick）的殘留依 Phase5-2 的裁示處理。
+  - 2026-09-14／09-15 使用者裁示（原記於已刪除的爬蟲缺口回補文件）：不再使用 DolphinDB、台股 tick 不回補、期貨 tick 不做；本文件是台股 tick 的新落地方式。DolphinDB 殘留中，台股部分由本文件 Phase5-2 處理，期貨 tick 的殘留依 Phase5-2 的裁示處理；完整殘留清單見 [健檢第五輪收斂.md](健檢第五輪收斂.md) Phase3-7。
   - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md)：共用 PostgreSQL 容器（Phase0-1）、driver（Phase0-3）、`core/db/`（Phase1-1）。兩份工作都不以對方為前置，先做的建立、後做的沿用。
