@@ -65,8 +65,12 @@ jobs:
       # 只跑 -m "not slow"：CI 沒有 data/db/tw_stock.db（*.db 未進版控），
       # 也沒有 Shioaji／FinMind 金鑰。需要這些的測試一律標 @pytest.mark.slow。
       # 本指令已在本機以「移除資料庫與金鑰的副本」模擬驗證過為全綠
+      #
+      # **`-rs` 不可拿掉**：沒有它，被 skip 的測試在輸出裡只是一個 `s`，
+      # 整組因為 fixture 不存在而永遠跳過也看起來是綠的（前端回歸的 14 條
+      # 就這樣從來沒在 CI 跑過）。加上它，跳過的原因會列在 short summary 裡
       - name: 測試（略過需要資料庫與外部 API 的項目）
-        run: pytest -m "not slow" --timeout=300
+        run: pytest -m "not slow" --timeout=300 -rs
 
       # 覆蓋率只建立基線、不設門檻：覆蓋率明顯偏低時設門檻只會鼓勵寫無效測試
       - name: 測試覆蓋率（僅報告，不阻擋）

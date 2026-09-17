@@ -23,8 +23,12 @@ from frontend.services.report_loader import (
 """
 前端只讀不算：指標與 reporter 落地的 CSV 逐值相同
 
-以 `results/Foreign-Sell-Short-Day-Trade/` 為 fixture。**它是一份純 SHORT 的
-報表**，正好踩中舊版四個錯的每一個：
+fixture 是 `tests/fixtures/frontend_report/`——`Foreign-Sell-Short-Day-Trade`
+那份報表的完整副本，**納入版控**。原本直接指向 `results/`，而該目錄被 `.gitignore`
+忽略，於是 `skipif` 在 CI 必定成立：這 14 條防的是四個已經發生過的錯，卻從來沒有
+在 CI 跑過一次，而 skip 在輸出裡只是一個 `s`，看起來是綠的。
+
+**它是一份純 SHORT 的報表**，正好踩中舊版四個錯的每一個：
 
 | 指標 | 舊版顯示 | 正確值 | 錯在哪 |
 |------|:---:|:---:|--------|
@@ -33,12 +37,11 @@ from frontend.services.report_loader import (
 | 資產曲線 | 依 `Sell Date` | 依 `Exit Date` | SHORT 的 `Sell Date` 是**開倉日** |
 | MDD | 已實現口徑 | **−11.43%** | 沒讀 `daily_equity`，持倉期間的逆勢被抹平 |
 
-fixture 缺檔時整組跳過，而不是讓測試變成永遠不會失敗的空殼。
+**fixture 不可再改回 `results/`**：那等於把這一整組測試關掉。
 """
 
 
-_PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
-_FIXTURE_DIR: Path = _PROJECT_ROOT / "results" / "Foreign-Sell-Short-Day-Trade"
+_FIXTURE_DIR: Path = Path(__file__).resolve().parent / "fixtures" / "frontend_report"
 
 # fixture 的正確答案（由 reporter 的 CSV 直接讀出，不是另外算的）
 EXPECTED_TRADES: int = 1096
@@ -47,12 +50,6 @@ EXPECTED_TOTAL_PNL: float = 3811419.0
 EXPECTED_AVG_ROI: float = 0.82
 EXPECTED_STARTING_CAPITAL: float = 1000000.0
 EXPECTED_MDD: float = -11.43
-
-
-pytestmark = pytest.mark.skipif(
-    not _FIXTURE_DIR.is_dir(),
-    reason=f"缺 fixture 報表目錄：{_FIXTURE_DIR}",
-)
 
 
 @pytest.fixture
