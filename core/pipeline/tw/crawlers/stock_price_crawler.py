@@ -55,8 +55,12 @@ class StockPriceCrawler(BaseDataCrawler):
         url: str = URLManager.get_url("TWSE_CLOSING_QUOTE_URL", date=date_str)
         result: FetchResult = RequestUtils.fetch(url)
 
-        # 個股明細固定在最後一張表
-        return self.parse_html_table(result, f"TWSE price {date}", index=-1)
+        # 個股明細固定在最後一張表。
+        # **證券代號要以 converters 保留原始字串**：某些日期的代號全是數字，
+        # pandas 會推斷成整數而讓 `0050` 變成 `50`（與 margin 同一個做法）
+        return self.parse_html_table(
+            result, f"TWSE price {date}", index=-1, converters={0: str}
+        )
 
     def crawl_tpex_price(self, date: datetime.date) -> CrawlResult:
         """

@@ -132,7 +132,9 @@ class StockPriceLoader(BaseDataLoader):
             try:
                 logger.info(f"Processing [{idx}/{total_files}] {file_path.name}...")
 
-                df: pd.DataFrame = pd.read_csv(file_path)
+                # `dtype` 不指定的話，全數字的代號會被推斷成整數，
+                # `0050` 入庫變成 `50`——而且兩者都查得到，只是查不到同一檔
+                df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
 
                 if df.empty:
                     logger.warning(f"Skipped {file_path.name} (file is empty)")

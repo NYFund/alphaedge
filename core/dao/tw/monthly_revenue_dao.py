@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -148,3 +148,14 @@ class MonthlyRevenueDAO(BaseDAO):
         if row is None or row[0] is None or row[1] is None:
             return None
         return int(row[0]), int(row[1])
+
+    def get_existing_year_months(self) -> Set[Tuple[int, int]]:
+        """表內已有的 (year, month)；表不存在時為空集合（初次更新的正常狀態）"""
+
+        if not self.table_exists():
+            return set()
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT DISTINCT year, month FROM {self.TABLE_NAME}"
+        ).fetchall()
+        return {(int(year), int(month)) for year, month in rows}

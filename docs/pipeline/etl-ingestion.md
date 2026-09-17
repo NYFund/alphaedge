@@ -211,12 +211,14 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 |------|------------------------|------|------|
 | 日頻三表（逐日） | 任一市場 `FAILED`、任一市場清洗失敗、**一邊 `NO_DATA` 一邊 `OK`** | 兩邊都不清洗／不入庫，記 `incomplete` 下次重試 | `BaseDataUpdater.record_market_day()`、`report_partial_day()` |
 | 財報三表（逐年季） | 任一市場請求失敗、拋例外或解析不出表格 | crawler 整季回 `None`；年季改差集，失敗的那季下次仍會被請求 | `FinancialStatementCrawler._crawl_listing_boards()`、`FinancialStatementUpdater.plan_pending_year_seasons()` |
+| 月營收（逐年月） | 任一市場請求失敗、**一邊 `NO_DATA` 一邊 `OK`** | 整個年月不入庫；年月為差集，失敗的那個月下次仍會被請求 | `MonthlyRevenueReportCrawler.crawl()`、`MonthlyRevenueReportUpdater.plan_pending_year_months()` |
 
 **一邊 `NO_DATA`、一邊 `OK` 也算沒有完整取得**：站方的「查無資料」涵蓋「尚未公布」，
 而兩個市場的公布時間不同，收盤後先公布的那一邊若照常入庫，當日就只有半個市場。
 代價是若真有「一個市場開市、另一個休市」的日子，它會每輪被重試；那只是多幾次請求。
-這條判定只放在日頻三表的 updater，**不改共用的 `UpdateStats.record()`**——除權息、減資、
-月營收是區間查詢，一個市場在整段區間內查無資料是正常的。
+這條判定放在日頻三表的 updater 與月營收 crawler，**不改共用的 `UpdateStats.record()`**
+——除權息、減資是**區間**查詢，一個市場在整段區間內查無資料是正常的；月營收則是
+逐「年月」查詢，與日頻三表同型（2026/04 補回時「只有 26 檔」即此成因）。
 
 **不在這條規則內**：申報期內的部分申報（財報、月營收在申報期間只拿得到已送件的公司）
 是「來源當下就只有這麼多」，不是市場失敗，需要另一套判準，目前未處理。

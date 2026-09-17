@@ -59,7 +59,11 @@ class StockChipCrawler(BaseDataCrawler):
         twse_url: str = URLManager.get_url("TWSE_CHIP_URL", date=date_str)
         result: FetchResult = RequestUtils.fetch(twse_url)
 
-        return self.parse_html_table(result, f"TWSE chip {date}", index=0)
+        # 證券代號以 converters 保留原始字串，否則全數字的代號會被推斷成整數，
+        # `0050` 入庫變成 `50`（與 margin 同一個做法）
+        return self.parse_html_table(
+            result, f"TWSE chip {date}", index=0, converters={0: str}
+        )
 
     def crawl_tpex_chip(self, date: datetime.date) -> CrawlResult:
         """
