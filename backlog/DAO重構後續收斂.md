@@ -26,7 +26,7 @@
 | S2 | 保證金歷史回補跳過已入庫公告 | `core/pipeline/tw/updaters/futures_margin_updater.py`、`tests/test_futures_margin.py` | 替身 crawler 記錄請求：已入庫生效日的公告不再下載附件，`skipped_existing` 正確計數 | ✅ | 2026-09-16 完成；**偏離原規格**：以公告連結為鍵另存處理紀錄 JSON，不以生效日判斷（同日常有多則公告）。未對正式來源實跑 |
 | S3 | 以 `to_sql` 建表的測試改走 `dao_factory` | `tests/test_api_public_interfaces.py`、`tests/test_finmind_api.py`、`tests/test_stock_data_api.py`、`tests/test_corporate_action.py`、`tests/backtest/test_reporting.py`、`tests/test_dao_financial_statement.py`、`tests/test_dao_stock_dividend_corporate_action.py` | `grep -rn "\.to_sql(" tests` 無結果；`pytest` 全綠 | ✅ | 2026-09-16 完成；另讓 `complete_rows()` 遇到 schema 沒有的欄位直接報錯，當場抓到 `test_finmind_api` 用了不存在的 `buy`／`sell` 欄 |
 | S4 | FinMind 連網冒煙檢查腳本 | `scripts/manual/manual_finmind_smoke.py`、`scripts/manual/README.md` | 有 token 時對暫存 DB 跑完 stock_info／broker_info／單一券商分點組合並印出列數；無 token 時清楚提示後結束 | ⏸ | 2026-09-16 使用者裁示暫緩：帳號等級 `register` 無券商分點權限，腳本最關鍵的一段無法實跑；帳號升級或確實需要連網檢查時再做 |
-| S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ⬜ | — |
+| S5 | PostgreSQL 遷移計畫重新盤點改動面 | `backlog/PostgreSQL遷移計畫.md`、`backlog/index.md` | 各步驟產出欄的檔案皆存在（`check_doc_paths.py` 通過），改動面數字與 `grep` 實測一致 | ✅ | 2026-09-16 完成；改動面表附上每一項的量測指令 |
 | S6 | 清掉既有 F841 | `tests/backtest/test_market_calendar_bounds.py` | `ruff check --select F core tasks tests scripts` 零警告 | ✅ | 2026-09-16 完成：未使用的 `api` 是早期草稿殘留，改為斷言回推次數等於上界 |
 | S7 | FinMind 券商分點 crawler 不再把錯誤當成沒有資料 | `core/pipeline/tw/crawlers/finmind_crawler.py`、`core/pipeline/tw/updaters/finmind/broker_trading_updater.py`、`tests/test_finmind_broker_trading_batch.py` | 替身 API 拋一般例外時組合記為 `ERROR`、整批跑完拋 `DataLoadError`；回空表時仍是 `NO_DATA` | ✅ | 2026-09-16 完成；權限不足在第一個組合即中止整批，已以真實 API 確認歸類為 `FinMindPermissionError` |
 | S8 | 入庫摘要區分「新寫入」與「整檔已存在」 | `core/pipeline/tw/loaders/stock_dividend_loader.py`、`corporate_action_loader.py`、`monthly_revenue_report_loader.py` 與對應測試 | 重跑同一批 CSV 時摘要為「新寫入 0 檔、已存在跳過 N 檔」 | ✅ | 2026-09-16 完成；dividend／corporate_action 改報「讀取 N 檔、新增 M 列」 |
@@ -98,13 +98,17 @@
 - **相依**：無。**需使用者確認是否需要**；不需要則本步驟標 ⏸ 並註明原因。
 - **暫緩（2026-09-16）**：使用者裁示暫緩。FinMind 帳號等級為 `register`，無券商分點資料集權限，腳本最關鍵的單一組合寫入無法實跑。**解除條件**：帳號升級，或確實需要可重複執行的連網檢查。
 
-## S5. PostgreSQL 遷移計畫重新盤點改動面 ⬜
+## S5. PostgreSQL 遷移計畫重新盤點改動面 ✅
 
 - **目的**：讓遷移計畫的步驟與產出欄反映 DAO 完成後的實況，避免照舊清單施工。
 - **做法**：以 `grep` 實測 `core/`、`tasks/`、`tests/` 的 SQLite 專屬語法（`sqlite_master`、`PRAGMA`、`INSERT OR IGNORE／REPLACE`、`SAVEPOINT`、`GLOB`、`CAST`）與 `import sqlite3` 分布；依結果改寫 `PostgreSQL遷移計畫.md` 的改動面表、各步驟產出欄與相依；Phase1-2、Phase2-1~Phase2-3 縮減為「改寫 `core/dao/` 內部」並列出具體 DAO 檔案；同步 `backlog/index.md` 該列的說明與進度。
 - **產出**：`backlog/PostgreSQL遷移計畫.md`、`backlog/index.md`。
 - **驗證方式**：`python scripts/check_doc_paths.py` 通過；文件列出的檔案皆存在；改動面數字與實測指令輸出一致（指令寫進文件）。
 - **相依**：S1（`query_df` 的實作方式會影響遷移時的讀取層改寫）。
+- **完成紀錄（2026-09-16）**：
+  - 實測結果：非測試 `import sqlite3` 5 檔（全在 `core/dao/`）、`connect_sqlite()` 呼叫點 21 檔、`sqlite_master` 1、`PRAGMA` 0、`INSERT OR` 實際 SQL 4、`SAVEPOINT` 1、`GLOB` 1、`rowcount` 2、DAO 外 `conn.commit()`／`close()` 12 檔、測試 `import sqlite3` 40 檔（`sqlite3.connect` 116 處）。
+  - `PostgreSQL遷移計畫.md`：以附量測指令的改動面表取代 2026-09-15 的盤點；Phase1-1 改在 `core/dao/connection.py`、Phase1-2 改為 21 個連線取得點、Phase2-1~Phase2-3 改寫為 DAO 內部的語法／連線型別／驗證三步、Phase2-4 只剩 `manual_db_tables.py`、Phase4-1 更新為 40 檔；〈技術路線〉改為不經 pandas 讀寫（呼應 S1）。
+  - `check_doc_paths.py` 通過；同步 `index.md` 該列。
 
 ## S6. 清掉既有 F841 ✅
 
