@@ -189,12 +189,18 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`，price／chip／margin
 三條線都要有；`tests/test_stock_id_leading_zero.py` 釘住這件事。
 
-**已知限制：被吃成「另一個合法代號」的那種抓不出來。** 常見盤點查詢是
+**被吃成「另一個合法代號」的那種，要靠名稱才驗得出來。** 常見盤點查詢是
 `length(stock_id) < 4 AND stock_id GLOB '[0-9]*'`，但六碼 ETF 少了前兩個 0 之後剛好是
-4 碼（`006203` → `6203`），而 `6203` 本身是合法的上櫃代號，比對 `taiwan_stock_info`
-同樣驗不出來。實測 `chip` 在 2014-03-11 就有 4 檔 ETF 這樣被存進去，是靠「同一天同代號
-卻有兩個不同證券名稱」才發現的（該表主鍵含 `證券名稱`，兩列才能並存）。目前沒有機器護欄，
-只能在懷疑某段歷史資料時以來源頁面比對。
+4 碼（`006201` → `6201`），而 `6201`（亞弘電）本身是合法的上市代號——長度、
+比對 `taiwan_stock_info` 都驗不出來（後者只有現名，ETF 改過名的更對不上）。
+
+唯一可靠的跡象是**同一天、同一個代號底下出現兩個證券名稱**：兩檔不同的證券擠在同一個
+`(date, stock_id)` 底下。改名不會命中，那是跨時間的。
+`tests/test_trading_calendar_guard.py::test_no_symbol_carries_two_names_on_the_same_day`
+以此掃 `price` 與 `chip`（實測抓到 `006201`／`006202`／`006205`／`006206` 共 508 列）。
+
+⚠️ **`margin` 驗不到**：它的主鍵是 `(date, stock_id)`，冒名的那一列會被
+`INSERT OR IGNORE` 直接吞掉，表裡不留痕跡——那張表只能靠寫入端的 `dtype` 擋。
 
 ### 3.4 欄位語言跟著資料來源走
 

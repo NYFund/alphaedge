@@ -219,6 +219,51 @@ def test_no_stale_replayed_price_batches() -> None:
 
 @pytest.mark.skipif(
     not Path(TW_STOCK_DB_PATH).exists(),
+    reason="需要 tw_stock.db 才能比對代號與名稱",
+)
+def test_no_symbol_carries_two_names_on_the_same_day() -> None:
+    """同一天、同一個代號不得出現兩個證券名稱
+
+    這是「前導 0 被吃掉、變成另一個合法代號」唯一可靠的跡象。`pd.read_csv()`／
+    `read_html()` 只要看到某份檔案的代號全是數字就整欄推斷成整數，六碼 ETF 少掉
+    前兩個 0 之後剛好是 4 碼——`006201`（元大富櫃50）變成 `6201`，而 `6201`
+    （亞弘電）本身是合法的上市代號。**代號長度、比對 `taiwan_stock_info` 都驗不出來**：
+    長度是 4、代號也真的存在；`stock_info` 只有現名，ETF 改過名的更對不上。
+
+    唯一會露出馬腳的地方是這裡：兩檔不同的證券擠在同一個 `(date, stock_id)` 底下。
+    改名不會命中——那是跨時間的，同一天只會有一個名字。
+
+    實測抓到 `006201`／`006202`／`006205`／`006206` 共 508 列（`chip` 506、`price` 2）。
+    `margin` 不在範圍內：它的主鍵是 `(date, stock_id)`，冒名的那一列會被
+    `INSERT OR IGNORE` 直接吞掉，表裡不會留下痕跡。
+    """
+
+    conn: sqlite3.Connection = sqlite3.connect(TW_STOCK_DB_PATH)
+    try:
+        offenders: Dict[str, List[Tuple[str, str, int]]] = {}
+        for table in (PRICE_TABLE_NAME, CHIP_TABLE_NAME):
+            rows: List[Tuple[str, str, int]] = conn.execute(
+                f"""
+                SELECT date, stock_id, COUNT(DISTINCT 證券名稱) AS names
+                FROM {table}
+                GROUP BY date, stock_id
+                HAVING names > 1
+                ORDER BY date
+                """
+            ).fetchall()
+            if rows:
+                offenders[table] = rows
+    finally:
+        conn.close()
+
+    assert not offenders, (
+        "以下 (日期, 代號) 底下有兩個以上的證券名稱，多半是前導 0 被吃掉："
+        f"{ {table: rows[:5] for table, rows in offenders.items()} }"
+    )
+
+
+@pytest.mark.skipif(
+    not Path(TW_STOCK_DB_PATH).exists(),
     reason="需要 tw_stock.db 才能比對逐日的市場別分布",
 )
 def test_no_single_market_batches() -> None:
