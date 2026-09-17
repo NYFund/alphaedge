@@ -2,7 +2,7 @@ import datetime
 import json
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 import pytest
@@ -13,6 +13,13 @@ from core.config import (
     STOCK_TRADING_DAILY_REPORT_TABLE_NAME,
 )
 from core.pipeline.tw.crawlers.finmind_crawler import FinMindCrawler
+from core.pipeline.utils import (
+    DataLoadError,
+    FinMindPermissionError,
+    FinMindQuotaExhaustedError,
+    FinMindRequestError,
+    UpdateStatus,
+)
 
 """
 券商分點批量更新的行為護欄（真的會斷言，不是腳本）
@@ -297,3 +304,113 @@ def test_write_csv_flag_does_not_change_loaded_rows(updater) -> None:
     pd.testing.assert_frame_equal(loaded[True], loaded[False])
     # 只有 True 那一輪會寫檔：2 券商 × 2 股票
     assert len(list(broker_trading_dir.rglob("*.csv"))) == 4
+
+
+# === 呼叫失敗不可被當成沒有資料 ===
+class _FakeDataLoader:
+    """FinMind `DataLoader` 替身：依序回傳或拋出預先排好的結果，並記錄呼叫次數"""
+
+    def __init__(self, outcome: Union[pd.DataFrame, Exception]) -> None:
+        self.outcome: Union[pd.DataFrame, Exception] = outcome
+        self.calls: int = 0
+
+    def respond(self, **kwargs: Any) -> pd.DataFrame:
+        """回傳預設表或拋出預設例外"""
+
+        self.calls += 1
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+    def taiwan_stock_trading_daily_report_secid_agg(
+        self, **kwargs: Any
+    ) -> pd.DataFrame:
+        """券商分點資料集"""
+
+        return self.respond(**kwargs)
+
+    def taiwan_stock_info(self, **kwargs: Any) -> pd.DataFrame:
+        """台股總覽資料集"""
+
+        return self.respond(**kwargs)
+
+
+# FinMind 套件把「帳號等級不足」包成一般 Exception 的實際訊息（2026-09-16 實測）
+PERMISSION_MESSAGE: str = (
+    "FinMind API unexpected response: Your level is register. "
+    "Please update your user level."
+)
+
+
+def test_permission_error_aborts_the_batch_with_a_clear_failure(updater) -> None:
+    """
+    帳號等級不足：第一個組合就中止整批並拋 `DataLoadError`
+
+    舊版 crawler 一律 `return None`，整批組合被記成「沒有資料」、行程以結束碼 0 成功結束；
+    而且權限不足對每個組合都會失敗，不中止就是數十萬次白打的請求。
+    """
+
+    api: _FakeDataLoader = _FakeDataLoader(Exception(PERMISSION_MESSAGE))
+    updater.crawler.api = api
+
+    with pytest.raises(DataLoadError) as exc_info:
+        updater.update_broker_trading_daily_report(
+            start_date=START_DATE, end_date=END_DATE
+        )
+
+    assert api.calls == 1
+    assert "帳號等級不足" in exc_info.value.failed_files[0]
+
+
+def test_request_errors_are_counted_as_errors_not_no_data(updater) -> None:
+    """一般請求錯誤：各組合記為 `ERROR`，其餘組合照跑，跑完拋 `DataLoadError`"""
+
+    api: _FakeDataLoader = _FakeDataLoader(ConnectionError("connection reset"))
+    updater.crawler.api = api
+
+    with pytest.raises(DataLoadError) as exc_info:
+        updater.update_broker_trading_daily_report(
+            start_date=START_DATE, end_date=END_DATE
+        )
+
+    assert api.calls == len(TRADER_IDS) * len(STOCK_IDS)
+    assert "4 個 (券商, 股票) 組合更新失敗" in exc_info.value.failed_files[0]
+    assert (
+        updater.broker_trading.update_combination("2330", "1020", START_DATE, END_DATE)
+        == UpdateStatus.ERROR
+    )
+
+
+def test_empty_response_is_still_no_data(updater) -> None:
+    """API 正常回傳空表才是「沒有資料」，整批不拋錯"""
+
+    updater.crawler.api = _FakeDataLoader(pd.DataFrame())
+
+    assert (
+        updater.broker_trading.update_combination("2330", "1020", START_DATE, END_DATE)
+        == UpdateStatus.NO_DATA
+    )
+    updater.update_broker_trading_daily_report(start_date=START_DATE, end_date=END_DATE)
+
+
+def test_quota_error_is_still_classified_as_quota(updater) -> None:
+    """配額用盡仍轉成 `FinMindQuotaExhaustedError`，由批次迴圈等待重試"""
+
+    updater.crawler.api = _FakeDataLoader(KeyError("data"))
+
+    with pytest.raises(FinMindQuotaExhaustedError):
+        updater.crawler.crawl_broker_trading_daily_report(
+            "2330", "1020", START_DATE, END_DATE
+        )
+
+
+def test_reference_dataset_errors_are_raised(updater) -> None:
+    """台股總覽等一次查完的資料集：呼叫失敗往外拋，不再回 None 當成沒有資料"""
+
+    updater.crawler.api = _FakeDataLoader(Exception(PERMISSION_MESSAGE))
+    with pytest.raises(FinMindPermissionError):
+        updater.update_stock_info()
+
+    updater.crawler.api = _FakeDataLoader(ConnectionError("connection reset"))
+    with pytest.raises(FinMindRequestError):
+        updater.update_stock_info()

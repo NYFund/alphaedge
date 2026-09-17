@@ -24,11 +24,11 @@ class StockInfoUpdater:
         try:
             df: Optional[pd.DataFrame] = self.context.crawler.crawl_stock_info()
         except FinMindQuotaExhaustedError as e:
+            # 往外拋讓 target 記為失敗：舊版 `return` 讓「這次沒更新到」以結束碼 0 收場
             logger.error(
-                "⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. %s",
-                e,
+                f"⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. {e}"
             )
-            return
+            raise
         if df is None or df.empty:
             logger.warning("No stock info data to update")
             return
@@ -58,11 +58,11 @@ class StockInfoUpdater:
                 self.context.crawler.crawl_stock_info_with_warrant()
             )
         except FinMindQuotaExhaustedError as e:
+            # 往外拋讓 target 記為失敗：舊版 `return` 讓「這次沒更新到」以結束碼 0 收場
             logger.error(
-                "⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. %s",
-                e,
+                f"⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. {e}"
             )
-            return
+            raise
         if df is None or df.empty:
             logger.warning("No stock info with warrant data to update")
             return

@@ -7,7 +7,12 @@ from FinMind.data import DataLoader
 from loguru import logger
 
 from core.pipeline.shared.base_crawler import BaseDataCrawler
-from core.pipeline.utils import FinMindError, FinMindQuotaExhaustedError
+from core.pipeline.utils import (
+    FinMindError,
+    FinMindPermissionError,
+    FinMindQuotaExhaustedError,
+    FinMindRequestError,
+)
 from core.utils.log_manager import LogManager
 
 """
@@ -57,7 +62,7 @@ class FinMindCrawler(BaseDataCrawler):
             - date: str                      # 更新日期
 
         回傳值：
-            pd.DataFrame 或 None
+            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info("* Start crawling Taiwan Stock Info")
@@ -74,13 +79,7 @@ class FinMindCrawler(BaseDataCrawler):
             return df
 
         except Exception as e:
-            if FinMindError.is_quota_error(e):
-                logger.warning(
-                    f"FinMind API quota exhausted while crawling Taiwan Stock Info: {e}"
-                )
-                raise FinMindQuotaExhaustedError("FinMind API quota exhausted") from e
-            logger.error(f"Error crawling Taiwan Stock Info: {e}")
-            return None
+            raise self.to_request_error(e, "Taiwan Stock Info") from e
 
     def crawl_stock_info_with_warrant(self) -> Optional[pd.DataFrame]:
         """爬取台股總覽(含權證) (TaiwanStockInfoWithWarrant)
@@ -92,7 +91,7 @@ class FinMindCrawler(BaseDataCrawler):
             - date: str                      # 更新日期
 
         回傳值：
-            pd.DataFrame 或 None
+            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info("* Start crawling Taiwan Stock Info With Warrant")
@@ -109,13 +108,7 @@ class FinMindCrawler(BaseDataCrawler):
             return df
 
         except Exception as e:
-            if FinMindError.is_quota_error(e):
-                logger.warning(
-                    f"FinMind API quota exhausted while crawling Taiwan Stock Info With Warrant: {e}"
-                )
-                raise FinMindQuotaExhaustedError("FinMind API quota exhausted") from e
-            logger.error(f"Error crawling Taiwan Stock Info With Warrant: {e}")
-            return None
+            raise self.to_request_error(e, "Taiwan Stock Info With Warrant") from e
 
     def crawl_broker_info(self) -> Optional[pd.DataFrame]:
         """
@@ -128,7 +121,7 @@ class FinMindCrawler(BaseDataCrawler):
             - phone: str                     # 電話
 
         回傳值：
-            pd.DataFrame 或 None
+            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info("* Start crawling Broker Info")
@@ -145,13 +138,7 @@ class FinMindCrawler(BaseDataCrawler):
             return df
 
         except Exception as e:
-            if FinMindError.is_quota_error(e):
-                logger.warning(
-                    f"FinMind API quota exhausted while crawling Broker Info: {e}"
-                )
-                raise FinMindQuotaExhaustedError("FinMind API quota exhausted") from e
-            logger.error(f"Error crawling Broker Info: {e}")
-            return None
+            raise self.to_request_error(e, "Broker Info") from e
 
     def crawl_broker_trading_daily_report(
         self,
@@ -188,34 +175,34 @@ class FinMindCrawler(BaseDataCrawler):
             - sell_price: float              # 賣出均價
 
         回傳值：
-            pd.DataFrame 或 None
+            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info(
             f"* Start crawling Broker Trading Daily Report: {start_date} to {end_date}"
         )
 
+        # 處理 start_date：如果是字符串則直接使用，如果是 datetime.date 則轉換為字符串
+        if isinstance(start_date, str):
+            start_date_str: str = start_date
+        elif isinstance(start_date, datetime.date):
+            start_date_str: str = start_date.strftime("%Y-%m-%d")
+        else:
+            raise ValueError(
+                f"start_date must be str or datetime.date, got {type(start_date)}"
+            )
+
+        # 處理 end_date：如果是字符串則直接使用，如果是 datetime.date 則轉換為字符串
+        if isinstance(end_date, str):
+            end_date_str: str = end_date
+        elif isinstance(end_date, datetime.date):
+            end_date_str: str = end_date.strftime("%Y-%m-%d")
+        else:
+            raise ValueError(
+                f"end_date must be str or datetime.date, got {type(end_date)}"
+            )
+
         try:
-            # 處理 start_date：如果是字符串則直接使用，如果是 datetime.date 則轉換為字符串
-            if isinstance(start_date, str):
-                start_date_str: str = start_date
-            elif isinstance(start_date, datetime.date):
-                start_date_str: str = start_date.strftime("%Y-%m-%d")
-            else:
-                raise ValueError(
-                    f"start_date must be str or datetime.date, got {type(start_date)}"
-                )
-
-            # 處理 end_date：如果是字符串則直接使用，如果是 datetime.date 則轉換為字符串
-            if isinstance(end_date, str):
-                end_date_str: str = end_date
-            elif isinstance(end_date, datetime.date):
-                end_date_str: str = end_date.strftime("%Y-%m-%d")
-            else:
-                raise ValueError(
-                    f"end_date must be str or datetime.date, got {type(end_date)}"
-                )
-
             # 直接使用 API 方法，傳遞所有參數
             df: pd.DataFrame = self.api.taiwan_stock_trading_daily_report_secid_agg(
                 stock_id=stock_id,
@@ -232,13 +219,41 @@ class FinMindCrawler(BaseDataCrawler):
             return df
 
         except Exception as e:
-            if FinMindError.is_quota_error(e):
-                logger.warning(
-                    f"FinMind API quota exhausted while crawling broker trading daily report "
-                    f"from {start_date} to {end_date}: {e}"
-                )
-                raise FinMindQuotaExhaustedError("FinMind API quota exhausted") from e
-            logger.error(
-                f"Error crawling broker trading daily report from {start_date} to {end_date}: {e}"
+            raise self.to_request_error(
+                e,
+                f"broker trading daily report "
+                f"(trader={securities_trader_id}, stock={stock_id}, {start_date} to {end_date})",
+            ) from e
+
+    @staticmethod
+    def to_request_error(error: Exception, label: str) -> FinMindError:
+        """
+        - Description:
+            把 FinMind API 呼叫拋出的例外歸類成 pipeline 的 FinMind 例外
+
+            **呼叫失敗一律往外拋，只有 API 正常回傳空表才回 None**：舊版除配額用盡外
+            全部 `return None`，updater 把帳號等級不足、連線失敗都記成「沒有資料」，
+            整批以結束碼 0 成功結束。
+        - Parameters:
+            - error: Exception
+                FinMind 套件拋出的原始例外
+            - label: str
+                log 與訊息用的資料集描述
+        - Return:
+            - FinMindError
+                配額用盡為 `FinMindQuotaExhaustedError`、帳號等級不足為
+                `FinMindPermissionError`，其餘為 `FinMindRequestError`
+        """
+
+        if FinMindError.is_quota_error(error):
+            logger.warning(
+                f"FinMind API quota exhausted while crawling {label}: {error}"
             )
-            return None
+            return FinMindQuotaExhaustedError("FinMind API quota exhausted")
+        if FinMindPermissionError.is_permission_error(error):
+            logger.error(f"FinMind 帳號等級不足，無法取得 {label}：{error}")
+            return FinMindPermissionError(
+                f"FinMind 帳號等級不足，無法取得 {label}：{error}"
+            )
+        logger.error(f"Error crawling {label}: {error}")
+        return FinMindRequestError(f"Error crawling {label}: {error}")
