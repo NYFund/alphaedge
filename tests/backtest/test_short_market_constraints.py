@@ -252,9 +252,7 @@ def test_cash_dividend_is_charged_to_short_position() -> None:
     settlement.apply_cash_dividends({STOCK_ID: 2.0})
     event_counts: Dict[str, int] = new_event_counts()
 
-    settlement.compensate_cash_dividend(
-        datetime.date(2024, 1, 4), account, event_counts
-    )
+    settlement.settle_cash_dividend(datetime.date(2024, 1, 4), account, event_counts)
 
     # 2 元／股 × 2 張 × 1000 股
     assert account.positions[0].dividend_compensation == 4000
@@ -271,7 +269,7 @@ def test_position_opened_on_ex_date_is_not_charged() -> None:
     settlement.apply_cash_dividends({STOCK_ID: 2.0})
     event_counts: Dict[str, int] = new_event_counts()
 
-    settlement.compensate_cash_dividend(date, account, event_counts)
+    settlement.settle_cash_dividend(date, account, event_counts)
 
     assert account.positions[0].dividend_compensation == 0
     assert event_counts["dividend_compensation_paid"] == 0
@@ -285,9 +283,7 @@ def test_unknown_cash_dividend_is_counted_not_guessed() -> None:
     settlement.apply_cash_dividends({STOCK_ID: float("nan")})
     event_counts: Dict[str, int] = new_event_counts()
 
-    settlement.compensate_cash_dividend(
-        datetime.date(2024, 1, 4), account, event_counts
-    )
+    settlement.settle_cash_dividend(datetime.date(2024, 1, 4), account, event_counts)
 
     assert account.positions[0].dividend_compensation == 0
     assert account.balance == 1000000.0
@@ -302,9 +298,7 @@ def test_pure_stock_dividend_has_no_cash_flow() -> None:
     settlement.apply_cash_dividends({STOCK_ID: 0.0})
     event_counts: Dict[str, int] = new_event_counts()
 
-    settlement.compensate_cash_dividend(
-        datetime.date(2024, 1, 4), account, event_counts
-    )
+    settlement.settle_cash_dividend(datetime.date(2024, 1, 4), account, event_counts)
 
     assert account.positions[0].dividend_compensation == 0
     assert event_counts["dividend_compensation_paid"] == 0
@@ -320,9 +314,7 @@ def test_compensation_can_be_disabled() -> None:
     settlement.apply_cash_dividends({STOCK_ID: 2.0})
     event_counts: Dict[str, int] = new_event_counts()
 
-    settlement.compensate_cash_dividend(
-        datetime.date(2024, 1, 4), account, event_counts
-    )
+    settlement.settle_cash_dividend(datetime.date(2024, 1, 4), account, event_counts)
 
     assert account.positions[0].dividend_compensation == 0
     assert account.balance == 1000000.0
@@ -336,9 +328,7 @@ def test_compensation_is_prorated_on_partial_cover() -> None:
     settlement.apply_cash_dividends({STOCK_ID: 1.5})
     event_counts: Dict[str, int] = new_event_counts()
 
-    settlement.compensate_cash_dividend(
-        datetime.date(2024, 1, 4), account, event_counts
-    )
+    settlement.settle_cash_dividend(datetime.date(2024, 1, 4), account, event_counts)
     # 1.5 元／股 × 4 張 × 1000 股
     assert account.positions[0].dividend_compensation == 6000
 

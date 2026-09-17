@@ -292,6 +292,14 @@ class TwStockDataFeed(BaseDataFeed):
 
         return self.dividend.get_cash_dividend_map(date)
 
+    def get_share_ratio_map(self, date: datetime.date) -> Dict[str, float]:
+        """當日的股數倍率（配股、分割、減資），供做多的股數調整與空單補償使用"""
+
+        if self.dividend is None:
+            return {}
+
+        return self.dividend.get_share_ratio_map(date)
+
     def close(self) -> None:
         """關閉所有資料連線（回測結束時呼叫；原本全專案的 conn 從不 close）"""
 

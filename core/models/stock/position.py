@@ -15,7 +15,8 @@ class StockPosition(BasePosition):
     - MARGIN 融券手續費：開倉時一次收取，記入 borrow_fee
     - MARGIN 融券利息：平倉時依 exit_date − entry_date 一次算出，不逐日累加
     - SBL 借券費：由 accrue_holding_cost() 逐日計提至 accrued_borrow_fee
-    - 股利補償：由 compensate_cash_dividend() 於除息日一次計入 dividend_compensation
+    - 股利補償：由結算模型於除息日一次計入 dividend_compensation（放空）
+      或 dividend_received（做多）
     """
 
     def __init__(
@@ -39,6 +40,7 @@ class StockPosition(BasePosition):
         borrow_fee: float = 0.0,
         accrued_borrow_fee: float = 0.0,
         dividend_compensation: float = 0.0,
+        dividend_received: float = 0.0,
         holding_days: int = 0,
         last_accrual_date: Optional[datetime.date] = None,
     ) -> None:
@@ -68,6 +70,9 @@ class StockPosition(BasePosition):
         self.accrued_borrow_fee: float = accrued_borrow_fee  # SBL 逐日計提的借券費
         # 除息日補償給出借方的現金股利（放空專屬支出）
         self.dividend_compensation: float = dividend_compensation
+        # 除息日收到的現金股利（做多專屬收入）。**除息當日即入帳**：
+        # 盯市用的是未還原價，跳空已經反映在未實現損益裡，這筆現金正好補回那一段
+        self.dividend_received: float = dividend_received
         self.holding_days: int = holding_days  # 已持有曆日數（＝當前日期 − 開倉日）
         # SBL 借券費上次計提到哪一天。**逐日計提必須看曆日而不是 bar**：
         # 週五開的空單到週一只過了 1 根 bar，卻是 3 個曆日的借券費。

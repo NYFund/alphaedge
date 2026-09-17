@@ -163,6 +163,26 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 | `forced_cover_suspended` | 觸及停券強制回補日（除權息推導或手動指定） |
 | `dividend_compensation_paid` | 跨除息日的空單補償出借方現金股利 |
 | `dividend_compensation_unknown` | 權息並存拆不出現金股利，該筆補償被跳過（成本低估） |
+| `dividend_received` | 跨除息日的做多部位收到現金股利 |
+| `share_adjustment_applied` | 配股、分割、減資造成的股數與每股成本調整 |
+| `forced_exit_no_quote` | 做多部位連續無報價（停牌／下市）達上限被強制出場 |
+
+### 公司行動的記帳口徑
+
+盯市與平倉一律用 `quote.close` 這條**未還原**的原始價，除權息的跳空因此留在
+帳面損益裡；記帳端要把「那段跳空該歸誰」還原回去，兩者相抵後除權息本身不產生損益：
+
+| 事件 | 做多 | 放空 |
+|------|------|------|
+| 現金股利 | 除息日入帳（`dividend_received`） | 除息日補償出借方（`dividend_compensation_paid`） |
+| 配股、分割、減資 | 股數 × 倍率、每股成本 ÷ 倍率 | 同左（義務等比例增加） |
+
+**還原價只用於訊號**（`Backtester.adjusted_price`），不參與記帳；兩者都要做，
+少了任何一邊都會有一段假損益。不足一張的零股以調整後的每股成本折現，
+不四捨五入吞掉——吞掉會讓權益在每次配股時跳動一小段。
+
+**`forced_exit_no_quote` 的出場價是「最後可得收盤價」**，這仍然高估下市股的回收價
+（實務上多為部分償還甚至歸零），但歸零會系統性低估。要保守估計者可依本計數自行調整。
 
 **查無融券資料時一律放行並 warning**，不會把「查不到」當成「借不到」——
 `margin` 表的歷史回補是獨立作業，尚未執行時整場回測都會查無資料。

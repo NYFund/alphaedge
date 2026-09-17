@@ -126,6 +126,17 @@ class BaseSettlementModel(ABC):
 
         pass
 
+    def apply_share_ratios(self, ratios: Dict[str, float]) -> None:
+        """
+        - Description:
+            更新今日的股數倍率（配股、分割、減資；由 DataFeed 每根 bar 提供）
+        - Parameters:
+            - ratios: Dict[str, float]
+                `{symbol: 新股數 / 舊股數}`
+        """
+
+        pass
+
     def get_mark_price(
         self, position: BasePosition, quote_map: Dict[str, BaseQuote]
     ) -> float:
@@ -235,6 +246,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         # 當日市場狀態，由引擎每根 bar 從 DataFeed 推入（本 model 不自行查資料源）
         self.force_cover_symbols: Set[str] = set()  # 今日觸及融券最後回補日的標的
         self.cash_dividends: Dict[str, float] = {}  # 今日除息的每股現金股利
+        self.share_ratios: Dict[str, float] = {}  # 今日的股數倍率（配股、分割、減資）
 
     def apply_force_cover_symbols(self, symbols: Set[str]) -> None:
         """更新今日觸及融券最後回補日的標的"""
@@ -245,6 +257,11 @@ class TwStockSettlementModel(BaseSettlementModel):
         """更新今日除息的每股現金股利（元／股）"""
 
         self.cash_dividends = dividends
+
+    def apply_share_ratios(self, ratios: Dict[str, float]) -> None:
+        """更新今日的股數倍率（`新股數 / 舊股數`）"""
+
+        self.share_ratios = ratios
 
     def on_bar_close(
         self,
@@ -442,7 +459,13 @@ class TwStockSettlementModel(BaseSettlementModel):
     ) -> None:
         """
         - Description:
-            每日收盤後對未平倉放空部位的檢查（做多部位直接略過）
+            每日收盤後對所有未平倉部位的檢查
+
+            **做多部位不可略過**：公司行動（除息、配股、分割、減資）與「長期
+            無報價」對兩個方向都成立。舊版只處理空單，做多跨除息因此收不到現金
+            股利、跨配股張數不調整，帳面在除權息日憑空虧一段；而下市的股票
+            會永遠留在帳上，以最後一個收盤價計算權益（存活者偏差），
+            還持續佔用 `max_holdings` 名額。
         - Parameters:
             - date: datetime.date
                 當前交易日
@@ -454,20 +477,20 @@ class TwStockSettlementModel(BaseSettlementModel):
                 事件計數
         """
 
-        short_positions: List[StockPosition] = account.get_positions(
-            position_type=PositionType.SHORT
-        )
-        if not short_positions:
+        positions: List[StockPosition] = account.get_positions()
+        if not positions:
             return
 
         quote_map: Dict[str, StockQuote] = {sq.symbol: sq for sq in stock_quotes}
 
-        self.update_no_quote_days(quote_map, short_positions)
+        self.update_no_quote_days(quote_map, positions)
         self.accrue_holding_cost(date, quote_map, account)
-        # 股利補償先於強制回補：除息當日的補償屬該日仍在倉者的義務，
-        # 放在回補之後會讓「回補日恰為除息日」的部位少扣一筆
-        self.compensate_cash_dividend(date, account, event_counts)
+        # 股利與股數調整先於強制回補／出場：除權息當日的權利義務屬該日仍在倉者，
+        # 放在出場之後會讓「出場日恰為除權息日」的部位少記一筆
+        self.settle_cash_dividend(date, account, event_counts)
+        self.apply_corporate_actions(date, account, event_counts)
         self.check_margin_call(date, quote_map, account, event_counts)
+        self.check_long_no_quote_exit(date, quote_map, account, event_counts)
 
     def accrue_holding_cost(
         self,
@@ -525,7 +548,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 short_method=ShortMethod.SBL,
             )
 
-    def compensate_cash_dividend(
+    def settle_cash_dividend(
         self,
         date: datetime.date,
         account: BaseAccount,
@@ -533,7 +556,7 @@ class TwStockSettlementModel(BaseSettlementModel):
     ) -> None:
         """
         - Description:
-            除息日的股利補償：放空者須把當期現金股利補償給出借方
+            除息日的現金股利結算：做多者收到、放空者補償給出借方
 
             **只補償除息日之前就在倉的部位**：除權息交易日當天賣出者已不含權，
             當日開倉的空單不需補償（漲停鎖死轉留倉的當沖單同樣落在此例）。
@@ -556,13 +579,12 @@ class TwStockSettlementModel(BaseSettlementModel):
                 事件計數
         """
 
-        if not self.cost_model.config.compensate_cash_dividend:
-            return
-
         if not self.cash_dividends:
             return
 
-        for position in account.get_positions(position_type=PositionType.SHORT):
+        compensate_short: bool = self.cost_model.config.compensate_cash_dividend
+
+        for position in account.get_positions():
             if position.symbol not in self.cash_dividends:
                 continue
 
@@ -570,32 +592,189 @@ class TwStockSettlementModel(BaseSettlementModel):
             if TimeUtils.to_date(position.date) >= date:
                 continue
 
+            is_short: bool = position.position_type == PositionType.SHORT
+            if is_short and not compensate_short:
+                continue
             dividend: float = self.to_dividend_per_share(
                 self.cash_dividends[position.symbol]
             )
             if math.isnan(dividend):
                 logger.warning(
                     f"[Dividend] {position.symbol} 於 {date} 除權息，但現金股利無法拆分"
-                    f"（權息並存），本次跳過股利補償——該筆放空成本會被低估"
+                    f"（權息並存），本次跳過"
+                    + ("股利補償——該筆放空成本會被低估" if is_short else "股利入帳")
                 )
                 event_counts["dividend_compensation_unknown"] += 1
                 continue
 
-            # 純除權（現金股利為 0）不產生補償現金流
+            # 純除權（現金股利為 0）不產生現金流
             amount: int = int(dividend * self.instrument.to_units(position.volume))
             if amount <= 0:
                 continue
 
-            logger.warning(
-                f"[Dividend] {position.symbol} 於 {date} 除息 {dividend} 元／股，"
-                f"空單補償出借方 {amount} 元"
-            )
-            event_counts["dividend_compensation_paid"] += 1
+            if is_short:
+                logger.warning(
+                    f"[Dividend] {position.symbol} 於 {date} 除息 {dividend} 元／股，"
+                    f"空單補償出借方 {amount} 元"
+                )
+                event_counts["dividend_compensation_paid"] += 1
 
-            # 與 accrued_borrow_fee 同一種記法：只累加在部位上，
-            # 平倉時才依回補張數攤提進 carry_cost，不動 position.transaction_cost
-            position.dividend_compensation += amount
-            account.balance -= amount
+                # 與 accrued_borrow_fee 同一種記法：只累加在部位上，
+                # 平倉時才依回補張數攤提進 carry_cost，不動 position.transaction_cost
+                position.dividend_compensation += amount
+                account.balance -= amount
+                continue
+
+            # 做多：股利當日入帳。**不調整成本基準**——盯市用的是未還原價，
+            # 除息跳空已經反映在未實現損益裡，收到的現金正好補回那一段，
+            # 兩者相抵後除息本身不產生損益
+            logger.info(
+                f"[Dividend] {position.symbol} 於 {date} 除息 {dividend} 元／股，"
+                f"做多部位收到 {amount} 元"
+            )
+            event_counts["dividend_received"] += 1
+            position.dividend_received += amount
+            account.balance += amount
+
+    def apply_corporate_actions(
+        self,
+        date: datetime.date,
+        account: BaseAccount,
+        event_counts: Dict[str, int],
+    ) -> None:
+        """
+        - Description:
+            配股、分割、減資的股數與每股成本調整（做多、放空都適用）
+
+            價格序列在這一天會跳動（分割後砍半、減資後上跳），盯市用的又是
+            **未還原價**，記帳端不跟著調整的話，張數不變、價格砍半，
+            帳面就憑空虧一半——空單則反向憑空獲利。
+
+            調整方式是「股數 × 倍率、每股成本 ÷ 倍率」，成本總額因此不變，
+            權益在調整日連續。
+
+            **不足一張的零股折現**：部位的張數是整數，倍率算出的股數多半不是
+            整張（配股 0.05 → 1.05 張）。零股部分以當日每股成本折成現金入帳
+            （空單則扣款），而不是四捨五入吞掉——吞掉會讓權益在每次配股時
+            跳動一小段。
+        - Parameters:
+            - date: datetime.date
+                當前交易日（＝除權交易日／恢復買賣日）
+            - account: BaseAccount
+                交易帳戶
+            - event_counts: Dict[str, int]
+                事件計數
+        """
+
+        if not self.share_ratios:
+            return
+
+        for position in account.get_positions():
+            ratio: float = self.share_ratios.get(position.symbol, 1.0)
+            if ratio <= 0 or ratio == 1.0:
+                continue
+
+            # 除權交易日當天開倉者不含權
+            if TimeUtils.to_date(position.date) >= date:
+                continue
+
+            old_volume: int = position.volume
+            adjusted_units: float = self.instrument.to_units(old_volume) * ratio
+            lot_size: int = self.instrument.to_units(1)
+            new_volume: int = int(adjusted_units // lot_size)
+            odd_units: float = adjusted_units - new_volume * lot_size
+
+            if new_volume <= 0:
+                logger.warning(
+                    f"[Corporate Action] {position.symbol} 於 {date} 調整倍率 {ratio}，"
+                    f"{old_volume} 張調整後不足一張，本次不調整"
+                )
+                continue
+
+            # 成本總額不變：每股成本除以倍率
+            new_price: float = position.price / ratio
+            odd_cash: int = int(odd_units * new_price)
+
+            position.volume = new_volume
+            position.price = round(new_price, 4)
+            if odd_cash > 0:
+                if position.position_type == PositionType.SHORT:
+                    account.balance -= odd_cash
+                else:
+                    account.balance += odd_cash
+
+            logger.info(
+                f"[Corporate Action] {position.symbol} 於 {date} 股數倍率 {ratio}："
+                f"{old_volume} → {new_volume} 張，每股成本 {position.price}"
+                + (f"，零股 {odd_units:.0f} 股折現 {odd_cash} 元" if odd_cash else "")
+            )
+            event_counts["share_adjustment_applied"] += 1
+
+    def check_long_no_quote_exit(
+        self,
+        date: datetime.date,
+        quote_map: Dict[str, StockQuote],
+        account: BaseAccount,
+        event_counts: Dict[str, int],
+    ) -> None:
+        """
+        - Description:
+            做多部位連續無報價達上限時強制出場
+
+            下市或長期停牌的股票不會再出現在 `price` 表，引擎也不會把無報價的
+            標的交給策略（`Backtester.execute_close_signal()` 只走有報價的部位），
+            於是它永遠留在帳上、以最後一個收盤價計入權益（下市損失完全不反映，
+            屬存活者偏差），還一直佔著 `max_holdings` 的名額。
+
+            **出場價沿用空單路徑的口徑**（最後可得收盤價）。那仍然高估下市股的
+            回收價——實務上多半是部分償還甚至歸零，但回測無法精確模擬，
+            歸零則會系統性低估。要保守估計的人可依本事件計數自行調整。
+        - Parameters:
+            - date: datetime.date
+                當前交易日
+            - quote_map: Dict[str, StockQuote]
+                當日報價對照表
+            - account: BaseAccount
+                交易帳戶
+            - event_counts: Dict[str, int]
+                事件計數
+        """
+
+        if self.max_no_quote_days is None:
+            return
+
+        for position in list(account.get_positions(position_type=PositionType.LONG)):
+            if position.no_quote_days < self.max_no_quote_days:
+                continue
+
+            price: float = self.get_mark_price(position, quote_map)
+            logger.warning(
+                f"[Forced Exit] {position.symbol} 連續 {position.no_quote_days} 日"
+                f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
+            )
+            event_counts["forced_exit_no_quote"] += 1
+            self.force_exit_long_position(position, date, price)
+
+    def force_exit_long_position(
+        self,
+        position: StockPosition,
+        date: datetime.date,
+        price: float,
+    ) -> None:
+        """以指定價格全量賣出做多部位（引擎強制出場用）"""
+
+        self.position_manager.close_long_position(
+            position=position,
+            stock_order=StockOrder(
+                stock_id=position.symbol,
+                date=date,
+                action=Action.SELL,
+                position_type=PositionType.LONG,
+                price=price,
+                volume=position.volume,
+            ),
+            close_volume=position.volume,
+        )
 
     @staticmethod
     def to_dividend_per_share(value: Any) -> float:

@@ -289,10 +289,18 @@ class StockPositionManager(BasePositionManager):
             price=stock_order.price,
             volume=close_volume,
         )
+        # **當沖與否要看實際成交日，不能只看設定值**：`tax()` 遇 `None` 會取
+        # `config.is_day_trade`，而那是策略層的開關——放空策略開了當沖、又允許
+        # 做多時，做多部位**隔夜**賣出也會吃到減半稅。減半的條件是兩者都成立：
+        # 策略確實開了當沖（現股當沖要事先簽署同意書），且開平倉同一天
+        is_day_trade: bool = self.cost_model.config.is_day_trade and (
+            TimeUtils.to_date(position.date) == TimeUtils.to_date(stock_order.date)
+        )
         sell_tax: int = self.cost_model.tax(
             price=stock_order.price,
             volume=close_volume,
             action=Action.SELL,
+            is_day_trade=is_day_trade,
             date=TimeUtils.to_date(stock_order.date),
         )
 

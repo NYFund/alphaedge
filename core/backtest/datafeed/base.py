@@ -117,6 +117,24 @@ class BaseDataFeed(ABC):
 
         return {}
 
+    def get_share_ratio_map(self, date: datetime.date) -> Dict[str, float]:
+        """
+        - Description:
+            取得當日的股數倍率（`新股數 / 舊股數`）
+
+            配股、分割、減資會改變手上的股數與每股成本，而價格序列同時跳動。
+            記帳端不跟著調整的話，張數不變、價格砍半，帳面就憑空虧一半——
+            那與訊號面的還原價是兩回事，兩者都要做。
+        - Parameters:
+            - date: datetime.date
+                交易日
+        - Return:
+            - Dict[str, float]
+                `{symbol: 股數倍率}`；預設為空 dict（沒有這種制度的市場）
+        """
+
+        return {}
+
     @abstractmethod
     def get_quotes(
         self,

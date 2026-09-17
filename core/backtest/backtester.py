@@ -59,6 +59,9 @@ def new_event_counts() -> Dict[str, int]:
         "truncated_by_volume": 0,  # 超過當日成交量上限被縮量的訂單
         "dividend_compensation_paid": 0,  # 除息日補償出借方股利的空單
         "dividend_compensation_unknown": 0,  # 因權息並存無法拆分股利而跳過補償的空單
+        "dividend_received": 0,  # 除息日收到現金股利的做多部位
+        "share_adjustment_applied": 0,  # 配股、分割、減資造成股數調整的部位
+        "forced_exit_no_quote": 0,  # 連續無報價（停牌／下市）強制出場的做多部位
     }
 
 
@@ -470,15 +473,17 @@ class Backtester:
         )
         self.fill_model.apply_short_balance(self.data_feed.get_short_balance(date))
 
-        # 停券日與除息股利只有放空路徑會用到，且推導停券日需掃整段交易日曆；
+        # 停券日只有放空路徑會用到，且推導它需掃整段交易日曆；
         # 純做多策略不可能有空單，故連查都不查，避免替 LONG 回測加上無謂的成本
         if PositionType.SHORT in self.get_allowed_directions():
             self.settlement.apply_force_cover_symbols(
                 self.data_feed.get_force_cover_symbols(date)
             )
-            self.settlement.apply_cash_dividends(
-                self.data_feed.get_cash_dividend_map(date)
-            )
+
+        # **除權息資料兩個方向都要**：做多跨除息要收現金股利、跨配股要調整股數，
+        # 不餵的話做多績效會系統性偏低（除權息日的跳空變成憑空虧損）
+        self.settlement.apply_cash_dividends(self.data_feed.get_cash_dividend_map(date))
+        self.settlement.apply_share_ratios(self.data_feed.get_share_ratio_map(date))
 
         if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
             self.execute_open_signal(quotes)
