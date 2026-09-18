@@ -278,6 +278,48 @@ def test_round_to_tick_respects_direction() -> None:
     assert TwFuturesSpec(tick_size=0.05).round_to_tick(18000.06, "down") == 18000.05
 
 
+def test_round_to_tick_looks_the_tick_size_up_by_product() -> None:
+    """
+    對齊檔位用的是**該商品**的跳動點，不是寫死的 1 點
+
+    TE 的一檔是 0.05 點：沿用 1 點會把 18000.05 對齊成 18000，
+    滑價算對了、對齊又把它推回去。
+    """
+
+    spec: TwFuturesSpec = TwFuturesSpec()
+
+    assert spec.round_to_tick(18000.06, "down", "TE") == 18000.05
+    assert spec.round_to_tick(18000.06, "down", "TX") == 18000.0
+
+
+def test_round_to_tick_absorbs_the_division_float_error() -> None:
+    """
+    非整數跳動點的浮點誤差不可以吃掉一整檔
+
+    `17999.8 / 0.2` 在浮點下是 89998.99999999999，直接往下取整會得到 17999.6。
+    跳動點是 1 點時看不到這件事，TF／ZFF 的 0.2 點才會踩到。
+    """
+
+    spec: TwFuturesSpec = TwFuturesSpec()
+
+    assert spec.round_to_tick(17999.8, "down", "TF") == 17999.8
+    assert spec.round_to_tick(18000.2, "up", "TF") == 18000.2
+
+
+def test_explicit_tick_size_wins_over_the_lookup() -> None:
+    """建構時明確指定的跳動點蓋過查表，留給尚未登錄的商品"""
+
+    spec: TwFuturesSpec = TwFuturesSpec(tick_size=0.05)
+
+    assert spec.get_tick_size("TX") == 0.05
+
+
+def test_unregistered_product_falls_back_to_the_default() -> None:
+    """未登錄的商品退回預設值（並在 log 留痕），不讓整場回測中斷"""
+
+    assert TwFuturesSpec().get_tick_size("XIF") == TwFuturesSpec.DEFAULT_TICK_SIZE
+
+
 def test_futures_have_no_price_limits() -> None:
     """期貨沒有固定漲跌停；`(None, None)` 的語意是「本市場無此制度」"""
 

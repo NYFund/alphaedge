@@ -102,6 +102,10 @@ class BaseFillModel(ABC):
 
     成交價可信度是市場規則而非引擎邏輯，故與 InstrumentSpec 一樣下沉為可插拔 model。
     對應 Lean 的 FillModel。
+
+    **子類別必須在 `__init__` 備妥兩個屬性**，基底的夾價與區間警告直接使用：
+    - `event_counts: Dict[str, int]`：與引擎共用同一個 dict，計數才會進報表
+    - `intraday_range: Dict[str, Tuple[float, float]]`：Tick 級別的當日累計高低點
     """
 
     @abstractmethod
@@ -167,6 +171,117 @@ class BaseFillModel(ABC):
         """
 
         return order
+
+    @abstractmethod
+    def get_filled_price(self, order: BaseOrder) -> float:
+        """
+        - Description:
+            依訂單方向套用滑價，回傳含滑價的成交價
+
+            **列為抽象方法**：策略委託（`fill()`）與引擎強制出場
+            （`BaseSettlementModel.apply_fill_price()`）都以本方法為唯一的滑價入口。
+            少一個市場沒實作，那個市場的強制出場要到執行期才會炸。
+        - Parameters:
+            - order: BaseOrder
+                待套用滑價的訂單
+        - Return:
+            - float
+                含滑價的成交價；未設定滑價時即原委託價
+        """
+        pass
+
+    def get_price_range(
+        self, quote: BaseQuote
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """
+        取得該報價可成交的價格區間：日 K 用 OHLC，Tick 用當日累計高低點
+
+        **放在基底而不是各市場一份**：台股與期貨的答案一模一樣，各寫一次必然漂移；
+        夾價與平倉腿的區間警告都以此為唯一判準。
+        """
+
+        if quote.scale == Scale.TICK:
+            return self.intraday_range.get(quote.symbol, (None, None))
+
+        if quote.high and quote.low:
+            return (quote.low, quote.high)
+
+        return (None, None)
+
+    def clamp_filled_price(self, order: BaseOrder, quote: BaseQuote) -> BaseOrder:
+        """
+        - Description:
+            把成交價夾回當根 bar 的 `[low, high]`
+
+            **`validate()` 跑在 `fill()` 之前**，於是滑價把價格推出區間之後
+            沒有任何檢查：一筆本來在區間內的單，加了 0.5% 滑價
+            就可能成交在當日根本沒出現過的價位，而回測不會有任何跡象。
+
+            夾回而不是拒單：滑價是使用者刻意開啟的假設，拒單會讓「加了滑價之後
+            訊號數反而變少」，那比價格偏一點更難解釋。
+
+            **改動的是副本，不是傳入的 order**（與 `fill()` 同一種寫法）：
+            今天夾價只會發生在 `fill()` 產生的副本上，因為 `validate()` 先擋掉了
+            區間外的單——但那是呼叫順序的巧合，不是保證。就地改動會讓策略
+            下一根 bar 看到被引擎改過的價格。
+        - Parameters:
+            - order: BaseOrder
+                已套用滑價的訂單
+            - quote: BaseQuote
+                當根 bar 的報價
+        - Return:
+            - BaseOrder
+                價格落在區間內的訂單（未超出時為原物件）
+        """
+
+        low, high = self.get_price_range(quote)
+        if low is None or high is None:
+            return order
+
+        clamped: float = min(max(order.price, low), high)
+        if clamped == order.price:
+            return order
+
+        logger.warning(
+            f"[Fill] {order.symbol} 滑價後成交價 {order.price} 超出當日區間 "
+            f"[{low}, {high}]，夾回 {clamped}"
+        )
+        self.event_counts["fill_price_clamped"] = (
+            self.event_counts.get("fill_price_clamped", 0) + 1
+        )
+
+        clamped_order: BaseOrder = copy.copy(order)
+        clamped_order.price = clamped
+        return clamped_order
+
+    def warn_close_price_out_of_range(self, order: BaseOrder, quote: BaseQuote) -> None:
+        """
+        - Description:
+            平倉腿的成交價超出當日區間時只警告並計數，不拒單
+
+            **平倉不能被拒**：拒掉一張平倉單會讓部位被迫留倉，那是比價格偏一點
+            嚴重得多的失真。但超出區間仍是值得看見的事，故留一個事件計數。
+        - Parameters:
+            - order: BaseOrder
+                平倉訂單
+            - quote: BaseQuote
+                當根 bar 的報價
+        """
+
+        low, high = self.get_price_range(quote)
+        if low is None or high is None:
+            return
+
+        if low <= order.price <= high:
+            return
+
+        logger.warning(
+            f"[Fill] {order.symbol} 平倉成交價 {order.price} 超出當日區間 "
+            f"[{low}, {high}]（平倉不拒單，僅計數）"
+        )
+        self.event_counts["close_price_out_of_range"] = (
+            self.event_counts.get("close_price_out_of_range", 0) + 1
+        )
 
 
 class TwStockFillModel(BaseFillModel):
@@ -332,19 +447,6 @@ class TwStockFillModel(BaseFillModel):
 
         return bool(quote.volume) and bool(quote.close or quote.cur_price)
 
-    def get_price_range(
-        self, quote: BaseQuote
-    ) -> Tuple[Optional[float], Optional[float]]:
-        """取得該報價可成交的價格區間：日 K 用 OHLC，Tick 用當日累計高低點"""
-
-        if quote.scale == Scale.TICK:
-            return self.intraday_range.get(quote.symbol, (None, None))
-
-        if quote.high and quote.low:
-            return (quote.low, quote.high)
-
-        return (None, None)
-
     def on_bar_open(self, quotes: List[BaseQuote]) -> None:
         """一根 bar 開始：Tick 級別的累計高低點以該根 bar 為範圍，故先重置再累計"""
 
@@ -435,75 +537,6 @@ class TwStockFillModel(BaseFillModel):
         filled_order.price = price
         filled_order.volume = volume
         return filled_order
-
-    def clamp_filled_price(self, order: BaseOrder, quote: BaseQuote) -> BaseOrder:
-        """
-        - Description:
-            把成交價夾回當根 bar 的 `[low, high]`
-
-            **`validate()` 跑在 `fill()` 之前**，於是滑價把價格推出區間之後
-            沒有任何檢查：一筆本來在區間內的單，加了 0.5% 滑價
-            就可能成交在當日根本沒出現過的價位，而回測不會有任何跡象。
-
-            夾回而不是拒單：滑價是使用者刻意開啟的假設，拒單會讓「加了滑價之後
-            訊號數反而變少」，那比價格偏一點更難解釋。
-        - Parameters:
-            - order: BaseOrder
-                已套用滑價的訂單
-            - quote: BaseQuote
-                當根 bar 的報價
-        - Return:
-            - BaseOrder
-                價格落在區間內的訂單（未超出時為原物件）
-        """
-
-        low, high = self.get_price_range(quote)
-        if low is None or high is None:
-            return order
-
-        clamped: float = min(max(order.price, low), high)
-        if clamped == order.price:
-            return order
-
-        logger.warning(
-            f"[Fill] {order.symbol} 滑價後成交價 {order.price} 超出當日區間 "
-            f"[{low}, {high}]，夾回 {clamped}"
-        )
-        self.event_counts["fill_price_clamped"] = (
-            self.event_counts.get("fill_price_clamped", 0) + 1
-        )
-
-        order.price = clamped
-        return order
-
-    def warn_close_price_out_of_range(self, order: BaseOrder, quote: BaseQuote) -> None:
-        """
-        - Description:
-            平倉腿的成交價超出當日區間時只警告並計數，不拒單
-
-            **平倉不能被拒**：拒掉一張平倉單會讓部位被迫留倉，那是比價格偏一點
-            嚴重得多的失真。但超出區間仍是值得看見的事，故留一個事件計數。
-        - Parameters:
-            - order: BaseOrder
-                平倉訂單
-            - quote: BaseQuote
-                當根 bar 的報價
-        """
-
-        low, high = self.get_price_range(quote)
-        if low is None or high is None:
-            return
-
-        if low <= order.price <= high:
-            return
-
-        logger.warning(
-            f"[Fill] {order.symbol} 平倉成交價 {order.price} 超出當日區間 "
-            f"[{low}, {high}]（平倉不拒單，僅計數）"
-        )
-        self.event_counts["close_price_out_of_range"] = (
-            self.event_counts.get("close_price_out_of_range", 0) + 1
-        )
 
     def check_short_not_suspended(self, order: BaseOrder) -> bool:
         """
@@ -737,25 +770,16 @@ class TwFuturesFillModel(BaseFillModel):
             self.event_counts["rejected_fill_price"] += 1
             return False
 
-        if self.instrument.round_to_tick(order.price, "nearest") != order.price:
+        product: Optional[str] = getattr(order, "product", None)
+        if (
+            self.instrument.round_to_tick(order.price, "nearest", product)
+            != order.price
+        ):
             logger.warning(
                 f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊跳動點"
             )
 
         return True
-
-    def get_price_range(
-        self, quote: BaseQuote
-    ) -> Tuple[Optional[float], Optional[float]]:
-        """取得該報價可成交的價格區間：日 K 用 OHLC，Tick 用當日累計高低點"""
-
-        if quote.scale == Scale.TICK:
-            return self.intraday_range.get(quote.symbol, (None, None))
-
-        if quote.high and quote.low:
-            return (quote.low, quote.high)
-
-        return (None, None)
 
     def on_bar_open(self, quotes: List[BaseQuote]) -> None:
         """一根 bar 開始：Tick 級別的累計高低點以該根 bar 為範圍，故先重置再累計"""
@@ -820,16 +844,18 @@ class TwFuturesFillModel(BaseFillModel):
                 含滑價的成交價
         """
 
+        product: Optional[str] = getattr(order, "product", None)
+
         ticks: float = self.get_slippage_ticks(order)
         if ticks:
-            return self.apply_tick_slippage(order.price, order.action, ticks)
+            return self.apply_tick_slippage(order.price, order.action, ticks, product)
 
         bps: float = (
             self.config.slippage_bps_buy
             if order.action == Action.BUY
             else self.config.slippage_bps_sell
         )
-        return self.instrument.apply_slippage(order.price, order.action, bps)
+        return self.instrument.apply_slippage(order.price, order.action, bps, product)
 
     def get_slippage_ticks(self, order: BaseOrder) -> float:
         """取得該筆訂單的滑價跳動點數；設定不是 `FuturesFillConfig` 時為 0"""
@@ -841,22 +867,52 @@ class TwFuturesFillModel(BaseFillModel):
             order.action, getattr(order, "product", None)
         )
 
-    def apply_tick_slippage(self, price: float, action: Action, ticks: float) -> float:
+    def apply_tick_slippage(
+        self,
+        price: float,
+        action: Action,
+        ticks: float,
+        product: Optional[str] = None,
+    ) -> float:
         """
-        以跳動點數套用滑價：買進往上加、賣出往下減
+        - Description:
+            以跳動點數套用滑價：買進往上加、賣出往下減
 
-        **方向寫死不由呼叫端決定符號**，理由同 `InstrumentSpec.apply_slippage()`
-        ——滑價的意義是「你拿不到理想價」，允許負值等於允許「滑價讓績效變好」。
+            **方向寫死不由呼叫端決定符號**，理由同 `InstrumentSpec.apply_slippage()`
+            ——滑價的意義是「你拿不到理想價」，允許負值等於允許「滑價讓績效變好」。
+
+            **跳動點逐商品查表**（`TwFuturesSpec.get_tick_size()`）：同一個
+            `slippage_ticks=1` 在 TX 是 1 點、在 TE 是 0.05 點。算出的價差與
+            事後的檔位對齊必須用同一個跳動點，否則滑價算對了、對齊又把它推回去。
+        - Parameters:
+            - price: float
+                參考價
+            - action: Action
+                訂單動作
+            - ticks: float
+                滑價跳動點數
+            - product: Optional[str]
+                商品代碼；`None` 時退回 `TwFuturesSpec.DEFAULT_TICK_SIZE`
+        - Return:
+            - float
+                含滑價且已對齊跳動點的成交價
         """
 
-        tick_size: float = getattr(
-            self.instrument, "tick_size", TwFuturesSpec.DEFAULT_TICK_SIZE
-        )
+        tick_size: float = self.get_tick_size(product)
         offset: float = ticks * tick_size
 
         if action == Action.BUY:
-            return self.instrument.round_to_tick(price + offset, "up")
-        return self.instrument.round_to_tick(price - offset, "down")
+            return self.instrument.round_to_tick(price + offset, "up", product)
+        return self.instrument.round_to_tick(price - offset, "down", product)
+
+    def get_tick_size(self, product: Optional[str] = None) -> float:
+        """取得該商品的跳動點；spec 沒有查表能力時退回預設值（非期貨 spec 的保險）"""
+
+        getter = getattr(self.instrument, "get_tick_size", None)
+        if getter is None:
+            return TwFuturesSpec.DEFAULT_TICK_SIZE
+
+        return getter(product)
 
     def get_filled_volume(self, order: BaseOrder, quote: BaseQuote) -> Optional[int]:
         """

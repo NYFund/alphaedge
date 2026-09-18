@@ -16,7 +16,7 @@ from core.managers.futures.position_manager import (
 )
 from core.models import FuturesAccount, FuturesOrder, FuturesTradeRecord
 from core.utils import Action, FuturesCost, PositionType
-from core.utils.constant import FUTURES_MULTIPLIER
+from core.utils.constant import FUTURES_MULTIPLIER, FUTURES_TICK_SIZE
 
 """
 台期貨交易成本測試
@@ -259,6 +259,138 @@ def test_no_slippage_returns_the_original_price() -> None:
     order: FuturesOrder = make_order(Action.BUY, PositionType.LONG, price=18000)
 
     assert fill_model.get_filled_price(order) == 18000.0
+
+
+# === 跳動點逐商品查表 ===
+@pytest.mark.parametrize("product", sorted(FUTURES_TICK_SIZE))
+def test_one_tick_of_slippage_equals_one_tick_of_that_product(product: str) -> None:
+    """
+    每個已登錄商品在 `slippage_ticks=1` 下的價差等於它自己的一個跳動點
+
+    寫死 1 點的話，TE 的一檔（0.05 點）會被當成 20 檔——滑價靜默偏 20 倍，
+    而且不會有任何徵兆。
+    """
+
+    fill_model: TwFuturesFillModel = TwFuturesFillModel(
+        config=FuturesFillConfig(slippage_ticks_buy=1, slippage_ticks_sell=1)
+    )
+    tick: float = FUTURES_TICK_SIZE[product]
+
+    buy: FuturesOrder = make_order(
+        Action.BUY, PositionType.LONG, price=18000.0, product=product
+    )
+    sell: FuturesOrder = make_order(
+        Action.SELL, PositionType.SHORT, price=18000.0, product=product
+    )
+
+    assert fill_model.get_filled_price(buy) == pytest.approx(18000.0 + tick)
+    assert fill_model.get_filled_price(sell) == pytest.approx(18000.0 - tick)
+
+
+def test_unregistered_product_raises_on_lookup() -> None:
+    """
+    未登錄的商品查表時 `KeyError`——**這是刻意的**
+
+    規矩與 `FUTURES_MULTIPLIER` 相同：給預設值等於讓猜錯的跳動點靜默生效，
+    而中斷至少擋得住。XIF 的乘數曾經變更過，跳動點同樣未查證。
+    """
+
+    with pytest.raises(KeyError):
+        FUTURES_TICK_SIZE["XIF"]
+
+
+def test_unregistered_product_falls_back_instead_of_breaking_the_backtest() -> None:
+    """
+    成交模型遇到未登錄商品退回預設值並警告，不讓回測整場中斷
+
+    跳動點只在「對齊檔位」與「以檔數表達的滑價」兩處生效；為此炸掉一場
+    本來跑得起來的回測不成比例，但那一次退回要被看見（見 `get_tick_size()`）。
+    """
+
+    fill_model: TwFuturesFillModel = TwFuturesFillModel(
+        config=FuturesFillConfig(slippage_ticks_buy=1)
+    )
+    order: FuturesOrder = make_order(
+        Action.BUY, PositionType.LONG, price=18000.0, product="XIF"
+    )
+
+    assert fill_model.get_filled_price(order) == 18001.0
+
+
+def test_explicit_tick_size_overrides_the_lookup() -> None:
+    """建構時明確指定的跳動點蓋過查表（留給尚未登錄的商品與單一契約的測試）"""
+
+    fill_model: TwFuturesFillModel = TwFuturesFillModel(
+        instrument=TwFuturesSpec(tick_size=0.05),
+        config=FuturesFillConfig(slippage_ticks_buy=2),
+    )
+    order: FuturesOrder = make_order(Action.BUY, PositionType.LONG, price=18000.0)
+
+    assert fill_model.get_filled_price(order) == 18000.10
+
+
+def test_tick_table_matches_the_multiplier_table() -> None:
+    """
+    兩張表登錄的商品必須一致，且每跳金額算得出來
+
+    跳動點 × 乘數 ＝ TAIFEX 規格頁標示的每跳金額；漏改一張表會讓兩者對不上。
+    """
+
+    assert set(FUTURES_TICK_SIZE) == set(FUTURES_MULTIPLIER)
+    assert FUTURES_TICK_SIZE["TE"] * FUTURES_MULTIPLIER["TE"] == pytest.approx(200.0)
+    assert FUTURES_TICK_SIZE["ZFF"] * FUTURES_MULTIPLIER["ZFF"] == pytest.approx(50.0)
+
+
+# === 期貨的 fill_config 型別 ===
+def test_base_fill_config_is_rejected_for_futures() -> None:
+    """
+    期貨策略給基底 `FillConfig` 時當場中斷（D6）
+
+    型別標註擋不住這件事：寫成 `FillConfig(slippage_bps_buy=10)` 照樣跑得完，
+    只是 `get_slippage_ticks()` 回 0、整組假設默默換成基點。警告在批次跑參數
+    掃描時會被洗掉，等於沒擋。
+    """
+
+    from core.backtest.backtester import Backtester
+    from core.backtest.factory import build_backtester
+    from core.backtest.models.fill_model import FillConfig
+    from core.strategies.futures.momentum_futures_strategy import (
+        MomentumFuturesStrategy,
+    )
+
+    original_setup = Backtester.setup
+    Backtester.setup = lambda self: None
+    try:
+        strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
+        strategy.fill_config = FillConfig(slippage_bps_buy=10.0)
+
+        with pytest.raises(TypeError, match="FuturesFillConfig"):
+            build_backtester(strategy)
+    finally:
+        Backtester.setup = original_setup
+
+
+@pytest.mark.parametrize("fill_config", [None, FuturesFillConfig(slippage_ticks_buy=1)])
+def test_futures_fill_config_is_accepted(fill_config) -> None:
+    """`None` 與 `FuturesFillConfig` 都照常組裝（防止防呆擋過頭）"""
+
+    from core.backtest.backtester import Backtester
+    from core.backtest.factory import build_backtester
+    from core.strategies.futures.momentum_futures_strategy import (
+        MomentumFuturesStrategy,
+    )
+
+    original_setup = Backtester.setup
+    Backtester.setup = lambda self: None
+    try:
+        strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
+        strategy.fill_config = fill_config
+        backtester: Backtester = build_backtester(strategy)
+    finally:
+        Backtester.setup = original_setup
+
+    # 強制出場與轉倉走的是與引擎同一個 fill_model
+    assert backtester.settlement.fill_model is backtester.fill_model
 
 
 # === 策略層可覆寫 ===

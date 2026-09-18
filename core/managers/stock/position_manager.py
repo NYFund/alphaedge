@@ -1,5 +1,5 @@
 import datetime
-from typing import Optional, Union
+from typing import Dict, Optional, Union
 
 from loguru import logger
 
@@ -23,10 +23,16 @@ class StockPositionManager(BasePositionManager):
         self,
         account: StockAccount,
         cost_model: Optional[StockCostModel] = None,
+        event_counts: Optional[Dict[str, int]] = None,
     ) -> None:
         super().__init__(account)
         self.cost_model: StockCostModel = cost_model or StockCostModel(
             CostConfig.default()
+        )
+
+        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）
+        self.event_counts: Dict[str, int] = (
+            event_counts if event_counts is not None else {}
         )
 
     def setup(self, *args, **kwargs) -> None:
@@ -127,6 +133,20 @@ class StockPositionManager(BasePositionManager):
 
                 self.account.balance -= position_value + open_cost
                 self.account.positions.append(position)
+            else:
+                # **開不成還是開不成，這裡只讓它被看見**：判斷邏輯一行都沒動。
+                # 舊版直接回 None，引擎的 `if open_position:` 不成立就跳過，
+                # 沒有 log、沒有計數，回測結果只是少一筆交易而已——而開了滑價之後
+                # 成交價高於 sizer 估算的參考價，這條路徑正好會被觸發。
+                # 放空（`open_short_position()`）與期貨都早有警告，只缺做多這條
+                logger.warning(
+                    f"[Open Long] {stock_order.stock_id} 餘額不足："
+                    f"需要 {position_value + open_cost}，"
+                    f"可用 {self.account.balance}，拒絕開倉"
+                )
+                self.event_counts["rejected_insufficient_balance"] = (
+                    self.event_counts.get("rejected_insufficient_balance", 0) + 1
+                )
         # Open Short & Sell Position
         elif (
             stock_order.position_type == PositionType.SHORT

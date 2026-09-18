@@ -224,7 +224,7 @@
 | `docs/` 條目 | 歸屬 |
 |--------------|------|
 | `--mode live` 實盤路徑未實作 | [實盤下單架構規劃.md](實盤下單架構規劃.md) |
-| 期貨跳動點只登錄台指期系列、一次回測只有一個 spec | [回測滑價口徑收斂.md](回測滑價口徑收斂.md) |
+| 期貨跳動點只登錄台指期系列、一次回測只有一個 spec | **已於 2026-09-18 完成**（逐商品查 `FUTURES_TICK_SIZE`，七檔查證自 TAIFEX 規格頁）；`README.md`／`README_en.md` 的限制敘述已改寫 |
 | 前端自算績效指標、MDD 兩套實作 | [回測績效指標統一由報表輸出.md](回測績效指標統一由報表輸出.md) |
 | 台股表名缺 `stock_` 前綴、`stock_id` → `symbol` 資料層改名、`create_symbol_date_index()` 寫死 `stock_id` | [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) |
 | 財報三表主鍵含 `公司名稱`（同一檔同年季多列） | [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 評估 |

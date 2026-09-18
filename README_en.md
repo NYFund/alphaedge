@@ -112,7 +112,7 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-09-17 and will
 
 - Tick-level futures backtests are not implemented (`TwFuturesDataFeed.get_quotes()` returns an empty list).
 - The futures margin lookup start date differs per product (earliest 2020-03, see the table); earlier periods can only use the `FuturesMarginConfig.ratio()` approximation, which distorts tradable lots and margin-call thresholds.
-- Futures tick size is only registered for the TAIEX futures family (1 point); TE / ZEF / TF / ZFF are distorted if slippage is set in ticks (default slippage is 0, so unaffected).
+- Futures tick sizes cover only the seven verified index futures (TX / MTX / TMF 1 point, TE / ZEF 0.05, TF / ZFF 0.2); unregistered products fall back to 1 point with a warning, so slippage set in ticks is distorted for them (default slippage is 0, so unaffected).
 - A single backtest cannot hold TW stocks and TW futures at the same time (cross-market portfolios / hedging).
 - The TW stock below-reference-price short restriction and the daily day-trade whitelist are not wired into matching yet, so short and day-trade opportunities are overestimated.
 - The `--mode live` path is not implemented.
