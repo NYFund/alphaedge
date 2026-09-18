@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 import pytest
@@ -396,3 +396,337 @@ def test_set_figure_config_does_not_open_browser_by_default() -> None:
     reporter.show = True
     reporter.set_figure_config(_Figure(), title="t")
     assert opened == ["shown"]
+
+
+# === 整體績效指標 ===
+def make_metrics_reporter(
+    strategy,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    pnls: List[float],
+    daily_equity: Optional[List[Dict[str, object]]] = None,
+) -> StockBacktestReporter:
+    """組出帶指定損益與（可選）逐日權益的 reporter"""
+
+    monkeypatch.setattr(StockBacktestReporter, "setup", lambda self: None)
+
+    account: StockAccount = StockAccount(1000000.0)
+    strategy.setup_account(account)
+    for index, pnl in enumerate(pnls, start=1):
+        account.trade_records.append(
+            StockTradeRecord(
+                id=index,
+                stock_id="2330",
+                is_closed=True,
+                position_type=PositionType.LONG,
+                buy_date=DAY_1,
+                buy_price=100.0,
+                buy_volume=1,
+                sell_date=datetime.date(2024, 1, index + 1),
+                sell_price=100.0 + pnl / 1000,
+                sell_volume=1,
+                realized_pnl=pnl,
+                roi=round(pnl / 100000 * 100, 2),
+            )
+        )
+
+    reporter: StockBacktestReporter = StockBacktestReporter(strategy, tmp_path)
+    reporter.account = account
+    reporter.benchmark_price = pd.Series(dtype=float)
+    reporter.daily_equity = daily_equity or []
+    reporter.trading_report = reporter.generate_trading_report()
+    return reporter
+
+
+def metrics_map(df: pd.DataFrame) -> Dict[str, object]:
+    """長表轉 `{Metric: Value}`"""
+
+    return dict(zip(df["Metric"], df["Value"]))
+
+
+def test_metrics_summary_is_a_long_table(make_strategy, tmp_path, monkeypatch) -> None:
+    """
+    格式是 `Metric`／`Value`／`Note` 長表
+
+    **不是寬表**：新增一個指標就要改欄位結構的話，每加一項都會讓既有的
+    下游讀取壞掉一次。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0, 800.0],
+    )
+
+    df: pd.DataFrame = reporter.generate_metrics_summary()
+
+    assert list(df.columns) == ["Metric", "Value", "Note"]
+    assert (
+        tmp_path / f"{reporter.strategy.strategy_name}_metrics_summary.csv"
+    ).exists()
+
+
+def test_metrics_summary_trade_statistics_match_hand_calculation(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """交易統計逐項與手算一致"""
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0, 800.0],
+    )
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Trades"] == 3
+    assert values["Win Count"] == 2
+    assert values["Loss Count"] == 1
+    assert values["Win Rate (%)"] == pytest.approx(66.67, abs=0.01)
+    assert values["Win/Loss Ratio"] == pytest.approx(2.0)
+    assert values["Profit Factor"] == pytest.approx(1800 / 500)
+    assert values["Total PnL"] == pytest.approx(1300.0)
+
+
+def test_overall_win_rate_matches_the_direction_summary(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """
+    整體勝率與 `direction_summary` 依 `Trades` 加權合併的結果必須相同
+
+    同一個數字在兩張報表上不一致，讀的人無從判斷哪個對。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0, 800.0, -200.0],
+    )
+
+    values = metrics_map(reporter.generate_metrics_summary())
+    summary: pd.DataFrame = reporter.generate_direction_summary()
+
+    weighted: float = (summary["Win Rate (%)"] * summary["Trades"]).sum() / summary[
+        "Trades"
+    ].sum()
+
+    assert values["Win Rate (%)"] == pytest.approx(weighted, abs=0.01)
+
+
+def test_daily_metrics_are_blank_without_daily_equity(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """
+    `Realized only` 口徑下，波動度與 Sharpe／Sortino 一律留空
+
+    那個口徑只在平倉那天才有節點，拿它的逐筆報酬乘 √252 等於宣稱一年有 252 筆
+    交易——留空比給一個看起來合理的錯數字好。**MDD 仍然輸出**（它不需要等距樣本）。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0, 800.0],
+    )
+
+    df: pd.DataFrame = reporter.generate_metrics_summary()
+    values = metrics_map(df)
+    notes = dict(zip(df["Metric"], df["Note"]))
+
+    assert values["Equity Basis"] == StockBacktestReporter.EQUITY_BASIS_REALIZED_ONLY
+    for metric in ("Annualized Volatility (%)", "Sharpe Ratio", "Sortino Ratio"):
+        assert values[metric] is None
+        assert "252" in notes[metric]
+
+    assert values["Max Drawdown (%)"] is not None
+
+
+def test_daily_metrics_are_computed_with_daily_equity(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """有逐日權益時三項風險指標照算（防止留空的條件寫得太寬）"""
+
+    equity_rows: List[Dict[str, object]] = [
+        {"Date": datetime.date(2024, 1, day), "Equity": value}
+        for day, value in enumerate(
+            [1000000.0, 1010000.0, 1005000.0, 1020000.0, 1015000.0], start=2
+        )
+    ]
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0],
+        daily_equity=equity_rows,
+    )
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Equity Basis"] == StockBacktestReporter.EQUITY_BASIS_MARK_TO_MARKET
+    assert values["Annualized Volatility (%)"] is not None
+    assert values["Sharpe Ratio"] is not None
+
+
+def test_information_ratio_needs_an_aligned_benchmark(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """
+    IR 以**日期交集**對齊後才逐日相減
+
+    長度湊得起來不代表日期對得起來；自作主張對齊只會讓錯位的比較看起來很正常。
+    """
+
+    equity_rows: List[Dict[str, object]] = [
+        {"Date": datetime.date(2024, 1, day), "Equity": value}
+        for day, value in enumerate(
+            [1000000.0, 1010000.0, 1005000.0, 1020000.0], start=2
+        )
+    ]
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0],
+        daily_equity=equity_rows,
+    )
+    # 基準比策略多一天（1/6），交集之後兩邊長度才會一致。
+    # 走勢刻意與策略不同——完全同步的話追蹤誤差為 0，IR 依定義就是 None
+    reporter.benchmark_price = pd.Series(
+        [100.0, 100.3, 101.2, 100.8, 103.0],
+        index=[datetime.date(2024, 1, day) for day in range(2, 7)],
+    )
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Benchmark"] == reporter.benchmark
+    assert values["Information Ratio"] is not None
+
+
+def test_information_ratio_is_blank_without_daily_equity(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """`Realized only` 口徑與基準日報酬不同頻，IR 留空並說明原因"""
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0],
+    )
+
+    df: pd.DataFrame = reporter.generate_metrics_summary()
+    notes = dict(zip(df["Metric"], df["Note"]))
+
+    assert metrics_map(df)["Information Ratio"] is None
+    assert "不同頻" in notes["Information Ratio"]
+
+
+def test_metrics_summary_is_empty_without_closed_trades(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """沒有已平倉交易時回空表，不是一堆 0"""
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[],
+    )
+
+    df: pd.DataFrame = reporter.generate_metrics_summary()
+
+    assert df.empty
+    assert list(df.columns) == ["Metric", "Value", "Note"]
+
+
+# === 滑價成本統計 ===
+def test_slippage_cost_is_reported(make_strategy, tmp_path, monkeypatch) -> None:
+    """
+    滑價吃掉的價差要看得見
+
+    報表原本只知道「有沒有開滑價」，不知道它總共吃掉多少——一支策略的績效若有
+    三成被滑價吃掉，那是該被看見的事實。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0],
+    )
+    reporter.account.total_slippage_cost = 125.0
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Slippage Cost"] == pytest.approx(125.0)
+    # 500 元損益、125 元滑價 → 25%
+    assert values["Slippage Cost / |Total PnL| (%)"] == pytest.approx(25.0)
+
+
+def test_slippage_share_uses_the_absolute_pnl(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """
+    分母取絕對值——虧損的策略同樣要看得到滑價佔比
+
+    直接除以負的損益會讓「滑價佔比」帶一個看不懂的負號。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[-1000.0],
+    )
+    reporter.account.total_slippage_cost = 200.0
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Slippage Cost / |Total PnL| (%)"] == pytest.approx(20.0)
+
+
+def test_slippage_share_is_blank_when_pnl_is_zero(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """損益為 0 時比例沒有定義，留空而不是除以零"""
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[500.0, -500.0],
+    )
+    reporter.account.total_slippage_cost = 50.0
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Slippage Cost"] == pytest.approx(50.0)
+    assert values["Slippage Cost / |Total PnL| (%)"] is None

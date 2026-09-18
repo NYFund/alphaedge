@@ -73,6 +73,36 @@ class BasePositionManager(ABC):
         """
         pass
 
+    def accrue_slippage_cost(
+        self, order: BaseOrder, volume: int, unit_size: int
+    ) -> None:
+        """
+        - Description:
+            把這張單的滑價價差累計到帳戶
+
+            **只是統計，不動餘額**：滑價是內含在成交價裡的，成交價已經比委託價
+            差了，損益早就反映了它——再扣一次就是重複計算。手續費與稅則相反，
+            那是真的另外從餘額扣的一筆錢。
+
+            `reference_price` 為 `None` 代表這張單沒經過滑價調整（未啟用滑價，
+            或不經 `FillModel`／`SettlementModel` 的純記憶體測試），此時不累計。
+        - Parameters:
+            - order: BaseOrder
+                已成交的訂單（帶 `reference_price` 的副本）
+            - volume: int
+                本次成交的數量（台股為張、期貨為口；部分平倉時是該次的量）
+            - unit_size: int
+                一單位的計價單位數（台股 1,000 股、期貨為契約乘數）
+        """
+
+        reference: Optional[float] = getattr(order, "reference_price", None)
+        if not reference or reference == order.price:
+            return
+
+        self.account.total_slippage_cost += round(
+            abs(order.price - reference) * volume * unit_size, 2
+        )
+
     def resolve_target_position_type(self, order: BaseOrder) -> PositionType:
         """平倉動作反推目標部位方向：賣出平多單、買進回補空單"""
 

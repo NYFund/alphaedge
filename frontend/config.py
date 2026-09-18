@@ -88,3 +88,7 @@ DIRECTION_SUMMARY_FILE_CANDIDATES = [
     "direction_summary.csv",
 ]
 EVENT_REPORT_FILE_CANDIDATES = ["*event_report.csv", "event_report.csv"]
+METRICS_SUMMARY_FILE_CANDIDATES = [
+    "*metrics_summary.csv",
+    "metrics_summary.csv",
+]

@@ -397,7 +397,7 @@ AlphaEdge/
 │   │   ├── models/            # InstrumentSpec / FillModel / CostModel / SettlementModel
 │   │   ├── datafeed/          # data loading, quote conversion, trading calendar, futures roll
 │   │   ├── report/            # trading report, direction summary, charts
-│   │   └── analysis/          # performance metrics (`risk_metrics.py` holds pure risk-adjusted return functions, currently called by the frontend)
+│   │   └── analysis/          # performance metrics (`performance_metrics.py` holds pure risk-adjusted return functions, currently called by the frontend)
 ├── data/                      # runtime data (git-ignored): db/ (tw_stock.db, tw_futures.db) + downloads/
 ├── results/                   # per-strategy backtest outputs (csv / png), git-ignored
 ├── logs/                      # api/ pipeline/ backtest/, git-ignored
@@ -406,7 +406,7 @@ AlphaEdge/
 │   ├── config.py              # frontend configuration
 │   ├── services/              # data loading and metrics (no Streamlit calls, so testable)
 │   │   ├── report_loader.py   # load backtest report files
-│   │   ├── metrics.py         # stock report metrics (Sharpe / Sortino via `risk_metrics.py`)
+│   │   ├── metrics.py         # stock report metrics (Sharpe / Sortino via `performance_metrics.py`)
 │   │   └── futures_metrics.py # futures-only metrics (margin, lot exposure)
 │   ├── static/theme.css       # page styles
 │   ├── requirements.txt       # frontend image dependencies

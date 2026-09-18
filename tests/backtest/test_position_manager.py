@@ -1,6 +1,8 @@
 import datetime
 from typing import Dict, List, Optional
 
+import pytest
+
 from core.backtest.backtester import new_event_counts
 from core.backtest.models.cost_model import CostConfig, ShortConstraint, StockCostModel
 from core.managers.stock.position_manager import StockPositionManager
@@ -563,3 +565,66 @@ def test_long_same_day_sell_without_day_trade_config_is_full_rate(make_order) ->
     )
 
     assert record.tax == 300
+
+
+# === 滑價成本統計 ===
+def test_slippage_cost_is_accrued_in_shares(make_order) -> None:
+    """
+    台股的滑價成本以**股**為計價單位（1 張 ＝ 1,000 股）
+
+    以張數當單位會讓金額差 1,000 倍——而那個數字看起來仍然像個合理的成本。
+    """
+
+    manager: StockPositionManager = build_manager()
+    order = make_order(action=Action.BUY, position_type=PositionType.LONG, price=101.0)
+    order.reference_price = 100.0  # 委託 100、成交 101，滑一元
+
+    manager.open_position(order)
+
+    assert manager.account.total_slippage_cost == pytest.approx(1.0 * 1 * 1000)
+
+
+def test_slippage_cost_is_not_counted_as_transaction_cost(make_order) -> None:
+    """
+    **不併進交易成本**：滑價內含在成交價裡，損益早就反映了它
+
+    加進 `total_transaction_cost` 等於重複計算一次，帳會對不起來。
+    """
+
+    manager: StockPositionManager = build_manager()
+    order = make_order(action=Action.BUY, position_type=PositionType.LONG, price=101.0)
+    order.reference_price = 100.0
+
+    manager.open_position(order)
+
+    assert manager.account.total_slippage_cost > 0
+    assert manager.account.total_transaction_cost == 0
+
+
+def test_no_slippage_accrues_nothing(make_order) -> None:
+    """沒有 `reference_price`（未啟用滑價）時不累計，也不該當成 0 元成交"""
+
+    manager: StockPositionManager = build_manager()
+
+    manager.open_position(
+        make_order(action=Action.BUY, position_type=PositionType.LONG, price=100.0)
+    )
+
+    assert manager.account.total_slippage_cost == 0.0
+
+
+def test_rejected_order_accrues_no_slippage(make_order) -> None:
+    """
+    **被拒的單不算滑價**：沒有成交，價差也就不存在
+
+    累計點放在拒絕檢查之前的話，餘額不足而開不成的單照樣會被計入，
+    滑價統計因此偏高——而那個數字看起來仍然像個合理的成本。
+    """
+
+    # 1 張 100 元需要 100,000 元 ＋ 手續費，餘額差一點就開不成
+    manager: StockPositionManager = build_manager(init_capital=100000.0)
+    order = make_order(action=Action.BUY, position_type=PositionType.LONG, price=100.0)
+    order.reference_price = 99.0
+
+    assert manager.open_position(order) is None
+    assert manager.account.total_slippage_cost == 0.0

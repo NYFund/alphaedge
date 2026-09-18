@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -13,6 +13,7 @@ try:
         DAILY_EQUITY_FILE_CANDIDATES,
         DIRECTION_SUMMARY_FILE_CANDIDATES,
         EVENT_REPORT_FILE_CANDIDATES,
+        METRICS_SUMMARY_FILE_CANDIDATES,
     )
 except ModuleNotFoundError:
     from frontend.config import (
@@ -21,6 +22,7 @@ except ModuleNotFoundError:
         DAILY_EQUITY_FILE_CANDIDATES,
         DIRECTION_SUMMARY_FILE_CANDIDATES,
         EVENT_REPORT_FILE_CANDIDATES,
+        METRICS_SUMMARY_FILE_CANDIDATES,
     )
 
 """
@@ -60,6 +62,7 @@ class BacktestReport:
     daily_equity_path: Optional[Path] = None
     direction_summary_path: Optional[Path] = None
     event_report_path: Optional[Path] = None
+    metrics_summary_path: Optional[Path] = None
 
 
 def list_strategy_dirs(results_root: Path) -> List[Path]:
@@ -100,6 +103,9 @@ def load_backtest_report(strategy_dir: Path) -> BacktestReport:
             strategy_dir, DIRECTION_SUMMARY_FILE_CANDIDATES
         ),
         event_report_path=_pick_first_match(strategy_dir, EVENT_REPORT_FILE_CANDIDATES),
+        metrics_summary_path=_pick_first_match(
+            strategy_dir, METRICS_SUMMARY_FILE_CANDIDATES
+        ),
     )
 
 
@@ -127,6 +133,43 @@ def read_direction_summary(csv_path: Optional[Path]) -> pd.DataFrame:
     """讀多空分開的績效統計；沒有這份檔案時回空表"""
 
     return _read_csv(csv_path)
+
+
+def read_metrics_summary(csv_path: Optional[Path]) -> pd.DataFrame:
+    """
+    讀整體績效指標（`Metric`／`Value`／`Note` 長表）
+
+    **這一份是前端所有風險指標的唯一來源**：Sharpe、Sortino、MDD、波動度、
+    Profit Factor、勝敗比、IR 全部取自它，前端不再自行重算任何一條公式
+    ——同一個指標算在兩個地方，最後一定會出現「報表說 1.2、前端說 0.8」
+    而沒有人知道哪個對。
+
+    改名之前產出的結果資料夾沒有這份檔案，此時回空表，由呼叫端顯示 `N/A`
+    並提示重跑回測。
+    """
+
+    return _read_csv(csv_path)
+
+
+def metrics_to_map(metrics: pd.DataFrame) -> Dict[str, Any]:
+    """把長表轉成 `{Metric: Value}`；空表回空 dict"""
+
+    if metrics.empty or "Metric" not in metrics.columns:
+        return {}
+
+    return dict(zip(metrics["Metric"], metrics["Value"]))
+
+
+def metrics_note_map(metrics: pd.DataFrame) -> Dict[str, str]:
+    """把長表轉成 `{Metric: Note}`，供留空的指標顯示原因"""
+
+    if metrics.empty or "Note" not in metrics.columns:
+        return {}
+
+    return {
+        str(metric): "" if pd.isna(note) else str(note)
+        for metric, note in zip(metrics["Metric"], metrics["Note"])
+    }
 
 
 def read_event_report(csv_path: Optional[Path]) -> pd.DataFrame:
@@ -215,30 +258,6 @@ def build_equity_series(
     return series
 
 
-def compute_max_drawdown(equity: pd.Series) -> Optional[float]:
-    """
-    - Description:
-        由權益序列算最大回撤（%，負值）
-
-        回 `None` 而不是 `0.0`——「沒有逐日權益可算」與「這條策略從沒回撤過」
-        是兩件完全不同的事，畫成 0 會讓看報表的人以為策略毫無風險
-        （口徑與 `core/backtest/analysis/risk_metrics.py` 一致）。
-    - Parameters:
-        - equity: pd.Series
-            權益序列
-    - Return:
-        - Optional[float]
-            最大回撤（%）；序列為空時為 None
-    """
-
-    if equity.empty:
-        return None
-
-    peak: pd.Series = equity.cummax()
-    drawdown: pd.Series = equity / peak - 1
-    return round(float(drawdown.min()) * 100, 2)
-
-
 def compute_daily_pnl(equity: pd.Series) -> pd.Series:
     """由權益序列算每日損益（逐日差分）；序列不足兩點時回空 Series"""
 
@@ -246,29 +265,6 @@ def compute_daily_pnl(equity: pd.Series) -> pd.Series:
         return pd.Series(dtype=float)
 
     return equity.diff().dropna()
-
-
-def compute_daily_returns(equity: pd.Series) -> pd.Series:
-    """
-    - Description:
-        由權益序列算**日報酬**（風險指標的樣本）
-
-        舊版拿的是「每平倉一筆一個節點」的累積餘額，那是**每筆交易**的報酬；
-        乘 √252 年化等於宣稱「一年有 252 筆交易」（`risk_metrics` 模組說明列的第 2、3 個缺陷）。
-    - Parameters:
-        - equity: pd.Series
-            權益序列
-    - Return:
-        - pd.Series
-            日報酬序列；前一期權益 ≤ 0 的期間不列入（沒有定義）
-    """
-
-    if len(equity) < 2:
-        return pd.Series(dtype=float)
-
-    previous: pd.Series = equity.shift(1)
-    returns: pd.Series = (equity / previous - 1)[previous > 0]
-    return returns.replace([float("inf"), float("-inf")], pd.NA).dropna()
 
 
 def summarise_overview(

@@ -722,6 +722,9 @@ class Backtester:
         reporter.generate_direction_summary()
         reporter.generate_event_report(self.event_counts)
 
+        # 整體績效指標：不開前端也看得到，且 Sharpe／Sortino／MDD 只有一份計算
+        reporter.generate_metrics_summary()
+
         if self.daily_equity:
             reporter.save_report(
                 pd.DataFrame(self.daily_equity),

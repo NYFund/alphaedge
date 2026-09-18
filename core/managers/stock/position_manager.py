@@ -158,6 +158,13 @@ class StockPositionManager(BasePositionManager):
 
             position = self.open_short_position(stock_order, position_value)
 
+        # **開成了才算滑價**：被拒的單沒有成交，價差也就不存在。
+        # 台股的計價單位是「股」（1 張 ＝ 1,000 股）
+        if position is not None:
+            self.accrue_slippage_cost(
+                stock_order, stock_order.volume, StockUtils.convert_lot_to_share(1)
+            )
+
         return position
 
     def open_short_position(
@@ -273,6 +280,11 @@ class StockPositionManager(BasePositionManager):
         close_volume: int,
     ) -> StockTradeRecord:
         """依部位方向分派記帳；FIFO 拆單主幹在 BasePositionManager"""
+
+        # 平倉腿的滑價同樣要計入；部分平倉以該次的張數為準
+        self.accrue_slippage_cost(
+            stock_order, close_volume, StockUtils.convert_lot_to_share(1)
+        )
 
         if position.position_type == PositionType.SHORT:
             logger.info(

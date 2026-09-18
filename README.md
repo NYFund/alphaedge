@@ -388,7 +388,7 @@ AlphaEdge/
 │   │   ├── models/            # InstrumentSpec／FillModel／CostModel／SettlementModel
 │   │   ├── datafeed/          # 資料載入、報價轉換、交易日曆、期貨換月
 │   │   ├── report/            # 交易報表、多空統計、圖表
-│   │   └── analysis/          # 績效指標（`risk_metrics.py` 為風險調整後報酬的純函式，目前由前端呼叫）
+│   │   └── analysis/          # 績效指標（`performance_metrics.py` 為風險調整後報酬的純函式，目前由前端呼叫）
 ├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db）＋ downloads/
 ├── results/                   # 各策略回測輸出（csv／png），不進版控
 ├── logs/                      # api/、pipeline/、backtest/ 三桶，不進版控
@@ -397,7 +397,7 @@ AlphaEdge/
 │   ├── config.py              # frontend 設定
 │   ├── services/              # 資料載入與指標計算（不含 Streamlit 呼叫，測試得到）
 │   │   ├── report_loader.py   # 載入回測報表檔案
-│   │   ├── metrics.py         # 股票報表指標（Sharpe／Sortino 走 `risk_metrics.py`）
+│   │   ├── metrics.py         # 股票報表指標（Sharpe／Sortino 走 `performance_metrics.py`）
 │   │   └── futures_metrics.py # 期貨專屬指標（保證金、口數曝險）
 │   ├── static/theme.css       # 版面樣式
 │   ├── requirements.txt       # frontend 映像的相依

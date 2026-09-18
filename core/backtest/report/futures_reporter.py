@@ -188,6 +188,29 @@ class FuturesBacktestReporter(StockBacktestReporter):
         series.index = pd.to_datetime(near_month["date"]).dt.date
         return series
 
+    def get_benchmark_block_reason(self) -> str:
+        """
+        對標退回近月拼接時不算 IR
+
+        近月拼接在換月當天有展期價差造成的**假跳空**，那幾天的基準日報酬是假的，
+        而 IR 是逐日相減算出來的——被那幾天帶偏之後，數字看起來合理但沒有意義。
+        連續合約已經把價差調整掉，那條路徑照算。
+        """
+
+        if self.benchmark_series_kind == self.CONTINUOUS_SERIES_LABEL:
+            return ""
+
+        return (
+            f"對標為{self.NEAR_MONTH_SERIES_LABEL}，換月接點的基準日報酬含展期"
+            f"假跳空，IR 會被帶偏；請先跑 `--target futures_continuous` 建出"
+            f"{self.benchmark_roll_rule.value} 的連續合約"
+        )
+
+    def get_avg_roi_note(self) -> str:
+        """期貨的 ROI 分母是**保證金**，與台股的名目報酬率不可混讀"""
+
+        return "保證金報酬率（分母為已繳保證金，非契約價值）"
+
     def get_benchmark_note(self) -> str:
         """標明對標曲線用的是連續合約還是近月拼接——兩種口徑不可混著看"""
 

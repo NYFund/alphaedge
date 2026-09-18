@@ -492,6 +492,7 @@ class FuturesPositionManager(BasePositionManager):
             return None
 
         multiplier: int = self.get_multiplier(order.product, order.date)
+
         margin: float = self.calculate_margin(
             order.price,
             order.volume,
@@ -537,6 +538,10 @@ class FuturesPositionManager(BasePositionManager):
         self.account.balance -= margin + open_cost
         self.account.margin_used += margin
         self.account.positions.append(position)
+
+        # **開成了才算滑價**：被拒的單沒有成交，價差也就不存在。
+        # 期貨的計價單位是契約乘數，逐契約不同
+        self.accrue_slippage_cost(order, order.volume, multiplier)
 
         return position
 
@@ -606,6 +611,10 @@ class FuturesPositionManager(BasePositionManager):
             f"* Close {position.position_type.value} Position: "
             f"{position.contract_id} ({close_volume} lots)"
         )
+
+        # 平倉腿的滑價同樣要計入；**乘數取自部位自身**，不重查——
+        # 同一個部位的乘數不該因為後來除權息調整而改變
+        self.accrue_slippage_cost(order, close_volume, position.multiplier)
 
         close_ratio: float = close_volume / position.volume
 

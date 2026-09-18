@@ -175,9 +175,16 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 
 ### 兩個容易誤解的地方
 
-1. **檔位會吸收小額 bps**：調整後必須對齊台股升降單位，且取對下單者不利的一側。
-   100 元的股票（檔位 0.5）設 10 bps 與 50 bps 都會得到 100.5——**低於半個檔位的
-   滑價設定不會有額外效果**。要讓 bps 精細生效，標的價格需落在較小的檔位級距。
+1. **檔位會放大小額 bps，不只是吸收**：調整後必須對齊台股升降單位，且取對下單者
+   **不利**的一側。100 元的股票（檔位 0.5）設 10 bps 與 50 bps 都會得到 100.5
+   ——低於半個檔位的差異被吸收掉，但**實際付出的是半個檔位以上**，比設定值大。
+
+   **實測**（`ForeignSellShortDayTradeStrategy`，2024-01-02 ~ 03-29，雙邊各 10 bps）：
+   名目 0.10%，實際吃掉兩腿名目總額的 **0.2439%（約 2.4 倍）**，
+   金額 39,900 元，**佔該期間已實現損益的 42.31%**。
+   標的價格越低（檔位佔價格的比例越大），放大越明顯。
+
+   這個數字現在由報表的 `Slippage Cost` 直接輸出，不必自己回推。
 2. **成交量上限只在日 K 生效**：`quote.volume` 在日 K 是當日總量、在 tick 是單筆成交量，
    以單筆量當分母沒有意義。tick 級別的累計量檢查尚未實作。
 
@@ -311,13 +318,39 @@ for stock_quote, ref_price, open_volume in self.sizer.size(
 
 ## 績效指標
 
-正式回測輸出（報表 CSV 與圖表）由 `report/reporter.py` 產生，reporter 目前**不計算**
-Sharpe／Sortino／Information Ratio 等風險調整後報酬。
+整體指標由 reporter 輸出成 `<策略>_metrics_summary.csv`（`Metric`／`Value`／`Note`
+**長表**），**不開前端也看得到**：勝率、勝敗比、獲利因子、平均 ROI、平均持有天數、
+最大回撤、年化波動度、Sharpe、Sortino、Information Ratio 與權益口徑。
 
-這類公式集中在 `analysis/risk_metrics.py`（純函式），目前只有前端
-（`frontend/services/metrics.py`）呼叫它算 Sharpe 與 Sortino；Information Ratio 的函式已備好，
-但報表沒有輸出基準日報酬，前端無從計算。日後要讓報表輸出這些指標，一律呼叫
-`risk_metrics.py`，不要在 reporter 另寫一份。
+**公式只有一份**，全部在 `analysis/performance_metrics.py`（純函式，只相依 `math`
+與 `typing`）。前端一律讀這份 CSV、**不自行重算任何一條公式**——同一個指標算在兩個
+地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對（MDD 曾經就有
+reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點同樣共用
+`compute_drawdown_series()`。
+
+兩種情況會讓指標**留空**，`Note` 欄一律寫明原因：
+
+| 情況 | 留空的指標 | 原因 |
+|------|------------|------|
+| `Equity Basis` 為 `Realized only`（沒有 `daily_equity`） | 年化波動度、Sharpe、Sortino、Information Ratio | 該口徑只在平倉日有節點，拿逐筆報酬乘 √252 等於宣稱一年有 252 筆交易 |
+| 期貨對標退回近月拼接 | Information Ratio | 換月接點的基準日報酬含展期假跳空，逐日相減會被那幾天帶偏 |
+
+**留空不是 0**：獲利因子與勝敗比在「沒有虧損筆數」時同樣留空——「從沒虧過」與
+「因子為零」意思完全相反。
+
+### 滑價成本
+
+`Slippage Cost` 是策略委託、引擎強制出場與換月轉倉的價差總額，
+`Slippage Cost / |Total PnL| (%)` 是它佔已實現損益的比例。
+
+⚠️ **這筆錢不計入 `total_transaction_cost`**：滑價是**內含在成交價裡**的
+——成交價已經比委託價差了，損益早就反映了它，再加進交易成本就是重複計算。
+手續費與稅則相反，那是真的另外從餘額扣的一筆。
+
+換算方式是「（成交價 − 委託價）× 數量 × 計價單位」，台股的計價單位是股
+（1 張 ＝ 1,000 股）、期貨是契約乘數（逐契約不同）。委託價由 `FillModel` 與
+`SettlementModel` 寫在成交副本的 `BaseOrder.reference_price` 上，
+**被拒的單不計入**（沒有成交，價差也就不存在）。
 
 回測系統會自動計算以下績效指標：
 

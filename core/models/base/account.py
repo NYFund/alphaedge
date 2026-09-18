@@ -31,6 +31,14 @@ class BaseAccount:
         self.total_tax: float = 0.0  # 總交易稅
         self.total_transaction_cost: float = 0  # 總交易成本
 
+        # 滑價吃掉的價差總額（統計用）。
+        #
+        # ⚠️ **刻意不併進 `total_transaction_cost`**：手續費與稅是真的從餘額扣掉的
+        # 一筆錢，滑價則是**內含在成交價裡**——成交價已經比委託價差了，損益早就
+        # 反映了它。加進交易成本等於重複計算一次，帳會對不起來。
+        # 它回答的是「這組滑價假設總共讓我少賺多少」，見報表的 `Slippage Cost`。
+        self.total_slippage_cost: float = 0.0
+
         # Trade ID
         self.trade_id_counter: int = 0  # 交易編號（每筆交易唯一編號）
 
