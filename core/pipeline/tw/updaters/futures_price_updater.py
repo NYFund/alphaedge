@@ -371,21 +371,28 @@ class FuturesPriceUpdater(BaseDataUpdater):
             )
         return universe_api.get_products(date)
 
-    def crawl_and_clean_date(self, product: str, date: datetime.date) -> bool:
+    def crawl_and_clean_date(
+        self, product: str, date: datetime.date
+    ) -> Set[FuturesSession]:
         """
         - Description:
-            單日、雙時段（日盤 ＋ 夜盤）的爬取與清洗；任一時段有資料即回傳 True
+            單日、雙時段（日盤 ＋ 夜盤）的爬取與清洗，回報**各時段**的結果
+
+            **不可只回一個 bool**：「只拿到夜盤」與「兩個時段都拿到」在 bool 下
+            長得一樣，於是缺日盤的那天照樣入庫、續跑起點照樣推進，缺的那一段
+            永遠不會再被請求（MTX 2026-09-02 即如此——寫入時間換算台北是當天
+            11:15，日盤都還沒收盤）。
         - Parameters:
             - product: str
                 商品代碼
             - date: datetime.date
                 查詢日
         - Return:
-            - bool
-                本日是否取得任何資料
+            - Set[FuturesSession]
+                本日確實取得並清洗成功的時段
         """
 
-        crawled: bool = False
+        crawled: Set[FuturesSession] = set()
 
         # **不可寫 `for session in FuturesSession`**：那會連整併用的
         # `COMBINED` 也一起爬，而來源根本沒有那個時段（見 `data_sessions()`）
@@ -404,9 +411,30 @@ class FuturesPriceUpdater(BaseDataUpdater):
                     f"Cleaned dataframe empty on {date} {product} {session.value}"
                 )
                 continue
-            crawled = True
+            crawled.add(session)
 
         return crawled
+
+    @staticmethod
+    def is_day_complete(crawled: Set[FuturesSession]) -> bool:
+        """
+        - Description:
+            判斷該日是否足以入庫並推進續跑起點
+
+            判準是**日盤有沒有拿到**，不是「兩個時段都有」：TF、TE、ZFF 這類
+            商品的夜盤本來就常常整天沒有成交（全表 2017-05-15 後，TF 有 1,977 天、
+            TE 有 381 天只有日盤），要求兩段齊全會讓它們每次執行都重問一次，
+            且永遠無法記為完成。反過來「只有夜盤沒有日盤」則一定是異常——
+            日盤是主要時段，缺它代表當天的日盤尚未收盤或站方正在擋。
+        - Parameters:
+            - crawled: Set[FuturesSession]
+                本日確實取得的時段
+        - Return:
+            - bool
+                是否可入庫
+        """
+
+        return FuturesSession.DAY in crawled
 
     @staticmethod
     def clamp_to_listing_date(product: str, start_date: datetime.date) -> datetime.date:
@@ -469,29 +497,40 @@ class FuturesPriceUpdater(BaseDataUpdater):
         consecutive_empty: int = 0
 
         for date in dates:
-            crawled: bool = self.crawl_and_clean_date(product, date)
+            crawled: Set[FuturesSession] = self.crawl_and_clean_date(product, date)
 
             # 空產出可能是「非交易日」，也可能是「站方正在擋」——兩者在 crawler
-            # 眼中相同，故一律等待後再試一次，只有第二次仍為空才算真的沒有資料
-            if not crawled:
+            # 眼中相同，故一律等待後再試一次，只有第二次仍為空才算真的沒有資料。
+            # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子
+            if not self.is_day_complete(crawled):
                 backoff_seconds: int = self.EMPTY_RETRY_DELAY_SECONDS * min(
                     consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR
                 )
                 logger.info(
-                    f"{date} {product} 查無資料，{backoff_seconds} 秒後重試一次"
+                    f"{date} {product} 未取得日盤（本次時段："
+                    f"{sorted(session.value for session in crawled) or '無'}），"
+                    f"{backoff_seconds} 秒後重試一次"
                 )
                 time.sleep(backoff_seconds)
                 crawled = self.crawl_and_clean_date(product, date)
-                if crawled:
+                if self.is_day_complete(crawled):
                     logger.warning(
                         f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
                         f"不是非交易日"
                     )
 
-            if crawled:
+            if self.is_day_complete(crawled):
                 batch_dates.append(TimeUtils.format_date(date))
                 consecutive_empty = 0
             else:
+                # **只有夜盤時整天不入庫**：入庫會讓 `MAX(date)` 推進過這一天，
+                # 缺的日盤永遠不會再被請求（續跑起點是 `MAX(date)+1`）
+                if crawled:
+                    logger.warning(
+                        f"{date} {product} 只取得 "
+                        f"{sorted(session.value for session in crawled)}、缺日盤，"
+                        f"整天不入庫，下次執行會重試"
+                    )
                 consecutive_empty += 1
                 if consecutive_empty >= self.EMPTY_PRODUCT_ABORT_THRESHOLD:
                     # 先把已爬到的入庫再中止，不浪費前面的成果

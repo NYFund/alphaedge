@@ -221,6 +221,23 @@ class ColumnLayoutError(PipelineError):
         )
 
 
+class CleanFailureError(PipelineError):
+    """部分來源的清洗失敗（版面改制），整批更新不算成功。
+
+    版面改制是逐來源、逐期間隔離的——其餘期間仍該清洗入庫，否則一個異常年份
+    會讓整段回補作廢。但整批跑完後若有任何清洗失敗，就必須讓行程非零結束：
+    除權息與減資是還原價的輸入，靜靜停止更新不會有任何錯誤訊息，
+    只會讓還原價從某一天起停在舊值。
+    """
+
+    def __init__(self, source: str, failures: List[str]) -> None:
+        self.source: str = source
+        self.failures: List[str] = failures
+        super().__init__(
+            f"{source} 有 {len(failures)} 個來源／期間清洗失敗：{failures[:10]}"
+        )
+
+
 # -----------------------------------------------------------------------------
 # Loader 例外
 # -----------------------------------------------------------------------------

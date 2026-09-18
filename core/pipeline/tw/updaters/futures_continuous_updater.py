@@ -202,6 +202,21 @@ class FuturesContinuousUpdater(BaseDataUpdater):
                 adjusted.insert(3, "method", method.value)
                 adjusted.insert(4, "roll_rule", roll_rule.value)
 
+                # **先刪後寫**：`INSERT OR REPLACE` 只覆寫主鍵相同的列，起日往後
+                # 移的重建會讓起日之前的舊列留著上一代的 `adj_factor`，兩代交界
+                # 那次換月的價差沒被調整，而序列看起來仍然連續
+                removed: int = self.loader.dao.delete_series(
+                    product=product,
+                    session=session.value,
+                    method=method.value,
+                    roll_rule=roll_rule.value,
+                )
+                if removed:
+                    logger.debug(
+                        f"[Futures Continuous] {product} / {method.value} / "
+                        f"{roll_rule.value}：重建前清掉 {removed} 列舊序列"
+                    )
+
                 total += self.loader.add_to_db(adjusted)
                 self.loader.save_csv(
                     adjusted,

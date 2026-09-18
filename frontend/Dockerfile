@@ -1,7 +1,14 @@
 FROM python:3.12-slim-bookworm
 
+# **`PYTHONPATH=/app` 不可省**：`streamlit run frontend/app.py` 只把主程式所在的
+# `/app/frontend` 放進 `sys.path`，工作目錄不在裡面（console script 的 `sys.path[0]`
+# 是腳本自己的目錄）。少了它，`frontend/services/metrics.py` 的
+# `from core.backtest.analysis...` 與 `app.py` 的 `from frontend.config ...`
+# 都會 `ModuleNotFoundError`——而本機不出事，是因為開發環境把專案 editable 安裝了。
+# `core/Dockerfile` 改用 editable 安裝時拿掉了這一行，前端映像沒有對應的替代。
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 

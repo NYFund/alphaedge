@@ -141,7 +141,7 @@ def test_trailing_commas_do_not_shift_columns(cleaner: FuturesMarginCleaner) -> 
 
 
 def test_source_is_marked_as_snapshot(cleaner: FuturesMarginCleaner) -> None:
-    """來自現行一覽表的列標為 snapshot，與公告回補（S4）區分"""
+    """來自現行一覽表的列標為 snapshot，與公告回補的 announcement 區分"""
 
     df: pd.DataFrame = cleaner.clean_index_margin(INDEX_MARGIN_CSV)
 
@@ -668,7 +668,7 @@ def _clean_rates_with(rate_loader: FuturesMarginLoader) -> pd.DataFrame:
 
 
 # ============================================================
-# 調整公告：歷史回補的來源（S4）
+# 調整公告：歷史回補的來源
 # ============================================================
 
 # 2026-09-01 自 TAIFEX 實際取得的附件縮影。

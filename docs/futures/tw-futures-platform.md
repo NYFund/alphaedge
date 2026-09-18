@@ -211,7 +211,8 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
   （春節連假可順延一週以上，這是不能沿用股票日曆的直接理由）。
   週契約 `YYYYMMWn` 是該月第 n 個星期三，**沒有 W3**（第三週就是月契約）。
 - **夜盤屬於次一營業日**：15:00 開盤、次日 05:00 收盤，凌晨的成交屬於前一天開始的那段夜盤；
-  星期五晚上那一段屬於星期一。cleaner 一律以官方歸屬日為準。
+  星期五晚上那一段屬於星期一。cleaner 一律以官方歸屬日為準，故 `futures_price_daily` 中
+  `session='night'` 那列的 `date` 是該段夜盤**所屬的交易日**（星期一），不是它開始的曆日（星期五）。
 - **2017-05-15 之前沒有夜盤**，那是制度不是資料缺漏。
 - 日曆涵蓋區間比回測結束日多取 45 天，否則末段契約的最後交易日會落在區間外而算不出來。
 
@@ -236,8 +237,9 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 
 ### 3.8 日夜盤整併
 
-- 策略把 `session` 設為 `FuturesSession.COMBINED`，DataFeed 就把「**前一交易日**夜盤 ＋ 當日日盤」合成一根 bar
-  （週一要取到週五，不是前一個曆日）。整併在報價層，不另建整併表。
+- 策略把 `session` 設為 `FuturesSession.COMBINED`，DataFeed 就把「**同一日期**的夜盤 ＋ 日盤」合成一根 bar。
+  行情表的 `night` 列記的是該段夜盤所屬的交易日（見 §3.5），所以取同一天就是「前一交易日 15:00 起
+  到當日 13:45」這一整段；往前取一個交易日會讓整條序列錯開一天。整併在報價層，不另建整併表。
 - **跨盤別跳空被保留**：整併後的 `open` 取夜盤開盤、`low`／`high` 涵蓋夜盤。
 - **`COMBINED` 不是資料表裡的值**：拿它查資料表一律回空表、策略整場零交易而不報錯。
   查歷史行情一律走 `BaseFuturesStrategy.price_query_session`；ETL 迭代時段一律用 `FuturesSession.data_sessions()`。
@@ -258,6 +260,9 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 - 契約單位歷史由**快照差分**推得（`get_contract_size_history()`），查詢日早於第一份快照時退回最早一份——近似，非事實。
 - 標的池的掛牌日 ≈ 首次出現、下市日 ≈ 最後一次出現早於最新快照，**都是觀測值不是官方日期**，
   故建議每日更新標的池（快照愈稀疏，推出來的日期誤差愈大）。
+- ⚠️ **這條路目前只走通了報價這半邊**：adapter 拿到的 `FuturesQuote.multiplier` 是對的，
+  但 `FuturesPositionManager` 開倉時會自己再查一次 `FUTURES_MULTIPLIER`，股期當場 `KeyError`。
+  股期因此**還不能回測**，詳見 §六〈已知限制〉。
 
 ---
 
@@ -294,6 +299,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 
 | 項目 | 影響 | 解除條件 |
 |------|------|----------|
+| **股票期貨回測開倉即中斷** | `FuturesPositionManager.get_multiplier()` 直接查 `FUTURES_MULTIPLIER`，股期不在常數表內，**第一筆開倉就 `KeyError`**；就算繞過，查表模式的保證金只讀金額表（`get_initial_margin()`），個股期貨在比例表裡，開倉同樣會中止。**DataFeed 這半邊已經做對**（`resolve_multiplier()` 逐日查標的池的契約單位），沒接上的是部位管理層 | [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S1、S2 |
 | **DolphinDB 的期貨 tick 寫入路徑未實測** | `--target futures_tick` 的爬取與清洗已驗證，入庫未驗證；無連線時保留中繼檔並記 warning | 啟動 DolphinDB server ＋ `pip install -e ".[tick]"`，跑一天確認 |
 | 期貨 Tick 級別回測未實作 | `TwFuturesDataFeed.get_quotes()` 對 Tick 回空 list 並記 warning | 出現日內期貨策略需求 |
 | 保證金 2020-03 之前沒有資料 | 行情自 2015 起，但更早的期間只能用 `ratio()` 近似（TX 實測跨年份誤差 +143% ~ −38%），可開口數與追繳門檻失真 | 真的要回測 2015~2019 時，人工登錄 TX 家族該期間的 16 則調整公告（掃描影像；MTX 依乘數等比例推得），並以下一則公告的「調整前」逐筆鏈式驗證、2020-03 首則的「調整前」當終點錨點。**不採 OCR**：`477000` 讀成 `47700` 不會報錯 |
@@ -301,8 +307,8 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 | 三大法人籌碼只有近三年 | 來源只保留約三年，更早無法回補 | 另找歷史來源 |
 | 股期的調整型契約（`EE1` 等數字尾碼）與官方掛牌／下市日未入庫 | 契約單位與日期只能由快照差分近似；標的池建立之前的調整一律看不到 | 另抓 TAIFEX 契約調整與商品異動公告 |
 | 跳動點只登錄已查證的台指期系列 | 其他商品需在建構時明確指定 `tick_size` | 逐商品查證後改為查表 |
-| 2017-05-15 之前仍會查詢夜盤 | 回補時多打約一成的請求並記大量 `No valid futures price rows` warning（資料正確） | crawler 或 updater 在該日前跳過夜盤查詢 |
-| 對標序列是近月拼接 | 報表的期貨對標曲線在換月接點有假跳空 | 改讀 `futures_continuous` |
+| 2017-05-15 之前仍會查詢夜盤 | 回補時多打約一成的請求並記大量 `No valid futures price rows` warning（資料正確） | crawler 或 updater 在該日前跳過夜盤查詢；待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S6 |
+| 對標序列是近月拼接 | 報表的期貨對標曲線在換月接點有假跳空 | 改讀 `futures_continuous`（該表已有 2015-01-05 起的資料）；待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S5 |
 
 ## 相關文件
 

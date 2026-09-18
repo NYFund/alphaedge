@@ -182,6 +182,26 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 （`DatePlanner.get_weekend_dates()`）。**已知限制**：尚未出現在任何一張表的新補行交易日仍補不到
 （日曆尾端只補平日）；台股自 2019 年起已無補行交易日，實務影響低。
 
+### 3.3.1 證券代號一律以字串讀取
+
+`pd.read_csv()`／`read_html()` 只要看到某份檔案的代號**全是數字**就會整欄推斷成整數，
+`0050` 因此變成 `50`——**兩個代號都查得到，只是查不到同一檔**，不會有任何錯誤。
+crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`，price／chip／margin
+三條線都要有；`tests/test_stock_id_leading_zero.py` 釘住這件事。
+
+**被吃成「另一個合法代號」的那種，要靠名稱才驗得出來。** 常見盤點查詢是
+`length(stock_id) < 4 AND stock_id GLOB '[0-9]*'`，但六碼 ETF 少了前兩個 0 之後剛好是
+4 碼（`006201` → `6201`），而 `6201`（亞弘電）本身是合法的上市代號——長度、
+比對 `taiwan_stock_info` 都驗不出來（後者只有現名，ETF 改過名的更對不上）。
+
+唯一可靠的跡象是**同一天、同一個代號底下出現兩個證券名稱**：兩檔不同的證券擠在同一個
+`(date, stock_id)` 底下。改名不會命中，那是跨時間的。
+`tests/test_trading_calendar_guard.py::test_no_symbol_carries_two_names_on_the_same_day`
+以此掃 `price` 與 `chip`（實測抓到 `006201`／`006202`／`006205`／`006206` 共 508 列）。
+
+⚠️ **`margin` 驗不到**：它的主鍵是 `(date, stock_id)`，冒名的那一列會被
+`INSERT OR IGNORE` 直接吞掉，表裡不留痕跡——那張表只能靠寫入端的 `dtype` 擋。
+
 ### 3.4 欄位語言跟著資料來源走
 
 **資料表的欄位語言由來源決定，不由市場決定。**
@@ -211,19 +231,37 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 |------|------------------------|------|------|
 | 日頻三表（逐日） | 任一市場 `FAILED`、任一市場清洗失敗、**一邊 `NO_DATA` 一邊 `OK`** | 兩邊都不清洗／不入庫，記 `incomplete` 下次重試 | `BaseDataUpdater.record_market_day()`、`report_partial_day()` |
 | 財報三表（逐年季） | 任一市場請求失敗、拋例外或解析不出表格 | crawler 整季回 `None`；年季改差集，失敗的那季下次仍會被請求 | `FinancialStatementCrawler._crawl_listing_boards()`、`FinancialStatementUpdater.plan_pending_year_seasons()` |
+| 月營收（逐年月） | 任一市場請求失敗、**一邊 `NO_DATA` 一邊 `OK`** | 整個年月不入庫；年月為差集，失敗的那個月下次仍會被請求 | `MonthlyRevenueReportCrawler.crawl()`、`MonthlyRevenueReportUpdater.plan_pending_year_months()` |
 
 **一邊 `NO_DATA`、一邊 `OK` 也算沒有完整取得**：站方的「查無資料」涵蓋「尚未公布」，
 而兩個市場的公布時間不同，收盤後先公布的那一邊若照常入庫，當日就只有半個市場。
 代價是若真有「一個市場開市、另一個休市」的日子，它會每輪被重試；那只是多幾次請求。
-這條判定只放在日頻三表的 updater，**不改共用的 `UpdateStats.record()`**——除權息、減資、
-月營收是區間查詢，一個市場在整段區間內查無資料是正常的。
+這條判定放在日頻三表的 updater 與月營收 crawler，**不改共用的 `UpdateStats.record()`**
+——除權息、減資是**區間**查詢，一個市場在整段區間內查無資料是正常的；月營收則是
+逐「年月」查詢，與日頻三表同型（2026/04 補回時「只有 26 檔」即此成因）。
 
 **不在這條規則內**：申報期內的部分申報（財報、月營收在申報期間只拿得到已送件的公司）
-是「來源當下就只有這麼多」，不是市場失敗，需要另一套判準，目前未處理。
+是「來源當下就只有這麼多」，不是市場失敗，需要另一套判準，目前未處理——
+判準已有現成的材料（`FinancialStatementUpdater.is_season_filed()`），缺的是把它接到
+「這個年季算不算完成」上；待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S10。
 
 期貨行情則是**多個商品各自獨立**的一批：`FuturesPriceUpdater.update()` 逐商品隔離例外，
 一個商品觸發空產出保險絲不擋其他商品；全部跑完、印出統計後才拋 `ProductUpdateError`
 列出失敗商品，讓 `target_guard()` 仍把整個 target 記為失敗（與 §3.2 的 `finish_load()` 同一個原則）。
+
+### 期貨的時段層完整性
+
+期貨一天由日盤與夜盤兩段拼成，但兩者**不對稱**，故判準不是「兩段齊全」而是**日盤有沒有拿到**：
+
+| 情況 | 處置 | 理由 |
+|------|------|------|
+| 有日盤、有夜盤 | 入庫 | 完整 |
+| 有日盤、無夜盤 | **照常入庫** | 夜盤整天沒有成交是常態（2017-05-15 之後 TF 有 1,977 天、TE 有 381 天只有日盤），要求齊全會讓這些商品永遠記不成完成、每次執行重問一次 |
+| 無日盤、有夜盤 | **整天不入庫**，下次重試 | 一定是異常：日盤尚未收盤，或站方正在擋。續跑起點是「表內該商品最新日 +1」，入庫會讓它越過這天，缺的日盤永遠不會再被請求 |
+| 兩段皆無 | 等待後重試一次，仍無才算非交易日 | TAIFEX 擋流量時回 HTTP 200 加一頁 HTML，與非交易日無法區分 |
+
+實作見 `FuturesPriceUpdater.is_day_complete()`；`tests/test_futures_price_updater.py`
+固定前三種情況，另有一條 slow 測試掃全表確認沒有「只有夜盤」的交易日。
 
 ---
 

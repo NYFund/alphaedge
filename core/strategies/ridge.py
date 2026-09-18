@@ -5,11 +5,10 @@ import numpy as np
 """
 Ridge 迴歸的擬合與 alpha 挑選
 
-**這份實作原本存在兩份**：`strategy_lab/strategies/
-tsmc_overnight_signal/pipeline.py` 一份、`core/strategies/stock/
-overnight_lead_event_strategy.py` 一份，逐字相同。研究版與成品版本來就該產生
-**一模一樣的訊號**——那是「研究結果搬得進生產」的唯一保證；各留一份的話，
-哪天有人在其中一邊調了正則化項的處理，兩邊的訊號會開始分岔而沒有任何跡象。
+**這份實作原本散在研究端與成品策略各一份、逐字相同**。研究端與 `core/` 本來
+就該產生**一模一樣的訊號**——那是「研究結果搬得進生產」的唯一保證；各留一份的話，
+哪天有人在其中一邊調了正則化項的處理，兩邊的訊號會開始分岔而沒有任何跡象
+（`tests/test_research_production_parity.py` 釘住這件事）。
 
 放在 `core/strategies/` 而不是 `strategy_lab/`：相依方向是研究層依賴核心層
 （見 `scripts/check_layer_deps.py`），反過來會讓生產程式碼依賴研究筆記。

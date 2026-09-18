@@ -65,7 +65,7 @@
 | 融券維持率門檻 | `ShortCost.MaintenanceRatio` | **130%** | 低於則追繳／斷頭 |
 | 借券（SBL）費率 | `ShortCost.SBLFeeRate` | **年 3.0%** | 議定區間 0.01%~16%，多數券商上限 7%，取市場常見中位 |
 | 融資利率（LONG 用） | `MarginCost.FinancingRate` | **年 6.35%** | 券商常見 6.15%~6.5%，取中間值 |
-| 融資成數 | `MarginCost.FinancingRatio` | 上市 60% / 上櫃 50% | 供未來做多槓桿用，尚未啟用 |
+| 融資成數 | `MarginCost.ListedFinancingRatio` / `OTCFinancingRatio` | 上市 60% / 上櫃 50% | 供未來做多槓桿用，尚未啟用 |
 | 計息基準日數 | `DAYS_PER_YEAR` | 365 | 台股慣例 |
 
 > **決策**：留倉放空的**預設管道是 `MARGIN`（融券）**——散戶可用、成本結構明確、資料可得。`SBL` 保留為可選參數。
@@ -428,7 +428,7 @@ snapshot_daily_equity(date, quotes)
 | T+2 交割（Lean 的 `SettlementModel`） | 資金可用時點被高估；現股當沖實際是淨額交割不需全額現金 | 對日頻策略影響小，實作成本高 |
 | 股東會停券 | 留倉放空的持有天數仍被高估 | 缺股東會行事曆資料源；除權息停券已接上，見 §5.3 |
 | `SBL` 議定費率的個股差異 | 熱門空方標的實際費率遠高於 3%（實務可達 16%） | `accrue_holding_cost()` 已能逐日計提，缺的只是每檔的實際議定費率。**卡借券成交資料源** |
-| 平盤下放空限制與每日可當沖清單 | 高估可放空／可當沖的機會數 | `allow_below_reference` 與 `day_trade_whitelist` **有定義、無撮合呼叫端**（見 §2.4）。**卡處置股／警示股公告與每日可當沖清單資料源**。接上後須移除建構期警告並改寫 `tests/backtest/test_unimplemented_constraints.py` |
+| 平盤下放空限制與每日可當沖清單 | 高估可放空／可當沖的機會數 | `allow_below_reference` 與 `day_trade_whitelist` **有定義、無撮合呼叫端**（見 §2.4）。**卡處置股／警示股公告與每日可當沖清單資料源**。接上後須移除建構期警告並改寫 `tests/backtest/test_unimplemented_constraints.py`；待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S8 |
 | 融資做多槓桿 | LONG 一律以現金全額買進，資金效率被低估 | 會動到 LONG 的資金計算、破壞回歸保護線，且**目前無策略需求** |
 | 同一標的雙向持倉（net position 語意） | 無法對同一檔做多空轉換 | 跨標的的多空並存**不受限**。放寬需要 `StockPosition` 改成淨部位語意、成本攤提與報表全部連動，且**目前無策略需求** |
 | TICK 級別的成交量上限 | Tick 回測的下單張數不受累計成交量約束 | 日 K 已有 `FillConfig.max_volume_share`，見 [`core/backtest/README.md`](../../core/backtest/README.md)〈成交假設〉 |

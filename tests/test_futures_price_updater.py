@@ -6,7 +6,7 @@ from typing import List, Optional
 import pandas as pd
 import pytest
 
-from core.config import FUTURES_PRICE_DAILY_TABLE_NAME
+from core.config import FUTURES_PRICE_DAILY_TABLE_NAME, TW_FUTURES_DB_PATH
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession
@@ -197,7 +197,7 @@ def test_empty_day_is_retried_before_being_counted_as_no_data(
         """第一次一律空手，第二次才給資料——模擬「被擋 → 恢復」"""
 
         attempts[date] = attempts.get(date, 0) + 1
-        if attempts[date] <= len(list(FuturesSession)):
+        if attempts[date] <= len(FuturesSession.data_sessions()):
             return None
         return pd.DataFrame({"契約": ["TX"]})
 
@@ -216,7 +216,7 @@ def test_empty_day_is_retried_before_being_counted_as_no_data(
     # 保險絲設為 1：沒有重試機制的話，第一個空日就會中止
     updater.update(start_date=DATE, end_date=DATE, products=["TX"], resume=False)
 
-    assert attempts[DATE] > len(list(FuturesSession))
+    assert attempts[DATE] > len(FuturesSession.data_sessions())
 
 
 # === 商品防呆 ===
@@ -479,3 +479,97 @@ def test_start_date_after_listing_is_unchanged(updater: FuturesPriceUpdater) -> 
     assert updater.clamp_to_listing_date(
         "TMF", datetime.date(2026, 1, 1)
     ) == datetime.date(2026, 1, 1)
+
+
+# === 時段完整性 ===
+def test_night_only_day_is_not_loaded(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    只拿到夜盤的那天整天不入庫
+
+    續跑起點是「表內該商品最新日 +1」，入庫會讓它越過這一天，缺的日盤永遠不會
+    再被請求——MTX 2026-09-02 即如此（夜盤 CSV 的寫入時間換算台北是當天 11:15，
+    日盤根本還沒收盤）。
+    """
+
+    loaded: List[List[str]] = []
+
+    def night_only(
+        date: datetime.date, product: str, session: FuturesSession
+    ) -> Optional[pd.DataFrame]:
+        return None if session is FuturesSession.DAY else day_session_raw()
+
+    monkeypatch.setattr(updater.crawler, "crawl_futures_price", night_only)
+    monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
+    monkeypatch.setattr(updater, "load_batch", lambda dates: loaded.append(list(dates)))
+    updater.BATCH_RANDOM_DELAY_MIN = 0
+    updater.BATCH_RANDOM_DELAY_MAX = 0
+    updater.EMPTY_PRODUCT_ABORT_THRESHOLD = 99
+
+    updater.update(start_date=DATE, end_date=DATE, products=["TX"], resume=False)
+
+    assert loaded == []
+
+
+def test_day_without_night_is_still_loaded(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    只有日盤、夜盤沒有成交的那天照常入庫
+
+    **不可要求兩段齊全**：TF、TE、ZFF 這類商品的夜盤本來就常常整天沒有成交
+    （2017-05-15 之後 TF 有 1,977 天、TE 有 381 天只有日盤），要求齊全會讓它們
+    永遠記不成完成、每次執行都重問一次。
+    """
+
+    loaded: List[List[str]] = []
+
+    def day_only(
+        date: datetime.date, product: str, session: FuturesSession
+    ) -> Optional[pd.DataFrame]:
+        return day_session_raw() if session is FuturesSession.DAY else None
+
+    monkeypatch.setattr(updater.crawler, "crawl_futures_price", day_only)
+    monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
+    monkeypatch.setattr(updater, "load_batch", lambda dates: loaded.append(list(dates)))
+    updater.BATCH_RANDOM_DELAY_MIN = 0
+    updater.BATCH_RANDOM_DELAY_MAX = 0
+
+    updater.update(start_date=DATE, end_date=DATE, products=["TF"], resume=False)
+
+    assert loaded == [["20260827"]]
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not Path(TW_FUTURES_DB_PATH).exists(), reason="需要 tw_futures.db 才能盤點"
+)
+def test_no_night_only_trading_days_in_table() -> None:
+    """
+    全表盤點：不得有「只有夜盤、沒有日盤」的交易日
+
+    這種缺口不會有任何錯誤——續跑起點越過那天之後，缺的日盤就只能靠人工發現。
+    夜盤制度 2017-05-15 晚上才上線，之前的日期不列入。
+    """
+
+    conn: sqlite3.Connection = sqlite3.connect(f"file:{TW_FUTURES_DB_PATH}?mode=ro")
+    try:
+        rows: List[tuple] = conn.execute(
+            f"""
+            SELECT product, date FROM (
+                SELECT date, product,
+                       MAX(session = 'day') AS has_day,
+                       MAX(session = 'night') AS has_night
+                FROM {FUTURES_PRICE_DAILY_TABLE_NAME}
+                WHERE date > '2017-05-15'
+                GROUP BY date, product
+            )
+            WHERE has_day = 0 AND has_night = 1
+            ORDER BY product, date
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    assert rows == []

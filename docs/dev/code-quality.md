@@ -11,7 +11,7 @@
 |------|------|------|
 | 套件定義 | `pyproject.toml` `[project]` | `pip install -e .` 後任意目錄可 `import core` |
 | Lint／格式 | `pyproject.toml` `[tool.ruff]` | 執行 `CLAUDE.md` §2.5（import 排序）、§2.10（行寬 88、雙引號） |
-| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、SHORT 回歸線、`pytest -m "not slow"` |
+| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"` |
 | 本機防線 | `.pre-commit-config.yaml` | commit 前先跑一次同一組檢查（需自行 `pre-commit install`） |
 
 `requirements.txt` 為鎖定版本的完整清單，末行 `-e .` 讓同一份檔案也能裝上專案本身；Docker build 用同一份（建置時會濾掉 `-e` 那行）。
@@ -70,6 +70,10 @@ pytest                              # 全部（需 data/db/tw_stock.db）
 以及 `pyproject.toml` 標為「潛在缺陷」的 `B008`／`B006`／`B904`／`E722`／`B007` 等。
 **修掉之後要把對應規則從 `ignore` 移除**，不要讓它長期留著。
 
+**清單裡的數量註記本身也會過期**：2026-09-17 實查時 `B008`／`F841`／`F811` 已經歸零、
+`B007` 只剩 1 處，ignore 清單卻還留著它們——留著等於對那類問題永久失明。
+校正待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S4。
+
 逐處位置不寫在文件裡（行號會漂移），一律現查：
 
 ```bash
@@ -93,15 +97,30 @@ ruff check . --select B008,B006,B904        # 看逐處位置
 | `stock_tick_utils.py`、`stock_tick_loader.py` 等 tick 模組 | `F401` | `dolphindb` 是選用相依，該處 import 是「可用性探測」 |
 | `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法（24 處）的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
 
-**`ANN201`／`ANN204` 於 2026-09-13 納入 `select`**（健檢第四輪 S4）。在那之前
-`CLAUDE.md` §2.4 的「所有函式回傳值都要標註，含 `-> None`」**完全沒有機器護欄**，
-全專案累積 181 處缺漏。補齊後才開啟，`core/`／`tasks/`／`frontend/`／`run.py` 兩條都生效。
+**`ANN201`／`ANN204` 在 `select` 內**，`core/`／`tasks/`／`frontend/`／`run.py` 兩條都生效：
+`CLAUDE.md` §2.4 的「所有函式回傳值都要標註，含 `-> None`」沒有機器護欄時，
+缺漏會以百處為單位累積。
+
+> ⚠️ **批次補回傳型別時，抽象方法必須單獨挑出來人工判**。它們的 body 是 `pass`，
+> 用「函式自己有沒有 return 值」判斷必然得到 `None`——而子類回傳什麼完全看不出來。
+> 補齊時實際有 4 個抽象方法被自動化標錯（例如 `BaseDataCrawler.crawl()` 的子類
+> 有五種回傳型別、`BaseDataLoader.add_to_db()` 有 `None` 與 `int` 兩種），
+> 只能逐一對照子類簽章才抓得到。這類方法一律標 `Any` 並在該處註明理由。
 
 只開這兩條、不開整組 `ANN`：`ANN001`（參數）另有 400 多處未標，
 而 `ANN002`／`ANN003`（`*args`／`**kwargs`）與 `ANN101`（`self`）跟本專案既有寫法衝突。
 
 `*.md` 已加入 `extend-exclude`：ruff 會連 Markdown 內的 Python 程式碼區塊一起格式化，
 而文件裡的範例常刻意對齊註解以利閱讀。`CLAUDE.md` §2.5／§2.10 規範的對象是程式碼，不是文件。
+
+### 工具產生的快取目錄不必寫進 `.gitignore`
+
+`.ruff_cache` 與 `.pytest_cache` 都會在自己的目錄裡寫一份 `.gitignore`（內容是 `*`）
+**自我排除整個目錄**，所以不在專案的 `.gitignore` 裡也進不了版控。
+
+⚠️ **要驗證「一個目錄進不了版控」，不能測目錄本身**：`git check-ignore .ruff_cache`
+會回報未命中（因為規則寫在該目錄內部，對目錄本身不生效），看起來像是漏了一條。
+該測的是底下的檔案，或直接 `git add -An <dir>` 看有沒有輸出。
 
 ---
 
@@ -127,6 +146,9 @@ CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `cor
 |------|----------|------|
 | `ruff check` / `ruff format --check` | CI ＋ pre-commit | 版本釘死，與 `.pre-commit-config.yaml` 的 rev 一致——不釘的話 CI 裝最新版，格式規則一變就出現「本機綠、CI 紅」，而那種紅燈與程式碼品質無關，只會訓練大家忽略 CI |
 | `scripts/check_layer_deps.py` | CI ＋ pre-commit | 反向 import、循環 import、市場語意洩漏、跨軸目錄污染、`core/dao/` 以外 import `sqlite3` |
+| `scripts/check_doc_paths.py` | CI ＋ pre-commit | 文件裡指向程式碼的路徑是否還存在（文件搬檔、程式改名後最容易漂的一項）|
+| `scripts/check_api_orphan_methods.py` | **只在 CI** | `core/api` 有沒有零呼叫端的公開方法。**不放 pre-commit**：它要 import `core/api`，比 pygrep 慢一個量級 |
+| `no-doc-step-refs`（pygrep） | pre-commit | 註解不得引用 backlog 步驟編號、健檢編號或 `backlog/` 路徑（`CLAUDE.md` §2.1 第 4 點）|
 | SHORT 回歸線 | CI ＋ 本機 | 純記憶體、不需要資料庫 |
 | **LONG 回歸線與 `slow` 測試** | **只在本機** | 需要 `data/db/tw_stock.db`、`tw_futures.db` 或外部 API |
 

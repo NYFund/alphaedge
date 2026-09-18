@@ -7,19 +7,37 @@ import pytest
 
 from core.api.tw.futures_chip_api import FuturesChipAPI
 from core.api.tw.futures_margin_api import FuturesMarginAPI
+from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.api.tw.futures_stock_universe_api import FuturesStockUniverseAPI
 from core.config import (
+    EQUITY_CHANGE_TABLE_NAME,
     FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
     FUTURES_MARGIN_HISTORY_TABLE_NAME,
+    FUTURES_PRICE_DAILY_TABLE_NAME,
     FUTURES_STOCK_UNIVERSE_TABLE_NAME,
+    MONTHLY_REVENUE_TABLE_NAME,
+    PRICE_TABLE_NAME,
+    SECURITIES_TRADER_INFO_TABLE_NAME,
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
+    STOCK_INFO_TABLE_NAME,
 )
 from core.dao.base import table_exists
+from core.dao.tw.futures_price_dao import FuturesPriceDAO
+from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
+from core.pipeline.tw.updaters.financial_statement_updater import (
+    FinancialStatementUpdater,
+)
+from core.pipeline.tw.updaters.finmind.common import FinMindContext
 from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
+from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
+    MonthlyRevenueReportUpdater,
+)
 
 """
-「表還沒建」與「查詢失敗」必須分得開（健檢第四輪 S1，與 F-056 同型）
+「表還沒建」與「查詢失敗」必須分得開
 
 期貨線原本有 8 處寫成 `except sqlite3.OperationalError: return None`，
 於是三種完全不同的狀況長得一模一樣：
@@ -277,3 +295,162 @@ def test_updater_falls_back_to_default_start_when_table_missing(
     )
 
     assert start == FuturesChipUpdater.DEFAULT_START_DATE
+
+
+# -----------------------------------------------------------------------
+# === 台股線與 FinMind：被鎖住時一律上拋 ===
+# -----------------------------------------------------------------------
+
+
+def test_monthly_revenue_start_raises_when_db_locked(tmp_path: Path) -> None:
+    """
+    月營收續跑起點：被鎖住時拋，而不是退回預設起點
+
+    吞掉的代價是靜默從 2013/1 整段重爬（約 164 個月 × 4 次請求）。
+    """
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_stock.db", MONTHLY_REVENUE_TABLE_NAME
+    )
+    updater = MonthlyRevenueReportUpdater.__new__(MonthlyRevenueReportUpdater)
+    updater.dao = MonthlyRevenueDAO(conn=conn)
+
+    with pytest.raises(sqlite3.Error):
+        updater.get_actual_update_start_year_month()
+
+
+def test_fs_target_stock_ids_raises_when_db_locked(tmp_path: Path) -> None:
+    """
+    權益變動表的目標股票清單：被鎖住時拋
+
+    回 `[]` 的話外層只印一行「No target stocks, skipped」就 return，
+    整張表沒更新而結束碼 0。
+    """
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_stock.db", STOCK_INFO_TABLE_NAME
+    )
+    updater = FinancialStatementUpdater.__new__(FinancialStatementUpdater)
+    updater.conn = conn
+
+    with pytest.raises(sqlite3.Error):
+        updater.get_target_stock_ids()
+
+
+def test_fs_crawled_stock_ids_raises_when_db_locked(tmp_path: Path) -> None:
+    """已入庫清單：被鎖住時拋，否則整季兩千多檔會全部重打"""
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_stock.db", EQUITY_CHANGE_TABLE_NAME
+    )
+    updater = FinancialStatementUpdater.__new__(FinancialStatementUpdater)
+    updater.conn = conn
+
+    with pytest.raises(sqlite3.Error):
+        updater.get_crawled_stock_ids(2024, 1)
+
+
+def test_finmind_stock_list_raises_when_db_locked(tmp_path: Path) -> None:
+    """FinMind 的股票清單：被鎖住時拋，而不是變成「沒有股票，略過」"""
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_stock.db", STOCK_INFO_TABLE_NAME
+    )
+    context = FinMindContext.__new__(FinMindContext)
+    context.conn = conn
+
+    with pytest.raises(sqlite3.Error):
+        context.get_stock_list()
+
+
+def test_finmind_trader_list_raises_when_db_locked(tmp_path: Path) -> None:
+    """券商清單：與股票清單同一套語意"""
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_stock.db", SECURITIES_TRADER_INFO_TABLE_NAME
+    )
+    context = FinMindContext.__new__(FinMindContext)
+    context.conn = conn
+
+    with pytest.raises(sqlite3.Error):
+        context.get_securities_trader_list()
+
+
+# -----------------------------------------------------------------------
+# === 期貨線：被鎖住時一律上拋 ===
+# -----------------------------------------------------------------------
+
+
+def test_futures_price_api_trading_days_raises_when_db_locked(tmp_path: Path) -> None:
+    """
+    期貨交易日曆：被鎖住時拋
+
+    回 `[]` 的話 `TwFuturesDataFeed.build_calendar()` 會拿到空日曆，
+    整場回測沒有任何交易日而完全不報錯。
+    """
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_futures.db", FUTURES_PRICE_DAILY_TABLE_NAME
+    )
+    api: FuturesPriceAPI = FuturesPriceAPI(conn=conn)
+
+    with pytest.raises(sqlite3.Error):
+        api.get_trading_days(datetime.date(2026, 9, 1), datetime.date(2026, 9, 2))
+
+
+def test_futures_chip_api_get_on_date_raises_when_db_locked(tmp_path: Path) -> None:
+    """當日籌碼查詢：被鎖住時拋，而不是回空表"""
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_futures.db", FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME
+    )
+    api: FuturesChipAPI = FuturesChipAPI(conn=conn)
+
+    with pytest.raises(sqlite3.Error):
+        api.get_on_date(datetime.date(2026, 9, 1))
+
+
+def test_futures_price_updater_start_raises_when_db_locked(tmp_path: Path) -> None:
+    """期貨行情續跑起點：被鎖住時拋，而不是從預設起日重跑整段回補"""
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_futures.db", FUTURES_PRICE_DAILY_TABLE_NAME
+    )
+    updater = FuturesPriceUpdater.__new__(FuturesPriceUpdater)
+    updater.dao = FuturesPriceDAO(conn=conn)
+
+    with pytest.raises(sqlite3.Error):
+        updater.get_actual_update_start_date("TX", datetime.date(2015, 1, 1))
+
+
+def test_futures_traded_weekends_raise_when_db_locked(tmp_path: Path) -> None:
+    """補行交易日判斷：被鎖住時拋，而不是一律跳過週末（那幾天之後不會回頭補）"""
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_stock.db", PRICE_TABLE_NAME
+    )
+    updater = FuturesPriceUpdater.__new__(FuturesPriceUpdater)
+    updater.stock_price_dao = StockPriceDAO(conn=conn)
+
+    with pytest.raises(sqlite3.Error):
+        updater.get_traded_weekend_dates(
+            datetime.date(2026, 9, 1), datetime.date(2026, 9, 30)
+        )
+
+
+def test_has_trading_days_raises_when_db_locked(tmp_path: Path) -> None:
+    """
+    「被擋」與「真的沒資料」的判準：被鎖住時拋
+
+    舊版的 `except Exception: return True` 讓被擋的月份不列入 blocked、結束碼 0，
+    之後 `MAX+1` 直接越過它。
+    """
+
+    conn: sqlite3.Connection = _make_locked_db(
+        tmp_path / "tw_futures.db", FUTURES_PRICE_DAILY_TABLE_NAME
+    )
+    updater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    updater.price_api = FuturesPriceAPI(conn=conn)
+
+    with pytest.raises(sqlite3.Error):
+        updater.has_trading_days(datetime.date(2026, 9, 1), datetime.date(2026, 9, 30))

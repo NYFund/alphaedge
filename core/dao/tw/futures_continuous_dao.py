@@ -1,10 +1,11 @@
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
-from core.dao.base import BaseDAO
+from core.dao.base import BaseDAO, to_sql_params
 
 """台期貨連續合約（`tw_futures.db` 的 `futures_continuous` 衍生表）的資料存取"""
 
@@ -69,3 +70,32 @@ class FuturesContinuousDAO(BaseDAO):
 
         if not self.table_exists():
             logger.warning(f"Table {self.TABLE_NAME} create unsuccessfully!")
+
+    def delete_series(
+        self, product: str, session: str, method: str, roll_rule: str
+    ) -> int:
+        """
+        - Description:
+            刪除某一組（商品, 時段, 調整方式, 換月規則）的所有列；**不 commit**
+
+            重建前一定要先刪：`INSERT OR REPLACE` 只覆寫主鍵相同的列，
+            以較晚的起日重建時，起日之前的舊列會原封不動留著，帶著上一代的
+            `adj_factor`——兩代交界那次換月的價差因此沒有被調整，
+            而表面上序列仍然連續。刪掉來源行情的壞日時同理，對應的衍生列
+            也只能靠這裡清掉。
+        - Parameters:
+            - product / session / method / roll_rule: str
+                要清掉的那一組序列
+        - Return:
+            - int
+                刪除的列數
+        """
+
+        cursor: sqlite3.Cursor = self.conn.execute(
+            f"""
+            DELETE FROM {self.TABLE_NAME}
+            WHERE product = ? AND session = ? AND method = ? AND roll_rule = ?
+            """,
+            to_sql_params(product, session, method, roll_rule),
+        )
+        return cursor.rowcount

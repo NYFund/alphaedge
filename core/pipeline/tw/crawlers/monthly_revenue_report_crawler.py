@@ -70,8 +70,22 @@ class MonthlyRevenueReportCrawler(BaseDataCrawler):
 
         twse: CrawlResult = self.crawl_twse_monthly_revenue(year, month)
         tpex: CrawlResult = self.crawl_tpex_monthly_revenue(year, month)
+        label: str = f"MRR {year}/{month}"
 
-        return self.combine_results([twse, tpex], f"MRR {year}/{month}")
+        # **一邊查無資料、另一邊有資料 → 整個年月失敗**，與日頻三表的
+        # `record_market_day()` 同語意：站方的「查無資料」涵蓋「尚未公布」，
+        # 兩個市場的公布時間不同，先公布的那一邊若照常入庫，該月就只有半個市場
+        # （2026/04 補回時「只有 26 檔」即此成因）。兩邊皆查無資料時維持 NO_DATA，
+        # 那是當月還沒公布的正常狀態
+        if twse.is_no_data != tpex.is_no_data:
+            missing: str = "TWSE" if twse.is_no_data else "TPEX"
+            logger.warning(
+                f"{label}: {missing} 查無資料、另一個市場有資料，"
+                f"整個年月視為失敗、不入庫，下次執行會重試"
+            )
+            return CrawlResult.failed(f"partial_market: {missing} no_data")
+
+        return self.combine_results([twse, tpex], label)
 
     @staticmethod
     def combine_results(results: List[CrawlResult], label: str) -> CrawlResult:

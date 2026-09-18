@@ -60,13 +60,15 @@ def make_quote(volume: int = 10_000, scale: Scale = Scale.DAY) -> StockQuote:
 
 
 def make_event_counts() -> Dict[str, int]:
-    """與引擎共用的事件計數器（只取本檔會用到的三個 key）"""
+    """與引擎共用的事件計數器（只取本檔會用到的那幾個 key）"""
 
     return {
         "rejected_fill_price": 0,
         "rejected_no_borrow": 0,
         "rejected_volume_cap": 0,
         "truncated_by_volume": 0,
+        "rejected_limit_up_locked": 0,
+        "rejected_limit_down_locked": 0,
     }
 
 
@@ -466,3 +468,65 @@ def test_tick_quote_carries_a_price() -> None:
     assert quote.close == 601.0
     assert quote.cur_price == 601.0
     assert quote.volume == 3
+
+
+# === 全日鎖漲跌停 ===
+def make_locked_quote(
+    open_: float, high: float, low: float, close: float
+) -> StockQuote:
+    """建立全日鎖住（或未鎖住）的報價"""
+
+    quote: StockQuote = make_quote()
+    quote.open, quote.high, quote.low, quote.close = open_, high, low, close
+    quote.cur_price = close
+    return quote
+
+
+def test_buy_open_is_rejected_when_locked_at_limit_up() -> None:
+    """
+    前收 100、開高低收皆 110（全日鎖漲停）時，買進開倉被拒
+
+    整天沒有人願意在漲停以下賣出，實務上排隊也買不到。`MomentumStrategy1`
+    的訊號正是「當日漲幅 ≥ 9%、以收盤價買進」，這類標的大量是鎖漲停，
+    照常成交會讓做多績效系統性偏樂觀且沒有任何徵兆。
+    """
+
+    event_counts: Dict[str, int] = make_event_counts()
+    fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
+    fill_model.prev_close[STOCK_ID] = 100.0
+
+    locked: StockQuote = make_locked_quote(110.0, 110.0, 110.0, 110.0)
+
+    assert fill_model.validate(make_order(price=110.0), locked) is False
+    assert event_counts["rejected_limit_up_locked"] == 1
+
+
+def test_short_open_is_rejected_when_locked_at_limit_down() -> None:
+    """對稱情形：全日鎖跌停時賣不掉，放空開倉同樣被拒"""
+
+    event_counts: Dict[str, int] = make_event_counts()
+    fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
+    fill_model.prev_close[STOCK_ID] = 100.0
+
+    locked: StockQuote = make_locked_quote(90.0, 90.0, 90.0, 90.0)
+    order = make_order(action=Action.SELL, position_type=PositionType.SHORT, price=90.0)
+
+    assert fill_model.validate(order, locked) is False
+    assert event_counts["rejected_limit_down_locked"] == 1
+
+
+def test_touching_the_limit_without_locking_is_allowed() -> None:
+    """
+    盤中觸及漲停但曾經打開過，照常成交（防止改過頭）
+
+    最低價低於漲停價就代表有人在漲停以下賣出過，那是買得到的。
+    """
+
+    event_counts: Dict[str, int] = make_event_counts()
+    fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
+    fill_model.prev_close[STOCK_ID] = 100.0
+
+    touched: StockQuote = make_locked_quote(105.0, 110.0, 104.0, 110.0)
+
+    assert fill_model.validate(make_order(price=110.0), touched) is True
+    assert event_counts["rejected_limit_up_locked"] == 0

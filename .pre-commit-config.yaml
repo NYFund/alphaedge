@@ -41,6 +41,19 @@ repos:
         language: pygrep
         files: ^(core|tasks)/.*\.py$
 
+      # 註解不得引用 backlog 的步驟編號、健檢發現編號或 backlog 路徑
+      # （`CLAUDE.md` §2.1 第 4 點）：文件會改版、會刪除，註解不會跟著更新，
+      # 於是讀者手上只剩一個查不到的編號。理由要直接寫在註解裡；
+      # 需要指路時指向程式碼（類別、函式、測試），不指向文件。
+      # 這條規則原本沒有機器護欄，規範訂下之後仍新增了數處。
+      - id: no-doc-step-refs
+        name: 註解不得引用 backlog 步驟／健檢編號
+        entry: (健檢|F-0[0-9]{2}|（S[0-9]+[）、]|backlog/)
+        language: pygrep
+        # `scripts/` 刻意不在範圍內：`check_doc_paths.py` 的職責就是掃描文件
+        # 路徑，`backlog/` 這種字面值在那裡是資料不是引用
+        files: ^(core|tasks|tests|frontend|strategy_lab)/.*\.py$
+
       # 分層相依閘門（反向 import、循環 import、市場語意洩漏、跨軸目錄污染）。
       # 這支腳本原本永遠 exit 1（strategy_lab 的循環 import 把整個閘門鎖住），
       # 2026-09-04 解掉之後才有資格當閘門。約 0.5 秒，掃全專案，

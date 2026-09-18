@@ -411,3 +411,109 @@ def test_long_is_allowed_after_the_short_is_covered(make_order) -> None:
     )
 
     assert long_position is not None
+
+
+# === 做多平倉的當沖稅 ===
+def test_long_overnight_sell_is_taxed_at_the_full_rate(make_order) -> None:
+    """
+    做多部位**隔夜**賣出一律是一般稅率
+
+    `cost_model.tax()` 遇 `is_day_trade=None` 會取 `config.is_day_trade`，
+    而那是策略層的開關。放空策略開了當沖、`allowed_directions` 又含 LONG 時，
+    做多部位持有 7 天後賣出也會吃到減半稅（實測 150，應為 300）。
+    """
+
+    manager: StockPositionManager = build_manager(
+        ShortMethod.DAY_TRADE, is_day_trade=True
+    )
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(
+            action=Action.BUY,
+            position_type=PositionType.LONG,
+            date=datetime.date(2024, 1, 2),
+            price=100.0,
+            volume=1,
+        )
+    )
+    assert position is not None
+
+    record: StockTradeRecord = manager.close_long_position(
+        position=position,
+        stock_order=make_order(
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            date=datetime.date(2024, 1, 9),
+            price=100.0,
+            volume=1,
+        ),
+        close_volume=1,
+    )
+
+    assert record.tax == 300
+
+
+def test_long_same_day_sell_keeps_the_day_trade_rate(make_order) -> None:
+    """開倉、平倉同一天且策略確實開了當沖時，維持減半稅（防止改過頭）"""
+
+    manager: StockPositionManager = build_manager(
+        ShortMethod.DAY_TRADE, is_day_trade=True
+    )
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(
+            action=Action.BUY,
+            position_type=PositionType.LONG,
+            date=datetime.date(2024, 1, 2),
+            price=100.0,
+            volume=1,
+        )
+    )
+    assert position is not None
+
+    record: StockTradeRecord = manager.close_long_position(
+        position=position,
+        stock_order=make_order(
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            date=datetime.date(2024, 1, 2),
+            price=100.0,
+            volume=1,
+        ),
+        close_volume=1,
+    )
+
+    assert record.tax == 150
+
+
+def test_long_same_day_sell_without_day_trade_config_is_full_rate(make_order) -> None:
+    """
+    沒開當沖的策略即使當日來回也是一般稅率
+
+    現股當沖要事先簽署同意書，不是「同一天賣掉」就自動成立；
+    只看日期會讓從未打算當沖的策略憑空少繳一半稅。
+    """
+
+    manager: StockPositionManager = build_manager(ShortMethod.MARGIN)
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(
+            action=Action.BUY,
+            position_type=PositionType.LONG,
+            date=datetime.date(2024, 1, 2),
+            price=100.0,
+            volume=1,
+        )
+    )
+    assert position is not None
+
+    record: StockTradeRecord = manager.close_long_position(
+        position=position,
+        stock_order=make_order(
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            date=datetime.date(2024, 1, 2),
+            price=100.0,
+            volume=1,
+        ),
+        close_volume=1,
+    )
+
+    assert record.tax == 300

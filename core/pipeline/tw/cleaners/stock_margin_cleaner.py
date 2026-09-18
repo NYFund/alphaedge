@@ -177,19 +177,20 @@ class StockMarginCleaner(BaseDataCleaner):
 
         - Return:
             - Optional[pd.DataFrame]
-                清洗後的 DataFrame；欄位數不符或無有效資料時回傳 None
+                清洗後的 DataFrame；原始表為空或無有效資料時回傳 None
+        - Raise:
+            - ColumnLayoutError
+                欄位數不符（來源版面改制）
         """
 
         if df is None or df.empty:
             return None
 
-        # 欄位數不符代表來源版面改制，直接中止避免錯位入庫
-        if df.shape[1] != len(raw_cols):
-            logger.warning(
-                f"Unexpected margin table structure on {date}: "
-                f"{df.shape[1]} columns (expected {len(raw_cols)})"
-            )
-            return None
+        # 欄位數不符代表來源版面改制，拋例外而不是回 None：
+        # 呼叫端才分得出「版面壞了」與「這天沒資料」，前者當天必須記為失敗
+        self.check_column_count(
+            df, len(raw_cols), f"{file_prefix.upper()} margin {date}"
+        )
 
         df.columns = raw_cols
 

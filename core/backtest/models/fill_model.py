@@ -2,7 +2,7 @@ import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
@@ -140,6 +140,11 @@ class BaseFillModel(ABC):
 
         pass
 
+    def apply_short_suspended_symbols(self, symbols: Set[str]) -> None:
+        """一根 bar 開始：更新今日處於停券期間的標的；預設不處理"""
+
+        pass
+
     def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
         """
         - Description:
@@ -202,6 +207,9 @@ class TwStockFillModel(BaseFillModel):
         # 前一交易日收盤價，作為漲跌停判定基準
         self.prev_close: Dict[str, float] = {}
 
+        # 今日停券的標的，由引擎每根 bar 從 DataFeed 推入
+        self.short_suspended_symbols: Set[str] = set()
+
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
         """成交價合理性檢查（前視偏誤與不可能成交的擋板）"""
 
@@ -236,11 +244,66 @@ class TwStockFillModel(BaseFillModel):
                 self.event_counts["rejected_fill_price"] += 1
                 return False
 
+        if self.is_locked_at_limit(order, quote, prev_close):
+            return False
+
         if self.instrument.round_to_tick(order.price, "nearest") != order.price:
             logger.warning(
                 f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊檔位"
             )
 
+        return True
+
+    def is_locked_at_limit(
+        self, order: BaseOrder, quote: BaseQuote, prev_close: Optional[float]
+    ) -> bool:
+        """
+        - Description:
+            全日鎖死漲停（買進）或跌停（賣出）時拒單，並計入事件
+
+            **這條擋的是開倉**：`validate()` 只跑在開倉路徑上（拒掉平倉單會讓部位
+            被迫留倉，那是更嚴重的失真）。開高低收都等於漲停價，代表整天沒有人
+            願意在漲停以下賣出，實務上排隊也買不到——而 `MomentumStrategy1` 的
+            訊號正是「當日漲幅 ≥ 9%、以收盤價買進」，這類標的大量是鎖漲停，
+            照常成交會讓做多績效系統性偏樂觀，且沒有任何徵兆。
+        - Parameters:
+            - order: BaseOrder
+                待驗證的開倉單
+            - quote: BaseQuote
+                當根 bar 的報價
+            - prev_close: Optional[float]
+                漲跌停基準價
+        - Return:
+            - bool
+                True 表示被鎖死、應拒單
+        """
+
+        # Tick 級別沒有當日四價，無從判定鎖死
+        if not all(hasattr(quote, field) for field in ("open", "high", "low", "close")):
+            return False
+
+        if not self.instrument.is_locked_at_limit(
+            prev_close=prev_close,
+            open_price=quote.open,
+            high=quote.high,
+            low=quote.low,
+            close=quote.close,
+            side=order.action,
+            date=TimeUtils.to_date(quote.date),
+        ):
+            return False
+
+        locked_side: str = "漲停" if order.action == Action.BUY else "跌停"
+        event_key: str = (
+            "rejected_limit_up_locked"
+            if order.action == Action.BUY
+            else "rejected_limit_down_locked"
+        )
+        logger.warning(
+            f"[Validate Fill] {order.symbol} 當日全日鎖{locked_side}"
+            f"（開高低收皆為 {quote.close}），開倉單無法成交，拒單"
+        )
+        self.event_counts[event_key] += 1
         return True
 
     @staticmethod
@@ -321,6 +384,21 @@ class TwStockFillModel(BaseFillModel):
 
         self.short_balance = balance
 
+    def apply_short_suspended_symbols(self, symbols: Set[str]) -> None:
+        """
+        - Description:
+            更新今日處於停券期間（融券最後回補日 ~ 除權息交易日）的標的
+
+            引擎原本只在「最後回補日」當天強制回補，**回補日之後到除權息交易日
+            這段期間卻沒有任何擋板**，留倉放空策略可以在停券期間開新的融券空單
+            並持有跨過除權息。
+        - Parameters:
+            - symbols: Set[str]
+                今日停券的標的，由 DataFeed 依除權息行事曆推導
+        """
+
+        self.short_suspended_symbols = symbols
+
     def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
         """
         - Description:
@@ -339,6 +417,9 @@ class TwStockFillModel(BaseFillModel):
         """
 
         if not self.check_short_borrowable(order):
+            return None
+
+        if not self.check_short_not_suspended(order):
             return None
 
         price: float = self.get_filled_price(order)
@@ -423,6 +504,44 @@ class TwStockFillModel(BaseFillModel):
         self.event_counts["close_price_out_of_range"] = (
             self.event_counts.get("close_price_out_of_range", 0) + 1
         )
+
+    def check_short_not_suspended(self, order: BaseOrder) -> bool:
+        """
+        - Description:
+            停券期間拒絕**融券**放空開倉
+
+            停券期間是「融券最後回補日 ~ 除權息交易日」這一段，制度上不得新增
+            融券賣出。**SBL 借券不受停券限制**，其跨除息的成本由股利補償反映，
+            故不擋；現股當沖沖賣不經過券源，同樣不擋。
+        - Parameters:
+            - order: BaseOrder
+                待檢核的訂單
+        - Return:
+            - bool
+                False 時呼叫端應拒單
+        """
+
+        if not self.short_suspended_symbols:
+            return True
+
+        is_short_open: bool = (
+            order.action == Action.SELL and order.position_type == PositionType.SHORT
+        )
+        if not is_short_open:
+            return True
+
+        if getattr(order, "short_method", None) != ShortMethod.MARGIN:
+            return True
+
+        if order.symbol not in self.short_suspended_symbols:
+            return True
+
+        logger.warning(
+            f"[Fill] {order.symbol} 今日處於停券期間（融券最後回補日至除權息交易日），"
+            f"不得新增融券賣出，拒單"
+        )
+        self.event_counts["rejected_short_suspended"] += 1
+        return False
 
     def check_short_borrowable(self, order: BaseOrder) -> bool:
         """

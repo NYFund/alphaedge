@@ -29,7 +29,6 @@ python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB
 python run.py --strategy MomentumStrategy1                  # 台股做多動能
 python run.py --strategy ForeignSellShortDayTradeStrategy   # 台股外資大賣強勢股當沖放空
 python run.py --strategy MomentumFuturesStrategy            # 台指期動能（示範用，非交易邏輯）
-python run.py --strategy OvernightLeadEventStrategy         # 2330 隔夜訊號
 ```
 
 策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 自動收錄；

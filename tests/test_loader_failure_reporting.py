@@ -438,10 +438,10 @@ def test_finmind_broker_trading_dataframe_path_raises(tmp_path: Path) -> None:
     conn.close()
 
 
-# === S5：期貨線的「壞檔 → DataLoadError」（健檢第四輪）===
+# === 期貨線的「壞檔 → DataLoadError」===
 # 台股線（price／margin／finmind）已在上面涵蓋，期貨線原本一條都沒有。
 # **tick 線不在此列**：`stock_tick_loader.add_to_db()` 根本沒呼叫 `finish_load()`，
-# 它的失敗語意屬另一條路徑（F-052，歸「ETL 失敗語意與缺口回補」）
+# 它的失敗語意屬另一條路徑（缺口回補，不在本檔範圍）
 def test_futures_price_loader_raises_on_broken_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -464,7 +464,7 @@ def test_futures_price_loader_raises_on_broken_file(
         loader.add_to_db()
 
     # ⚠️ 期貨線存的是**完整路徑**，台股線（price／margin）只存檔名——
-    # 兩條線的失敗清單格式不一致（健檢第四輪 S5 發現，尚未收斂）。
+    # 兩條線的失敗清單格式不一致（尚未收斂）。
     # 這裡斷言「檔名出現在清單裡」，兩種格式都通得過
     assert len(exc_info.value.failed_files) == 1
     assert "futures_price_20260901.csv" in exc_info.value.failed_files[0]

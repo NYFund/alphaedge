@@ -5,9 +5,9 @@ import numpy as np
 from core.strategies.ridge import ridge_fit_predict, tune_alpha
 
 """
-研究版與成品版必須產生同一組訊號
+研究端與 `core/` 必須共用同一份 ridge 實作
 
-`strategy_lab/` 的研究結論是拿來搬進 `core/` 的；兩邊各留一份 ridge 實作時，
+`strategy_lab/` 的研究結論是拿來搬進 `core/` 的；兩邊各留一份實作時，
 哪天有人在其中一邊調了正則化項的處理，訊號會開始分岔而沒有任何跡象——
 而「研究說 Sharpe 2.1、生產跑出 1.3」這種問題查起來極貴。
 """
@@ -25,16 +25,13 @@ def make_dataset(seed: int = 42) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     return X_train, y_train, X_pred
 
 
-def test_both_sides_import_the_same_ridge() -> None:
-    """研究版與成品版指向的是**同一個函式物件**，不是兩份相同的程式碼"""
+def test_research_imports_the_same_ridge() -> None:
+    """研究端指向的是 `core` 裡**同一個函式物件**，不是另一份相同的程式碼"""
 
-    import core.strategies.stock.overnight_lead_event_strategy as production
     import strategy_lab.strategies.tsmc_overnight_signal.pipeline as research
 
     assert research.ridge_fit_predict is ridge_fit_predict
     assert research.tune_alpha is tune_alpha
-    assert production.ridge_fit_predict is ridge_fit_predict
-    assert production.tune_alpha is tune_alpha
 
 
 def test_ridge_does_not_regularise_the_intercept() -> None:

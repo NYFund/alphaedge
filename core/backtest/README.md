@@ -158,11 +158,35 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 | 事件 | 意義 |
 |------|------|
 | `rejected_no_borrow` | 融券餘額不足，放空開倉被拒 |
+| `rejected_limit_up_locked` | 全日鎖漲停（開高低收皆為漲停價），買進開倉被拒 |
+| `rejected_limit_down_locked` | 全日鎖跌停，放空開倉被拒 |
 | `rejected_volume_cap` | 超過成交量上限且政策為拒單（或上限不足一張） |
 | `truncated_by_volume` | 超過成交量上限被縮量 |
 | `forced_cover_suspended` | 觸及停券強制回補日（除權息推導或手動指定） |
+| `rejected_short_suspended` | 停券期間（回補日 ~ 除權息交易日）的融券放空開倉被拒 |
+| `forced_cover_insufficient_margin` | 當沖轉融券留倉時餘額不足，改為強制回補 |
 | `dividend_compensation_paid` | 跨除息日的空單補償出借方現金股利 |
 | `dividend_compensation_unknown` | 權息並存拆不出現金股利，該筆補償被跳過（成本低估） |
+| `dividend_received` | 跨除息日的做多部位收到現金股利 |
+| `share_adjustment_applied` | 配股、分割、減資造成的股數與每股成本調整 |
+| `forced_exit_no_quote` | 做多部位連續無報價（停牌／下市）達上限被強制出場 |
+
+### 公司行動的記帳口徑
+
+盯市與平倉一律用 `quote.close` 這條**未還原**的原始價，除權息的跳空因此留在
+帳面損益裡；記帳端要把「那段跳空該歸誰」還原回去，兩者相抵後除權息本身不產生損益：
+
+| 事件 | 做多 | 放空 |
+|------|------|------|
+| 現金股利 | 除息日入帳（`dividend_received`） | 除息日補償出借方（`dividend_compensation_paid`） |
+| 配股、分割、減資 | 股數 × 倍率、每股成本 ÷ 倍率 | 同左（義務等比例增加） |
+
+**還原價只用於訊號**（`Backtester.adjusted_price`），不參與記帳；兩者都要做，
+少了任何一邊都會有一段假損益。不足一張的零股以調整後的每股成本折現，
+不四捨五入吞掉——吞掉會讓權益在每次配股時跳動一小段。
+
+**`forced_exit_no_quote` 的出場價是「最後可得收盤價」**，這仍然高估下市股的回收價
+（實務上多為部分償還甚至歸零），但歸零會系統性低估。要保守估計者可依本計數自行調整。
 
 **查無融券資料時一律放行並 warning**，不會把「查不到」當成「借不到」——
 `margin` 表的歷史回補是獨立作業，尚未執行時整場回測都會查無資料。
@@ -284,6 +308,9 @@ python run.py --strategy <StrategyName>
 
 - `--mode`: 執行模式，可選 `backtest` 或 `live`，預設為 `backtest`
 - `--strategy`: 指定要使用的策略類別名稱（必填）
+- `--show` / `--no-show`: 回測結束後要不要在瀏覽器開圖。**預設不開**——圖本來就會
+  存成 PNG，批次掃參數時一次開幾十個分頁，無頭環境（CI、容器、`nohup`）更會直接失敗。
+  未指定時依環境變數 `ALPHAEDGE_SHOW_FIGURES`
 
 ### 使用範例
 
@@ -298,7 +325,8 @@ python run.py --mode live --strategy MomentumStrategy1
 ### 注意事項
 
 - Strategy Name 是 Class 的名稱
-- 策略會自動從 `core/strategies/stock/` 目錄載入
+- 策略由 `strategy_loader` 逐一掃描 `core/strategies/` 底下的商品類別子目錄
+  （`stock/`、`futures/`）載入，新增商品類別不需要改程式
 - 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
 - 回測結果會儲存在 `results/<StrategyName>/` 目錄
 

@@ -181,9 +181,9 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 |------|------|----------|
 | **per-instrument 粒度的 model 掛載** | 無法在同一次回測同時持有台股與台指期（跨市場組合／避險） | 業界（Lean 掛在 `Security`、Nautilus 掛在 `Instrument`）確實是這個粒度，本專案採 per-run 簡化。升級路徑乾淨：把 model 從 `Backtester` 移到 `InstrumentSpec` 物件上，引擎迴圈不動 |
 | 事件驅動 order queue（T+1 延遲成交、限價單未成交、部分成交） | 追繳仍只能以觸發當日收盤價回補 | 本質是引擎典範轉移，見 [§5.1](#51-事件驅動迴圈長期方向) |
-| 台股報表輸出欄位仍為 `Stock ID` 而非 `Symbol` | 兩種報表的識別欄名不同（台股 `Stock ID`、期貨 `Contract ID`） | 改名會讓 LONG baseline 失效；等 baseline 下次本來就要重產時再統一 |
+| 台股報表輸出欄位仍為 `Stock ID` 而非 `Symbol` | 兩種報表的識別欄名不同（台股 `Stock ID`、期貨 `Contract ID`） | 改名會讓 LONG baseline 失效；等 baseline 下次本來就要重產時再統一（待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S7）|
 | `core/utils/instrument.py` 未移出 | `core/utils/` 仍留一個領域模組 | `StockUtils` 有 `core/backtest/` 以外的使用者（pipeline、adapters、`strategy_lab`）。移進 `core/backtest/` 會讓資料管線反過來相依於回測引擎，是更嚴重的層級問題；其各函式的歸屬需先拆解 |
-| 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「前收 ±幅度後往內對齊檔位」推算，與交易所公告值多數差一檔，影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 公告值可經 `DataFeed.get_price_limit_basis()` 同一掛點推入、公式版退為 fallback；等有策略真的依賴漲停判定時再做 |
+| 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「前收 ±幅度後往內對齊檔位」推算，與交易所公告值多數差一檔，影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 公告值可經 `DataFeed.get_price_limit_basis()` 同一掛點推入（該掛點已存在且已被引擎呼叫）、公式版退為 fallback；待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S9 |
 | `--mode live` 實盤路徑 | `run.py --mode live` 會拋 `NotImplementedError` | factory 已預留讓實盤共用同一組 model |
 
 ### 5.1 事件驅動迴圈（長期方向）

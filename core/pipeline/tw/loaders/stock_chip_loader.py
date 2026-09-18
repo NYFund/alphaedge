@@ -109,7 +109,9 @@ class StockChipLoader(BaseDataLoader):
         skipped_cnt: int = 0
         for file_path in self.select_csv_files(self.chip_dir, only_dates):
             try:
-                df: pd.DataFrame = pd.read_csv(file_path)
+                # `dtype` 不指定的話，全數字的代號會被推斷成整數，
+                # `0050` 入庫變成 `50`（與 margin、price 同一個做法）
+                df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
                 inserted: int
                 skipped: int
                 with self.dao.savepoint():

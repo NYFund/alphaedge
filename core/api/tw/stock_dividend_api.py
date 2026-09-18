@@ -1,5 +1,6 @@
 import datetime
-from typing import Dict, List, Optional, Tuple
+import math
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -126,6 +127,60 @@ class StockDividendAPI(BaseDataAPI):
         """取得指定日期的每股配股數對照表（純除息時為 0）"""
 
         return self.build_column_map(self.get(date), "配股率")
+
+    def get_share_ratio_map(self, date: datetime.date) -> Dict[str, float]:
+        """
+        - Description:
+            取得指定日期的**股數倍率**對照表（`新股數 / 舊股數`）
+
+            兩個來源合併，回答的是同一個問題「手上的股數今天要乘以多少」：
+
+            | 來源 | 欄位 | 換算 | 例 |
+            |------|------|------|----|
+            | `dividend` | `配股率`（每股配發股數） | `1 + 配股率` | 配股 0.05 → 1.05 |
+            | `corporate_action` | `調整倍率`（價格倍率） | `1 / 調整倍率` | 分割價格砍半 0.5 → 2.0 |
+
+            **與還原係數的分工**：還原係數只用於訊號面的價格序列；本方法用於
+            記帳面——做多部位的股數與每股成本要跟著調整，否則張數不變、價格砍半，
+            帳面會憑空虧一半。兩者都需要，少了任何一邊都會有一段假損益。
+
+            同一天兩個來源都有時以 `dividend` 為準，與 `get_adjust_factors()`
+            的取捨一致（交易所對除權息的參考價已含該日全部調整）。
+        - Parameters:
+            - date: datetime.date
+                交易日（除權息交易日／恢復買賣日）
+        - Return:
+            - Dict[str, float]
+                `{stock_id: 股數倍率}`；倍率為 1（無變動）者不列入
+        """
+
+        ratios: Dict[str, float] = {}
+
+        action_df: pd.DataFrame = self.corporate_action_dao.get_adjust_ratios_by_date(
+            date
+        )
+        for stock_id, ratio in self.build_column_map(action_df, "調整倍率").items():
+            value: float = self.to_float(ratio)
+            if value > 0 and value != 1.0:
+                ratios[str(stock_id)] = 1 / value
+
+        for stock_id, share_ratio in self.get_stock_dividend_ratio_map(date).items():
+            value = self.to_float(share_ratio)
+            if value > 0:
+                ratios[str(stock_id)] = 1 + value
+
+        return ratios
+
+    @staticmethod
+    def to_float(value: Any) -> float:
+        """把資料表原樣取出的數值轉為 float；無法轉換者視為 0（＝沒有調整）"""
+
+        try:
+            result: float = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+        return 0.0 if math.isnan(result) else result
 
     def get_opening_reference_price_map(self, date: datetime.date) -> Dict[str, float]:
         """

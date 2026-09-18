@@ -15,6 +15,7 @@ from core.pipeline.tw.cleaners.corporate_action_cleaner import (
     CorporateActionCleaner,
 )
 from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoader
+from core.pipeline.utils.exceptions import ColumnLayoutError
 
 """
 非除權息公司行動 ETL（還原價 S2）
@@ -312,14 +313,16 @@ def test_rows_without_price_are_dropped(cleaner: CorporateActionCleaner) -> None
 
 def test_missing_column_aborts_cleaning(cleaner: CorporateActionCleaner) -> None:
     """
-    欄名對不上代表版面改制，整批不清洗
+    欄名對不上代表版面改制，拋例外而不是整批靜靜略過
 
-    **不可硬取位置**：欄位錯位是靜默的錯，會一路錯到還原價。
+    **不可硬取位置**：欄位錯位是靜默的錯，會一路錯到還原價。也不回 None：
+    那與「這段期間沒有公司行動」長得一樣，更新會無聲地停止。
     """
 
     raw: pd.DataFrame = pd.DataFrame([["114/02/12", "2025"]], columns=["日期", "代號"])
 
-    assert cleaner.clean(raw, source="twse") is None
+    with pytest.raises(ColumnLayoutError):
+        cleaner.clean(raw, source="twse")
 
 
 # === Loader ===

@@ -1,4 +1,5 @@
 import datetime
+import statistics
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,10 +18,10 @@ from core.utils import FuturesSession, Scale
 日盤／夜盤整併測試
 
 **整併最容易錯的是「夜盤屬於哪一天」**：TAIFEX 的夜盤 15:00 開盤、次日 05:00
-收盤，制度上屬於**次一交易日**——星期五晚上那一段屬於星期一。資料表為了忠實
-記錄來源，把夜盤存在它**開始**的那個日曆日，因此整併時必須往前取一個**交易日**
-（不是前一個曆日，週一要取到週五）。取錯的話夜盤會被併到錯誤的交易日，
-而且價格看起來都很合理，不會有任何異常。
+收盤，制度上屬於**次一交易日**——星期五晚上那一段屬於星期一。行情表存的是它
+**所屬的交易日**（星期一），不是它開始的曆日，因此整併時取同一個日期。
+往前取一個交易日的話，併進來的會是前一天的夜盤，價格看起來仍然合理、
+不會有任何異常，但整條序列錯開一天。
 
 第二個重點是**跨盤別跳空必須留在 bar 內**：整併後的 `open` 取夜盤開盤而非
 日盤開盤，前一個日盤收盤到夜盤開盤之間的跳空才不會被抹掉——那正是隔夜風險。
@@ -73,7 +74,7 @@ def test_combined_bar_takes_night_open_and_day_close() -> None:
         19314, 19144, 19340, 19137, 97821, FuturesSession.DAY
     )
     night: FuturesQuote = make_quote(
-        18954, 18961, 19000, 18891, 52330, FuturesSession.NIGHT, date=FRIDAY
+        18954, 18961, 19000, 18891, 52330, FuturesSession.NIGHT
     )
 
     combined: FuturesQuote = FuturesQuoteAdapter.combine_quote(day, night)
@@ -98,7 +99,7 @@ def test_cross_session_gap_is_preserved() -> None:
         19314, 19144, 19340, 19137, 97821, FuturesSession.DAY
     )
     night: FuturesQuote = make_quote(
-        18954, 18961, 19000, 18891, 52330, FuturesSession.NIGHT, date=FRIDAY
+        18954, 18961, 19000, 18891, 52330, FuturesSession.NIGHT
     )
     day_open_before: float = day.open
 
@@ -134,7 +135,7 @@ def test_settlement_and_open_interest_come_from_the_day_session() -> None:
         19314, 19144, 19340, 19137, 97821, FuturesSession.DAY, settlement=19310
     )
     night: FuturesQuote = make_quote(
-        18954, 18961, 19000, 18891, 52330, FuturesSession.NIGHT, date=FRIDAY
+        18954, 18961, 19000, 18891, 52330, FuturesSession.NIGHT
     )
 
     combined: FuturesQuote = FuturesQuoteAdapter.combine_quote(day, night)
@@ -175,16 +176,17 @@ class StubPriceAPI:
                 19144,
                 500,
             ],
+            # 星期五的夜盤屬於星期五（由星期四 15:00 開始），不該併進星期一
             [
                 str(FRIDAY),
                 "TX",
                 "202403",
                 "night",
-                18961,
-                19000,
-                18891,
-                18954,
-                50,
+                17000,
+                17000,
+                17000,
+                17000,
+                999,
                 None,
                 None,
             ],
@@ -201,7 +203,21 @@ class StubPriceAPI:
                 19314,
                 600,
             ],
-            # 週日（非交易日）不該被取到；放一列進來確保 feed 沒有用「前一個曆日」
+            # 星期一的夜盤：星期五 15:00 開盤、星期一 05:00 收盤，行情表記為星期一
+            [
+                str(DATE),
+                "TX",
+                "202403",
+                "night",
+                18961,
+                19000,
+                18891,
+                18954,
+                50,
+                None,
+                None,
+            ],
+            # 週日（非交易日）不該被取到
             ["2024-03-03", "TX", "202403", "night", 1, 1, 1, 1, 999, None, None],
         ]
         self.requested: List[tuple] = []
@@ -234,16 +250,18 @@ def make_feed() -> TwFuturesDataFeed:
     return feed
 
 
-def test_night_session_comes_from_the_previous_trading_day() -> None:
+def test_night_session_comes_from_the_same_trading_day() -> None:
     """
-    **星期一取的是星期五的夜盤**，不是星期日
+    **星期一取的是行情表裡日期為星期一的那列夜盤**
 
-    用「前一個曆日」會在每個週一取到不存在的資料（或更糟：取到別人的資料）。
+    那一段從星期五 15:00 開始，制度上屬於星期一，行情表也記為星期一。
+    往前取一個交易日的話會併進星期五那段（由星期四 15:00 開始），
+    整條序列會錯開一天。
     """
 
     feed: TwFuturesDataFeed = make_feed()
 
-    assert feed.get_night_session_date(DATE) == FRIDAY
+    assert feed.get_night_session_date(DATE) == DATE
 
 
 def test_feed_produces_combined_quotes() -> None:
@@ -255,7 +273,7 @@ def test_feed_produces_combined_quotes() -> None:
 
     assert len(quotes) == 1
     assert quotes[0].session == FuturesSession.COMBINED
-    assert quotes[0].open == 18961  # 星期五夜盤的開盤
+    assert quotes[0].open == 18961  # 星期一夜盤的開盤（星期五 15:00 那段）
     assert quotes[0].close == 19314  # 星期一日盤的收盤
     assert quotes[0].volume == 250
 
@@ -304,10 +322,10 @@ def test_real_combined_bar_contains_the_night_session() -> None:
             api, DATE, product="TX", session=FuturesSession.DAY
         )
         night_quotes: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-            api, FRIDAY, product="TX", session=FuturesSession.NIGHT
+            api, DATE, product="TX", session=FuturesSession.NIGHT
         )
         combined: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_combined_quotes(
-            api, DATE, FRIDAY, product="TX"
+            api, DATE, DATE, product="TX"
         )
     finally:
         api.close()
@@ -328,6 +346,63 @@ def test_real_combined_bar_contains_the_night_session() -> None:
             assert quote.volume == day.volume + night.volume
             assert quote.high >= max(day.high, night.high)
             assert quote.low <= min(day.low, night.low)
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(
+    not Path(TW_FUTURES_DB_PATH).exists(), reason="需要 tw_futures.db 才能驗時序"
+)
+def test_real_night_open_follows_the_previous_day_close() -> None:
+    """
+    以真實資料固定「夜盤屬於哪一天」的口徑
+
+    行情表裡日期為 D 的夜盤，是 D−1 日盤收盤後 15:00 開始的那一段，所以它的
+    開盤價會**貼著 D−1 的日盤收盤**，而不是貼著 D 的日盤收盤。整併若往前取一個
+    交易日，序列會整條錯開一天——價格仍然合理，不會有任何異常。
+
+    以近月合約、2023 年起的樣本比中位數：貼著前一交易日收盤的那一組要明顯小。
+    """
+
+    from core.api.tw.futures_price_api import FuturesPriceAPI
+
+    api: FuturesPriceAPI = FuturesPriceAPI()
+    try:
+        trading_days: List[datetime.date] = api.get_trading_days(
+            datetime.date(2023, 1, 1), datetime.date(2026, 9, 1), product="TX"
+        )
+        gap_to_previous_close: List[float] = []
+        gap_to_same_day_close: List[float] = []
+
+        for previous_day, day in zip(trading_days, trading_days[1:]):
+            night: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
+                api, day, product="TX", session=FuturesSession.NIGHT
+            )
+            today: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
+                api, day, product="TX", session=FuturesSession.DAY
+            )
+            yesterday: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
+                api, previous_day, product="TX", session=FuturesSession.DAY
+            )
+            if not night or not today or not yesterday:
+                continue
+
+            # 近月合約＝到期月代碼最小的那一檔
+            night_open: float = min(night, key=lambda q: q.expiry).open
+            gap_to_previous_close.append(
+                abs(night_open - min(yesterday, key=lambda q: q.expiry).close)
+            )
+            gap_to_same_day_close.append(
+                abs(night_open - min(today, key=lambda q: q.expiry).close)
+            )
+    finally:
+        api.close()
+
+    if len(gap_to_previous_close) < 100:
+        pytest.skip("樣本不足，無法判斷時序口徑")
+
+    assert statistics.median(gap_to_previous_close) < statistics.median(
+        gap_to_same_day_close
+    )
 
 
 # === 整併模式的常見陷阱 ===

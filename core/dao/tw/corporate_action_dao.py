@@ -1,3 +1,4 @@
+import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -72,3 +73,14 @@ class CorporateActionDAO(BaseDAO):
         """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""
 
         return self._get_latest_value("date")
+
+    def get_adjust_ratios_by_date(self, date: datetime.date) -> pd.DataFrame:
+        """取得單日的調整倍率（`date`／`stock_id`／`調整倍率` 三欄）；表不存在時為空表"""
+
+        if not self.table_exists():
+            return pd.DataFrame(columns=["date", "stock_id", "調整倍率"])
+
+        return self.query_df(
+            f"SELECT date, stock_id, 調整倍率 FROM {self.TABLE_NAME} WHERE date = ?",
+            (date,),
+        )

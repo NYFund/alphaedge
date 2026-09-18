@@ -1,7 +1,7 @@
 import random
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -90,14 +90,10 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         )
 
         logger.info(f"Latest data date in database: {start_year}/{start_month}")
-        # Set Up Update Period
-        # **不可用 years × months 的笛卡兒積**：起點 2025/03、終點 2026/12 時
-        # `months` 只會是 [3..12]，2026/01 與 2026/02 不會被爬；起點月份大於終點
-        # 月份時 `months` 甚至是空清單，整輪什麼都不做。兩種情況都不會有任何錯誤
-        # ——那些年月只是從來沒出現在迴圈裡
-        year_months: List[Tuple[int, int]] = TimeUtils.generate_year_period_range(
-            start_year, start_month, end_year, end_month, periods_per_year=12
+        year_months: List[Tuple[int, int]] = self.plan_pending_year_months(
+            start_year, start_month, end_year, end_month
         )
+        logger.info(f"本次待更新年月：{len(year_months)} 個")
         file_cnt: int = 0
         stats: UpdateStats = UpdateStats()
 
@@ -146,6 +142,61 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
             )
         else:
             logger.warning("No new monthly revenue data was updated")
+
+    def plan_pending_year_months(
+        self,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+    ) -> List[Tuple[int, int]]:
+        """
+        - Description:
+            算出這次要請求的年月：區間內所有年月 − 表內已有的年月
+
+            **不可用「表內最新年月 +1」起跑**：中間某個月失敗被跳過之後，只要
+            下一個月成功入庫，`MAX` 就越過它，那個月從此不會再被請求。財報三表
+            已改成差集，月營收沒有跟進——`docs/pipeline/etl-ingestion.md` 的對照表
+            寫的也是差集，程式與文件在此之前不一致。
+
+            **不可用 years × months 的笛卡兒積**：起點 2025/03、終點 2026/12 時
+            `months` 只會是 [3..12]，2026/01 與 2026/02 不會被爬；起點月份大於
+            終點月份時甚至是空清單，整輪什麼都不做而沒有任何錯誤。
+        - Parameters:
+            - start_year / start_month: int
+                區間起點
+            - end_year / end_month: int
+                區間終點
+        - Return:
+            - List[Tuple[int, int]]
+                由早到晚排序的 (year, month)
+        """
+
+        year_months: List[Tuple[int, int]] = TimeUtils.generate_year_period_range(
+            start_year, start_month, end_year, end_month, periods_per_year=12
+        )
+        existing: Set[Tuple[int, int]] = self.dao.get_existing_year_months()
+        pending: List[Tuple[int, int]] = [
+            year_month for year_month in year_months if year_month not in existing
+        ]
+
+        # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的月份，
+        # 晚於最新的是尚未公布的月份，兩者每輪都會出現，報出來只是噪音
+        if existing:
+            earliest: Tuple[int, int] = min(existing)
+            latest: Tuple[int, int] = max(existing)
+            gaps: List[str] = [
+                f"{year}/{month:02d}"
+                for year, month in pending
+                if earliest < (year, month) < latest
+            ]
+            if gaps:
+                logger.warning(
+                    f"[mrr] 偵測到 {len(gaps)} 個年月缺口"
+                    f"（表內最新為 {latest[0]}/{latest[1]:02d}），本次一併回補：{gaps[:10]}"
+                )
+
+        return pending
 
     def get_actual_update_start_year_month(
         self,

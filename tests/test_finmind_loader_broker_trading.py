@@ -5,7 +5,7 @@
 
 **資料庫走 pytest 的 `tmp_path`**：本測試原本在 `tests/temp/` 建帶時間戳的 `.db`
 且從不刪除，跑一次留一個 12 MB 的檔——2026-09-13 清理時已累積 560 個、275 MB
-（健檢第四輪 S6）。`tmp_path` 由 pytest 負責回收，且每個測試各自隔離。
+。`tmp_path` 由 pytest 負責回收，且每個測試各自隔離。
 """
 
 import sqlite3

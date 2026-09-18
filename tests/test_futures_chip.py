@@ -198,6 +198,20 @@ def test_available_data_excludes_the_same_day(chip_api: FuturesChipAPI) -> None:
     )
 
 
+def test_datetime_is_treated_as_its_date(chip_api: FuturesChipAPI) -> None:
+    """
+    傳 `datetime` 與傳 `date` 結果一致
+
+    資料表的 `date` 欄是 `TEXT`，若直接把 `datetime` 丟進去比較，
+    `'2026-08-28' < '2026-08-28 09:00:00'` 會成立——盤中查詢就拿到當天盤後
+    才公布的籌碼，而這支 API 存在的理由正是防前視。
+    """
+
+    assert chip_api.get_latest_available_date(
+        datetime.datetime(2026, 8, 28, 9, 0)
+    ) == chip_api.get_latest_available_date(datetime.date(2026, 8, 28))
+
+
 def test_available_data_carries_forward_over_holidays(chip_api: FuturesChipAPI) -> None:
     """連假期間沿用最近一次公布的籌碼——那確實是當下唯一知道的資訊"""
 

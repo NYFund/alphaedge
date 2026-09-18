@@ -4,9 +4,10 @@ services:
       context: .
       dockerfile: core/Dockerfile
     container_name: alphaedge-core
-    environment:
-      MODE: backtest
-      STRATEGY: MomentumStrategy1
+    # **不要在這裡設 MODE／STRATEGY**：下方 `command` 的 `${MODE:-backtest}` 是
+    # compose **解析設定檔時**由 shell 環境或 `.env` 替換的，與容器的
+    # `environment` 無關。寫在 environment 裡不會改變啟動參數，只會讓人以為改了。
+    # 要換策略：`MODE=backtest STRATEGY=XXX docker compose up core`，或寫進 `.env`
     command:
       [
         "--mode",

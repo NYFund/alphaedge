@@ -99,6 +99,24 @@ class BaseDataFeed(ABC):
 
         return set()
 
+    def get_short_suspended_symbols(self, date: datetime.date) -> Set[str]:
+        """
+        - Description:
+            取得今日處於**停券期間**的標的
+
+            與 `get_force_cover_symbols()` 的差別是「一天」與「一段」：後者是
+            融券最後回補日當天，本方法涵蓋從那天起到除權息交易日之間的整段期間，
+            這段期間制度上不得新增融券賣出。
+        - Parameters:
+            - date: datetime.date
+                交易日
+        - Return:
+            - Set[str]
+                `{symbol}`；預設為空集合
+        """
+
+        return set()
+
     def get_cash_dividend_map(self, date: datetime.date) -> Dict[str, float]:
         """
         - Description:
@@ -113,6 +131,24 @@ class BaseDataFeed(ABC):
         - Return:
             - Dict[str, float]
                 `{symbol: 每股現金股利}`；預設為空 dict
+        """
+
+        return {}
+
+    def get_share_ratio_map(self, date: datetime.date) -> Dict[str, float]:
+        """
+        - Description:
+            取得當日的股數倍率（`新股數 / 舊股數`）
+
+            配股、分割、減資會改變手上的股數與每股成本，而價格序列同時跳動。
+            記帳端不跟著調整的話，張數不變、價格砍半，帳面就憑空虧一半——
+            那與訊號面的還原價是兩回事，兩者都要做。
+        - Parameters:
+            - date: datetime.date
+                交易日
+        - Return:
+            - Dict[str, float]
+                `{symbol: 股數倍率}`；預設為空 dict（沒有這種制度的市場）
         """
 
         return {}

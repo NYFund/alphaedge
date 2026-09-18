@@ -49,16 +49,23 @@ def new_event_counts() -> Dict[str, int]:
         "close_price_out_of_range": 0,  # 平倉成交價超出當日區間（不拒單，只計數）
         "forced_cover_day_trade": 0,  # 當沖日終強制回補
         "forced_cover_margin_call": 0,  # 維持率追繳強制回補
+        "forced_cover_insufficient_margin": 0,  # 當沖轉留倉時餘額不足而強制回補
         "forced_cover_max_holding": 0,  # 超過最長持有天數強制回補
         "forced_cover_suspended": 0,  # 停券日強制回補
         "forced_cover_no_quote": 0,  # 連續無報價（停牌／下市）強制出場
         "limit_up_cover_failed": 0,  # 漲停鎖死無法回補
         "rejected_max_holdings": 0,  # 超過最大持倉檔數被引擎剔除的開倉單
         "rejected_no_borrow": 0,  # 融券餘額不足被拒的放空開倉單
+        "rejected_short_suspended": 0,  # 停券期間被拒的融券放空開倉單
+        "rejected_limit_up_locked": 0,  # 全日鎖漲停、買不到，被拒的買進開倉單
+        "rejected_limit_down_locked": 0,  # 全日鎖跌停、賣不掉，被拒的放空開倉單
         "rejected_volume_cap": 0,  # 超過當日成交量上限被拒的訂單
         "truncated_by_volume": 0,  # 超過當日成交量上限被縮量的訂單
         "dividend_compensation_paid": 0,  # 除息日補償出借方股利的空單
         "dividend_compensation_unknown": 0,  # 因權息並存無法拆分股利而跳過補償的空單
+        "dividend_received": 0,  # 除息日收到現金股利的做多部位
+        "share_adjustment_applied": 0,  # 配股、分割、減資造成股數調整的部位
+        "forced_exit_no_quote": 0,  # 連續無報價（停牌／下市）強制出場的做多部位
     }
 
 
@@ -470,15 +477,22 @@ class Backtester:
         )
         self.fill_model.apply_short_balance(self.data_feed.get_short_balance(date))
 
-        # 停券日與除息股利只有放空路徑會用到，且推導停券日需掃整段交易日曆；
+        # 停券日只有放空路徑會用到，且推導它需掃整段交易日曆；
         # 純做多策略不可能有空單，故連查都不查，避免替 LONG 回測加上無謂的成本
         if PositionType.SHORT in self.get_allowed_directions():
             self.settlement.apply_force_cover_symbols(
                 self.data_feed.get_force_cover_symbols(date)
             )
-            self.settlement.apply_cash_dividends(
-                self.data_feed.get_cash_dividend_map(date)
+            # 停券期間不得新增融券賣出；回補日當天的強制回補由 settlement 處理，
+            # 這裡擋的是回補日之後到除權息交易日之間的新開倉
+            self.fill_model.apply_short_suspended_symbols(
+                self.data_feed.get_short_suspended_symbols(date)
             )
+
+        # **除權息資料兩個方向都要**：做多跨除息要收現金股利、跨配股要調整股數，
+        # 不餵的話做多績效會系統性偏低（除權息日的跳空變成憑空虧損）
+        self.settlement.apply_cash_dividends(self.data_feed.get_cash_dividend_map(date))
+        self.settlement.apply_share_ratios(self.data_feed.get_share_ratio_map(date))
 
         if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
             self.execute_open_signal(quotes)
@@ -587,8 +601,9 @@ class Backtester:
             q for q in quotes if self.account.check_has_position(q.symbol)
         ]
 
+        # 回傳型別是 List，`return` 會給出 None——呼叫端若照標註串接就會炸
         if not positions:
-            return
+            return []
 
         quote_map: Dict[str, BaseQuote] = {q.symbol: q for q in quotes}
 

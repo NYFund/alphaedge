@@ -1,0 +1,15 @@
+﻿Event,Count
+rejected_direction,0
+rejected_fill_price,6
+forced_cover_day_trade,0
+forced_cover_margin_call,0
+forced_cover_max_holding,0
+forced_cover_suspended,1
+forced_cover_no_quote,0
+limit_up_cover_failed,10
+rejected_max_holdings,0
+rejected_no_borrow,0
+rejected_volume_cap,0
+truncated_by_volume,0
+dividend_compensation_paid,0
+dividend_compensation_unknown,0

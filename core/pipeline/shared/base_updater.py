@@ -131,6 +131,10 @@ class BaseDataUpdater(ABC):
             （`load_batch()` 每 100 天才呼叫一次）。
 
             爬取層的失敗已經是逐日隔離的（見 `CrawlResult`），清洗層沒有理由不是。
+
+            **回 `None`／空表同樣算失敗**：走到這裡代表 crawler 已判定站方有資料，
+            清洗後卻一列都不剩，只可能是版面異常。若照常回 True，當天會被記為完成、
+            只入庫另一個市場，之後差集判定表內已有這天，永遠不會回頭補。
         - Parameters:
             - clean: Callable
                 cleaner 的清洗函式
@@ -142,7 +146,7 @@ class BaseDataUpdater(ABC):
                 來源名稱，只用於訊息
         - Return:
             - bool
-                清洗成功且有資料為 True
+                清洗成功且有資料為 True；拋例外、回 None 或空表皆為 False
         """
 
         try:
@@ -155,7 +159,11 @@ class BaseDataUpdater(ABC):
             return False
 
         if cleaned is None or cleaned.empty:
-            logger.warning(f"Cleaned {label} dataframe empty on {date}")
+            logger.error(
+                f"[{label}] {date} 清洗後無資料（站方有回應但無有效列），"
+                f"本日計為失敗、下次執行會重試"
+            )
+            return False
 
         return True
 

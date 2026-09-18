@@ -1,8 +1,9 @@
 import datetime
 import random
 import time
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 
+import pandas as pd
 from loguru import logger
 
 from core.config import TW_STOCK_DB_PATH
@@ -143,18 +144,25 @@ class StockPriceUpdater(BaseDataUpdater):
 
             # Step 2: Clean
             # 任一市場沒問到（含一邊查無資料）時兩邊都不清洗：這天反正不入庫，
-            # 清洗只會在 downloads 留下半份 CSV
+            # 清洗只會在 downloads 留下半份 CSV。
+            # 列數不足門檻（只剩表頭或合計列）與清洗失敗同樣算這天失敗：
+            # 跳過清洗卻照常入庫另一邊，就是半個市場
             cleaned: bool = True
             if day_status is not CrawlStatus.FAILED:
-                if twse.is_ok and len(twse.data) > self.MIN_DF_ROWS_AFTER_CLEAN:
-                    cleaned &= self.clean_one(
-                        self.cleaner.clean_twse_price, twse.data, date, "TWSE"
+                for result, label in ((twse, "TWSE"), (tpex, "TPEX")):
+                    if not result.is_ok:
+                        continue
+                    clean: Callable[..., Optional[pd.DataFrame]] = getattr(
+                        self.cleaner, f"clean_{label.lower()}_price"
                     )
-
-                if tpex.is_ok and len(tpex.data) > self.MIN_DF_ROWS_AFTER_CLEAN:
-                    cleaned &= self.clean_one(
-                        self.cleaner.clean_tpex_price, tpex.data, date, "TPEX"
-                    )
+                    if len(result.data) <= self.MIN_DF_ROWS_AFTER_CLEAN:
+                        logger.error(
+                            f"[{label}] {date} 原始表只有 {len(result.data)} 列，"
+                            f"本日計為失敗、下次執行會重試"
+                        )
+                        cleaned = False
+                        continue
+                    cleaned &= self.clean_one(clean, result.data, date, label)
 
             if not cleaned:
                 cleaner_failures.append(date)

@@ -207,25 +207,6 @@ def test_max_holdings_defaults_to_unlimited() -> None:
     assert _Bare().max_holdings is None
 
 
-def test_overnight_lead_event_strategy_can_be_constructed() -> None:
-    """
-    建構本身不可觸網、不可依賴尚未注入的 API
-
-    舊版在 `__init__()` 末尾就呼叫 `_build_signals()`，而它要用
-    `self.price`——那是 `setup_apis()` 才掛上去的，於是這一行本身就
-    `AttributeError`。引擎的 factory 是先建策略再 `setup_apis()`，
-    順序反了就沒有任何方法救得回來。
-    """
-
-    from core.strategies.stock.overnight_lead_event_strategy import (
-        OvernightLeadEventStrategy,
-    )
-
-    strategy: OvernightLeadEventStrategy = OvernightLeadEventStrategy()
-
-    assert strategy.signal_by_date == {}
-
-
 def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
     """
     單一模組壞掉不該讓所有策略都列不出來

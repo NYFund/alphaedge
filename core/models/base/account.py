@@ -45,8 +45,17 @@ class BaseAccount:
         return self.trade_id_counter
 
     def get_position_count(self) -> int:
-        """取得庫存商品檔數"""
-        return len(self.positions)
+        """
+        取得庫存**商品檔數**（同一檔加碼多次只算一檔）
+
+        `max_holdings` 的語意在 `BaseStrategy` 與各策略 docstring 都寫「檔數」，
+        舊實作卻回傳部位筆數：允許加碼的策略（例如 `MomentumStrategy1`）
+        同一檔加碼兩次就佔掉兩個名額，實際持有檔數比設定少。
+        """
+
+        return len(
+            {position.symbol for position in self.positions if not position.is_closed}
+        )
 
     def get_first_open_position(self, symbol: str) -> Optional[BasePosition]:
         """根據商品代號取得庫存中該商品最早開倉的部位（FIFO）"""

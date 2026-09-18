@@ -375,3 +375,57 @@ def test_loguru_opt_exception_emits_traceback(tmp_path: Path) -> None:
     assert "Traceback" not in head, "exc_info= 竟然印出了堆疊，本護欄的前提要重新檢查"
     assert "Traceback" in tail, "logger.opt(exception=True) 必須附上完整堆疊"
     assert "刻意拋錯" in tail
+
+
+# === delete_price_data 的結束碼 ===
+def test_delete_price_data_reports_failure_on_bad_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dao_factory: Callable[..., BaseDAO]
+) -> None:
+    """
+    日期解析失敗要回報失敗
+
+    `--yes` 的用途是排程，而排程只看得到結束碼。舊版任何失敗都只記一行 log
+    就 return，行程照樣以 0 結束，排程端完全看不出來。
+    """
+
+    import tasks.delete_price_data as module
+
+    monkeypatch.setattr(
+        module, "TW_STOCK_DB_PATH", str(make_price_db(tmp_path, dao_factory))
+    )
+
+    assert module.delete_price_data_by_date("2025-13-45") is False
+
+
+def test_delete_price_data_reports_failure_when_db_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    資料庫不存在時回報失敗，且**不可建出空的 DB**
+
+    `sqlite3.connect()` 會直接建一個 0 byte 的 `tw_stock.db`，
+    之後所有查詢都回空表，看起來像「資料還沒更新」。
+    """
+
+    import tasks.delete_price_data as module
+
+    missing: Path = tmp_path / "nope" / "tw_stock.db"
+    monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(missing))
+
+    assert module.delete_price_data_by_date("2025-07-13") is False
+    assert not missing.exists()
+
+
+def test_delete_price_data_reports_success_on_preview(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dao_factory: Callable[..., BaseDAO]
+) -> None:
+    """預覽模式與「本來就沒有這天」都算成功，排程不該因此變紅"""
+
+    import tasks.delete_price_data as module
+
+    monkeypatch.setattr(
+        module, "TW_STOCK_DB_PATH", str(make_price_db(tmp_path, dao_factory))
+    )
+
+    assert module.delete_price_data_by_date("2025-07-13") is True
+    assert module.delete_price_data_by_date("2025-07-15") is True

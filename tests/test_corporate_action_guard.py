@@ -1,4 +1,3 @@
-import sqlite3
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -7,7 +6,6 @@ import pytest
 
 from core.config import CORPORATE_ACTION_TABLE_NAME, TW_STOCK_DB_PATH
 from core.pipeline.tw.cleaners.corporate_action_detector import (
-    KNOWN_BAD_PRICE_DATES,
     detect_unexplained_moves,
 )
 
@@ -151,34 +149,4 @@ def test_ordinary_stocks_unexplained_does_not_grow(
         f"一般個股／ETF 解釋不掉的跳空由 {BASELINE_UNEXPLAINED_ORDINARY} "
         f"增為 {len(ordinary)} 筆。最可疑的前五筆："
         f"{ordinary.nlargest(5, '停牌日數')[['date', 'stock_id', '推估倍率', '停牌日數']].to_dict('records')}"
-    )
-
-
-@_NEEDS_DB
-def test_known_bad_dates_are_still_bad() -> None:
-    """
-    已知的錯誤資料日期若被修好，要把它從排除清單移掉
-
-    `2020-04-14` 整批是 `2020-12-18` 的內容（台積電開 508／收 510／
-    成交股數 40,625,502 兩日完全相同）。**排除清單不該長期留著**——
-    這條測試會在資料修好那天變紅，提醒把日期刪掉。
-    """
-
-    conn: sqlite3.Connection = sqlite3.connect(
-        f"file:{TW_STOCK_DB_PATH}?mode=ro", uri=True
-    )
-    try:
-        row = conn.execute(
-            "SELECT 收盤價 FROM price WHERE stock_id = '2330' AND date = '2020-04-14'"
-        ).fetchone()
-    finally:
-        conn.close()
-
-    if row is None:
-        pytest.skip("2020-04-14 的資料已被刪除")
-
-    assert "2020-04-14" in KNOWN_BAD_PRICE_DATES
-    assert row[0] == pytest.approx(510.0), (
-        "2020-04-14 的台積電收盤價已不是 510.0，該日的錯誤資料似乎已修正——"
-        "請把它從 `KNOWN_BAD_PRICE_DATES` 移除，讓護欄重新涵蓋那兩天。"
     )

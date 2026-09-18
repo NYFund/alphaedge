@@ -14,7 +14,7 @@
 
 | Skill | 觸發時機 | 對應 Cursor Rule |
 |-------|----------|------------------|
-| [`manage-backlog`](.claude/skills/manage-backlog/SKILL.md) | 新增／更新 `backlog/**` 文件與 `index.md` | — |
+| [`manage-backlog`](.claude/skills/manage-backlog/SKILL.md) | 新增／更新 `backlog/**` 文件與 `index.md` | `.cursor/skills/manage-backlog/SKILL.md` |
 | [`develop-strategy`](.claude/skills/develop-strategy/SKILL.md) | 新增／修改 `core/strategies/{stock,futures}/` 策略 | `.cursor/rules/strategy-development-sdd.mdc` |
 | [`commit-push-merge`](.claude/skills/commit-push-merge/SKILL.md) | 使用者要求「commit + push + merge」 | `.cursor/skills/commit-push-merge/SKILL.md`、`.cursor/rules/commit-message-zh.mdc` |
 
@@ -141,7 +141,7 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 | 模組 / 檔案 | `snake_case` | `stock_price_api.py` |
 | 類別 | `PascalCase`，資料 API 結尾 `API`、清洗器 `Cleaner`、更新器 `Updater`、爬蟲 `Crawler`、管理器 `Manager` | `StockChipAPI`、`StockTickCleaner` |
 | 函式 / 變數 | `snake_case`；查詢類前綴 `get_`、設定類 `setup_`、訊號判斷 `check_*_signal`、計算 `calculate_` | `get_stock_price()`、`check_open_signal()` |
-| 模組私有 | 前綴底線 | `_ridge_fit_predict()`、`_PROJECT_ROOT` |
+| 模組私有 | 前綴底線 | `_drop_explained()`、`_PROJECT_ROOT` |
 | 常數 | `UPPER_SNAKE_CASE`，策略參數放 class 層級常數並附中文單位註解 | `MIN_VOLUME_LOTS: int = 5000  # 最小成交量（張）` |
 | 策略類別 | 類別名即策略識別名稱，需與 `run.py --strategy` 對應 | `MomentumStrategy1` |
 

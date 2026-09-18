@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from core.pipeline.tw.cleaners.stock_dividend_cleaner import StockDividendCleaner
+from core.pipeline.utils.exceptions import ColumnLayoutError
 
 """
 除權除息計算結果表清洗測試
@@ -255,12 +256,18 @@ def test_invalid_price_rows_are_dropped(cleaner: StockDividendCleaner) -> None:
     assert df["還原係數"].notna().all()
 
 
-def test_unexpected_column_count_returns_none(cleaner: StockDividendCleaner) -> None:
-    """來源版面改制（欄位數不符）時回傳 None，不讓錯位資料入庫"""
+def test_unexpected_column_count_raises(cleaner: StockDividendCleaner) -> None:
+    """
+    來源版面改制（欄位數不符）時拋例外，不讓錯位資料入庫
+
+    **不回 None**：除權息表每輪重掃整個區間，回 None 與「這段期間沒有除權息」
+    長得一樣，更新會無聲地停止——而除權息正是還原價的輸入。
+    """
 
     raw: pd.DataFrame = read_twse_raw().drop(columns=[14])
 
-    assert cleaner.clean_twse_dividend(raw, file_name="twse") is None
+    with pytest.raises(ColumnLayoutError):
+        cleaner.clean_twse_dividend(raw, file_name="twse")
 
 
 def test_csv_written_to_downloads_dir(

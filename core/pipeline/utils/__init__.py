@@ -7,6 +7,7 @@ from .constant import (
     UpdateStatus,
 )
 from .exceptions import (
+    CleanFailureError,
     ColumnLayoutError,
     DataLoadError,
     FinMindError,
