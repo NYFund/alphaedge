@@ -30,7 +30,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 映像大小約 core 2.9 GB（其中 chromium 與 shioaji 佔大宗）、frontend 0.9 GB。
 
 **已知限制**：`frontend/app.py` 仍使用 Streamlit 已棄用的 `use_container_width` 參數（執行時會印棄用警告），
-而 `frontend/requirements.txt` 只釘下限 `streamlit>=1.40`；Streamlit 移除該參數後，重建的前端映像會在渲染表格與圖表時出錯，屆時改用 `width="stretch"`。
+而 `frontend/requirements.txt` 只釘下限 `streamlit>=1.40`；Streamlit 移除該參數後，重建的前端映像會在渲染表格與圖表時出錯，屆時改用 `width="stretch"`。待辦見 [docs 已載明但未實作的缺口盤點](../../backlog/docs已載明但未實作的缺口盤點.md) S3。
 
 ## 2) 準備資料與環境檔
 

@@ -38,6 +38,7 @@ graph TB
     subgraph data_layer ["資料與流程層"]
         API["core/api"]
         Adapters["core/adapters"]
+        DAO["core/dao<br/>（SQL／連線／交易）"]
         Pipeline["core/pipeline"]
         DB["data/db"]
         Data["data/downloads"]
@@ -70,12 +71,14 @@ graph TB
     BTModels --> Models
     Feed --> API
     Feed --> Adapters
-    API --> DB
+    API --> DAO
+    DAO --> DB
     Adapters --> API
     API --> Config
+    DAO --> Config
+    Pipeline --> DAO
     Pipeline --> Config
     Tasks --> Pipeline
-    Pipeline --> DB
     Pipeline --> Data
     Report --> Results
     Results --> FrontendService
@@ -91,13 +94,13 @@ graph TB
 一次回測跑一個（市場, 商品）組合，由策略基底宣告、`factory.py` 分派；方向（LONG／SHORT）與商品類別是兩條獨立的軸，
 記帳一律看每一張訂單的 `position_type`，策略的 `allowed_directions` 只是方向白名單。
 
-表中的資料區間是 2026-09-15 盤點 `data/db` 的結果，更新資料後會跟著變動。
+表中的資料區間是 2026-09-17 盤點 `data/db` 的結果，更新資料後會跟著變動。
 
 | 市場 × 商品 | 狀態 | 範圍與資料區間 | K 棒級別 | 方向 | 策略基底 |
 | ----------- | ---- | -------------- | -------- | ---- | -------- |
-| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-15（最新交易日 2,392 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-14 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
-| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；更新至 2026-09-01～09-03<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
-| 股票期貨／ETF 期貨 | ❌ 目前無法回測 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），快照只有 2026-08-29～09-02；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料<br>**程式阻斷**：`FuturesPositionManager.open_position()` 以 `FUTURES_MULTIPLIER` 查乘數，股期不在表內，**第一筆開倉就 `KeyError`**，查表與比率兩種保證金模式皆然（DataFeed 已改查標的池，部位管理層沒接上）<br>**其餘缺口**：個股期貨保證金在比例表，查表模式只讀金額表，開倉會中止（ETF 期貨 NYF 在金額表，2020-07-22 起）；契約單位只回溯到 2026-08-29 的快照 | 僅 `DAY` | 設計上同台指數期貨，實際開倉即中斷 | `BaseFuturesStrategy` |
+| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-16（最新交易日 2,393 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-16 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
+| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-16<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
+| 股票期貨／ETF 期貨 | ❌ 目前無法回測 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29、09-02、09-16 共 3 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料<br>**程式阻斷**：`FuturesPositionManager.open_position()` 以 `FUTURES_MULTIPLIER` 查乘數，股期不在表內，**第一筆開倉就 `KeyError`**，查表與比率兩種保證金模式皆然（DataFeed 的 `resolve_multiplier()` 已改查標的池，部位管理層沒接上；待辦見 [docs 已載明但未實作的缺口盤點](backlog/docs已載明但未實作的缺口盤點.md)）<br>**其餘缺口**：個股期貨保證金在比例表，查表模式只讀金額表，開倉會中止（ETF 期貨 NYF 在金額表，2020-07-22 起）；契約單位只回溯到 2026-08-29 的首份快照 | 僅 `DAY` | 設計上同台指數期貨，實際開倉即中斷 | `BaseFuturesStrategy` |
 | 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
 
 > - 多空並存要宣告 `allowed_directions = {LONG, SHORT}`；做多當沖需自行宣告 `bar_execution_order = OPEN_THEN_CLOSE`。
@@ -119,7 +122,7 @@ graph TB
 
 | 模組            | 說明                                                                  |
 | --------------- | --------------------------------------------------------------------- |
-| `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
+| `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、資料存取層、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
 | `tasks/`        | 資料維護與資料庫更新腳本                                              |
 | `tests/`        | 單元／整合測試與回測回歸線（`tests/backtest/`）                       |
@@ -362,7 +365,11 @@ AlphaEdge/
 │   │   ├── ridge.py           # 研究版與成品版共用的 ridge 訊號（刻意為模組，不是子套件）
 │   │   ├── stock/             # BaseStockStrategy ＋ 各支台股策略
 │   │   └── futures/           # BaseFuturesStrategy 與台期貨策略
-│   ├── api/                   # 資料存取 API（SQLite／DolphinDB）
+│   ├── api/                   # 資料查詢介面與業務規則（不寫 SQL，以 conn= 建 DAO）
+│   ├── dao/                   # 資料存取層：SQL、連線與交易只寫在這裡
+│   │   ├── base.py            # BaseDAO：owns_conn、table_exists、savepoint、寫入方法
+│   │   ├── connection.py      # connect_sqlite() 單一入口（含唯讀模式）
+│   │   └── tw/                # 一張表（或一組緊密相關的表）一個 DAO
 │   ├── adapters/              # 資料介接 / 整合層
 │   │   └── tw/               # StockQuoteAdapter（日線/Tick → StockQuote）、FuturesQuoteAdapter
 │   ├── managers/              # 倉位管理器（base/ ＋ stock/ ＋ futures/）

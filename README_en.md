@@ -38,6 +38,7 @@ graph TB
     subgraph data_layer ["Data & Pipeline"]
         API["core/api"]
         Adapters["core/adapters"]
+        DAO["core/dao<br/>(SQL / connections / transactions)"]
         Pipeline["core/pipeline"]
         DB["data/db"]
         Data["data/downloads"]
@@ -70,12 +71,14 @@ graph TB
     BTModels --> Models
     Feed --> API
     Feed --> Adapters
-    API --> DB
+    API --> DAO
+    DAO --> DB
     Adapters --> API
     API --> Config
+    DAO --> Config
+    Pipeline --> DAO
     Pipeline --> Config
     Tasks --> Pipeline
-    Pipeline --> DB
     Pipeline --> Data
     Report --> Results
     Results --> FrontendService
@@ -92,13 +95,13 @@ graph TB
 
 Each backtest runs one (market, instrument) combination, declared by the strategy base and dispatched by `factory.py`. Direction (LONG / SHORT) and instrument type are independent axes: accounting always follows each order's `position_type`, and the strategy's `allowed_directions` is only a direction whitelist.
 
-Data ranges below reflect an inventory of `data/db` taken on 2026-09-15 and will move as the data is updated.
+Data ranges below reflect an inventory of `data/db` taken on 2026-09-17 and will move as the data is updated.
 
 | Market × Instrument | Status | Scope and data range | Bar scale | Directions | Strategy base |
 | ------------------- | ------ | -------------------- | --------- | ---------- | ------------- |
-| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-09-15 (2,392 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-09-14 | `DAY`, `TICK` (ticks live in DolphinDB, not `data/db`; needs the `[tick]` extra) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
-| TW index futures (`TW` × `FUTURE`) | ✅ Supported | TX, MTX, TMF, TE, ZEF, TF, ZFF; automatic contract roll<br>**Day-session prices** (`DAY`): TX / MTX / TE / TF from 2015-01-05 (backfill start), ZEF from 2021-06-28, ZFF from 2021-12-06, TMF from 2024-07-29 (listing dates); updated to 2026-09-01 – 09-03<br>**Night-session prices** (`NIGHT` / `COMBINED`): TX / MTX from 2017-05-16, TE from 2018-11-20, ZEF from 2021-06-29, TMF from 2024-07-30; **TF / ZFF only from 2025-06-24**<br>**Margin** (lookup mode): TX / MTX from 2020-03-13, TE / TF from 2020-07-22, ZEF from 2021-08-12, ZFF from 2022-01-26, TMF from 2024-08-09 | `DAY` only | **LONG / SHORT**: the same margin trading, daily mark-to-market and margin call; no borrow availability or borrow fees<br>Long and short can coexist across contracts; opposite positions in the same contract are rejected | `BaseFuturesStrategy` |
-| Stock futures / ETF futures | ❌ Not backtestable yet | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), snapshots only for 2026-08-29 – 09-02; prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session)<br>**Code blocker**: `FuturesPositionManager.open_position()` looks up the multiplier in `FUTURES_MULTIPLIER`, which has no stock futures, so **the first open raises `KeyError`** in both lookup and ratio margin modes (the DataFeed already reads the universe; the position manager does not)<br>**Other gaps**: single-stock futures margin lives in the rate table while lookup mode only reads the amount table, so opens abort (ETF future NYF is in the amount table from 2020-07-22); contract sizes only go back to the 2026-08-29 snapshot | `DAY` only | Designed like TW index futures, but aborts on the first open | `BaseFuturesStrategy` |
+| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-09-16 (2,393 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-09-16 | `DAY`, `TICK` (ticks live in DolphinDB, not `data/db`; needs the `[tick]` extra) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
+| TW index futures (`TW` × `FUTURE`) | ✅ Supported | TX, MTX, TMF, TE, ZEF, TF, ZFF; automatic contract roll<br>**Day-session prices** (`DAY`): TX / MTX / TE / TF from 2015-01-05 (backfill start), ZEF from 2021-06-28, ZFF from 2021-12-06, TMF from 2024-07-29 (listing dates); all products updated to 2026-09-16<br>**Night-session prices** (`NIGHT` / `COMBINED`): TX / MTX from 2017-05-16, TE from 2018-11-20, ZEF from 2021-06-29, TMF from 2024-07-30; **TF / ZFF only from 2025-06-24**<br>**Margin** (lookup mode): TX / MTX from 2020-03-13, TE / TF from 2020-07-22, ZEF from 2021-08-12, ZFF from 2022-01-26, TMF from 2024-08-09 | `DAY` only | **LONG / SHORT**: the same margin trading, daily mark-to-market and margin call; no borrow availability or borrow fees<br>Long and short can coexist across contracts; opposite positions in the same contract are rejected | `BaseFuturesStrategy` |
+| Stock futures / ETF futures | ❌ Not backtestable yet | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), universe snapshots for 2026-08-29, 09-02 and 09-16 (3 in total); prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session)<br>**Code blocker**: `FuturesPositionManager.open_position()` looks up the multiplier in `FUTURES_MULTIPLIER`, which has no stock futures, so **the first open raises `KeyError`** in both lookup and ratio margin modes (the DataFeed's `resolve_multiplier()` already reads the universe; the position manager does not — tracked in [backlog/docs已載明但未實作的缺口盤點.md](backlog/docs已載明但未實作的缺口盤點.md))<br>**Other gaps**: single-stock futures margin lives in the rate table while lookup mode only reads the amount table, so opens abort (ETF future NYF is in the amount table from 2020-07-22); contract sizes only go back to the first snapshot on 2026-08-29 | `DAY` only | Designed like TW index futures, but aborts on the first open | `BaseFuturesStrategy` |
 | US market, options | ❌ Not supported | `Market.US` and `InstrumentType.OPTION` are defined only; the factory raises `ValueError` | — | — | — |
 
 > - Holding both directions requires `allowed_directions = {LONG, SHORT}`; a LONG intraday strategy must declare `bar_execution_order = OPEN_THEN_CLOSE` itself.
@@ -121,7 +124,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 
 | Module          | Description                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `core/`         | Core trading domain code (strategies, managers, models, adapters, API, ETL, backtest engine; outputs land in the top-level `results/`) |
+| `core/`         | Core trading domain code (strategies, managers, models, adapters, API, data access layer, ETL, backtest engine; outputs land in the top-level `results/`) |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
 | `tasks/`        | Data maintenance and database update scripts                                                                                    |
 | `tests/`        | Unit/integration tests and the backtest regression lines (`tests/backtest/`)                                                    |
@@ -371,7 +374,11 @@ AlphaEdge/
 │   │   ├── ridge.py           # ridge signal shared by research and production (a module on purpose)
 │   │   ├── stock/             # BaseStockStrategy + concrete stock strategies
 │   │   └── futures/           # BaseFuturesStrategy + TW futures strategies
-│   ├── api/                   # data access APIs (SQLite / DolphinDB)
+│   ├── api/                   # query interfaces and business rules (no SQL; builds DAOs with conn=)
+│   ├── dao/                   # data access layer: SQL, connections and transactions live only here
+│   │   ├── base.py            # BaseDAO: owns_conn, table_exists, savepoint, write methods
+│   │   ├── connection.py      # connect_sqlite() single entry point (read-only mode included)
+│   │   └── tw/                # one DAO per table (or per tightly related group)
 │   ├── adapters/              # data adapters / integrations
 │   │   └── tw/                # StockQuoteAdapter (day/tick → StockQuote), FuturesQuoteAdapter
 │   ├── managers/              # position managers (base/ + stock/ + futures/)
