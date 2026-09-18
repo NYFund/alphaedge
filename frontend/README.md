@@ -6,6 +6,8 @@
 
 - 側欄選擇 `results/<StrategyName>/` 策略資料夾
 - **總覽**：策略摘要、關鍵指標、多空統計、事件計數；期貨報表（以報表欄位判斷）另外顯示保證金與口數曝險
+  - 指標**一律讀 `<策略>_metrics_summary.csv`**（Sharpe／Sortino／MDD／波動度／獲利因子／勝敗比／IR），前端不自行計算任何公式，因此也完全不 import `core`
+  - 該檔是新版回測才有的產出；舊結果資料夾會顯示 `N/A` 並提示重跑回測
 - **交易明細**：可依股票代號／契約篩選
 - **圖表**：互動圖（資產曲線、每日損益）
 - **圖片**：reporter 輸出的 PNG（若存在）
@@ -19,7 +21,7 @@
 python -m pip install -e ".[frontend]"
 ```
 
-Docker 映像**不安裝本專案**：只 COPY `frontend/` 與 `core/backtest/analysis/risk_metrics.py`，
+Docker 映像**不安裝本專案**：只 COPY `frontend/` 與 `core/backtest/analysis/performance_metrics.py`，
 相依一律來自 `frontend/requirements.txt`（streamlit、pandas、plotly）。
 
 ```bash

@@ -44,6 +44,11 @@ class BaseBacktestReporter(ABC):
         pass
 
     @abstractmethod
+    def generate_metrics_summary(self) -> pd.DataFrame:
+        """整體績效指標（長表；公式一律走 `analysis/performance_metrics.py`）"""
+        pass
+
+    @abstractmethod
     def plot_balance_curve(self) -> None:
         """計算並繪製總資金曲線（總資金隨時間變化）"""
         pass

@@ -49,6 +49,10 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.api", 3, "資料層", False),
     ("core.adapters", 3, "資料層", False),
     ("core.pipeline", 3, "資料層（ETL）", False),
+    # 純公式檔，**只相依 `math` 與 `typing`**（見 `analysis/__init__.py` 的說明）：
+    # 它比 `core.utils` 還低，任何人都可以 import 它而不會拉進任何相依。
+    # 報表與（日後的）策略都要呼叫同一份公式，故必須擺在所有呼叫端之下
+    ("core.backtest.analysis", 1, "共用層／績效公式", False),
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
     ("core.backtest.report", 4, "引擎層／報表", False),

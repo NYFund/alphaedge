@@ -3,12 +3,17 @@ from typing import List, Optional
 
 import pytest
 
-from core.backtest.analysis.risk_metrics import (
+from core.backtest.analysis.performance_metrics import (
     TRADING_DAYS_PER_YEAR,
     compute_annualized_information_ratio,
     compute_annualized_sharpe,
     compute_annualized_sortino,
+    compute_annualized_volatility,
+    compute_drawdown_series,
+    compute_max_drawdown,
     compute_period_returns,
+    compute_profit_factor,
+    compute_win_loss_ratio,
 )
 
 """
@@ -191,3 +196,121 @@ def test_information_ratio_returns_none_without_tracking_error() -> None:
 
     assert compute_annualized_information_ratio([0.01, 0.02], [0.01, 0.02]) is None
     assert compute_annualized_information_ratio([0.01], [0.02]) is None
+
+
+# === 最大回撤 ===
+def test_max_drawdown_matches_hand_calculation() -> None:
+    """自高點 120 跌到 90 ＝ −25%，取最深的那一次"""
+
+    assert compute_max_drawdown([100.0, 120.0, 90.0, 110.0]) == pytest.approx(-25.0)
+
+
+def test_max_drawdown_is_measured_from_the_running_peak() -> None:
+    """
+    基準是**歷史最高**權益，不是起點
+
+    用起點當基準的話，一路上漲後的小回檔會算成 0，而那正是真實的回撤。
+    """
+
+    # 高點 200，之後跌到 150 ＝ −25%；若以起點 100 當基準會誤算成 +50%
+    assert compute_max_drawdown([100.0, 200.0, 150.0]) == pytest.approx(-25.0)
+
+
+def test_max_drawdown_is_zero_when_it_only_goes_up() -> None:
+    """從未回撤回 0.0——與「沒有資料」（None）是兩件事"""
+
+    assert compute_max_drawdown([100.0, 110.0, 120.0]) == 0.0
+    assert compute_max_drawdown([]) is None
+
+
+# === 年化波動度 ===
+def test_annualized_volatility_matches_hand_calculation() -> None:
+    """樣本標準差（ddof=1）× √252 × 100"""
+
+    returns: List[float] = [0.01, -0.01, 0.01, -0.01]
+    expected: float = 0.011547005383792515 * math.sqrt(TRADING_DAYS_PER_YEAR) * 100
+
+    assert compute_annualized_volatility(returns) == pytest.approx(expected, abs=0.01)
+
+
+def test_annualized_volatility_uses_the_sample_standard_deviation() -> None:
+    """
+    用樣本標準差（除以 n−1）不是母體標準差（除以 n）
+
+    母體公式會系統性低估波動度，樣本數少時低估得特別明顯。
+    """
+
+    returns: List[float] = [0.02, -0.02]
+    population: float = 0.02 * math.sqrt(TRADING_DAYS_PER_YEAR) * 100
+
+    # 兩筆樣本時，樣本標準差是母體標準差的 √2 倍
+    assert compute_annualized_volatility(returns) == pytest.approx(
+        population * math.sqrt(2), abs=0.01
+    )
+
+
+def test_annualized_volatility_returns_none_without_enough_samples() -> None:
+    """不足兩期沒有離散度可言"""
+
+    assert compute_annualized_volatility([0.01]) is None
+    assert compute_annualized_volatility([]) is None
+
+
+# === 獲利因子與勝敗比 ===
+def test_profit_factor_matches_hand_calculation() -> None:
+    """總獲利 18 ÷ |總虧損| 5 ＝ 3.6"""
+
+    assert compute_profit_factor([10.0, -5.0, 8.0]) == pytest.approx(3.6)
+
+
+def test_profit_factor_returns_none_without_losses() -> None:
+    """
+    沒有虧損筆數回 None，**不可回 0**
+
+    「從沒虧過」與「獲利因子為零」意思完全相反，用 0 表示會讓排序與門檻篩選
+    把最好的策略當成最差的。
+    """
+
+    assert compute_profit_factor([10.0, 8.0]) is None
+    assert compute_profit_factor([]) is None
+
+
+def test_win_loss_ratio_matches_hand_calculation() -> None:
+    """獲利 2 筆 ÷ 虧損 1 筆 ＝ 2.0"""
+
+    assert compute_win_loss_ratio([10.0, -5.0, 8.0]) == pytest.approx(2.0)
+
+
+def test_win_loss_ratio_ignores_break_even_trades() -> None:
+    """損益為 0 的筆數兩邊都不算——平盤出場既不算贏也不算輸"""
+
+    assert compute_win_loss_ratio([10.0, -5.0, 0.0]) == pytest.approx(1.0)
+
+
+def test_win_loss_ratio_returns_none_without_losses() -> None:
+    """零虧損筆數回 None，理由同獲利因子"""
+
+    assert compute_win_loss_ratio([10.0, 8.0]) is None
+    assert compute_win_loss_ratio([]) is None
+
+
+def test_max_drawdown_is_the_minimum_of_the_drawdown_series() -> None:
+    """
+    純量與序列是**同一條公式**
+
+    畫圖要整條序列、報表要最深的那一點；兩處各寫一次必然漂移——
+    MDD 曾經就有 reporter 與前端兩份實作，而且沒有任何測試盯住兩者一致。
+    """
+
+    equity: List[float] = [100.0, 120.0, 90.0, 110.0, 80.0]
+    series: List[float] = compute_drawdown_series(equity)
+
+    assert len(series) == len(equity)
+    assert series[0] == 0.0  # 起點必為 0（它自己就是當下的高點）
+    assert compute_max_drawdown(equity) == pytest.approx(round(min(series), 2))
+
+
+def test_drawdown_series_is_zero_before_any_peak_is_lost() -> None:
+    """一路上漲時整條序列都是 0"""
+
+    assert compute_drawdown_series([100.0, 110.0, 120.0]) == [0.0, 0.0, 0.0]

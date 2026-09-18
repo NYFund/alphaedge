@@ -149,7 +149,7 @@ sequenceDiagram
 | `core/backtest/report/base.py` | `BaseBacktestReporter`：報表介面與存檔工具 |
 | `core/backtest/report/reporter.py` | 台股報表：交易明細、多空統計、事件計數、五張圖、benchmark（`0050` 還原價）比較 |
 | `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、對標序列（連續合約優先，查不到退回近月拼接） |
-| `core/backtest/analysis/risk_metrics.py` | 風險調整後報酬的純函式；目前只有前端呼叫（Sharpe／Sortino），reporter 不計算這類指標 |
+| `core/backtest/analysis/performance_metrics.py` | 風險調整後報酬的純函式；目前只有前端呼叫（Sharpe／Sortino），reporter 不計算這類指標 |
 
 ---
 
@@ -162,6 +162,7 @@ sequenceDiagram
 | `<策略>_trading_report.csv` | 已平倉交易逐筆明細（含放空專屬的 `Borrow Fee`／`Interest`／`Margin`／`Holding Days`／`ROI on Capital`） | `generate_trading_report()` |
 | `<策略>_direction_summary.csv` | 多空分開的勝率、損益、成本統計 | `generate_direction_summary()` |
 | `<策略>_event_report.csv` | 事件計數（強制回補、斷頭、拒單、漲停回補失敗等） | `generate_event_report()` |
+| `<策略>_metrics_summary.csv` | 整體績效指標（`Metric`／`Value`／`Note` **長表**）：勝率、勝敗比、獲利因子、MDD、年化波動度、Sharpe、Sortino、Information Ratio 與權益口徑。**前端只讀這一份**，不自行重算 | `generate_metrics_summary()` |
 | `<策略>_daily_equity.csv` | **含未實現損益**的逐日權益序列 | `Backtester.snapshot_daily_equity()` |
 | `<策略>_balance_curve.png` | 權益曲線 | `plot_balance_curve()` |
 | `<策略>_networth.png` | 策略 vs `0050` 淨值 | `plot_balance_and_benchmark_curve()` |

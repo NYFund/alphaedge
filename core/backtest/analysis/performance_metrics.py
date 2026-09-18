@@ -186,3 +186,135 @@ def compute_annualized_information_ratio(
         return None
 
     return round(mean / tracking_error * math.sqrt(periods_per_year), 4)
+
+
+def compute_drawdown_series(equity_curve: Sequence[float]) -> List[float]:
+    """
+    - Description:
+        逐點回撤序列（%，負值）：`當前權益 / 歷史最高權益 − 1`
+
+        **與 `compute_max_drawdown()` 是同一條公式**：畫圖要的是整條序列、
+        報表要的是最深的那一點，兩處各寫一次必然漂移——MDD 曾經就有
+        reporter 與前端兩份實作，而且沒有任何測試盯住兩者一致。
+
+        歷史高點為 0 或負數時該點記為 0：回撤比例在那裡沒有定義
+        （與 `compute_period_returns()` 同一個理由）。
+    - Parameters:
+        - equity_curve: Sequence[float]
+            權益序列
+    - Return:
+        - List[float]
+            與輸入等長的回撤序列（%，負值）
+    """
+
+    series: List[float] = []
+    peak: float = equity_curve[0] if equity_curve else 0.0
+
+    for value in equity_curve:
+        peak = max(peak, value)
+        series.append(0.0 if peak <= 0 else (value / peak - 1) * 100)
+
+    return series
+
+
+def compute_max_drawdown(equity_curve: Sequence[float]) -> Optional[float]:
+    """
+    - Description:
+        最大回撤（%，負值）＝ `compute_drawdown_series()` 的最小值
+
+        **回傳負值**：−12.5 表示曾自高點下跌 12.5%，正負號本身帶著方向，
+        呼叫端不必再猜要不要加負號。
+    - Parameters:
+        - equity_curve: Sequence[float]
+            權益序列
+    - Return:
+        - Optional[float]
+            最大回撤（%，負值）；序列為空時為 None。**從未回撤時回 0.0**
+            ——那與「沒有資料」是兩件事
+    """
+
+    if not equity_curve:
+        return None
+
+    return round(min(compute_drawdown_series(equity_curve)), 2)
+
+
+def compute_annualized_volatility(
+    returns: Sequence[float],
+    periods_per_year: int = TRADING_DAYS_PER_YEAR,
+) -> Optional[float]:
+    """
+    - Description:
+        年化波動度（%）
+
+        `樣本標準差（ddof=1） × √periods_per_year × 100`。
+        **用樣本標準差不是母體標準差**：手上的報酬序列是樣本，母體公式
+        （除以 n）會系統性低估波動度，樣本數少時低估得特別明顯。
+    - Parameters:
+        - returns: Sequence[float]
+            逐期報酬率（小數）
+        - periods_per_year: int
+            一年幾期
+    - Return:
+        - Optional[float]
+            年化波動度（%）；樣本不足兩期時為 None
+    """
+
+    if len(returns) < 2:
+        return None
+
+    mean: float = sum(returns) / len(returns)
+    variance: float = sum((value - mean) ** 2 for value in returns) / (len(returns) - 1)
+
+    return round(math.sqrt(variance) * math.sqrt(periods_per_year) * 100, 2)
+
+
+def compute_profit_factor(pnls: Sequence[float]) -> Optional[float]:
+    """
+    - Description:
+        獲利因子 ＝ 總獲利 ÷ |總虧損|
+
+        > 1 代表整體獲利。**沒有虧損筆數時回 None 而不是 0 或無限大**：
+        「從沒虧過」與「獲利因子為零」意思完全相反，用 0 表示會讓排序與
+        門檻篩選把最好的策略當成最差的。
+    - Parameters:
+        - pnls: Sequence[float]
+            逐筆已實現損益
+    - Return:
+        - Optional[float]
+            獲利因子；沒有虧損筆數（含空序列）時為 None
+    """
+
+    gross_profit: float = sum(value for value in pnls if value > 0)
+    gross_loss: float = sum(-value for value in pnls if value < 0)
+
+    if gross_loss <= 0:
+        return None
+
+    return round(gross_profit / gross_loss, 4)
+
+
+def compute_win_loss_ratio(pnls: Sequence[float]) -> Optional[float]:
+    """
+    - Description:
+        勝敗比 ＝ 獲利筆數 ÷ 虧損筆數
+
+        **與勝率是兩個指標**：勝率是「贏的比例」，勝敗比是「贏幾次輸一次」。
+        損益為 0 的筆數不計入任何一邊（平盤出場既不算贏也不算輸）。
+
+        零虧損筆數時回 None，理由同 `compute_profit_factor()`。
+    - Parameters:
+        - pnls: Sequence[float]
+            逐筆已實現損益
+    - Return:
+        - Optional[float]
+            勝敗比；沒有虧損筆數（含空序列）時為 None
+    """
+
+    wins: int = sum(1 for value in pnls if value > 0)
+    losses: int = sum(1 for value in pnls if value < 0)
+
+    if losses == 0:
+        return None
+
+    return round(wins / losses, 4)

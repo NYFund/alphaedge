@@ -8,8 +8,6 @@ from frontend.services.report_loader import (
     BacktestReport,
     build_equity_series,
     compute_daily_pnl,
-    compute_daily_returns,
-    compute_max_drawdown,
     extract_starting_capital,
     load_backtest_report,
     read_daily_equity,
@@ -49,7 +47,6 @@ EXPECTED_WIN_RATE: float = 59.76
 EXPECTED_TOTAL_PNL: float = 3811419.0
 EXPECTED_AVG_ROI: float = 0.82
 EXPECTED_STARTING_CAPITAL: float = 1000000.0
-EXPECTED_MDD: float = -11.43
 
 
 @pytest.fixture
@@ -191,21 +188,6 @@ def test_equity_series_starts_at_initial_capital(
     assert len(equity) == len(daily_equity_df) + 1
 
 
-def test_max_drawdown_from_daily_equity(daily_equity_df: pd.DataFrame) -> None:
-    """MDD 走盯市權益；已實現口徑會把持倉期間的逆勢整段抹平"""
-
-    equity: pd.Series = build_equity_series(daily_equity_df, EXPECTED_STARTING_CAPITAL)
-
-    assert compute_max_drawdown(equity) == pytest.approx(EXPECTED_MDD)
-
-
-def test_max_drawdown_is_none_without_equity() -> None:
-    """沒有逐日權益時回 None 而不是 0——後者會看起來像「從沒回撤過」"""
-
-    assert compute_max_drawdown(pd.Series(dtype=float)) is None
-    assert build_equity_series(pd.DataFrame()).empty
-
-
 def test_daily_pnl_sums_to_total_gain(daily_equity_df: pd.DataFrame) -> None:
     """逐日損益加總 ＝ 期末權益 − 初始資金"""
 
@@ -215,24 +197,6 @@ def test_daily_pnl_sums_to_total_gain(daily_equity_df: pd.DataFrame) -> None:
     assert float(daily_pnl.sum()) == pytest.approx(
         float(equity.iloc[-1]) - EXPECTED_STARTING_CAPITAL
     )
-
-
-def test_daily_returns_are_per_day_not_per_trade(
-    daily_equity_df: pd.DataFrame, trading_df: pd.DataFrame
-) -> None:
-    """
-    風險指標的樣本是**日報酬**，不是每筆交易的報酬
-
-    本 fixture 有 1,459 個交易日但只有 631 個平倉日；拿後者乘 √252 年化，
-    等於宣稱「一年有 252 筆交易」。
-    """
-
-    equity: pd.Series = build_equity_series(daily_equity_df, EXPECTED_STARTING_CAPITAL)
-    returns: pd.Series = compute_daily_returns(equity)
-
-    exit_days: int = trading_df["Exit Date"].nunique()
-    assert len(returns) == len(daily_equity_df)
-    assert len(returns) > exit_days
 
 
 # === 一律 Exit Date 排序 ===

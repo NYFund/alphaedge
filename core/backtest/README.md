@@ -311,13 +311,25 @@ for stock_quote, ref_price, open_volume in self.sizer.size(
 
 ## 績效指標
 
-正式回測輸出（報表 CSV 與圖表）由 `report/reporter.py` 產生，reporter 目前**不計算**
-Sharpe／Sortino／Information Ratio 等風險調整後報酬。
+整體指標由 reporter 輸出成 `<策略>_metrics_summary.csv`（`Metric`／`Value`／`Note`
+**長表**），**不開前端也看得到**：勝率、勝敗比、獲利因子、平均 ROI、平均持有天數、
+最大回撤、年化波動度、Sharpe、Sortino、Information Ratio 與權益口徑。
 
-這類公式集中在 `analysis/risk_metrics.py`（純函式），目前只有前端
-（`frontend/services/metrics.py`）呼叫它算 Sharpe 與 Sortino；Information Ratio 的函式已備好，
-但報表沒有輸出基準日報酬，前端無從計算。日後要讓報表輸出這些指標，一律呼叫
-`risk_metrics.py`，不要在 reporter 另寫一份。
+**公式只有一份**，全部在 `analysis/performance_metrics.py`（純函式，只相依 `math`
+與 `typing`）。前端一律讀這份 CSV、**不自行重算任何一條公式**——同一個指標算在兩個
+地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對（MDD 曾經就有
+reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點同樣共用
+`compute_drawdown_series()`。
+
+兩種情況會讓指標**留空**，`Note` 欄一律寫明原因：
+
+| 情況 | 留空的指標 | 原因 |
+|------|------------|------|
+| `Equity Basis` 為 `Realized only`（沒有 `daily_equity`） | 年化波動度、Sharpe、Sortino、Information Ratio | 該口徑只在平倉日有節點，拿逐筆報酬乘 √252 等於宣稱一年有 252 筆交易 |
+| 期貨對標退回近月拼接 | Information Ratio | 換月接點的基準日報酬含展期假跳空，逐日相減會被那幾天帶偏 |
+
+**留空不是 0**：獲利因子與勝敗比在「沒有虧損筆數」時同樣留空——「從沒虧過」與
+「因子為零」意思完全相反。
 
 回測系統會自動計算以下績效指標：
 

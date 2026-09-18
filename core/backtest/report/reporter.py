@@ -7,6 +7,18 @@ import plotly.graph_objects as go
 from loguru import logger
 
 from core.api.tw.stock_price_api import StockPriceAPI
+from core.backtest.analysis.performance_metrics import (
+    TRADING_DAYS_PER_YEAR,
+    compute_annualized_information_ratio,
+    compute_annualized_sharpe,
+    compute_annualized_sortino,
+    compute_annualized_volatility,
+    compute_drawdown_series,
+    compute_max_drawdown,
+    compute_period_returns,
+    compute_profit_factor,
+    compute_win_loss_ratio,
+)
 from core.backtest.report.base import BaseBacktestReporter
 from core.config import resolve_show_figures
 from core.models.stock.record import StockTradeRecord
@@ -276,6 +288,236 @@ class StockBacktestReporter(BaseBacktestReporter):
         self.save_report(df, f"{self.strategy.strategy_name}_event_report.csv")
         return df
 
+    # 指標報表的欄位；**長表**而非寬表，新增指標不必改欄位結構
+    METRICS_COLUMNS: List[str] = ["Metric", "Value", "Note"]
+
+    def generate_metrics_summary(self) -> pd.DataFrame:
+        """
+        - Description:
+            輸出整體績效指標（`<策略>_metrics_summary.csv`）
+
+            **不開前端也看得到，且只有一份計算**：Sharpe／Sortino／MDD 原本只存在
+            於前端與 MDD 圖，公式散在兩處。本方法一律呼叫
+            `core/backtest/analysis/performance_metrics.py` 的純函式。
+
+            **格式是長表**（`Metric`／`Value`／`Note`）：新增指標不必改欄位結構，
+            前端也能逐列直接顯示；`Note` 放口徑說明，避免兩種口徑的數字被混讀。
+
+            **`Equity Basis` 為 `Realized only` 時，波動度與 Sharpe／Sortino 留空**：
+            那個口徑只在平倉那天才有節點，拿它的「逐筆報酬」乘 √252 等於宣稱
+            一年有 252 筆交易。留空比給一個看起來合理的錯數字好。
+        - Return:
+            - pd.DataFrame
+                長表格式的指標；沒有已平倉交易時為空表
+        """
+
+        if self.trading_report is None or self.trading_report.empty:
+            logger.warning("[Metrics] 沒有已平倉交易，略過整體績效指標")
+            return pd.DataFrame(columns=self.METRICS_COLUMNS)
+
+        equity: pd.Series
+        basis: str
+        equity, basis = self.get_equity_series()
+
+        rows: List[Dict[str, Any]] = self.build_trade_metrics()
+        rows.extend(self.build_equity_metrics(equity, basis))
+        rows.extend(self.build_benchmark_metrics(equity, basis))
+        rows.append({"Metric": "Equity Basis", "Value": basis, "Note": ""})
+
+        df: pd.DataFrame = pd.DataFrame(rows, columns=self.METRICS_COLUMNS)
+        self.save_report(df, f"{self.strategy.strategy_name}_metrics_summary.csv")
+        return df
+
+    def build_trade_metrics(self) -> List[Dict[str, Any]]:
+        """
+        逐筆交易統計
+
+        **整體勝率與 `Avg ROI` 必須等於 `direction_summary` 依 `Trades` 加權合併
+        的結果**：同一個數字在兩張報表上不一致，讀的人無從判斷哪個對。
+        """
+
+        pnls: List[float] = self.trading_report["Realized PnL"].astype(float).tolist()
+        wins: int = sum(1 for value in pnls if value > 0)
+        losses: int = sum(1 for value in pnls if value < 0)
+
+        return [
+            {"Metric": "Trades", "Value": len(pnls), "Note": ""},
+            {"Metric": "Win Count", "Value": wins, "Note": ""},
+            {
+                "Metric": "Loss Count",
+                "Value": losses,
+                "Note": "平盤出場不計入勝敗任一邊",
+            },
+            {
+                "Metric": "Win Rate (%)",
+                "Value": round(wins / len(pnls) * 100, 2),
+                "Note": "",
+            },
+            {
+                "Metric": "Win/Loss Ratio",
+                "Value": compute_win_loss_ratio(pnls),
+                "Note": "獲利筆數 ÷ 虧損筆數；零虧損筆數時留空",
+            },
+            {
+                "Metric": "Profit Factor",
+                "Value": compute_profit_factor(pnls),
+                "Note": "總獲利 ÷ |總虧損|；零虧損筆數時留空（不是 0）",
+            },
+            {
+                "Metric": "Avg ROI (%)",
+                "Value": round(self.trading_report["ROI"].astype(float).mean(), 2),
+                "Note": self.get_avg_roi_note(),
+            },
+            {
+                "Metric": "Avg Holding Days",
+                "Value": round(
+                    self.trading_report["Holding Days"].astype(float).mean(), 2
+                ),
+                "Note": "曆日，非交易日",
+            },
+            {"Metric": "Total PnL", "Value": round(sum(pnls), 2), "Note": ""},
+        ]
+
+    def build_equity_metrics(
+        self, equity: pd.Series, basis: str
+    ) -> List[Dict[str, Any]]:
+        """
+        權益序列衍生的指標
+
+        口徑為 `Realized only` 時，以日報酬為樣本的三項一律留空並在 `Note`
+        說明原因——留空比給一個看起來合理的錯數字好。
+        """
+
+        values: List[float] = equity.astype(float).tolist()
+        returns: List[float] = compute_period_returns(values)
+
+        skip: bool = basis == self.EQUITY_BASIS_REALIZED_ONLY
+        skip_note: str = (
+            f"{self.EQUITY_BASIS_REALIZED_ONLY} 口徑只在平倉日有節點，"
+            f"以它算日頻指標等於宣稱一年有 {TRADING_DAYS_PER_YEAR} 筆交易"
+        )
+
+        return [
+            {
+                "Metric": "Final Equity",
+                "Value": round(values[-1], 2) if values else None,
+                "Note": basis,
+            },
+            {
+                "Metric": "Max Drawdown (%)",
+                "Value": compute_max_drawdown(values),
+                "Note": f"自歷史高點的最大跌幅（負值）；口徑 {basis}",
+            },
+            {
+                "Metric": "Annualized Volatility (%)",
+                "Value": None if skip else compute_annualized_volatility(returns),
+                "Note": skip_note if skip else "",
+            },
+            {
+                "Metric": "Sharpe Ratio",
+                "Value": None if skip else compute_annualized_sharpe(returns),
+                "Note": skip_note if skip else "",
+            },
+            {
+                "Metric": "Sortino Ratio",
+                "Value": None if skip else compute_annualized_sortino(returns),
+                "Note": skip_note if skip else "",
+            },
+        ]
+
+    def build_benchmark_metrics(
+        self, equity: pd.Series, basis: str
+    ) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            對標相關指標：`Benchmark` 與 `Information Ratio`
+
+            **兩條序列一定要先依日期對齊**：`compute_annualized_information_ratio()`
+            對長度不同直接 `ValueError`，而長度湊得起來不代表日期對得起來
+            ——自作主張對齊只會讓錯位的比較看起來很正常。策略首日沒有對應的
+            基準報酬，自然落在交集之外。
+
+            `Realized only` 口徑不算 IR，理由同波動度與 Sharpe。
+            對標序列本身不可信時（見 `get_benchmark_block_reason()`）同樣留空。
+        - Parameters:
+            - equity: pd.Series
+                策略權益序列（index 為交易日）
+            - basis: str
+                權益口徑
+        - Return:
+            - List[Dict[str, Any]]
+                `Benchmark` 與 `Information Ratio` 兩列
+        """
+
+        rows: List[Dict[str, Any]] = [
+            {"Metric": "Benchmark", "Value": self.benchmark, "Note": ""}
+        ]
+
+        reason: str = self.get_benchmark_block_reason()
+        if basis == self.EQUITY_BASIS_REALIZED_ONLY:
+            reason = (
+                f"{self.EQUITY_BASIS_REALIZED_ONLY} 口徑只在平倉日有節點，"
+                f"與基準日報酬不同頻，無法逐日相減"
+            )
+
+        if reason:
+            rows.append({"Metric": "Information Ratio", "Value": None, "Note": reason})
+            return rows
+
+        strategy_returns: List[float]
+        benchmark_returns: List[float]
+        strategy_returns, benchmark_returns = self.align_daily_returns(equity)
+
+        rows.append(
+            {
+                "Metric": "Information Ratio",
+                "Value": compute_annualized_information_ratio(
+                    strategy_returns, benchmark_returns
+                ),
+                "Note": f"相對 {self.benchmark} 的年化主動報酬 ÷ 追蹤誤差",
+            }
+        )
+        return rows
+
+    def align_daily_returns(self, equity: pd.Series) -> Tuple[List[float], List[float]]:
+        """
+        把策略權益與對標價格對齊到**同一組日期**後各自轉成日報酬
+
+        先取日期交集再算報酬，不是先各算報酬再截長度：後者在任一邊缺某一天時
+        會讓之後的每一期都錯開一格，而長度仍然可能剛好相同。
+        """
+
+        if self.benchmark_price is None or self.benchmark_price.empty:
+            return ([], [])
+
+        benchmark: pd.Series = self.benchmark_price.copy()
+        benchmark = benchmark[benchmark.notna() & (benchmark > 0)].sort_index()
+        benchmark = benchmark[~benchmark.index.duplicated(keep="last")]
+
+        common: pd.Index = equity.index.intersection(benchmark.index).sort_values()
+        if len(common) < 2:
+            return ([], [])
+
+        return (
+            compute_period_returns(equity.reindex(common).astype(float).tolist()),
+            compute_period_returns(benchmark.reindex(common).astype(float).tolist()),
+        )
+
+    def get_benchmark_block_reason(self) -> str:
+        """
+        對標序列不可信時回傳原因字串（IR 因此留空）；台股的還原價一律可信
+
+        期貨覆寫它：對標退回近月拼接時，換月接點有展期價差造成的假跳空，
+        那幾天的基準日報酬是假的，算出來的 IR 會被那幾天帶偏。
+        """
+
+        return ""
+
+    def get_avg_roi_note(self) -> str:
+        """`Avg ROI` 的口徑說明；台股是名目報酬率，期貨覆寫為保證金報酬率"""
+
+        return ""
+
     def get_equity_series(self) -> Tuple[pd.Series, str]:
         """
         - Description:
@@ -538,10 +780,13 @@ class StockBacktestReporter(BaseBacktestReporter):
                 self.account.init_capital
             )
 
-        # 在對齊後的日期上計算策略的 MDD
-        mdd_balance: pd.Series = (
-            cumulative_balance_aligned / cumulative_balance_aligned.cummax() - 1
-        ) * 100
+        # 在對齊後的日期上計算策略的 MDD。
+        # **公式與 `metrics_summary.csv` 的 `Max Drawdown (%)` 共用同一個函式**：
+        # 兩處各寫一份必然漂移（MDD 曾經就有 reporter 與前端兩份實作）
+        mdd_balance: pd.Series = pd.Series(
+            compute_drawdown_series(cumulative_balance_aligned.astype(float).tolist()),
+            index=cumulative_balance_aligned.index,
+        )
 
         # mdd_benchmark 已經在 all_dates 上（因為 all_dates 就是從它的 index 來的），直接使用即可
         mdd_benchmark_aligned: pd.Series = mdd_benchmark

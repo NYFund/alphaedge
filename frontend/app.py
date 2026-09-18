@@ -17,23 +17,20 @@ try:
         is_futures_report,
         summarise_margin,
     )
-    from services.metrics import (
-        calc_sharpe_ratio,
-        calc_sortino_ratio,
-        extract_backtest_date_range,
-    )
+    from services.metrics import extract_backtest_date_range
     from services.report_loader import (
         BacktestReport,
         build_equity_series,
         compute_daily_pnl,
-        compute_daily_returns,
-        compute_max_drawdown,
         extract_starting_capital,
         list_strategy_dirs,
         load_backtest_report,
+        metrics_note_map,
+        metrics_to_map,
         read_daily_equity,
         read_direction_summary,
         read_event_report,
+        read_metrics_summary,
         read_trading_report,
         sort_by_exit_date,
         summarise_overview,
@@ -49,23 +46,20 @@ except ModuleNotFoundError:
         is_futures_report,
         summarise_margin,
     )
-    from frontend.services.metrics import (
-        calc_sharpe_ratio,
-        calc_sortino_ratio,
-        extract_backtest_date_range,
-    )
+    from frontend.services.metrics import extract_backtest_date_range
     from frontend.services.report_loader import (
         BacktestReport,
         build_equity_series,
         compute_daily_pnl,
-        compute_daily_returns,
-        compute_max_drawdown,
         extract_starting_capital,
         list_strategy_dirs,
         load_backtest_report,
+        metrics_note_map,
+        metrics_to_map,
         read_daily_equity,
         read_direction_summary,
         read_event_report,
+        read_metrics_summary,
         read_trading_report,
         sort_by_exit_date,
         summarise_overview,
@@ -121,28 +115,25 @@ def _render_strategy_overview(report: BacktestReport, df: pd.DataFrame) -> None:
 def _render_metrics(
     df: pd.DataFrame,
     direction_summary: pd.DataFrame,
-    equity: pd.Series,
+    metrics: pd.DataFrame,
 ) -> None:
     """
     關鍵指標**一律取自 reporter 落地的 CSV**
 
-    總覽四個數字來自 `direction_summary.csv`；權益相關（MDD、Sharpe、Sortino）
-    來自 `daily_equity.csv`。前端不再自行重算任何一條公式。
+    交易概況來自 `direction_summary.csv`；其餘全部來自 `metrics_summary.csv`
+    ——**前端不再自行重算任何一條公式**。同一個指標算在兩個地方，最後一定會
+    出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對。
     """
 
     overview = summarise_overview(df, direction_summary)
-    cumulative_balance = to_numeric(df, "Cumulative Balance")
+    values = metrics_to_map(metrics)
+    notes = metrics_note_map(metrics)
 
-    daily_returns = compute_daily_returns(equity)
-    sharpe_ratio = calc_sharpe_ratio(daily_returns)
-    sortino_ratio = calc_sortino_ratio(daily_returns)
-    max_drawdown = compute_max_drawdown(equity)
+    def _fmt_ratio(value: object) -> str:
+        return "N/A" if pd.isna(value) else f"{float(value):.3f}"
 
-    def _fmt_ratio(value: float) -> str:
-        return f"{value:.3f}" if pd.notna(value) else "N/A"
-
-    def _fmt_number(value: float | None, suffix: str = "") -> str:
-        return "N/A" if value is None else f"{value:,.2f}{suffix}"
+    def _fmt_number(value: object, suffix: str = "") -> str:
+        return "N/A" if pd.isna(value) else f"{float(value):,.2f}{suffix}"
 
     st.markdown("##### 交易概況")
     r1c1, r1c2, r1c3 = st.columns(3)
@@ -160,33 +151,51 @@ def _render_metrics(
     r2c1.metric("總已實現損益", _fmt_number(overview["total_pnl"]))
     # `ROI` 欄本來就是百分比，**不再乘 100**
     r2c2.metric("平均 ROI", _fmt_number(overview["avg_roi"], "%"))
-    r2c3.metric(
-        "最後累積資產",
-        (
-            f"{float(cumulative_balance.iloc[-1]):,.2f}"
-            if not cumulative_balance.empty
-            else "N/A"
-        ),
-    )
+    r2c3.metric("最後權益", _fmt_number(values.get("Final Equity")))
+
+    st.divider()
+
+    st.markdown("##### 獲利品質")
+    r3c1, r3c2 = st.columns(2)
+    r3c1.metric("獲利因子", _fmt_ratio(values.get("Profit Factor")))
+    r3c2.metric("勝敗比", _fmt_ratio(values.get("Win/Loss Ratio")))
+    st.caption("兩者在沒有虧損筆數時顯示 N/A——「從沒虧過」不是「因子為零」。")
 
     st.divider()
 
     st.markdown("##### 風險調整報酬")
-    if equity.empty:
+    if metrics.empty:
         st.info(
-            "找不到 `daily_equity.csv`，本區塊無法計算。"
-            "風險指標的樣本必須是**日報酬**——用每筆交易的報酬代替並乘 √252，"
-            "等於宣稱「一年有 252 筆交易」，會得到一個看起來合理的錯數字。"
+            "找不到 `metrics_summary.csv`。本區塊的指標一律由回測報表輸出，"
+            "**前端不自行計算**；請以現行版本重跑一次回測。"
         )
-    else:
-        r3c1, r3c2, r3c3 = st.columns(3)
-        r3c1.metric("Sharpe Ratio", _fmt_ratio(sharpe_ratio))
-        r3c2.metric("Sortino Ratio", _fmt_ratio(sortino_ratio))
-        r3c3.metric("最大回撤", _fmt_number(max_drawdown, "%"))
-        st.caption(
-            "以 `daily_equity.csv` 的**盯市權益**為樣本（含未實現損益）。"
-            "Information Ratio 需要基準的日報酬序列，報表目前沒有輸出這一欄，故不顯示。"
+        return
+
+    r4c1, r4c2, r4c3 = st.columns(3)
+    r4c1.metric("Sharpe Ratio", _fmt_ratio(values.get("Sharpe Ratio")))
+    r4c2.metric("Sortino Ratio", _fmt_ratio(values.get("Sortino Ratio")))
+    r4c3.metric("Information Ratio", _fmt_ratio(values.get("Information Ratio")))
+
+    r5c1, r5c2, r5c3 = st.columns(3)
+    r5c1.metric("最大回撤", _fmt_number(values.get("Max Drawdown (%)"), "%"))
+    r5c2.metric("年化波動度", _fmt_number(values.get("Annualized Volatility (%)"), "%"))
+    r5c3.metric("對標", str(values.get("Benchmark", "N/A")))
+
+    st.caption(f"權益口徑：{values.get('Equity Basis', 'N/A')}")
+
+    # 留空的指標把 `Note` 顯示出來——不寫原因的話，N/A 與「算出來是 0」分不開
+    blocked = [
+        f"**{metric}**：{notes.get(metric, '')}"
+        for metric in (
+            "Sharpe Ratio",
+            "Sortino Ratio",
+            "Annualized Volatility (%)",
+            "Information Ratio",
         )
+        if pd.isna(values.get(metric)) and notes.get(metric)
+    ]
+    if blocked:
+        st.info("部分指標未輸出：\n\n" + "\n\n".join(f"- {line}" for line in blocked))
 
 
 def _render_direction_summary(direction_summary: pd.DataFrame) -> None:
@@ -375,9 +384,10 @@ if report.csv_path is None:
 
 df = read_trading_report(report.csv_path)
 
-# reporter 另外落地的三份 CSV：前端只讀不算，指標一律以這些為準
+# reporter 另外落地的四份 CSV：前端只讀不算，指標一律以這些為準
 direction_summary = read_direction_summary(report.direction_summary_path)
 event_report = read_event_report(report.event_report_path)
+metrics_summary = read_metrics_summary(report.metrics_summary_path)
 daily_equity = read_daily_equity(report.daily_equity_path)
 equity = build_equity_series(daily_equity, extract_starting_capital(df))
 
@@ -390,7 +400,7 @@ with overview_tab:
     _render_strategy_overview(report, df)
     st.divider()
     st.subheader("關鍵指標")
-    _render_metrics(df, direction_summary, equity)
+    _render_metrics(df, direction_summary, metrics_summary)
     st.divider()
     _render_direction_summary(direction_summary)
     st.divider()
