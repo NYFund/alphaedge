@@ -59,7 +59,7 @@ def generate_baseline() -> pd.DataFrame:
     # 不應該因為報表層的欄位調整而失效
     rows: List[dict] = [
         {
-            "Stock ID": record.stock_id,
+            "Symbol": record.symbol,
             "Position Type": record.position_type.value,
             "Buy Date": record.buy_date,
             "Buy Price": record.buy_price,

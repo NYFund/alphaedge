@@ -1,3 +1,4 @@
+import datetime
 import random
 import time
 from pathlib import Path
@@ -32,6 +33,12 @@ from core.utils.log_manager import LogManager
 
 class MonthlyRevenueReportUpdater(BaseDataUpdater):
     """TWSE & TPEX Monthly Revenue Report Updater"""
+
+    # 月營收的申報期限：上市櫃公司須於**次月 10 日**前申報上月營收。
+    # 寬限天數的意義與財報三表相同——逾期申報與申請延期都會落在期限之後，
+    # 而把「還沒送件的公司」當成「來源就是沒有」的代價是它送件後再也補不進來
+    FILING_DEADLINE_DAY: int = 10
+    FILING_GRACE_DAYS: int = 30
 
     BATCH_SLEEP_EVERY_N_FILES: int = 10
     BATCH_SLEEP_DURATION_SECONDS: int = 30
@@ -152,7 +159,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
     ) -> List[Tuple[int, int]]:
         """
         - Description:
-            算出這次要請求的年月：區間內所有年月 − 表內已有的年月
+            算出這次要請求的年月：區間內所有年月 − 表內**已收齊**的年月
 
             **不可用「表內最新年月 +1」起跑**：中間某個月失敗被跳過之後，只要
             下一個月成功入庫，`MAX` 就越過它，那個月從此不會再被請求。財報三表
@@ -176,8 +183,27 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
             start_year, start_month, end_year, end_month, periods_per_year=12
         )
         existing: Set[Tuple[int, int]] = self.dao.get_existing_year_months()
+
+        # **申報期還沒關閉的月份不算收齊**：月營收是逐家公司在次月 10 日前申報的，
+        # 申報期內入庫的只有「已送件的那批公司」。當成收齊的話，年月差集從此跳過
+        # 它，後送件的公司永遠補不進來——而每個月初跑一次日常更新就會踩到。
+        # 判準與財報三表同一套（見 `FinancialStatementUpdater.is_season_settled()`），
+        # 只是週期不同；寫入走 `INSERT OR IGNORE`，重問不會產生重複列
+        incomplete: Set[Tuple[int, int]] = {
+            year_month
+            for year_month in existing
+            if not self.is_month_settled(*year_month)
+        }
+        if incomplete:
+            logger.info(
+                f"[mrr] {len(incomplete)} 個月份仍在申報期內"
+                f"（{sorted(f'{y}/{m:02d}' for y, m in incomplete)}），"
+                f"本次一併重問以補進後送件的公司"
+            )
+
+        settled: Set[Tuple[int, int]] = existing - incomplete
         pending: List[Tuple[int, int]] = [
-            year_month for year_month in year_months if year_month not in existing
+            year_month for year_month in year_months if year_month not in settled
         ]
 
         # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的月份，
@@ -197,6 +223,36 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
                 )
 
         return pending
+
+    @classmethod
+    def is_month_settled(
+        cls, year: int, month: int, today: Optional[datetime.date] = None
+    ) -> bool:
+        """
+        - Description:
+            該月份的營收申報期是否已關閉（含寬限期）
+
+            上市櫃公司須於**次月 10 日**前申報上月營收。在那之前（以及寬限期內）
+            拿到的結果只是「已送件的那批公司」，不代表來源只有這麼多——
+            兩者無法區分正是本判準要解的問題，見
+            `FinancialStatementUpdater.is_season_settled()`。
+        - Parameters:
+            - year / month: int
+                年月
+            - today: Optional[datetime.date]
+                今天；None 取系統日期（測試可覆寫）
+        - Return:
+            - bool
+                申報期已關閉為 True
+        """
+
+        deadline_year: int = year + 1 if month == 12 else year
+        deadline_month: int = 1 if month == 12 else month + 1
+        deadline: datetime.date = datetime.date(
+            deadline_year, deadline_month, cls.FILING_DEADLINE_DAY
+        ) + datetime.timedelta(days=cls.FILING_GRACE_DAYS)
+
+        return (today or datetime.date.today()) > deadline
 
     def get_actual_update_start_year_month(
         self,

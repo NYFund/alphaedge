@@ -2,6 +2,8 @@ import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import pytest
+
 from core.backtest.models.cost_model import FuturesCostConfig, TwFuturesCostModel
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
 from core.managers.futures.position_manager import (
@@ -513,3 +515,165 @@ def test_margin_table_matches_the_announced_adjustment(tmp_path: Path) -> None:
     budget: float = 1_600_000
     assert int(budget // before) == 6
     assert int(budget // after) == 5
+
+
+# === 股票期貨：查表模式走比例表 ===
+STOCK_FUTURES_PRODUCT: str = "CDF"
+STOCK_FUTURES_CONTRACT_SIZE: int = 2000  # 標準型股票期貨的契約單位（股）
+UNDERLYING_CLOSE: float = 500.0  # 標的證券當日收盤價
+INITIAL_RATE: float = 0.135  # 原始保證金適用比例
+MAINTENANCE_RATE: float = 0.1035  # 維持保證金適用比例
+
+
+class StubTwoTableMarginAPI:
+    """
+    同時帶「金額表」與「比例表」的假 API
+
+    **分表依據是「金額 vs 比例」而不是「指數 vs 股票」**：指數期貨與 ETF 期貨在
+    金額表（每口固定金額），個股期貨在比例表（適用比例 ＋ 契約單位，要自己算）。
+    """
+
+    def __init__(self, amount_products: Optional[Dict[str, int]] = None) -> None:
+        # 金額表涵蓋的商品：{商品代碼: 每口原始保證金}
+        self.amount_products: Dict[str, int] = amount_products or {}
+        self.rate_calls: List[str] = []
+
+    def get_initial_margin(self, product, date, fallback_to_earliest=False):
+        return self.amount_products.get(product)
+
+    def get_maintenance_margin(self, product, date, fallback_to_earliest=False):
+        per_lot: Optional[int] = self.amount_products.get(product)
+        return int(per_lot * 0.75) if per_lot is not None else None
+
+    def calculate_stock_futures_margin(
+        self, product, date, price, fallback_to_earliest=False
+    ):
+        self.rate_calls.append(product)
+        if product != STOCK_FUTURES_PRODUCT:
+            return None
+        return price * STOCK_FUTURES_CONTRACT_SIZE * INITIAL_RATE
+
+    def calculate_stock_futures_maintenance_margin(
+        self, product, date, price, fallback_to_earliest=False
+    ):
+        if product != STOCK_FUTURES_PRODUCT:
+            return None
+        return price * STOCK_FUTURES_CONTRACT_SIZE * MAINTENANCE_RATE
+
+    def get_covered_date_range(self, product):
+        return {"earliest": "2020-03-13", "latest": "2026-08-12"}
+
+
+def make_stock_futures_manager(
+    api: Optional[StubTwoTableMarginAPI] = None,
+    underlying_price: Optional[float] = UNDERLYING_CLOSE,
+) -> FuturesPositionManager:
+    """組出帶兩張表與標的取價路徑的部位管理器"""
+
+    return FuturesPositionManager(
+        FuturesAccount(init_capital=INIT_CAPITAL),
+        cost_model=TwFuturesCostModel(FuturesCostConfig.free()),
+        margin_config=FuturesMarginConfig(api=api or StubTwoTableMarginAPI()),
+        multiplier_resolver=lambda product, date: STOCK_FUTURES_CONTRACT_SIZE,
+        underlying_price_resolver=lambda product, date: underlying_price,
+    )
+
+
+def make_stock_futures_order(volume: int = 1) -> FuturesOrder:
+    """組一張股票期貨訂單"""
+
+    return FuturesOrder(
+        product=STOCK_FUTURES_PRODUCT,
+        expiry="202403",
+        date=DAY_1,
+        action=Action.BUY,
+        position_type=PositionType.LONG,
+        price=UNDERLYING_CLOSE,
+        volume=volume,
+    )
+
+
+def test_stock_futures_margin_falls_back_to_the_rate_table() -> None:
+    """
+    個股期貨查不到金額表時改走比例表，不再直接中止開倉
+
+    比例表那條路徑（`標的股價 × 契約單位 × 比例`）早就實作好也有測試，
+    只是**全專案沒有任何呼叫端**——於是股期在預設的查表模式下開不了倉。
+    """
+
+    manager: FuturesPositionManager = make_stock_futures_manager()
+
+    position: Optional[FuturesPosition] = manager.open_position(
+        make_stock_futures_order(volume=2)
+    )
+
+    assert position is not None
+    expected: float = UNDERLYING_CLOSE * STOCK_FUTURES_CONTRACT_SIZE * INITIAL_RATE * 2
+    assert position.margin == expected
+
+
+def test_amount_table_wins_and_the_rate_table_is_not_consulted() -> None:
+    """
+    金額表查得到就用金額表，**完全不碰比例表**
+
+    ETF 期貨在金額表內（`NYF` 等，2020-07-22 起），指數期貨亦然；
+    這條擋的是「兩張表都算一次」造成的口徑混用。
+    """
+
+    api: StubTwoTableMarginAPI = StubTwoTableMarginAPI(amount_products={"TX": 167_000})
+    manager: FuturesPositionManager = FuturesPositionManager(
+        FuturesAccount(init_capital=INIT_CAPITAL),
+        cost_model=TwFuturesCostModel(FuturesCostConfig.free()),
+        margin_config=FuturesMarginConfig(api=api),
+        underlying_price_resolver=lambda product, date: UNDERLYING_CLOSE,
+    )
+
+    position: Optional[FuturesPosition] = manager.open_position(make_order())
+
+    assert position is not None
+    assert position.margin == 167_000
+    assert api.rate_calls == []
+
+
+def test_neither_table_covers_the_product_raises() -> None:
+    """兩張表都查不到就中斷——**刻意不退回比率近似**，理由同金額表那條"""
+
+    manager: FuturesPositionManager = make_stock_futures_manager(
+        api=StubTwoTableMarginAPI()
+    )
+    order: FuturesOrder = make_stock_futures_order()
+    order.product = "ZZZ"  # 兩張表都沒有的商品
+
+    with pytest.raises(ValueError, match="比例表也查不到"):
+        manager.open_position(order)
+
+
+def test_missing_underlying_price_also_raises() -> None:
+    """
+    標的當日無收盤價時同樣中斷，不拿期貨價替代
+
+    期貨價與標的股價是兩個數字，拿前者算保證金會讓整段偏掉且毫無徵兆。
+    """
+
+    manager: FuturesPositionManager = make_stock_futures_manager(underlying_price=None)
+
+    with pytest.raises(ValueError, match="比例表也查不到"):
+        manager.open_position(make_stock_futures_order())
+
+
+def test_stock_futures_maintenance_margin_uses_its_own_rate() -> None:
+    """
+    維持保證金走**維持比例**，不是用原始比例打折
+
+    兩者是同一列裡的兩個獨立欄位，用固定折數互推會讓追繳門檻整段偏掉。
+    """
+
+    manager: FuturesPositionManager = make_stock_futures_manager()
+    position: Optional[FuturesPosition] = manager.open_position(
+        make_stock_futures_order()
+    )
+
+    assert position is not None
+    assert manager.calculate_maintenance_margin(position, DAY_1) == (
+        UNDERLYING_CLOSE * STOCK_FUTURES_CONTRACT_SIZE * MAINTENANCE_RATE
+    )

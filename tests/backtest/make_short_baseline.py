@@ -393,7 +393,7 @@ def collect_trade_rows(
             {
                 "Scenario": scenario_name,
                 "Trade ID": record.id,
-                "Stock ID": record.stock_id,
+                "Symbol": record.symbol,
                 "Position Type": record.position_type.value,
                 "Short Method": record.short_method.value
                 if record.short_method
@@ -437,7 +437,7 @@ def collect_position_rows(
             {
                 "Scenario": scenario_name,
                 "Position ID": position.id,
-                "Stock ID": position.stock_id,
+                "Symbol": position.symbol,
                 "Position Type": position.position_type.value,
                 "Short Method": position.short_method.value
                 if position.short_method

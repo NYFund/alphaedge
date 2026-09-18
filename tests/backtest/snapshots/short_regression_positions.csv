@@ -1,4 +1,4 @@
-Scenario,Position ID,Stock ID,Position Type,Short Method,Is Day Trade,Open Date,Open Price,Volume,Commission,Tax,Transaction Cost,Margin,Short Proceeds,Borrow Fee,Accrued Borrow Fee,Dividend Compensation,Holding Days
+Scenario,Position ID,Symbol,Position Type,Short Method,Is Day Trade,Open Date,Open Price,Volume,Commission,Tax,Transaction Cost,Margin,Short Proceeds,Borrow Fee,Accrued Borrow Fee,Dividend Compensation,Holding Days
 partial_cover_fifo,2,2330,SHORT,MARGIN,False,2024-01-03,105.0,1,45,315,444,94500.0,105000.0,84,0.0,0.0,1
 limit_up_locked_convert,1,2330,SHORT,MARGIN,False,2024-01-03,110.0,1,47,330,465,99000.0,110000.0,88,0.0,0.0,0
 ex_dividend_force_cover_sbl,1,2330,SHORT,SBL,False,2024-01-02,100.0,2,85,600,685,180000.0,200000.0,0,16.0,0.0,1

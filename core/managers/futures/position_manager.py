@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from loguru import logger
 
@@ -126,6 +126,10 @@ class FuturesPositionManager(BasePositionManager):
         account: FuturesAccount,
         cost_model: Optional[TwFuturesCostModel] = None,
         margin_config: Optional[FuturesMarginConfig] = None,
+        multiplier_resolver: Optional[Callable[[str, datetime.date], int]] = None,
+        underlying_price_resolver: Optional[
+            Callable[[str, datetime.date], Optional[float]]
+        ] = None,
     ) -> None:
         super().__init__(account)
         self.account: FuturesAccount = account
@@ -135,6 +139,19 @@ class FuturesPositionManager(BasePositionManager):
         self.margin_config: FuturesMarginConfig = (
             margin_config or FuturesMarginConfig.default()
         )
+
+        # 乘數解析器，由 DataFeed 注入（見 `get_multiplier()`）。
+        # **未注入時退回常數表**：留給不經 DataFeed 的純記憶體測試，
+        # 那些測試只跑指數期貨，常數表夠用
+        self.multiplier_resolver: Optional[Callable[[str, datetime.date], int]] = (
+            multiplier_resolver
+        )
+
+        # 股期保證金要用**標的證券**的價格，而它在 `tw_stock.db`（另一個 DB 檔）。
+        # 同樣由 DataFeed 注入：連線一律由 DataFeed 持有，本層不自行開連線
+        self.underlying_price_resolver: Optional[
+            Callable[[str, datetime.date], Optional[float]]
+        ] = underlying_price_resolver
 
     @property
     def cost_config(self) -> FuturesCostConfig:
@@ -147,14 +164,39 @@ class FuturesPositionManager(BasePositionManager):
         pass
 
     # === 共用計算 ===
-    @staticmethod
-    def get_multiplier(product: str) -> int:
+    def get_multiplier(
+        self, product: str, date: Union[datetime.date, datetime.datetime]
+    ) -> int:
         """
-        取得契約乘數
+        - Description:
+            取得該商品在該日的契約乘數
 
-        **刻意用 `[]` 而非 `.get()`**：未登錄的商品讓它當場 KeyError，
-        乘數猜錯不會有任何徵兆，只會讓整條 PnL 靜默偏掉（見 `FUTURES_MULTIPLIER`）。
+            **兩種來源不可互相取代**：指數期貨的乘數是常數
+            （`FUTURES_MULTIPLIER`），股票期貨的「契約單位」會隨除權息被交易所
+            調整，必須查**當時**的快照——故本方法一定要帶日期。
+
+            解析工作本身不在這一層：`TwFuturesDataFeed.resolve_multiplier()`
+            早就做對了（它持有標的池的連線），本層只是把它接上。舊版在此重新查一次
+            `FUTURES_MULTIPLIER`，股期不在常數表內，**第一筆開倉就 KeyError**、
+            整場回測中斷——DataFeed 那半邊接好了，部位管理這半邊沒有。
+
+            **查不到一律讓它中斷，不退回近似值**：乘數猜錯不會有任何徵兆，
+            只會讓整條 PnL 靜默偏掉，那比中斷難查得多。
+        - Parameters:
+            - product: str
+                商品代碼
+            - date: Union[datetime.date, datetime.datetime]
+                交易日；股期的契約單位隨日期變動
+        - Return:
+            - int
+                乘數（股期為契約單位股數）
+        - Raises:
+            - KeyError
+                未注入 resolver 且商品不在 `FUTURES_MULTIPLIER` 內
         """
+
+        if self.multiplier_resolver is not None:
+            return self.multiplier_resolver(product, self.normalize_date(date))
 
         return FUTURES_MULTIPLIER[product]
 
@@ -177,8 +219,13 @@ class FuturesPositionManager(BasePositionManager):
         - Description:
             計算應繳的原始保證金
 
-            **帶了 `api` 就查表**（每口金額 × 口數），否則退回
-            「契約價值 × 比率」的近似，見 `FuturesMarginConfig`。
+            **帶了 `api` 就查表**，否則退回「契約價值 × 比率」的近似，
+            見 `FuturesMarginConfig`。
+
+            查表模式下**有兩張表，分表依據是「金額 vs 比例」而不是「指數 vs 股票」**：
+            指數期貨與 ETF 期貨給每口固定金額（`futures_margin_history`），
+            個股期貨給適用比例 ＋ 級距（`stock_futures_margin_rate_history`）。
+            故先查金額表，查不到再走比例表；兩者皆無才中斷。
         - Parameters:
             - price / volume / multiplier: float, int, int
                 成交價、口數、契約乘數
@@ -203,22 +250,70 @@ class FuturesPositionManager(BasePositionManager):
         if product is None or date is None:
             raise ValueError("查表模式必須提供 product 與 date——保證金隨商品與日期變動")
 
-        per_lot: Optional[int] = self.margin_config.api.get_initial_margin(
+        query_date: datetime.date = self.normalize_date(date)
+
+        per_lot: Optional[float] = self.margin_config.api.get_initial_margin(
             product,
-            self.normalize_date(date),
+            query_date,
             fallback_to_earliest=self.margin_config.fallback_to_earliest,
         )
+
+        if per_lot is None:
+            per_lot = self.calculate_stock_futures_margin(product, query_date)
+
         if per_lot is None:
             covered = self.margin_config.api.get_covered_date_range(product)
             raise ValueError(
                 f"查無 {product} 在 {date} 生效的保證金"
-                f"（表內涵蓋 {covered}）。"
+                f"（金額表涵蓋 {covered}，比例表也查不到）。"
                 f"**刻意不退回近似值**：靜默套一個比率會讓資金效率與可開口數"
                 f"整段偏掉卻毫無徵兆。保證金資料只回溯到 2020-03，"
                 f"要回測更早的期間請明確改用 `FuturesMarginConfig.ratio()`"
             )
 
         return float(per_lot * volume)
+
+    def calculate_stock_futures_margin(
+        self, product: str, date: datetime.date, maintenance: bool = False
+    ) -> Optional[float]:
+        """
+        - Description:
+            走比例表算股期的每口保證金 ＝ 標的股價 × 契約單位 × 適用比例
+
+            **標的股價由 resolver 提供**：它在 `tw_stock.db`，與期貨行情不同檔，
+            跨庫取值一律由 DataFeed 負責（連線的所有權在那一層）。
+            未注入 resolver 或取不到價（純記憶體測試、標的當日無成交）時回 `None`，
+            由呼叫端決定要中斷還是退回既有門檻。
+        - Parameters:
+            - product: str
+                股期代碼
+            - date: datetime.date
+                查詢日
+            - maintenance: bool
+                `True` 取維持保證金比例，否則取原始保證金比例
+        - Return:
+            - Optional[float]
+                每口保證金；比例、契約單位或標的股價任一查不到時為 None
+        """
+
+        if self.underlying_price_resolver is None:
+            return None
+
+        price: Optional[float] = self.underlying_price_resolver(product, date)
+        if not price:
+            return None
+
+        calculate = (
+            self.margin_config.api.calculate_stock_futures_maintenance_margin
+            if maintenance
+            else self.margin_config.api.calculate_stock_futures_margin
+        )
+        return calculate(
+            product,
+            date,
+            price,
+            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        )
 
     def calculate_maintenance_margin(
         self,
@@ -249,11 +344,19 @@ class FuturesPositionManager(BasePositionManager):
         if self.margin_config.api is None or date is None:
             return position.margin
 
-        per_lot: Optional[int] = self.margin_config.api.get_maintenance_margin(
+        query_date: datetime.date = self.normalize_date(date)
+
+        per_lot: Optional[float] = self.margin_config.api.get_maintenance_margin(
             position.product,
-            self.normalize_date(date),
+            query_date,
             fallback_to_earliest=self.margin_config.fallback_to_earliest,
         )
+
+        if per_lot is None:
+            per_lot = self.calculate_stock_futures_margin(
+                position.product, query_date, maintenance=True
+            )
+
         if per_lot is None:
             logger.warning(
                 f"[Margin] 查無 {position.product} 在 {date} 生效的維持保證金，"
@@ -388,7 +491,7 @@ class FuturesPositionManager(BasePositionManager):
             )
             return None
 
-        multiplier: int = self.get_multiplier(order.product)
+        multiplier: int = self.get_multiplier(order.product, order.date)
         margin: float = self.calculate_margin(
             order.price,
             order.volume,

@@ -79,9 +79,12 @@ def test_trading_report_columns_and_symbol(
     """
     報表的欄位名與識別欄位取值
 
-    引擎內部改用 symbol 之後，輸出欄位名必須維持 `Stock ID`——
-    改名會讓 915 筆 LONG baseline 失效。但回歸雙線是自行從 trade_records 組表的，
-    完全不經過 reporter，故欄位名與取值只能靠本測試把關。
+    識別欄名與領域模型一致（`record.symbol` → `Symbol`）。期貨那份維持
+    `Contract ID`：它是 `{商品}{到期月}`，與「一檔股票」不是同一種東西，
+    而且前端以它判斷報表型別（見 `frontend/services/futures_metrics.py`）。
+
+    **回歸雙線完全不經過 reporter**（它們自行從 `trade_records` 組表），
+    所以報表的欄位名與取值只能靠本測試把關——改錯了回歸不會變紅。
     """
 
     monkeypatch.setattr(StockBacktestReporter, "setup", lambda self: None)
@@ -114,12 +117,12 @@ def test_trading_report_columns_and_symbol(
     report: pd.DataFrame = reporter.generate_trading_report()
 
     # 欄位名維持台股語意，且順序不變（baseline 逐欄比對依賴此順序）
-    assert list(report.columns)[:3] == ["Stock ID", "Position Type", "Entry Date"]
-    assert "Symbol" not in report.columns
+    assert list(report.columns)[:3] == ["Symbol", "Position Type", "Entry Date"]
+    assert "Stock ID" not in report.columns
 
     # 取值來自 model 的 symbol，不是空字串
-    assert report.loc[0, "Stock ID"] == "2330"
-    assert report.loc[0, "Stock ID"] == account.trade_records[0].symbol
+    assert report.loc[0, "Symbol"] == "2330"
+    assert report.loc[0, "Symbol"] == account.trade_records[0].symbol
 
 
 def test_direction_summary_and_event_report(

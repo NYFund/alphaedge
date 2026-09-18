@@ -349,7 +349,7 @@ def test_real_continuous_table_is_consistent() -> None:
     dates: List[str] = list(continuous["date"])
     mismatched: List[str] = []
 
-    for index, row in continuous[continuous["roll_flag"] == 1].iterrows():
+    for _index, row in continuous[continuous["roll_flag"] == 1].iterrows():
         position: int = dates.index(row["date"])
         adjusted_change: float = (
             continuous.iloc[position][CLOSE] - continuous.iloc[position - 1][CLOSE]

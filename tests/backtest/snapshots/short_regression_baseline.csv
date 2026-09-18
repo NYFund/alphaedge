@@ -1,4 +1,4 @@
-Scenario,Trade ID,Stock ID,Position Type,Short Method,Entry Date,Entry Price,Exit Date,Exit Price,Sell Date,Sell Price,Sell Volume,Buy Date,Buy Price,Buy Volume,Commission,Tax,Borrow Fee,Interest,Dividend Compensation,Margin,Transaction Cost,Holding Days,Realized PnL,ROI,ROI on Capital
+Scenario,Trade ID,Symbol,Position Type,Short Method,Entry Date,Entry Price,Exit Date,Exit Price,Sell Date,Sell Price,Sell Volume,Buy Date,Buy Price,Buy Volume,Commission,Tax,Borrow Fee,Interest,Dividend Compensation,Margin,Transaction Cost,Holding Days,Realized PnL,ROI,ROI on Capital
 day_trade_same_day_cover,1,2330,SHORT,DAY_TRADE,2024-01-02,100.0,2024-01-02,95.0,2024-01-02,100.0,2,2024-01-02,95.0,2,166,300,0,0,0,0.0,466,0,9534.0,4.76,2476.36
 margin_swing_10_days,1,2330,SHORT,MARGIN,2024-01-02,100.0,2024-01-12,95.0,2024-01-02,100.0,2,2024-01-12,95.0,2,166,600,160,20,0,180000.0,906,10,9094.0,4.53,5.03
 partial_cover_fifo,1,2330,SHORT,MARGIN,2024-01-02,100.0,2024-01-04,95.0,2024-01-02,100.0,3,2024-01-04,95.0,3,249,900,240,6,0,270000.0,1383,2,13617.0,4.52,5.02

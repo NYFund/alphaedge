@@ -10,6 +10,7 @@ from core.api.tw.futures_stock_universe_api import FuturesStockUniverseAPI
 from core.config import (
     DEFAULT_FUTURES_START_DATE,
     FUTURES_PRODUCT_LISTING_DATES,
+    FUTURES_PRODUCT_NIGHT_SESSION_START_DATES,
     FUTURES_TARGET_PRODUCTS,
     TW_FUTURES_DB_PATH,
     TW_STOCK_DB_PATH,
@@ -397,6 +398,9 @@ class FuturesPriceUpdater(BaseDataUpdater):
         # **不可寫 `for session in FuturesSession`**：那會連整併用的
         # `COMBINED` 也一起爬，而來源根本沒有那個時段（見 `data_sessions()`）
         for session in FuturesSession.data_sessions():
+            if not self.has_night_session(product, date, session):
+                continue
+
             raw_df: Optional[pd.DataFrame] = self.crawler.crawl_futures_price(
                 date, product, session
             )
@@ -414,6 +418,43 @@ class FuturesPriceUpdater(BaseDataUpdater):
             crawled.add(session)
 
         return crawled
+
+    @staticmethod
+    def has_night_session(
+        product: str, date: datetime.date, session: FuturesSession
+    ) -> bool:
+        """
+        - Description:
+            判斷該商品在該日是否已經有夜盤可查
+
+            盤後交易 2017-05-15 晚上才上線，且各商品是**逐批**納入的
+            （TX／MTX 2017-05、TE 2018-11、ZEF 2021-06、TMF 2024-07、
+            TF／ZFF 2025-06）。在那之前查夜盤等於白打一半的請求，並產生大量
+            `No valid futures price rows` warning——資料是對的，雜訊是多的，
+            而雜訊會淹掉真正該看的那幾行。
+
+            **沒登錄起始日的商品一律回 True**（例如股期）：行為與本檢查加入前
+            相同。填錯一個過晚的日期會讓回補靜默跳過開頭幾天，比多打請求嚴重得多，
+            故寧可不登錄，見 `FUTURES_PRODUCT_NIGHT_SESSION_START_DATES`。
+        - Parameters:
+            - product: str
+                商品代碼
+            - date: datetime.date
+                查詢日
+            - session: FuturesSession
+                要查的時段；日盤一律回 True
+        - Return:
+            - bool
+                False 表示該日不必查這個時段
+        """
+
+        if session != FuturesSession.NIGHT:
+            return True
+
+        start: Optional[datetime.date] = FUTURES_PRODUCT_NIGHT_SESSION_START_DATES.get(
+            product
+        )
+        return start is None or date >= start
 
     @staticmethod
     def is_day_complete(crawled: Set[FuturesSession]) -> bool:

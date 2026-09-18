@@ -7,10 +7,11 @@ from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.api.tw.futures_stock_universe_api import FuturesStockUniverseAPI
+from core.api.tw.stock_price_api import StockPriceAPI
 from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
-from core.config import TW_FUTURES_DB_PATH
+from core.config import TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection, connect_sqlite
 from core.managers.futures.position_manager import FuturesMarginConfig
 from core.models import FuturesQuote
@@ -63,6 +64,13 @@ class TwFuturesDataFeed(BaseDataFeed):
         # 股期標的池：**股期的乘數是會隨除權息調整的契約單位**，不在
         # `FUTURES_MULTIPLIER` 裡，必須逐日查表（見 `resolve_multiplier()`）
         self.universe: Optional[FuturesStockUniverseAPI] = None
+
+        # 股期保證金要用**標的證券**的收盤價，而那在另一個 DB 檔（`tw_stock.db`）。
+        # **延遲建立**：只跑指數期貨的回測一輩子不會用到它，沒有理由先開一條連線
+        self.stock_conn: Optional[DBConnection] = None
+        self.stock_price: Optional[StockPriceAPI] = None
+        # {交易日: {股票代號: 收盤價}}，一天只查一次全市場
+        self.underlying_close_cache: Dict[datetime.date, Dict[str, float]] = {}
 
         # 本次回測的商品與時段（由策略宣告）
         self.products: List[str] = []
@@ -327,6 +335,66 @@ class TwFuturesDataFeed(BaseDataFeed):
 
         return lambda product: self.resolve_multiplier(product, date)
 
+    def resolve_underlying_price(
+        self, product: str, date: datetime.date
+    ) -> Optional[float]:
+        """
+        - Description:
+            解出股票期貨**標的證券**在該日的收盤價
+
+            股期的保證金來源只給比例，每口金額得自己算：
+            `標的股價 × 契約單位 × 適用比例`。那個「標的股價」在 `tw_stock.db`，
+            與期貨行情不同檔，故由本 feed 負責跨庫取值——**連線一律由 DataFeed
+            持有**，部位管理層不自行開連線。
+
+            **取未還原的收盤價**：保證金是拿當時真實的市價去算的，
+            還原價是為了訊號連續性而回推的數字，拿它算保證金會整段偏掉。
+
+            指數期貨不會走到這裡（`calculate_margin()` 先查得到金額表就回傳了）。
+        - Parameters:
+            - product: str
+                股期代碼（Ex: CDF）
+            - date: datetime.date
+                交易日
+        - Return:
+            - Optional[float]
+                標的證券當日收盤價；標的或價格查不到時為 None
+        """
+
+        if self.universe is None:
+            return None
+
+        underlying: Optional[Dict[str, str]] = self.universe.get_underlying(
+            product, date
+        )
+        if not underlying or not underlying.get("underlying_stock_id"):
+            return None
+
+        close_map: Dict[str, float] = self.get_underlying_close_map(date)
+        price: Optional[float] = close_map.get(underlying["underlying_stock_id"])
+
+        return float(price) if price else None
+
+    def get_underlying_close_map(self, date: datetime.date) -> Dict[str, float]:
+        """
+        當日全市場收盤價對照表（逐日快取）
+
+        一天只查一次：同一天可能有多檔股期要算保證金，逐檔查會變成 N 次全表掃描。
+        `tw_stock.db` 的連線在此**首次需要時才開**。
+        """
+
+        if date in self.underlying_close_cache:
+            return self.underlying_close_cache[date]
+
+        if self.stock_price is None:
+            TW_STOCK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.stock_conn = connect_sqlite(TW_STOCK_DB_PATH)
+            self.stock_price = StockPriceAPI(conn=self.stock_conn)
+
+        close_map: Dict[str, float] = self.stock_price.get_close_map(date)
+        self.underlying_close_cache[date] = close_map
+        return close_map
+
     def get_night_session_date(self, date: datetime.date) -> Optional[datetime.date]:
         """
         - Description:
@@ -355,10 +423,15 @@ class TwFuturesDataFeed(BaseDataFeed):
     def close(self) -> None:
         """關閉資料連線（回測結束時由引擎呼叫）"""
 
-        for api in (self.futures_price, self.margin, self.universe):
+        for api in (self.futures_price, self.margin, self.universe, self.stock_price):
             if api is not None:
                 api.close()
 
         if self.conn is not None:
             self.conn.close()
             self.conn = None
+
+        # 標的股價那一條是延遲開的，只跑指數期貨時根本沒建立
+        if self.stock_conn is not None:
+            self.stock_conn.close()
+            self.stock_conn = None

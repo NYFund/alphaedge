@@ -11,6 +11,14 @@
 # 版本下限與 `pyproject.toml` 一致（pandas／plotly 在主 dependencies，
 # streamlit 在 `[project.optional-dependencies].frontend`）。這裡刻意用下限而不是
 # 釘死：本機沒有安裝 streamlit，釘一個沒有實測過的版本只是假的可重現性。
-streamlit>=1.40
+#
+# **streamlit 的下限是 1.49 而不是隨手寫的數字**：`app.py` 用的 `width="stretch"`
+# 是 1.49.0（2025-08-26）才加進 `st.dataframe`／`st.plotly_chart`／`st.image` 的，
+# 更早的版本會當成未知關鍵字直接 `TypeError`——一開頁就壞，不是降級。
+#
+# **不加上限**：上限擋不住真正的風險。Streamlit 的移除發生在 minor 版（`<2.0`
+# 形同虛設），而本檔改用新參數之後，`use_container_width` 被移除那天已經影響不到。
+# 下一個棄用參數要靠升級時實際開一次前端確認，不是靠一個猜出來的上限。
+streamlit>=1.49
 pandas>=3.0
 plotly>=6.7

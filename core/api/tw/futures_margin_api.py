@@ -213,6 +213,10 @@ class FuturesMarginAPI(BaseDataAPI):
 
         return self.universe_dao.get_contract_size(product_id, date, per_product=True)
 
+    # 三種比例在同一列，差別只有取哪一欄；欄名寫死在此，呼叫端不必知道
+    INITIAL_RATE_COLUMN: str = "原始保證金適用比例"
+    MAINTENANCE_RATE_COLUMN: str = "維持保證金適用比例"
+
     def calculate_stock_futures_margin(
         self,
         product_id: str,
@@ -238,6 +242,70 @@ class FuturesMarginAPI(BaseDataAPI):
                 每口原始保證金；比例或契約單位查不到時為 None
         """
 
+        return self.calculate_stock_futures_margin_by_rate(
+            product_id,
+            date,
+            price,
+            self.INITIAL_RATE_COLUMN,
+            fallback_to_earliest=fallback_to_earliest,
+        )
+
+    def calculate_stock_futures_maintenance_margin(
+        self,
+        product_id: str,
+        date: datetime.date,
+        price: float,
+        fallback_to_earliest: bool = False,
+    ) -> Optional[float]:
+        """
+        - Description:
+            算出股票期貨的**每口維持保證金**（追繳門檻）
+
+            **維持與原始是兩個獨立的比例**，同一列裡分成兩欄，不可用固定折數
+            互推——理由同指數期貨那兩個公告金額。
+        - Parameters:
+            - product_id: str
+                股期代碼（Ex: CDF）
+            - date: datetime.date
+                查詢日
+            - price: float
+                標的證券價格
+        - Return:
+            - Optional[float]
+                每口維持保證金；比例或契約單位查不到時為 None
+        """
+
+        return self.calculate_stock_futures_margin_by_rate(
+            product_id,
+            date,
+            price,
+            self.MAINTENANCE_RATE_COLUMN,
+            fallback_to_earliest=fallback_to_earliest,
+        )
+
+    def calculate_stock_futures_margin_by_rate(
+        self,
+        product_id: str,
+        date: datetime.date,
+        price: float,
+        rate_column: str,
+        fallback_to_earliest: bool = False,
+    ) -> Optional[float]:
+        """
+        - Description:
+            股期每口保證金的共用算式 ＝ 標的股價 × 契約單位 × 指定的適用比例
+
+            原始與維持只差取哪一欄，兩處各寫一次算式必然漂移。
+        - Parameters:
+            - product_id / date / price: str, datetime.date, float
+                股期代碼、查詢日、標的證券價格
+            - rate_column: str
+                要取的比例欄位（`INITIAL_RATE_COLUMN` 或 `MAINTENANCE_RATE_COLUMN`）
+        - Return:
+            - Optional[float]
+                每口保證金；比例或契約單位查不到時為 None
+        """
+
         rates: Optional[Dict[str, float]] = self.get_margin_rates(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )
@@ -245,7 +313,7 @@ class FuturesMarginAPI(BaseDataAPI):
 
         if rates is None or contract_size is None:
             return None
-        return price * contract_size * rates["原始保證金適用比例"]
+        return price * contract_size * rates[rate_column]
 
     # === 涵蓋範圍 ===
     def get_covered_date_range(self, product: str) -> Optional[Dict[str, str]]:

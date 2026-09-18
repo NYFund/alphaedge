@@ -196,7 +196,7 @@ def _render_direction_summary(direction_summary: pd.DataFrame) -> None:
     if direction_summary.empty:
         st.info("找不到 `direction_summary.csv`。")
         return
-    st.dataframe(direction_summary, use_container_width=True, hide_index=True)
+    st.dataframe(direction_summary, width="stretch", hide_index=True)
 
 
 def _render_event_report(event_report: pd.DataFrame) -> None:
@@ -217,7 +217,7 @@ def _render_event_report(event_report: pd.DataFrame) -> None:
         st.success("回測期間沒有任何強制回補、斷頭或拒單事件。")
         st.caption(f"（已檢視 {len(event_report)} 種事件，全部為 0）")
         return
-    st.dataframe(counts, use_container_width=True, hide_index=True)
+    st.dataframe(counts, width="stretch", hide_index=True)
     st.caption(f"僅列出計數不為 0 者；報表共記錄 {len(event_report)} 種事件。")
 
 
@@ -274,7 +274,7 @@ def _render_futures_exposure_chart(df: pd.DataFrame) -> None:
     # 圖上出現從未發生過的中間值
     figure.update_traces(line_shape="hv")
     figure.update_layout(paper_bgcolor=theme["paper_bg"], plot_bgcolor=theme["plot_bg"])
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(figure, width="stretch")
 
     lots_figure = px.line(
         exposure, x=DATE_COLUMN, y=LOTS_COLUMN, markers=True, title="未平倉口數"
@@ -283,7 +283,7 @@ def _render_futures_exposure_chart(df: pd.DataFrame) -> None:
     lots_figure.update_layout(
         paper_bgcolor=theme["paper_bg"], plot_bgcolor=theme["plot_bg"]
     )
-    st.plotly_chart(lots_figure, use_container_width=True)
+    st.plotly_chart(lots_figure, width="stretch")
 
 
 def _get_chart_theme() -> dict[str, str]:
@@ -328,7 +328,7 @@ def _render_interactive_charts(df: pd.DataFrame, equity: pd.Series) -> None:
     equity_df = pd.DataFrame({"Date": list(equity.index), "Equity": equity.to_numpy()})
     line_fig = px.line(equity_df, x="Date", y="Equity", title="資產曲線（盯市）")
     _style(line_fig)
-    st.plotly_chart(line_fig, use_container_width=True)
+    st.plotly_chart(line_fig, width="stretch")
 
     daily_pnl = compute_daily_pnl(equity)
     if not daily_pnl.empty:
@@ -337,7 +337,7 @@ def _render_interactive_charts(df: pd.DataFrame, equity: pd.Series) -> None:
         )
         bar_fig = px.bar(pnl_df, x="Date", y="Daily PnL", title="每日損益（盯市）")
         _style(bar_fig)
-        st.plotly_chart(bar_fig, use_container_width=True)
+        st.plotly_chart(bar_fig, width="stretch")
 
 
 def _render_chart_images(chart_paths: Dict[str, Path | None]) -> None:
@@ -346,7 +346,7 @@ def _render_chart_images(chart_paths: Dict[str, Path | None]) -> None:
         if chart_path is None:
             st.warning(f"找不到 `{chart_name}` 圖檔。")
             continue
-        st.image(str(chart_path), caption=chart_path.name, use_container_width=True)
+        st.image(str(chart_path), caption=chart_path.name, width="stretch")
 
 
 strategy_dirs = list_strategy_dirs(RESULTS_ROOT)
@@ -405,11 +405,12 @@ with detail_tab:
     st.subheader("交易報表")
     # 一律依**平倉日**排序：`Sell Date` 對 SHORT 是開倉日
     detail_df = sort_by_exit_date(df)
-    # 期貨的識別欄是 Contract ID（`{商品}{到期月}`），股票是 Stock ID
+    # 期貨的識別欄是 Contract ID（`{商品}{到期月}`），股票是 Symbol。
+    # **`Stock ID` 是舊欄名**，保留在候選裡是為了讓改名前產出的結果資料夾照樣打得開
     stock_col = next(
         (
             column
-            for column in ("Stock ID", "Contract ID")
+            for column in ("Symbol", "Contract ID", "Stock ID")
             if column in detail_df.columns
         ),
         None,
@@ -424,7 +425,7 @@ with detail_tab:
         )
     else:
         filtered_df = detail_df
-    st.dataframe(filtered_df, use_container_width=True, height=480)
+    st.dataframe(filtered_df, width="stretch", height=480)
 
 with chart_tab:
     st.subheader("圖表")

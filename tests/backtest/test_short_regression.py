@@ -54,7 +54,7 @@ def assert_matches_snapshot(actual: pd.DataFrame, file_name: str) -> None:
         f"{file_name} 不存在，請先執行 make_short_baseline.py"
     )
 
-    expected: pd.DataFrame = pd.read_csv(snapshot_path, dtype={"Stock ID": str})
+    expected: pd.DataFrame = pd.read_csv(snapshot_path, dtype={"Symbol": str})
 
     assert len(actual) == len(expected), f"{file_name} 的列數與 baseline 不同"
     assert list(actual.columns) == list(expected.columns), (
