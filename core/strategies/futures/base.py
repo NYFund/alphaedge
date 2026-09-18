@@ -88,7 +88,10 @@ class BaseFuturesStrategy(BaseStrategy):
         self.margin_config: Optional[FuturesMarginConfig] = None
         # 換月設定；**策略挑合約與結算模型轉倉共用這一份**（見 `FuturesRollConfig`）
         self.roll_config: Optional[FuturesRollConfig] = None
-        # 成交假設（滑價、成交量上限）；None 時全部關閉，成交價即策略給的委託價
+        # 成交假設（滑價、成交量上限）；None 時全部關閉，成交價即策略給的委託價。
+        # **真正擋住型別錯誤的是 factory 的檢查，不是這行標註**：期貨的滑價以
+        # 跳動點表達，寫成基底的 `FillConfig(slippage_bps_buy=...)` 一樣跑得完，
+        # 只是假設默默換成基點，故 `build_tw_futures_backtester()` 會當場拋 TypeError
         self.fill_config: Optional[FuturesFillConfig] = None
 
         """ === Datasets Setting === """

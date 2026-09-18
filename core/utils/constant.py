@@ -444,6 +444,40 @@ FUTURES_MULTIPLIER: dict = {
 }
 
 
+# 台期貨最小升降單位（跳動點，單位：指數點）：滑價的 `slippage_ticks_*` 以此換算成價差
+#
+# **只登錄已查證的商品**，規矩與 `FUTURES_MULTIPLIER` 完全相同：查表一律直接用
+# `FUTURES_TICK_SIZE[code]`，**不要 `.get(code, 預設值)`**——跳動點猜錯不會有徵兆，
+# 只會讓滑價靜默偏掉，而且偏很多（TE 的一檔是 0.05 點，當成 1 點就是 20 倍）。
+#
+# 查證來源：TAIFEX 各商品契約規格頁的「最小升降單位」（2026-09-17 查）
+#   TX   https://www.taifex.com.tw/cht/2/tX    指數 1 點（相當於新臺幣 200 元）
+#   MTX  https://www.taifex.com.tw/cht/2/mTX   指數 1 點（相當於新臺幣 50 元）
+#   TMF  https://www.taifex.com.tw/cht/2/tMF   指數 1 點（相當於新臺幣 10 元）
+#   TE   https://www.taifex.com.tw/cht/2/tE    指數 0.05 點（相當於新臺幣 200 元）
+#   ZEF  https://www.taifex.com.tw/cht/2/zEF   指數 0.05 點（相當於新臺幣 25 元）
+#   TF   https://www.taifex.com.tw/cht/2/tF    指數 0.2 點（相當於新臺幣 200 元）
+#   ZFF  https://www.taifex.com.tw/cht/2/zFF   指數 0.2 點（相當於新臺幣 50 元）
+#
+# 交叉驗證：跳動點 × `FUTURES_MULTIPLIER` ＝ 規格頁標示的每跳金額，七項全數相符
+# （例：TE 0.05 × 4000 ＝ 200 元）。兩張表因此互為對方的護欄，改一張要同時對帳。
+#
+# ⚠️ **跳動點曾變更過的商品不可用單一數值表達**（理由同 `FUTURES_MULTIPLIER` 的
+# XIF 乘數）：跨越變更日的回測會靜默算錯，須比照 `PRICE_LIMIT_RATIO` ／
+# `_LEGACY` ／ `_WIDENED_DATE` 改為帶生效日的表達方式。上列七項在查證當下皆為
+# 現行規格；未登錄的商品（XIF／M1F／SOF／GTF／G2F／BTF／SHF／E4F 與股票期貨）
+# 一律不猜，要用它們得先查證後登錄，或在建構 `TwFuturesSpec` 時明確指定 tick_size。
+FUTURES_TICK_SIZE: dict = {
+    FUTURES_PRODUCT_TX: 1.0,
+    FUTURES_PRODUCT_MTX: 1.0,
+    FUTURES_PRODUCT_TMF: 1.0,
+    FUTURES_PRODUCT_TE: 0.05,
+    FUTURES_PRODUCT_ZEF: 0.05,
+    FUTURES_PRODUCT_TF: 0.2,
+    FUTURES_PRODUCT_ZFF: 0.2,
+}
+
+
 class StockFuturesType(str, Enum):
     """
     股票期貨（single stock futures）／ETF 期貨的商品類型

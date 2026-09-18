@@ -379,6 +379,25 @@ def test_price_inside_range_is_untouched() -> None:
     assert "fill_price_clamped" not in event_counts
 
 
+def test_clamping_does_not_mutate_the_caller_order() -> None:
+    """
+    夾價改的是副本，傳入的訂單不被動到
+
+    理由與 `fill()` 的「絕不就地修改傳入的 order」相同：策略可能持有同一個物件。
+    今天夾價只會發生在 `fill()` 產生的副本上（因為 `validate()` 先擋掉了區間外
+    的單），但那是呼叫順序的巧合，不該當成保證。
+    """
+
+    fill_model: TwStockFillModel = TwStockFillModel(event_counts=make_event_counts())
+    order: StockOrder = make_order(price=110.0)
+
+    clamped = fill_model.clamp_filled_price(order, make_quote())  # 區間 [95, 105]
+
+    assert clamped is not order
+    assert clamped.price == 105.0
+    assert order.price == 110.0
+
+
 def test_close_leg_only_warns_and_counts() -> None:
     """
     平倉腿超出區間只計數，不改價也不拒單

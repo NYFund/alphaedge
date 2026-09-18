@@ -1,6 +1,7 @@
 import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+from core.backtest.backtester import new_event_counts
 from core.backtest.models.cost_model import CostConfig, ShortConstraint, StockCostModel
 from core.managers.stock.position_manager import StockPositionManager
 from core.models import StockAccount, StockPosition, StockTradeRecord
@@ -14,6 +15,7 @@ def build_manager(
     is_day_trade: bool = False,
     constraint: Optional[ShortConstraint] = None,
     init_capital: float = 1000000.0,
+    event_counts: Optional[Dict[str, int]] = None,
 ) -> StockPositionManager:
     """建立指定放空管道的部位管理器"""
 
@@ -21,7 +23,51 @@ def build_manager(
     if constraint is not None:
         config.short_constraint = constraint
 
-    return StockPositionManager(StockAccount(init_capital), StockCostModel(config))
+    return StockPositionManager(
+        StockAccount(init_capital),
+        StockCostModel(config),
+        event_counts=event_counts,
+    )
+
+
+def test_long_open_rejected_by_balance_is_counted(make_order) -> None:
+    """
+    做多開倉餘額不足時要留下計數，不可靜默丟棄
+
+    舊版直接回 `None`，引擎的 `if open_position:` 不成立就跳過——沒有 log、
+    沒有計數，回測結果只是少一筆交易。開了滑價之後成交價高於 sizer 估算的
+    參考價，這條路徑正好會被觸發，而且完全看不出來。
+    """
+
+    event_counts: Dict[str, int] = new_event_counts()
+    # 1 張 100 元需要 100,000 元 ＋ 手續費，餘額差一點點就開不成
+    manager: StockPositionManager = build_manager(
+        init_capital=100000.0, event_counts=event_counts
+    )
+
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(action=Action.BUY, position_type=PositionType.LONG, price=100.0)
+    )
+
+    assert position is None  # **判斷邏輯完全沒動**：開不成還是開不成
+    assert event_counts["rejected_insufficient_balance"] == 1
+    assert manager.account.balance == 100000.0  # 餘額未被扣
+
+
+def test_long_open_with_enough_balance_is_not_counted(make_order) -> None:
+    """餘額足夠時照常開倉且不計數（防止改過頭）"""
+
+    event_counts: Dict[str, int] = new_event_counts()
+    manager: StockPositionManager = build_manager(
+        init_capital=200000.0, event_counts=event_counts
+    )
+
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(action=Action.BUY, position_type=PositionType.LONG, price=100.0)
+    )
+
+    assert position is not None
+    assert event_counts["rejected_insufficient_balance"] == 0
 
 
 def test_short_open_position_margin(make_order) -> None:

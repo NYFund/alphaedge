@@ -130,6 +130,36 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 換算出的檔數不同——TX 在 12,000 點時 1 bps 是 1.2 點、24,000 點時是 2.4 點，
 同一組設定跨年份回測會靜默變成不同的滑價假設。兩種都設時**以跳動點為準**。
 
+**跳動點逐商品查表**（`FUTURES_TICK_SIZE`）：TX／MTX／TMF 為 1 點、TE／ZEF 為 0.05 點、
+TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的價差。只登錄已查證的
+商品，未登錄者退回 1 點並記 warning——要用它們得先查證後登錄，或在建構 `TwFuturesSpec`
+時明確指定 `tick_size`（明確指定一律蓋過查表）。
+
+**期貨的 `fill_config` 必須是 `FuturesFillConfig`**：給基底的 `FillConfig` 會在
+`build_tw_futures_backtester()` 當場拋 `TypeError`。型別標註擋不住這件事——寫成
+`FillConfig(slippage_bps_buy=10)` 照樣跑得完，只是整組假設默默換成基點。
+
+### 滑價套用在哪些路徑
+
+| 路徑 | 台股 | 期貨 |
+|------|:----:|:----:|
+| 策略開倉單、平倉單與停損單 | ✅ `fill()` | ✅ `fill()` |
+| 引擎強制出場（當沖日終、追繳、持有天數、停券、無報價、到期兜底） | ✅ `apply_fill_price()` | ✅ `apply_fill_price()` |
+| 換月轉倉（平舊月、開新月**兩腿**） | — | ✅ `apply_fill_price()` |
+| 逐日盯市／每日權益快照 | ⛔ 刻意不套 | ⛔ 刻意不套 |
+
+三者用的是**同一組 `fill_config`**，不另開「強制出場專用滑價」旋鈕。
+
+**強制出場只取成交價、不走 `fill()`**：`fill()` 會做券源檢核與成交量上限，那兩項會
+拒單或縮量——而強制出場是市場規則強加的，拒掉它等於讓部位違規留倉，那比「拿不到
+理想價」嚴重得多。逐日盯市不套滑價則是因為它是**評價不是成交**。
+
+**強制出場的成交價超出當日區間時只警告並計數，不夾回**（計入
+`close_price_out_of_range`，與策略平倉腿同一個 key）：強制出場的時點是市場規則決定
+的，夾回等於換一個價格假設，而且一律把成交價推向對持有者有利的一側，正好抵銷滑價
+的保守意義。開倉腿則仍然夾回（`fill_price_clamped`）——拒單會讓「加了滑價之後訊號
+數反而變少」，比價格偏一點更難解釋。
+
 ### 計算順序：先滑價，再算費用
 
 ```
@@ -161,6 +191,7 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 | `rejected_limit_up_locked` | 全日鎖漲停（開高低收皆為漲停價），買進開倉被拒 |
 | `rejected_limit_down_locked` | 全日鎖跌停，放空開倉被拒 |
 | `rejected_volume_cap` | 超過成交量上限且政策為拒單（或上限不足一張） |
+| `rejected_insufficient_balance` | 餘額不足以支應**做多**開倉（部位價值 ＋ 開倉成本）；放空另有自己的 warning，不計入本 key |
 | `truncated_by_volume` | 超過成交量上限被縮量 |
 | `forced_cover_suspended` | 觸及停券強制回補日（除權息推導或手動指定） |
 | `rejected_short_suspended` | 停券期間（回補日 ~ 除權息交易日）的融券放空開倉被拒 |
@@ -170,6 +201,8 @@ class MyFuturesStrategy(BaseFuturesStrategy):
 | `dividend_received` | 跨除息日的做多部位收到現金股利 |
 | `share_adjustment_applied` | 配股、分割、減資造成的股數與每股成本調整 |
 | `forced_exit_no_quote` | 做多部位連續無報價（停牌／下市）達上限被強制出場 |
+| `fill_price_clamped` | 滑價把**開倉**成交價推出當日區間，被夾回 |
+| `close_price_out_of_range` | **平倉腿與引擎強制出場**的成交價超出當日區間（只計數不夾回） |
 
 ### 公司行動的記帳口徑
 

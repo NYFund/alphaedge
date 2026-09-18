@@ -91,12 +91,14 @@ def build_tw_stock_backtester(
     strategy.setup_account(account)
 
     cost_model: StockCostModel = StockCostModel(build_cost_config(strategy))
-    position_manager: StockPositionManager = StockPositionManager(account, cost_model)
+
+    # 事件計數由 factory 建立，引擎、FillModel 與部位管理層共用同一個 dict
+    event_counts: dict = new_event_counts()
+    position_manager: StockPositionManager = StockPositionManager(
+        account, cost_model, event_counts=event_counts
+    )
 
     instrument: TwStockSpec = TwStockSpec()
-
-    # 事件計數由 factory 建立，引擎與 FillModel 共用同一個 dict
-    event_counts: dict = new_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(
         instrument=instrument,
         event_counts=event_counts,
@@ -148,6 +150,8 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
            近似的誤差跨年份實測為 +143% ~ −38%（TX，而且會變號）。
         4. **`SettlementModel` 不需要 `cost_model`**：期貨在收盤後只做逐日盯市，
            不像台股要在此計提借券費與稅差。
+
+        另有一道 `fill_config` 的型別檢查，理由見函式內的註解。
     - Parameters:
         - strategy: BaseFuturesStrategy
             要回測的台期貨策略
@@ -184,6 +188,20 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
 
     instrument: TwFuturesSpec = TwFuturesSpec()
 
+    # **型別標註擋不住這件事，這道檢查才擋得住**：期貨的滑價以跳動點表達，
+    # 策略若寫成基底的 `FillConfig(slippage_bps_buy=...)` 照樣跑得完，只是
+    # `get_slippage_ticks()` 回 0、整組假設默默換成基點。不自動轉型是刻意的——
+    # 包成 `FuturesFillConfig` 會讓那組 bps 繼續生效，等於接受一個本就不該用的單位
+    if strategy.fill_config is not None and not isinstance(
+        strategy.fill_config, FuturesFillConfig
+    ):
+        raise TypeError(
+            f"{type(strategy).__name__}.fill_config 必須是 FuturesFillConfig，"
+            f"收到 {type(strategy.fill_config).__name__}。"
+            f"期貨的滑價以跳動點（slippage_ticks_*）表達，"
+            f"基底 FillConfig 只有基點（slippage_bps_*），兩者不可互換"
+        )
+
     # 事件計數由 factory 建立，引擎與 FillModel 共用同一個 dict
     event_counts: dict = new_event_counts()
     fill_model: TwFuturesFillModel = TwFuturesFillModel(
@@ -192,10 +210,13 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
         config=strategy.fill_config or FuturesFillConfig(),
     )
 
+    # **注入與引擎同一個 fill_model**（台股那邊同一個寫法）：強制平倉、到期兜底
+    # 與換月轉倉的兩腿因此與策略自己送的單吃同一組滑價
     settlement: TwFuturesSettlementModel = TwFuturesSettlementModel(
         position_manager=position_manager,
         instrument=instrument,
         roll_config=roll_config,
+        fill_model=fill_model,
     )
 
     return Backtester(

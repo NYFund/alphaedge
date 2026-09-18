@@ -372,6 +372,22 @@ def test_new_event_counts_contains_dividend_keys() -> None:
 
 
 # === 當沖轉融券留倉的餘額檢查 ===
+def make_day_trade_close_quote(close: float = 500.0) -> StockQuote:
+    """當沖日終那根 bar 的報價；轉留倉失敗時以其收盤價強制回補"""
+
+    return StockQuote(
+        stock_id=STOCK_ID,
+        scale=Scale.DAY,
+        date=datetime.date(2024, 1, 4),
+        cur_price=close,
+        volume=10_000,
+        open=close,
+        high=close,
+        low=close,
+        close=close,
+    )
+
+
 def make_day_trade_position(price: float = 500.0, volume: int = 1) -> StockPosition:
     """建立當沖放空部位（尚未回補）"""
 
@@ -399,7 +415,11 @@ def test_conversion_is_rejected_when_balance_is_insufficient() -> None:
     event_counts: Dict[str, int] = new_event_counts()
 
     settlement.convert_to_margin_position(
-        position, account, datetime.date(2024, 1, 4), 500.0, event_counts
+        position,
+        account,
+        datetime.date(2024, 1, 4),
+        make_day_trade_close_quote(),
+        event_counts,
     )
 
     assert event_counts["forced_cover_insufficient_margin"] == 1
@@ -417,7 +437,11 @@ def test_conversion_proceeds_when_balance_is_enough() -> None:
     event_counts: Dict[str, int] = new_event_counts()
 
     settlement.convert_to_margin_position(
-        position, account, datetime.date(2024, 1, 4), 500.0, event_counts
+        position,
+        account,
+        datetime.date(2024, 1, 4),
+        make_day_trade_close_quote(),
+        event_counts,
     )
 
     assert event_counts["forced_cover_insufficient_margin"] == 0
@@ -556,7 +580,9 @@ def test_forced_cover_applies_slippage() -> None:
     settlement: TwStockSettlementModel = make_settlement(account)
     settlement.fill_model = fill_model
 
-    settlement.force_cover_position(position, datetime.date(2024, 1, 4), 100.0)
+    settlement.force_cover_position(
+        position, datetime.date(2024, 1, 4), 100.0, make_stock_quote()
+    )
 
     record: StockTradeRecord = account.trade_records[-1]
     # 回補是買進，滑價往上；100 元 ＋ 100 bps 後對齊檔位

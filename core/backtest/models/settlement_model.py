@@ -21,6 +21,7 @@ from core.managers.futures.position_manager import (
 from core.managers.stock.position_manager import StockPositionManager
 from core.models import (
     BaseAccount,
+    BaseOrder,
     BasePosition,
     BaseQuote,
     FuturesAccount,
@@ -53,6 +54,57 @@ class BaseSettlementModel(ABC):
     在架構上是同一個掛點的兩種實作，看出這點之後就不需要兩個引擎。
     對應 Lean 的 SettlementModel / MarginCallModel / MarginInterestRateModel。
     """
+
+    def __init__(self, fill_model: Optional[BaseFillModel] = None) -> None:
+        # 引擎強制出場時同樣要走成交假設（滑價），否則同一支策略會有兩種口徑：
+        # 策略自己送的平倉單吃滑價、引擎的強制出場與換月轉倉不吃
+        self.fill_model: Optional[BaseFillModel] = fill_model
+
+    def apply_fill_price(
+        self, order: BaseOrder, quote: Optional[BaseQuote]
+    ) -> BaseOrder:
+        """
+        - Description:
+            對引擎自己送出的強制出場單套用滑價，並檢查是否落在當根 bar 的區間內
+
+            **台股與期貨共用這一份**：兩邊各寫一次必然漂移，而「強制出場要不要
+            吃滑價」在兩個市場是同一個問題的同一個答案。
+
+            **不走 `fill()` 而只取成交價**：`fill()` 會做券源檢核與成交量上限，
+            那兩項會拒單或縮量，而強制出場是市場規則強加的——拒掉它等於讓部位
+            違規留倉。這裡只補上「拿不到理想價」這一項。
+
+            **超出當日區間只警告不夾回**，與策略平倉腿同一個口徑
+            （計入 `close_price_out_of_range`）：強制出場的時點是市場規則決定的，
+            夾回等於換一個價格假設，而且一律把成交價推向對持有者有利的一側，
+            正好抵銷滑價的保守意義。
+
+            未注入 `fill_model`（純記憶體測試）或未設定滑價時原樣回傳。
+        - Parameters:
+            - order: BaseOrder
+                引擎產生的強制出場單
+            - quote: Optional[BaseQuote]
+                當根 bar 的報價；`None` 時跳過區間檢查——期貨「到期無報價」
+                那條路徑本來就沒有報價，那不是遺漏
+        - Return:
+            - BaseOrder
+                含滑價的訂單；未調整時為原物件
+        """
+
+        if self.fill_model is None:
+            return order
+
+        filled_price: float = self.fill_model.get_filled_price(order)
+
+        filled_order: BaseOrder = order
+        if filled_price != order.price:
+            filled_order = copy.copy(order)
+            filled_order.price = filled_price
+
+        if quote is not None:
+            self.fill_model.warn_close_price_out_of_range(filled_order, quote)
+
+        return filled_order
 
     @abstractmethod
     def on_bar_close(
@@ -232,6 +284,8 @@ class TwStockSettlementModel(BaseSettlementModel):
         max_no_quote_days: Optional[int] = None,
         fill_model: Optional[BaseFillModel] = None,
     ) -> None:
+        super().__init__(fill_model=fill_model)
+
         self.position_manager: StockPositionManager = position_manager
         self.cost_model: StockCostModel = cost_model
         self.instrument: InstrumentSpec = instrument or TwStockSpec()
@@ -247,10 +301,6 @@ class TwStockSettlementModel(BaseSettlementModel):
         self.margin_call_policy: MarginCallPolicy = margin_call_policy
         self.max_holding_days: Optional[int] = max_holding_days
         self.max_no_quote_days: Optional[int] = max_no_quote_days
-
-        # 引擎強制出場時同樣要走成交假設（滑價），否則同一支策略會有兩種口徑：
-        # 策略自己送的回補單吃滑價、引擎的當沖日終／追繳／無報價強制回補不吃
-        self.fill_model: Optional[BaseFillModel] = fill_model
 
         # 當日市場狀態，由引擎每根 bar 從 DataFeed 推入（本 model 不自行查資料源）
         self.force_cover_symbols: Set[str] = set()  # 今日觸及融券最後回補日的標的
@@ -329,7 +379,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 )
                 event_counts["limit_up_cover_failed"] += 1
                 self.convert_to_margin_position(
-                    position, account, date, quote.close, event_counts
+                    position, account, date, quote, event_counts
                 )
                 continue
 
@@ -343,7 +393,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"[Day Trade Cover] {position.symbol} 未回補，依政策轉為融券留倉"
                 )
                 self.convert_to_margin_position(
-                    position, account, date, quote.close, event_counts
+                    position, account, date, quote, event_counts
                 )
                 continue
 
@@ -351,7 +401,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"[Day Trade Cover] {position.symbol} 未回補，以收盤價 {quote.close} 強制回補"
             )
             event_counts["forced_cover_day_trade"] += 1
-            self.force_cover_position(position, date, quote.close)
+            self.force_cover_position(position, date, quote.close, quote)
 
     def check_limit_up_locked(self, quote: StockQuote) -> bool:
         """
@@ -376,7 +426,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         position: StockPosition,
         account: BaseAccount,
         date: datetime.date,
-        close_price: float,
+        quote: StockQuote,
         event_counts: Dict[str, int],
     ) -> None:
         """
@@ -401,8 +451,8 @@ class TwStockSettlementModel(BaseSettlementModel):
                 虛擬帳戶
             - date: datetime.date
                 當前交易日（餘額不足強制回補時的成交日）
-            - close_price: float
-                當日收盤價（餘額不足強制回補時的成交價）
+            - quote: StockQuote
+                當日報價；餘額不足強制回補時以其收盤價成交，並據以檢查成交價區間
             - event_counts: Dict[str, int]
                 事件計數
         """
@@ -420,6 +470,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         tax_diff: int = self.get_day_trade_tax_top_up(position)
 
         required: int = margin + borrow_fee + tax_diff
+        close_price: float = quote.close
         if account.balance < required:
             event_counts["forced_cover_insufficient_margin"] += 1
             if self.margin_call_policy == MarginCallPolicy.FORCE_COVER:
@@ -427,7 +478,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"[Day Trade Cover] {position.symbol} 轉融券留倉需 {required} 元，"
                     f"帳戶只有 {account.balance} 元，改以收盤價 {close_price} 強制回補"
                 )
-                self.force_cover_position(position, date, close_price)
+                self.force_cover_position(position, date, close_price, quote)
             else:
                 logger.warning(
                     f"[Day Trade Cover] {position.symbol} 轉融券留倉需 {required} 元，"
@@ -484,8 +535,26 @@ class TwStockSettlementModel(BaseSettlementModel):
         position: StockPosition,
         date: datetime.date,
         price: float,
+        quote: Optional[StockQuote],
     ) -> List[StockTradeRecord]:
-        """以指定價格強制回補放空部位（當沖日終、維持率追繳、超過持有天數共用）"""
+        """
+        - Description:
+            以指定價格強制回補放空部位（當沖日終、維持率追繳、超過持有天數共用）
+        - Parameters:
+            - position: StockPosition
+                要回補的放空部位
+            - date: datetime.date
+                成交日
+            - price: float
+                回補參考價（滑價前）
+            - quote: Optional[StockQuote]
+                當根 bar 的報價，供 `apply_fill_price()` 做區間檢查；
+                **不給預設值**是刻意的：停牌無報價時要明確傳 `None`，
+                而不是讓新增的呼叫端漏傳就靜默跳過檢查
+        - Return:
+            - List[StockTradeRecord]
+                回補產生的交易紀錄
+        """
 
         order: StockOrder = StockOrder(
             stock_id=position.symbol,
@@ -497,7 +566,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             short_method=position.short_method,
             is_day_trade=position.is_day_trade,
         )
-        return self.position_manager.close_position(self.apply_fill_price(order))
+        return self.position_manager.close_position(self.apply_fill_price(order, quote))
 
     def execute_daily_position_check(
         self,
@@ -802,15 +871,19 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
             )
             event_counts["forced_exit_no_quote"] += 1
-            self.force_exit_long_position(position, date, price)
+            # 走到這裡代表連續無報價，`quote_map.get()` 幾乎必然是 None（見上）
+            self.force_exit_long_position(
+                position, date, price, quote_map.get(position.symbol)
+            )
 
     def force_exit_long_position(
         self,
         position: StockPosition,
         date: datetime.date,
         price: float,
+        quote: Optional[StockQuote],
     ) -> None:
-        """以指定價格全量賣出做多部位（引擎強制出場用）"""
+        """以指定價格全量賣出做多部位（引擎強制出場用）；`quote` 供區間檢查，無報價時傳 None"""
 
         order: StockOrder = StockOrder(
             stock_id=position.symbol,
@@ -822,38 +895,9 @@ class TwStockSettlementModel(BaseSettlementModel):
         )
         self.position_manager.close_long_position(
             position=position,
-            stock_order=self.apply_fill_price(order),
+            stock_order=self.apply_fill_price(order, quote),
             close_volume=position.volume,
         )
-
-    def apply_fill_price(self, order: StockOrder) -> StockOrder:
-        """
-        - Description:
-            對引擎自己送出的強制出場單套用滑價
-
-            **不走 `fill()` 而只取成交價**：`fill()` 會做券源檢核與成交量上限，
-            那兩項會拒單或縮量，而強制出場是市場規則強加的——拒掉它等於讓部位
-            違規留倉。這裡只補上「拿不到理想價」這一項。
-
-            未注入 `fill_model`（純記憶體測試）或未設定滑價時原樣回傳。
-        - Parameters:
-            - order: StockOrder
-                引擎產生的強制出場單
-        - Return:
-            - StockOrder
-                含滑價的訂單；未調整時為原物件
-        """
-
-        if self.fill_model is None:
-            return order
-
-        filled_price: float = self.fill_model.get_filled_price(order)
-        if filled_price == order.price:
-            return order
-
-        filled_order: StockOrder = copy.copy(order)
-        filled_order.price = filled_price
-        return filled_order
 
     @staticmethod
     def to_dividend_per_share(value: Any) -> float:
@@ -915,6 +959,8 @@ class TwStockSettlementModel(BaseSettlementModel):
 
         for position in list(account.get_positions(position_type=PositionType.SHORT)):
             price: float = self.get_mark_price(position, quote_map)
+            # 停牌／下市時取不到報價，`apply_fill_price()` 遇到 None 會跳過區間檢查
+            quote: Optional[StockQuote] = quote_map.get(position.symbol)
 
             # 連續無報價（停牌／下市）：強制出場
             #
@@ -930,7 +976,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
                 )
                 event_counts["forced_cover_no_quote"] += 1
-                self.force_cover_position(position, date, price)
+                self.force_cover_position(position, date, price, quote)
                 continue
 
             # 超過最長持有天數：強制回補
@@ -943,7 +989,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"已達上限，以 {price} 強制回補"
                 )
                 event_counts["forced_cover_max_holding"] += 1
-                self.force_cover_position(position, date, price)
+                self.force_cover_position(position, date, price, quote)
                 continue
 
             # 停券強制回補日（使用者指定 ＋ 除權息行事曆推導的融券最後回補日）
@@ -954,7 +1000,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 # 停券與持有天數到期是兩種成因，記到同一個桶會讓「策略設定的持有上限
                 # 太短」與「標的停券」無法區分，兩者的因應方式完全不同
                 event_counts["forced_cover_suspended"] += 1
-                self.force_cover_position(position, date, price)
+                self.force_cover_position(position, date, price, quote)
                 continue
 
             # 維持率追繳
@@ -979,7 +1025,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"[Margin Call] {position.symbol} 維持率不足，以 {price} 強制回補（斷頭）"
             )
             event_counts["forced_cover_margin_call"] += 1
-            self.force_cover_position(position, date, price)
+            self.force_cover_position(position, date, price, quote)
 
     def update_no_quote_days(
         self,
@@ -1044,6 +1090,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     故本 model 在契約連續 `MAX_NO_QUOTE_DAYS` 根 bar 沒有報價時，以**最近一次
     結算價**強制出場並計入 `forced_cover_no_quote`。這是**兜底不是換月**：
     換月轉倉會先把月契約部位轉走，本段接住的是轉倉接不到的部位（例如週契約）。
+
+    ⚠️ **強制平倉與換月轉倉都走 `apply_fill_price()`**：追繳、到期兜底與轉倉的
+    兩腿吃的是與策略同一組 `fill_config`，故 log 印的「以 X 強制平倉」是**滑價前的
+    參考價**，實際入帳價另含滑價（轉倉的 log 則印含滑價後的價格，因為那是新部位的
+    成本）。設定裡沒開滑價時兩者相同。
     """
 
     # 契約連續幾根 bar 沒有報價就強制出場。
@@ -1059,7 +1110,10 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         position_manager: FuturesPositionManager,
         instrument: Optional[InstrumentSpec] = None,
         roll_config: Optional[FuturesRollConfig] = None,
+        fill_model: Optional[BaseFillModel] = None,
     ) -> None:
+        super().__init__(fill_model=fill_model)
+
         self.position_manager: FuturesPositionManager = position_manager
         self.instrument: InstrumentSpec = instrument or TwFuturesSpec()
 
@@ -1182,7 +1236,9 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             )
             event_counts["forced_cover_margin_call"] += 1
 
-            if not self.close_position_at(position, date, price):
+            if not self.close_position_at(
+                position, date, price, quote_map.get(position.symbol)
+            ):
                 # 平不掉就停手，否則會在同一根 bar 內無限重試
                 logger.warning(
                     f"[Margin Call] {position.symbol} 無法平倉，本根 bar 停止追繳處理"
@@ -1300,6 +1356,9 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         - Description:
             平掉舊契約並以相同口數與方向開新契約（展期價差如實入帳）
 
+            **兩腿都吃滑價**：實盤換月是真的送兩張單、吃兩次價差，只算平倉腿
+            會讓轉倉成本少一半。滑價沿用策略既有的 `fill_config`，不另開旋鈕。
+
             **兩腿一定要用同一種價**：舊版舊腿走盯市價
             （＝結算價），新腿卻用 `close`。結算價與收盤價在期貨是兩個不同的
             數字，混用會讓帳上多出一筆**不存在的展期價差**——而展期價差正是
@@ -1320,13 +1379,13 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         exit_price: float = self.get_mark_price(position, quote_map)
         entry_price: float = self.get_quote_mark_price(new_quote)
 
-        logger.info(
-            f"* Roll {position.symbol} → {new_quote.contract_id} "
-            f"({volume} lots @ {entry_price})"
+        self.close_position_at(
+            position, date, exit_price, quote_map.get(position.symbol)
         )
-        self.close_position_at(position, date, exit_price)
 
-        opened = self.position_manager.open_position(
+        # **開新月這一腿也要吃滑價**：實盤換月是真的送兩張單、吃兩次價差，
+        # 只算平倉腿會讓轉倉成本少一半，提前 N 日換月的策略因此系統性低估
+        entry_order: FuturesOrder = self.apply_fill_price(
             FuturesOrder(
                 product=new_quote.product,
                 expiry=new_quote.expiry,
@@ -1337,8 +1396,17 @@ class TwFuturesSettlementModel(BaseSettlementModel):
                 position_type=position_type,
                 price=entry_price,
                 volume=volume,
-            )
+            ),
+            new_quote,
         )
+
+        # log 印**含滑價後**的價格，否則與實際入帳價不一致
+        logger.info(
+            f"* Roll {position.symbol} → {new_quote.contract_id} "
+            f"({volume} lots @ {entry_order.price})"
+        )
+
+        opened = self.position_manager.open_position(entry_order)
         if opened is None:
             logger.warning(
                 f"[Roll] {new_quote.contract_id} 開倉失敗（多半是保證金不足），"
@@ -1360,7 +1428,8 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             策略永遠下不出那張平倉單，部位會留到回測結束並持續佔用保證金。
 
             出場價取 `position.price`——逐日盯市之後它就是最近一次結算價，
-            該部位到期前的損益早已逐日結進帳戶，故這一段的價差為 0。
+            該部位到期前的損益早已逐日結進帳戶，故這一段的價差為 0（有設滑價時
+            另扣一段，見 `apply_fill_price()`；**這條路徑沒有報價可做區間檢查**）。
             與真正的最終結算價（最後交易日次一營業日的特別開盤參考價）仍有落差，
             **正常情況下換月轉倉會先把部位轉走，這段是兜底**。
         - Parameters:
@@ -1385,15 +1454,35 @@ class TwFuturesSettlementModel(BaseSettlementModel):
                 f"無報價（契約已到期），以最近一次結算價 {position.price} 強制出場"
             )
             event_counts["forced_cover_no_quote"] += 1
-            self.close_position_at(position, date, position.price)
+            # 走到這裡的定義就是「連續無報價」，故一律傳 None 跳過區間檢查
+            self.close_position_at(position, date, position.price, None)
 
     def close_position_at(
         self,
         position: FuturesPosition,
         date: datetime.date,
         price: float,
+        quote: Optional[FuturesQuote],
     ) -> List[FuturesTradeRecord]:
-        """以指定價格強制平掉部位（多單賣出、空單買進回補）"""
+        """
+        - Description:
+            以指定價格強制平掉部位（多單賣出、空單買進回補）
+
+            **追繳、到期兜底與轉倉的平倉腿共用這一條**，滑價因此只接一次；
+            三者要拆開不同口徑的話得先在此處分流，而不是各自繞過 `apply_fill_price()`。
+        - Parameters:
+            - position: FuturesPosition
+                要平掉的部位
+            - date: datetime.date
+                成交日
+            - price: float
+                平倉參考價（滑價前，一般為當日結算價）
+            - quote: Optional[FuturesQuote]
+                當根 bar 的報價，供區間檢查；到期無報價那條路徑傳 `None`
+        - Return:
+            - List[FuturesTradeRecord]
+                平倉產生的交易紀錄
+        """
 
         order: FuturesOrder = FuturesOrder(
             product=position.product,
@@ -1408,7 +1497,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             price=price,
             volume=position.volume,
         )
-        return self.position_manager.close_position(order)
+        return self.position_manager.close_position(self.apply_fill_price(order, quote))
 
     def update_no_quote_days(
         self,

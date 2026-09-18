@@ -55,6 +55,7 @@ def new_event_counts() -> Dict[str, int]:
         "forced_cover_no_quote": 0,  # 連續無報價（停牌／下市）強制出場
         "limit_up_cover_failed": 0,  # 漲停鎖死無法回補
         "rejected_max_holdings": 0,  # 超過最大持倉檔數被引擎剔除的開倉單
+        "rejected_insufficient_balance": 0,  # 餘額不足以支應做多開倉（部位價值 ＋ 開倉成本）
         "rejected_no_borrow": 0,  # 融券餘額不足被拒的放空開倉單
         "rejected_short_suspended": 0,  # 停券期間被拒的融券放空開倉單
         "rejected_limit_up_locked": 0,  # 全日鎖漲停、買不到，被拒的買進開倉單

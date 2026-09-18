@@ -3,7 +3,10 @@ import math
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
+from loguru import logger
+
 from core.utils import (
+    FUTURES_TICK_SIZE,
     PRICE_LIMIT_RATIO,
     PRICE_LIMIT_RATIO_LEGACY,
     PRICE_LIMIT_WIDENED_DATE,
@@ -25,7 +28,13 @@ class InstrumentSpec(ABC):
     對應 Lean 的 SymbolProperties。
     """
 
-    def apply_slippage(self, price: float, action: Action, bps: float) -> float:
+    def apply_slippage(
+        self,
+        price: float,
+        action: Action,
+        bps: float,
+        product: Optional[str] = None,
+    ) -> float:
         """
         - Description:
             對參考價套用滑價，回傳含滑價的成交價
@@ -43,6 +52,8 @@ class InstrumentSpec(ABC):
                 訂單動作；買進加價、賣出減價
             - bps: float
                 滑價基點（1 bps = 0.01%）；`0` 時原價回傳，不做任何對齊
+            - product: Optional[str]
+                商品代碼，只有跳動點逐商品不同的市場（期貨）會用到
         - Return:
             - float
                 含滑價的成交價
@@ -54,8 +65,8 @@ class InstrumentSpec(ABC):
         ratio: float = bps / BPS_PER_UNIT
 
         if action == Action.BUY:
-            return self.round_to_tick(price * (1 + ratio), "up")
-        return self.round_to_tick(price * (1 - ratio), "down")
+            return self.round_to_tick(price * (1 + ratio), "up", product)
+        return self.round_to_tick(price * (1 - ratio), "down", product)
 
     @abstractmethod
     def to_units(self, volume: int) -> int:
@@ -72,7 +83,12 @@ class InstrumentSpec(ABC):
         pass
 
     @abstractmethod
-    def round_to_tick(self, price: float, direction: str = "nearest") -> float:
+    def round_to_tick(
+        self,
+        price: float,
+        direction: str = "nearest",
+        product: Optional[str] = None,
+    ) -> float:
         """
         - Description:
             將價格對齊該商品的跳動點，避免算出不可能成交的價格
@@ -81,6 +97,8 @@ class InstrumentSpec(ABC):
                 原始價格
             - direction: str
                 取整方向："up"（進位）、"down"（捨去）、"nearest"（就近）
+            - product: Optional[str]
+                商品代碼；只有跳動點逐商品不同的市場（期貨）需要，台股用不到
         - Return:
             - float
                 對齊檔位後的價格
@@ -112,8 +130,13 @@ class TwStockSpec(InstrumentSpec):
 
         return StockUtils.convert_lot_to_share(volume)
 
-    def round_to_tick(self, price: float, direction: str = "nearest") -> float:
-        """對齊台股六段分段檔位"""
+    def round_to_tick(
+        self,
+        price: float,
+        direction: str = "nearest",
+        product: Optional[str] = None,
+    ) -> float:
+        """對齊台股六段分段檔位（`product` 用不到：台股的檔位由價格級距決定）"""
 
         return StockUtils.round_to_tick(price, direction)
 
@@ -230,7 +253,7 @@ class TwStockSpec(InstrumentSpec):
 
 class TwFuturesSpec(InstrumentSpec):
     """
-    台期貨規格：跳動點 1 點（台指期系列）、**無固定漲跌停**
+    台期貨規格：跳動點**逐商品查表**、**無固定漲跌停**
 
     與 `TwStockSpec` 的兩個根本差異，兩個都會讓沿用股票習慣的人靜默算錯：
 
@@ -244,40 +267,97 @@ class TwFuturesSpec(InstrumentSpec):
        故 `get_price_limits()` 一律回傳 `(None, None)`，`TwFuturesFillModel`
        也不做漲跌停檢查。
 
-    **跳動點只登錄已查證的商品**（理由同 `FUTURES_MULTIPLIER`：猜錯不會有徵兆）：
-    台指期系列（TX／MTX／TMF）為 1 點。電子期、金融期與股票期貨的跳動點不同且
-    尚未查證，要回測那些商品必須在建構時明確指定 `tick_size`；
-    逐商品查證後再改為依商品查表。
+    **跳動點逐商品查表**（`FUTURES_TICK_SIZE`，只登錄已查證的商品）：同一個
+    `slippage_ticks_*` 設定在 TX 是 1 點、在 TE 是 0.05 點，寫死單一數值會讓
+    非台指期系列的滑價偏掉 20 倍，而且不會有任何徵兆。故本 spec 不再自帶
+    唯一的跳動點——需要對齊檔位的呼叫端**一律把 `product` 傳進來**。
     """
 
-    DEFAULT_TICK_SIZE: float = 1.0  # 台指期系列的最小跳動點（點）
+    # 未帶商品資訊、或商品尚未登錄時的退回值（台指期系列的跳動點）
+    DEFAULT_TICK_SIZE: float = 1.0
 
-    def __init__(self, tick_size: float = DEFAULT_TICK_SIZE) -> None:
-        self.tick_size: float = tick_size  # 最小跳動點（點）
+    def __init__(self, tick_size: Optional[float] = None) -> None:
+        # **明確指定時一律覆寫查表**：留給尚未登錄的商品與單一契約的測試；
+        # `None`（正常回測路徑）代表逐商品查 `FUTURES_TICK_SIZE`
+        self.tick_size: Optional[float] = tick_size
+
+    def get_tick_size(self, product: Optional[str] = None) -> float:
+        """
+        - Description:
+            取得該商品的最小跳動點
+
+            三層順序：建構時明確指定的值 → `FUTURES_TICK_SIZE` 查表 → 退回
+            `DEFAULT_TICK_SIZE`。
+
+            **未登錄的商品退回預設值而不是中斷**：跳動點只在「對齊檔位」與
+            「以檔數表達的滑價」兩處生效，滑價預設為 0 時整條路徑沒有作用，
+            為此炸掉一場本來跑得起來的回測不成比例。但退回的那一次要被看見，
+            故記一筆 warning——`FUTURES_TICK_SIZE[code]` 本身仍維持不給預設值，
+            直接查表的呼叫端照樣會 `KeyError`。
+        - Parameters:
+            - product: Optional[str]
+                商品代碼；`None` 表示呼叫端沒有商品資訊
+        - Return:
+            - float
+                該商品的跳動點（點）
+        """
+
+        if self.tick_size is not None:
+            return self.tick_size
+
+        if not product:
+            return self.DEFAULT_TICK_SIZE
+
+        if product not in FUTURES_TICK_SIZE:
+            logger.warning(
+                f"[Instrument] {product} 的跳動點尚未登錄於 FUTURES_TICK_SIZE，"
+                f"暫以 {self.DEFAULT_TICK_SIZE} 點計算；"
+                f"以跳動點數設定的滑價與檔位對齊都會失真，請查證後登錄"
+            )
+            return self.DEFAULT_TICK_SIZE
+
+        return FUTURES_TICK_SIZE[product]
 
     def to_units(self, volume: int) -> int:
         """口 → 口（**不乘契約乘數**，理由見 class docstring 第 1 點）"""
 
         return volume
 
-    def round_to_tick(self, price: float, direction: str = "nearest") -> float:
+    def round_to_tick(
+        self,
+        price: float,
+        direction: str = "nearest",
+        product: Optional[str] = None,
+    ) -> float:
         """
         - Description:
-            將價格對齊跳動點；`tick_size` 未設定（≤ 0）時原價回傳
+            將價格對齊該商品的跳動點；跳動點 ≤ 0 時原價回傳
+
+            **多一個 `product` 參數**（台股那份沒有）：台股的檔位由價格級距決定，
+            期貨的跳動點由商品決定。不傳商品時退回 `DEFAULT_TICK_SIZE`，
+            滑價算對了卻被對齊推回去的話，兩邊要一起看。
         - Parameters:
             - price: float
                 原始價格
             - direction: str
                 取整方向："up"（進位）、"down"（捨去）、"nearest"（就近）
+            - product: Optional[str]
+                商品代碼，決定採用哪一個跳動點
         - Return:
             - float
                 對齊跳動點後的價格
         """
 
-        if self.tick_size <= 0:
+        tick_size: float = self.get_tick_size(product)
+
+        if tick_size <= 0:
             return price
 
-        ticks: float = price / self.tick_size
+        # **先吸收除法的浮點誤差再取整**：17999.8 / 0.2 在浮點下是
+        # 89998.99999999999，往下取整會整整少一檔。跳動點是整數（1 點）時看不到
+        # 這件事，TF／ZFF 的 0.2 點與 TE／ZEF 的 0.05 點才會踩到。
+        # 取到小數第 9 位遠小於任何有意義的價差，不會吃掉真正落在檔位之間的價格
+        ticks: float = round(price / tick_size, 9)
 
         if direction == "up":
             aligned: float = math.ceil(ticks)
@@ -288,7 +368,7 @@ class TwFuturesSpec(InstrumentSpec):
             aligned = math.floor(ticks + 0.5)
 
         # 浮點誤差會讓 0.05 這類跳動點算出 18000.049999999999
-        return round(aligned * self.tick_size, 10)
+        return round(aligned * tick_size, 10)
 
     def get_price_limits(
         self, prev_close: float
