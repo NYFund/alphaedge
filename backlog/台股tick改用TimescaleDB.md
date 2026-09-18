@@ -14,10 +14,14 @@
   - **不做**台股日頻資料的 SQLite → PostgreSQL 遷移，那是 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的範圍；本文件只和它共用 PostgreSQL 容器、driver 與連線層。
   - **不改**爬蟲（`StockTickCrawler`）與清洗邏輯（`StockTickCleaner` 的欄位格式），也不改 tick 回測引擎的成交語意。
   - **不做** tick 回補續跑到今天。回補要不要做、做多少是另一個決策，本文件只保證 updater 在新儲存上可以續跑。
+  - **實作完成後不自動把資料寫進正式資料庫**（2026-09-18 使用者裁示）。以下三件事都**等使用者明確下指令才執行**，程式與腳本寫好、以抽樣或測試 schema 驗證過即為該步驟完成：
+    1. `data/downloads/tw_stock/tick/` 的 541 檔全量入庫——那個資料夾只是**測試素材**，開發過程一律只取少量抽樣（Phase4-2）。
+    2. 雲端歷史 CSV 的全量匯入（Phase4-3）。
+    3. 跑 `python -m tasks.update_db --target tick`——它會實際爬取並寫入正式資料表（Phase2-2 的驗證改以替身取代 crawler）。
 - **驗收標準**：
-  1. 雲端歷史 CSV 全數入庫，每個「股票 × 交易日」的列數與 CSV 一致。
+  1. 雲端歷史 CSV 全數入庫，每個「股票 × 交易日」的列數與 CSV 一致。**這一條要等使用者要求全量匯入後才驗**；在那之前，前四個 Phase 的驗收以抽樣樣本為準。
   2. `StockTickAPI` 四個公開方法在 TimescaleDB 上回傳相同欄位；Mac 本機查一天全市場 `get_ordered_ticks()` 的耗時已記錄，並符合 Phase4-2 定下的門檻。
-  3. `python -m tasks.update_db --target tick` 可寫入 TimescaleDB，重跑同一區間不產生重複列。
+  3. `python -m tasks.update_db --target tick` 可寫入 TimescaleDB，重跑同一區間不產生重複列。**這一條以替身或測試 schema 驗證**；真的對正式資料表跑更新要等使用者指令。
   4. 台股 tick 相關程式不再 import `dolphindb`，`pytest` 全數通過。
 
 ---
@@ -42,8 +46,8 @@
 | Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-2 |
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/adapters/tw/stock_quote_adapter.py`、`core/api/base.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
 | Phase4-1 | 盤點 Google 雲端的歷史 CSV | 本文件（盤點紀錄） | 檔案佈局、日期範圍、總列數、欄位格式差異寫入本文件 | ⬜ | **無相依，可最先做**；結果可能改變 Phase2-1 的 CSV 解析 |
-| Phase4-2 | 試點：本機 541 檔入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時 | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1 |
-| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」的 DB 列數＝CSV 列數＝`load_log.row_count` | ⬜ | 相依 Phase4-1、Phase4-2 |
+| Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1；**只用抽樣，541 檔全量入庫需使用者要求**（見〈範圍界線〉） |
+| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」的 DB 列數＝CSV 列數＝`load_log.row_count` | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ⬜ | 相依 Phase2-2、Phase3-1 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* tasks` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示** |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
@@ -219,7 +223,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 加上 `healthcheck`（`pg_isready`）、port `5432:5432`，帳密從 `.env` 的 `POSTGRES_USER`／`POSTGRES_PASSWORD`／`POSTGRES_DB=alphaedge` 讀取。
   - `.env.example` 補上述三個鍵。
   - service 名稱用 `postgres` 而不是 `timescaledb`：[PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase0-1 會沿用同一個 service，TimescaleDB image 本身就是完整的 PostgreSQL。
-  - **Docker Desktop 的 Disk usage limit 要調到 ≥ 150 GB**（Settings → Resources），避免 Phase4-3 匯入途中寫滿磁碟。
+  - **Docker Desktop 的 Disk usage limit 要調到 ≥ 150 GB**（Settings → Resources），避免 Phase4-3 匯入途中寫滿磁碟。**這件事在全量匯入前做即可**：抽樣試點（Phase4-2）只有幾十 MB，不必為它先調。
+- **2026-09-18 裁示：維持 Docker，不走本機安裝。** 曾評估以 Homebrew 直接裝 `postgresql@17` ＋ `timescale/tap` 的 `timescaledb`（程式面完全不受影響——Phase0-2 之後只認 `TICK_DATABASE_URL`，只有本步驟會變）。本機路線的好處是原生 I/O、沒有 Docker Desktop 的磁碟上限；代價是 brew 只給當下版本、鎖不住 `2.x-pg17`，`brew upgrade` 動到 postgres 時要重跑 `timescaledb-tune`，且 [PostgreSQL遷移計畫](PostgreSQL遷移計畫.md) Phase0-1「沿用同一個 service」的規劃要改寫。**結論是維持 Docker**：全量匯入已改為等使用者要求（見〈範圍界線〉），I/O 的代價在抽樣試點根本不會發生，而版本鎖定與跨計畫共用是現在就受用的。真的要做全量匯入時，可再評估是否改走本機 instance（資料以 `pg_dump` 帶走或重跑匯入腳本即可）。
 - **產出**：`docker-compose.yml`、`.env.example`。
 - **驗證方式**：`docker compose up -d postgres` 之後，執行 `docker compose exec postgres psql -U $POSTGRES_USER -d alphaedge -c "CREATE EXTENSION IF NOT EXISTS timescaledb; SELECT extversion FROM pg_extension WHERE extname = 'timescaledb';"` 有回傳版本號。
 - **相依**：無。
@@ -346,7 +351,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `scripts/manual/manual_init_tick_metadata.py` 失去用途，在 Phase5-2 刪除。
   - 模組說明字串（`"""台股 tick 的 DolphinDB 與 metadata 工具"""`）與 class docstring 同步更新。
 - **產出**：`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`。
-- **驗證方式**：以 Phase4-2 的 3 天樣本入庫後，手動刪掉某檔股票最後一天的 `load_log` 與資料，對 2024-05-13～05-15 跑 `update()`（可用替身取代 crawler），只有那檔股票被重爬。
+- **驗證方式**：以 Phase4-2 的 3 天樣本入庫後，手動刪掉某檔股票最後一天的 `load_log` 與資料，對 2024-05-13～05-15 跑 `update()`（**crawler 一律用替身**，不對外連線、也不對正式資料表跑真實更新，見〈範圍界線〉），只有那檔股票被重爬。
 - **相依**：Phase2-1。
 
 ---
@@ -410,28 +415,32 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **驗證方式**：盤點紀錄涵蓋上述 5 項。
 - **相依**：無，可最先做。
 
-### Phase4-2. 試點：本機 541 檔入庫與效能量測 ⬜
+### Phase4-2. 試點：本機抽樣檔案入庫與效能量測 ⬜
 
 - **目的**：在全量匯入前驗證 schema 與冪等性，量測壓縮率和查詢速度，決定 chunk 間隔要不要調整。
+- **`data/downloads/tw_stock/tick/` 只當測試素材**（2026-09-18 使用者裁示）：本步驟**只取抽樣**，不要對 541 檔全跑一次。整個資料夾入庫要等使用者明確要求，屆時再依本步驟的做法擴大重跑一次即可。
 - **做法**：
-  1. 對 `data/downloads/tw_stock/tick/` 的 541 個 CSV 跑 `StockTickLoader().add_to_db()`，記錄耗時。
+  1. 從 `data/downloads/tw_stock/tick/` 取**約 20 檔**（涵蓋成交量大小不同的股票，例如 `2330`、`1101`、`9958` 與幾檔冷門股），複製到暫存目錄後以 `add_to_db(dir_path=...)` 入庫，記錄耗時與樣本列數。
+     - `add_to_db()` 的 `dir_path` 參數（Phase2-1）就是為了這件事：**不要**直接對 `TICK_DOWNLOADS_PATH` 整個資料夾跑。
   2. 記錄壓縮前大小：`hypertable_size('stock_tick')`。
   3. `compress_chunks_before(datetime.date(2024, 5, 16))` 之後，記錄 `hypertable_compression_stats('stock_tick')`。
   4. 分別在**壓縮前**與**壓縮後**，各量 3 次：
      - `StockTickAPI().get_ordered_ticks(d, d)`（三天各一次）
      - `get_stock_ticks("2330", d, d)`
-  5. 把量測值依「全市場每日列數 ÷ 樣本每日列數」換算成全市場的推估耗時。
+  5. 把量測值依「全市場每日列數 ÷ **樣本**每日列數」換算成全市場的推估耗時。
+     - **換算基準要寫進量測紀錄**：樣本只有 20 檔時，倍數會拉到 50～100 倍，換算誤差比 541 檔大。門檻踩線（8～12 秒）時不要直接下結論，改為向使用者說明並請求擴大樣本。
 - **門檻**：換算後全市場單日 `get_ordered_ticks()` **≤ 10 秒**，以 1,000 個交易日的回測來說約 3 小時。超過時依序檢查：
   - 是否誤用 `SELECT *`
   - `ORDER BY` 能否由壓縮的 `orderby` 直接提供
   - 改用 ConnectorX 的 `return_type="arrow"` 再轉 pandas
-- **產出**：本步驟末尾的「量測紀錄」表。
-- **驗證方式**：量測紀錄填寫完整；DB 列數與 CSV 總列數（957,262）一致。
+- **產出**：本步驟末尾的「量測紀錄」表（含樣本檔數、樣本列數與換算倍數）。
+- **驗證方式**：量測紀錄填寫完整；**抽樣**檔案的 DB 列數與其 CSV 列數一致（全市場總列數 957,262 留到全量入庫時才對得上）。
 - **相依**：Phase1-3、Phase2-1、Phase3-1。
 
 ### Phase4-3. 歷史 CSV 全量匯入與完整性比對 ⬜
 
 - **目的**：把雲端的歷史資料全部搬進 TimescaleDB。
+- **執行時機**：**腳本可以先寫好，真正跑匯入要等使用者要求**（2026-09-18 裁示，與 Phase4-2 同一條）。本機 `data/downloads/tw_stock/tick/` 的 541 檔若要全量入庫，也走這支腳本（`--source-dir` 指過去），同樣等要求。
 - **做法**：新增 `scripts/manual/manual_tick_history_import.py`：
   - 參數：`--source-dir`、`--start-date`、`--end-date`、`--resume`。
   - **逐週處理**：載入一週 → `compress_chunks_before(該週結束)` → 在 log 記錄進度 → 下一週。峰值磁碟用量只會多出一週的未壓縮資料。
@@ -488,7 +497,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **設定**：`core/config/settings.py`（`TICK_UPDATE_START_DATE`、`DDB_*`、tick 爬蟲多帳號 `API_KEYS`）、`core/config/schema.py`（`TICK_DB_*`、`require_tick_db_path()`、`TICK_TABLE_NAME`、`FUTURES_TICK_TABLE_NAME`）、`core/config/__init__.py`、`core/pipeline/utils/constant.py`、`pyproject.toml`（`tick` extra 與 per-file-ignores）、`.env.example`。
   - **測試**：`tests/test_futures_tick.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_strategy_data_access.py`、`tests/test_api_public_interfaces.py`、`tests/test_config_consistency.py` 的 tick 相關段落。
   - **文件**：兩份 README、`strategy_lab/README.md`、`scripts/manual/README.md`，以及 `docs/` 下 `pipeline/etl-ingestion.md`、`futures/tw-futures-platform.md`、`setup/dev-setup.md`、`exchanges/data_coverage.md`、`backtest/module-map.md`、`deployment/dev-deployment.md`、`dev/runtime-artifacts.md`、`dev/code-quality.md`、兩份 `commands/command-usage*.md`。
-  - **本機資料**（不在版控）：`data/downloads/tw_stock/tick/` 541 個 CSV 與 `tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。
+  - **本機資料**（不在版控）：`data/downloads/tw_stock/tick/` 541 個 CSV 與 `tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**這 541 個 CSV 是目前唯一的本機測試素材，不刪**（本步驟只刪 `tick_metadata.json`）；它們要不要入庫見〈範圍界線〉。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core tasks scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
 - **相依**：Phase4-3（確認新儲存資料完整後才刪對照）、Phase5-1。

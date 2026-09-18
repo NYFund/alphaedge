@@ -5,7 +5,8 @@
 - **背景／問題**：專案以 SQLite3 為主要儲存，分成 `data/db/tw_stock.db`（台股）與 `data/db/tw_futures.db`（台期貨）兩個檔。資料存取層（`core/dao/`）完成後，SQL 與 SQLite 專屬語法已集中在 15 支 DAO 與 `BaseDAO`，`core/dao/` 以外不再 `import sqlite3`（分層檢查強制）；但 DAO 內部仍是 `sqlite3`（`INSERT OR IGNORE／REPLACE`、`SAVEPOINT`、`sqlite_master`、`GLOB`），21 處以 `connect_sqlite()` 開連線，40 個測試檔直接建立 SQLite 連線。
 - **目標**：導入 SQLAlchemy Engine 作為統一資料庫介面，分階段把讀取、寫入、測試與部署路徑遷移到 PostgreSQL（兩個 SQLite 檔併入單一 `alphaedge` 資料庫），並保留可回退方案至少一個版本週期。
 - **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：2026-09-14 已決定往後不再使用 DolphinDB、tick 不回補，`StockTickAPI` 等 DolphinDB 程式不遷移。
-- **驗收標準**：主要流程（資料更新、查詢、回測讀取）在 PostgreSQL 可完整執行；核心 smoke ＋ integration 測試在 PostgreSQL 環境通過；文件與部署配置已更新且可重現；SQLite 依賴已降到可移除或已完全移除。
+  **實作完成後不自動遷移資料、也不自動切換 backend**（2026-09-18 使用者裁示）：Phase3-2 的一次性資料遷移與 Phase5-1 的灰度切換（把 `DATABASE_URL` 指向 PostgreSQL，日更就會寫進新庫）都**等使用者明確下指令才執行**。遷移腳本可以先寫好，並以小表或測試資料驗證；正式庫的搬遷與切換時機由使用者決定。這與 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 的同一條裁示一致。
+- **驗收標準**（**Phase3-2 之後的項目要等使用者下令遷移才驗得到**）：主要流程（資料更新、查詢、回測讀取）在 PostgreSQL 可完整執行；核心 smoke ＋ integration 測試在 PostgreSQL 環境通過；文件與部署配置已更新且可重現；SQLite 依賴已降到可移除或已完全移除。
 
 ---
 
@@ -53,10 +54,10 @@
 | Phase2-3 | 驗證查詢 API 與回測 DataFeed 兩種 backend 結果一致 | `core/api/base.py`、`core/api/tw/*.py`、`core/backtest/datafeed/tw/*.py`（僅連線取得與關閉） | 各 API 查詢結果與 SQLite 一致；回測回歸雙線逐筆相同 | ⬜ | 相依 Phase2-2；欄位 Enum 下沉 `core/config/schema.py` 已於 DAO 重構時完成 |
 | Phase2-4 | 改造 scripts | `scripts/manual/manual_db_tables.py` | 可在 PostgreSQL 正常執行 | ⬜ | 相依 Phase1-2；`tasks/delete_price_data.py` 已走 `StockPriceDAO`，不必改 |
 | Phase3-1 | 選定資料遷移方案（pgloader 或 Python ETL） | 本文件（決策紀錄） | 決策與理由寫入本文件 | ⬜ | 相依 Phase2-1~Phase2-4；中文欄位名稱需特別驗證 |
-| Phase3-2 | 執行一次性資料遷移與完整性比對 | 遷移腳本／指令紀錄 | 每張表 row count 比對、主鍵完整性、抽樣 20 筆查詢一致 | ⬜ | 相依 Phase3-1 |
+| Phase3-2 | 執行一次性資料遷移與完整性比對 | 遷移腳本／指令紀錄 | 每張表 row count 比對、主鍵完整性、抽樣 20 筆查詢一致 | ⬜ | 相依 Phase3-1；**腳本可先寫好，實際遷移要等使用者指令**（見〈範圍界線〉） |
 | Phase4-1 | 測試 fixture 支援 PostgreSQL 測試資料庫 | `tests/conftest.py`（`memory_conn`、`dao_factory`）、直接 `import sqlite3` 的 40 個測試檔 | 不再直接建立 SQLite 連線灌樣本 | ⬜ | 相依 Phase2-1~Phase2-4；`sqlite3.connect` 116 處、手寫 `CREATE TABLE` 14 處 |
 | Phase4-2 | 補齊核心路徑測試覆蓋 | `tests/` | `update_db` 各 target、FinMind loader/updater、API 查詢、去重與主鍵衝突 | ⬜ | 相依 Phase4-1 |
-| Phase5-1 | 灰度：開發環境全面改 PostgreSQL，保留 SQLite fallback | — | 觀察期內無資料不一致 | ⬜ | 相依 Phase4-2 |
+| Phase5-1 | 灰度：開發環境全面改 PostgreSQL，保留 SQLite fallback | — | 觀察期內無資料不一致 | ⬜ | 相依 Phase4-2；**切換 backend 要等使用者指令**（見〈範圍界線〉） |
 | Phase5-2 | 移除 SQLite 專屬程式碼與舊路徑 | 全專案 | 全域搜尋無 `import sqlite3` 殘留 | ⬜ | 相依 Phase5-1；至少保留一個版本週期後再執行 |
 | Phase5-3 | 更新 README 與部署文件 | `README.md`、`README_en.md`、`docs/deployment/`、`docs/setup/dev-setup.md` | 團隊可依文件重現部署 | ⬜ | 相依 Phase5-2 |
 
@@ -210,6 +211,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 ### Phase3-2. 執行遷移與完整性比對 ⬜
 
 - **目的**：確保資料一筆不漏、型別無誤。
+- **執行時機**：**遷移腳本（或 pgloader 指令）可以先寫好並以小表試跑，真正對正式庫執行要等使用者下指令**（2026-09-18 裁示，見〈範圍界線〉）。本步驟在腳本備妥、小表驗證通過時即可視為可交付，正式遷移另外記錄日期與結果。
 - **做法**：依 Phase3-1 選定的方案執行，並建立索引與 constraints。
 - **產出**：遷移腳本或指令紀錄。
 - **驗證方式**：至少三項——① 每張表 row count 比對；② 主鍵／唯一鍵完整性；③ 抽樣 20 筆關鍵查詢結果一致。
@@ -245,6 +247,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 ### Phase5-1. 灰度切換 ⬜
 
 - **目的**：先在低風險環境驗證，保留回退能力。
+- **執行時機**：**把 `DATABASE_URL` 指向 PostgreSQL 等於讓日更開始寫進新庫，這個切換要等使用者下指令**（2026-09-18 裁示，見〈範圍界線〉）。在那之前 `DATABASE_URL` 保持未設定，程式走 SQLite fallback。
 - **做法**：開發環境全面改 PostgreSQL，保留 SQLite fallback。
 - **產出**：環境設定變更。
 - **驗證方式**：觀察期內日更與回測流程無資料不一致。

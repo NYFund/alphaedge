@@ -95,7 +95,8 @@ Target 對照表
   futures_margin              台期貨保證金（變動序列，寫入 tw_futures.db）
   futures_continuous          台期貨連續合約（由 futures_price_daily 建出，不連網路）
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
-  futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔）
+  futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
+                              **不含在 all／no_tick 內**，只在此處點名才會跑）
   futures_tick                台期貨逐筆成交（Shioaji → DolphinDB；需 [tick] 相依與金鑰）
   fs                          財報 (Financial Statement)
   mrr                         月營收報表 (Monthly Revenue Report)
@@ -104,8 +105,8 @@ Target 對照表
   stock_info_with_warrant     FinMind 台股總覽（含權證）
   broker_info                 FinMind 證券商資訊
   broker_trading              FinMind 券商分點統計
-  all                         全部資料（含 tick 與 futures_tick）
-  no_tick                     全部資料（不含 tick 與 futures_tick，預設）
+  all                         全部資料（含 tick 與 futures_tick；不含 futures_stock_price）
+  no_tick                     全部資料（不含 tick、futures_tick 與 futures_stock_price，預設）
 
 ================================================================================
 各資料更新指令（單一 target）
@@ -137,6 +138,7 @@ Target 對照表
   python -m tasks.update_db --target futures_chip
 
   # 更新股票期貨行情（預設流動性前 20 檔；320 檔全爬要好幾個月）
+  # all／no_tick 都不含這個 target，要跑就得像這樣明確點名
   python -m tasks.update_db --target futures_stock_price
 
   # 更新股票期貨標的池（寫入 tw_futures.db；每次執行留下一份當日快照）
@@ -166,10 +168,10 @@ Target 對照表
   # FinMind 券商分點統計
   python -m tasks.update_db --target broker_trading
 
-  # 全部資料（含 tick）
+  # 全部資料（含 tick，但不含 futures_stock_price）
   python -m tasks.update_db --target all
 
-  # 全部資料（不含 tick 與 futures_tick，等同預設）
+  # 全部資料（不含 tick、futures_tick 與 futures_stock_price，等同預設）
   python -m tasks.update_db --target no_tick
   或
   python -m tasks.update_db
@@ -186,6 +188,15 @@ Target 對照表
 
 # 需要 Shioaji 金鑰與 `[tick]` 選用相依的 target；`no_tick` 一律排除這些
 TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
+
+# 只在 `--target` 明確點名時才跑的 target；`all` 與 `no_tick` 兩個集合捷徑一律排除
+#
+# 股期的商品清單有 320 檔，而 `FuturesPriceUpdater.resolve_stock_futures_products()`
+# 在表內還沒有股期行情時排不出流動性，會**無聲退回整份標的池**——實測約每小時
+# 330 個交易日，單一商品 11 年就要 8.6 小時，320 檔是 100 天以上。
+# 這種量級的回補必須是人明確要求的動作，不能被 `python -m tasks.update_db`
+# 的預設值一腳踩進去，更不能卡住排在它後面的 futures_chip、fs、mrr 等 target
+EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {DataType.FUTURES_STOCK_PRICE}
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -377,9 +388,11 @@ def main() -> None:
     if from_date is not None:
         logger.info(f"--from {from_date}：以日期為單位的 target 一律由此日起算")
 
-    # all = 所有資料類型（包含 tick 和 finmind）
+    # all = 所有資料類型（包含 tick 和 finmind），但不含 EXPLICIT_ONLY_DATA_TYPES
     if "all" in targets:
-        targets.update(dt.name.lower() for dt in DataType)
+        targets.update(
+            dt.name.lower() for dt in DataType if dt not in EXPLICIT_ONLY_DATA_TYPES
+        )
 
     # no_tick = 所有資料類型 − **所有** tick（包含 finmind）
     #
@@ -388,7 +401,11 @@ def main() -> None:
     # 金鑰與 `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
     # 久了就沒人在看那個紅燈了。
     if "no_tick" in targets:
-        targets.update(dt.name.lower() for dt in DataType if dt not in TICK_DATA_TYPES)
+        targets.update(
+            dt.name.lower()
+            for dt in DataType
+            if dt not in TICK_DATA_TYPES and dt not in EXPLICIT_ONLY_DATA_TYPES
+        )
 
     if DataType.TICK.name.lower() in targets:
         with target_guard("tick", failed_targets):
