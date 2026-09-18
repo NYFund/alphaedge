@@ -434,3 +434,50 @@ def test_default_strategy_uses_real_rates() -> None:
 
     assert config.tax_rate > 0
     assert config.commission_per_lot > 0
+
+
+# === 滑價成本統計 ===
+def test_slippage_cost_is_accrued_with_the_contract_multiplier() -> None:
+    """
+    期貨的滑價成本以**契約乘數**換算，不是口數
+
+    TX 一口一點是 200 元；用口數當單位會讓金額差 200 倍，而那個數字看起來
+    仍然像個合理的成本。乘數逐契約不同（MTX 是 50），所以不能寫死。
+    """
+
+    manager: FuturesPositionManager = FuturesPositionManager(
+        FuturesAccount(init_capital=INIT_CAPITAL),
+        cost_model=TwFuturesCostModel(FuturesCostConfig.free()),
+        margin_config=FuturesMarginConfig.ratio(),
+    )
+    order: FuturesOrder = make_order(
+        Action.BUY, PositionType.LONG, price=18001.0, volume=2
+    )
+    order.reference_price = 18000.0  # 委託 18,000、成交 18,001，滑一點
+
+    manager.open_position(order)
+
+    assert manager.account.total_slippage_cost == pytest.approx(1.0 * 2 * MULTIPLIER)
+
+
+def test_close_leg_slippage_uses_the_position_multiplier() -> None:
+    """
+    平倉腿取**部位自身**的乘數，不重查
+
+    同一個部位的乘數不該因為後來除權息調整而改變（股期的契約單位會被交易所調）。
+    """
+
+    manager: FuturesPositionManager = FuturesPositionManager(
+        FuturesAccount(init_capital=INIT_CAPITAL),
+        cost_model=TwFuturesCostModel(FuturesCostConfig.free()),
+        margin_config=FuturesMarginConfig.ratio(),
+    )
+    manager.open_position(make_order(Action.BUY, PositionType.LONG, price=18000.0))
+
+    close_order: FuturesOrder = make_order(
+        Action.SELL, PositionType.LONG, price=17999.0, date=DAY_2
+    )
+    close_order.reference_price = 18000.0
+    manager.close_position(close_order)
+
+    assert manager.account.total_slippage_cost == pytest.approx(1.0 * 1 * MULTIPLIER)

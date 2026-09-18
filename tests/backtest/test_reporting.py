@@ -659,3 +659,74 @@ def test_metrics_summary_is_empty_without_closed_trades(
 
     assert df.empty
     assert list(df.columns) == ["Metric", "Value", "Note"]
+
+
+# === 滑價成本統計 ===
+def test_slippage_cost_is_reported(make_strategy, tmp_path, monkeypatch) -> None:
+    """
+    滑價吃掉的價差要看得見
+
+    報表原本只知道「有沒有開滑價」，不知道它總共吃掉多少——一支策略的績效若有
+    三成被滑價吃掉，那是該被看見的事實。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[1000.0, -500.0],
+    )
+    reporter.account.total_slippage_cost = 125.0
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Slippage Cost"] == pytest.approx(125.0)
+    # 500 元損益、125 元滑價 → 25%
+    assert values["Slippage Cost / |Total PnL| (%)"] == pytest.approx(25.0)
+
+
+def test_slippage_share_uses_the_absolute_pnl(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """
+    分母取絕對值——虧損的策略同樣要看得到滑價佔比
+
+    直接除以負的損益會讓「滑價佔比」帶一個看不懂的負號。
+    """
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[-1000.0],
+    )
+    reporter.account.total_slippage_cost = 200.0
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Slippage Cost / |Total PnL| (%)"] == pytest.approx(20.0)
+
+
+def test_slippage_share_is_blank_when_pnl_is_zero(
+    make_strategy, tmp_path, monkeypatch
+) -> None:
+    """損益為 0 時比例沒有定義，留空而不是除以零"""
+
+    reporter = make_metrics_reporter(
+        make_strategy(
+            start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 3, 31)
+        ),
+        tmp_path,
+        monkeypatch,
+        pnls=[500.0, -500.0],
+    )
+    reporter.account.total_slippage_cost = 50.0
+
+    values = metrics_map(reporter.generate_metrics_summary())
+
+    assert values["Slippage Cost"] == pytest.approx(50.0)
+    assert values["Slippage Cost / |Total PnL| (%)"] is None

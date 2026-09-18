@@ -100,6 +100,8 @@ class BaseSettlementModel(ABC):
         if filled_price != order.price:
             filled_order = copy.copy(order)
             filled_order.price = filled_price
+            # 強制出場的滑價同樣要算進成本統計（理由見 `fill()`）
+            filled_order.reference_price = order.price
 
         if quote is not None:
             self.fill_model.warn_close_price_out_of_range(filled_order, quote)

@@ -536,6 +536,10 @@ class TwStockFillModel(BaseFillModel):
         filled_order: BaseOrder = copy.copy(order)
         filled_order.price = price
         filled_order.volume = volume
+        # **滑價前的委託價留在副本上**：滑價成本＝（成交價 − 委託價）× 數量 ×
+        # 計價單位，而計價單位只有部位管理層知道（期貨的乘數逐契約不同），
+        # 它又拿不到原單——兩者只能在副本上碰頭
+        filled_order.reference_price = order.price
         return filled_order
 
     def check_short_not_suspended(self, order: BaseOrder) -> bool:
@@ -826,6 +830,10 @@ class TwFuturesFillModel(BaseFillModel):
         filled_order: BaseOrder = copy.copy(order)
         filled_order.price = price
         filled_order.volume = volume
+        # **滑價前的委託價留在副本上**：滑價成本＝（成交價 − 委託價）× 數量 ×
+        # 計價單位，而計價單位只有部位管理層知道（期貨的乘數逐契約不同），
+        # 它又拿不到原單——兩者只能在副本上碰頭
+        filled_order.reference_price = order.price
         return filled_order
 
     def get_filled_price(self, order: BaseOrder) -> float:

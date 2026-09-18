@@ -376,6 +376,49 @@ class StockBacktestReporter(BaseBacktestReporter):
                 "Note": "曆日，非交易日",
             },
             {"Metric": "Total PnL", "Value": round(sum(pnls), 2), "Note": ""},
+            *self.build_slippage_metrics(sum(pnls)),
+        ]
+
+    def build_slippage_metrics(self, total_pnl: float) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            滑價吃掉的價差總額與它佔損益的比例
+
+            **原本完全看不見**：報表只知道「有沒有開滑價」，不知道它總共吃掉多少
+            ——一支策略的績效若有三成被滑價吃掉，那是該被看見的事實，而調參數的人
+            無從判斷這組假設的影響有多大。
+
+            **不併進交易成本**：滑價是內含在成交價裡的，損益早就反映了它，
+            加進 `total_transaction_cost` 等於重複計算（見
+            `BaseAccount.total_slippage_cost`）。
+
+            分母取 `|Total PnL|`：虧損的策略也該看得到比例，而負數分母會讓
+            「滑價佔比」出現看不懂的負號。
+        - Parameters:
+            - total_pnl: float
+                已實現損益總額
+        - Return:
+            - List[Dict[str, Any]]
+                `Slippage Cost` 與 `Slippage Cost / |Total PnL| (%)` 兩列
+        """
+
+        cost: float = round(getattr(self.account, "total_slippage_cost", 0.0), 2)
+        share: Optional[float] = (
+            round(cost / abs(total_pnl) * 100, 2) if total_pnl else None
+        )
+
+        return [
+            {
+                "Metric": "Slippage Cost",
+                "Value": cost,
+                "Note": "策略委託、強制出場與換月轉倉的價差總額；**不計入交易成本**"
+                "（已內含在成交價裡）",
+            },
+            {
+                "Metric": "Slippage Cost / |Total PnL| (%)",
+                "Value": share,
+                "Note": "損益為 0 時留空；分母取絕對值，虧損策略同樣看得到比例",
+            },
         ]
 
     def build_equity_metrics(
