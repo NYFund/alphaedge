@@ -5,13 +5,14 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
+from core.api.tw.futures_continuous_api import FuturesContinuousAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.backtest.datafeed.tw.futures_roll import FuturesRollPlanner
 from core.backtest.report.reporter import StockBacktestReporter
 from core.config.schema import FuturesPriceColumn
 from core.models.futures.record import FuturesTradeRecord
 from core.strategies.futures import BaseFuturesStrategy
-from core.utils import FuturesSession
+from core.utils import FuturesRollRule, FuturesSession
 
 """FuturesBacktestReporter: 台期貨回測報表（交易明細與績效圖表）"""
 
@@ -29,9 +30,14 @@ class FuturesBacktestReporter(StockBacktestReporter):
     > 重產。在那之前
     > 動它會讓台股報表跟著改，不划算。
 
-    **對標序列是「近月拼接」，不是連續合約**：每個交易日取該商品最近到期月的
-    收盤價接起來，換月當天會有一段展期價差造成的假跳空。真正的連續合約在
-    `futures_continuous`；這條線只能當粗略參考，不可拿來算精確的對標報酬。
+    **對標序列優先讀連續合約**（`futures_continuous`，`BACKWARD` 調整、換月規則
+    對齊策略的 `roll_config.rule`）：換月價差已經調整掉，接點沒有假跳空，
+    對標與策略實際轉倉的時點也一致。
+
+    `futures_continuous` 查不到該商品、該區間或該組設定時，**退回近月拼接**
+    （每個交易日取最近到期月的收盤價）並記 warning——那條線在換月當天有展期
+    價差造成的假跳空，只能當粗略參考。圖表註腳會標明實際採用的是哪一種，
+    **兩種口徑的曲線不可混著看**。
     """
 
     def __init__(
@@ -41,6 +47,13 @@ class FuturesBacktestReporter(StockBacktestReporter):
         price: Optional[Any] = None,
         show: Optional[bool] = None,
     ) -> None:
+        # 對標的換月規則與策略實際轉倉共用同一份設定：不一致的話，
+        # 兩條曲線在換月那幾天比的是不同的東西
+        roll_config = getattr(strategy, "roll_config", None)
+        self.benchmark_roll_rule: FuturesRollRule = getattr(
+            roll_config, "rule", FuturesRollRule.LAST_TRADING_DAY
+        )
+
         # 對標商品：策略交易的第一個商品（多商品策略以第一個為代表）
         self.benchmark_product: str = (
             strategy.products[0] if getattr(strategy, "products", None) else "TX"
@@ -57,18 +70,68 @@ class FuturesBacktestReporter(StockBacktestReporter):
         super().__init__(strategy, output_dir, price=price, show=show)
 
     def setup(self) -> None:
-        """建立對標序列（近月拼接的收盤價）；本 reporter 不碰台股資料庫"""
+        """建立對標序列：連續合約優先，查不到才退回近月拼接"""
 
         self.benchmark: str = self.benchmark_product
         self.price = None  # 期貨報表不使用 StockPriceAPI
 
+        # 實際採用的序列種類，供圖表註腳標示（兩種口徑不可混著看）
+        self.benchmark_series_kind: str = self.CONTINUOUS_SERIES_LABEL
+
+        self.benchmark_price: pd.Series = self.build_continuous_close_series()
+        if not self.benchmark_price.empty:
+            return
+
+        self.benchmark_series_kind = self.NEAR_MONTH_SERIES_LABEL
         futures_price: FuturesPriceAPI = FuturesPriceAPI()
         try:
-            self.benchmark_price: pd.Series = self.build_near_month_close_series(
-                futures_price
-            )
+            self.benchmark_price = self.build_near_month_close_series(futures_price)
         finally:
             futures_price.close()
+
+    def build_continuous_close_series(self) -> pd.Series:
+        """
+        - Description:
+            讀 `futures_continuous` 的收盤價序列（`BACKWARD` 調整）
+
+            **換月規則對齊策略自己的 `roll_config.rule`**：對標與策略實際轉倉的
+            時點不一致的話，兩條曲線在換月那幾天比的是不同的東西。
+
+            這是衍生表，`--target futures_continuous` 沒跑過、或那一組
+            （商品, 調整方式, 換月規則）沒建過就會是空的——此時回空 Series，
+            由 `setup()` 決定退回近月拼接，**不在此自行換一組設定**。
+        - Return:
+            - pd.Series
+                index 為交易日、值為調整後收盤價；查無資料時為空 Series
+        """
+
+        api: FuturesContinuousAPI = FuturesContinuousAPI()
+        try:
+            series: pd.Series = api.get_close_series(
+                self.benchmark_product,
+                self.start_date,
+                self.end_date,
+                session=self.benchmark_session,
+                roll_rule=self.benchmark_roll_rule,
+            )
+        finally:
+            api.close()
+
+        if series.empty:
+            logger.warning(
+                f"[Futures Report] futures_continuous 查無 "
+                f"{self.benchmark_product}／{self.benchmark_session.value}／"
+                f"{self.benchmark_roll_rule.value} 於 {self.start_date} ~ "
+                f"{self.end_date} 的序列，對標改用近月拼接"
+                f"（換月接點有展期價差造成的假跳空，只能當粗略參考）。"
+                f"要用連續合約請先跑 `--target futures_continuous` 建出該組設定"
+            )
+
+        return series
+
+    # 圖表註腳用的序列種類標示
+    CONTINUOUS_SERIES_LABEL: str = "連續合約"
+    NEAR_MONTH_SERIES_LABEL: str = "近月拼接"
 
     def build_near_month_close_series(
         self, futures_price: FuturesPriceAPI
@@ -124,6 +187,17 @@ class FuturesBacktestReporter(StockBacktestReporter):
         series: pd.Series = near_month[FuturesPriceColumn.CLOSE.value].astype(float)
         series.index = pd.to_datetime(near_month["date"]).dt.date
         return series
+
+    def get_benchmark_note(self) -> str:
+        """標明對標曲線用的是連續合約還是近月拼接——兩種口徑不可混著看"""
+
+        if self.benchmark_series_kind == self.CONTINUOUS_SERIES_LABEL:
+            return (
+                f"{self.CONTINUOUS_SERIES_LABEL}"
+                f"（BACKWARD／{self.benchmark_roll_rule.value}）"
+            )
+
+        return f"{self.NEAR_MONTH_SERIES_LABEL}（換月接點有展期價差造成的假跳空）"
 
     def _get_adjusted_price(self, price_series: pd.Series, stock_id: str) -> pd.Series:
         """期貨沒有股票分割，對標價格原樣回傳（覆寫台股的分割調整）"""

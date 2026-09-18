@@ -6,7 +6,11 @@ from typing import List, Optional
 import pandas as pd
 import pytest
 
-from core.config import FUTURES_PRICE_DAILY_TABLE_NAME, TW_FUTURES_DB_PATH
+from core.config import (
+    FUTURES_PRICE_DAILY_TABLE_NAME,
+    FUTURES_PRODUCT_NIGHT_SESSION_START_DATES,
+    TW_FUTURES_DB_PATH,
+)
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession
@@ -573,3 +577,91 @@ def test_no_night_only_trading_days_in_table() -> None:
         conn.close()
 
     assert rows == []
+
+
+# === 夜盤起始日 ===
+def test_day_session_is_never_skipped() -> None:
+    """日盤一律要查——本檢查只針對夜盤"""
+
+    assert FuturesPriceUpdater.has_night_session(
+        "TX", datetime.date(2015, 1, 5), FuturesSession.DAY
+    )
+
+
+def test_night_session_is_skipped_before_it_existed() -> None:
+    """
+    盤後交易上線前不查夜盤
+
+    回補 2015~2017 那段等於白打一半的請求，並產生大量
+    `No valid futures price rows` warning——資料是對的，雜訊是多的。
+    """
+
+    assert not FuturesPriceUpdater.has_night_session(
+        "TX", datetime.date(2016, 6, 1), FuturesSession.NIGHT
+    )
+    # 起始日當天要查（夜盤第一天就有行情）
+    assert FuturesPriceUpdater.has_night_session(
+        "TX", datetime.date(2017, 5, 16), FuturesSession.NIGHT
+    )
+
+
+def test_night_session_start_is_per_product() -> None:
+    """
+    各商品是**逐批**納入盤後交易的，不是同一天全開
+
+    用 TX 的日期一體適用會讓 TE（2018-11）、TF（2025-06）那幾年照樣白打請求。
+    """
+
+    date: datetime.date = datetime.date(2019, 1, 2)
+
+    assert FuturesPriceUpdater.has_night_session("TE", date, FuturesSession.NIGHT)
+    assert not FuturesPriceUpdater.has_night_session("TF", date, FuturesSession.NIGHT)
+
+
+def test_unregistered_product_still_queries_the_night_session() -> None:
+    """
+    沒登錄起始日的商品（例如股期）照查不誤
+
+    填一個過晚的日期會讓回補靜默跳過開頭幾天，比多打請求嚴重得多，
+    所以寧可不登錄——不登錄只是回到本檢查加入前的行為。
+    """
+
+    assert FuturesPriceUpdater.has_night_session(
+        "CDF", datetime.date(2015, 1, 5), FuturesSession.NIGHT
+    )
+
+
+@pytest.mark.skipif(
+    not TW_FUTURES_DB_PATH.exists(), reason="需要 data/db/tw_futures.db"
+)
+def test_night_session_start_dates_are_not_later_than_the_data() -> None:
+    """
+    常數表登錄的起始日不可**晚於**表內實際最早的夜盤行情
+
+    這張表是觀測值不是制度公告：它由現有資料推得，所以往前回補之後可能發現
+    更早的夜盤行情。那時本測試會變紅，提醒把常數往前調——**填得太晚的後果是
+    回補靜默跳過開頭幾天**，比多打請求嚴重得多。
+    """
+
+    conn: sqlite3.Connection = sqlite3.connect(TW_FUTURES_DB_PATH)
+    try:
+        rows: List[tuple] = conn.execute(
+            f"SELECT product, MIN(date) FROM {FUTURES_PRICE_DAILY_TABLE_NAME} "
+            f"WHERE session = ? GROUP BY product",
+            (FuturesSession.NIGHT.value,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    observed: dict = {
+        product: datetime.date.fromisoformat(str(earliest))
+        for product, earliest in rows
+        if earliest
+    }
+
+    too_late: List[str] = [
+        f"{product}：常數 {start}、資料最早 {observed[product]}"
+        for product, start in FUTURES_PRODUCT_NIGHT_SESSION_START_DATES.items()
+        if product in observed and start > observed[product]
+    ]
+    assert not too_late, f"夜盤起始日登錄得比實際資料晚，回補會跳過開頭：{too_late}"

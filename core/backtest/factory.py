@@ -150,6 +150,8 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
            近似的誤差跨年份實測為 +143% ~ −38%（TX，而且會變號）。
         4. **`SettlementModel` 不需要 `cost_model`**：期貨在收盤後只做逐日盯市，
            不像台股要在此計提借券費與稅差。
+        5. **`DataFeed` 建在 `PositionManager` 之前**：後者的契約乘數要由前者解析
+           （股期的契約單位逐日不同），台股沒有這個相依。
 
         另有一道 `fill_config` 的型別檢查，理由見函式內的註解。
     - Parameters:
@@ -180,10 +182,23 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
     strategy.roll_config = roll_config
 
     cost_model: TwFuturesCostModel = TwFuturesCostModel(cost_config)
+
+    # **DataFeed 先建**：部位管理層的乘數要由它解析（見下），故建構順序與台股相反。
+    # DataFeed 此時只是建好物件、還沒連線，連線在 `setup()` 才開
+    data_feed: TwFuturesDataFeed = TwFuturesDataFeed(
+        margin_config=margin_config, roll_config=roll_config
+    )
+
+    # **乘數與標的股價都由 DataFeed 解析**：指數期貨的乘數查常數表、股票期貨逐日查
+    # 標的池的契約單位（會隨除權息被交易所調整，寫死必錯）；股期的保證金走比例表，
+    # 算式需要的標的股價在 `tw_stock.db`，跨庫取值同樣屬 DataFeed 的職責
+    # （連線一律由它持有）。部位管理層自己查常數表的話，股期第一筆開倉就 KeyError
     position_manager: FuturesPositionManager = FuturesPositionManager(
         account,
         cost_model=cost_model,
         margin_config=margin_config,
+        multiplier_resolver=data_feed.resolve_multiplier,
+        underlying_price_resolver=data_feed.resolve_underlying_price,
     )
 
     instrument: TwFuturesSpec = TwFuturesSpec()
@@ -227,9 +242,7 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
         fill_model=fill_model,
         cost_model=cost_model,
         settlement=settlement,
-        data_feed=TwFuturesDataFeed(
-            margin_config=margin_config, roll_config=roll_config
-        ),
+        data_feed=data_feed,
         reporter_cls=FuturesBacktestReporter,
         event_counts=event_counts,
         adjusted_price=False,

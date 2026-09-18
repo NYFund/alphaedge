@@ -193,8 +193,12 @@ class FinancialStatementUpdater(BaseDataUpdater):
     EQUITY_CHANGE_MAX_CONSECUTIVE_ERRORS: int = 20
     # 各季申報期限取「各行業中最晚」的那一天（見本檔開頭的申報期限表）：
     # 金控 Q1 是 5/30、Q3 是 11/29，Q2 各業別皆 8/31，年報一律隔年 3/31。
-    # 值為 (跨年數, 月, 日)——年報的期限落在次年，故 Q4 的跨年數是 1
-    EQUITY_CHANGE_FILING_DEADLINES: Dict[int, Tuple[int, int, int]] = {
+    # 值為 (跨年數, 月, 日)——年報的期限落在次年，故 Q4 的跨年數是 1。
+    #
+    # **四張表共用這一份**（名稱刻意不帶 equity_change）：申報期限是制度，
+    # 不分報表；資產負債表、綜合損益表、現金流量表與權益變動表都以它判斷
+    # 「這一季的資料算不算收齊了」
+    FILING_DEADLINES: Dict[int, Tuple[int, int, int]] = {
         1: (0, 5, 30),
         2: (0, 8, 31),
         3: (0, 11, 29),
@@ -202,7 +206,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
     }
     # 申報期限之後再留的寬限天數：逾期申報、申請延期都會落在期限之後，
     # 而「把還沒送件的公司寫進永久無資料名單」的代價是它送件後再也不會被抓
-    EQUITY_CHANGE_FILING_GRACE_DAYS: int = 30
+    FILING_GRACE_DAYS: int = 30
 
     def __init__(self) -> None:
         super().__init__()
@@ -664,11 +668,18 @@ class FinancialStatementUpdater(BaseDataUpdater):
         - Description:
             該年季的申報期是否已關閉（含寬限期）
 
-            **只有已關閉的年季，「查無資料」才能寫進永久名單。** 財報是逐家公司
-            申報的，申報期間查某一檔沒有資料，多半只代表那家公司還沒送件；
-            若這時就寫進永久名單，它送件之後**再也不會被抓到**——而每季申報期間
-            跑一次日常更新就會踩到。這與逐日來源「當天不寫入 `no_data`」
-            （`DateProgressStore.record_no_data()`）是同一道防線。
+            **兩處用它，解的是同一個問題**：
+
+            1. 逐檔的權益變動表：只有已關閉的年季，「查無資料」才能寫進永久名單。
+               申報期間查某一檔沒有資料，多半只代表那家公司還沒送件；
+               若這時就寫進永久名單，它送件之後**再也不會被抓到**。
+            2. 逐季的三張報表（`plan_pending_year_seasons()`）：申報期內入庫的
+               年季只有「已送件的那批公司」，不算收齊。當成收齊的話，年季差集
+               從此跳過它，後送件的公司永遠補不進來。
+
+            兩者都是「來源當下只有這麼多」與「來源真的只有這麼多」的區分，
+            與逐日來源「當天不寫入 `no_data`」（`DateProgressStore.record_no_data()`）
+            是同一道防線。
 
             期限取各行業中最晚的那一天再加寬限天數，寧可晚一個月才停止重問，
             也不要把已申報的公司誤鎖在名單裡。
@@ -685,10 +696,10 @@ class FinancialStatementUpdater(BaseDataUpdater):
         year_offset: int
         month: int
         day: int
-        year_offset, month, day = cls.EQUITY_CHANGE_FILING_DEADLINES[season]
+        year_offset, month, day = cls.FILING_DEADLINES[season]
         deadline: datetime.date = datetime.date(
             year + year_offset, month, day
-        ) + datetime.timedelta(days=cls.EQUITY_CHANGE_FILING_GRACE_DAYS)
+        ) + datetime.timedelta(days=cls.FILING_GRACE_DAYS)
 
         return (today or datetime.date.today()) > deadline
 
@@ -1123,7 +1134,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
     ) -> List[Tuple[int, int]]:
         """
         - Description:
-            算出該報表這次要請求的年季：區間內所有年季 − 表內已有的年季
+            算出該報表這次要請求的年季：區間內所有年季 − 表內**已收齊**的年季
 
             **不可用 `MAX(year, season) + 1` 起跑**：某一季失敗被跳過之後，只要下一季
             成功入庫，`MAX` 就越過它，那一季從此不會再被請求——資產負債表 2021Q1
@@ -1150,8 +1161,27 @@ class FinancialStatementUpdater(BaseDataUpdater):
             start_year, start_season, end_year, end_season, periods_per_year=4
         )
         existing: Set[Tuple[int, int]] = self.get_existing_year_seasons(table_name)
+
+        # **申報期還沒關閉的年季不算完成**：財報是逐家公司申報的，申報期內入庫的
+        # 只是「當下已送件的那批公司」。把它當成完成，年季差集從此跳過它，
+        # 後送件的公司永遠補不進來——而每季申報期間跑一次日常更新就會踩到。
+        # 重問的代價很小（每張報表每季只有上市、上櫃各一次請求），且寫入走
+        # `INSERT OR IGNORE`，已入庫的列不會重複，只有新送件的公司會被加進來
+        incomplete: Set[Tuple[int, int]] = {
+            year_season
+            for year_season in existing
+            if not self.is_season_settled(*year_season)
+        }
+        if incomplete:
+            logger.info(
+                f"[{table_name}] {len(incomplete)} 個年季仍在申報期內"
+                f"（{sorted(f'{y}Q{s}' for y, s in incomplete)}），"
+                f"本次一併重問以補進後送件的公司"
+            )
+
+        settled: Set[Tuple[int, int]] = existing - incomplete
         pending: List[Tuple[int, int]] = [
-            year_season for year_season in year_seasons if year_season not in existing
+            year_season for year_season in year_seasons if year_season not in settled
         ]
 
         # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的年季

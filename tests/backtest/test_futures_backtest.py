@@ -20,7 +20,10 @@ from core.backtest.models.settlement_model import (
     TwStockSettlementModel,
 )
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
-from core.managers.futures.position_manager import FuturesPositionManager
+from core.managers.futures.position_manager import (
+    FuturesMarginConfig,
+    FuturesPositionManager,
+)
 from core.models import (
     FuturesAccount,
     FuturesOrder,
@@ -254,6 +257,133 @@ def test_engine_does_not_reject_futures_orders_by_holdings_cap(
 
     assert backtester.max_holdings is None
     assert backtester.check_max_holdings(make_order()) is True
+
+
+# === 契約乘數（股票期貨） ===
+STOCK_FUTURES_PRODUCT: str = "CDF"  # 股票期貨代碼，刻意不在 FUTURES_MULTIPLIER 內
+STOCK_FUTURES_CONTRACT_SIZE: int = 2000  # 標準型股票期貨的契約單位（股）
+
+
+def make_stock_futures_manager(
+    multiplier_resolver=None,
+) -> FuturesPositionManager:
+    """組出零成本、比率保證金的部位管理器（本組驗乘數，不驗費用）"""
+
+    return FuturesPositionManager(
+        FuturesAccount(init_capital=10_000_000),
+        cost_model=TwFuturesCostModel(FuturesCostConfig.free()),
+        margin_config=FuturesMarginConfig.ratio(),
+        multiplier_resolver=multiplier_resolver,
+    )
+
+
+def make_stock_futures_order(
+    action: Action = Action.BUY,
+    position_type: PositionType = PositionType.LONG,
+    price: float = 100.0,
+    date: Optional[datetime.date] = None,
+) -> FuturesOrder:
+    """組一張股票期貨訂單"""
+
+    return FuturesOrder(
+        product=STOCK_FUTURES_PRODUCT,
+        expiry="202403",
+        date=date or DAY_1,
+        action=action,
+        position_type=position_type,
+        price=price,
+        volume=1,
+    )
+
+
+def test_stock_futures_open_uses_the_resolved_contract_size() -> None:
+    """
+    股票期貨開得了倉，且乘數取自 resolver 的契約單位
+
+    **這條擋的是整場回測當場中斷**：股期不在 `FUTURES_MULTIPLIER` 內，
+    舊版的部位管理層自己查常數表，第一筆開倉就 `KeyError`。
+    DataFeed 的 `resolve_multiplier()` 本來就做對了，缺的只是把它接上。
+    """
+
+    manager: FuturesPositionManager = make_stock_futures_manager(
+        multiplier_resolver=lambda product, date: STOCK_FUTURES_CONTRACT_SIZE
+    )
+
+    position: Optional[FuturesPosition] = manager.open_position(
+        make_stock_futures_order(price=100.0)
+    )
+
+    assert position is not None
+    assert position.multiplier == STOCK_FUTURES_CONTRACT_SIZE
+    # 比率保證金 ＝ 契約價值 × 10%＝ 100 × 2,000 × 1 × 0.1
+    assert position.margin == 100.0 * STOCK_FUTURES_CONTRACT_SIZE * 0.1
+
+
+def test_stock_futures_pnl_uses_the_contract_size() -> None:
+    """平倉損益依契約單位計算，不是依口數"""
+
+    manager: FuturesPositionManager = make_stock_futures_manager(
+        multiplier_resolver=lambda product, date: STOCK_FUTURES_CONTRACT_SIZE
+    )
+    manager.open_position(make_stock_futures_order(price=100.0))
+
+    records = manager.close_position(
+        make_stock_futures_order(
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            price=110.0,
+            date=DAY_2,
+        )
+    )
+
+    assert len(records) == 1
+    assert records[0].realized_pnl == (110.0 - 100.0) * STOCK_FUTURES_CONTRACT_SIZE
+
+
+def test_resolver_is_asked_for_the_order_date() -> None:
+    """
+    乘數要問「開倉那一天」的契約單位
+
+    股期的契約單位會隨除權息被交易所調整，拿今天的值回測歷史，
+    除權息之後那一段的 PnL 會整段偏掉。
+    """
+
+    asked: List[tuple] = []
+
+    def resolver(product: str, date: datetime.date) -> int:
+        asked.append((product, date))
+        return STOCK_FUTURES_CONTRACT_SIZE
+
+    manager: FuturesPositionManager = make_stock_futures_manager(
+        multiplier_resolver=resolver
+    )
+    manager.open_position(make_stock_futures_order(date=DAY_2))
+
+    assert asked == [(STOCK_FUTURES_PRODUCT, DAY_2)]
+
+
+def test_without_a_resolver_an_unregistered_product_still_raises() -> None:
+    """
+    未注入 resolver 時仍走常數表，查不到就 `KeyError`——**刻意保留**
+
+    退回近似值不會有任何徵兆，只會讓整條 PnL 靜默偏掉。純記憶體測試
+    （只跑指數期貨）沿用常數表即可，不必為它們建一條假的解析路徑。
+    """
+
+    manager: FuturesPositionManager = make_stock_futures_manager()
+
+    with pytest.raises(KeyError):
+        manager.open_position(make_stock_futures_order())
+
+
+def test_index_futures_still_use_the_constant_table(make_order) -> None:
+    """指數期貨不受影響：有 resolver 也好、沒有也好，乘數都是常數表那個值"""
+
+    manager: FuturesPositionManager = make_stock_futures_manager()
+    position: Optional[FuturesPosition] = manager.open_position(make_order())
+
+    assert position is not None
+    assert position.multiplier == MULTIPLIER
 
 
 # === InstrumentSpec ===

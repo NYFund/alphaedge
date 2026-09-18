@@ -101,6 +101,30 @@ FUTURES_PRODUCT_LISTING_DATES: Dict[str, datetime.date] = {
     "TMF": datetime.date(2024, 7, 29),  # 微型臺指
 }
 
+# 各商品**夜盤（盤後交易時段）**第一個有行情的日期。
+#
+# 盤後交易 2017-05-15 晚上上線，而且**不是所有商品同時開放**，是逐批納入的。
+# `FuturesPriceUpdater` 對每個日期一律日夜盤各打一次請求，回補早於各自起始日的
+# 區間等於白打一半的請求，並產生大量 `No valid futures price rows` warning——
+# **資料是對的，雜訊是多的**，而雜訊會淹掉真正該看的那幾行。
+#
+# ⚠️ **這張表是觀測值不是制度公告**：2026-09-18 以 `futures_price_daily` 逐商品取
+# `MIN(date) WHERE session='night'` 得到，故它的語意是「本地資料庫最早有夜盤行情
+# 的那天」。若該商品的回補本身就不完整，這個值會比真實開放日晚——那會讓回補靜默
+# 跳過開頭幾天，比多打請求嚴重。故 `tests/test_futures_price_updater.py` 有一條
+# 測試釘住「表內每個商品的夜盤最早日期 ≥ 本表的值」，回補往前延伸時會變紅。
+#
+# **沒登錄的商品不跳過**（例如股期）：行為與本表加入前完全相同，照樣日夜盤都查。
+FUTURES_PRODUCT_NIGHT_SESSION_START_DATES: Dict[str, datetime.date] = {
+    "TX": datetime.date(2017, 5, 16),  # 臺股期貨
+    "MTX": datetime.date(2017, 5, 16),  # 小型臺指
+    "TE": datetime.date(2018, 11, 20),  # 電子期貨
+    "ZEF": datetime.date(2021, 6, 29),  # 小型電子期貨
+    "TMF": datetime.date(2024, 7, 30),  # 微型臺指
+    "TF": datetime.date(2025, 6, 24),  # 金融期貨
+    "ZFF": datetime.date(2025, 6, 24),  # 小型金融期貨
+}
+
 # 股票期貨預設只爬**流動性前 N 檔**。
 #
 # **不要一次爬 320 檔**：那是每天 640 次請求（日夜盤各一），13 年的回補要好幾個月。

@@ -1,7 +1,9 @@
+import datetime
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
+import pandas as pd
 from loguru import logger
 
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
@@ -99,3 +101,41 @@ class FuturesContinuousDAO(BaseDAO):
             to_sql_params(product, session, method, roll_rule),
         )
         return cursor.rowcount
+
+    def get_series(
+        self,
+        product: str,
+        session: str,
+        method: str,
+        roll_rule: str,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> pd.DataFrame:
+        """
+        - Description:
+            取某一組（商品, 時段, 調整方式, 換月規則）在指定區間的序列
+
+            四個條件缺一不可：少了任何一個，同一天會回多列（三種調整方式 ×
+            三種換月規則並存於同一張表），而那些列的價格是不同口徑的。
+        - Parameters:
+            - product / session / method / roll_rule: str
+                要取的那一組序列
+            - start_date / end_date: datetime.date
+                日期範圍（含兩端）
+        - Return:
+            - pd.DataFrame
+                依日期排序的序列；`start_date > end_date` 或查無資料時為空表
+        """
+
+        if start_date > end_date:
+            return pd.DataFrame()
+
+        return self.query_df(
+            f"""
+            SELECT * FROM {self.TABLE_NAME}
+            WHERE product = ? AND session = ? AND method = ? AND roll_rule = ?
+              AND date BETWEEN ? AND ?
+            ORDER BY date
+            """,
+            to_sql_params(product, session, method, roll_rule, start_date, end_date),
+        )

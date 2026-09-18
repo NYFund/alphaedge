@@ -49,7 +49,7 @@ dev = [
 ]
 # 以下三組刻意不放進主 dependencies：它們在目前的開發環境**並未安裝**，
 # 而專案的回測與 ETL 主流程照樣可運作，硬列進去只會讓 `pip install -e .` 變重
-frontend = ["streamlit>=1.40"]  # frontend/ 的 Streamlit 介面
+frontend = ["streamlit>=1.49"]  # frontend/ 的 Streamlit 介面（1.49 起才有 width="stretch"）
 tick = ["dolphindb>=3.0"]  # Tick 級資料的 DolphinDB 儲存（loader 內為惰性 import）
 lab = ["python-docx>=1.2"]  # strategy_lab/ 的報告輸出
 
@@ -105,9 +105,9 @@ ignore = [
     # --- 例外處理：只量化不修，數量記在各條的行尾註解 ---
     # 數量過大會讓 CI 永遠紅燈，故先 ignore 並逐條記錄；
     # 不可因為「讓 CI 變綠」就當成永久豁免
-    "BLE001",  # blind-except，85 處
+    "BLE001",  # blind-except，70 處
     "TRY003",  # 例外訊息長度，與 §2.1 中文訊息衝突
-    "TRY300",  # try-consider-else，19 處
+    "TRY300",  # try-consider-else，20 處
     "TRY301",  # raise-within-try，3 處
     "TRY201",  # verbose-raise，3 處
     "TRY004",  # type-check-without-type-error，4 處
@@ -121,18 +121,16 @@ ignore = [
     "B905",
 
     # --- 潛在缺陷，已逐點記錄，待後續收斂 ---
-    # 這 21 處**不是樣式問題，是真的可能出錯的地方**，逐處位置用
+    # 這 10 處**不是樣式問題，是真的可能出錯的地方**，逐處位置用
     # `ruff check --select <規則>` 查。之所以先 ignore 而非在原地加 noqa：
     # 加了 noqa 會讓該行超過 88 字元，formatter 就把運算式拆成多行，
     # noqa 反而跟著跑到別行去、失去效力（實測過）。
-    # **修掉之後要把對應那條從本清單移除**，不要讓它長期留著。
+    # **修掉之後要把對應那條從本清單移除**，不要讓它長期留著——留著等於對那類
+    # 問題永久失明。2026-09-18 實查後移除已歸零的 B008／F841／F811，
+    # 並修掉 B007 最後一處（`tests/test_futures_continuous.py` 的未用迴圈變數）。
     "B006",  # 可變預設參數，4 處
-    "B008",  # 預設參數呼叫 datetime.date.today()，5 處（長駐程序會拿到匯入當下的日期）
     "B904",  # raise 未帶 from，3 處
-    "B007",  # 未使用的迴圈變數，2 處
     "E722",  # 裸 except，3 處
-    "F841",  # 指派後未使用，3 處
-    "F811",  # 重複定義，1 處
 ]
 
 [tool.ruff.lint.per-file-ignores]

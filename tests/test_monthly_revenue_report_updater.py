@@ -165,3 +165,55 @@ def test_both_markets_with_data_are_combined(
 
     assert result.status is CrawlStatus.OK
     assert len(result.tables) == 2
+
+
+# === 申報期內的月份不算收齊 ===
+def test_month_inside_the_filing_window_is_requested_again(tmp_path: Path) -> None:
+    """
+    申報期還沒關閉的月份要重新進入候選
+
+    月營收是逐家公司在**次月 10 日**前申報的。申報期內入庫的只有「已送件的那批
+    公司」，把它當成收齊的話，年月差集從此跳過它，後送件的公司永遠補不進來——
+    而每個月初跑一次日常更新就會踩到。
+    """
+
+    updater: MonthlyRevenueReportUpdater = make_updater(
+        tmp_path, [(2026, 7), (2026, 8)]
+    )
+    # 2026/08 的申報期限是 09/10 ＋ 30 天寬限；把「今天」設在寬限期內
+    updater.is_month_settled = lambda year, month: (year, month) != (2026, 8)
+
+    pending: List[Tuple[int, int]] = updater.plan_pending_year_months(2026, 7, 2026, 8)
+
+    assert pending == [(2026, 8)]
+
+
+def test_settled_month_is_not_requested_again(tmp_path: Path) -> None:
+    """申報期關閉之後就不再重問（防止改過頭，每輪重爬整段歷史）"""
+
+    updater: MonthlyRevenueReportUpdater = make_updater(
+        tmp_path, [(2026, 7), (2026, 8)]
+    )
+    updater.is_month_settled = lambda year, month: True
+
+    assert updater.plan_pending_year_months(2026, 7, 2026, 8) == []
+
+
+def test_month_is_settled_after_the_deadline_plus_grace() -> None:
+    """
+    申報期限是**次月** 10 日，12 月要跨年
+
+    邊界寫錯的症狀是整段歷史每輪重爬（太寬）或永久缺口（太嚴），兩者都無聲。
+    """
+
+    import datetime
+
+    settled = MonthlyRevenueReportUpdater.is_month_settled
+
+    # 2026/08 → 期限 2026/09/10 ＋ 30 天寬限 ＝ 2026/10/10
+    assert not settled(2026, 8, datetime.date(2026, 10, 10))
+    assert settled(2026, 8, datetime.date(2026, 10, 11))
+
+    # 12 月的期限落在次年 1 月
+    assert not settled(2026, 12, datetime.date(2027, 2, 9))
+    assert settled(2026, 12, datetime.date(2027, 2, 10))

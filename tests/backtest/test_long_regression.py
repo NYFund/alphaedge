@@ -37,7 +37,7 @@ def test_long_regression_snapshot() -> None:
     actual: pd.DataFrame = pd.DataFrame(
         [
             {
-                "Stock ID": record.stock_id,
+                "Symbol": record.symbol,
                 "Position Type": record.position_type.value,
                 "Buy Date": str(record.buy_date),
                 "Buy Price": record.buy_price,
@@ -56,7 +56,7 @@ def test_long_regression_snapshot() -> None:
         ]
     )
 
-    expected: pd.DataFrame = pd.read_csv(baseline_path, dtype={"Stock ID": str})
+    expected: pd.DataFrame = pd.read_csv(baseline_path, dtype={"Symbol": str})
     expected["Buy Date"] = expected["Buy Date"].astype(str)
     expected["Sell Date"] = expected["Sell Date"].astype(str)
 

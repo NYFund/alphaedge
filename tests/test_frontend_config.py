@@ -145,3 +145,32 @@ def test_frontend_requirements_cover_every_third_party_import() -> None:
 
     missing: set[str] = {name for name in third_party if name.lower() not in declared}
     assert not missing, f"frontend/requirements.txt 缺少：{sorted(missing)}"
+
+
+def test_frontend_uses_the_current_width_api() -> None:
+    """
+    `frontend/` 不得再出現已棄用的 `use_container_width`
+
+    **這條擋的是「映像重建那天才炸」**：`requirements.txt` 只釘下限，上游移除該
+    參數之後重建的映像會在渲染表格與圖表時直接出錯，而不是降級成沒有樣式。
+    本機不安裝 streamlit（見該檔註解），沒有任何測試會實際渲染元件，
+    所以這條靜態檢查是唯一擋得住回頭用舊參數的防線。
+
+    同時釘住 streamlit 的下限：`width="stretch"` 自 1.49.0 起才存在，
+    下限低於它的話新參數在舊版是 `TypeError`——兩者必須一起改。
+    """
+
+    frontend_dir: Path = PROJECT_ROOT / "frontend"
+
+    offenders: list[str] = [
+        str(path.relative_to(PROJECT_ROOT))
+        for path in frontend_dir.rglob("*.py")
+        if "__pycache__" not in path.parts
+        and "use_container_width" in path.read_text(encoding="utf-8")
+    ]
+    assert not offenders, f"仍在用已棄用的 use_container_width：{offenders}"
+
+    requirements: str = (frontend_dir / "requirements.txt").read_text(encoding="utf-8")
+    assert "streamlit>=1.49" in requirements, (
+        'width="stretch" 需要 streamlit 1.49 以上，requirements.txt 的下限要一起提高'
+    )

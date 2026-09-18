@@ -1,4 +1,4 @@
-Stock ID,Position Type,Buy Date,Buy Price,Buy Volume,Sell Date,Sell Price,Sell Volume,Commission,Tax,Transaction Cost,Realized PnL,ROI
+Symbol,Position Type,Buy Date,Buy Price,Buy Volume,Sell Date,Sell Price,Sell Volume,Commission,Tax,Transaction Cost,Realized PnL,ROI
 2362,LONG,2024-01-02,44.75,2,2024-01-03,43.85,2,75,263,338,-2138.0,-2.39
 3390,LONG,2024-01-02,32.3,3,2024-01-03,31.95,3,81,287,368,-1418.0,-1.46
 6108,LONG,2024-01-02,23.5,4,2024-01-03,22.9,4,79,274,353,-2753.0,-2.93

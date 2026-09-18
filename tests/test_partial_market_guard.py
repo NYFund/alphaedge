@@ -602,3 +602,53 @@ def test_corporate_action_layout_change_fails_the_run(
         updater.update(
             start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 12, 31)
         )
+
+
+# === 申報期內的年季不算收齊 ===
+def test_fs_season_inside_the_filing_window_is_planned_again(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
+    """
+    申報期還沒關閉的年季要重新進入候選
+
+    財報是逐家公司申報的，申報期內入庫的只是「當下已送件的那批公司」。
+    把它當成收齊的話，年季差集從此跳過它，後送件的公司永遠補不進來——
+    而每季申報期間跑一次日常更新就會踩到。
+    """
+
+    updater: FinancialStatementUpdater = make_fs_updater(
+        tmp_path, [(2026, 1), (2026, 2)], dao_factory
+    )
+    # 把「今天」設在 2026Q2 的申報期內（Q2 期限 8/31 ＋ 30 天寬限）
+    updater.is_season_settled = lambda year, season: (year, season) != (2026, 2)
+
+    pending: List[Tuple[int, int]] = updater.plan_pending_year_seasons(
+        table_name="balance_sheet",
+        start_year=2026,
+        start_season=1,
+        end_year=2026,
+        end_season=2,
+    )
+
+    assert pending == [(2026, 2)]
+
+
+def test_fs_settled_season_is_not_planned_again(
+    tmp_path: Path, dao_factory: Callable[..., BaseDAO]
+) -> None:
+    """申報期關閉之後就不再重問（防止改過頭，每輪重爬整段歷史）"""
+
+    updater: FinancialStatementUpdater = make_fs_updater(
+        tmp_path, [(2026, 1), (2026, 2)], dao_factory
+    )
+    updater.is_season_settled = lambda year, season: True
+
+    pending: List[Tuple[int, int]] = updater.plan_pending_year_seasons(
+        table_name="balance_sheet",
+        start_year=2026,
+        start_season=1,
+        end_year=2026,
+        end_season=2,
+    )
+
+    assert pending == []

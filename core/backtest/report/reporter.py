@@ -113,7 +113,7 @@ class StockBacktestReporter(BaseBacktestReporter):
         """生成回測報告"""
 
         report_columns: List[str] = [
-            "Stock ID",
+            "Symbol",
             "Position Type",
             "Entry Date",
             "Entry Price",
@@ -176,8 +176,10 @@ class StockBacktestReporter(BaseBacktestReporter):
             cumulative_balance += record.realized_pnl
 
             row: Dict[str, Any] = {
-                # 內部一律讀 symbol；輸出欄位名維持 Stock ID（改名會讓 baseline 失效）
-                "Stock ID": record.symbol,
+                # 欄名與領域模型的識別欄一致（`record.symbol`）；
+                # 期貨那份維持 `Contract ID`——它是 `{商品}{到期月}`，
+                # 與「一檔股票」不是同一種東西，且前端以它判斷報表型別
+                "Symbol": record.symbol,
                 "Position Type": record.position_type.value,
                 "Entry Date": record.entry_date,
                 "Entry Price": record.entry_price,
@@ -351,6 +353,16 @@ class StockBacktestReporter(BaseBacktestReporter):
         )
         self.save_figure(fig, f"{self.strategy.strategy_name}_balance_curve.png")
 
+    def get_benchmark_note(self) -> str:
+        """
+        對標序列的口徑註腳；台股只有一種（還原價），故不標示
+
+        期貨覆寫它：連續合約與近月拼接是兩種口徑，圖上不標的話，
+        換月接點有沒有假跳空完全看不出來，見 `FuturesBacktestReporter`。
+        """
+
+        return ""
+
     def plot_balance_and_benchmark_curve(self) -> None:
         """繪製總資金 & benchmark 曲線圖"""
 
@@ -435,6 +447,10 @@ class StockBacktestReporter(BaseBacktestReporter):
             f"{self.benchmark} Total ROI(%): {benchmark_roi}%\n"
             f"Equity basis: {basis}"
         )
+        # 對標序列的口徑註腳（期貨有連續合約與近月拼接兩種，不可混著看）
+        benchmark_note: str = self.get_benchmark_note()
+        if benchmark_note:
+            roi_text += f"\nBenchmark series: {benchmark_note}"
 
         # === 繪製圖表 ===
         fig: go.Figure = go.Figure()
