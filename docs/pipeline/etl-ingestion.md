@@ -3,7 +3,7 @@
 > 本文件描述 `core/pipeline/` **入庫階段**的現行約定：分批時機、冪等性、失敗語意與結束碼。
 >
 > **各項設計的理由寫在程式碼的 docstring**（`core.dao.base.insert_or_ignore()` / `BaseDAO.savepoint()`、
-> `BaseDataLoader.finish_load()` / `select_csv_files()`、`DataLoadError`、`tasks.update_db.target_guard()`、
+> `BaseDataLoader.finish_load()` / `select_csv_files()` / `check_symbol_name_uniqueness()`、`DataLoadError`、`tasks.update_db.target_guard()`、
 > `core/pipeline/shared/date_planner.py`）。本文件只放**跨檔案的全貌**與新增 updater 時的檢查表。
 >
 > 連線、交易與 SQL 一律在 `core/dao/`，loader／updater 不寫 SQL；連線所有權與 commit 時點的全貌見
@@ -196,11 +196,21 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 
 唯一可靠的跡象是**同一天、同一個代號底下出現兩個證券名稱**：兩檔不同的證券擠在同一個
 `(date, stock_id)` 底下。改名不會命中，那是跨時間的。
-`tests/test_trading_calendar_guard.py::test_no_symbol_carries_two_names_on_the_same_day`
-以此掃 `price` 與 `chip`（實測抓到 `006201`／`006202`／`006205`／`006206` 共 508 列）。
 
-⚠️ **`margin` 驗不到**：它的主鍵是 `(date, stock_id)`，冒名的那一列會被
-`INSERT OR IGNORE` 直接吞掉，表裡不留痕跡——那張表只能靠寫入端的 `dtype` 擋。
+這個跡象要在**兩個時點**各看一次：
+
+| 時點 | 實作 | 涵蓋範圍 |
+|------|------|----------|
+| 入庫前（每一批） | `BaseDataLoader.check_symbol_name_uniqueness()`，三支 loader 讀完 CSV 就呼叫 | price／chip／margin |
+| 入庫後（事後護欄） | `tests/test_trading_calendar_guard.py::test_no_symbol_carries_two_names_on_the_same_day` | price／chip |
+
+**事後護欄看不到 `margin`**：它的主鍵是 `(date, stock_id)`，冒名的那一列會被
+`INSERT OR IGNORE` 直接吞掉，表裡不留痕跡——後果不是缺資料，而是留下來的那一列
+可能是另一檔的數字。**入庫前檢查沒有這個分別**：來源當天的表裡，同一個代號本來就
+只有一個名稱，出現兩個就整批失敗、一列都不寫，該日記為失敗、下次執行重試。
+
+比對名稱時會先去掉全半形空白與 `*`（全額交割註記）——那些只是同一個名稱的不同寫法，
+若讓它們觸發整批退回，正常日子會停止更新，比漏抓更糟。名稱缺漏的列不參與比對。
 
 ### 3.4 欄位語言跟著資料來源走
 

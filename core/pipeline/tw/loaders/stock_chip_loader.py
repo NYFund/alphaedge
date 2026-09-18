@@ -112,6 +112,11 @@ class StockChipLoader(BaseDataLoader):
                 # `dtype` 不指定的話，全數字的代號會被推斷成整數，
                 # `0050` 入庫變成 `50`（與 margin、price 同一個做法）
                 df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
+
+                # 同一批裡一個代號對到兩個名稱，代表有一檔的前導 0 被吃掉了；
+                # 整檔視為失敗、一列都不寫，下次執行重試
+                self.check_symbol_name_uniqueness(df, file_path.name)
+
                 inserted: int
                 skipped: int
                 with self.dao.savepoint():

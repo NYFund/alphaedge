@@ -16,5 +16,6 @@ from .exceptions import (
     FinMindRequestError,
     IPBlockedError,
     PipelineError,
+    SymbolNameConflictError,
     UnbuildableSeriesError,
 )

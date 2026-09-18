@@ -112,6 +112,12 @@ class StockMarginLoader(BaseDataLoader):
                 df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
                 # 空字串的註記在 read_csv 後會變成 NaN，統一還原為空字串
                 df["註記"] = df["註記"].fillna("")
+
+                # 同一批裡一個代號對到兩個名稱，代表有一檔的前導 0 被吃掉了。
+                # margin 的主鍵不含證券名稱，冒名的列入庫後會被吞掉，
+                # 這是三張表裡唯一擋得住的環節
+                self.check_symbol_name_uniqueness(df, file_path.name)
+
                 inserted: int
                 skipped: int
                 with self.dao.savepoint():
