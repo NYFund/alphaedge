@@ -265,6 +265,34 @@ class DataLoadError(PipelineError):
         )
 
 
+class SymbolNameConflictError(PipelineError):
+    """同一批資料裡，一個證券代號對到兩個以上的證券名稱。
+
+    **這是「前導 0 被吃掉」在入庫當下唯一驗得出來的跡象**：`pd.read_csv()`／
+    `read_html()` 只要看到某份檔案的代號全是數字就整欄推斷成整數，`006201`
+    （元大富櫃50）少掉兩個 0 之後剛好是合法的上市代號 `6201`（亞弘電）。
+    代號長度是 4、代號也真的存在，比對 `taiwan_stock_info` 同樣驗不出來。
+
+    **寫進資料庫之後才查就來不及了**：`margin` 的主鍵是 `(date, stock_id)`，
+    冒名的那一列會被 `INSERT OR IGNORE` 吞掉，表裡不留任何痕跡——後果不是缺資料，
+    而是留下來的那一列可能是另一檔的數字。
+
+    來源當天的表裡，同一個代號本來就只會有一個名稱（改名是跨時間的），
+    出現兩個就一定是錯的，故整批視為失敗、一列都不寫，下次執行重試。
+    """
+
+    def __init__(self, label: str, conflicts: Dict[str, List[str]]) -> None:
+        self.label: str = label
+        self.conflicts: Dict[str, List[str]] = conflicts
+        detail: str = "；".join(
+            f"{stock_id} → {names}" for stock_id, names in list(conflicts.items())[:10]
+        )
+        super().__init__(
+            f"{label} 有 {len(conflicts)} 個證券代號對到多個證券名稱："
+            f"{detail}" + ("…（僅列前 10 筆）" if len(conflicts) > 10 else "")
+        )
+
+
 # -----------------------------------------------------------------------------
 # Updater 例外
 # -----------------------------------------------------------------------------

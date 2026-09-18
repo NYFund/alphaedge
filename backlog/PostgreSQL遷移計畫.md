@@ -295,4 +295,10 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
      壓成單一目錄名），程式碼側已是 `pipeline/tw/`（每層只承載一條軸）。純目錄名的
      `tw/stock/` 才與程式碼側同構，但那是第二次資料搬遷，不值得為一致性單獨做——
      **本計畫或下次動 `downloads/` 時順手收斂**。
+  5. **`margin` 主鍵維持 `(date, stock_id)`，不納入 `證券名稱`**：`price`／`chip` 是
+     `(date, stock_id, 證券名稱)`，`margin` 少了名稱那一段，代表冒名的列（證券代號前導 0
+     被吃掉）會被 `INSERT OR IGNORE` 吞掉、事後查不出來。2026-09-18 已改由入庫前檢查
+     （`BaseDataLoader.check_symbol_name_uniqueness()`）擋在更早的環節，三張表一視同仁，
+     主鍵因此**不動**——改主鍵要遷移既有資料，換來的只是同一個問題的第二道事後防線，
+     而且同一檔改名前後會被視為兩列，日頻查詢得額外去重。
 - **相關 backlog**：[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md)（2026-09-16 立項，tick 改落地 TimescaleDB；與本計畫共用 `postgres` service（TimescaleDB image）、driver 與 `core/dao/` 連線入口，先做的建立、後做的沿用）；[美股ETL與回測架構規劃.md](美股ETL與回測架構規劃.md)（美股資料量較大，建議本計畫先收斂；`us_` 表名前綴同樣以單一資料庫為前提）

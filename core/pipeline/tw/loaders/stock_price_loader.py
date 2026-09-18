@@ -141,6 +141,10 @@ class StockPriceLoader(BaseDataLoader):
                     skipped_files += 1
                     continue
 
+                # 同一批裡一個代號對到兩個名稱，代表有一檔的前導 0 被吃掉了；
+                # 整檔視為失敗、一列都不寫，下次執行重試
+                self.check_symbol_name_uniqueness(df, file_path.name)
+
                 # 同一檔內的重複列先去掉：`INSERT OR IGNORE` 擋得掉，
                 # 但先去掉才數得準「這檔到底寫進去幾列」
                 original_count: int = len(df)

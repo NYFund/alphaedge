@@ -1,17 +1,25 @@
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
+import pandas as pd
 from loguru import logger
 
-from core.pipeline.utils.exceptions import DataLoadError
+from core.pipeline.utils.exceptions import DataLoadError, SymbolNameConflictError
 
 """Abstract base class for all data loaders that write processed data to a storage system"""
 
 
 class BaseDataLoader(ABC):
     """Base Class of Data Loader"""
+
+    # 代號與名稱的欄名在清洗後已標準化，三條台股日頻線（price／chip／margin）一致
+    SYMBOL_COLUMN: str = "stock_id"
+    SYMBOL_NAME_COLUMN: str = "證券名稱"
+
+    # 全半形空白與全額交割註記只是同一個名稱的不同寫法，不代表另一檔證券
+    NAME_NOISE_PATTERN: str = r"[\s\u3000*＊]"
 
     def __init__(self) -> None:
         pass
@@ -46,6 +54,64 @@ class BaseDataLoader(ABC):
     def add_to_db(self, *args, **kwargs) -> Any:
         """Add Data into Database"""
         pass
+
+    @classmethod
+    def check_symbol_name_uniqueness(cls, df: pd.DataFrame, label: str) -> None:
+        """
+        - Description:
+            入庫前確認這一批裡「一個證券代號只對到一個證券名稱」
+
+            **這是前導 0 被吃掉之後唯一擋得住的環節**：`pd.read_csv()` 只要看到
+            某份檔案的代號全是數字就整欄推斷成整數，`006201`（元大富櫃50）少掉兩個
+            0 剛好是合法的上市代號 `6201`（亞弘電）。寫入端的 `dtype` 已經擋住一層，
+            這裡擋的是來源本身就給錯、或日後新增的讀檔路徑忘了指定型別。
+
+            事後稽核只對主鍵含證券名稱的表有效（`price`、`chip` 會並存兩列）；
+            `margin` 的主鍵是 `(date, stock_id)`，冒名的那一列在 `INSERT OR IGNORE`
+            當下就消失，表裡永遠看不出來。**入庫前檢查沒有這個分別。**
+
+            來源當天的表裡同一個代號只會有一個名稱——改名是跨時間的，同一天不會有
+            兩個名字——所以命中時一定是錯的，直接拋出讓整批失敗，不留半份資料。
+        - Parameters:
+            - df: pd.DataFrame
+                清洗後、準備寫入的單批資料（清洗前的欄名尚未標準化）
+            - label: str
+                批次描述（通常是檔名），只用於錯誤訊息
+        - Raise:
+            - SymbolNameConflictError
+                有代號對到兩個以上的證券名稱
+        """
+
+        if (
+            df.empty
+            or cls.SYMBOL_COLUMN not in df.columns
+            or cls.SYMBOL_NAME_COLUMN not in df.columns
+        ):
+            return
+
+        work: pd.DataFrame = pd.DataFrame(
+            {
+                "symbol": df[cls.SYMBOL_COLUMN].astype(str),
+                "name": df[cls.SYMBOL_NAME_COLUMN]
+                .fillna("")
+                .astype(str)
+                .str.replace(cls.NAME_NOISE_PATTERN, "", regex=True),
+            }
+        )
+
+        # 名稱缺漏的列不參與比對：空字串不是「另一個名稱」
+        work = work[work["name"] != ""]
+
+        name_counts: pd.Series = work.groupby("symbol")["name"].nunique()
+        conflicted: List[str] = sorted(name_counts[name_counts > 1].index)
+        if not conflicted:
+            return
+
+        conflicts: Dict[str, List[str]] = {
+            symbol: sorted(set(work.loc[work["symbol"] == symbol, "name"]))
+            for symbol in conflicted
+        }
+        raise SymbolNameConflictError(label, conflicts)
 
     @staticmethod
     def select_csv_files(
