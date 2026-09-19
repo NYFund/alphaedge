@@ -53,6 +53,10 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 它比 `core.utils` 還低，任何人都可以 import 它而不會拉進任何相依。
     # 報表與（日後的）策略都要呼叫同一份公式，故必須擺在所有呼叫端之下
     ("core.backtest.analysis", 1, "共用層／績效公式", False),
+    # 部位建構層：回測與實盤共用，**不是**回測概念。只可 import `core.models`／
+    # `core.utils`／`core.config`／`core.api`；需要 `FuturesMarginConfig` 時會 import
+    # 同層的 `core.managers`，那會列在 F 區（同層互相 import，僅供人工判讀），是刻意的
+    ("core.portfolio", 4, "部位建構層", False),
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
     ("core.backtest.report", 4, "引擎層／報表", False),

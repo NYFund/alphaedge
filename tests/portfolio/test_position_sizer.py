@@ -3,8 +3,8 @@ from typing import Callable, List, Tuple
 
 import pytest
 
-from core.backtest.models.sizing import EqualWeightSizer
 from core.models import StockAccount, StockPosition, StockQuote
+from core.portfolio.sizing import EqualWeightSizer
 
 """等權資金切分的單元測試
 
