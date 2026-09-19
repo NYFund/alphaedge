@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Set
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
+from core.portfolio.construction import BasePortfolioConstructor
+from core.portfolio.signal import Signal
 from core.utils import BarExecutionOrder, InstrumentType, Market, PositionType, Scale
 
 """BaseStrategy: 市場與商品皆無關的策略骨架（market ＋ instrument_type 為 factory 的分派鍵）"""
@@ -78,11 +80,58 @@ class BaseStrategy(ABC):
         """
         pass
 
-    @abstractmethod
+    # === Alpha 層：策略只需要實作這些 ===
+    def generate_open_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
+        """
+        - Description:
+            開倉訊號：選標的、定方向、給價，**不決定數量**
+
+            數量由 portfolio 層依資金或保證金換算（見 `check_open_signal()`），
+            故回傳的 `Signal` 一律不填 `volume`。
+
+            尚未搬到分層鉤子的策略仍自行覆寫 `check_open_signal()`，那條路徑
+            不會走到這裡；**兩條路徑只能擇一**，同時覆寫等於讓本方法變成死碼。
+        - Parameter:
+            - quotes: List[BaseQuote]
+                目標商品的報價資訊
+        - Return:
+            - List[Signal]
+                開倉訊號
+        """
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 尚未實作 generate_open_signals()"
+        )
+
+    def make_portfolio_constructor(self) -> BasePortfolioConstructor:
+        """
+        - Description:
+            建立本次組裝要用的部位建構器
+
+            **刻意不是 `@abstractmethod`**：部位建構器是市場專屬的，由
+            `BaseStockStrategy`／`BaseFuturesStrategy` 提供，策略本身不需要宣告。
+            在這一層掛 abstract 會讓所有直接繼承 `BaseStrategy` 的類別（含測試
+            的 stub）變成抽象類別，而 `StrategyLoader` 會**靜默跳過**抽象類別
+            ——那是「加一個抽象方法就讓既有子類從清單裡消失」的無聲故障。
+
+            **每次組裝都重建，不快取**：策略的 `max_holdings`／`max_lots` 在
+            `__init__` 呼叫 `super().__init__()` 之後才填，`margin_config` 更是由
+            `core/backtest/factory.py` 在策略建構完成後才注入。建一次存起來會
+            永遠看到舊值，而症狀是部位大小整段偏掉，不會有任何錯誤訊息。
+
+            要換配置演算法（波動度加權等）時覆寫本方法即可。
+        - Return:
+            - BasePortfolioConstructor
+                對應本市場的部位建構器
+        """
+
+        raise NotImplementedError(f"{type(self).__name__} 沒有可用的部位建構器")
+
+    # === 引擎契約：由基底提供，策略不需要實作 ===
     def check_open_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
         """
         - Description:
-            開倉策略（Long & Short），需要包含買賣的標的、價位和數量
+            開倉：Alpha 選出候選後交由 portfolio 層換算部位
         - Parameter:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
@@ -90,7 +139,15 @@ class BaseStrategy(ABC):
             - List[BaseOrder]
                 開倉訂單
         """
-        pass
+
+        if self.account is None:
+            return []
+
+        signals: List[Signal] = self.generate_open_signals(quotes)
+        if not signals:
+            return []
+
+        return self.make_portfolio_constructor().build(signals, self.account)
 
     @abstractmethod
     def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
