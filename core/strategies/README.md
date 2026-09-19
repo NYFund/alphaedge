@@ -437,7 +437,7 @@ def calculate_position_size(
     策略只負責挑標的與提供參考價；不要自己算「可開檔數 ÷ 餘額 ÷ 張數」
   - `sizer` 由 `BaseStockStrategy.__init__()` 預設為 `EqualWeightSizer`（等權切分），
     回傳 `(報價, 參考價, 張數)`，張數不足 1 張者不回傳
-  - 換模型只需在子類覆寫 `self.sizer`，公式集中在 `core/backtest/models/sizing.py`
+  - 換模型只需在子類覆寫 `self.sizer`，公式集中在 `core/portfolio/sizing.py`
 
 - **平倉時（Action.SELL）**:
   - 使用持倉的全部股數進行平倉

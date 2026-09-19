@@ -1,3 +1,4 @@
+import datetime
 import inspect
 import sqlite3
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Type
@@ -6,6 +7,8 @@ import pandas as pd
 import pytest
 
 from core.dao.base import BaseDAO, insert_or_ignore
+from core.models import StockQuote
+from core.utils import Scale
 from core.utils.log_manager import LogManager
 
 """
@@ -148,3 +151,42 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
         return dao
 
     return make
+
+
+# -----------------------------------------------------------------------
+# === 報價 fixture：放 root conftest 供各子目錄共用 ===
+# -----------------------------------------------------------------------
+#
+# 原本住在 `tests/backtest/conftest.py`，只有 `tests/backtest/` 看得到。
+# `sizing.py` 搬到 `core/portfolio/` 後，`tests/portfolio/` 也要用同一個 factory；
+# 複製一份到那邊必然與這份漂移，故上移到 root，全專案共用同一份。
+
+
+@pytest.fixture
+def make_quote() -> Callable[..., StockQuote]:
+    """建立 StockQuote 的 factory；未指定的 OHLC 一律沿用 cur_price"""
+
+    def _make_quote(
+        stock_id: str = "2330",
+        date: Optional[datetime.date] = None,
+        cur_price: float = 100.0,
+        open: Optional[float] = None,
+        high: Optional[float] = None,
+        low: Optional[float] = None,
+        close: Optional[float] = None,
+        volume: int = 1000,
+        scale: Scale = Scale.DAY,
+    ) -> StockQuote:
+        return StockQuote(
+            stock_id=stock_id,
+            scale=scale,
+            date=date or datetime.date(2024, 1, 2),
+            cur_price=cur_price,
+            volume=volume,
+            open=open if open is not None else cur_price,
+            high=high if high is not None else cur_price,
+            low=low if low is not None else cur_price,
+            close=close if close is not None else cur_price,
+        )
+
+    return _make_quote

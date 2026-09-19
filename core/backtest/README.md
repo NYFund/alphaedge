@@ -249,7 +249,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 | 層級 | 由誰負責 | 做什麼 |
 |------|----------|--------|
 | 策略 | `check_open_signal()` | 選標的、決定**參考價**（`close`／`open`／tick 價皆可） |
-| 部位大小模型 | `EqualWeightSizer`（`core/backtest/models/sizing.py`） | 依剩餘名額均分餘額、換算張數 |
+| 部位大小模型 | `EqualWeightSizer`（`core/portfolio/sizing.py`） | 依剩餘名額均分餘額、換算張數 |
 | 引擎 | `Backtester.check_max_holdings()` | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
 
 ### 策略要寫的部分

@@ -12,36 +12,6 @@ from core.utils import Action, PositionType, Scale, ShortMethod
 
 
 @pytest.fixture
-def make_quote() -> Callable[..., StockQuote]:
-    """建立 StockQuote 的 factory；未指定的 OHLC 一律沿用 cur_price"""
-
-    def _make_quote(
-        stock_id: str = "2330",
-        date: Optional[datetime.date] = None,
-        cur_price: float = 100.0,
-        open: Optional[float] = None,
-        high: Optional[float] = None,
-        low: Optional[float] = None,
-        close: Optional[float] = None,
-        volume: int = 1000,
-        scale: Scale = Scale.DAY,
-    ) -> StockQuote:
-        return StockQuote(
-            stock_id=stock_id,
-            scale=scale,
-            date=date or datetime.date(2024, 1, 2),
-            cur_price=cur_price,
-            volume=volume,
-            open=open if open is not None else cur_price,
-            high=high if high is not None else cur_price,
-            low=low if low is not None else cur_price,
-            close=close if close is not None else cur_price,
-        )
-
-    return _make_quote
-
-
-@pytest.fixture
 def make_order() -> Callable[..., StockOrder]:
     """建立 StockOrder 的 factory"""
 

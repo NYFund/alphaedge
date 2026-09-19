@@ -10,8 +10,8 @@ from core.api.tw.stock_tick_api import StockTickAPI
 from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.models.cost_model import CostConfig, ShortConstraint
 from core.backtest.models.fill_model import FillConfig
-from core.backtest.models.sizing import BasePositionSizer, EqualWeightSizer
 from core.models import StockAccount, StockOrder, StockQuote
+from core.portfolio.sizing import BasePositionSizer, EqualWeightSizer
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
