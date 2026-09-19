@@ -2,8 +2,6 @@ import datetime
 from abc import abstractmethod
 from typing import Dict, List, Optional
 
-from loguru import logger
-
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.backtest.datafeed.base import BaseDataFeed
@@ -13,6 +11,11 @@ from core.backtest.models.cost_model import FuturesCostConfig
 from core.backtest.models.fill_model import FuturesFillConfig
 from core.managers.futures.position_manager import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
+from core.portfolio.construction import (
+    FuturesPortfolioConstructor,
+    normalize_quote_date,
+)
+from core.portfolio.signal import Signal
 from core.strategies.base import BaseStrategy
 from core.utils import Action, FuturesSession, InstrumentType, Market
 
@@ -172,18 +175,33 @@ class BaseFuturesStrategy(BaseStrategy):
         )
 
     # === 口數計算：保證金約束，不是資金約束 ===
+    def make_portfolio_constructor(self) -> FuturesPortfolioConstructor:
+        """
+        期貨的部位建構器：保證金約束
+
+        **每次組裝都重建**（理由見 `BaseStrategy.make_portfolio_constructor()`）：
+        `max_lots` 在 `super().__init__()` 之後才填，`margin_config` 更是由
+        `core/backtest/factory.py` 在策略建構完成之後才注入——建一次存起來會
+        永遠看到 `None`，於是**靜默退回比率近似**而不是查表。
+        """
+
+        return FuturesPortfolioConstructor(
+            max_lots=self.max_lots,
+            max_capital_usage=self.max_capital_usage,
+            margin_config=self.margin_config,
+            log_context=self.strategy_name,
+        )
+
     def calculate_max_lots(self, quote: FuturesQuote) -> int:
         """
         - Description:
             以**保證金**算出這筆訂單最多能開幾口
 
-            股票是「用多少錢買多少股」，期貨是「繳多少保證金開幾口」——
-            拿契約價值去除可動用餘額會嚴重低估可開口數（TX 一口契約價值 900 萬、
-            保證金只有 70 萬）。
+            公式本體在 `FuturesPortfolioConstructor`：股票是「用多少錢買多少股」，
+            期貨是「繳多少保證金開幾口」，拿契約價值去除可動用餘額會嚴重低估
+            可開口數（TX 一口契約價值 900 萬、保證金只有 70 萬）。
 
-            保證金取得方式與 `FuturesPositionManager` 一致：帶了 API 就查表，
-            否則用比率近似。**查表查不到會往外拋**，那是刻意的，見
-            `FuturesMarginConfig` 的說明。
+            **本方法保留為可覆寫的鉤子**，供仍走舊路徑的策略與子類客製使用。
         - Parameters:
             - quote: FuturesQuote
                 目標契約的報價
@@ -192,50 +210,26 @@ class BaseFuturesStrategy(BaseStrategy):
                 可開口數；帳戶或報價不足以計算時為 0
         """
 
-        if self.account is None or quote.multiplier <= 0:
+        if self.account is None:
             return 0
 
-        margin_per_lot: float = self.get_margin_per_lot(quote)
-        if margin_per_lot <= 0:
-            return 0
-
-        budget: float = self.account.balance * self.max_capital_usage
-        return max(0, int(budget // margin_per_lot))
+        return self.make_portfolio_constructor().calculate_max_lots(quote, self.account)
 
     def get_margin_per_lot(self, quote: FuturesQuote) -> float:
         """
         取得每口原始保證金
 
-        沒有 `margin_config` 或沒有 API 時退回「契約價值 × 比率」，
-        與 `FuturesPositionManager` 的比率模式一致——兩處若不一致，
-        策略算出來的口數會開不進去（或開得太少）。
+        委派給 `FuturesPortfolioConstructor`，與 `FuturesPositionManager` 的
+        比率模式一致——兩處若不一致，策略算出來的口數會開不進去（或開得太少）。
         """
 
-        config: FuturesMarginConfig = (
-            self.margin_config or FuturesMarginConfig.default()
-        )
-
-        if config.api is not None:
-            per_lot: Optional[int] = config.api.get_initial_margin(
-                quote.product,
-                self.normalize_quote_date(quote.date),
-                fallback_to_earliest=config.fallback_to_earliest,
-            )
-            if per_lot is None:
-                logger.warning(
-                    f"[{self.strategy_name}] 查無 {quote.product} 在 {quote.date} "
-                    f"的保證金，本次不開倉"
-                )
-                return 0.0
-            return float(per_lot)
-
-        return quote.close * quote.multiplier * config.initial_margin_ratio
+        return self.make_portfolio_constructor().get_margin_per_lot(quote)
 
     @staticmethod
     def normalize_quote_date(date) -> datetime.date:
         """Tick 級別的報價日期會是 datetime，統一取其日期部分"""
 
-        return date.date() if isinstance(date, datetime.datetime) else date
+        return normalize_quote_date(date)
 
     def build_order(
         self,
@@ -312,22 +306,34 @@ class BaseFuturesStrategy(BaseStrategy):
         """
         pass
 
-    @abstractmethod
-    def check_open_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """開倉策略；`quotes` 為當日**所有契約**，策略需自行挑選"""
-        pass
+    def build_close_orders(self, signals: List[Signal]) -> List[FuturesOrder]:
+        """
+        把平倉／停損訊號組成 `FuturesOrder`
 
-    @abstractmethod
-    def check_close_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """平倉策略"""
-        pass
+        **只做欄位搬運**：期貨的平倉訊號來自帳上部位（`position.volume`、
+        多單賣出、空單買進），數量與方向都已由策略決定。
+        """
 
-    @abstractmethod
-    def check_stop_loss_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """停損機制"""
-        pass
+        orders: List[FuturesOrder] = []
+        for signal in signals:
+            # 訊號沒帶數量就是策略算出來無倉可平，略過而非下一張 0 口的單
+            if not signal.volume or signal.volume <= 0:
+                continue
 
-    @abstractmethod
+            quote: FuturesQuote = signal.quote
+            orders.append(
+                FuturesOrder(
+                    product=quote.product,
+                    expiry=quote.expiry,
+                    date=quote.date,
+                    action=signal.action,
+                    position_type=signal.position_type,
+                    price=signal.order_price,
+                    volume=signal.volume,
+                )
+            )
+        return orders
+
     def calculate_position_size(
         self, quotes: List[FuturesQuote], action: Action
     ) -> List[FuturesOrder]:
@@ -335,5 +341,11 @@ class BaseFuturesStrategy(BaseStrategy):
         計算下單**口數**（不是張數也不是股數）
 
         受保證金約束，見 `calculate_max_lots()`。
+
+        **已不是必要實作**：開倉改由 `make_portfolio_constructor()` 產生的部位
+        建構器負責，平倉改由 `build_close_orders()` 組裝。
         """
-        pass
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 未實作 calculate_position_size()"
+        )

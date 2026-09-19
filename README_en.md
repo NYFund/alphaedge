@@ -15,9 +15,13 @@ graph TB
         Tasks["tasks/update_db.py"]
     end
 
-    subgraph strategy_layer ["Strategy Layer"]
-        Strategies["core/strategies<br/>(declares market + instrument_type)"]
+    subgraph strategy_layer ["Strategy Layer (Alpha)"]
+        Strategies["core/strategies<br/>(declares market + instrument_type<br/>generate_*_signals → Signal)"]
         Loader["strategy_loader.py"]
+    end
+
+    subgraph portfolio_layer ["Portfolio Construction (shared by backtest & live)"]
+        Portfolio["core/portfolio<br/>signal / sizing / construction<br/>(Signal + Account → Order, entries only)"]
     end
 
     subgraph engine_layer ["Backtest Engine (market-agnostic)"]
@@ -57,6 +61,8 @@ graph TB
 
     RunPy --> Loader
     Loader --> Strategies
+    Strategies --> Portfolio
+    Portfolio --> Models
     RunPy --> Factory
     Factory --> Backtester
     Factory --> BTModels

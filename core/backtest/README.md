@@ -248,34 +248,48 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 
 | 層級 | 由誰負責 | 做什麼 |
 |------|----------|--------|
-| 策略 | `check_open_signal()` | 選標的、決定**參考價**（`close`／`open`／tick 價皆可） |
+| 策略（Alpha） | `generate_open_signals()` | 選標的、決定 `sizing_price`（算量價）與 `order_price`（委託價） |
+| 部位建構 | `StockPortfolioConstructor`（`core/portfolio/construction.py`） | 把訊號交給 sizer，再組成訂單 |
 | 部位大小模型 | `EqualWeightSizer`（`core/portfolio/sizing.py`） | 依剩餘名額均分餘額、換算張數 |
 | 引擎 | `Backtester.check_max_holdings()` | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
 
+> **sizer 與引擎的 `max_holdings` 檢查刻意不合併。** 兩者回答不同問題：sizer 問
+> 「資金要切成幾份」（訊號階段，張數不足 1 張的候選不佔名額），引擎問「這張單送出去
+> 會不會讓帳戶超過上限」（逐單階段，看即時持倉數，未成交的單不增加持倉）。
+> 兩者不等價，少任何一道都會漏掉對方擋得住的情況。
+
 ### 策略要寫的部分
 
-`calculate_position_size()` 的 `BUY` 分支**不需要自己算張數**，交給 `self.sizer`：
+策略**只回傳訊號**，張數由部位建構層換算：
 
 ```python
-candidates: List[Tuple[StockQuote, float]] = [
-    (stock_quote, stock_quote.close) for stock_quote in stock_quotes  # 參考價由策略決定
-]
-
-for stock_quote, ref_price, open_volume in self.sizer.size(
-    self.account, candidates, self.max_holdings
-):
-    orders.append(StockOrder(..., price=ref_price, volume=open_volume))
+def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+    return [
+        Signal(
+            quote=stock_quote,
+            action=Action.BUY,
+            position_type=PositionType.LONG,
+            order_price=stock_quote.cur_price,  # 委託價
+            sizing_price=stock_quote.close,  # 算張數用的價格，由策略決定
+        )
+        for stock_quote in candidates
+    ]
 ```
 
-`self.sizer` 由 `BaseStockStrategy` 預設為 `EqualWeightSizer()`；要換配置演算法（波動度加權等），在策略的 `__init__` 覆寫該欄位即可，呼叫端不動。
+要換配置演算法（波動度加權等），覆寫 `make_portfolio_constructor()` 傳入別的 sizer 即可，
+呼叫端不動。**建構器每次組裝都重建**：`max_holdings` 是策略在 `super().__init__()` 之後
+才填的，存成欄位會永遠讀到舊值。
+
+**平倉與停損不走這一層**：張數取自持倉（`position.volume`）、價格由策略的交易邏輯決定，
+由 `build_close_orders()` 直接組單。
 
 ### 預設的等權公式
 
 ```
 可開檔數 = max(0, max_holdings - 現有持倉檔數)   # max_holdings 為 None 時不限制
 每檔資金 = account.balance / 可開檔數
-張數     = int(每檔資金 / (參考價 × Units.LOT))   # 無條件捨去
-下單條件 = 張數 >= 1；參考價 <= 0 者跳過
+張數     = int(每檔資金 / (sizing_price × Units.LOT))   # 無條件捨去
+下單條件 = 張數 >= 1；sizing_price <= 0 者跳過
 ```
 
 **`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定 LONG 回歸 baseline 的 915 筆結果。

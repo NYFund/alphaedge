@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from typing import List, Optional, Set
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
+from core.portfolio.construction import BasePortfolioConstructor
+from core.portfolio.signal import Signal
 from core.utils import BarExecutionOrder, InstrumentType, Market, PositionType, Scale
 
 """BaseStrategy: 市場與商品皆無關的策略骨架（market ＋ instrument_type 為 factory 的分派鍵）"""
@@ -78,11 +80,112 @@ class BaseStrategy(ABC):
         """
         pass
 
-    @abstractmethod
+    # === Alpha 層：策略只需要實作這些 ===
+    def generate_open_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
+        """
+        - Description:
+            開倉訊號：選標的、定方向、給價，**不決定數量**
+
+            數量由 portfolio 層依資金或保證金換算（見 `check_open_signal()`），
+            故回傳的 `Signal` 一律不填 `volume`。
+
+            尚未搬到分層鉤子的策略仍自行覆寫 `check_open_signal()`，那條路徑
+            不會走到這裡；**兩條路徑只能擇一**，同時覆寫等於讓本方法變成死碼。
+        - Parameter:
+            - quotes: List[BaseQuote]
+                目標商品的報價資訊
+        - Return:
+            - List[Signal]
+                開倉訊號
+        """
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 尚未實作 generate_open_signals()"
+        )
+
+    def generate_close_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
+        """
+        - Description:
+            平倉訊號：挑哪些部位出場、用什麼價，**數量也由策略決定**
+
+            與開倉相反，平倉的數量**不經過 portfolio 層**：它來自持倉查詢，
+            而「平掉第一筆部位」與「合併同標的所有部位」是策略決策
+            （後者若逐筆送單，會被 `close_position()` 的 FIFO 吃掉）。
+            故回傳的 `Signal` 必須填 `volume` 與 `order_price`。
+        - Parameter:
+            - quotes: List[BaseQuote]
+                目標商品的報價資訊
+        - Return:
+            - List[Signal]
+                平倉訊號
+        """
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 尚未實作 generate_close_signals()"
+        )
+
+    def generate_stop_loss_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
+        """
+        - Description:
+            停損訊號；語意與 `generate_close_signals()` 相同，只是觸發條件不同
+        - Parameter:
+            - quotes: List[BaseQuote]
+                目標商品的報價資訊
+        - Return:
+            - List[Signal]
+                停損（平倉）訊號
+        """
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 尚未實作 generate_stop_loss_signals()"
+        )
+
+    def build_close_orders(self, signals: List[Signal]) -> List[BaseOrder]:
+        """
+        - Description:
+            把平倉／停損訊號組成訂單
+
+            **只做欄位搬運**，不做任何數量或價格決策——兩者都已由策略在
+            `Signal` 裡給定。由各市場基底實作（組出 `StockOrder`／`FuturesOrder`）。
+        - Parameter:
+            - signals: List[Signal]
+                已填好 `volume` 與 `order_price` 的平倉訊號
+        - Return:
+            - List[BaseOrder]
+                平倉訂單；`volume` 未填或不大於 0 者略過
+        """
+
+        raise NotImplementedError(f"{type(self).__name__} 沒有可用的平倉組裝")
+
+    def make_portfolio_constructor(self) -> BasePortfolioConstructor:
+        """
+        - Description:
+            建立本次組裝要用的部位建構器
+
+            **刻意不是 `@abstractmethod`**：部位建構器是市場專屬的，由
+            `BaseStockStrategy`／`BaseFuturesStrategy` 提供，策略本身不需要宣告。
+            在這一層掛 abstract 會讓所有直接繼承 `BaseStrategy` 的類別（含測試
+            的 stub）變成抽象類別，而 `StrategyLoader` 會**靜默跳過**抽象類別
+            ——那是「加一個抽象方法就讓既有子類從清單裡消失」的無聲故障。
+
+            **每次組裝都重建，不快取**：策略的 `max_holdings`／`max_lots` 在
+            `__init__` 呼叫 `super().__init__()` 之後才填，`margin_config` 更是由
+            `core/backtest/factory.py` 在策略建構完成後才注入。建一次存起來會
+            永遠看到舊值，而症狀是部位大小整段偏掉，不會有任何錯誤訊息。
+
+            要換配置演算法（波動度加權等）時覆寫本方法即可。
+        - Return:
+            - BasePortfolioConstructor
+                對應本市場的部位建構器
+        """
+
+        raise NotImplementedError(f"{type(self).__name__} 沒有可用的部位建構器")
+
+    # === 引擎契約：由基底提供，策略不需要實作 ===
     def check_open_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
         """
         - Description:
-            開倉策略（Long & Short），需要包含買賣的標的、價位和數量
+            開倉：Alpha 選出候選後交由 portfolio 層換算部位
         - Parameter:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
@@ -90,13 +193,22 @@ class BaseStrategy(ABC):
             - List[BaseOrder]
                 開倉訂單
         """
-        pass
 
-    @abstractmethod
+        if self.account is None:
+            return []
+
+        signals: List[Signal] = self.generate_open_signals(quotes)
+        if not signals:
+            return []
+
+        return self.make_portfolio_constructor().build(signals, self.account)
+
     def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
         """
         - Description:
-            平倉策略（Long & Short），需要包含買賣的標的、價位和數量
+            平倉：數量與價格都由策略在訊號裡給定，基底只負責組單
+
+            **不經過 portfolio 層**，理由見 `generate_close_signals()`。
         - Parameter:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
@@ -104,13 +216,16 @@ class BaseStrategy(ABC):
             - List[BaseOrder]
                 平倉訂單
         """
-        pass
 
-    @abstractmethod
+        if self.account is None:
+            return []
+
+        return self.build_close_orders(self.generate_close_signals(quotes))
+
     def check_stop_loss_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
         """
         - Description:
-            設定停損機制
+            停損：與平倉走同一條組裝路徑，只是訊號來源不同
         - Parameter:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
@@ -118,4 +233,8 @@ class BaseStrategy(ABC):
             - List[BaseOrder]
                 停損（平倉）訂單
         """
-        pass
+
+        if self.account is None:
+            return []
+
+        return self.build_close_orders(self.generate_stop_loss_signals(quotes))

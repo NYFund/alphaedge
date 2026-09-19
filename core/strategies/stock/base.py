@@ -11,6 +11,8 @@ from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.models.cost_model import CostConfig, ShortConstraint
 from core.backtest.models.fill_model import FillConfig
 from core.models import StockAccount, StockOrder, StockQuote
+from core.portfolio.construction import StockPortfolioConstructor
+from core.portfolio.signal import Signal
 from core.portfolio.sizing import BasePositionSizer, EqualWeightSizer
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -142,63 +144,57 @@ class BaseStockStrategy(BaseStrategy):
             return self.price.get_adjusted_close_map(date)
         return self.price.get_close_map(date)
 
-    @abstractmethod
-    def check_open_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
+    def make_portfolio_constructor(self) -> StockPortfolioConstructor:
         """
-        - Description:
-            開倉策略（Long & Short） ，需要包含買賣的標的、價位和數量
-        - Parameter:
-            - account: StockAccount
-                交易帳戶資訊
-            - stock_quotes: List[StockQuote]
-                目標股票的報價資訊
-        - Return:
-            - position: List[StockQuote]
-                開倉訂單
-        """
-        pass
+        台股的部位建構器：等權資金切分
 
-    @abstractmethod
-    def check_close_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
+        **每次組裝都重建**（理由見 `BaseStrategy.make_portfolio_constructor()`）：
+        `max_holdings` 是策略在 `super().__init__()` 之後才填的，建一次存起來
+        會永遠讀到 `None`。
         """
-        - Description:
-            平倉策略（Long & Short） ，需要包含買賣的標的、價位和數量
-        - Parameter:
-            - account: StockAccount
-                交易帳戶資訊
-            - stock_quotes: List[StockQuote]
-                目標股票的報價資訊
-        - Return:
-            - position: List[StockQuote]
-                平倉訂單
-        """
-        pass
 
-    @abstractmethod
-    def check_stop_loss_signal(
-        self, stock_quotes: List[StockQuote]
-    ) -> List[StockOrder]:
-        """
-        - Description:
-            設定停損機制
-        - Parameter:
-            - account: StockAccount
-                交易帳戶資訊
-            - stock_quotes: List[StockQuote]
-                目標股票的報價資訊
-        - Return:
-            - position: List[StockOrder]
-                停損（平倉）訂單
-        """
-        pass
+        return StockPortfolioConstructor(self.sizer, self.max_holdings)
 
-    @abstractmethod
+    def build_close_orders(self, signals: List[Signal]) -> List[StockOrder]:
+        """
+        把平倉／停損訊號組成 `StockOrder`
+
+        **只做欄位搬運**：平幾張、用什麼價、算在哪個方向，全部由策略在訊號裡
+        決定（`MomentumStrategy1` 平第一筆部位、`ForeignSellShortDayTradeStrategy`
+        合併同標的所有空單，後者逐筆送單會被 `close_position()` 的 FIFO 吃掉）。
+
+        `short_method` 與 `is_day_trade` 不在此填，由 `Backtester._enrich_orders()`
+        依策略設定補值。
+        """
+
+        orders: List[StockOrder] = []
+        for signal in signals:
+            # 訊號沒帶數量就是策略算出來無倉可平，略過而非下一張 0 張的單
+            if not signal.volume or signal.volume <= 0:
+                continue
+
+            orders.append(
+                StockOrder(
+                    stock_id=signal.symbol,
+                    date=signal.quote.date,
+                    action=signal.action,
+                    position_type=signal.position_type,
+                    price=signal.order_price,
+                    volume=signal.volume,
+                )
+            )
+        return orders
+
     def calculate_position_size(
         self, stock_quotes: List[StockQuote], action: Action
     ) -> List[StockOrder]:
         """
         - Description:
             計算下單股數，依據當前資金、價格、風控規則決定部位大小
+
+            **已不是必要實作**：開倉改由 `make_portfolio_constructor()` 產生的
+            部位建構器負責，平倉改由 `build_close_orders()` 組裝。尚未搬到分層
+            鉤子的策略仍可自行實作並從 `check_*_signal()` 呼叫。
         - Parameters:
             - account: StockAccount
                 交易帳戶資訊
@@ -210,4 +206,7 @@ class BaseStockStrategy(BaseStrategy):
             - List[StockOrder]
                 建議下單的股數
         """
-        pass
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 未實作 calculate_position_size()"
+        )

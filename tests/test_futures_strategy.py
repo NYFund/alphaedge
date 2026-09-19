@@ -6,6 +6,7 @@ import pytest
 
 from core.managers.futures.position_manager import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesQuote
+from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.strategy_loader import StrategyLoader
@@ -61,6 +62,22 @@ class StubMarginAPI:
 
     def get_covered_date_range(self, product):
         return {"earliest": "2020-03-13", "latest": "2026-08-12"}
+
+
+def open_signals(
+    strategy: MomentumFuturesStrategy, quotes: List[FuturesQuote]
+) -> List[Signal]:
+    """把報價直接當成開倉候選；驗的是口數換算，不是選契約的條件"""
+
+    return [
+        Signal(
+            quote=quote,
+            action=Action.BUY,
+            position_type=strategy.position_type,
+            order_price=quote.close,
+        )
+        for quote in quotes
+    ]
 
 
 @pytest.fixture
@@ -235,7 +252,9 @@ def test_position_size_is_capped_by_max_lots(
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
     strategy.max_lots = 3
 
-    orders = strategy.calculate_position_size([make_quote("202609")], Action.OPEN)
+    orders = strategy.make_portfolio_constructor().build(
+        open_signals(strategy, [make_quote("202609")]), strategy.account
+    )
 
     assert len(orders) == 1
     assert orders[0].volume == 3  # 保證金允許 15 口，被 max_lots 壓到 3
@@ -245,7 +264,9 @@ def test_orders_carry_contract_identity(strategy: MomentumFuturesStrategy) -> No
     """訂單要帶得出商品與到期月，否則下游對不回契約"""
 
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
-    orders = strategy.calculate_position_size([make_quote("202609")], Action.OPEN)
+    orders = strategy.make_portfolio_constructor().build(
+        open_signals(strategy, [make_quote("202609")]), strategy.account
+    )
 
     assert orders[0].product == "TX"
     assert orders[0].expiry == "202609"
