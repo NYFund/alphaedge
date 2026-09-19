@@ -15,9 +15,13 @@ graph TB
         Tasks["tasks/update_db.py"]
     end
 
-    subgraph strategy_layer ["策略層"]
-        Strategies["core/strategies<br/>（宣告 market ＋ instrument_type）"]
+    subgraph strategy_layer ["策略層（Alpha）"]
+        Strategies["core/strategies<br/>（宣告 market ＋ instrument_type<br/>generate_*_signals → Signal）"]
         Loader["strategy_loader.py"]
+    end
+
+    subgraph portfolio_layer ["部位建構層（回測與實盤共用）"]
+        Portfolio["core/portfolio<br/>signal／sizing／construction<br/>（Signal ＋ Account → Order，只做開倉）"]
     end
 
     subgraph engine_layer ["回測引擎層（市場無關）"]
@@ -57,6 +61,8 @@ graph TB
 
     RunPy --> Loader
     Loader --> Strategies
+    Strategies --> Portfolio
+    Portfolio --> Models
     RunPy --> Factory
     Factory --> Backtester
     Factory --> BTModels

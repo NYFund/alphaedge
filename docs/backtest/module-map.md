@@ -14,6 +14,10 @@
 入口層      run.py ── tasks/update_db.py
               │
 策略層      core/strategies/          ← 宣告 market，是 factory 的分派鍵
+            （Alpha：generate_*_signals() → List[Signal]）
+              │
+部位建構層  core/portfolio/           ← 回測與實盤共用，不屬於任一市場
+            （Signal ＋ Account → List[Order]；**只做開倉**）
               │
 組裝層      core/backtest/factory.py  ← 全專案唯一的 if market ==
               │
@@ -32,6 +36,21 @@
 ```
 
 **引擎不認識任何市場**：`grep "Stock" core/backtest/backtester.py` 為 0。市場語意全部在 `factory.py` 組裝時注入。
+
+**策略層與部位建構層的分界**：
+
+| 層 | 檔案 | 回答什麼 | 不回答什麼 |
+|----|------|----------|-----------|
+| Alpha | `core/strategies/` | 買哪些、什麼方向、什麼價 | 各買幾張 |
+| Portfolio | `core/portfolio/construction.py` | 開倉各買幾張／幾口 | 選哪些標的 |
+| Portfolio | `core/portfolio/sizing.py` | 資金怎麼切（可替換） | 用哪個參考價 |
+
+引擎對策略的契約是 `check_*_signal(quotes) -> List[Order]`，**由 `BaseStrategy` 提供**，
+策略只實作 `generate_*_signals()`。
+
+**平倉與停損不經過部位建構層**：張數取自持倉查詢、價格由策略的交易邏輯決定
+（哪一筆部位、合併與否、回補價怎麼挑），由市場基底的 `build_close_orders()` 直接組單。
+把它交給部位建構器等於要求那一層懂 FIFO 與回補價政策。
 
 ---
 
@@ -194,7 +213,8 @@ sequenceDiagram
 | 動作 | 檔案 |
 |------|------|
 | 新增 | `core/models/<instrument>/`（五個領域模型） |
-| 新增 | `core/strategies/<instrument>/base.py`（設定 `self.market` 與 `self.instrument_type`） |
+| 新增 | `core/strategies/<instrument>/base.py`（設定 `self.market` 與 `self.instrument_type`，並實作 `make_portfolio_constructor()` 與 `build_close_orders()`） |
+| 新增 | `core/portfolio/construction.py` 的對應建構器（若部位約束與既有兩者都不同） |
 | 新增 | `core/backtest/models/` 的該組合 `InstrumentSpec`／`FillModel`／`CostModel`／`SettlementModel` |
 | 新增 | `core/backtest/datafeed/<market>/` 的該組合 `DataFeed` |
 | 新增 | `core/managers/<instrument>/position_manager.py` |
