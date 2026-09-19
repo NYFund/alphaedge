@@ -257,6 +257,8 @@ sequenceDiagram
 | 策略層與引擎層互相引用契約：引擎／factory／報表 → 策略契約（三個 `base.py`）→ 引擎的 model 型別 | 圖的用途是說明呼叫序列，改畫相依圖反而難讀；`check_layer_deps.py` 以獨立的「策略契約」等級處理 |
 | `core/pipeline/tw/updaters/*` import `core/api/tw/*`（期貨行情、標的池 API） | 單向（api 已不再 import pipeline：欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`）；同層不同套件，`check_layer_deps.py` 只列出不擋 |
 | `settlement_model.py` import `futures_roll`（datafeed）、`StockCostModel`、兩個 PositionManager 的具體類別 | 期貨轉倉需要 planner 與 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
+| **策略層仍 import `core/backtest/` 的 `BaseDataFeed`、`CostConfig`／`FuturesCostConfig`、`FillConfig`／`FuturesFillConfig`、`MarketCalendar`、`FuturesCalendar`、`FuturesRollConfig`**（2026-09-19 實測 6 檔、13 處） | 與 `sizing.py` 原本放在 `core/backtest/models/` 是**同一種分層錯置**——那些設定回測與實盤都要用，不是回測概念。`sizing.py` 已於 2026-09-19 搬到 `core/portfolio/`，這幾個沒跟著搬是因為影響面差很多：搬動它們會牽動 DataFeed 與成本／成交模型的**所有**呼叫端。實盤下單規劃對 `BaseDataFeed` 有相同裁示（`LiveDataFeed` 會繼承它，因為策略的 `setup_apis(feed)` 型別就是它） |
+| `core/portfolio/construction.py` import `core/managers/futures/position_manager.py` 的 `FuturesMarginConfig` | 同層不同套件（皆為分層 4），`check_layer_deps.py` 只列出不擋。期貨的部位建構要算每口保證金，而保證金設定的權威來源在部位管理層——複製一份到 portfolio 層會與 `FuturesPositionManager` 的比率模式漂移，算出的口數開不進去 |
 
 ## 相關文件
 
