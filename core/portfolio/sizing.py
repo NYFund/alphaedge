@@ -43,7 +43,13 @@ class BasePositionSizer(ABC):
             - candidates: List[Tuple[BaseQuote, float]]
                 (報價, 該策略選定的參考價)
             - max_holdings: Optional[int]
-                最大持倉檔數；`None` 表示不限制
+                最大持倉檔數；`None` 表示不限制。
+
+                **引擎側另有一道同名檢查，兩者刻意不合併**：這裡回答「資金要切成
+                幾份」，張數不足 1 張的候選不佔名額；`Backtester.check_max_holdings()`
+                回答「這張單送出去會不會讓帳戶超過上限」，看的是逐單執行當下的
+                即時持倉數（未成交的單不增加持倉）。兩者不等價，少任何一道都會漏掉
+                對方擋得住的情況
         - Return:
             - List[Tuple[BaseQuote, float, int]]
                 (報價, 參考價, 張數)；張數不足 1 張者不回傳
