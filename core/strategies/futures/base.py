@@ -15,6 +15,7 @@ from core.portfolio.construction import (
     FuturesPortfolioConstructor,
     normalize_quote_date,
 )
+from core.portfolio.signal import Signal
 from core.strategies.base import BaseStrategy
 from core.utils import Action, FuturesSession, InstrumentType, Market
 
@@ -305,15 +306,33 @@ class BaseFuturesStrategy(BaseStrategy):
         """
         pass
 
-    @abstractmethod
-    def check_close_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """平倉策略"""
-        pass
+    def build_close_orders(self, signals: List[Signal]) -> List[FuturesOrder]:
+        """
+        把平倉／停損訊號組成 `FuturesOrder`
 
-    @abstractmethod
-    def check_stop_loss_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """停損機制"""
-        pass
+        **只做欄位搬運**：期貨的平倉訊號來自帳上部位（`position.volume`、
+        多單賣出、空單買進），數量與方向都已由策略決定。
+        """
+
+        orders: List[FuturesOrder] = []
+        for signal in signals:
+            # 訊號沒帶數量就是策略算出來無倉可平，略過而非下一張 0 口的單
+            if not signal.volume or signal.volume <= 0:
+                continue
+
+            quote: FuturesQuote = signal.quote
+            orders.append(
+                FuturesOrder(
+                    product=quote.product,
+                    expiry=quote.expiry,
+                    date=quote.date,
+                    action=signal.action,
+                    position_type=signal.position_type,
+                    price=signal.order_price,
+                    volume=signal.volume,
+                )
+            )
+        return orders
 
     def calculate_position_size(
         self, quotes: List[FuturesQuote], action: Action

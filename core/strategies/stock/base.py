@@ -12,6 +12,7 @@ from core.backtest.models.cost_model import CostConfig, ShortConstraint
 from core.backtest.models.fill_model import FillConfig
 from core.models import StockAccount, StockOrder, StockQuote
 from core.portfolio.construction import StockPortfolioConstructor
+from core.portfolio.signal import Signal
 from core.portfolio.sizing import BasePositionSizer, EqualWeightSizer
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -154,39 +155,35 @@ class BaseStockStrategy(BaseStrategy):
 
         return StockPortfolioConstructor(self.sizer, self.max_holdings)
 
-    @abstractmethod
-    def check_close_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
+    def build_close_orders(self, signals: List[Signal]) -> List[StockOrder]:
         """
-        - Description:
-            平倉策略（Long & Short） ，需要包含買賣的標的、價位和數量
-        - Parameter:
-            - account: StockAccount
-                交易帳戶資訊
-            - stock_quotes: List[StockQuote]
-                目標股票的報價資訊
-        - Return:
-            - position: List[StockQuote]
-                平倉訂單
-        """
-        pass
+        把平倉／停損訊號組成 `StockOrder`
 
-    @abstractmethod
-    def check_stop_loss_signal(
-        self, stock_quotes: List[StockQuote]
-    ) -> List[StockOrder]:
+        **只做欄位搬運**：平幾張、用什麼價、算在哪個方向，全部由策略在訊號裡
+        決定（`MomentumStrategy1` 平第一筆部位、`ForeignSellShortDayTradeStrategy`
+        合併同標的所有空單，後者逐筆送單會被 `close_position()` 的 FIFO 吃掉）。
+
+        `short_method` 與 `is_day_trade` 不在此填，由 `Backtester._enrich_orders()`
+        依策略設定補值。
         """
-        - Description:
-            設定停損機制
-        - Parameter:
-            - account: StockAccount
-                交易帳戶資訊
-            - stock_quotes: List[StockQuote]
-                目標股票的報價資訊
-        - Return:
-            - position: List[StockOrder]
-                停損（平倉）訂單
-        """
-        pass
+
+        orders: List[StockOrder] = []
+        for signal in signals:
+            # 訊號沒帶數量就是策略算出來無倉可平，略過而非下一張 0 張的單
+            if not signal.volume or signal.volume <= 0:
+                continue
+
+            orders.append(
+                StockOrder(
+                    stock_id=signal.symbol,
+                    date=signal.quote.date,
+                    action=signal.action,
+                    position_type=signal.position_type,
+                    price=signal.order_price,
+                    volume=signal.volume,
+                )
+            )
+        return orders
 
     def calculate_position_size(
         self, stock_quotes: List[StockQuote], action: Action

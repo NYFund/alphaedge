@@ -10,6 +10,7 @@ from core.models import (
     FuturesAccount,
     FuturesQuote,
     StockAccount,
+    StockPosition,
     StockQuote,
 )
 from core.portfolio.construction import (
@@ -87,6 +88,10 @@ class LayeredMomentum(BaseStockStrategy):
 
     **刻意直接繼承 `BaseStockStrategy`**：`MomentumStrategy1` 在 S6 之前仍自行
     覆寫 `check_open_signal()`，繼承它就會走到舊覆寫，驗不到基底路徑。
+
+    **不要為了「本策略不平倉」補一個 `check_close_signal()` 空實作**：那會蓋掉基底
+    的實作，平倉路徑就再也驗不到了。不實作的鉤子會在被呼叫時拋 `NotImplementedError`，
+    而不是默默回空清單。
     """
 
     def __init__(self, quotes: List[StockQuote]) -> None:
@@ -116,16 +121,6 @@ class LayeredMomentum(BaseStockStrategy):
             )
             for quote in self.candidates
         ]
-
-    def check_close_signal(self, stock_quotes: List[StockQuote]) -> List[BaseOrder]:
-        """本示範策略不平倉"""
-
-        return []
-
-    def check_stop_loss_signal(self, stock_quotes: List[StockQuote]) -> List[BaseOrder]:
-        """本示範策略不停損"""
-
-        return []
 
 
 class LayeredFuturesMomentum(BaseFuturesStrategy):
@@ -157,16 +152,6 @@ class LayeredFuturesMomentum(BaseFuturesStrategy):
             )
             for quote in self.candidates
         ]
-
-    def check_close_signal(self, quotes: List[FuturesQuote]) -> List[BaseOrder]:
-        """本示範策略不平倉"""
-
-        return []
-
-    def check_stop_loss_signal(self, quotes: List[FuturesQuote]) -> List[BaseOrder]:
-        """本示範策略不停損"""
-
-        return []
 
 
 # === 基底路徑與舊路徑一致 ===
@@ -272,3 +257,109 @@ def test_strategy_without_signal_hook_raises_clearly() -> None:
 
     with pytest.raises(NotImplementedError, match="_NoHook"):
         strategy.check_open_signal([])
+
+
+# === 平倉／停損：不經過 portfolio 層 ===
+class LayeredClose(LayeredMomentum):
+    """平倉訊號取自持倉的示範策略（對應 `MomentumStrategy1` 的 SELL 分支）"""
+
+    def generate_close_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
+        """平掉每檔的第一筆部位，價格用 cur_price——與改寫前同一組欄位"""
+
+        signals: List[Signal] = []
+        for quote in quotes:
+            position = self.account.get_first_open_position(quote.symbol)
+            if position is None:
+                continue
+
+            signals.append(
+                Signal(
+                    quote=quote,
+                    action=Action.SELL,
+                    position_type=position.position_type,
+                    order_price=quote.cur_price,
+                    volume=position.volume,
+                )
+            )
+        return signals
+
+    def generate_stop_loss_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
+        """停損與平倉共用同一組訊號，只為驗證兩者走同一條組裝路徑"""
+
+        return self.generate_close_signals(quotes)
+
+
+def test_stock_close_path_matches_legacy() -> None:
+    """平倉單：基底組裝與 `calculate_position_size(SELL)` 逐筆相同"""
+
+    quotes: List[StockQuote] = [make_stock_quote("2330", 100.0)]
+
+    legacy_strategy: MomentumStrategy1 = MomentumStrategy1()
+    legacy_strategy.setup_account(StockAccount(1_000_000.0))
+    legacy_strategy.account.positions.append(
+        StockPosition(id=1, stock_id="2330", date=DAY_1, price=90.0, volume=4)
+    )
+    legacy: List[BaseOrder] = legacy_strategy.calculate_position_size(
+        quotes, Action.SELL
+    )
+
+    layered: LayeredClose = LayeredClose(quotes)
+    layered.setup_account(StockAccount(1_000_000.0))
+    layered.account.positions.append(
+        StockPosition(id=1, stock_id="2330", date=DAY_1, price=90.0, volume=4)
+    )
+
+    assert order_fields(layered.check_close_signal(quotes)) == order_fields(legacy)
+    assert legacy, "帳上有部位就該平得出單"
+
+
+def test_stop_loss_shares_the_close_builder() -> None:
+    """停損與平倉走同一條組裝路徑"""
+
+    quotes: List[StockQuote] = [make_stock_quote("2330", 100.0)]
+
+    layered: LayeredClose = LayeredClose(quotes)
+    layered.setup_account(StockAccount(1_000_000.0))
+    layered.account.positions.append(
+        StockPosition(id=1, stock_id="2330", date=DAY_1, price=90.0, volume=4)
+    )
+
+    assert order_fields(layered.check_stop_loss_signal(quotes)) == order_fields(
+        layered.check_close_signal(quotes)
+    )
+
+
+def test_close_signal_without_volume_is_skipped() -> None:
+    """訊號沒帶數量代表無倉可平，略過而不是下一張 0 張的單"""
+
+    quotes: List[StockQuote] = [make_stock_quote("2330", 100.0)]
+    layered: LayeredClose = LayeredClose(quotes)
+    layered.setup_account(StockAccount(1_000_000.0))
+
+    signals: List[Signal] = [
+        Signal(
+            quote=quotes[0],
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            order_price=100.0,
+            volume=None,
+        ),
+        Signal(
+            quote=quotes[0],
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            order_price=100.0,
+            volume=0,
+        ),
+    ]
+
+    assert layered.build_close_orders(signals) == []
+
+
+def test_close_signal_without_account_returns_empty() -> None:
+    """帳戶還沒載入時平倉也回空清單"""
+
+    layered: LayeredClose = LayeredClose([make_stock_quote("2330", 100.0)])
+
+    assert layered.check_close_signal([]) == []
+    assert layered.check_stop_loss_signal([]) == []
