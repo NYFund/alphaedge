@@ -9,29 +9,28 @@ from core.models import (
     FuturesQuote,
     StockAccount,
     StockPosition,
-    StockQuote,
 )
 from core.portfolio.construction import (
     FuturesPortfolioConstructor,
     StockPortfolioConstructor,
 )
 from core.portfolio.signal import Signal
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.stock.foreign_sell_short_day_trade_strategy import (
-    ForeignSellShortDayTradeStrategy,
-)
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from core.portfolio.sizing import EqualWeightSizer
 from core.utils import Action, FuturesSession, PositionType, Scale
 
 """
-部位建構層的 A／B 測試：新路徑與既有策略的 `calculate_position_size()` 逐筆相同
+部位建構層：訊號換算成訂單的欄位與數量
 
-這一層是純搬移，**唯一有意義的驗收就是新舊輸出一致**。故本檔不自己算一遍
-「應該幾張」——那只會變成把同一個公式抄第二遍——而是直接拿三支既有策略的
-`calculate_position_size()` 當基準，兩邊餵同一組輸入後逐欄比對。
+**公式本身由 `test_position_sizer.py` 與回歸 baseline 把關**（LONG 線的 915 筆
+直接踩在等權切分的取整規則上）。本檔要釘的是這一層獨有的事：
 
-`./scripts/run_regression.sh` 只能在 S6 改寫策略之後才蓋得到這段；在那之前
-本檔是唯一的護欄。
+- 訂單價取 `order_price`，**不是** `sizing_price`——兩者在現行資料源同值，
+  拿錯不會有任何一筆交易變動來提醒你。
+- `action`／`position_type` 照訊號搬，不由本層推導。
+- 期貨的口數受保證金與剩餘口數雙重約束。
+
+本檔原本以三支策略的 `calculate_position_size()` 當 A／B 基準，該方法已於 S6
+隨策略改寫刪除，改為逐項寫明預期值。
 """
 
 
@@ -71,113 +70,65 @@ def make_futures_quote(expiry: str, close: float = 18000.0) -> FuturesQuote:
     )
 
 
-# === 台股做多：等權資金切分 ===
-@pytest.fixture
-def long_strategy() -> MomentumStrategy1:
-    """已載入帳戶的做多動能策略"""
+# === 台股：等權資金切分 ===
+def test_stock_split_uses_sizing_price_and_orders_at_order_price(make_quote) -> None:
+    """張數用 `sizing_price` 算，訂單價用 `order_price`——兩欄不可混用"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
-    strategy.setup_account(StockAccount(1_000_000.0))
-    return strategy
-
-
-def test_stock_long_matches_calculate_position_size(
-    long_strategy: MomentumStrategy1, make_quote
-) -> None:
-    """`MomentumStrategy1` 的開倉單：新舊路徑逐筆相同"""
-
-    quotes: List[StockQuote] = [
-        make_quote(stock_id="2330", date=DAY_1, cur_price=100.0),
-        make_quote(stock_id="2317", date=DAY_1, cur_price=50.0),
-        make_quote(stock_id="2454", date=DAY_1, cur_price=1000.0),
-    ]
-
-    legacy: List[BaseOrder] = long_strategy.calculate_position_size(quotes, Action.BUY)
-
+    account: StockAccount = StockAccount(1_000_000.0)
     signals: List[Signal] = [
         Signal(
-            quote=quote,
+            quote=make_quote(stock_id="2330", date=DAY_1, cur_price=101.0),
             action=Action.BUY,
             position_type=PositionType.LONG,
-            order_price=quote.cur_price,
-            sizing_price=quote.close,
-        )
-        for quote in quotes
+            order_price=101.0,
+            sizing_price=100.0,
+        ),
+        Signal(
+            quote=make_quote(stock_id="2317", date=DAY_1, cur_price=52.0),
+            action=Action.SELL,
+            position_type=PositionType.SHORT,
+            order_price=52.0,
+            sizing_price=50.0,
+        ),
     ]
-    built: List[BaseOrder] = StockPortfolioConstructor(
-        long_strategy.sizer, long_strategy.max_holdings
-    ).build(signals, long_strategy.account)
 
-    assert order_fields(built) == order_fields(legacy)
-    assert built, "這組輸入本來就該開得出倉，空清單代表測試沒測到東西"
+    orders: List[BaseOrder] = StockPortfolioConstructor(
+        EqualWeightSizer(), max_holdings=2
+    ).build(signals, account)
+
+    # 兩個名額均分 1,000,000 → 每檔 500,000；以 sizing_price 換算張數
+    assert order_fields(orders) == [
+        ("2330", DAY_1, Action.BUY, PositionType.LONG, 101.0, 5),
+        ("2317", DAY_1, Action.SELL, PositionType.SHORT, 52.0, 10),
+    ]
 
 
-def test_stock_long_respects_existing_holdings(
-    long_strategy: MomentumStrategy1, make_quote
-) -> None:
-    """已有持倉時可開名額變少，新舊路徑一致"""
+def test_stock_split_respects_existing_holdings(make_quote) -> None:
+    """已有持倉時可開名額變少，剩下的名額分到更多資金"""
 
-    long_strategy.max_holdings = 2
-    long_strategy.account.positions.append(
+    account: StockAccount = StockAccount(1_000_000.0)
+    account.positions.append(
         StockPosition(id=1, stock_id="2330", date=DAY_1, price=100.0, volume=1)
     )
 
-    quotes: List[StockQuote] = [
-        make_quote(stock_id="2317", date=DAY_1, cur_price=50.0),
-        make_quote(stock_id="2454", date=DAY_1, cur_price=80.0),
-    ]
-
-    legacy: List[BaseOrder] = long_strategy.calculate_position_size(quotes, Action.BUY)
-
     signals: List[Signal] = [
         Signal(
-            quote=quote,
+            quote=make_quote(stock_id="2317", date=DAY_1, cur_price=50.0),
             action=Action.BUY,
             position_type=PositionType.LONG,
-            order_price=quote.cur_price,
-            sizing_price=quote.close,
+            order_price=50.0,
+            sizing_price=50.0,
         )
-        for quote in quotes
-    ]
-    built: List[BaseOrder] = StockPortfolioConstructor(
-        long_strategy.sizer, long_strategy.max_holdings
-    ).build(signals, long_strategy.account)
-
-    assert order_fields(built) == order_fields(legacy)
-    assert len(built) == 1
-
-
-# === 台股放空：算量價與下單價都是開盤價 ===
-def test_stock_short_matches_calculate_position_size(make_quote) -> None:
-    """`ForeignSellShortDayTradeStrategy` 的放空開倉單：新舊路徑逐筆相同"""
-
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
-    strategy.setup_account(StockAccount(1_000_000.0))
-
-    quotes: List[StockQuote] = [
-        make_quote(stock_id="2330", date=DAY_1, cur_price=105.0, open=100.0),
-        make_quote(stock_id="2317", date=DAY_1, cur_price=52.0, open=50.0),
     ]
 
-    legacy: List[BaseOrder] = strategy.calculate_position_size(quotes, Action.SELL)
+    orders: List[BaseOrder] = StockPortfolioConstructor(
+        EqualWeightSizer(), max_holdings=2
+    ).build(signals, account)
 
-    signals: List[Signal] = [
-        Signal(
-            quote=quote,
-            action=Action.SELL,
-            position_type=PositionType.SHORT,
-            order_price=quote.open,
-            sizing_price=quote.open,
-        )
-        for quote in quotes
+    # 剩 1 個名額 → 1,000,000 / (50 × 1000) = 20 張
+    assert order_fields(orders) == [
+        ("2317", DAY_1, Action.BUY, PositionType.LONG, 50.0, 20)
     ]
-    built: List[BaseOrder] = StockPortfolioConstructor(
-        strategy.sizer, strategy.max_holdings
-    ).build(signals, strategy.account)
-
-    assert order_fields(built) == order_fields(legacy)
-    # 放空的下單價是開盤價，不是 cur_price——搬移時最容易混掉的一欄
-    assert all(order.price == 100.0 for order in built if order.symbol == "2330")
 
 
 def test_stock_open_signal_without_sizing_price_raises(make_quote) -> None:
@@ -191,112 +142,79 @@ def test_stock_open_signal_without_sizing_price_raises(make_quote) -> None:
     )
 
     with pytest.raises(ValueError, match="2330"):
-        StockPortfolioConstructor(MomentumStrategy1().sizer, 5).build(
+        StockPortfolioConstructor(EqualWeightSizer(), 5).build(
             [signal], StockAccount(1_000_000.0)
         )
 
 
-# === 台期貨：保證金約束 ===
-@pytest.fixture
-def futures_strategy() -> MomentumFuturesStrategy:
-    """已載入帳戶的期貨動能策略（比率模式，不連資料庫）"""
-
-    strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
-    strategy.setup_account(FuturesAccount(init_capital=3_000_000))
-    return strategy
-
-
-def futures_constructor(
-    strategy: MomentumFuturesStrategy,
-) -> FuturesPortfolioConstructor:
-    """以策略當下的設定組出對應的 constructor"""
-
-    return FuturesPortfolioConstructor(
-        max_lots=strategy.max_lots,
-        max_capital_usage=strategy.max_capital_usage,
-        margin_config=strategy.margin_config,
-        log_context=strategy.strategy_name,
-    )
-
-
-def test_futures_matches_calculate_position_size(
-    futures_strategy: MomentumFuturesStrategy,
-) -> None:
-    """`MomentumFuturesStrategy` 的開倉單：新舊路徑逐筆相同"""
-
-    quotes: List[FuturesQuote] = [make_futures_quote("202403")]
-
-    legacy: List[BaseOrder] = futures_strategy.calculate_position_size(
-        quotes, Action.OPEN
-    )
-
-    signals: List[Signal] = [
-        Signal(
-            quote=quote,
-            action=Action.BUY,
-            position_type=PositionType.LONG,
-            order_price=quote.close,
-        )
-        for quote in quotes
-    ]
-    built: List[BaseOrder] = futures_constructor(futures_strategy).build(
-        signals, futures_strategy.account
-    )
-
-    assert order_fields(built) == order_fields(legacy)
-    assert built, "3,000,000 的帳戶在比率模式下開得出口數"
-
-
-def test_futures_stops_at_remaining_lots(
-    futures_strategy: MomentumFuturesStrategy,
-) -> None:
-    """剩餘口數用完就停，逐筆遞減的行為與舊路徑一致"""
-
-    futures_strategy.max_lots = 1
-
-    quotes: List[FuturesQuote] = [
-        make_futures_quote("202403"),
-        make_futures_quote("202406"),
-    ]
-
-    legacy: List[BaseOrder] = futures_strategy.calculate_position_size(
-        quotes, Action.OPEN
-    )
-
-    signals: List[Signal] = [
-        Signal(
-            quote=quote,
-            action=Action.BUY,
-            position_type=PositionType.LONG,
-            order_price=quote.close,
-        )
-        for quote in quotes
-    ]
-    built: List[BaseOrder] = futures_constructor(futures_strategy).build(
-        signals, futures_strategy.account
-    )
-
-    assert order_fields(built) == order_fields(legacy)
-    assert len(built) == 1
-
-
-def test_futures_zero_max_lots_opens_nothing(
-    futures_strategy: MomentumFuturesStrategy,
-) -> None:
-    """`max_lots` 為 0 表示不開倉"""
-
-    futures_strategy.max_lots = 0
-
-    signals: List[Signal] = [
-        Signal(
-            quote=make_futures_quote("202403"),
-            action=Action.BUY,
-            position_type=PositionType.LONG,
-            order_price=18000.0,
-        )
-    ]
+def test_stock_empty_signals_returns_empty() -> None:
+    """沒有訊號時不必碰 sizer"""
 
     assert (
-        futures_constructor(futures_strategy).build(signals, futures_strategy.account)
+        StockPortfolioConstructor(EqualWeightSizer(), 5).build(
+            [], StockAccount(1_000_000.0)
+        )
+        == []
+    )
+
+
+# === 台期貨：保證金約束 ===
+def futures_signal(quote: FuturesQuote) -> Signal:
+    """期貨開倉訊號：口數由保證金決定，故不給 sizing_price"""
+
+    return Signal(
+        quote=quote,
+        action=Action.BUY,
+        position_type=PositionType.LONG,
+        order_price=quote.close,
+    )
+
+
+def test_futures_lots_come_from_margin_not_contract_value() -> None:
+    """
+    口數＝可動用預算 ÷ 每口保證金
+
+    比率模式下每口保證金 ＝ 18000 × 200 × 0.1 ＝ 360,000；
+    預算 ＝ 3,000,000 × 0.5 ＝ 1,500,000 → 4 口。
+    **拿契約價值（360 萬）去除會算成 0 口**，那正是這一層存在的理由。
+    """
+
+    account: FuturesAccount = FuturesAccount(init_capital=3_000_000)
+    orders: List[BaseOrder] = FuturesPortfolioConstructor(
+        max_lots=10, max_capital_usage=0.5
+    ).build([futures_signal(make_futures_quote("202403"))], account)
+
+    assert order_fields(orders) == [
+        ("TX202403", DAY_1, Action.BUY, PositionType.LONG, 18000.0, 4)
+    ]
+
+
+def test_futures_stops_at_remaining_lots() -> None:
+    """剩餘口數逐筆遞減，用完即停"""
+
+    account: FuturesAccount = FuturesAccount(init_capital=3_000_000)
+    signals: List[Signal] = [
+        futures_signal(make_futures_quote("202403")),
+        futures_signal(make_futures_quote("202406")),
+    ]
+
+    orders: List[BaseOrder] = FuturesPortfolioConstructor(
+        max_lots=1, max_capital_usage=0.5
+    ).build(signals, account)
+
+    assert order_fields(orders) == [
+        ("TX202403", DAY_1, Action.BUY, PositionType.LONG, 18000.0, 1)
+    ]
+
+
+def test_futures_zero_max_lots_opens_nothing() -> None:
+    """`max_lots` 為 0 表示不開倉"""
+
+    account: FuturesAccount = FuturesAccount(init_capital=3_000_000)
+
+    assert (
+        FuturesPortfolioConstructor(max_lots=0).build(
+            [futures_signal(make_futures_quote("202403"))], account
+        )
         == []
     )

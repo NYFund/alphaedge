@@ -7,7 +7,8 @@ from loguru import logger
 from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.backtest.models.fill_model import FillConfig, VolumeCapPolicy
-from core.models import StockAccount, StockOrder, StockPosition, StockQuote
+from core.models import StockAccount, StockPosition, StockQuote
+from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, Units
 
@@ -297,8 +298,8 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
             return None
         return number
 
-    def check_open_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
-        """開倉策略：T−1 外資賣超且強勢，T 日以開盤價放空"""
+    def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        """開倉訊號：T−1 外資賣超且強勢，T 日以開盤價放空"""
 
         if not stock_quotes or self.max_holdings == 0:
             return []
@@ -383,11 +384,23 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
             )
             open_positions.append(stock_quote)
 
-        return self.calculate_position_size(open_positions, Action.SELL)
+        # 放空開倉：算量與下單都用當日開盤價（即成交價）。
+        # 現股當沖沖賣不需保證金，等權切分是以「全額買進」為基準的保守假設：
+        # 名目曝險上界即為初始本金，不會因為零保證金而放大到不可解釋的槓桿
+        return [
+            Signal(
+                quote=stock_quote,
+                action=Action.SELL,  # 放空開倉是賣出
+                position_type=PositionType.SHORT,
+                order_price=stock_quote.open,
+                sizing_price=stock_quote.open,
+            )
+            for stock_quote in open_positions
+        ]
 
-    def check_close_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
+    def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
         """
-        平倉策略：當日以收盤價回補全部空單，不留倉
+        平倉訊號：當日以收盤價回補全部空單，不留倉
 
         **疑似全日鎖漲停的標的不送回補單**：引擎對平倉單不做價格合理性檢查，
         照送等於用「買不到的漲停價」記一筆回補，把放空最致命的尾部風險抹掉，
@@ -395,7 +408,7 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
         改交給 `SettlementModel` 於收盤後判定與處理（見 `check_limit_up_locked()`）。
         """
 
-        close_positions: List[StockQuote] = []
+        signals: List[Signal] = []
         for stock_quote in stock_quotes:
             if not self.account.check_has_position(
                 stock_quote.stock_id, PositionType.SHORT
@@ -409,75 +422,34 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
                 )
                 continue
 
-            close_positions.append(stock_quote)
+            # 同一標的的多筆部位合併成一張單：`close_position()` 本來就會 FIFO
+            # 掃過該標的所有同向部位，逐筆送單會讓第一張就吃掉後面那筆的張數，
+            # 後續訂單再以「持倉不足」警告收場
+            positions: List[StockPosition] = self.account.get_positions(
+                stock_quote.stock_id, PositionType.SHORT
+            )
+            cover_volume: int = sum(position.volume for position in positions)
+            if cover_volume <= 0:
+                continue
 
-        return self.calculate_position_size(close_positions, Action.BUY)
+            signals.append(
+                Signal(
+                    quote=stock_quote,
+                    action=Action.BUY,  # 放空平倉是買進回補
+                    position_type=PositionType.SHORT,
+                    order_price=self.get_cover_price(stock_quote, positions),
+                    volume=cover_volume,
+                )
+            )
 
-    def check_stop_loss_signal(
+        return signals
+
+    def generate_stop_loss_signals(
         self, stock_quotes: List[StockQuote]
-    ) -> List[StockOrder]:
-        """停損策略：本策略未實作停損（理由見 class docstring），固定回傳空列表"""
+    ) -> List[Signal]:
+        """停損訊號：本策略未實作停損（理由見 class docstring），固定回傳空列表"""
 
         return []
-
-    def calculate_position_size(
-        self, stock_quotes: List[StockQuote], action: Action
-    ) -> List[StockOrder]:
-        """
-        計算部位：SELL 為放空開倉，BUY 為回補
-
-        放空的動作與做多相反，兩個分支的語意也跟著對調——SELL 是開倉、BUY 是平倉。
-        開倉價一律為當日開盤價；回補價由 `get_cover_price()` 依「是否被迫留倉」決定。
-        """
-
-        orders: List[StockOrder] = []
-
-        if action == Action.SELL:
-            # 張數由 EqualWeightSizer 統一計算，參考價為當日開盤價（即成交價）。
-            # 現股當沖沖賣不需保證金，等權切分是以「全額買進」為基準的保守假設：
-            # 名目曝險上界即為初始本金，不會因為零保證金而放大到不可解釋的槓桿
-            candidates: List[Tuple[StockQuote, float]] = [
-                (stock_quote, stock_quote.open) for stock_quote in stock_quotes
-            ]
-
-            for stock_quote, ref_price, open_volume in self.sizer.size(
-                self.account, candidates, self.max_holdings
-            ):
-                orders.append(
-                    StockOrder(
-                        stock_id=stock_quote.stock_id,
-                        date=stock_quote.date,
-                        action=Action.SELL,  # 放空開倉是賣出
-                        position_type=PositionType.SHORT,
-                        price=ref_price,
-                        volume=open_volume,
-                    )
-                )
-
-        elif action == Action.BUY:
-            for stock_quote in stock_quotes:
-                # 同一標的的多筆部位合併成一張單：`close_position()` 本來就會 FIFO
-                # 掃過該標的所有同向部位，逐筆送單會讓第一張就吃掉後面那筆的張數，
-                # 後續訂單再以「持倉不足」警告收場
-                positions: List[StockPosition] = self.account.get_positions(
-                    stock_quote.stock_id, PositionType.SHORT
-                )
-                cover_volume: int = sum(position.volume for position in positions)
-                if cover_volume <= 0:
-                    continue
-
-                orders.append(
-                    StockOrder(
-                        stock_id=stock_quote.stock_id,
-                        date=stock_quote.date,
-                        action=Action.BUY,  # 放空平倉是買進回補
-                        position_type=PositionType.SHORT,
-                        price=self.get_cover_price(stock_quote, positions),
-                        volume=cover_volume,
-                    )
-                )
-
-        return orders
 
     @staticmethod
     def get_cover_price(

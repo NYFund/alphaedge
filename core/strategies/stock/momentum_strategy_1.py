@@ -1,13 +1,14 @@
 # Python standard library
 import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
 
 from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.datafeed.tw.market_calendar import MarketCalendar
-from core.models import StockAccount, StockOrder, StockPosition, StockQuote
+from core.models import StockAccount, StockPosition, StockQuote
+from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale
 
@@ -144,8 +145,8 @@ class MomentumStrategy1(BaseStockStrategy):
 
         return MarketCalendar.get_last_trading_date(api=self.price, date=date)
 
-    def check_open_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
-        """開倉策略：昨收基準漲幅達門檻且成交量達門檻，做多；部位數由 calculate_position_size 依 max_holdings 與資金切分"""
+    def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        """開倉訊號：昨收基準漲幅達門檻且成交量達門檻，做多；張數由 portfolio 層依 max_holdings 與資金切分決定"""
 
         open_positions: List[StockQuote] = []
 
@@ -196,12 +197,22 @@ class MomentumStrategy1(BaseStockStrategy):
 
             open_positions.append(stock_quote)
 
-        return self.calculate_position_size(open_positions, Action.BUY)
+        # 算量用當日收盤、下單用 cur_price：兩者在現行資料源同值，但語意不同，不合併
+        return [
+            Signal(
+                quote=stock_quote,
+                action=Action.BUY,
+                position_type=PositionType.LONG,
+                order_price=stock_quote.cur_price,
+                sizing_price=stock_quote.close,
+            )
+            for stock_quote in open_positions
+        ]
 
-    def check_close_signal(self, stock_quotes: List[StockQuote]) -> List[StockOrder]:
-        """平倉策略：帳上已有該股部位時，若報價日 ≥ 開倉日 + 1 日曆日則列入出場候選（至少持有一天後可賣）"""
+    def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        """平倉訊號：帳上已有該股部位時，若報價日 ≥ 開倉日 + 1 日曆日則出場（至少持有一天後可賣）"""
 
-        close_positions: List[StockQuote] = []
+        signals: List[Signal] = []
 
         for stock_quote in stock_quotes:
             if self.account.check_has_position(stock_quote.stock_id):
@@ -213,60 +224,22 @@ class MomentumStrategy1(BaseStockStrategy):
                     continue
                 # 開倉當日不平：隔日（含）起才允許平倉
                 if stock_quote.date >= position.date + datetime.timedelta(days=1):
-                    close_positions.append(stock_quote)
+                    # 依該股**第一筆**開倉部位的張數與多空類型全數賣出
+                    signals.append(
+                        Signal(
+                            quote=stock_quote,
+                            action=Action.SELL,
+                            position_type=position.position_type,
+                            order_price=stock_quote.cur_price,
+                            volume=position.volume,
+                        )
+                    )
 
-        return self.calculate_position_size(close_positions, Action.SELL)
+        return signals
 
-    def check_stop_loss_signal(
+    def generate_stop_loss_signals(
         self, stock_quotes: List[StockQuote]
-    ) -> List[StockOrder]:
-        """停損策略：本策略未實作停損，固定回傳空列表"""
+    ) -> List[Signal]:
+        """停損訊號：本策略未實作停損，固定回傳空列表"""
+
         return []
-
-    def calculate_position_size(
-        self, stock_quotes: List[StockQuote], action: Action
-    ) -> List[StockOrder]:
-        """計算部位：BUY 時依剩餘可開倉名額均分餘額並換算張數；SELL 時全數平掉該筆開倉部位"""
-
-        orders: List[StockOrder] = []
-
-        if action == Action.BUY:
-            # 張數由 EqualWeightSizer 統一計算；本策略只負責選參考價（當日收盤）
-            candidates: List[Tuple[StockQuote, float]] = [
-                (stock_quote, stock_quote.close) for stock_quote in stock_quotes
-            ]
-
-            for stock_quote, _, open_volume in self.sizer.size(
-                self.account, candidates, self.max_holdings
-            ):
-                orders.append(
-                    StockOrder(
-                        stock_id=stock_quote.stock_id,
-                        date=stock_quote.date,
-                        action=action,
-                        position_type=PositionType.LONG,
-                        price=stock_quote.cur_price,
-                        volume=open_volume,
-                    )
-                )
-        elif action == Action.SELL:
-            # 平倉：依該股第一筆開倉部位的張數與多空類型全數賣出
-            for stock_quote in stock_quotes:
-                position: Optional[StockPosition] = (
-                    self.account.get_first_open_position(stock_quote.stock_id)
-                )
-
-                if position is None:
-                    continue
-
-                orders.append(
-                    StockOrder(
-                        stock_id=stock_quote.stock_id,
-                        date=stock_quote.date,
-                        action=action,
-                        position_type=position.position_type,
-                        price=stock_quote.cur_price,
-                        volume=position.volume,
-                    )
-                )
-        return orders

@@ -154,43 +154,39 @@ class LayeredFuturesMomentum(BaseFuturesStrategy):
         ]
 
 
-# === 基底路徑與舊路徑一致 ===
-def test_stock_base_open_path_matches_legacy() -> None:
-    """`check_open_signal()` 走基底時，輸出與 `calculate_position_size()` 逐筆相同"""
+# === 基底路徑產生的訂單 ===
+def test_stock_base_open_path_builds_orders() -> None:
+    """`check_open_signal()` 走基底：訊號經 portfolio 層換算成張數"""
 
     quotes: List[StockQuote] = [
         make_stock_quote("2330", 100.0),
         make_stock_quote("2317", 50.0),
     ]
 
-    legacy_strategy: MomentumStrategy1 = MomentumStrategy1()
-    legacy_strategy.setup_account(StockAccount(1_000_000.0))
-    legacy: List[BaseOrder] = legacy_strategy.calculate_position_size(
-        quotes, Action.BUY
-    )
-
     layered: LayeredMomentum = LayeredMomentum(quotes)
+    layered.max_holdings = 2
     layered.setup_account(StockAccount(1_000_000.0))
 
-    assert order_fields(layered.check_open_signal(quotes)) == order_fields(legacy)
+    # 兩個名額均分 1,000,000 → 每檔 500,000
+    assert order_fields(layered.check_open_signal(quotes)) == [
+        ("2330", DAY_1, Action.BUY, PositionType.LONG, 100.0, 5),
+        ("2317", DAY_1, Action.BUY, PositionType.LONG, 50.0, 10),
+    ]
 
 
-def test_futures_base_open_path_matches_legacy() -> None:
-    """期貨的基底路徑同樣與舊路徑逐筆相同"""
+def test_futures_base_open_path_builds_orders() -> None:
+    """期貨的基底路徑：口數由保證金決定"""
 
     quotes: List[FuturesQuote] = [make_futures_quote("202403")]
 
-    legacy_strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
-    legacy_strategy.setup_account(FuturesAccount(init_capital=3_000_000))
-    legacy: List[BaseOrder] = legacy_strategy.calculate_position_size(
-        quotes, Action.OPEN
-    )
-
     layered: LayeredFuturesMomentum = LayeredFuturesMomentum(quotes)
+    layered.max_lots = 10
     layered.setup_account(FuturesAccount(init_capital=3_000_000))
 
-    assert order_fields(layered.check_open_signal(quotes)) == order_fields(legacy)
-    assert legacy, "這組輸入本來就該開得出口數"
+    # 比率模式每口 18000 × 200 × 0.1 ＝ 360,000；預算 1,500,000 → 4 口
+    assert order_fields(layered.check_open_signal(quotes)) == [
+        ("TX202403", DAY_1, Action.BUY, PositionType.LONG, 18000.0, 4)
+    ]
 
 
 # === 建構器每次重建：設定晚於 __init__ 才填 ===
@@ -289,19 +285,10 @@ class LayeredClose(LayeredMomentum):
         return self.generate_close_signals(quotes)
 
 
-def test_stock_close_path_matches_legacy() -> None:
-    """平倉單：基底組裝與 `calculate_position_size(SELL)` 逐筆相同"""
+def test_stock_close_path_uses_position_volume() -> None:
+    """平倉單的張數取自持倉，**不經過 portfolio 層的資金切分**"""
 
     quotes: List[StockQuote] = [make_stock_quote("2330", 100.0)]
-
-    legacy_strategy: MomentumStrategy1 = MomentumStrategy1()
-    legacy_strategy.setup_account(StockAccount(1_000_000.0))
-    legacy_strategy.account.positions.append(
-        StockPosition(id=1, stock_id="2330", date=DAY_1, price=90.0, volume=4)
-    )
-    legacy: List[BaseOrder] = legacy_strategy.calculate_position_size(
-        quotes, Action.SELL
-    )
 
     layered: LayeredClose = LayeredClose(quotes)
     layered.setup_account(StockAccount(1_000_000.0))
@@ -309,8 +296,10 @@ def test_stock_close_path_matches_legacy() -> None:
         StockPosition(id=1, stock_id="2330", date=DAY_1, price=90.0, volume=4)
     )
 
-    assert order_fields(layered.check_close_signal(quotes)) == order_fields(legacy)
-    assert legacy, "帳上有部位就該平得出單"
+    # 4 張全數出場；若誤走資金切分會變成「1,000,000 ÷ 100,000 ＝ 10 張」
+    assert order_fields(layered.check_close_signal(quotes)) == [
+        ("2330", DAY_1, Action.SELL, PositionType.LONG, 100.0, 4)
+    ]
 
 
 def test_stop_loss_shares_the_close_builder() -> None:

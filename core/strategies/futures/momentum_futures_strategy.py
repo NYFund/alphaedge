@@ -1,10 +1,9 @@
 import datetime
 from typing import List, Optional
 
-from loguru import logger
-
 from core.backtest.datafeed.base import BaseDataFeed
-from core.models import FuturesAccount, FuturesOrder, FuturesQuote
+from core.models import FuturesAccount, FuturesQuote
+from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import Action, PositionType, Scale
 
@@ -63,8 +62,8 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
         self.margin = getattr(feed, "margin", None)
         self.calendar = getattr(feed, "calendar", None)
 
-    def check_open_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """開倉：近月契約相對昨收漲幅達門檻且目前無部位"""
+    def generate_open_signals(self, quotes: List[FuturesQuote]) -> List[Signal]:
+        """開倉訊號：近月契約相對昨收漲幅達門檻且目前無部位；口數由保證金決定"""
 
         if self.max_lots == 0 or not quotes:
             return []
@@ -86,7 +85,18 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
             if self.is_momentum(quote):
                 candidates.append(quote)
 
-        return self.calculate_position_size(candidates, Action.OPEN)
+        # 口數受保證金約束，由 portfolio 層換算，故不給 sizing_price
+        return [
+            Signal(
+                quote=quote,
+                action=Action.BUY
+                if self.position_type == PositionType.LONG
+                else Action.SELL,
+                position_type=self.position_type,
+                order_price=quote.close,
+            )
+            for quote in candidates
+        ]
 
     def is_momentum(self, quote: FuturesQuote) -> bool:
         """當日收盤相對前一交易日收盤的漲幅是否達門檻"""
@@ -115,16 +125,13 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
         change_pct: float = (quote.close / previous_close - 1) * 100
         return change_pct >= self.MIN_PRICE_CHANGE_PCT_FOR_SIGNAL
 
-    def check_close_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """平倉：持有滿門檻天數即出場"""
-
-        if self.account is None:
-            return []
+    def generate_close_signals(self, quotes: List[FuturesQuote]) -> List[Signal]:
+        """平倉訊號：持有滿門檻天數即出場；**訊號來源是帳上部位，不是報價**"""
 
         day_quotes: List[FuturesQuote] = self.filter_session(quotes)
         quote_by_contract = {quote.contract_id: quote for quote in day_quotes}
 
-        orders: List[FuturesOrder] = []
+        signals: List[Signal] = []
         for position in self.account.get_positions():
             quote: Optional[FuturesQuote] = quote_by_contract.get(position.contract_id)
             if quote is None:
@@ -137,62 +144,22 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
             if holding_days < self.MIN_HOLDING_DAYS:
                 continue
 
-            orders.append(
-                self.build_order(
-                    quote,
+            signals.append(
+                Signal(
+                    quote=quote,
                     action=Action.SELL
                     if position.position_type == PositionType.LONG
                     else Action.BUY,
+                    # 方向沿用策略宣告，與改寫前的 `build_order()` 同一個來源
+                    position_type=self.position_type,
+                    order_price=quote.close,
                     volume=position.volume,
                 )
             )
 
-        return orders
+        return signals
 
-    def check_stop_loss_signal(self, quotes: List[FuturesQuote]) -> List[FuturesOrder]:
-        """停損：本策略未實作"""
+    def generate_stop_loss_signals(self, quotes: List[FuturesQuote]) -> List[Signal]:
+        """停損訊號：本策略未實作"""
 
         return []
-
-    def calculate_position_size(
-        self, quotes: List[FuturesQuote], action: Action
-    ) -> List[FuturesOrder]:
-        """
-        依保證金與口數上限計算下單口數
-
-        **可開口數由保證金決定不是契約價值**（見 `calculate_max_lots()`）；
-        再與 `max_lots` 取小值。
-        """
-
-        if not quotes or self.account is None:
-            return []
-
-        orders: List[FuturesOrder] = []
-        remaining_lots: int = self.max_lots - sum(
-            abs(lots) for lots in self.get_open_lots().values()
-        )
-
-        for quote in quotes:
-            if remaining_lots <= 0:
-                break
-
-            affordable: int = self.calculate_max_lots(quote)
-            volume: int = min(affordable, remaining_lots)
-            if volume <= 0:
-                logger.info(
-                    f"[{self.strategy_name}] {quote.contract_id} 保證金不足或已達口數上限，跳過"
-                )
-                continue
-
-            orders.append(
-                self.build_order(
-                    quote,
-                    action=Action.BUY
-                    if self.position_type == PositionType.LONG
-                    else Action.SELL,
-                    volume=volume,
-                )
-            )
-            remaining_lots -= volume
-
-        return orders
