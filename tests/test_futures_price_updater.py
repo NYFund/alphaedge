@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import pandas as pd
 import pytest
@@ -11,6 +11,8 @@ from core.config import (
     FUTURES_PRODUCT_NIGHT_SESSION_START_DATES,
     TW_FUTURES_DB_PATH,
 )
+from core.dao.base import BaseDAO
+from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession
@@ -665,3 +667,95 @@ def test_night_session_start_dates_are_not_later_than_the_data() -> None:
         if product in observed and start > observed[product]
     ]
     assert not too_late, f"夜盤起始日登錄得比實際資料晚，回補會跳過開頭：{too_late}"
+
+
+# === 股期商品清單解析 ===
+#
+# `top_n` 是請求量的上限。排不出流動性時退回整份標的池，等於呼叫端要 20 檔、
+# 實際送出 320 檔——那曾經讓一次更新變成 100 天以上的回補，並擋住排在後面的
+# 所有 target。以下三個測試釘住「失敗路徑收緊、不放大」。
+SNAPSHOT_DATE: str = "2026-08-29"
+
+
+def seed_universe(
+    dao_factory: Callable[..., BaseDAO],
+    updater: FuturesPriceUpdater,
+    product_ids: List[str],
+) -> None:
+    """在 updater 自己的 DB 建一份標的池快照"""
+
+    dao_factory(
+        FuturesStockUniverseDAO,
+        conn=updater.conn,
+        records=[
+            {
+                "snapshot_date": SNAPSHOT_DATE,
+                "product_id": product_id,
+                "base_code": product_id[:2],
+                "product_type": "個股期貨",
+                "underlying_stock_id": "2330",
+                "underlying_name": "台積電",
+                "underlying_listing_board": "上市",
+                "contract_size": 2000,
+                "day_session_time": "08:45-13:45",
+                "night_session_time": "15:00-05:00",
+            }
+            for product_id in product_ids
+        ],
+    )
+
+
+def insert_volume(
+    conn: sqlite3.Connection, product: str, days: int, volume: int
+) -> None:
+    """塞 `days` 個交易日的日盤行情，用來製造可排序的流動性"""
+
+    for offset in range(days):
+        date: str = (
+            datetime.date(2026, 8, 3) + datetime.timedelta(days=offset)
+        ).isoformat()
+        conn.execute(
+            f"INSERT OR IGNORE INTO {FUTURES_PRICE_DAILY_TABLE_NAME} "
+            f'("date", product, expiry, session, 成交量) VALUES (?, ?, ?, ?, ?)',
+            (date, product, "202609", "day", volume),
+        )
+    conn.commit()
+
+
+def test_warm_up_sample_is_capped_by_top_n(
+    dao_factory: Callable[..., BaseDAO], updater: FuturesPriceUpdater
+) -> None:
+    """表內沒有股期行情、排不出流動性時，暖身樣本仍不得超過 top_n"""
+
+    universe: List[str] = [f"S{index:02d}" for index in range(50)]
+    seed_universe(dao_factory, updater, universe)
+
+    resolved: List[str] = updater.resolve_stock_futures_products(20, DATE)
+
+    assert len(resolved) == 20
+    assert set(resolved) <= set(universe)
+
+
+def test_liquidity_ranking_wins_when_there_is_enough_data(
+    dao_factory: Callable[..., BaseDAO], updater: FuturesPriceUpdater
+) -> None:
+    """排得出流動性時依成交量取前 N 檔，不是退回標的池順序"""
+
+    universe: List[str] = [f"S{index:02d}" for index in range(50)]
+    seed_universe(dao_factory, updater, universe)
+    # 標的池順序的最後兩檔才有行情，且 S41 的量大於 S40
+    insert_volume(updater.conn, "S40", days=5, volume=100)
+    insert_volume(updater.conn, "S41", days=5, volume=900)
+
+    assert updater.resolve_stock_futures_products(2, DATE) == ["S41", "S40"]
+
+
+def test_whole_universe_only_when_top_n_is_none(
+    dao_factory: Callable[..., BaseDAO], updater: FuturesPriceUpdater
+) -> None:
+    """整份標的池只在呼叫端明確不設上限時才會出現"""
+
+    universe: List[str] = [f"S{index:02d}" for index in range(50)]
+    seed_universe(dao_factory, updater, universe)
+
+    assert len(updater.resolve_stock_futures_products(None, DATE)) == 50

@@ -46,6 +46,10 @@ from core.utils.log_manager import LogManager
 # 週六的 weekday() 值；用於判斷是否為週末
 SATURDAY: int = 5
 
+# 一個「商品 × 日」固定送出日盤＋夜盤兩次請求（夜盤查無資料也照打），
+# 用於開跑前估算請求量
+SESSIONS_PER_DAY: int = 2
+
 
 class FuturesPriceUpdater(BaseDataUpdater):
     """Futures Price Updater"""
@@ -311,11 +315,12 @@ class FuturesPriceUpdater(BaseDataUpdater):
             股期則有 320 檔且會隨掛牌／下市異動，故改由 `futures_stock_universe`
             提供。
 
-            ⚠️ **不要一次爬 320 檔**：那是每天 640 次請求（日夜盤各一），
+            **請求量由 `top_n` 把關**：320 檔全爬是每天 640 次請求（日夜盤各一），
             13 年的回補要好幾個月。實務上有意義的只有流動性前段——尾端有整批
             一天成交個位數口的商品，回測賺到的錢實際上掛不到單。
-            故預設走 `top_n`，且**流動性排序需要先有行情**（雞生蛋問題）：
-            第一次可先指定少數幾檔跑起來，之後再用 `top_n` 篩。
+            `top_n` 在所有路徑下都是上限，包含排不出流動性的冷啟動
+            （見 `resolve_stock_futures_products()`）；只有 `top_n=None` 才會
+            取整份標的池，那是呼叫端明確要的。開跑前會先把估算的請求量寫進 log。
         - Parameters:
             - start_date / end_date: datetime.date
                 回補區間
@@ -339,7 +344,19 @@ class FuturesPriceUpdater(BaseDataUpdater):
             )
             return
 
-        logger.info(f"* Start updating stock futures price: {len(targets)} 檔")
+        # 量級要在送出第一個請求之前就看得見：`* Start updating: 320 檔` 這種訊息
+        # 看不出那是 100 天還是 3 小時。用平日數當交易日上限估算（國定假日照樣
+        # 送出請求才知道休市），`resume=True` 時實際量會更少
+        weekdays: int = sum(
+            1
+            for date in TimeUtils.generate_date_range(start_date, end_date)
+            if date.weekday() < SATURDAY
+        )
+        estimated_requests: int = len(targets) * weekdays * SESSIONS_PER_DAY
+        logger.info(
+            f"* Start updating stock futures price: {len(targets)} 檔"
+            f"（{start_date} ~ {end_date}，估算上限約 {estimated_requests:,} 次請求）"
+        )
         self.update(
             start_date=start_date,
             end_date=end_date,
@@ -354,23 +371,35 @@ class FuturesPriceUpdater(BaseDataUpdater):
         決定要爬哪些股期：有 `top_n` 就依流動性取前 N 檔，否則取整份標的池
 
         **流動性排序取自已入庫的行情**，故第一次跑（表內還沒有股期行情）時
-        會排不出來，此時退回整份標的池並提醒——那是雞生蛋，不是錯誤。
+        排不出來——那是雞生蛋，不是錯誤。此時退回**標的池的前 `top_n` 檔**
+        當暖身樣本，暖身完再跑一次就有排序依據。
+
+        ⚠️ **退回時不可改取整份標的池**：`top_n` 是請求量的上限，在失敗路徑上
+        把它拿掉，等於呼叫端要 20 檔、實際送出 320 檔的請求量。曾經如此，
+        代價是一次 100 天以上的回補擋住了排在後面的所有 target，而過程中
+        只有一行警告。失敗路徑一律收緊，不放大。
+
+        暖身樣本的順序是標的池順序（依商品代碼），**不是流動性順序**。
 
         標的池與行情同在 `tw_futures.db`，故共用本 updater 的連線，不另開一條。
         """
 
         universe_api: FuturesStockUniverseAPI = FuturesStockUniverseAPI(conn=self.conn)
-        if top_n:
-            liquid: List[str] = universe_api.get_top_liquid_products(
-                top_n, end_date=date
-            )
-            if liquid:
-                return liquid
-            logger.warning(
-                "[Futures Price] 表內還沒有股期行情，排不出流動性；"
-                "本次改取整份標的池（之後再用 top_n 篩）"
-            )
-        return universe_api.get_products(date)
+        universe: List[str] = universe_api.get_products(date)
+        if not top_n:
+            return universe
+
+        liquid: List[str] = universe_api.get_top_liquid_products(top_n, end_date=date)
+        if liquid:
+            return liquid
+
+        logger.warning(
+            f"[Futures Price] 表內還沒有足夠的股期行情，排不出流動性；"
+            f"本次改取標的池前 {top_n} 檔當暖身樣本"
+            f"（順序依商品代碼，非流動性）。暖身後再跑一次，"
+            f"才會依實際成交量選出前 {top_n} 檔"
+        )
+        return universe[:top_n]
 
     def crawl_and_clean_date(
         self, product: str, date: datetime.date
