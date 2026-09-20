@@ -431,6 +431,75 @@ class OrderManager:
                 )
         return cancelled
 
+    def refresh_from_broker(self) -> List[OrderTicket]:
+        """
+        - Description:
+            向券商刷新一次當日委託狀態，並套回本行程的委託
+
+            **盤後才呼叫**：它算在下單類額度裡，拿來輪詢會把送單額度吃光。
+        - Return:
+            - List[OrderTicket]
+                券商端當日的委託
+        """
+
+        broker_tickets: List[OrderTicket] = self.broker.refresh_order_status()
+        by_seqno: Dict[str, OrderTicket] = {
+            ticket.broker_seqno: ticket
+            for ticket in broker_tickets
+            if ticket.broker_seqno
+        }
+
+        for ticket in self.tickets.values():
+            latest: Optional[OrderTicket] = by_seqno.get(ticket.broker_seqno or "")
+            if latest is None or latest.status is ticket.status:
+                continue
+            try:
+                ticket.filled_volume = latest.filled_volume
+                self.transition(ticket, latest.status, op_type="refresh")
+            except OrderStateError as exc:
+                logger.warning(f"刷新狀態與本地矛盾，已跳過本筆：{exc}")
+
+        return broker_tickets
+
+    def expire_unfinished(self, run_date: datetime.date) -> List[OrderTicket]:
+        """
+        - Description:
+            把當日仍未終結的委託標成已撤
+
+            ROD 單在券商端日終自動失效，**本地要跟著標**：不標的話，
+            次日的恢復流程會把它們當成「還在場上」去接管，然後去撤一張
+            早就不存在的單，而那個錯誤訊息看起來像真的出了事。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[OrderTicket]
+                被標記的委託
+        """
+
+        expired: List[OrderTicket] = []
+        for row in self.dao.get_unfinished_orders(run_date):
+            client_order_id: str = str(row["client_order_id"])
+            ticket: Optional[OrderTicket] = self.tickets.get(client_order_id)
+            if ticket is None:
+                ticket = self._rebuild_ticket(row)
+                self.tickets[client_order_id] = ticket
+
+            try:
+                self.transition(
+                    ticket,
+                    LiveOrderStatus.CANCELLED,
+                    reason="日終未成交，券商端自動失效",
+                    op_type="expire",
+                )
+                expired.append(ticket)
+            except OrderStateError as exc:
+                logger.warning(f"標記日終失效時與本地狀態矛盾，已跳過：{exc}")
+
+        if expired:
+            logger.info(f"日終標記 {len(expired)} 張未成交委託為已撤")
+        return expired
+
     # === 重啟接管 ===
     def recover(self, run_date: datetime.date) -> List[OrderTicket]:
         """

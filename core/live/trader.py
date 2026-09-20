@@ -1,6 +1,7 @@
 import datetime
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
@@ -15,6 +16,7 @@ from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.reconciler import Reconciler
+from core.live.report.live_reporter import LiveReporter
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
 from core.live.risk.trading_mode import TradingMode, TradingModeState
@@ -23,7 +25,7 @@ from core.live.strategy_guard import resolve_hook_timing, verify_strategies
 from core.managers.base.position_manager import BasePositionManager
 from core.models import BaseAccount, BaseOrder, BaseQuote, ExecutionReport
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
+from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook, PositionType
 
 """
 LiveTrader：實盤引擎本體
@@ -108,6 +110,7 @@ class LiveTrader:
         dry_run: bool = False,
         resume_trading: bool = False,
         notifier: Optional[Any] = None,
+        reporter: Optional[LiveReporter] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -169,6 +172,9 @@ class LiveTrader:
         self.dry_run: bool = dry_run
         self.resume_trading: bool = resume_trading
         self.notifier: Optional[Any] = notifier
+        self.reporter: LiveReporter = (
+            reporter if reporter is not None else LiveReporter(dao)
+        )
         self._now: Callable[[], datetime.datetime] = now_provider
         self._sleep: Callable[[float], None] = sleep
 
@@ -256,6 +262,11 @@ class LiveTrader:
         """
 
         self._wait_until_submit_window(window)
+
+        # **開盤段的第一件事是補平昨天沒成交的平倉單**，排在任何新訊號之前：
+        # 那是預期外的隔夜部位，多留一分鐘就多一分鐘的曝險
+        if timing is ExecutionTiming.AT_OPEN:
+            self.apply_pending_actions()
 
         candidates: List[Tuple[StrategyContext, BaseOrder]] = []
         for context in self.contexts:
@@ -611,6 +622,314 @@ class LiveTrader:
                 }
             )
         self.dao.conn.commit()
+
+    # === 盤後 ===
+    def run_after_close(self) -> Dict[str, Any]:
+        """
+        - Description:
+            盤後作業：刷新委託、對帳、回填成本、殘量處理、輸出報表
+
+            **和送單段落分開跑**（`--phase after_close`）：它不送任何新倉單，
+            只把當天發生的事收攏成可稽核的結果，並把「明天要補的事」寫下來。
+        - Return:
+            - Dict[str, Any]
+                本次盤後作業的摘要（報表路徑、殘量筆數、滑價統計）
+        """
+
+        today: datetime.date = self._now().date()
+        logger.info(f"=== 盤後作業開始（{today}）===")
+
+        try:
+            self.broker.connect()
+            self.mode_state.load()
+
+            # 1. 刷新委託狀態：ROD 未成交單在券商端日終自動失效
+            self.expire_open_orders()
+
+            # 2. 對帳與快照
+            positions: List[Any] = self.broker.get_positions()
+            self.account_sync.rebuild_from_broker(positions)
+            self.last_reconcile = self.reconciler.check(positions)
+
+            # 3. 回填券商實際費用（估算值保留，差額是校正成本設定的依據）
+            self.backfill_actual_costs(today)
+
+            # 4. 未成交殘量依政策處理
+            remainders: int = self.handle_unfilled_remainders(today)
+
+            # 5. 報表與滑價
+            reports: Dict[str, Path] = self.reporter.write_daily_reports(today)
+            slippage: Dict[str, float] = self.reporter.summarize_slippage(today)
+
+            return {
+                "reports": reports,
+                "pending_actions": remainders,
+                "slippage": slippage,
+            }
+        finally:
+            self.broker.close()
+            for context in self.contexts:
+                context.data_feed.close()
+            logger.info("=== 盤後作業結束 ===")
+
+    def expire_open_orders(self) -> List[Any]:
+        """
+        - Description:
+            把當日仍未終結的委託標成已撤
+
+            ROD 單在券商端日終自動失效，**本地要跟著標**：不標的話，
+            明天的恢復流程會把它們當成「還在場上」去接管，然後撤一張不存在的單。
+        - Return:
+            - List[Any]
+                被標記的委託
+        """
+
+        self.order_manager.refresh_from_broker()
+        return self.order_manager.expire_unfinished(self._now().date())
+
+    def backfill_actual_costs(self, run_date: datetime.date) -> int:
+        """
+        - Description:
+            以券商的損益明細回填當日成交的實際手續費與稅
+
+            **估算值不覆蓋**：兩者分欄保存，差額才是校正成本設定的依據；
+            併成一欄之後就再也算不出「估得準不準」。
+
+            ⚠️ **券商端的查詢方法與欄位尚未以模擬環境核對**（規劃要求實作前核對）。
+            取不到時只記 warning 並略過——盤後少一次回填不影響部位，
+            而在這裡拋例外會讓報表也產不出來。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - int
+                成功回填的筆數
+        """
+
+        provider: Optional[Callable[[datetime.date], List[Any]]] = getattr(
+            self.broker, "get_profit_loss_details", None
+        )
+        if provider is None:
+            logger.warning(
+                "券商閘道尚未提供損益明細查詢，本次不回填實際費用；"
+                "成本統計會停留在估算值"
+            )
+            return 0
+
+        try:
+            details: List[Any] = provider(run_date)
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"回填實際費用失敗（略過）：{exc}")
+            return 0
+
+        filled: int = 0
+        for detail in details:
+            seqno: str = str(getattr(detail, "seqno", "") or "")
+            trade_id: str = str(getattr(detail, "trade_id", "") or "")
+            if not seqno or not trade_id:
+                continue
+            self.dao.backfill_fill_costs(
+                seqno,
+                trade_id,
+                float(getattr(detail, "fee", 0.0) or 0.0),
+                float(getattr(detail, "tax", 0.0) or 0.0),
+            )
+            filled += 1
+
+        logger.info(f"回填實際費用 {filled} 筆")
+        return filled
+
+    def handle_unfilled_remainders(self, run_date: datetime.date) -> int:
+        """
+        - Description:
+            未成交殘量的處理政策
+
+            **開倉與出場的處理完全不同**：
+            - **開倉未成交一律放棄**，不追價。追價等於在偏離訊號價的位置建倉，
+              而回測沒有這個行為。
+            - **平倉與停損未成交必須補**：那是預期外的隔夜部位，風險遠大於
+              開倉沒成交。寫一筆 `PENDING` 待辦，由次日開盤段第一件事執行。
+
+            **待辦要有狀態才冪等**：只記「明天要補」而沒有完成標記的話，
+            次日開盤段重跑或崩潰重啟會重複送補平單——而重複的補平單不是多買一點，
+            是直接把部位做反。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - int
+                新增的待辦筆數
+        """
+
+        created: int = 0
+        for order_row in self.dao.get_orders_by_date(run_date):
+            remainder: int = int(order_row.get("volume") or 0) - int(
+                order_row.get("filled_volume") or 0
+            )
+            if remainder <= 0:
+                continue
+
+            if not self._is_exit_row(order_row):
+                logger.info(
+                    f"開倉單 {order_row['client_order_id']} 殘量 {remainder} 放棄，"
+                    "不追價（追價等於在偏離訊號價的位置建倉）"
+                )
+                continue
+
+            self._record_pending_cover(order_row, remainder, run_date)
+            created += 1
+
+        return created
+
+    def _record_pending_cover(
+        self, order_row: Dict[str, Any], remainder: int, run_date: datetime.date
+    ) -> None:
+        """寫一筆待辦與一則 CRITICAL 事件，並推播"""
+
+        client_order_id: str = str(order_row["client_order_id"])
+        message: str = (
+            f"平倉／停損單 {client_order_id}（{order_row['symbol']}）殘量 {remainder} "
+            "未成交，已成為預期外的隔夜部位；次日開盤段第一件事補平"
+        )
+        logger.error(message)
+
+        self.dao.insert_pending_action(
+            {
+                "action_id": f"{run_date.isoformat()}-{client_order_id}",
+                "strategy_name": order_row["strategy_name"],
+                "symbol": order_row["symbol"],
+                "action": order_row["action"],
+                "position_type": order_row["position_type"],
+                "volume": remainder,
+                "due_date": run_date + datetime.timedelta(days=1),
+                "status": self.dao.ACTION_PENDING,
+                "reason": "平倉單未成交",
+                "source_client_order_id": client_order_id,
+                "created_at": self._now(),
+            }
+        )
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": order_row["strategy_name"],
+                "severity": "CRITICAL",
+                "category": "UNFILLED_EXIT",
+                "symbol": order_row["symbol"],
+                "client_order_id": client_order_id,
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
+        self._notify("CRITICAL", "平倉單未成交", message)
+
+    def apply_pending_actions(self) -> int:
+        """
+        - Description:
+            執行到期的跨日待辦（次日開盤段的第一件事）
+
+            成功送出才標 `DONE`；送不出去就**留在 `PENDING` 並把到期日滾到次日**，
+            同時再推播一次——一張補不成的平倉單不會因為換了一天就變得不重要。
+        - Return:
+            - int
+                實際送出的補平單數
+        """
+
+        today: datetime.date = self._now().date()
+        pending: List[Dict[str, Any]] = self.dao.get_pending_actions(today)
+        if not pending:
+            return 0
+
+        by_name: Dict[str, StrategyContext] = {
+            context.name: context for context in self.contexts
+        }
+        submitted: int = 0
+
+        for action in pending:
+            context: Optional[StrategyContext] = by_name.get(
+                str(action["strategy_name"])
+            )
+            if context is None:
+                logger.warning(
+                    f"待辦 {action['action_id']} 的策略未在本次啟動的清單中，本日略過"
+                )
+                continue
+
+            order: Optional[BaseOrder] = self._build_cover_order(context, action)
+            if order is None:
+                continue
+
+            try:
+                self.order_manager.submit(order, context.name)
+                self.dao.resolve_pending_action(
+                    str(action["action_id"]), self.dao.ACTION_DONE, self._now()
+                )
+                submitted += 1
+            except Exception as exc:
+                logger.opt(exception=True).error(
+                    f"補平單送出失敗，待辦保留：{action['action_id']}：{exc}"
+                )
+                self.dao.postpone_pending_action(
+                    str(action["action_id"]), today + datetime.timedelta(days=1)
+                )
+                self._notify(
+                    "CRITICAL",
+                    "補平單送出失敗",
+                    f"{action['symbol']} 殘量 {action['volume']} 仍未平掉",
+                )
+
+        return submitted
+
+    def _build_cover_order(
+        self, context: StrategyContext, action: Dict[str, Any]
+    ) -> Optional[BaseOrder]:
+        """
+        由待辦組出補平單
+
+        **交給策略自己組**：訂單型別、價格類型與商品欄位都是市場特性，
+        引擎本體既不知道也不該知道。策略沒有提供組裝方法時記 warning 並略過——
+        那代表這支策略還沒準備好處理跨日補平。
+        """
+
+        builder: Optional[Callable[..., BaseOrder]] = getattr(
+            context.strategy, "build_cover_order", None
+        )
+        if builder is None:
+            logger.warning(
+                f"{context.name} 沒有 build_cover_order()，待辦 "
+                f"{action['action_id']} 無法自動補平，需人工處理"
+            )
+            return None
+
+        try:
+            return builder(action)
+        except Exception as exc:
+            logger.opt(exception=True).error(f"組補平單失敗：{exc}")
+            return None
+
+    @staticmethod
+    def _is_exit_row(order_row: Dict[str, Any]) -> bool:
+        """
+        這張委託是不是出場單
+
+        以持倉方向與買賣別推導，與 `order_preprocess.resolve_close_action()` 同一套
+        規則——散在多處會漂移，而漂移的後果是開倉單被當成平倉單去補，
+        那會憑空建出一個新部位。
+        """
+
+        position_type: PositionType = PositionType(str(order_row["position_type"]))
+        return str(order_row["action"]) == (
+            order_preprocess.resolve_close_action(position_type).value
+        )
+
+    def _notify(self, level: str, title: str, body: str) -> None:
+        """推播；沒有通知管道時只留 log。**通知失敗不可影響流程**"""
+
+        if self.notifier is None:
+            return
+        try:
+            self.notifier.send(level, title, body)
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"推播失敗（忽略）：{exc}")
 
     # === 內部 ===
     def _can_submit_any(self) -> bool:

@@ -570,6 +570,69 @@ class LiveTradeDAO(BaseDAO):
         result: List[Dict[str, Any]] = self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
         return result[0] if result else None
 
+    def get_orders_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            取得某一交易日的所有委託（含已終結者）
+
+            與 `get_unfinished_orders()` 的差別是**不過濾狀態**：盤後報表要的是
+            「今天送出了什麼」，包含被拒與已撤的——那些正是 parity 比對要歸因的部分。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                委託清單，依建立時間排序
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} "
+            "WHERE date(created_at) = ? ORDER BY created_at, client_order_id",
+            to_sql_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
+
+    def get_fills_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            取得某一交易日的所有成交
+
+            **以 `filled_at` 篩選而不是委託的建立日**：跨段落的委託（開盤段送出、
+            尾盤段才成交）在兩種篩法下會落在不同的日子，而帳務要看成交那一天。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                成交清單
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_FILL_TABLE_NAME} "
+            "WHERE date(filled_at) = ? ORDER BY filled_at, broker_trade_id",
+            to_sql_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_FILL_TABLE_NAME, rows)
+
+    def get_position_snapshots(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            取得某一交易日的部位快照（含本地、券商與帳戶層三種來源）
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                快照清單
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_POSITION_SNAPSHOT_TABLE_NAME} "
+            "WHERE date = ? ORDER BY source, strategy_name, symbol",
+            to_sql_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_POSITION_SNAPSHOT_TABLE_NAME, rows)
+
     # === 跨日待辦 ===
     def insert_pending_action(self, row: Dict[str, Any]) -> None:
         """新增一筆跨日待辦（例如「次日開盤段補平」）"""

@@ -325,18 +325,22 @@ def test_unknown_strategy_is_reported() -> None:
     assert "Available strategies" in result.stderr
 
 
-def test_after_close_is_explicitly_refused() -> None:
+def test_after_close_is_wired_not_refused() -> None:
     """
-    盤後作業尚未實作，**明確拒絕而不是靜默跑一個空段落**
+    `--phase after_close` 要真的走盤後流程
 
-    後者會讓排程以為盤後已經做完。
+    **前身是「尚未實作，明確拒絕」**。接上之後守的東西變成：它不可以再被當成
+    用法錯誤擋掉——否則排程會以為自己打錯參數，而盤後其實從來沒跑過。
+
+    這裡連不到券商是預期的（測試環境沒有金鑰），所以只驗「不是 2」：
+    退出碼 2 代表它還停在參數檢查那一關。
     """
 
     result: subprocess.CompletedProcess = _run_cli(
         "--mode", "live", "--strategy", "MomentumStrategy1", "--phase", "after_close"
     )
 
-    assert result.returncode == run_module.EXIT_USAGE
+    assert result.returncode != run_module.EXIT_USAGE
 
 
 def test_exit_codes_are_distinct() -> None:

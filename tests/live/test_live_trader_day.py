@@ -1,5 +1,6 @@
 import datetime
 import sqlite3
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 import pytest
@@ -84,10 +85,12 @@ class ScriptedStrategy(BaseStrategy):
         name: str,
         orders: Optional[List[BaseOrder]] = None,
         raises: bool = False,
+        close_orders: Optional[List[BaseOrder]] = None,
     ) -> None:
         super().__init__()
         self._name: str = name
         self._orders: List[BaseOrder] = orders or []
+        self._close_orders: List[BaseOrder] = close_orders or []
         self._raises: bool = raises
         self.init_capital = CAPITAL
         self.live_ready = True
@@ -106,10 +109,23 @@ class ScriptedStrategy(BaseStrategy):
         return list(self._orders)
 
     def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
-        return []
+        return list(self._close_orders)
 
     def check_stop_loss_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
         return []
+
+    def build_cover_order(self, action: Dict[str, Any]) -> StockOrder:
+        """由跨日待辦組出補平單；訂單型別是市場特性，交給策略組"""
+
+        return StockOrder(
+            stock_id=str(action["symbol"]),
+            date=TODAY,
+            action=Action.SELL,
+            position_type=PositionType.LONG,
+            volume=int(action["volume"]),
+            price=100.0,
+            price_type=StockPriceType.LMT,
+        )
 
 
 def make_order(
@@ -522,3 +538,197 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     assert (
         sum(slept) <= harness.trader.MAX_WAIT_SECONDS + LiveTrader.POLL_INTERVAL_SECONDS
     )
+
+
+# === 盤後作業 ===
+def test_after_close_writes_reports(tmp_path: Path) -> None:
+    """盤後跑完要留下三份 CSV"""
+
+    from core.live.report.live_reporter import LiveReporter
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+
+    summary: Dict[str, Any] = harness.trader.run_after_close()
+
+    assert summary["reports"]["Alpha/orders"].exists()
+    assert summary["reports"]["Alpha/fills"].exists()
+    assert summary["reports"]["Alpha/positions"].exists()
+
+
+def test_unfilled_entry_order_is_abandoned(tmp_path: Path) -> None:
+    """
+    開倉未成交一律放棄，不追價
+
+    追價等於在偏離訊號價的位置建倉，而回測沒有這個行為。
+    """
+
+    from core.live.report.live_reporter import LiveReporter
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fill_ratio = 0.0
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+
+    summary: Dict[str, Any] = harness.trader.run_after_close()
+
+    assert summary["pending_actions"] == 0
+
+
+def test_unfilled_exit_order_creates_a_pending_action(tmp_path: Path) -> None:
+    """
+    平倉未成交必須補：寫 `PENDING` 待辦 ＋ CRITICAL 事件
+
+    那是預期外的隔夜部位，風險遠大於開倉沒成交。
+    """
+
+    from core.live.report.live_reporter import LiveReporter
+
+    exit_order: StockOrder = make_order()
+    exit_order.action = Action.SELL  # LONG 的賣出＝平倉
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            # **平倉單要從平倉鉤子出來**：從開倉鉤子回傳的話，委託前處理會依
+            # 「開倉階段的動作應為 BUY」把它剔除——那是對的，但驗不到殘量政策
+            super().__init__("Alpha", close_orders=[exit_order])
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fill_ratio = 0.0
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+
+    summary: Dict[str, Any] = harness.trader.run_after_close()
+
+    assert summary["pending_actions"] == 1
+    assert (
+        harness.dao.conn.execute(
+            "SELECT COUNT(*) FROM live_risk_event WHERE category = 'UNFILLED_EXIT'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_pending_action_is_covered_next_morning(tmp_path: Path) -> None:
+    """
+    次日開盤段的第一件事就是補平
+
+    那是預期外的隔夜部位，多留一分鐘就多一分鐘的曝險。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+            self.live_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    assert harness.broker.placed_count == 1
+    assert harness.dao.get_pending_actions(TODAY) == []
+
+
+def test_pending_action_without_a_builder_is_left_for_humans(tmp_path: Path) -> None:
+    """
+    策略沒有提供補平單組裝方法時留給人工，**不猜一張單**
+
+    猜錯方向的補平單會把部位做反，比留著不動嚴重得多。
+    """
+
+    class NoBuilder(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("NoBuilder", [])
+            self.live_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+            self.build_cover_order = None  # type: ignore[assignment]
+
+    harness: Harness = Harness([NoBuilder()])
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "NoBuilder",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    assert harness.broker.placed_count == 0
+    assert len(harness.dao.get_pending_actions(TODAY)) == 1  # 待辦留著
+
+
+def test_open_orders_are_expired_at_day_end(tmp_path: Path) -> None:
+    """
+    ROD 單在券商端日終自動失效，**本地要跟著標**
+
+    不標的話，次日的恢復流程會把它們當成「還在場上」去接管，
+    然後去撤一張早就不存在的單，而那個錯誤訊息看起來像真的出了事。
+    """
+
+    from core.live.report.live_reporter import LiveReporter
+    from core.utils import LiveOrderStatus
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+
+    # 模擬「段落行程已經結束、盤後是另一個行程」：DB 裡留著一張未終結的委託，
+    # 而盤後行程的記憶體裡什麼都沒有——那正是日終標記真正會遇到的狀態
+    harness.dao.upsert_order(
+        {
+            "client_order_id": "run1-0001",
+            "run_id": "run1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Buy",
+            "position_type": "LONG",
+            "price": 100.0,
+            "volume": 1,
+            "status": LiveOrderStatus.SUBMITTED.value,
+            "custom_field": "010001",
+            "created_at": NOW,
+        }
+    )
+    harness.dao.conn.commit()
+    assert len(harness.dao.get_unfinished_orders(TODAY)) == 1
+
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+    harness.trader.run_after_close()
+
+    assert harness.dao.get_unfinished_orders(TODAY) == []

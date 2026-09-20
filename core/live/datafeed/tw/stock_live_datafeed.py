@@ -3,6 +3,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from loguru import logger
 
+from core.api.tw.financial_statement_api import FinancialStatementAPI
+from core.api.tw.monthly_revenue_report_api import MonthlyRevenueReportAPI
 from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
@@ -61,6 +63,8 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.dividend: Optional[StockDividendAPI] = None
         self.chip: Optional[StockChipAPI] = None
         self.margin: Optional[StockMarginAPI] = None
+        self.mrr: Optional[MonthlyRevenueReportAPI] = None
+        self.fs: Optional[FinancialStatementAPI] = None
 
     def setup(self, strategy: BaseStrategy) -> None:
         """
@@ -69,6 +73,11 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
 
             唯讀的兩個理由：實盤行程不該寫研究庫；以及唯讀連線不會與背景 ETL
             搶寫入鎖——尾盤那 4 分鐘被一個 ETL 擋住是很難查的那種事故。
+
+            **建立的 API 必須與回測資料源完全相同**（少了 `tick`，那是盤中的事）。
+            少建一個的話，用到它的策略會在 `setup_apis()` 當場 `AttributeError`，
+            而那個訊息只會說「物件沒有某個屬性」，完全看不出是實盤資料源漏建了。
+            `tests/live/test_live_datafeed.py` 有一條測試直接比對兩邊的屬性集合。
         - Parameters:
             - strategy: BaseStrategy
                 本次要跑的策略
@@ -79,6 +88,8 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.price = StockPriceAPI(conn=self.conn, dividend_api=self.dividend)
         self.chip = StockChipAPI(conn=self.conn)
         self.margin = StockMarginAPI(conn=self.conn)
+        self.mrr = MonthlyRevenueReportAPI(conn=self.conn)
+        self.fs = FinancialStatementAPI(conn=self.conn)
 
         if not self.calendar_sources:
             self.calendar_sources = self.build_default_calendar_sources()

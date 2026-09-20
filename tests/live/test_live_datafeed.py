@@ -338,3 +338,34 @@ def test_close_is_idempotent(feed: TwStockLiveDataFeed) -> None:
     feed.close()
 
     assert feed.conn is None
+
+
+def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
+    """
+    **實盤資料源建立的 API 必須與回測資料源相同**
+
+    少建一個的話，用到它的策略會在 `setup_apis()` 當場 `AttributeError`，
+    而那個訊息只會說「物件沒有某個屬性」，完全看不出是實盤資料源漏建了。
+    這正是 `MomentumStrategy1` 撞到的——它取 `feed.mrr`，而實盤那邊沒建。
+
+    `tick` 不比對：那是盤中（Scale.TICK）才要的，屬 Phase5。
+    """
+
+    import inspect
+
+    from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
+
+    def assigned_api_names(cls: Any) -> set:
+        source: str = inspect.getsource(cls.setup)
+        return {
+            line.split("=")[0].strip().removeprefix("self.")
+            for line in source.splitlines()
+            if line.strip().startswith("self.") and "API(" in line
+        }
+
+    backtest_apis: set = assigned_api_names(TwStockDataFeed) - {"tick"}
+    live_apis: set = assigned_api_names(TwStockLiveDataFeed)
+
+    assert backtest_apis <= live_apis, (
+        f"實盤資料源少建了這些 API：{sorted(backtest_apis - live_apis)}"
+    )

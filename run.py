@@ -214,12 +214,6 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         )
         return EXIT_STRATEGY_NOT_FOUND
 
-    if args.phase == "after_close":
-        # 盤後作業（撤單、對帳、快照、日報、殘量處理）尚未接上。
-        # **明確拒絕而不是靜默跑一個空段落**：後者會讓排程以為盤後已經做完
-        print("盤後作業（--phase after_close）尚未實作", file=sys.stderr)
-        return EXIT_USAGE
-
     strategies: List[BaseStrategy] = [registry[name]() for name in names]
 
     try:
@@ -238,7 +232,13 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
     print(f"實盤啟動：{environment}環境、段落 {args.phase}、策略 {names}")
 
     try:
-        trader.run(ExecutionTiming[PHASE_TO_TIMING[args.phase]])
+        if args.phase == "after_close":
+            # 盤後不送新倉單，走另一條流程：刷新委託、對帳、回填成本、
+            # 殘量處理、輸出報表
+            summary = trader.run_after_close()
+            print(f"盤後作業完成：{summary['pending_actions']} 筆跨日待辦")
+        else:
+            trader.run(ExecutionTiming[PHASE_TO_TIMING[args.phase]])
     except DataFreshnessError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_STALE_DATA
