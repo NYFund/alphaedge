@@ -7,10 +7,8 @@ from typing import Any, Dict, List, Tuple, Union
 
 import pytest
 
-from core.broker.tw.shioaji_execution_handler import (
-    ExecutionEventDeduplicator,
-    ShioajiExecutionHandler,
-)
+from core.broker.execution_dedup import ExecutionEventDeduplicator
+from core.broker.tw.shioaji_execution_handler import ShioajiExecutionHandler
 from core.models import ExecutionReport, OrderStatusEvent
 from core.utils import Action, OrderState
 
