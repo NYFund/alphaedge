@@ -14,7 +14,8 @@ from typing import Dict, List, Optional, Set, Tuple
     1. 反向相依：低層 import 高層（例如 core/api → core/backtest）、`core/` import 到
        `tasks/`／`frontend/`／`strategy_lab/`／`tests/`／`scripts/`
     2. 循環 import：檔案層級的強連通分量（含套件 `__init__.py` 的 re-export 邊）
-    3. 市場語意洩漏：`core/backtest/backtester.py` 不得出現 Stock／Futures／Tw 字樣，
+    3. 市場語意洩漏：`_ENGINE_FILES` 列出的引擎本體（回測與實盤）不得出現
+       Stock／Futures／Tw 字樣，
        `if market ==` 只允許出現在 `factory.py`
     4. 跨軸目錄污染：每層目錄只承載一條軸（市場 `tw/`／`us/` 或商品類別 `stock/`／`futures/`）
     5. `sys.path` 注入：專案已可 `pip install -e .`，逐處列出以便複查
@@ -67,6 +68,34 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 策略「契約」（抽象基底與其套件門面）是引擎、factory、報表都要認得的介面，
     # 與可插拔 model 同層；具體策略（momentum_strategy_1 等）才是策略層。
     # 引擎若 import 到任何具體策略，仍會被列為反向相依
+    # === 實盤（core/broker、core/execution、core/live）===
+    # 券商閘道層：只可 import `core.config`／`core.utils`／`core.models`。
+    # **不可 import `core.api`**——券商層不讀歷史資料，它只負責「把委託送出去、
+    # 把回報收回來」。一旦它開始查價格庫，實盤與回測就會各有一套取數路徑
+    ("core.broker", 3, "券商閘道層", False),
+    # 回測與實盤共用的委託前處理（方向白名單、max_holdings、排序）。
+    # 刻意只 import `core.utils`／`core.models`，由呼叫端傳入純參數而不收策略物件——
+    # 收了策略就會多一條 `core.execution` → `core.strategies.base` 的同層邊
+    ("core.execution", 4, "共用委託前處理", False),
+    # 實盤引擎的元件層，與 `core.backtest.models` 等可插拔 model 同級
+    ("core.live.oms", 4, "實盤／委託管理", False),
+    ("core.live.risk", 4, "實盤／風控", False),
+    ("core.live.datafeed", 4, "實盤／資料載入", False),
+    ("core.live.intraday", 4, "實盤／盤中迴圈", False),
+    ("core.live.report", 4, "實盤／報表", False),
+    ("core.live.attribution", 4, "實盤／多策略歸屬", False),
+    ("core.live.account_sync", 4, "實盤／帳戶同步", False),
+    ("core.live.reconciler", 4, "實盤／對帳", False),
+    ("core.live.capital_allocator", 4, "實盤／資金額度分配", False),
+    # 通知是旁路，**只可 import `core.config`／`core.utils`**：不碰模型也不碰 DAO，
+    # 這樣它壞掉也不可能拖垮交易主流程
+    ("core.live.notify", 4, "實盤／事件通知", False),
+    # 套件本身也要登記。沒有規則命中的模組分層為 -1，**它 import 任何東西都會被
+    # 判成反向相依**；`core.backtest` 同樣登記了套件本身。
+    # 另外沿用 `core/backtest/__init__.py` 的作法：套件層不 eager import
+    ("core.live", 5, "實盤引擎層（套件本身）", False),
+    ("core.live.trader", 5, "實盤引擎本體", False),
+    ("core.live.factory", 6, "組裝層", False),
     ("core.strategies.base", 4, "策略契約", False),
     ("core.strategies.stock.base", 4, "策略契約", False),
     ("core.strategies.futures.base", 4, "策略契約", False),
@@ -118,10 +147,19 @@ _MARKET_AXIS_DIRS: Set[str] = {"tw", "us"}
 _INSTRUMENT_AXIS_DIRS: Set[str] = {"stock", "futures", "option", "options"}
 _MARKET_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/api",
+    "core/broker",
+    "core/live/datafeed",
     "core/adapters",
     "core/dao",
     "core/backtest/datafeed",
     "core/pipeline",
+)
+# 引擎本體：市場語意一律由注入物件承載，檔案內不得出現 Stock／Futures／Tw 字樣。
+# 回測與實盤各一支，兩邊用同一條規則——實盤引擎若分出 `TwStockLiveTrader` 子類，
+# 就會重演回測引擎當初的分裂
+_ENGINE_FILES: Tuple[str, ...] = (
+    "core/backtest/backtester.py",
+    "core/live/trader.py",
 )
 _INSTRUMENT_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/models",
@@ -328,12 +366,14 @@ def check_market_leakage() -> List[str]:
     """引擎本體不得出現市場字樣；`if market ==` 只准出現在 factory.py"""
 
     problems: List[str] = []
-    engine: Path = _PROJECT_ROOT / "core/backtest/backtester.py"
-    if engine.exists():
+    for engine_rel in _ENGINE_FILES:
+        engine: Path = _PROJECT_ROOT / engine_rel
+        if not engine.exists():
+            continue
         for lineno, code in sorted(code_lines(engine).items()):
             if re.search(r"\b(Stock|Futures|Tw)[A-Za-z]*\b", code):
                 problems.append(
-                    f"core/backtest/backtester.py:{lineno}: 引擎出現市場字樣：{code.strip()}"
+                    f"{engine_rel}:{lineno}: 引擎出現市場字樣：{code.strip()}"
                 )
     for path in (_PROJECT_ROOT / "core").rglob("*.py"):
         if path.name == "factory.py":

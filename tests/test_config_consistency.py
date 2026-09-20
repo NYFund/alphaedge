@@ -4,6 +4,9 @@ import tomllib
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Set
 
+import pytest
+
+from core.config import settings
 from core.config.paths import PROJECT_ROOT
 from core.config.settings import NUM_API
 
@@ -234,3 +237,58 @@ def test_every_pyproject_dependency_is_pinned_in_requirements() -> None:
 
     assert unpinned == [], f"requirements.txt 沒有鎖定這些主相依：{unpinned}"
     assert effective[-1] == "-e ."
+
+
+# === 實盤設定 ===
+def test_no_environment_variable_can_select_production_trading() -> None:
+    """
+    **正式環境不可由環境變數開啟**，只能由命令列 `--confirm-production`
+
+    `.env` 的設定會留在機器上。一旦有一個「連正式環境」的鍵存在，
+    某天排程就會默默連上去下真單，而那一刻沒有任何人在看。
+    """
+
+    suspicious: List[str] = sorted(
+        key
+        for key in collect_env_keys_read_by_code() | collect_env_example_keys()
+        if "PRODUCTION" in key and "RESULTS" not in key
+    )
+
+    assert suspicious == [], f"出現可由環境變數切到正式環境的鍵：{suspicious}"
+
+
+def test_require_shioaji_ca_raises_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """憑證缺值時當場拋出，不回傳 None 讓 `activate_ca()` 拿到空路徑"""
+
+    monkeypatch.setattr(settings, "SHIOAJI_CA_PATH", None)
+    monkeypatch.setattr(settings, "SHIOAJI_CA_PASSWORD", None)
+
+    with pytest.raises(RuntimeError, match="SHIOAJI_CA_PATH"):
+        settings.require_shioaji_ca()
+
+
+def test_require_shioaji_ca_raises_when_file_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """路徑有設定但檔案不在時也要拋出：錯字造成的缺檔要在下單前就現形"""
+
+    monkeypatch.setattr(settings, "SHIOAJI_CA_PATH", str(tmp_path / "nope.pfx"))
+    monkeypatch.setattr(settings, "SHIOAJI_CA_PASSWORD", "x")
+
+    with pytest.raises(RuntimeError, match="不存在"):
+        settings.require_shioaji_ca()
+
+
+def test_live_timezone_is_taipei_and_aware() -> None:
+    """
+    實盤時間一律是台北時區的 aware datetime
+
+    主機時區是 UTC 而程式讀 naive 的 `datetime.now()` 時，尾盤段會整段跑在
+    錯的時刻，而且不會有任何錯誤訊息。
+    """
+
+    now = settings.now_live()
+
+    assert settings.LIVE_TIMEZONE_NAME == "Asia/Taipei"
+    assert now.tzinfo is not None
+    assert now.utcoffset() is not None

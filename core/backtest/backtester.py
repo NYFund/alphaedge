@@ -12,6 +12,7 @@ from core.backtest.models.instrument_spec import InstrumentSpec
 from core.backtest.models.settlement_model import BaseSettlementModel
 from core.backtest.report.base import BaseBacktestReporter
 from core.config import BACKTEST_RESULT_DIR_PATH
+from core.execution import order_preprocess
 from core.managers.base.position_manager import BasePositionManager
 from core.models import (
     BaseAccount,
@@ -178,7 +179,9 @@ class Backtester:
     def get_allowed_directions(self) -> Set[PositionType]:
         """取得允許的訂單方向白名單；策略未指定時等同其宣告方向"""
 
-        return self.strategy.allowed_directions or {self.strategy.position_type}
+        return order_preprocess.get_allowed_directions(
+            self.strategy.allowed_directions, self.strategy.position_type
+        )
 
     def get_execution_order(self) -> BarExecutionOrder:
         """
@@ -209,28 +212,23 @@ class Backtester:
                 本次回測單根 bar 的開平倉先後
         """
 
-        if self.strategy.bar_execution_order is not None:
-            return self.strategy.bar_execution_order
-
-        if (
-            self.strategy.position_type == PositionType.SHORT
-            and self.strategy.enable_intraday
-        ):
-            return BarExecutionOrder.OPEN_THEN_CLOSE
-
-        return BarExecutionOrder.CLOSE_THEN_OPEN
+        return order_preprocess.get_execution_order(
+            self.strategy.bar_execution_order,
+            self.strategy.position_type,
+            self.strategy.enable_intraday,
+        )
 
     @staticmethod
     def resolve_open_action(position_type: PositionType) -> Action:
         """開倉動作：LONG 為買進、SHORT 為賣出（依訂單方向，不看策略）"""
 
-        return Action.BUY if position_type == PositionType.LONG else Action.SELL
+        return order_preprocess.resolve_open_action(position_type)
 
     @staticmethod
     def resolve_close_action(position_type: PositionType) -> Action:
         """平倉動作：LONG 為賣出、SHORT 為買進回補"""
 
-        return Action.SELL if position_type == PositionType.LONG else Action.BUY
+        return order_preprocess.resolve_close_action(position_type)
 
     # === Order Validation ===
     def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
@@ -247,34 +245,12 @@ class Backtester:
                 通過檢查的訂單
         """
 
-        allowed: Set[PositionType] = self.get_allowed_directions()
-        valid_orders: List[BaseOrder] = []
-
-        for order in orders:
-            if order.position_type not in allowed:
-                logger.warning(
-                    f"[Validate Order] {order.symbol} 方向 {order.position_type} "
-                    f"不在策略允許的 {allowed} 內，已剔除"
-                )
-                self.event_counts["rejected_direction"] += 1
-                continue
-
-            expected_action: Action = (
-                self.resolve_open_action(order.position_type)
-                if stage == "open"
-                else self.resolve_close_action(order.position_type)
-            )
-            if order.action != expected_action:
-                logger.warning(
-                    f"[Validate Order] {order.symbol} {stage} 動作應為 {expected_action}，"
-                    f"實際為 {order.action}，已剔除"
-                )
-                self.event_counts["rejected_direction"] += 1
-                continue
-
-            valid_orders.append(order)
-
-        return valid_orders
+        return order_preprocess.validate_orders(
+            orders,
+            stage,
+            self.get_allowed_directions(),
+            self.event_counts,
+        )
 
     def enrich_orders(self, orders: List[BaseOrder]) -> List[BaseOrder]:
         """補上市場專屬的訂單欄位；規則由 CostModel 實作"""
@@ -312,7 +288,7 @@ class Backtester:
                 依穩定排序鍵重排後的委託
         """
 
-        return sorted(orders, key=lambda order: (order.date, order.symbol))
+        return order_preprocess.sort_orders(orders)
 
     def validate_fill_price(self, order: BaseOrder, quote: BaseQuote) -> bool:
         """成交價合理性檢查；規則由 FillModel 實作"""
@@ -568,19 +544,12 @@ class Backtester:
                 True 表示可以開倉
         """
 
-        # None 表示不限制（與 EqualWeightSizer 的語意一致）
-        if self.max_holdings is None:
-            return True
-
-        if self.account.get_position_count() < self.max_holdings:
-            return True
-
-        logger.warning(
-            f"[Max Holdings] {order.symbol} 開倉單超過持倉檔數上限 "
-            f"{self.max_holdings}，已剔除"
+        return order_preprocess.check_max_holdings(
+            order,
+            self.max_holdings,
+            self.account.get_position_count(),
+            self.event_counts,
         )
-        self.event_counts["rejected_max_holdings"] += 1
-        return False
 
     def execute_close_signal(self, quotes: List[BaseQuote]) -> List[BaseTradeRecord]:
         """

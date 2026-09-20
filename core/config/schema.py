@@ -60,6 +60,18 @@ TW_FUTURES_DB_PATH: Path = get_static_resolved_path(
     base_dir=DATABASE_DIR_PATH, dir_name=TW_FUTURES_DB_NAME
 )
 
+# 實盤交易紀錄獨立一庫，**不併進 tw_stock.db**：研究資料可以重建
+# （爬蟲重跑一次就回來），交易紀錄不能——委託、成交與對帳結果是唯一的事實來源。
+# 分庫之後，重建研究庫或砍掉價格資料時不可能誤傷交易紀錄。
+#
+# 本庫也是唯一「實盤行程是單一寫入者」的資料庫，連線設定與其他庫不同
+# （WAL ＋ synchronous=FULL），見 `core/dao/connection.py`
+TW_TRADING_DB_NAME: str = "tw_trading.db"
+
+TW_TRADING_DB_PATH: Path = get_static_resolved_path(
+    base_dir=DATABASE_DIR_PATH, dir_name=TW_TRADING_DB_NAME
+)
+
 
 # -----------------------------------------------------------------------
 # === Database Table names ===
@@ -117,6 +129,24 @@ FUTURES_STOCK_UNIVERSE_TABLE_NAME: str = "futures_stock_universe"  # 股票期�
 STOCK_TRADING_DAILY_REPORT_TABLE_NAME: str = (
     "taiwan_stock_trading_daily_report_secid_agg"
 )
+
+# 定義實盤交易紀錄庫（tw_trading.db）的資料表名稱。
+#
+# 表名一律以 `live_` 開頭：本庫日後若與研究庫一起遷到 PostgreSQL，
+# 兩邊的表會落在同一個 schema 命名空間下，前綴是唯一能分辨「這是交易紀錄」的標記
+LIVE_RUN_TABLE_NAME: str = "live_run"  # 每次啟動一筆（含稽核欄位與結束時的交易模式）
+LIVE_ORDER_TABLE_NAME: str = "live_order"  # 委託單；歸屬鏈的起點（strategy_name）
+LIVE_ORDER_EVENT_TABLE_NAME: str = "live_order_event"  # 狀態轉移歷史（append-only）
+LIVE_FILL_TABLE_NAME: str = "live_fill"  # 成交明細（估算成本與券商實際值分欄）
+LIVE_POSITION_LOT_TABLE_NAME: str = "live_position_lot"  # 策略層部位歸屬帳
+LIVE_POSITION_SNAPSHOT_TABLE_NAME: str = "live_position_snapshot"  # 部位快照（對帳用）
+LIVE_ACCOUNT_SNAPSHOT_TABLE_NAME: str = "live_account_snapshot"  # 帳務快照
+LIVE_RISK_EVENT_TABLE_NAME: str = "live_risk_event"  # 風控事件（帶 severity）
+LIVE_STRATEGY_MODE_TABLE_NAME: str = (
+    "live_strategy_mode"  # 策略層交易模式（跨段落延續）
+)
+LIVE_PENDING_ACTION_TABLE_NAME: str = "live_pending_action"  # 跨日待辦（次日補平）
+LIVE_PARITY_DIFF_TABLE_NAME: str = "live_parity_diff"  # 實盤與回測的委託 diff
 
 
 # -----------------------------------------------------------------------

@@ -101,6 +101,32 @@ BACKTEST_LOGS_DIR_PATH: Path = get_static_resolved_path(
 # 正是原本會長出第二棵日誌樹（backtest/results/logs/）的原因
 BACKTEST_RESULT_DIR_PATH: Path = RESULTS_DIR_PATH
 
+
+# -----------------------------------------------------------------------
+# === Live Trading Path ===
+# -----------------------------------------------------------------------
+#
+# 實盤日報另開一層子目錄，**不與回測輸出混在同一層**：回測結果直接放在
+# `RESULTS_DIR_PATH/<策略名>/`，同一支策略跑實盤時若也寫進那裡，
+# 每日 parity 比對產出的單日結果會蓋掉回歸雙線的比對基準
+LIVE_RESULT_DIR_PATH: Path = get_static_resolved_path(
+    base_dir=RESULTS_DIR_PATH, dir_name="live"
+)
+
+# kill switch：**檔案存在即停止送單**（實盤風控的最後一道人工開關）。
+#
+# 用「檔案存在」而不是環境變數或 API：值班的人要能在不重啟、不改設定、
+# 不看程式的情況下按下它——`touch data/live/KILL_SWITCH` 一行就夠，
+# 而且它在容器掛載的 volume 裡，從宿主機就按得到。
+#
+# 目錄不在此建立（同前述：import 設定模組不應有檔案系統副作用）；
+# 真正要按的時候 `mkdir -p` 一次即可
+LIVE_KILL_SWITCH_PATH: Path = get_env_path(
+    "ALPHAEDGE_LIVE_KILL_SWITCH_PATH",
+    get_static_resolved_path(base_dir=DATA_DIR_PATH, dir_name="live") / "KILL_SWITCH",
+)
+
+
 # -----------------------------------------------------------------------
 # === Crawl Data Downloads Path ===
 # -----------------------------------------------------------------------

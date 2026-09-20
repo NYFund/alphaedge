@@ -16,6 +16,11 @@ STOCK_PRICE_TYPE_LIMITPRICE = "LMT"
 STOCK_PRICE_TYPE_MKT = "MKT"
 STOCK_PRICE_TYPE_CLOSE = "Close"
 
+# 定義期貨價格類型常量（比股票多一個 MKP 範圍市價）
+FUTURES_PRICE_TYPE_LIMITPRICE = "LMT"
+FUTURES_PRICE_TYPE_MKT = "MKT"
+FUTURES_PRICE_TYPE_MKP = "MKP"  # 範圍市價
+
 # 定義下單類型常量
 ORDER_TYPE_ROD = "ROD"
 ORDER_TYPE_IOC = "IOC"
@@ -32,6 +37,43 @@ STOCK_ORDER_LOT_BLOCKTRADE = "BlockTrade"  # 鉅額
 STOCK_ORDER_LOT_FIXING = "Fixing"  # 定盤
 STOCK_ORDER_LOT_ODD = "Odd"  # 零股
 STOCK_ORDER_LOT_INTRADAY_ODD = "IntradayOdd"  # 零股
+
+# 定義股票委託條件常量（現股／融資／融券／借券）
+#
+# **策略不填這個欄位**：它由 `order_preprocess` 依 `position_type` ＋ `short_method`
+# ＋ `is_day_trade` 推導，才能保證和回測的成本路徑走同一組假設
+STOCK_ORDER_COND_CASH = "Cash"  # 現股
+STOCK_ORDER_COND_MARGIN_TRADING = "MarginTrading"  # 融資
+STOCK_ORDER_COND_SHORT_SELLING = "ShortSelling"  # 融券
+STOCK_ORDER_COND_SBL_SHORT = "SBLShort"  # 借券賣出
+
+# 定義期貨開平倉別常量
+FUTURES_OC_TYPE_AUTO = "Auto"
+FUTURES_OC_TYPE_NEW = "New"  # 開倉
+FUTURES_OC_TYPE_COVER = "Cover"  # 平倉
+FUTURES_OC_TYPE_DAY_TRADE = "DayTrade"  # 當沖
+
+# 定義實盤執行時點常量
+#
+# 日 K 在實盤不存在：回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道 close、
+# 在收盤前不知道完整 OHLC。故同一支策略的鉤子要拆成兩個時點送單
+EXECUTION_TIMING_AT_OPEN = "AT_OPEN"  # 盤前委託，進開盤集合競價
+EXECUTION_TIMING_AT_CLOSE = "AT_CLOSE"  # 尾盤取快照算訊號，進收盤集合競價
+EXECUTION_TIMING_IMMEDIATE = "IMMEDIATE"  # 盤中逐筆觸發，算完就送
+
+# 定義實盤策略鉤子名稱常量（`live_schedule` 的鍵）
+LIVE_HOOK_OPEN = "open"  # 開倉訊號
+LIVE_HOOK_CLOSE = "close"  # 平倉訊號
+LIVE_HOOK_STOP_LOSS = "stop_loss"  # 停損訊號
+
+# 定義實盤委託狀態常量（OMS 狀態機的狀態）
+LIVE_ORDER_STATUS_PENDING_SUBMIT = "PENDING_SUBMIT"  # 已寫入本地，尚未送出券商
+LIVE_ORDER_STATUS_SUBMITTED = "SUBMITTED"  # 券商已收單
+LIVE_ORDER_STATUS_PARTIALLY_FILLED = "PARTIALLY_FILLED"  # 部分成交
+LIVE_ORDER_STATUS_FILLED = "FILLED"  # 全部成交
+LIVE_ORDER_STATUS_CANCELLED = "CANCELLED"  # 已撤單（含日終失效）
+LIVE_ORDER_STATUS_REJECTED = "REJECTED"  # 券商拒單
+LIVE_ORDER_STATUS_FAILED = "FAILED"  # 送出失敗，或刷新後在券商端查無此單
 
 # 定義放空管道常量
 SHORT_METHOD_DAY_TRADE = "DAY_TRADE"  # 現股當沖沖賣（先賣後買，同日結清）
@@ -153,6 +195,19 @@ class StockPriceType(str, Enum):
     MKT = STOCK_PRICE_TYPE_MKT
 
 
+class FuturesPriceType(str, Enum):
+    """
+    期貨價格類型
+
+    與 `StockPriceType` 分開而不合併成一個：期貨多一個 `MKP`（範圍市價），
+    合在一起會讓股票訂單也長出一個它送不出去的值，而錯誤要到券商退單才出現。
+    """
+
+    LMT = FUTURES_PRICE_TYPE_LIMITPRICE
+    MKT = FUTURES_PRICE_TYPE_MKT
+    MKP = FUTURES_PRICE_TYPE_MKP
+
+
 class OrderType(str, Enum):
     ROD = ORDER_TYPE_ROD
     IOC = ORDER_TYPE_IOC
@@ -171,6 +226,89 @@ class StockOrderLot(str, Enum):
     Fixing = STOCK_ORDER_LOT_FIXING  # 定盤
     Odd = STOCK_ORDER_LOT_ODD  # 零股
     IntradayOdd = STOCK_ORDER_LOT_INTRADAY_ODD  # 盤中零股
+
+
+class StockOrderCond(str, Enum):
+    """
+    股票委託條件（現股／融資／融券／借券）
+
+    成員名與值都對齊 `shioaji.constant.StockOrderCond`，由
+    `tests/test_order_state_parity.py` 盯住。
+
+    ⚠️ **`SBLShort` 在 shioaji 1.3.3 沒有對應成員**（該版只有 Cash／MarginTrading／
+    ShortSelling）。借券賣出是回測已支援的放空管道之一，所以本專案的 Enum 先留著它；
+    真正要送借券單時得先升 shioaji，mapper 在查不到對應值時必須當場拋出，
+    不可退回 `ShortSelling`——那會變成用融券的券源與成本送出一張以為是借券的單。
+    """
+
+    Cash = STOCK_ORDER_COND_CASH
+    MarginTrading = STOCK_ORDER_COND_MARGIN_TRADING
+    ShortSelling = STOCK_ORDER_COND_SHORT_SELLING
+    SBLShort = STOCK_ORDER_COND_SBL_SHORT
+
+
+class FuturesOCType(str, Enum):
+    """
+    期貨開平倉別
+
+    **不使用 `Auto`**：它在同時有多空部位或換月時的行為不透明，
+    開平倉別一律由訂單的 `Action` 與持倉推導。成員仍保留 `Auto` 以對齊券商值域。
+    """
+
+    Auto = FUTURES_OC_TYPE_AUTO
+    New = FUTURES_OC_TYPE_NEW
+    Cover = FUTURES_OC_TYPE_COVER
+    DayTrade = FUTURES_OC_TYPE_DAY_TRADE
+
+
+class LiveHook(str, Enum):
+    """
+    策略鉤子；`live_schedule` 以它宣告「哪個鉤子在哪一段被呼叫」
+
+    停損與一般平倉分開列出，是因為它們在實盤**可能落在不同段落**：
+    停損要盤中就反應，一般平倉可以等到尾盤算完訊號再送。
+    """
+
+    OPEN = LIVE_HOOK_OPEN
+    CLOSE = LIVE_HOOK_CLOSE
+    STOP_LOSS = LIVE_HOOK_STOP_LOSS
+
+
+class ExecutionTiming(str, Enum):
+    """
+    實盤的執行時點；**回測忽略此欄位**（仍用策略給的價），因此回歸零變動
+
+    台股的兩個日頻段落：
+    - `AT_OPEN`：08:30~09:00 盤前委託，進開盤集合競價。
+    - `AT_CLOSE`：13:20 起取快照算訊號，**13:25:00 之後才送單**、13:29:00 前送完，
+      讓委託進收盤集合競價。13:25 前送出的限價單會在逐筆交易時段就成交，
+      成交價不是收盤價，和回測「以收盤價成交」的假設對不上。
+
+    期貨的段落時點由 `InstrumentSpec` 提供，不寫死在引擎裡。
+    """
+
+    AT_OPEN = EXECUTION_TIMING_AT_OPEN
+    AT_CLOSE = EXECUTION_TIMING_AT_CLOSE
+    IMMEDIATE = EXECUTION_TIMING_IMMEDIATE
+
+
+class LiveOrderStatus(str, Enum):
+    """
+    實盤委託在本專案 OMS 狀態機中的狀態
+
+    **與 `Status` 分開**：`Status` 是券商回報值的鏡像（券商說什麼就是什麼），
+    `LiveOrderStatus` 是本地狀態機的狀態（本地認為這張單走到哪了）。
+    兩者由 mapper 轉換。合併的話，「還沒送出去」與「券商說還沒送出去」會變成
+    同一個值，而重啟接管要靠的正是這兩者的差別。
+    """
+
+    PENDING_SUBMIT = LIVE_ORDER_STATUS_PENDING_SUBMIT
+    SUBMITTED = LIVE_ORDER_STATUS_SUBMITTED
+    PARTIALLY_FILLED = LIVE_ORDER_STATUS_PARTIALLY_FILLED
+    FILLED = LIVE_ORDER_STATUS_FILLED
+    CANCELLED = LIVE_ORDER_STATUS_CANCELLED
+    REJECTED = LIVE_ORDER_STATUS_REJECTED
+    FAILED = LIVE_ORDER_STATUS_FAILED
 
 
 class OrderState(str, Enum):
