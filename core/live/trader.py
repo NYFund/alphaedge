@@ -208,6 +208,11 @@ class LiveTrader:
         # 而排程需要一個退出碼才分得出「今天剛出事」與「跑完了」
         self.last_reconcile: Optional[Any] = None
 
+        # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。
+        # **預設 True**：只有檢查實際判定為休市才會是 False，
+        # 預設 False 會讓沒跑過 `prepare()` 的呼叫端誤以為今天休市
+        self.is_trading_day: bool = True
+
     # === 主流程 ===
     def run(self, timing: ExecutionTiming) -> None:
         """
@@ -230,6 +235,10 @@ class LiveTrader:
 
         try:
             self.prepare()
+
+            if not self.is_trading_day:
+                logger.warning("今天不是交易日，本段落不進入送單路徑")
+                return
 
             if not self._can_submit_any():
                 logger.warning(
@@ -263,11 +272,27 @@ class LiveTrader:
         verify_strategies([context.strategy for context in self.contexts])
 
         today: datetime.date = self._now().date()
+
+        # 休市日不進送單路徑；判不出來一律拒絕啟動（`is_market_open()` 會拋）
+        self.is_trading_day = self._verify_trading_day(today)
+        if not self.is_trading_day:
+            return
+
+        # 歷史資料沒更新到前一個交易日就拒絕啟動：策略會拿舊資料算出訊號，
+        # 而那條路徑不會有任何錯誤
+        for context in self.contexts:
+            context.data_feed.verify_data_freshness(today)
+
         self.order_manager.recover(today)
 
         positions: List[Any] = self.broker.get_positions()
         self.account_sync.rebuild_from_broker(positions)
         self._refresh_capital()
+
+        # 額度總量要在有帳務之後才驗得動（`build_live_trader()` 當下還沒連線），
+        # 且要在對帳之前——超配就不該讓這個段落繼續往下走
+        self.allocator.verify_quota(self._account_equity())
+        self._check_daily_loss()
 
         self.last_reconcile = self.reconciler.check(positions)
 
@@ -980,6 +1005,72 @@ class LiveTrader:
                 self.mode_state.allows_close(context.name) for context in self.contexts
             )
         )
+
+    def _verify_trading_day(self, today: datetime.date) -> bool:
+        """
+        今天是不是交易日
+
+        **各策略的資料源各判一次**：台股與期貨的交易日不必然相同。
+        任何一條判定為休市就整段不送單——同一個行程裡只有一部分市場開市時，
+        分開排程才是正解，硬送會被退單。
+
+        判不出來時 `is_market_open()` 會拋 `TradingCalendarUnavailableError`，
+        **刻意不接住**：官方休市日曆尚未接上，平日只剩券商合約檔一個來源，
+        這時候預設為開市等於在休市日照常送單。
+        """
+
+        for context in self.contexts:
+            if not context.data_feed.is_market_open(today):
+                logger.warning(f"{context.name} 的資料源判定 {today} 非交易日")
+                return False
+        return True
+
+    def _account_equity(self) -> float:
+        """帳戶總權益：可用餘額 ＋ 持倉占用；與批次曝險檢查用的是同一個口徑"""
+
+        return self.allocator.available_balance + sum(self.allocator.used.values())
+
+    def _check_daily_loss(self) -> None:
+        """
+        段落開始前的虧損檢查：逐策略降級 ＋ 帳戶層降級
+
+        **放開盤前不放段落結束**：開盤前就發現昨天虧太多，這個段落直接不送新倉單；
+        放在結束才判等於本段落已經白送一輪。
+
+        ⚠️ **目前只在有本地損益時才判得出來**：`prepare()` 走到這裡時，帳戶是剛由
+        `live_position_lot` 以**原始開倉價**重建的，未實現損益因此是 0，本段落之前
+        的已實現損益也不在這個行程的 `trade_records` 裡。換句話說**開盤段這道檢查
+        目前恆為不觸發**。要讓它真的擋得住昨天的虧損，得先決定損益來源
+        （見 backlog 本步驟的已知限制）。接線本身是對的，缺的是輸入。
+        """
+
+        total_loss: float = 0.0
+        for context in self.contexts:
+            loss: float = self._strategy_loss(context)
+            total_loss += loss
+            self.risk_manager.check_daily_loss(
+                context.name, loss, context.account.init_capital
+            )
+
+        self.risk_manager.check_account_daily_loss(total_loss, self._account_equity())
+
+    @staticmethod
+    def _strategy_loss(context: StrategyContext) -> float:
+        """
+        本策略目前的虧損金額（正數表示虧損）：已實現 ＋ 未實現
+
+        **一律取本地帳**（與回測同一套算法），不取券商快照：對帳不一致本身
+        會另外觸發降級，兩個來源在那個時候會給出不同的答案。
+        """
+
+        account: BaseAccount = context.account
+        account.update_realized_pnl()
+        unrealized: float = sum(
+            position.unrealized_pnl
+            for position in account.positions
+            if not position.is_closed
+        )
+        return -(account.realized_pnl + unrealized)
 
     def _refresh_capital(self) -> None:
         """刷新帳戶可用餘額與各策略的持倉占用；段落內不再逐單查帳務"""

@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -147,3 +148,60 @@ def test_failure_paths_never_exit_zero(args: List[str]) -> None:
     """
 
     assert run_entry(*args).returncode != 0
+
+
+# === 實盤啟動檢查對應的退出碼 ===
+def make_live_args() -> argparse.Namespace:
+    """一組最小可用的實盤參數（模擬環境、fake 券商）"""
+
+    return argparse.Namespace(
+        phase="close",
+        simulation=True,
+        confirm_production=False,
+        broker="fake",
+        strategy="Alpha",
+        dry_run=False,
+        resync_from_broker=False,
+        resume_trading=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("exception_path", "message"),
+    [
+        ("core.live.datafeed.base.DataFreshnessError", "資料停在 T-30"),
+        (
+            "core.live.datafeed.calendar.TradingCalendarUnavailableError",
+            "沒有任何來源判定得出",
+        ),
+    ],
+)
+def test_startup_check_failures_exit_with_stale_data(
+    monkeypatch: pytest.MonkeyPatch, exception_path: str, message: str
+) -> None:
+    """
+    啟動檢查擋下來時要回結束碼 3，**不是 0**
+
+    接上呼叫端之前，`DataFreshnessError` 沒有任何地方會拋出——`run.py` 特地接住它
+    回 3 的那條路徑因此是死的，ETL 掛掉三天實盤照樣啟動。
+    """
+
+    import importlib
+
+    import run as run_module
+
+    module_name, _, class_name = exception_path.rpartition(".")
+    error_type = getattr(importlib.import_module(module_name), class_name)
+
+    class ExplodingTrader:
+        def run(self, timing: object) -> None:
+            raise error_type(message)
+
+    monkeypatch.setattr(
+        "core.live.factory.build_live_trader",
+        lambda *args, **kwargs: ExplodingTrader(),
+    )
+
+    code: int = run_module.run_live(make_live_args(), {"Alpha": object})
+
+    assert code == run_module.EXIT_STALE_DATA

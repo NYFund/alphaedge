@@ -1,5 +1,6 @@
 import datetime
 import sqlite3
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -10,10 +11,11 @@ from core.live.account_sync import AccountSynchronizer
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
-from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
+from core.live.datafeed.calendar import TradingCalendarUnavailableError
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
-from core.live.risk.risk_config import RiskConfig
+from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO, RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.segment import SegmentWindow
@@ -52,16 +54,30 @@ CAPITAL: float = 10_000_000.0
 class FakeFeed(BaseLiveDataFeed):
     """報價由測試指定；不碰資料庫"""
 
-    def __init__(self, quotes: Optional[List[BaseQuote]] = None) -> None:
+    def __init__(
+        self,
+        quotes: Optional[List[BaseQuote]] = None,
+        is_open: bool = True,
+        latest_data_date: Optional[datetime.date] = None,
+    ) -> None:
         super().__init__(broker=None, calendar_sources=[], now_provider=lambda: NOW)
         self._quotes: List[BaseQuote] = quotes or []
         self.closed: int = 0
+        self._is_open: bool = is_open
+        self._latest: datetime.date = latest_data_date or (
+            TODAY - datetime.timedelta(days=1)
+        )
 
     def setup(self, strategy: BaseStrategy) -> None:
         """測試不需要建 API"""
 
+    def is_market_open(self, date: datetime.date) -> bool:
+        """由測試指定；不建日曆來源（那是 `test_live_datafeed.py` 的範疇）"""
+
+        return self._is_open
+
     def get_latest_data_date(self) -> Optional[datetime.date]:
-        return TODAY - datetime.timedelta(days=1)
+        return self._latest
 
     def get_live_quotes(
         self, timing: ExecutionTiming, symbols: Sequence[str]
@@ -156,14 +172,20 @@ class Harness:
         strategies: List[ScriptedStrategy],
         window: Optional[SegmentWindow] = None,
         dry_run: bool = False,
+        is_open: bool = True,
+        latest_data_date: Optional[datetime.date] = None,
+        quota: Optional[float] = None,
     ) -> None:
         self.dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
         self.dao.ensure_tables()
 
         self.broker: FakeBroker = FakeBroker()
         self.broker.quotes["2330"] = make_quote()
-        self.broker.account.available_balance = CAPITAL
-        self.broker.account.total_equity = CAPITAL
+        # 帳戶權益要撐得住 Σ 各策略額度 ÷ 安全係數，否則 `prepare()` 的
+        # `verify_quota()` 會當場拒絕啟動——那正是它要擋的事
+        equity: float = CAPITAL * len(strategies) / CAPITAL_SAFETY_RATIO
+        self.broker.account.available_balance = equity
+        self.broker.account.total_equity = equity
 
         self.mode_state: TradingModeState = TradingModeState(
             self.dao, "run1", lambda: NOW
@@ -180,7 +202,10 @@ class Harness:
             now_provider=lambda: NOW,
         )
         self.allocator: CapitalAllocator = CapitalAllocator(
-            {type(s).__name__: CAPITAL for s in strategies},
+            {
+                type(s).__name__: quota if quota is not None else CAPITAL
+                for s in strategies
+            },
             self.dao,
             "run1",
             now_provider=lambda: NOW,
@@ -200,7 +225,11 @@ class Harness:
                     strategy=strategy,
                     account=account,
                     position_manager=manager,
-                    data_feed=FakeFeed([make_quote()]),
+                    data_feed=FakeFeed(
+                        [make_quote()],
+                        is_open=is_open,
+                        latest_data_date=latest_data_date,
+                    ),
                     risk_config=RiskConfig(),
                     symbols=["2330"],
                     calculate_notional=lambda order: order.price * order.volume * 1000,
@@ -732,3 +761,99 @@ def test_open_orders_are_expired_at_day_end(tmp_path: Path) -> None:
     harness.trader.run_after_close()
 
     assert harness.dao.get_unfinished_orders(TODAY) == []
+
+
+# === 啟動檢查：寫好了就要有人呼叫 ===
+def test_stale_data_refuses_to_start() -> None:
+    """
+    歷史資料沒更新到前一個交易日就拒絕啟動
+
+    接上之前，`DataFreshnessError` 全庫只在 `verify_data_freshness()` 內拋出而
+    沒有任何呼叫端——`run.py` 的結束碼 3 因此永遠不會發生，ETL 掛掉三天也照跑。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness(
+        [Alpha()], latest_data_date=TODAY - datetime.timedelta(days=30)
+    )
+
+    with pytest.raises(DataFreshnessError):
+        harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+
+
+def test_market_closed_does_not_enter_the_submit_path() -> None:
+    """休市日只連線不送單；**不是拋例外**——沒開市不是錯誤"""
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()], is_open=False)
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.trader.is_trading_day is False
+    assert harness.broker.placed_count == 0
+
+
+def test_undecidable_trading_day_refuses_to_start() -> None:
+    """判不出今天是不是交易日 → 拒絕啟動，**不預設為開市**"""
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    # 還原成「沒有任何日曆來源」的真實行為
+    for context in harness.contexts:
+        feed: BaseLiveDataFeed = context.data_feed
+        feed.is_market_open = partial(BaseLiveDataFeed.is_market_open, feed)
+
+    with pytest.raises(TradingCalendarUnavailableError):
+        harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+
+
+def test_over_allocated_quota_refuses_to_start() -> None:
+    """Σ 各策略額度超過帳戶總權益 × 安全係數 → 拒絕啟動，不等盤中被退單"""
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()], quota=CAPITAL * 10)
+
+    with pytest.raises(ValueError, match="超過帳戶總權益"):
+        harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+
+
+def test_daily_loss_degrades_the_strategy_before_submitting() -> None:
+    """
+    段落開始前就發現虧損超標 → 降級到 `REDUCE_ONLY` 並寫 `live_risk_event`
+
+    **判定在送單之前**：放到段落結束才判，等於本段落已經白送一輪。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    # 讓本地帳帶著超過 `daily_loss_ratio`（3%）的已實現虧損
+    harness.contexts[0].account.realized_pnl = -CAPITAL * 0.05
+    harness.contexts[0].account.update_realized_pnl = lambda: None
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.mode_state.effective_mode("Alpha") is TradingMode.REDUCE_ONLY
+    rows = harness.dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'DAILY_LOSS'"
+    ).fetchone()
+    assert rows[0] == 1
