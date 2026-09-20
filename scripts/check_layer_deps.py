@@ -95,6 +95,9 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 另外沿用 `core/backtest/__init__.py` 的作法：套件層不 eager import
     ("core.live", 5, "實盤引擎層（套件本身）", False),
     ("core.live.trader", 5, "實盤引擎本體", False),
+    # 盤後作業：與送單段落沒有共用狀態，但同樣是「組裝一堆元件層跑一條流程」，
+    # 故與 `trader` 同級。放 4 會讓它對 oms／report／reconciler 產生一整排同層邊
+    ("core.live.after_close", 5, "實盤／盤後作業", False),
     ("core.live.factory", 6, "組裝層", False),
     ("core.strategies.base", 4, "策略契約", False),
     ("core.strategies.stock.base", 4, "策略契約", False),
