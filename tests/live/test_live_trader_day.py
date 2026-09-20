@@ -21,12 +21,20 @@ from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.segment import SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
 from core.managers.stock.position_manager import StockPositionManager
-from core.models import BaseOrder, BaseQuote, StockAccount, StockOrder, StockQuote
+from core.models import (
+    BaseOrder,
+    BaseQuote,
+    OrderTicket,
+    StockAccount,
+    StockOrder,
+    StockQuote,
+)
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
     ExecutionTiming,
     LiveHook,
+    LiveOrderStatus,
     PositionType,
     Scale,
     StockPriceType,
@@ -145,12 +153,15 @@ class ScriptedStrategy(BaseStrategy):
 
 
 def make_order(
-    symbol: str = "2330", volume: int = 1, price: float = 100.0
+    symbol: str = "2330",
+    volume: int = 1,
+    price: float = 100.0,
+    action: Action = Action.BUY,
 ) -> StockOrder:
     return StockOrder(
         stock_id=symbol,
         date=TODAY,
-        action=Action.BUY,
+        action=action,
         position_type=PositionType.LONG,
         volume=volume,
         price=price,
@@ -857,3 +868,104 @@ def test_daily_loss_degrades_the_strategy_before_submitting() -> None:
         "SELECT COUNT(*) FROM live_risk_event WHERE category = 'DAILY_LOSS'"
     ).fetchone()
     assert rows[0] == 1
+
+
+# === 持倉檔數上限：回測與實盤共用同一份判定 ===
+def test_max_holdings_blocks_the_order_beyond_the_cap() -> None:
+    """
+    `max_holdings` 在實盤也要擋得住
+
+    `check_max_holdings()` 放在共用層 `core/execution/order_preprocess.py`，
+    但接上之前只有 `Backtester` 呼叫——**回測會擋掉的開倉單，實盤會送出去**。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__(
+                "Alpha",
+                [make_order("2330"), make_order("2317"), make_order("2454")],
+            )
+            self.max_holdings = 2
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.quotes["2317"] = make_quote("2317")
+    harness.broker.quotes["2454"] = make_quote("2454")
+    harness.contexts[0].symbols = ["2330", "2317", "2454"]
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 2
+    rejected = harness.dao.conn.execute(
+        "SELECT symbol FROM live_risk_event WHERE category = 'MAX_HOLDINGS'"
+    ).fetchall()
+    assert [row[0] for row in rejected] == ["2454"]
+
+
+def test_unfilled_orders_still_occupy_a_holding_slot() -> None:
+    """
+    未終結的委託也要佔名額
+
+    回測在同一根 bar 內逐單成交、持倉檔數即時增加；實盤是非同步的，
+    只看持倉的話一批單會全部放行，`max_holdings` 等於沒有設。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order("2454")])
+            self.max_holdings = 2
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.quotes["2454"] = make_quote("2454")
+    harness.contexts[0].symbols = ["2454"]
+
+    # 兩張還沒成交的委託先佔住兩個名額
+    for symbol in ("2330", "2317"):
+        ticket: OrderTicket = OrderTicket(
+            client_order_id=f"run1-{symbol}",
+            strategy_name="Alpha",
+            order=make_order(symbol),
+            status=LiveOrderStatus.SUBMITTED,
+        )
+        harness.oms.tickets[ticket.client_order_id] = ticket
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+
+
+def test_adding_to_an_existing_holding_does_not_take_a_new_slot() -> None:
+    """加碼不佔新名額：與 `get_position_count()` 的「同一檔只算一檔」語意一致"""
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order("2330")])
+            self.max_holdings = 1
+
+    harness: Harness = Harness([Alpha()])
+    ticket: OrderTicket = OrderTicket(
+        client_order_id="run1-2330",
+        strategy_name="Alpha",
+        order=make_order("2330"),
+        status=LiveOrderStatus.SUBMITTED,
+    )
+    harness.oms.tickets[ticket.client_order_id] = ticket
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 1
+
+
+def test_close_orders_are_not_limited_by_max_holdings() -> None:
+    """平倉不受檔數上限影響——擋掉平倉單等於把部位鎖在場上"""
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__(
+                "Alpha", [], close_orders=[make_order("2330", action=Action.SELL)]
+            )
+            self.max_holdings = 0
+
+    harness: Harness = Harness([Alpha()])
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 1

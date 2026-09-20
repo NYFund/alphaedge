@@ -2,7 +2,7 @@ import datetime
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
@@ -437,7 +437,7 @@ class LiveTrader:
     def _preprocess(
         self, context: StrategyContext, orders: List[BaseOrder], stage: str
     ) -> List[BaseOrder]:
-        """方向白名單 ＋ 決定性排序；與回測共用同一份實作"""
+        """方向白名單 ＋ 持倉檔數上限 ＋ 決定性排序；與回測共用同一份實作"""
 
         allowed = order_preprocess.get_allowed_directions(
             context.strategy.allowed_directions, context.strategy.position_type
@@ -445,7 +445,92 @@ class LiveTrader:
         valid: List[BaseOrder] = order_preprocess.validate_orders(
             orders, stage, allowed
         )
-        return order_preprocess.sort_orders(valid)
+        sorted_orders: List[BaseOrder] = order_preprocess.sort_orders(valid)
+
+        # 只擋開倉，與回測一致（`Backtester` 也只在開倉分支呼叫）。
+        # **排序之後才截斷**：先排序才知道超額時該留下哪幾張
+        if stage == "open":
+            return self._apply_max_holdings(context, sorted_orders)
+        return sorted_orders
+
+    def _apply_max_holdings(
+        self, context: StrategyContext, orders: List[BaseOrder]
+    ) -> List[BaseOrder]:
+        """
+        逐單套用持倉檔數上限
+
+        **未終結的委託也要佔名額**：回測在同一根 bar 內逐單成交，持倉檔數會即時
+        增加；實盤是非同步的，一批 8 張單送出時全部尚未成交，只看持倉的話整批
+        都會放行——`max_holdings` 等於沒有設。
+
+        已持有或已掛單的標的不佔新名額：那是加碼，與 `get_position_count()`
+        「同一檔加碼多次只算一檔」的檔數語意一致。
+        """
+
+        if context.strategy.max_holdings is None:
+            return orders
+
+        occupied: Set[str] = self._occupied_symbols(context)
+        kept: List[BaseOrder] = []
+        for order in orders:
+            if order.symbol in occupied:
+                kept.append(order)
+                continue
+
+            if not order_preprocess.check_max_holdings(
+                order, context.strategy.max_holdings, len(occupied)
+            ):
+                self._write_max_holdings_event(context, order)
+                continue
+
+            occupied.add(order.symbol)
+            kept.append(order)
+        return kept
+
+    def _occupied_symbols(self, context: StrategyContext) -> Set[str]:
+        """本策略已經佔住名額的標的：未平倉部位 ＋ 尚未終結的委託"""
+
+        symbols: Set[str] = {
+            position.symbol
+            for position in context.account.positions
+            if not position.is_closed
+        }
+        symbols.update(
+            ticket.order.symbol
+            for ticket in self.order_manager.tickets.values()
+            if ticket.strategy_name == context.name
+            and ticket.order is not None
+            and not ticket.is_terminal
+        )
+        return symbols
+
+    def _write_max_holdings_event(
+        self, context: StrategyContext, order: BaseOrder
+    ) -> None:
+        """
+        被檔數上限剔除的開倉單要留下紀錄
+
+        **不沿用回測的 `rejected_max_holdings` 事件計數 key**：那是回測報表的欄位名，
+        實盤沒有對應的計數器，兩邊硬共用一個名字只會讓報表欄位變得模稜兩可。
+        """
+
+        message: str = (
+            f"{order.symbol} 開倉單超過持倉檔數上限 "
+            f"{context.strategy.max_holdings}，已剔除"
+        )
+        logger.warning(f"[Max Holdings] {context.name}：{message}")
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": context.name,
+                "severity": "WARNING",
+                "category": "MAX_HOLDINGS",
+                "symbol": order.symbol,
+                "client_order_id": order.client_order_id,
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
 
     # === 跨策略 ===
     def apply_cross_checks(
