@@ -16,7 +16,12 @@ from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw.shioaji_broker import ShioajiBroker
 from core.broker.tw.shioaji_session import ShioajiSession
-from core.config.settings import now_live
+from core.config.settings import (
+    LIVE_NOTIFY_CHANNEL,
+    LIVE_NOTIFY_TARGET,
+    LIVE_NOTIFY_TOKEN,
+    now_live,
+)
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_sync import AccountSynchronizer
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
@@ -25,6 +30,8 @@ from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
+from core.live.notify.base import BaseNotifier, NullNotifier
+from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import RiskConfig
@@ -223,7 +230,17 @@ def build_live_trader(
         ledger, resolved_dao, resolved_run_id, now_provider
     )
 
-    _record_run(resolved_dao, resolved_run_id, simulation, dry_run, now_provider)
+    notifier: BaseNotifier = build_notifier(
+        LIVE_NOTIFY_CHANNEL, LIVE_NOTIFY_TOKEN, LIVE_NOTIFY_TARGET
+    )
+    _record_run(
+        resolved_dao,
+        resolved_run_id,
+        simulation,
+        dry_run,
+        not isinstance(notifier, NullNotifier),
+        now_provider,
+    )
 
     return LiveTrader(
         contexts=contexts,
@@ -241,6 +258,7 @@ def build_live_trader(
         schedule=_merge_schedules(schedules),
         dry_run=dry_run,
         resume_trading=resume_trading,
+        notifier=notifier,
         now_provider=now_provider,
     )
 
@@ -400,6 +418,7 @@ def _record_run(
     run_id: str,
     simulation: bool,
     dry_run: bool,
+    notify_enabled: bool,
     now_provider: Callable[[], datetime.datetime],
 ) -> None:
     """
@@ -408,7 +427,17 @@ def _record_run(
     **稽核欄位不是可有可無**：實盤出事時第一個要回答的是「那天那張單是哪一版程式
     送出的」。取不到 git commit 時記 `unknown` 並警告，**不阻擋啟動**——
     容器內沒有 `.git` 是正常的。
+
+    `notify_enabled` 同理：**通知缺設定時退化為不推播，但那件事要落地**。
+    只記一行 warning 的話，事後回頭查「那天為什麼沒收到告警」會查不到答案——
+    而「以為有告警其實沒有」比「知道沒有告警」危險得多。
     """
+
+    if not notify_enabled:
+        logger.warning(
+            "本次啟動沒有可用的通知管道：異常只會寫進 log 與 live_risk_event，"
+            "不會主動通知任何人"
+        )
 
     dao.insert_run(
         {
@@ -417,6 +446,7 @@ def _record_run(
             "phase": "",
             "simulation": int(simulation),
             "dry_run": int(dry_run),
+            "notify_enabled": int(notify_enabled),
             "git_commit": _git_commit(),
             "shioaji_version": getattr(sj, "__version__", "unknown"),
         }

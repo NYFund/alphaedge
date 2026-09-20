@@ -15,6 +15,7 @@ from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.notify.base import NotifyLevel
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.risk.risk_config import RiskConfig
@@ -922,12 +923,18 @@ class LiveTrader:
         )
 
     def _notify(self, level: str, title: str, body: str) -> None:
-        """推播；沒有通知管道時只留 log。**通知失敗不可影響流程**"""
+        """
+        推播
+
+        **通知失敗不可影響流程**：`BaseNotifier.send()` 自己就吞例外，
+        這裡再包一層是因為 notifier 可能是任何注入進來的東西——
+        監控拖垮被監控的東西是典型反例。
+        """
 
         if self.notifier is None:
             return
         try:
-            self.notifier.send(level, title, body)
+            self.notifier.send(NotifyLevel(level), title, body)
         except Exception as exc:
             logger.opt(exception=True).warning(f"推播失敗（忽略）：{exc}")
 
