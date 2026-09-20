@@ -1,6 +1,6 @@
 import datetime
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
@@ -117,6 +117,22 @@ class BaseStrategy(ABC):
             載入虛擬帳戶資訊
         """
         pass
+
+    def setup_apis(self, feed: Any) -> None:
+        """
+        - Description:
+            宣告本策略要用的資料源；**預設什麼都不做**
+
+            `BaseDataFeed.setup()` 一律會呼叫它，但它原本只定義在各市場的策略基底上——
+            直接繼承 `BaseStrategy` 的策略（例如測試替身，或日後某個不吃資料庫的策略）
+            會在 `setup()` 當場 `AttributeError`，而那個訊息完全指不到「契約缺了一塊」
+            這個真正的原因。
+
+            預設為 no-op 不改變任何既有行為：現有的市場策略基底都已覆寫它。
+        - Parameters:
+            - feed: Any
+                引擎持有的資料源
+        """
 
     # === Alpha 層：策略只需要實作這些 ===
     def generate_open_signals(self, quotes: List[BaseQuote]) -> List[Signal]:

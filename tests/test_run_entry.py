@@ -98,37 +98,37 @@ def test_missing_strategy_argument_is_still_a_usage_error() -> None:
     assert result.returncode == EXIT_USAGE_ERROR
 
 
-def test_live_mode_fails_loudly() -> None:
+def test_live_mode_without_phase_fails_loudly() -> None:
     """
-    `--mode live` 尚未實作 → 非 0 退出並說明原因
+    `--mode live` 少了 `--phase` → 非 0 退出並說明原因
 
-    舊版是 `pass`：退出碼 0、零輸出，跑起來與「實盤已經正常結束」無法區分。
+    **本條的前身是「實盤尚未實作」**。實盤做出來之後，要守的變成「參數不全時
+    不可靜默跑一個預設段落」——那會在錯的時點送單，而且看起來完全正常。
+    退出碼 0、零輸出的失敗仍然是最不能接受的那種。
     """
 
     result: subprocess.CompletedProcess = run_entry(
         "--mode", "live", "--strategy", "MomentumStrategy1"
     )
 
-    assert result.returncode == EXIT_UNHANDLED_EXCEPTION
     assert result.returncode != 0
-    assert "NotImplementedError" in result.stderr
-    assert "--mode backtest" in result.stderr
+    assert "--phase" in result.stderr
 
 
-def test_help_says_live_is_not_implemented() -> None:
+def test_help_describes_the_production_safety_flags() -> None:
     """
-    `--help` 不可讓 `live` 看起來已經支援
+    `--help` 要讓人看得出「連正式環境需要兩個旗標」
 
-    另一半問題：模式列在 `choices` 裡而沒有任何說明，讀 `--help` 的人
-    會以為實盤可用。保留選項但在說明裡講明，比從 `choices` 移除更誠實——
-    它確實是規劃中的模式。
+    前身是「不可讓 live 看起來已經支援」。實盤支援之後，`--help` 的責任變成
+    **講清楚怎樣才會真的下單**——看不出這件事的人，遲早會在正式環境按下 enter。
     """
 
     result: subprocess.CompletedProcess = run_entry("--help")
 
     assert result.returncode == 0
-    assert "live" in result.stdout
-    assert "尚未實作" in result.stdout
+    assert "--production" in result.stdout
+    assert "--confirm-production" in result.stdout
+    assert "--dry-run" in result.stdout
 
 
 @pytest.mark.parametrize(
