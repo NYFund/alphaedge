@@ -23,12 +23,19 @@ from core.config.settings import (
     now_live,
 )
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.account_sync import AccountSynchronizer
+from core.live.account_sync import (
+    AccountSynchronizer,
+    FilledOrderBuilder,
+    build_stock_order,
+)
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
-from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
+from core.live.datafeed.tw.futures_live_datafeed import (
+    TwFuturesLiveDataFeed,
+    split_contract_id,
+)
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.live.notify.base import BaseNotifier, NullNotifier
 from core.live.notify.factory import build_notifier
@@ -42,9 +49,9 @@ from core.live.trader import LiveTrader, StrategyContext
 from core.managers.base.position_manager import BasePositionManager
 from core.managers.futures.position_manager import FuturesPositionManager
 from core.managers.stock.position_manager import StockPositionManager
-from core.models import BaseOrder, FuturesAccount, StockAccount
+from core.models import BaseOrder, FuturesAccount, FuturesOrder, StockAccount
 from core.strategies.base import BaseStrategy
-from core.utils import ExecutionTiming, InstrumentType, Market
+from core.utils import Action, ExecutionTiming, InstrumentType, Market, PositionType
 
 """
 實盤 factory：組裝與分派只寫在這裡
@@ -216,7 +223,15 @@ def build_live_trader(
         context.data_feed.setup(strategy)
 
     account_sync: AccountSynchronizer = AccountSynchronizer(
-        managers, ledger, resolved_dao, now_provider
+        managers,
+        ledger,
+        resolved_dao,
+        now_provider,
+        order_builders={
+            context.name: context.build_filled_order
+            for context in contexts
+            if context.build_filled_order is not None
+        },
     )
     reconciler: Reconciler = Reconciler(
         ledger,
@@ -306,6 +321,7 @@ def _build_context(
         feed: BaseLiveDataFeed = TwStockLiveDataFeed(broker, now_provider=now_provider)
         spec: TwStockSpec = TwStockSpec()
         schedule: SegmentSchedule = TW_STOCK_SEGMENTS
+        build_order: FilledOrderBuilder = build_stock_order
 
     elif market == Market.TW and instrument == InstrumentType.FUTURE:
         futures_account: FuturesAccount = FuturesAccount(
@@ -318,6 +334,7 @@ def _build_context(
         feed = TwFuturesLiveDataFeed(broker, now_provider=now_provider)
         spec = TwFuturesSpec()
         schedule = TW_FUTURES_SEGMENTS
+        build_order = _build_futures_order
 
     else:
         raise UnsupportedMarketError(
@@ -333,8 +350,36 @@ def _build_context(
         risk_config=risk_config if risk_config is not None else RiskConfig(),
         symbols=list(getattr(strategy, "symbols", []) or []),
         calculate_notional=_make_notional_calculator(spec),
+        build_filled_order=build_order,
     )
     return (context, schedule)
+
+
+def _build_futures_order(
+    symbol: str,
+    date: Any,
+    action: Action,
+    position_type: PositionType,
+    price: float,
+    volume: int,
+) -> BaseOrder:
+    """
+    期貨版的還原建構器
+
+    `FuturesPositionManager` 會讀 `order.product` 與 `order.contract_id`，
+    故一定要把契約代號拆回 product／expiry，不能只塞 symbol。
+    """
+
+    product, expiry = split_contract_id(symbol)
+    return FuturesOrder(
+        product=product,
+        expiry=expiry,
+        date=date,
+        action=action,
+        position_type=position_type,
+        price=price,
+        volume=volume,
+    )
 
 
 def _make_notional_calculator(spec: Any) -> Callable[[BaseOrder], float]:

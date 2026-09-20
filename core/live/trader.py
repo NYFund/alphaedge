@@ -10,7 +10,7 @@ from core.broker.base import BaseBroker
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.execution import order_preprocess
-from core.live.account_sync import AccountSynchronizer
+from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
@@ -45,6 +45,25 @@ LiveTrader：實盤引擎本體
 """
 
 
+def position_value(account: BaseAccount) -> float:
+    """
+    未平倉部位的帳面金額（開倉價 × 數量）
+
+    **口徑是開倉成本不是即時市值**：本地帳沒有即時報價，硬要取市值就得在每個
+    呼叫點各查一次行情，而帳務類限流只有 25 次／5 秒。總權益因此會落後市場，
+    但它只用在額度與占用這類「分母」上——分母漏掉整批持倉（本函式修掉的那個
+    問題）會讓超配變成通過，落後一段行情不會。
+    """
+
+    return float(
+        sum(
+            position.volume * position.price
+            for position in account.positions
+            if not position.is_closed
+        )
+    )
+
+
 @dataclass
 class StrategyContext:
     """
@@ -65,6 +84,9 @@ class StrategyContext:
     # 把一張委託換算成金額（風控與資金保留都要用）。
     # 計價單位是市場特性（張要乘 1000 股、口要乘保證金），故由外部注入
     calculate_notional: Optional[Callable[[BaseOrder], float]] = None
+    # 把「已成交的一筆」還原成訂單物件餵給 `PositionManager`。
+    # 訂單型別同樣是市場特性（期貨要 product／expiry），故一併由外部注入
+    build_filled_order: Optional[FilledOrderBuilder] = None
 
     @property
     def name(self) -> str:
@@ -592,7 +614,7 @@ class LiveTrader:
             self.order_manager.cancel_open_orders()
             self.drain_until(window, "drain_end")
             self._release_all_remaining()
-            self.write_snapshots()
+            self.write_account_snapshots()
         except Exception as exc:
             logger.opt(exception=True).error(f"段落收尾失敗：{exc}")
         finally:
@@ -608,8 +630,13 @@ class LiveTrader:
             self.allocator.release(name, amount)
         self._reserved_by_order.clear()
 
-    def write_snapshots(self) -> None:
-        """寫入各策略與帳戶層的部位快照；一致與否都要寫"""
+    def write_account_snapshots(self) -> None:
+        """
+        寫入各策略的**帳務**快照；一致與否都要寫
+
+        **不是部位快照**——部位快照由 `Reconciler._write_snapshots()` 寫。
+        兩者寫的是不同的表，名字混在一起會讓人以為這裡已經記了部位。
+        """
 
         today: datetime.date = self._now().date()
         for context in self.contexts:
@@ -619,7 +646,8 @@ class LiveTrader:
                     "strategy_name": context.name,
                     "source": "local",
                     "available_balance": context.account.balance,
-                    "total_equity": context.account.balance,
+                    "total_equity": context.account.balance
+                    + position_value(context.account),
                 }
             )
         self.dao.conn.commit()
@@ -958,12 +986,7 @@ class LiveTrader:
 
         snapshot: Any = self.broker.get_account()
         used: Dict[str, float] = {
-            context.name: sum(
-                position.volume * position.price
-                for position in context.account.positions
-                if not position.is_closed
-            )
-            for context in self.contexts
+            context.name: position_value(context.account) for context in self.contexts
         }
         self.allocator.refresh(snapshot.available_balance, used)
 

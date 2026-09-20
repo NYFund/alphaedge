@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -30,6 +30,20 @@ from core.utils import (
 - **標的是契約不是商品**：同一個商品同時有多個到期月在交易，要哪一個由換月規則
   決定（策略層的 `select_near_month()`），這一層只負責「給定契約代號就取得報價」。
 """
+
+
+def split_contract_id(symbol: str) -> Tuple[str, str]:
+    """
+    把契約代號拆成商品與到期月份；拆不開時回 `(symbol, "")`
+
+    `FuturesOrder.symbol` 是 `f"{product}{expiry}"`，本函式是它的反向。
+    **放模組層而不是掛在資料源上**：帳戶重建也要用同一條規則
+    （`live_position_lot` 只記 symbol），各寫一份會在換月時分岔。
+    """
+
+    if len(symbol) > 6 and symbol[-6:].isdigit():
+        return (symbol[:-6], symbol[-6:])
+    return (symbol, "")
 
 
 class TwFuturesLiveDataFeed(BaseLiveDataFeed):
@@ -150,7 +164,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 continue
 
             symbol: str = str(getattr(contract, "symbol", ""))
-            product, expiry = self._split_symbol(symbol)
+            product, expiry = split_contract_id(symbol)
             quotes.append(
                 PreOpenFuturesQuote(
                     product=product,
@@ -177,7 +191,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         if resolver is None:
             return None
 
-        product, expiry = self._split_symbol(symbol)
+        product, expiry = split_contract_id(symbol)
         if not expiry:
             logger.warning(f"契約代號 {symbol} 拆不出到期月份，本段落略過")
             return None
@@ -187,14 +201,6 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         except LookupError as exc:
             logger.warning(f"取不到契約 {symbol}，本段落略過：{exc}")
             return None
-
-    @staticmethod
-    def _split_symbol(symbol: str) -> tuple:
-        """把契約代號拆成商品與到期月份；拆不開時回 `(symbol, "")`"""
-
-        if len(symbol) > 6 and symbol[-6:].isdigit():
-            return (symbol[:-6], symbol[-6:])
-        return (symbol, "")
 
     @staticmethod
     def _resolve_session(moment: datetime.datetime) -> FuturesSession:
