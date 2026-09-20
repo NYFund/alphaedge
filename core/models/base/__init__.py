@@ -3,6 +3,7 @@ from .execution import (
     BrokerAccountSnapshot,
     BrokerPositionSnapshot,
     ExecutionReport,
+    OrderStatusEvent,
     OrderTicket,
 )
 from .order import BaseOrder

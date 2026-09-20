@@ -1,0 +1,390 @@
+import datetime
+import queue
+from typing import Any, Dict, List, Optional, Sequence
+
+import pytest
+import shioaji.constant as sj_constant
+
+from core.broker.rate_limiter import RateLimitCategory, RateLimiter
+from core.broker.tw.shioaji_quote_stream import (
+    SNAPSHOT_BATCH_SIZE,
+    ShioajiQuoteStream,
+)
+from core.models import FuturesQuote, StockQuote
+from core.utils import FuturesSession, Scale
+
+"""
+即時行情：策略讀到的報價物件必須和回測一模一樣
+
+否則同一支策略在兩邊會拿到不同結構，「策略層不分家」這條前提就不成立。
+
+本檔特別盯兩個**不會報錯、只會讓訊號默默不成立**的取值錯誤：
+- `volume` 取成「該筆成交量」而不是「當日累計」→ 成交量門檻永遠不達標。
+- 時戳當成秒而不是奈秒 → 日期變成 1970 年，而那個日期會一路寫進部位與報表。
+"""
+
+
+class FakeSnapshot:
+    """對應 `shioaji.data.Snapshot`"""
+
+    def __init__(
+        self,
+        code: str = "2330",
+        open: float = 990.0,
+        high: float = 1010.0,
+        low: float = 985.0,
+        close: float = 1000.0,
+        volume: int = 3,
+        total_volume: int = 5200,
+        ts: Optional[int] = 1789000000_000_000_000,
+    ) -> None:
+        self.code: str = code
+        self.open: float = open
+        self.high: float = high
+        self.low: float = low
+        self.close: float = close
+        self.volume: int = volume  # 該筆成交量
+        self.total_volume: int = total_volume  # 當日累計成交量
+        self.ts: Optional[int] = ts
+
+
+class FakeContract:
+    def __init__(
+        self,
+        code: str = "2330",
+        symbol: str = "TSE2330",
+        multiplier: int = 0,
+        unit: int = 0,
+    ) -> None:
+        self.code: str = code
+        self.symbol: str = symbol
+        self.multiplier: int = multiplier
+        self.unit: int = unit
+
+
+class FakeQuoteManager:
+    def __init__(self) -> None:
+        self.callbacks: Dict[str, Any] = {}
+        self.subscribed: List[tuple] = []
+        self.unsubscribed: List[tuple] = []
+
+    def set_on_tick_stk_v1_callback(self, func: Any) -> None:
+        self.callbacks["tick_stk"] = func
+
+    def set_on_bidask_stk_v1_callback(self, func: Any) -> None:
+        self.callbacks["bidask_stk"] = func
+
+    def set_on_tick_fop_v1_callback(self, func: Any) -> None:
+        self.callbacks["tick_fop"] = func
+
+    def set_on_bidask_fop_v1_callback(self, func: Any) -> None:
+        self.callbacks["bidask_fop"] = func
+
+    def subscribe(self, contract: Any, quote_type: Any, version: Any) -> None:
+        self.subscribed.append((contract.code, quote_type))
+
+    def unsubscribe(self, contract: Any, quote_type: Any, version: Any) -> None:
+        self.unsubscribed.append((contract.code, quote_type))
+
+
+class FakeApi:
+    def __init__(self, snapshots: Optional[List[FakeSnapshot]] = None) -> None:
+        self.quote: FakeQuoteManager = FakeQuoteManager()
+        self._snapshots: List[FakeSnapshot] = snapshots or []
+        self.snapshot_calls: List[int] = []
+
+    def snapshots(self, contracts: Sequence[Any]) -> List[FakeSnapshot]:
+        self.snapshot_calls.append(len(contracts))
+        codes: set = {getattr(c, "code", "") for c in contracts}
+        return [s for s in self._snapshots if s.code in codes]
+
+
+@pytest.fixture
+def limiter() -> RateLimiter:
+    return RateLimiter(time_source=lambda: 0.0, sleep=lambda seconds: None)
+
+
+def make_stream(api: FakeApi, limiter: RateLimiter) -> ShioajiQuoteStream:
+    return ShioajiQuoteStream(api, limiter, queue.Queue())
+
+
+# === 轉換語意 ===
+def test_volume_uses_total_volume(limiter: RateLimiter) -> None:
+    """
+    `volume` 取**當日累計**成交量
+
+    快照的 `volume` 是該筆成交量。取錯的話，「當日成交量 ≥ 5000 張」這類門檻
+    永遠不會成立，策略整天不開倉而且不會有任何錯誤訊息。
+    """
+
+    snapshot: FakeSnapshot = FakeSnapshot(volume=3, total_volume=5200)
+    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(snapshot)
+
+    assert quote.volume == 5200
+
+
+def test_close_and_cur_price_are_the_same_provisional_value(
+    limiter: RateLimiter,
+) -> None:
+    """
+    盤中的 `close` 是暫定值，與 `cur_price` 同值
+
+    策略拿它算「今天漲幅」得到的是此刻的漲幅，不是收盤漲幅——
+    那正是日頻策略要拆成開盤段與尾盤段的原因。
+    """
+
+    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(FakeSnapshot())
+
+    assert quote.close == quote.cur_price == 1000.0
+    assert quote.scale is Scale.DAY
+
+
+def test_quote_fields_match_the_backtest_shape(limiter: RateLimiter) -> None:
+    """轉出的報價物件與回測同款：策略讀到的結構不能因為換了資料來源而變"""
+
+    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(FakeSnapshot())
+
+    assert isinstance(quote, StockQuote)
+    assert (quote.stock_id, quote.open, quote.high, quote.low) == (
+        "2330",
+        990.0,
+        1010.0,
+        985.0,
+    )
+    assert quote.signal_close == 1000.0  # 未啟用還原時等於 close
+
+
+def test_timestamp_is_parsed_as_nanoseconds(limiter: RateLimiter) -> None:
+    """
+    `Snapshot.ts` 是 **epoch 奈秒**
+
+    當成秒來解會得到 1970 年，而那個日期會一路寫進部位與報表。
+    """
+
+    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(FakeSnapshot())
+
+    assert quote.date.year == 2026
+    assert quote.date.tzinfo is not None
+
+
+def test_unparsable_timestamp_falls_back_to_now(limiter: RateLimiter) -> None:
+    """時戳壞掉時退回目前時間，不可讓整筆報價消失"""
+
+    stream: ShioajiQuoteStream = ShioajiQuoteStream(
+        FakeApi(),
+        limiter,
+        queue.Queue(),
+        now_provider=lambda: datetime.datetime(2026, 9, 19, 13, 20),
+    )
+    quote: StockQuote = stream.to_stock_quote(FakeSnapshot(ts=None))
+
+    assert quote.date == datetime.datetime(2026, 9, 19, 13, 20)
+
+
+# === 期貨 ===
+def test_futures_quote_keeps_settlement_fields_none(limiter: RateLimiter) -> None:
+    """
+    結算價與未沖銷契約量留 `None`
+
+    快照沒有這兩項。填 0 會讓它們看起來像「今天是 0」而不是「沒有資料」，
+    而回測那邊夜盤的這兩欄本來就是 None。
+    """
+
+    quote: FuturesQuote = make_stream(FakeApi(), limiter).to_futures_quote(
+        FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TXF202601")
+    )
+
+    assert quote.settlement_price is None
+    assert quote.open_interest is None
+
+
+def test_futures_expiry_comes_from_symbol_not_code(limiter: RateLimiter) -> None:
+    """
+    到期月份取自合約的 `symbol`，不是快照的 `code`
+
+    `code`（`TXFA6`＝月份字母 ＋ 年末碼）**跨年會重複**，拆不出可靠的月份。
+    """
+
+    quote: FuturesQuote = make_stream(FakeApi(), limiter).to_futures_quote(
+        FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TXF202601")
+    )
+
+    assert (quote.product, quote.expiry) == ("TXF", "202601")
+
+
+@pytest.mark.parametrize(
+    "hour, expected",
+    [
+        (9, FuturesSession.DAY),
+        (13, FuturesSession.DAY),
+        (14, FuturesSession.DAY),  # 日夜盤之間的空檔歸日盤
+        (15, FuturesSession.NIGHT),
+        (23, FuturesSession.NIGHT),
+        (3, FuturesSession.NIGHT),
+        (6, FuturesSession.DAY),
+    ],
+)
+def test_session_resolution(hour: int, expected: FuturesSession) -> None:
+    """
+    日盤 08:45~13:45、夜盤 15:00~次日 05:00
+
+    兩段之間的空檔歸日盤：那段時間沒有行情，但歸夜盤會讓 13:45 收盤後的快照
+    被記成次一交易日的帳。
+    """
+
+    moment: datetime.datetime = datetime.datetime(2026, 9, 19, hour, 30)
+
+    assert ShioajiQuoteStream.resolve_session(moment) is expected
+
+
+def test_index_futures_multiplier_comes_from_the_table() -> None:
+    """指數期貨的乘數查登錄表"""
+
+    assert ShioajiQuoteStream.resolve_multiplier("TX") == 200
+
+
+def test_stock_futures_multiplier_comes_from_the_contract() -> None:
+    """
+    股期的乘數取自合約
+
+    它會隨除權息調整，寫死必錯——而錯掉不會報錯，只會讓整條 PnL 靜默偏掉。
+    """
+
+    assert (
+        ShioajiQuoteStream.resolve_multiplier("CDF", FakeContract(multiplier=2000))
+        == 2000
+    )
+    assert ShioajiQuoteStream.resolve_multiplier("CDF", FakeContract(unit=100)) == 100
+
+
+def test_unknown_multiplier_is_zero_not_a_guess() -> None:
+    """
+    取不到乘數時回 0 並 warning，不猜
+
+    猜一個值會讓 PnL 靜默偏掉；回 0 則會在算 PnL 時被發現。
+    """
+
+    assert ShioajiQuoteStream.resolve_multiplier("UNKNOWN") == 0
+
+
+# === 快照批次與限流 ===
+def test_snapshots_are_batched(limiter: RateLimiter) -> None:
+    """快照分批呼叫，每批算一次行情類額度"""
+
+    contracts: List[FakeContract] = [
+        FakeContract(code=f"{index:04d}") for index in range(SNAPSHOT_BATCH_SIZE + 5)
+    ]
+    api: FakeApi = FakeApi()
+    make_stream(api, limiter).get_stock_snapshots(contracts)
+
+    assert api.snapshot_calls == [SNAPSHOT_BATCH_SIZE, 5]
+    assert limiter.try_acquire(RateLimitCategory.MARKET_DATA) is True
+
+
+def test_missing_snapshots_are_skipped_not_misaligned(limiter: RateLimiter) -> None:
+    """
+    查無資料的標的直接略過
+
+    配對一律以代號進行。用位置索引的話，停牌一檔就會讓後面所有標的的乘數
+    集體錯位，而每一筆看起來都還是合法報價。
+    """
+
+    api: FakeApi = FakeApi(snapshots=[FakeSnapshot(code="2330")])
+    quotes: List[StockQuote] = make_stream(api, limiter).get_stock_snapshots(
+        [FakeContract(code="2330"), FakeContract(code="9999")]
+    )
+
+    assert [quote.stock_id for quote in quotes] == ["2330"]
+
+
+def test_futures_snapshots_pair_by_code(limiter: RateLimiter) -> None:
+    """期貨快照也以代號配回合約，乘數才不會張冠李戴"""
+
+    api: FakeApi = FakeApi(
+        snapshots=[FakeSnapshot(code="TXFA6"), FakeSnapshot(code="CDFA6")]
+    )
+    quotes: List[FuturesQuote] = make_stream(api, limiter).get_futures_snapshots(
+        [
+            FakeContract(code="CDFA6", symbol="CDF202601", multiplier=2000),
+            FakeContract(code="TXFA6", symbol="TXF202601"),
+        ]
+    )
+    by_product: Dict[str, FuturesQuote] = {q.product: q for q in quotes}
+
+    assert by_product["TXF"].multiplier == 0  # TXF 不在登錄表裡（表裡是 TAIFEX 的 TX）
+    assert by_product["CDF"].multiplier == 2000
+
+
+# === 訂閱 ===
+def test_subscribe_registers_tick_and_bidask(limiter: RateLimiter) -> None:
+    """盤中策略要 bid/ask 才算得出可成交價，兩種都要訂"""
+
+    api: FakeApi = FakeApi()
+    make_stream(api, limiter).subscribe([FakeContract(code="2330")])
+
+    assert set(api.quote.subscribed) == {
+        ("2330", sj_constant.QuoteType.Tick),
+        ("2330", sj_constant.QuoteType.BidAsk),
+    }
+
+
+def test_subscription_limit_raises_before_subscribing(limiter: RateLimiter) -> None:
+    """
+    超過上限在訂閱**之前**就拋出
+
+    先訂到滿再失敗的話，前面那幾檔會訂閱成功、後面的默默訂不到，
+    於是策略只收得到一部分標的的行情，而它不會知道。
+    """
+
+    api: FakeApi = FakeApi()
+    stream: ShioajiQuoteStream = make_stream(api, limiter)
+    contracts: List[FakeContract] = [
+        FakeContract(code=f"{index:04d}")
+        for index in range(ShioajiQuoteStream.MAX_SUBSCRIPTIONS + 1)
+    ]
+
+    with pytest.raises(ValueError, match="上限"):
+        stream.subscribe(contracts)
+
+    assert api.quote.subscribed == []
+    assert stream.subscribed == set()
+
+
+def test_unsubscribe_clears_the_set(limiter: RateLimiter) -> None:
+    """取消訂閱要同步更新本地紀錄，否則上限檢查會愈算愈多"""
+
+    api: FakeApi = FakeApi()
+    stream: ShioajiQuoteStream = make_stream(api, limiter)
+    contract: FakeContract = FakeContract(code="2330")
+
+    stream.subscribe([contract])
+    stream.unsubscribe([contract])
+
+    assert stream.subscribed == set()
+
+
+# === 回呼 ===
+def test_callbacks_only_enqueue(limiter: RateLimiter) -> None:
+    """
+    四個回呼都要掛，且只做入列
+
+    少掛一個不會報錯，只會讓那一類行情安靜地收不到。
+    """
+
+    api: FakeApi = FakeApi()
+    quote_queue: queue.Queue = queue.Queue()
+    stream: ShioajiQuoteStream = ShioajiQuoteStream(api, limiter, quote_queue)
+    stream.register_callbacks()
+
+    assert set(api.quote.callbacks) == {
+        "tick_stk",
+        "bidask_stk",
+        "tick_fop",
+        "bidask_fop",
+    }
+
+    api.quote.callbacks["tick_stk"]("TSE", {"code": "2330"})
+    kind, exchange, message = quote_queue.get_nowait()
+
+    assert (kind, exchange) == ("tick_stk", "TSE")
+    assert message == {"code": "2330"}

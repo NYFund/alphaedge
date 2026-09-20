@@ -143,6 +143,58 @@ class ExecutionReport:
         return (self.broker_seqno, self.broker_trade_id)
 
 
+class OrderStatusEvent:
+    """
+    一筆委託狀態事件（新單成功、被拒、改價、刪單）
+
+    **與 `ExecutionReport` 分開**：成交是「部位真的動了」，狀態事件是「券商對這張單
+    做了什麼」。合成一種的話，`quantity` 這個欄位會一下子代表成交量、一下子代表
+    剩餘量，而兩者的差別正是殘量處理要用的。
+
+    `op_code` 為 `"00"` 以外的值代表這次操作失敗，`op_msg` 是券商的原文訊息。
+    """
+
+    def __init__(
+        self,
+        broker_seqno: str = "",
+        broker_order_id: Optional[str] = None,
+        op_type: str = "",
+        op_code: str = "",
+        op_msg: str = "",
+        symbol: str = "",
+        custom_field: str = "",
+        exchange_ts: Optional[datetime.datetime] = None,
+        raw: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.broker_seqno: str = broker_seqno
+        self.broker_order_id: Optional[str] = broker_order_id
+
+        # 操作別（New／Cancel／UpdatePrice／UpdateQty…）與結果
+        self.op_type: str = op_type
+        self.op_code: str = op_code
+        self.op_msg: str = op_msg
+
+        self.symbol: str = symbol
+        self.custom_field: str = custom_field  # 隨委託往返的識別碼，用來反查本地委託
+
+        # 交易所時戳。**去重鍵的一部分**：同一張單的同一種操作可能被重推，
+        # 但不同時點的兩次改價是兩個事件
+        self.exchange_ts: Optional[datetime.datetime] = exchange_ts
+        self.raw: Dict[str, Any] = raw if raw is not None else {}
+
+    @property
+    def dedup_key(self) -> Tuple[str, str, Optional[datetime.datetime]]:
+        """去重鍵：`(委託序號, 操作別, 交易所時戳)`"""
+
+        return (self.broker_seqno, self.op_type, self.exchange_ts)
+
+    @property
+    def is_failure(self) -> bool:
+        """這次操作是否失敗；`op_code` 為 `"00"` 才是成功"""
+
+        return bool(self.op_code) and self.op_code != "00"
+
+
 class BrokerPositionSnapshot:
     """
     券商端某一檔部位的正規化快照

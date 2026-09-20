@@ -7,6 +7,7 @@ from .base import (
     BrokerAccountSnapshot,
     BrokerPositionSnapshot,
     ExecutionReport,
+    OrderStatusEvent,
     OrderTicket,
 )
 from .futures import (
