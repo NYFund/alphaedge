@@ -61,6 +61,11 @@ EXECUTION_TIMING_AT_OPEN = "AT_OPEN"  # 盤前委託，進開盤集合競價
 EXECUTION_TIMING_AT_CLOSE = "AT_CLOSE"  # 尾盤取快照算訊號，進收盤集合競價
 EXECUTION_TIMING_IMMEDIATE = "IMMEDIATE"  # 盤中逐筆觸發，算完就送
 
+# 定義實盤策略鉤子名稱常量（`live_schedule` 的鍵）
+LIVE_HOOK_OPEN = "open"  # 開倉訊號
+LIVE_HOOK_CLOSE = "close"  # 平倉訊號
+LIVE_HOOK_STOP_LOSS = "stop_loss"  # 停損訊號
+
 # 定義實盤委託狀態常量（OMS 狀態機的狀態）
 LIVE_ORDER_STATUS_PENDING_SUBMIT = "PENDING_SUBMIT"  # 已寫入本地，尚未送出券商
 LIVE_ORDER_STATUS_SUBMITTED = "SUBMITTED"  # 券商已收單
@@ -254,6 +259,19 @@ class FuturesOCType(str, Enum):
     New = FUTURES_OC_TYPE_NEW
     Cover = FUTURES_OC_TYPE_COVER
     DayTrade = FUTURES_OC_TYPE_DAY_TRADE
+
+
+class LiveHook(str, Enum):
+    """
+    策略鉤子；`live_schedule` 以它宣告「哪個鉤子在哪一段被呼叫」
+
+    停損與一般平倉分開列出，是因為它們在實盤**可能落在不同段落**：
+    停損要盤中就反應，一般平倉可以等到尾盤算完訊號再送。
+    """
+
+    OPEN = LIVE_HOOK_OPEN
+    CLOSE = LIVE_HOOK_CLOSE
+    STOP_LOSS = LIVE_HOOK_STOP_LOSS
 
 
 class ExecutionTiming(str, Enum):

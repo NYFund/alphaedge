@@ -7,6 +7,7 @@ from .base import (
     BrokerAccountSnapshot,
     BrokerPositionSnapshot,
     ExecutionReport,
+    LiveDataUnavailableError,
     OrderStatusEvent,
     OrderTicket,
 )
@@ -19,8 +20,10 @@ from .futures import (
     FuturesPositionSnapshot,
     FuturesQuote,
     FuturesTradeRecord,
+    PreOpenFuturesQuote,
 )
 from .stock import (
+    PreOpenStockQuote,
     StockAccount,
     StockOrder,
     StockOrderTicket,

@@ -1,11 +1,18 @@
 import datetime
 from abc import ABC, abstractmethod
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
 from core.portfolio.signal import Signal
-from core.utils import BarExecutionOrder, InstrumentType, Market, PositionType, Scale
+from core.utils import (
+    BarExecutionOrder,
+    ExecutionTiming,
+    InstrumentType,
+    Market,
+    PositionType,
+    Scale,
+)
 
 """BaseStrategy: 市場與商品皆無關的策略骨架（market ＋ instrument_type 為 factory 的分派鍵）"""
 
@@ -71,6 +78,37 @@ class BaseStrategy(ABC):
         self.scale: str = Scale.DAY  # Backtest scale: DAY / TICK
         self.start_date: datetime.date = None  # Optional: 回測起始日
         self.end_date: datetime.date = None  # Optional: 回測結束日
+
+        """
+        === Live Setting ===
+
+        **回測完全不讀這一區**，故加上它們不會改變任何回測結果。
+
+        `live_ready` 預設 False：**策略預設不可上實盤**。它不只是一個旗標，
+        還帶一條契約——策略的內部狀態必須能由「歷史資料 ＋ 當前帳戶部位」重建，
+        不可依賴回測逐日跑出來的累積（例如自行累計的持有天數、只在 `setup()`
+        算一次而盤中會過期的清單）。實盤會在任意時點重啟，重建不出來的狀態
+        會產生錯訊號，而且不會報錯。標成 True 之前要逐項確認並寫進
+        class docstring 的〈實盤執行〉區塊。
+
+        `live_schedule` 宣告各鉤子在哪一個段落被呼叫，例如
+        `{"open": AT_OPEN, "close": AT_CLOSE, "stop_loss": AT_CLOSE}`。
+        日 K 在實盤不存在——回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道
+        close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點。
+
+        ⚠️ **`live_schedule` 與 `bar_execution_order` 可能互相矛盾。**
+        回測用後者決定同一根 bar 內先平後開還是先開後平；實盤拆成兩段之後，
+        **兩個鉤子分屬不同段落時，實際順序由段落決定，`bar_execution_order`
+        形同失效**。兩者宣告相反時會**靜默**改掉交易順序，回測與實盤的部位軌跡
+        從當天起就不同。故啟動時一律檢查（見 `core/live/strategy_guard.py`）。
+
+        `live_tag` 是策略代號，**只寫本地紀錄與報表，不送券商**——券商的
+        `custom_field` 那 6 個字元讓給委託識別碼的壓縮碼（壓縮碼反查得到策略，
+        策略代號卻反查不到是哪一張單），因此它不受 6 字元與英數字的限制。
+        """
+        self.live_ready: bool = False  # 預設不可上實盤
+        self.live_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
+        self.live_tag: str = ""  # 策略代號（只寫本地）
 
     @abstractmethod
     def setup_account(self, account: BaseAccount) -> None:

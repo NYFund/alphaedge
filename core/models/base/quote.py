@@ -6,6 +6,17 @@ from core.utils import Scale
 """BaseQuote: 市場與商品皆無關的報價骨架（識別欄位一律為 symbol）"""
 
 
+class LiveDataUnavailableError(AttributeError):
+    """
+    實盤在這個時點拿不到這個欄位
+
+    **繼承 `AttributeError` 而不是 `ValueError`**：它就是「這個屬性此刻不存在」，
+    而且 `getattr(quote, "close", 預設值)` 這種寫法會因此安靜地拿到預設值——
+    那正是我們要讓它現形的情況之一，繼承對的基底才不會讓既有的防禦性程式碼
+    把錯誤吞掉還自以為正常。
+    """
+
+
 class BaseQuote:
     """
     報價資訊的共用骨架
