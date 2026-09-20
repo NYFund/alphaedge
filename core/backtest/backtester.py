@@ -114,6 +114,12 @@ class Backtester:
         # 回測參數
         self.scale: str = self.strategy.scale  # 回測 KBar 級別
         self.max_holdings: Optional[int] = self.strategy.max_holdings  # 最大持倉檔數
+        # 本場回測「會送出的委託」，供實盤 parity 比對取用。
+        # **只記錄、不參與任何判斷**：記的是通過方向白名單、檔數上限與排序之後、
+        # 進入成交模擬之前的那一份——那才是實盤真正會送到券商的東西，
+        # 成不成交是市場的事，不影響「這張單有沒有被送出去」
+        self.submitted_orders: List[Tuple[datetime.date, str, BaseOrder]] = []
+
         self.start_date: datetime.date = self.strategy.start_date  # 回測起始日
         self.cur_date: datetime.date = self.strategy.start_date  # 回測當前日
         self.end_date: datetime.date = self.strategy.end_date  # 回測結束日
@@ -505,6 +511,8 @@ class Backtester:
             if not self.check_max_holdings(order):
                 continue
 
+            self.submitted_orders.append((self.cur_date, "open", order))
+
             quote: Optional[BaseQuote] = quote_map.get(order.symbol)
             if quote and not self.validate_fill_price(order, quote):
                 continue
@@ -589,6 +597,9 @@ class Backtester:
         stop_loss_orders = self.sort_orders(
             self.validate_orders(stop_loss_orders, "close")
         )
+        self.submitted_orders.extend(
+            (self.cur_date, "stop_loss", order) for order in stop_loss_orders
+        )
 
         # Close records
         close_records: List[BaseTradeRecord] = []
@@ -620,6 +631,9 @@ class Backtester:
             remaining_positions
         )
         close_orders = self.sort_orders(self.validate_orders(close_orders, "close"))
+        self.submitted_orders.extend(
+            (self.cur_date, "close", order) for order in close_orders
+        )
 
         # Execute close orders
         for order in close_orders:

@@ -13,6 +13,7 @@ from core.live.notify.base import BaseNotifier, notify_safely
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
+from core.live.report.parity_checker import ParityChecker, ParityDiff
 from core.live.risk.trading_mode import TradingModeState
 from core.utils import PositionType
 
@@ -52,6 +53,7 @@ class AfterCloseRunner:
         run_id: str,
         notifier: Optional[BaseNotifier] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        parity_checker: Optional[ParityChecker] = None,
     ) -> None:
         """
         - Description:
@@ -79,6 +81,8 @@ class AfterCloseRunner:
                 推播管道
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
+            - parity_checker: Optional[ParityChecker]
+                訊號 parity 比對器；None 時跳過比對並記 warning
         """
 
         self.data_feeds: Sequence[BaseLiveDataFeed] = data_feeds
@@ -91,6 +95,7 @@ class AfterCloseRunner:
         self.dao: LiveTradeDAO = dao
         self.run_id: str = run_id
         self.notifier: Optional[BaseNotifier] = notifier
+        self.parity_checker: Optional[ParityChecker] = parity_checker
         self._now: Callable[[], datetime.datetime] = now_provider
 
         # 本次對帳結果；`run.py` 由它決定退出碼，故盤後跑完要回填給 `LiveTrader`
@@ -133,16 +138,70 @@ class AfterCloseRunner:
             reports: Dict[str, Path] = self.reporter.write_daily_reports(today)
             slippage: Dict[str, float] = self.reporter.summarize_slippage(today)
 
+            # 6. 訊號 parity：同一支策略在回測與實盤有沒有送出同一批委託。
+            # **排在報表之後**：比對要讀當日委託，而那些在前面幾步已經寫完了
+            unexplained: int = self.check_signal_parity(today)
+
             return {
                 "reports": reports,
                 "pending_actions": remainders,
                 "slippage": slippage,
+                "unexplained_parity": unexplained,
             }
         finally:
             self.broker.close()
             for feed in self.data_feeds:
                 feed.close()
             logger.info("=== 盤後作業結束 ===")
+
+    def check_signal_parity(self, run_date: datetime.date) -> int:
+        """
+        - Description:
+            比對當日實盤委託與同一天回測會送出的委託
+
+            **未解釋的差異一律推播 CRITICAL**：訊號漂移不會有任何錯誤訊息，
+            它只會讓回測績效靜靜失去參考價值。已知的制度性差異（快照口徑、
+            跨策略守門、資金排擠）各有類別，不佔用 `UNEXPLAINED`。
+
+            **比對失敗不可中斷盤後作業**：報表與殘量處理都已經完成了，
+            為了一個比對把它們的結束流程拖掉並不划算。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - int
+                未解釋差異的筆數；比對未執行時為 0
+        """
+
+        if self.parity_checker is None:
+            logger.warning("未注入 parity 比對器，本日不做訊號一致性比對")
+            return 0
+
+        try:
+            result: Dict[str, List[ParityDiff]] = self.parity_checker.check(run_date)
+        except Exception as exc:
+            logger.opt(exception=True).error(f"訊號 parity 比對失敗：{exc}")
+            self._notify("CRITICAL", "訊號 parity 比對失敗", str(exc))
+            return 0
+
+        unexplained: Dict[str, int] = {
+            name: sum(1 for diff in diffs if diff.is_unexplained)
+            for name, diffs in result.items()
+        }
+        total: int = sum(unexplained.values())
+        if total == 0:
+            logger.info("訊號 parity 比對通過：無未解釋的差異")
+            return 0
+
+        detail: str = "、".join(
+            f"{name} {count} 筆" for name, count in unexplained.items() if count
+        )
+        self._notify(
+            "CRITICAL",
+            "訊號 parity 有未解釋的差異",
+            f"{run_date} 共 {total} 筆（{detail}），列為隔日第一優先",
+        )
+        return total
 
     def expire_open_orders(self) -> List[Any]:
         """

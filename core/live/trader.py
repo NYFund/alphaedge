@@ -18,6 +18,7 @@ from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.notify.base import notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
+from core.live.report.parity_checker import ParityChecker
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
 from core.live.risk.trading_mode import TradingMode, TradingModeState
@@ -136,6 +137,7 @@ class LiveTrader:
         reporter: Optional[LiveReporter] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
         sleep: Callable[[float], None] = time.sleep,
+        parity_checker: Optional[ParityChecker] = None,
     ) -> None:
         """
         - Description:
@@ -175,6 +177,8 @@ class LiveTrader:
                 事件推播；None 時不推播
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
+            - parity_checker: Optional[ParityChecker]
+                訊號 parity 比對器；只在盤後用得到，故直接轉給 `AfterCloseRunner`
             - sleep: Callable[[float], None]
                 等待函式
         """
@@ -222,6 +226,7 @@ class LiveTrader:
             run_id=run_id,
             notifier=notifier,
             now_provider=now_provider,
+            parity_checker=parity_checker,
         )
 
         # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。

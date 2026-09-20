@@ -592,6 +592,28 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
 
+    def get_risk_events_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            取得某一交易日的所有風控事件
+
+            parity 比對以它歸因「實盤為什麼沒送這張單」——被誰擋下來當下就寫進去了，
+            事後用猜的一定會把跨策略守門與資金排擠混成同一類。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                事件清單，依發生時間排序
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_RISK_EVENT_TABLE_NAME} "
+            "WHERE date(occurred_at) = ? ORDER BY occurred_at, event_id",
+            to_sql_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_RISK_EVENT_TABLE_NAME, rows)
+
     def get_fills_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:

@@ -5,6 +5,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 import shioaji as sj
 from loguru import logger
 
+from core.backtest.backtester import Backtester
+from core.backtest.factory import build_backtester
 from core.backtest.models.cost_model import (
     CostConfig,
     FuturesCostConfig,
@@ -41,6 +43,7 @@ from core.live.notify.base import BaseNotifier, NullNotifier
 from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
+from core.live.report.parity_checker import ParityChecker
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
@@ -248,6 +251,9 @@ def build_live_trader(
     notifier: BaseNotifier = build_notifier(
         LIVE_NOTIFY_CHANNEL, LIVE_NOTIFY_TOKEN, LIVE_NOTIFY_TARGET
     )
+    parity_checker: ParityChecker = ParityChecker(
+        resolved_dao, make_daily_backtest_runner(strategies)
+    )
     _record_run(
         resolved_dao,
         resolved_run_id,
@@ -275,6 +281,7 @@ def build_live_trader(
         resume_trading=resume_trading,
         notifier=notifier,
         now_provider=now_provider,
+        parity_checker=parity_checker,
     )
 
 
@@ -353,6 +360,49 @@ def _build_context(
         build_filled_order=build_order,
     )
     return (context, schedule)
+
+
+def make_daily_backtest_runner(
+    strategies: Sequence[BaseStrategy],
+) -> Callable[[str, datetime.date], List[BaseOrder]]:
+    """
+    - Description:
+        產生 parity 比對用的「跑一天回測，回傳會送出的委託」函式
+
+        **組裝寫在這裡而不是比對器裡**：跑回測要 `core.backtest.factory`（組裝層），
+        而 `core/live/report/` 在元件層——比對器自己 import 它就是反向相依。
+        注入之後，比對邏輯的測試也不必真的跑一場回測。
+
+        **每次呼叫都重建一份策略實例**：實盤那份已經帶著當天的帳戶與持倉，
+        拿它跑回測會讓回測從「今天的部位」開始，而比對基準應該是
+        「這支策略單獨從零跑這一天會送什麼單」。
+    - Parameters:
+        - strategies: Sequence[BaseStrategy]
+            本次實盤載入的策略實例；只用來取類別與 `init_capital`
+    - Return:
+        - Callable[[str, datetime.date], List[BaseOrder]]
+            `(策略名, 交易日) → 該日回測會送出的委託清單`
+    """
+
+    blueprints: Dict[str, BaseStrategy] = {
+        type(strategy).__name__: strategy for strategy in strategies
+    }
+
+    def run(strategy_name: str, run_date: datetime.date) -> List[BaseOrder]:
+        blueprint: Optional[BaseStrategy] = blueprints.get(strategy_name)
+        if blueprint is None:
+            raise UnsupportedMarketError(f"本次執行沒有載入策略 {strategy_name}")
+
+        replica: BaseStrategy = type(blueprint)()
+        replica.init_capital = blueprint.init_capital
+        replica.start_date = run_date
+        replica.end_date = run_date
+
+        backtester: Backtester = build_backtester(replica)
+        backtester.run()
+        return [order for _, _, order in backtester.submitted_orders]
+
+    return run
 
 
 def _build_futures_order(
