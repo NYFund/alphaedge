@@ -181,6 +181,7 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
     # 延後 import：實盤那一整串相依（shioaji、券商閘道、OMS）只有實盤用得到，
     # 回測不該為了它們付 import 成本，也不該因為它們壞掉而跑不動
     from core.live.datafeed.base import DataFreshnessError
+    from core.live.datafeed.calendar import TradingCalendarUnavailableError
     from core.live.factory import UnsupportedMarketError, build_live_trader
     from core.live.risk.trading_mode import TradingMode
     from core.utils import ExecutionTiming
@@ -241,6 +242,11 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
             trader.run(ExecutionTiming[PHASE_TO_TIMING[args.phase]])
     except DataFreshnessError as exc:
         print(str(exc), file=sys.stderr)
+        return EXIT_STALE_DATA
+    except TradingCalendarUnavailableError as exc:
+        # 判不出今天是不是交易日 → 拒絕啟動。與資料過期同一個結束碼：
+        # 對排程而言兩者是同一件事——**資料源給不出可信的答案，今天不要跑**
+        print(f"無法判定交易日，拒絕啟動：{exc}", file=sys.stderr)
         return EXIT_STALE_DATA
 
     return _resolve_live_exit_code(trader, TradingMode)

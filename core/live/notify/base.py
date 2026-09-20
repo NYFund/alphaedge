@@ -2,6 +2,7 @@ import re
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
+from typing import Optional
 
 from loguru import logger
 
@@ -165,3 +166,35 @@ class NullNotifier(BaseNotifier):
         """只記 log"""
 
         logger.info(f"[通知未設定／{level.value}] {title}：{body}")
+
+
+def notify_safely(
+    notifier: Optional[BaseNotifier], level: str, title: str, body: str
+) -> None:
+    """
+    - Description:
+        推播一則訊息；**任何失敗都不往外拋**
+
+        `BaseNotifier.send()` 自己就吞例外，這裡再包一層是因為 notifier
+        可能是任何注入進來的東西——監控拖垮被監控的東西是典型反例。
+
+        放模組層而不是讓每個呼叫端各寫一份：送單段落與盤後作業都要推播，
+        兩份 try/except 遲早會有一邊漏掉。
+    - Parameters:
+        - notifier: Optional[BaseNotifier]
+            推播管道；None 表示不推播
+        - level: str
+            等級字串；對應 `NotifyLevel`
+        - title: str
+            標題
+        - body: str
+            內文
+    """
+
+    if notifier is None:
+        return
+
+    try:
+        notifier.send(NotifyLevel(level), title, body)
+    except Exception as exc:
+        logger.opt(exception=True).warning(f"推播失敗（忽略）：{exc}")

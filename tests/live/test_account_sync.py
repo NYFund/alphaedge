@@ -10,12 +10,17 @@ from core.live.attribution.position_ledger import (
     UNATTRIBUTED_STRATEGY,
     PositionAttributionLedger,
 )
+from core.live.factory import _build_futures_order
 from core.live.reconciler import Reconciler, ReconcileResult
+from core.managers.futures.position_manager import FuturesPositionManager
 from core.managers.stock.position_manager import StockPositionManager
 from core.models import (
     BrokerPositionSnapshot,
     ExecutionReport,
+    FuturesAccount,
+    FuturesOrder,
     StockAccount,
+    StockOrder,
     StockPositionSnapshot,
 )
 from core.utils import Action, PositionType, StockOrderCond
@@ -427,3 +432,88 @@ def test_rebuild_sets_the_balance_from_the_broker(
     sync.rebuild_from_broker([], balances={"A": 123_456.0})
 
     assert manager.account.balance == 123_456.0
+
+
+# === 期貨：訂單型別要跟著策略的商品走 ===
+def make_futures_sync(
+    dao: LiveTradeDAO, ledger: PositionAttributionLedger
+) -> AccountSynchronizer:
+    """建一個餵期貨部位管理器的同步器；建構器由組裝層注入的那一份"""
+
+    account: FuturesAccount = FuturesAccount(init_capital=10_000_000.0)
+    return AccountSynchronizer(
+        {"F": FuturesPositionManager(account)},
+        ledger,
+        dao,
+        now_provider=lambda: NOW,
+        order_builders={"F": _build_futures_order},
+    )
+
+
+def test_futures_fill_opens_a_position_instead_of_crashing(
+    dao: LiveTradeDAO, ledger: PositionAttributionLedger
+) -> None:
+    """
+    期貨策略的第一筆成交不可以炸
+
+    `FuturesPositionManager.open_position()` 會讀 `order.product`，而 `StockOrder`
+    沒有這個屬性——注入建構器之前，這條路徑是 `AttributeError`，
+    而訊息完全看不出問題出在帳戶同步器。
+    """
+
+    sync: AccountSynchronizer = make_futures_sync(dao, ledger)
+
+    name: str = sync.apply_fill(
+        make_fill(symbol="TX202601", volume=1, price=23000.0), strategy_name="F"
+    )
+
+    assert name == "F"
+    manager: FuturesPositionManager = sync.position_managers["F"]
+    assert manager.account.get_position_count() == 1
+
+
+def test_futures_order_carries_product_and_expiry(
+    dao: LiveTradeDAO, ledger: PositionAttributionLedger
+) -> None:
+    """契約代號要拆回 product／expiry，只塞 symbol 會讓乘數與保證金查錯商品"""
+
+    sync: AccountSynchronizer = make_futures_sync(dao, ledger)
+
+    order: FuturesOrder = sync._to_order(
+        "F", make_fill(symbol="TX202601", volume=1, price=23000.0), PositionType.LONG
+    )
+
+    assert isinstance(order, FuturesOrder)
+    assert (order.product, order.expiry) == ("TX", "202601")
+    assert order.contract_id == "TX202601"
+
+
+def test_futures_rebuild_restores_a_futures_order(
+    dao: LiveTradeDAO, ledger: PositionAttributionLedger
+) -> None:
+    """重啟接管走的是 lot 表，同樣不可以還原成股票訂單"""
+
+    lot: Dict[str, object] = {
+        "symbol": "TX202601",
+        "direction": PositionType.LONG.value,
+        "open_date": datetime.date(2026, 9, 18),
+        "open_price": 23000.0,
+        "volume": 1,
+    }
+
+    order: FuturesOrder = AccountSynchronizer._lot_to_order(lot, _build_futures_order)
+
+    assert isinstance(order, FuturesOrder)
+    assert (order.product, order.expiry) == ("TX", "202601")
+    assert order.date == datetime.date(2026, 9, 18)
+
+
+def test_stock_strategy_still_gets_a_stock_order(
+    sync: AccountSynchronizer,
+) -> None:
+    """股票線不受影響：未注入建構器時退回股票版"""
+
+    order = sync._to_order("A", make_fill(), PositionType.LONG)
+
+    assert isinstance(order, StockOrder)
+    assert order.stock_id == "2330"

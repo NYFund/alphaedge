@@ -1,8 +1,7 @@
 import datetime
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
@@ -10,12 +9,13 @@ from core.broker.base import BaseBroker
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.execution import order_preprocess
-from core.live.account_sync import AccountSynchronizer
+from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
+from core.live.after_close import AfterCloseRunner
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
-from core.live.notify.base import NotifyLevel
+from core.live.notify.base import notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.risk.risk_config import RiskConfig
@@ -26,7 +26,7 @@ from core.live.strategy_guard import resolve_hook_timing, verify_strategies
 from core.managers.base.position_manager import BasePositionManager
 from core.models import BaseAccount, BaseOrder, BaseQuote, ExecutionReport
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook, PositionType
+from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
 
 """
 LiveTrader：實盤引擎本體
@@ -43,6 +43,25 @@ LiveTrader：實盤引擎本體
 （不然是帶著錯誤部位交易）、守門要在批次曝險之前（不然被擋的單還佔著額度）、
 保留資金要在風控之前（不然風控算的是一個拿不到的金額）。
 """
+
+
+def position_value(account: BaseAccount) -> float:
+    """
+    未平倉部位的帳面金額（開倉價 × 數量）
+
+    **口徑是開倉成本不是即時市值**：本地帳沒有即時報價，硬要取市值就得在每個
+    呼叫點各查一次行情，而帳務類限流只有 25 次／5 秒。總權益因此會落後市場，
+    但它只用在額度與占用這類「分母」上——分母漏掉整批持倉（本函式修掉的那個
+    問題）會讓超配變成通過，落後一段行情不會。
+    """
+
+    return float(
+        sum(
+            position.volume * position.price
+            for position in account.positions
+            if not position.is_closed
+        )
+    )
 
 
 @dataclass
@@ -65,6 +84,9 @@ class StrategyContext:
     # 把一張委託換算成金額（風控與資金保留都要用）。
     # 計價單位是市場特性（張要乘 1000 股、口要乘保證金），故由外部注入
     calculate_notional: Optional[Callable[[BaseOrder], float]] = None
+    # 把「已成交的一筆」還原成訂單物件餵給 `PositionManager`。
+    # 訂單型別同樣是市場特性（期貨要 product／expiry），故一併由外部注入
+    build_filled_order: Optional[FilledOrderBuilder] = None
 
     @property
     def name(self) -> str:
@@ -186,6 +208,27 @@ class LiveTrader:
         # 而排程需要一個退出碼才分得出「今天剛出事」與「跑完了」
         self.last_reconcile: Optional[Any] = None
 
+        # 盤後作業。**獨立一個類別**：它與送單段落沒有共用狀態，
+        # 自己 connect／close，`run.py` 也是走完全獨立的分支
+        self.after_close: AfterCloseRunner = AfterCloseRunner(
+            data_feeds=[context.data_feed for context in contexts],
+            broker=broker,
+            order_manager=order_manager,
+            account_sync=account_sync,
+            reconciler=reconciler,
+            reporter=self.reporter,
+            mode_state=mode_state,
+            dao=dao,
+            run_id=run_id,
+            notifier=notifier,
+            now_provider=now_provider,
+        )
+
+        # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。
+        # **預設 True**：只有檢查實際判定為休市才會是 False，
+        # 預設 False 會讓沒跑過 `prepare()` 的呼叫端誤以為今天休市
+        self.is_trading_day: bool = True
+
     # === 主流程 ===
     def run(self, timing: ExecutionTiming) -> None:
         """
@@ -208,6 +251,10 @@ class LiveTrader:
 
         try:
             self.prepare()
+
+            if not self.is_trading_day:
+                logger.warning("今天不是交易日，本段落不進入送單路徑")
+                return
 
             if not self._can_submit_any():
                 logger.warning(
@@ -241,11 +288,27 @@ class LiveTrader:
         verify_strategies([context.strategy for context in self.contexts])
 
         today: datetime.date = self._now().date()
+
+        # 休市日不進送單路徑；判不出來一律拒絕啟動（`is_market_open()` 會拋）
+        self.is_trading_day = self._verify_trading_day(today)
+        if not self.is_trading_day:
+            return
+
+        # 歷史資料沒更新到前一個交易日就拒絕啟動：策略會拿舊資料算出訊號，
+        # 而那條路徑不會有任何錯誤
+        for context in self.contexts:
+            context.data_feed.verify_data_freshness(today)
+
         self.order_manager.recover(today)
 
         positions: List[Any] = self.broker.get_positions()
         self.account_sync.rebuild_from_broker(positions)
         self._refresh_capital()
+
+        # 額度總量要在有帳務之後才驗得動（`build_live_trader()` 當下還沒連線），
+        # 且要在對帳之前——超配就不該讓這個段落繼續往下走
+        self.allocator.verify_quota(self._account_equity())
+        self._check_daily_loss()
 
         self.last_reconcile = self.reconciler.check(positions)
 
@@ -390,7 +453,7 @@ class LiveTrader:
     def _preprocess(
         self, context: StrategyContext, orders: List[BaseOrder], stage: str
     ) -> List[BaseOrder]:
-        """方向白名單 ＋ 決定性排序；與回測共用同一份實作"""
+        """方向白名單 ＋ 持倉檔數上限 ＋ 決定性排序；與回測共用同一份實作"""
 
         allowed = order_preprocess.get_allowed_directions(
             context.strategy.allowed_directions, context.strategy.position_type
@@ -398,7 +461,92 @@ class LiveTrader:
         valid: List[BaseOrder] = order_preprocess.validate_orders(
             orders, stage, allowed
         )
-        return order_preprocess.sort_orders(valid)
+        sorted_orders: List[BaseOrder] = order_preprocess.sort_orders(valid)
+
+        # 只擋開倉，與回測一致（`Backtester` 也只在開倉分支呼叫）。
+        # **排序之後才截斷**：先排序才知道超額時該留下哪幾張
+        if stage == "open":
+            return self._apply_max_holdings(context, sorted_orders)
+        return sorted_orders
+
+    def _apply_max_holdings(
+        self, context: StrategyContext, orders: List[BaseOrder]
+    ) -> List[BaseOrder]:
+        """
+        逐單套用持倉檔數上限
+
+        **未終結的委託也要佔名額**：回測在同一根 bar 內逐單成交，持倉檔數會即時
+        增加；實盤是非同步的，一批 8 張單送出時全部尚未成交，只看持倉的話整批
+        都會放行——`max_holdings` 等於沒有設。
+
+        已持有或已掛單的標的不佔新名額：那是加碼，與 `get_position_count()`
+        「同一檔加碼多次只算一檔」的檔數語意一致。
+        """
+
+        if context.strategy.max_holdings is None:
+            return orders
+
+        occupied: Set[str] = self._occupied_symbols(context)
+        kept: List[BaseOrder] = []
+        for order in orders:
+            if order.symbol in occupied:
+                kept.append(order)
+                continue
+
+            if not order_preprocess.check_max_holdings(
+                order, context.strategy.max_holdings, len(occupied)
+            ):
+                self._write_max_holdings_event(context, order)
+                continue
+
+            occupied.add(order.symbol)
+            kept.append(order)
+        return kept
+
+    def _occupied_symbols(self, context: StrategyContext) -> Set[str]:
+        """本策略已經佔住名額的標的：未平倉部位 ＋ 尚未終結的委託"""
+
+        symbols: Set[str] = {
+            position.symbol
+            for position in context.account.positions
+            if not position.is_closed
+        }
+        symbols.update(
+            ticket.order.symbol
+            for ticket in self.order_manager.tickets.values()
+            if ticket.strategy_name == context.name
+            and ticket.order is not None
+            and not ticket.is_terminal
+        )
+        return symbols
+
+    def _write_max_holdings_event(
+        self, context: StrategyContext, order: BaseOrder
+    ) -> None:
+        """
+        被檔數上限剔除的開倉單要留下紀錄
+
+        **不沿用回測的 `rejected_max_holdings` 事件計數 key**：那是回測報表的欄位名，
+        實盤沒有對應的計數器，兩邊硬共用一個名字只會讓報表欄位變得模稜兩可。
+        """
+
+        message: str = (
+            f"{order.symbol} 開倉單超過持倉檔數上限 "
+            f"{context.strategy.max_holdings}，已剔除"
+        )
+        logger.warning(f"[Max Holdings] {context.name}：{message}")
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": context.name,
+                "severity": "WARNING",
+                "category": "MAX_HOLDINGS",
+                "symbol": order.symbol,
+                "client_order_id": order.client_order_id,
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
 
     # === 跨策略 ===
     def apply_cross_checks(
@@ -592,7 +740,7 @@ class LiveTrader:
             self.order_manager.cancel_open_orders()
             self.drain_until(window, "drain_end")
             self._release_all_remaining()
-            self.write_snapshots()
+            self.write_account_snapshots()
         except Exception as exc:
             logger.opt(exception=True).error(f"段落收尾失敗：{exc}")
         finally:
@@ -608,8 +756,13 @@ class LiveTrader:
             self.allocator.release(name, amount)
         self._reserved_by_order.clear()
 
-    def write_snapshots(self) -> None:
-        """寫入各策略與帳戶層的部位快照；一致與否都要寫"""
+    def write_account_snapshots(self) -> None:
+        """
+        寫入各策略的**帳務**快照；一致與否都要寫
+
+        **不是部位快照**——部位快照由 `Reconciler._write_snapshots()` 寫。
+        兩者寫的是不同的表，名字混在一起會讓人以為這裡已經記了部位。
+        """
 
         today: datetime.date = self._now().date()
         for context in self.contexts:
@@ -619,7 +772,8 @@ class LiveTrader:
                     "strategy_name": context.name,
                     "source": "local",
                     "available_balance": context.account.balance,
-                    "total_equity": context.account.balance,
+                    "total_equity": context.account.balance
+                    + position_value(context.account),
                 }
             )
         self.dao.conn.commit()
@@ -628,200 +782,18 @@ class LiveTrader:
     def run_after_close(self) -> Dict[str, Any]:
         """
         - Description:
-            盤後作業：刷新委託、對帳、回填成本、殘量處理、輸出報表
+            盤後作業；實作在 `AfterCloseRunner`
 
-            **和送單段落分開跑**（`--phase after_close`）：它不送任何新倉單，
-            只把當天發生的事收攏成可稽核的結果，並把「明天要補的事」寫下來。
+            **保留這個方法而不是讓 `run.py` 直接拿 runner**：退出碼由
+            `trader.last_reconcile` 決定，盤後的對帳結果要回填回來。
         - Return:
             - Dict[str, Any]
                 本次盤後作業的摘要（報表路徑、殘量筆數、滑價統計）
         """
 
-        today: datetime.date = self._now().date()
-        logger.info(f"=== 盤後作業開始（{today}）===")
-
-        try:
-            self.broker.connect()
-            self.mode_state.load()
-
-            # 1. 刷新委託狀態：ROD 未成交單在券商端日終自動失效
-            self.expire_open_orders()
-
-            # 2. 對帳與快照
-            positions: List[Any] = self.broker.get_positions()
-            self.account_sync.rebuild_from_broker(positions)
-            self.last_reconcile = self.reconciler.check(positions)
-
-            # 3. 回填券商實際費用（估算值保留，差額是校正成本設定的依據）
-            self.backfill_actual_costs(today)
-
-            # 4. 未成交殘量依政策處理
-            remainders: int = self.handle_unfilled_remainders(today)
-
-            # 5. 報表與滑價
-            reports: Dict[str, Path] = self.reporter.write_daily_reports(today)
-            slippage: Dict[str, float] = self.reporter.summarize_slippage(today)
-
-            return {
-                "reports": reports,
-                "pending_actions": remainders,
-                "slippage": slippage,
-            }
-        finally:
-            self.broker.close()
-            for context in self.contexts:
-                context.data_feed.close()
-            logger.info("=== 盤後作業結束 ===")
-
-    def expire_open_orders(self) -> List[Any]:
-        """
-        - Description:
-            把當日仍未終結的委託標成已撤
-
-            ROD 單在券商端日終自動失效，**本地要跟著標**：不標的話，
-            明天的恢復流程會把它們當成「還在場上」去接管，然後撤一張不存在的單。
-        - Return:
-            - List[Any]
-                被標記的委託
-        """
-
-        self.order_manager.refresh_from_broker()
-        return self.order_manager.expire_unfinished(self._now().date())
-
-    def backfill_actual_costs(self, run_date: datetime.date) -> int:
-        """
-        - Description:
-            以券商的損益明細回填當日成交的實際手續費與稅
-
-            **估算值不覆蓋**：兩者分欄保存，差額才是校正成本設定的依據；
-            併成一欄之後就再也算不出「估得準不準」。
-
-            ⚠️ **券商端的查詢方法與欄位尚未以模擬環境核對**（規劃要求實作前核對）。
-            取不到時只記 warning 並略過——盤後少一次回填不影響部位，
-            而在這裡拋例外會讓報表也產不出來。
-        - Parameters:
-            - run_date: datetime.date
-                交易日
-        - Return:
-            - int
-                成功回填的筆數
-        """
-
-        provider: Optional[Callable[[datetime.date], List[Any]]] = getattr(
-            self.broker, "get_profit_loss_details", None
-        )
-        if provider is None:
-            logger.warning(
-                "券商閘道尚未提供損益明細查詢，本次不回填實際費用；"
-                "成本統計會停留在估算值"
-            )
-            return 0
-
-        try:
-            details: List[Any] = provider(run_date)
-        except Exception as exc:
-            logger.opt(exception=True).warning(f"回填實際費用失敗（略過）：{exc}")
-            return 0
-
-        filled: int = 0
-        for detail in details:
-            seqno: str = str(getattr(detail, "seqno", "") or "")
-            trade_id: str = str(getattr(detail, "trade_id", "") or "")
-            if not seqno or not trade_id:
-                continue
-            self.dao.backfill_fill_costs(
-                seqno,
-                trade_id,
-                float(getattr(detail, "fee", 0.0) or 0.0),
-                float(getattr(detail, "tax", 0.0) or 0.0),
-            )
-            filled += 1
-
-        logger.info(f"回填實際費用 {filled} 筆")
-        return filled
-
-    def handle_unfilled_remainders(self, run_date: datetime.date) -> int:
-        """
-        - Description:
-            未成交殘量的處理政策
-
-            **開倉與出場的處理完全不同**：
-            - **開倉未成交一律放棄**，不追價。追價等於在偏離訊號價的位置建倉，
-              而回測沒有這個行為。
-            - **平倉與停損未成交必須補**：那是預期外的隔夜部位，風險遠大於
-              開倉沒成交。寫一筆 `PENDING` 待辦，由次日開盤段第一件事執行。
-
-            **待辦要有狀態才冪等**：只記「明天要補」而沒有完成標記的話，
-            次日開盤段重跑或崩潰重啟會重複送補平單——而重複的補平單不是多買一點，
-            是直接把部位做反。
-        - Parameters:
-            - run_date: datetime.date
-                交易日
-        - Return:
-            - int
-                新增的待辦筆數
-        """
-
-        created: int = 0
-        for order_row in self.dao.get_orders_by_date(run_date):
-            remainder: int = int(order_row.get("volume") or 0) - int(
-                order_row.get("filled_volume") or 0
-            )
-            if remainder <= 0:
-                continue
-
-            if not self._is_exit_row(order_row):
-                logger.info(
-                    f"開倉單 {order_row['client_order_id']} 殘量 {remainder} 放棄，"
-                    "不追價（追價等於在偏離訊號價的位置建倉）"
-                )
-                continue
-
-            self._record_pending_cover(order_row, remainder, run_date)
-            created += 1
-
-        return created
-
-    def _record_pending_cover(
-        self, order_row: Dict[str, Any], remainder: int, run_date: datetime.date
-    ) -> None:
-        """寫一筆待辦與一則 CRITICAL 事件，並推播"""
-
-        client_order_id: str = str(order_row["client_order_id"])
-        message: str = (
-            f"平倉／停損單 {client_order_id}（{order_row['symbol']}）殘量 {remainder} "
-            "未成交，已成為預期外的隔夜部位；次日開盤段第一件事補平"
-        )
-        logger.error(message)
-
-        self.dao.insert_pending_action(
-            {
-                "action_id": f"{run_date.isoformat()}-{client_order_id}",
-                "strategy_name": order_row["strategy_name"],
-                "symbol": order_row["symbol"],
-                "action": order_row["action"],
-                "position_type": order_row["position_type"],
-                "volume": remainder,
-                "due_date": run_date + datetime.timedelta(days=1),
-                "status": self.dao.ACTION_PENDING,
-                "reason": "平倉單未成交",
-                "source_client_order_id": client_order_id,
-                "created_at": self._now(),
-            }
-        )
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": order_row["strategy_name"],
-                "severity": "CRITICAL",
-                "category": "UNFILLED_EXIT",
-                "symbol": order_row["symbol"],
-                "client_order_id": client_order_id,
-                "message": message,
-                "occurred_at": self._now(),
-            }
-        )
-        self._notify("CRITICAL", "平倉單未成交", message)
+        summary: Dict[str, Any] = self.after_close.run()
+        self.last_reconcile = self.after_close.last_reconcile
+        return summary
 
     def apply_pending_actions(self) -> int:
         """
@@ -907,36 +879,10 @@ class LiveTrader:
             logger.opt(exception=True).error(f"組補平單失敗：{exc}")
             return None
 
-    @staticmethod
-    def _is_exit_row(order_row: Dict[str, Any]) -> bool:
-        """
-        這張委託是不是出場單
-
-        以持倉方向與買賣別推導，與 `order_preprocess.resolve_close_action()` 同一套
-        規則——散在多處會漂移，而漂移的後果是開倉單被當成平倉單去補，
-        那會憑空建出一個新部位。
-        """
-
-        position_type: PositionType = PositionType(str(order_row["position_type"]))
-        return str(order_row["action"]) == (
-            order_preprocess.resolve_close_action(position_type).value
-        )
-
     def _notify(self, level: str, title: str, body: str) -> None:
-        """
-        推播
+        """推播；失敗一律吞掉，監控不可拖垮被監控的東西"""
 
-        **通知失敗不可影響流程**：`BaseNotifier.send()` 自己就吞例外，
-        這裡再包一層是因為 notifier 可能是任何注入進來的東西——
-        監控拖垮被監控的東西是典型反例。
-        """
-
-        if self.notifier is None:
-            return
-        try:
-            self.notifier.send(NotifyLevel(level), title, body)
-        except Exception as exc:
-            logger.opt(exception=True).warning(f"推播失敗（忽略）：{exc}")
+        notify_safely(self.notifier, level, title, body)
 
     # === 內部 ===
     def _can_submit_any(self) -> bool:
@@ -953,17 +899,81 @@ class LiveTrader:
             )
         )
 
+    def _verify_trading_day(self, today: datetime.date) -> bool:
+        """
+        今天是不是交易日
+
+        **各策略的資料源各判一次**：台股與期貨的交易日不必然相同。
+        任何一條判定為休市就整段不送單——同一個行程裡只有一部分市場開市時，
+        分開排程才是正解，硬送會被退單。
+
+        判不出來時 `is_market_open()` 會拋 `TradingCalendarUnavailableError`，
+        **刻意不接住**：官方休市日曆尚未接上，平日只剩券商合約檔一個來源，
+        這時候預設為開市等於在休市日照常送單。
+        """
+
+        for context in self.contexts:
+            if not context.data_feed.is_market_open(today):
+                logger.warning(f"{context.name} 的資料源判定 {today} 非交易日")
+                return False
+        return True
+
+    def _account_equity(self) -> float:
+        """帳戶總權益：可用餘額 ＋ 持倉占用；與批次曝險檢查用的是同一個口徑"""
+
+        return self.allocator.available_balance + sum(self.allocator.used.values())
+
+    def _check_daily_loss(self) -> None:
+        """
+        段落開始前的虧損檢查：逐策略降級 ＋ 帳戶層降級
+
+        **放開盤前不放段落結束**：開盤前就發現昨天虧太多，這個段落直接不送新倉單；
+        放在結束才判等於本段落已經白送一輪。
+
+        ⚠️ **目前恆為不觸發，缺的是輸入不是接線**：`prepare()` 走到這裡時，帳戶是剛由
+        `AccountSynchronizer._restore_positions()` 以**原始開倉價**重建的，未實現損益
+        因此是 0；而 `OrderManager.recover()` 只接管未終結的委託、不回放已成交的回報，
+        本段落之前的已實現損益也不在這個行程的 `trade_records` 裡。
+
+        **刻意留著這段接線而不是拿掉**：判定與降級的路徑本身是對的，缺的只是損益來源。
+        日頻模式下三個段落是三個獨立行程，本地帳每次都從零開始——要真的擋得住昨天的
+        虧損，得等盤中事件迴圈讓帳戶持續收到成交回報，或改由帳戶快照比對日內變動。
+        """
+
+        total_loss: float = 0.0
+        for context in self.contexts:
+            loss: float = self._strategy_loss(context)
+            total_loss += loss
+            self.risk_manager.check_daily_loss(
+                context.name, loss, context.account.init_capital
+            )
+
+        self.risk_manager.check_account_daily_loss(total_loss, self._account_equity())
+
+    @staticmethod
+    def _strategy_loss(context: StrategyContext) -> float:
+        """
+        本策略目前的虧損金額（正數表示虧損）：已實現 ＋ 未實現
+
+        **一律取本地帳**（與回測同一套算法），不取券商快照：對帳不一致本身
+        會另外觸發降級，兩個來源在那個時候會給出不同的答案。
+        """
+
+        account: BaseAccount = context.account
+        account.update_realized_pnl()
+        unrealized: float = sum(
+            position.unrealized_pnl
+            for position in account.positions
+            if not position.is_closed
+        )
+        return -(account.realized_pnl + unrealized)
+
     def _refresh_capital(self) -> None:
         """刷新帳戶可用餘額與各策略的持倉占用；段落內不再逐單查帳務"""
 
         snapshot: Any = self.broker.get_account()
         used: Dict[str, float] = {
-            context.name: sum(
-                position.volume * position.price
-                for position in context.account.positions
-                if not position.is_closed
-            )
-            for context in self.contexts
+            context.name: position_value(context.account) for context in self.contexts
         }
         self.allocator.refresh(snapshot.available_balance, used)
 

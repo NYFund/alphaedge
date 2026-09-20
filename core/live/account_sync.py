@@ -1,5 +1,5 @@
 import datetime
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -37,6 +37,41 @@ from core.utils import Action, PositionType
 會把真正的 bug（例如回報漏接）蓋掉——蓋掉之後明天還會再發生一次。
 """
 
+# 把「已成交的一筆」還原成訂單物件。**訂單型別是市場特性**：股票是 `StockOrder`、
+# 期貨是 `FuturesOrder`，而期貨還要拆出 product／expiry。本層不做市場分派
+# （`check_layer_deps.py` 的市場語意洩漏檢查只放行 `factory.py`），由組裝層注入。
+#
+# 參數順序：`(symbol, date, action, position_type, price, volume)`
+FilledOrderBuilder = Callable[
+    [str, Union[datetime.date, datetime.datetime], Action, PositionType, float, int],
+    BaseOrder,
+]
+
+
+def build_stock_order(
+    symbol: str,
+    date: Union[datetime.date, datetime.datetime],
+    action: Action,
+    position_type: PositionType,
+    price: float,
+    volume: int,
+) -> BaseOrder:
+    """
+    股票版的還原建構器；**同時是未注入時的預設值**
+
+    預設留在這裡只為了讓直接建構同步器的呼叫端（測試、單一股票策略）不必逐一注入。
+    `build_live_trader()` 一律會依市場注入正確的建構器，正式路徑不依賴這個預設。
+    """
+
+    return StockOrder(
+        stock_id=symbol,
+        date=date,
+        action=action,
+        position_type=position_type,
+        price=price,
+        volume=volume,
+    )
+
 
 class AccountSynchronizer:
     """
@@ -53,6 +88,7 @@ class AccountSynchronizer:
         ledger: PositionAttributionLedger,
         dao: LiveTradeDAO,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        order_builders: Optional[Dict[str, FilledOrderBuilder]] = None,
     ) -> None:
         """
         - Description:
@@ -66,12 +102,20 @@ class AccountSynchronizer:
                 實盤紀錄庫（用來由委託反查策略）
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
+            - order_builders: Optional[Dict[str, FilledOrderBuilder]]
+                `{策略名: 還原訂單的建構器}`；未提供的策略退回股票訂單
         """
 
         self.position_managers: Dict[str, BasePositionManager] = position_managers
         self.ledger: PositionAttributionLedger = ledger
         self.dao: LiveTradeDAO = dao
         self._now: Callable[[], datetime.datetime] = now_provider
+        self.order_builders: Dict[str, FilledOrderBuilder] = order_builders or {}
+
+    def _builder(self, strategy_name: str) -> FilledOrderBuilder:
+        """取得該策略的還原建構器；未注入時退回股票版"""
+
+        return self.order_builders.get(strategy_name, build_stock_order)
 
     # === 運行中：以回報為準 ===
     def apply_fill(
@@ -105,7 +149,7 @@ class AccountSynchronizer:
 
         manager: BasePositionManager = self.position_managers[name]
         direction: PositionType = self._resolve_direction(name, report)
-        order: BaseOrder = self._to_order(report, direction)
+        order: BaseOrder = self._to_order(name, report, direction)
 
         if self._is_closing(order):
             manager.close_position(order)
@@ -148,23 +192,29 @@ class AccountSynchronizer:
             return PositionType.LONG
         return PositionType.SHORT
 
-    @staticmethod
-    def _to_order(report: ExecutionReport, direction: PositionType) -> BaseOrder:
+    def _to_order(
+        self, strategy_name: str, report: ExecutionReport, direction: PositionType
+    ) -> BaseOrder:
         """
         把成交回報組回一張「已成交的訂單」餵給 `PositionManager`
+
+        **訂單型別要跟著策略的商品走**：`FuturesPositionManager.open_position()` 會讀
+        `order.contract_id` 與 `order.product`，而 `StockOrder` 兩個都沒有——
+        餵錯型別的話，期貨策略的第一筆成交就會 `AttributeError`，
+        而那個訊息完全看不出問題出在帳戶同步器。
 
         **成本在這裡只有估算值**：成交回報不帶手續費與稅，盤中先用 cost model 估，
         盤後再以券商的損益明細回填實際值並記錄差額——那個差額是校正成本設定的
         唯一依據。
         """
 
-        return StockOrder(
-            stock_id=report.symbol,
-            date=report.ts,
-            action=report.action,
-            position_type=direction,
-            price=report.price,
-            volume=report.volume,
+        return self._builder(strategy_name)(
+            report.symbol,
+            report.ts,
+            report.action,
+            direction,
+            report.price,
+            report.volume,
         )
 
     @staticmethod
@@ -222,7 +272,9 @@ class AccountSynchronizer:
                     )
                 continue
 
-            self._restore_positions(manager, lots, (balances or {}).get(name))
+            self._restore_positions(
+                manager, lots, (balances or {}).get(name), self._builder(name)
+            )
 
         logger.info(f"由歸屬帳重建本地部位：{rebuilt}")
         return rebuilt
@@ -232,6 +284,7 @@ class AccountSynchronizer:
         manager: BasePositionManager,
         lots: List[Dict[str, object]],
         balance: Optional[float],
+        builder: FilledOrderBuilder,
     ) -> None:
         """
         把 lot 還原成部位，**期間停用餘額檢查**
@@ -245,17 +298,20 @@ class AccountSynchronizer:
         manager.account.balance = float("inf")
         try:
             for lot in lots:
-                manager.open_position(AccountSynchronizer._lot_to_order(lot))
+                manager.open_position(AccountSynchronizer._lot_to_order(lot, builder))
         finally:
             manager.account.balance = original if balance is None else balance
 
     @staticmethod
-    def _lot_to_order(lot: Dict[str, object]) -> BaseOrder:
+    def _lot_to_order(lot: Dict[str, object], builder: FilledOrderBuilder) -> BaseOrder:
         """
         把一筆 lot 還原成開倉訂單
 
         **原始開倉日取自 lot 表**。推不出來時會落到啟動日，那會讓持有天數
         與當沖判定都算錯，故 lot 表本身就要記住它。
+
+        **`live_position_lot` 只記 symbol**，期貨的 product／expiry 由建構器自己
+        從契約代號拆回來（`split_contract_id()`），不在這一層做市場判斷。
         """
 
         open_date: object = lot["open_date"]
@@ -266,11 +322,11 @@ class AccountSynchronizer:
         )
         direction: PositionType = PositionType(str(lot["direction"]))
 
-        return StockOrder(
-            stock_id=str(lot["symbol"]),
-            date=parsed,
-            action=Action.BUY if direction is PositionType.LONG else Action.SELL,
-            position_type=direction,
-            price=float(lot["open_price"]),
-            volume=int(lot["volume"]),
+        return builder(
+            str(lot["symbol"]),
+            parsed,
+            Action.BUY if direction is PositionType.LONG else Action.SELL,
+            direction,
+            float(lot["open_price"]),
+            int(lot["volume"]),
         )
