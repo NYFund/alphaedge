@@ -12,6 +12,15 @@ RiskConfig：風控門檻
 """
 
 
+# 資金額度的安全係數：Σ 各策略額度不得超過帳戶總權益 × 它。
+#
+# **與 `RiskConfig.account_exposure_ratio` 是同一個值**，故只定義一次。
+# 規劃原本把它放 `core/config/schema.py`，但那個檔是**資料庫結構**
+# （分庫檔名、表名），放一個營運參數進去會讓「改門檻」與「改 schema」
+# 混在同一個檔案的變更歷史裡；而且定義兩次必然漂移。
+CAPITAL_SAFETY_RATIO: float = 0.95
+
+
 # 全域上限。**這一份不可由策略覆寫**，改它要有人明確決定並留下 commit。
 #
 # 用純字典而不是另一個 `RiskConfig` 實例：後者會陷入雞生蛋——建構它時
@@ -68,7 +77,7 @@ class RiskConfig:
     # === 帳戶層 ===
     account_daily_loss_ratio: float = 0.03  # 帳戶當日虧損 → 全體 REDUCE_ONLY
     # 帳戶總曝險上限；與 `CapitalAllocator` 的安全係數同一個值
-    account_exposure_ratio: float = 0.95
+    account_exposure_ratio: float = CAPITAL_SAFETY_RATIO
 
     def __post_init__(self) -> None:
         """建立時就驗證，不等到盤中第一次拒單才發現門檻設錯"""
