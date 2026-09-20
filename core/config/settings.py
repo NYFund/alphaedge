@@ -1,6 +1,8 @@
 import datetime
 import os
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -177,6 +179,95 @@ DDB_PASSWORD: str | None = os.getenv("DDB_PASSWORD")
 #
 API_KEY: str | None = os.getenv("API_KEY")
 API_SECRET_KEY: str | None = os.getenv("API_SECRET_KEY")
+
+# 下單憑證（CA）：正式環境下單前必須 `activate_ca()`，模擬環境預設不啟用。
+#
+# **憑證檔放專案目錄以外**（例如 `~/.alphaedge/ca/`）：放在 repo 內遲早會被
+# `git add -A` 掃進版控，也會被複製進容器映像。這裡只存路徑，檔案本身不歸專案管。
+#
+# 缺值時為 `None` 而不在 import 期拋出：`core.config` 是全專案的共用入口，
+# 沒有憑證的機器（CI、只跑回測的開發機）連 import 都會失敗，
+# 錯誤訊息還與憑證無關。真正要下單的地方呼叫 `require_shioaji_ca()`
+# （理由同 `schema.require_tick_db_path()`）
+SHIOAJI_CA_PATH: Optional[str] = os.getenv("SHIOAJI_CA_PATH")
+SHIOAJI_CA_PASSWORD: Optional[str] = os.getenv("SHIOAJI_CA_PASSWORD")
+
+# 身分證字號；一張憑證對應多個帳號時，`activate_ca()` 才需要指定
+SHIOAJI_PERSON_ID: Optional[str] = os.getenv("SHIOAJI_PERSON_ID")
+
+
+def require_shioaji_ca() -> Tuple[Path, str]:
+    """
+    - Description:
+        取得 CA 憑證路徑與密碼；任一未設定、或憑證檔不存在時當場拋出
+
+        **不回傳 None 讓呼叫端自己判斷**：`activate_ca()` 拿到空路徑時的錯誤訊息
+        指不到真正的原因，而這是正式下單前的最後一道設定檢查。
+    - Return:
+        - Tuple[Path, str]
+            憑證檔路徑與密碼
+    - Raise:
+        - RuntimeError
+            `.env` 缺少 `SHIOAJI_CA_PATH`／`SHIOAJI_CA_PASSWORD`，或憑證檔不存在
+    """
+
+    if not SHIOAJI_CA_PATH or not SHIOAJI_CA_PASSWORD:
+        raise RuntimeError(
+            "環境變數 SHIOAJI_CA_PATH／SHIOAJI_CA_PASSWORD 未設定，無法啟用下單憑證；"
+            "請在 .env 補上（憑證檔請放專案目錄以外，例如 ~/.alphaedge/ca/）"
+        )
+
+    ca_path: Path = Path(SHIOAJI_CA_PATH).expanduser().resolve()
+    if not ca_path.is_file():
+        raise RuntimeError(f"CA 憑證檔不存在：{ca_path}")
+
+    return (ca_path, SHIOAJI_CA_PASSWORD)
+
+
+# -----------------------------------------------------------------------
+# === Live Trading ===
+# -----------------------------------------------------------------------
+#
+# **刻意不提供 `ALPHAEDGE_LIVE_PRODUCTION` 這類環境變數**：正式環境只能由命令列
+# `--production --confirm-production` 開啟。放進 `.env` 的旗標會留在機器上，
+# 於是某天排程默默連到正式環境下單，而那一刻沒有任何人在看。
+#
+# 實盤整份流程由時點驅動（08:30 開盤段／13:20 取快照／13:25 送單／15:00 盤後），
+# 時間一律用 `Asia/Taipei` 的 aware datetime，**不要用 naive 的 `datetime.now()`**：
+# 主機時區是 UTC 而程式讀本地 naive 時間時，尾盤段會整段跑在錯的時刻，
+# 而且不會有任何錯誤訊息。容器與排程環境另外設 `TZ=Asia/Taipei`
+LIVE_TIMEZONE_NAME: str = "Asia/Taipei"
+
+
+def get_live_timezone() -> ZoneInfo:
+    """
+    - Description:
+        取得實盤用時區
+
+        **刻意不在模組層級就建好 `ZoneInfo` 物件**：精簡的容器映像沒裝 tzdata 時
+        `ZoneInfo()` 會拋 `ZoneInfoNotFoundError`，而本模組被全專案 import，
+        等於連回測都啟動不了。
+    - Return:
+        - ZoneInfo
+            台北時區
+    """
+
+    return ZoneInfo(LIVE_TIMEZONE_NAME)
+
+
+def now_live() -> datetime.datetime:
+    """取得實盤用的當下時間（台北時區的 aware datetime）"""
+
+    return datetime.datetime.now(tz=get_live_timezone())
+
+
+# 事件通知管道（Telegram 為第一階段唯一實作的通道）。
+#
+# 缺值時退化為不推播，但**啟動時要 log 警告並寫進 `live_run`**，不可靜默——
+# 「以為有告警其實沒有」比「知道沒有告警」危險：前者會讓人放心把程式丟著跑
+LIVE_NOTIFY_CHANNEL: Optional[str] = os.getenv("ALPHAEDGE_LIVE_NOTIFY_CHANNEL")
+LIVE_NOTIFY_TOKEN: Optional[str] = os.getenv("ALPHAEDGE_LIVE_NOTIFY_TOKEN")
+LIVE_NOTIFY_TARGET: Optional[str] = os.getenv("ALPHAEDGE_LIVE_NOTIFY_TARGET")
 
 # -----------------------------------------------------------------------
 # === API list for crawling tick data ===

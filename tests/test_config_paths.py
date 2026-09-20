@@ -59,6 +59,9 @@ def test_artifact_roots_live_outside_core(name: str) -> None:
         "PIPELINE_LOGS_DIR_PATH",
         "BACKTEST_LOGS_DIR_PATH",
         "BACKTEST_RESULT_DIR_PATH",
+        "LIVE_RESULT_DIR_PATH",
+        "LIVE_KILL_SWITCH_PATH",
+        "TW_TRADING_DB_PATH",
         "DOWNLOADS_METADATA_DIR_PATH",
     ],
 )
@@ -150,3 +153,32 @@ def test_config_facade_exposes_all_three_modules() -> None:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_live_result_dir_is_a_subdirectory_of_results() -> None:
+    """
+    實盤日報要有自己的一層，**不可等於回測結果根目錄**
+
+    回測結果直接放在 `RESULTS_DIR_PATH/<策略名>/`，那裡同時是回歸雙線的比對基準。
+    實盤與每日 parity 比對如果也寫進同一層，單日結果會蓋掉 baseline，
+    `run_regression.sh` 就失去意義了——而且是安靜地失去。
+    """
+
+    assert config.LIVE_RESULT_DIR_PATH != config.RESULTS_DIR_PATH
+    assert config.LIVE_RESULT_DIR_PATH.parent == config.RESULTS_DIR_PATH
+    assert config.LIVE_RESULT_DIR_PATH != config.BACKTEST_RESULT_DIR_PATH
+
+
+def test_trading_db_is_separate_from_research_dbs() -> None:
+    """
+    交易紀錄獨立一庫
+
+    研究資料重跑爬蟲就回來，交易紀錄不能重建。併庫之後，任何一次
+    「砍掉重建研究庫」都會連委託與成交一起帶走。
+    """
+
+    assert config.TW_TRADING_DB_PATH not in (
+        config.TW_STOCK_DB_PATH,
+        config.TW_FUTURES_DB_PATH,
+    )
+    assert config.TW_TRADING_DB_PATH.parent == config.DATABASE_DIR_PATH
