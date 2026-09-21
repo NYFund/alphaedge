@@ -1,7 +1,1 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(.venv/bin/python scripts/fix_chip_margin_stale_batches.py:*)"
-    ]
-  }
-}
+{}
