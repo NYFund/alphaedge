@@ -103,7 +103,7 @@
 - **相依**：S3。
 
 > **🔄 進度（2026-09-21）**
-> - 已完成：`actions/setup-python` 換成 `astral-sh/setup-uv@v10`，並把 uv 版本釘在 `0.12.17`（與本機相同）；Python 版本改由 `.python-version` 決定。安裝改為 `uv sync --locked --extra dev`，其餘步驟都加上 `uv run`。本機依 CI 順序逐步執行：除下述既有問題外全數通過（`not slow` 1982 passed、SHORT 回歸 6 passed）；`uv lock --check` 在 lock 過期時會提示重新 lock。
+> - 已完成：`actions/setup-python` 換成 `astral-sh/setup-uv@v10.1.0`（第一次寫成 `@v10`，CI 在 Set up job 就失敗：setup-uv 不發佈浮動主版本 tag），並把 uv 版本釘在 `0.12.17`（與本機相同）；Python 版本改由 `.python-version` 決定。安裝改為 `uv sync --locked --extra dev`，其餘步驟都加上 `uv run`。本機依 CI 順序逐步執行：除下述既有問題外全數通過（`not slow` 1982 passed、SHORT 回歸 6 passed）；`uv lock --check` 在 lock 過期時會提示重新 lock。
 > - 未完成：push 後在 GitHub Actions 上看到結果，以及「故意讓 lock 過期」的 CI 端驗證。
 > - **既有問題，與本工作無關**：`main` 最近三次 CI（2026-09-20～21）都紅在「API 死介面檢查」，原因是 `FuturesMarginAPI.calculate_stock_futures_maintenance_margin` 既沒有呼叫點也沒有測試。把本工作的改動 stash 掉之後照樣紅。2026-09-21 決定補測試：`tests/test_api_public_interfaces.py` 新增 `test_calculate_stock_futures_maintenance_margin`，另外以一筆獨立的 commit 修正。
 
