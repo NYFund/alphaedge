@@ -36,7 +36,7 @@ AlphaEdge/
 
 ## 為什麼要有這條線
 
-產物一旦住進 `pip install -e .` 安裝的套件裡，代價會攤在每一個工具的設定上：
+產物一旦住進 editable 安裝的套件裡，代價會攤在每一個工具的設定上：
 `pyproject.toml` 的 `packages.find`、ruff 的 `extend-exclude`、coverage 的 `omit`
 都得各維護一份排除清單。
 

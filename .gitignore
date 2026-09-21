@@ -53,7 +53,7 @@ site/
 *.swp
 
 # Build & Coverage
-# egg-info 由 `pip install -e .` 產生；.coverage 由 pytest --cov 產生。
+# egg-info 由 editable 安裝（`uv sync`）產生；.coverage 由 pytest --cov 產生。
 # ruff 與 pytest 的 cache 目錄會自行寫入 .gitignore 自我排除，不需列在這裡
 *.egg-info/
 .coverage

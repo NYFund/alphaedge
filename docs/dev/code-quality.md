@@ -9,18 +9,17 @@
 
 | 項目 | 檔案 | 作用 |
 |------|------|------|
-| 套件定義 | `pyproject.toml` `[project]` | `pip install -e .` 後任意目錄可 `import core` |
+| 套件定義 | `pyproject.toml` `[project]` | 唯一的相依宣告；`uv sync` 以 editable 安裝後任意目錄可 `import core` |
 | Lint／格式 | `pyproject.toml` `[tool.ruff]` | 執行 `CLAUDE.md` §2.5（import 排序）、§2.10（行寬 88、雙引號） |
 | CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"` |
 | 本機防線 | `.pre-commit-config.yaml` | commit 前先跑一次同一組檢查（需自行 `pre-commit install`） |
 
-`requirements.txt` 為鎖定版本的完整清單，末行 `-e .` 讓同一份檔案也能裝上專案本身；Docker build 用同一份（建置時會濾掉 `-e` 那行）。
+`uv.lock` 由 `uv lock` 從 `pyproject.toml` 解析產生，鎖定整棵相依樹；本機、CI（`--locked`）與 Docker build（`--frozen`）都從同一份安裝。
 
 ### 常用指令
 
 ```bash
-python -m pip install -r requirements.txt   # 相依 + 專案本身
-python -m pip install -e ".[dev]"           # 追加 pytest / pytest-cov / ruff
+uv sync --extra dev                 # 相依 + 專案本身 + pytest / pytest-cov / ruff
 
 ruff check .                        # lint
 ruff format .                       # 格式化
@@ -35,7 +34,7 @@ pytest                              # 全部（需 data/db/tw_stock.db）
 
 `dolphindb`（tick）、`streamlit`（frontend）、`python-docx`（lab）**刻意不放進主
 `dependencies`**：回測與 ETL 主流程不需要它們。
-需要時以 `pip install -e ".[tick]"` 等方式個別安裝。
+需要時以 `uv sync --extra tick` 等方式個別安裝（要保留 `dev` 時一起列出：`uv sync --extra dev --extra tick`）。
 
 ---
 
@@ -185,7 +184,7 @@ cd /tmp/cisim && env -u API_KEY -u API_SECRET_KEY python -m pytest tests -q -m "
 若 `.venv` 內的檔案帶著 macOS 的 `UF_HIDDEN` 旗標，**CPython ≥3.11 的 `site.addpackage()`
 會靜默略過隱藏的 `.pth`**——editable 安裝因此完全不生效，且沒有任何錯誤訊息。
 
-症狀是 `pip install -e .` 顯示成功，但在 repo 以外的目錄 `import core` 仍然 `ModuleNotFoundError`。
+症狀是 `uv sync` 顯示成功，但在 repo 以外的目錄 `import core` 仍然 `ModuleNotFoundError`。
 檢查與修復：
 
 ```bash

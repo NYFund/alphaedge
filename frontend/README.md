@@ -15,10 +15,10 @@
 
 ## 安裝
 
-本機：先依根目錄 README 裝好 `requirements.txt`，再於專案根目錄補裝 frontend extra：
+本機：在專案根目錄以 uv 補裝 frontend extra（開發時要保留 `dev` 就一起列出：`uv sync --extra dev --extra frontend`）：
 
 ```bash
-python -m pip install -e ".[frontend]"
+uv sync --extra frontend
 ```
 
 Docker 映像**不安裝本專案**：只 COPY `frontend/` 與 `core/backtest/analysis/performance_metrics.py`，

@@ -29,7 +29,7 @@ try:
     from docx.oxml.ns import qn
     from docx.shared import Cm, Inches, Pt, RGBColor
 except ImportError as e:
-    raise SystemExit("請先安裝 python-docx：pip install python-docx\n" + str(e)) from e
+    raise SystemExit("請先安裝 python-docx：uv sync --extra lab\n" + str(e)) from e
 
 # reports/ 與 output/ 是 tsmc_overnight_signal/ 底下的同層姊妹資料夾
 _STRATEGY_DIR = Path(__file__).resolve().parent.parent

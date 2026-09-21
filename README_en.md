@@ -200,29 +200,30 @@ All three run the same code — **pick one and follow it**; you do not need all 
 
 #### Option 1: Local Python (recommended)
 
-**Step 1: Create a virtualenv and install**
+**Step 1: Install uv and create the environment**
+
+Dependencies are managed by [uv](https://docs.astral.sh/uv/): `pyproject.toml` declares them, `uv.lock`
+pins every package to an exact version, and local, CI and Docker all install from the same lock.
 
 macOS / Linux:
 
 ```bash
-python3 -m venv .venv                       # create the virtualenv
-source .venv/bin/activate                   # activate it
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt   # install dependencies and the project itself
+brew install uv          # or: curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync                  # create .venv, install dependencies and the project (Python from .python-version)
+source .venv/bin/activate
 ```
 
-Windows (PowerShell or CMD):
+Windows (PowerShell):
 
 ```powershell
-python -m venv .venv
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+uv sync
 .venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
 ```
 
-The last line of `requirements.txt` is `-e .`, so the same command installs the project too, and
-`core` / `tasks` / `tests` are importable from any directory. Activate the virtualenv in every new
-terminal; run `deactivate` to leave it.
+The project is installed into `.venv` in editable mode, so `core` / `tasks` / `tests` are importable
+from any directory. Activate the virtualenv in every new terminal (run `deactivate` to leave it);
+alternatively prefix commands with `uv run`, e.g. `uv run python run.py ...`.
 
 **Step 2: Run a backtest**
 
@@ -239,7 +240,7 @@ python run.py --strategy MomentumStrategy1
 The frontend packages are not in the base install, so add them once:
 
 ```bash
-python -m pip install -e ".[frontend]"   # one-time
+uv sync --extra frontend   # one-time
 streamlit run frontend/app.py
 ```
 
@@ -316,13 +317,17 @@ cp .env.example .env
 
 ### 4. Developer tools (when changing code)
 
-Inside the Option 1 virtualenv, add the dev extras:
+In the Option 1 environment, add the dev extras:
 
 ```bash
-python -m pip install -e ".[dev]"   # pytest, pytest-timeout, pytest-cov, ruff
+uv sync --extra dev   # pytest, pytest-timeout, pytest-cov, ruff
 ```
 
-Other optional extras: `tick` (DolphinDB tick storage), `lab` (`strategy_lab` report output); the backtest and ETL paths run without them.
+Other optional extras: `frontend` (Streamlit UI), `tick` (DolphinDB tick storage), `lab` (`strategy_lab` report output);
+the backtest and ETL paths run without them.
+
+**`uv sync` makes the environment match exactly what you ask for**: extras not listed on the command are removed.
+To keep several, list them together, e.g. `uv sync --extra dev --extra frontend`, or use `uv sync --all-extras`.
 
 **Lint, format and tests**
 
@@ -337,7 +342,7 @@ pytest                  # full suite (needs data/db/tw_stock.db)
 **Pre-commit checks**: run ruff, the layer-dependency gate and the doc path check automatically before each commit (tests and the API orphan-method check are left to CI).
 
 ```bash
-pip install pre-commit
+uv tool install pre-commit
 pre-commit install       # one-time; installs the git hook
 pre-commit run --all-files
 ```
@@ -440,6 +445,8 @@ AlphaEdge/
 │   ├── clean_pycache.sh/.ps1  # remove __pycache__ and .pyc (macOS/Linux, Windows)
 │   └── manual/                # scripts needing credentials or a database (see its README)
 ├── docker-compose.yml         # compose: core + frontend + shared results volume
+├── pyproject.toml             # dependency declaration (single source) and ruff/pytest config
+├── uv.lock                    # versions resolved by uv (do not edit; run `uv lock` after changing pyproject)
 ├── run.py
 ├── README.md                  # Chinese (source of truth)
 └── README_en.md               # English translation

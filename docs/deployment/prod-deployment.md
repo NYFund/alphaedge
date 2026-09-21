@@ -20,7 +20,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 
 | 項目 | 做法 | 為什麼 |
 |------|------|--------|
-| core 的 Python 相依 | 先照 `requirements.txt` 的鎖定版本裝第三方套件，再 `pip install -e .` 裝本專案 | 與本機、CI 同一種安裝方式；只改原始碼時第一層仍吃快取 |
+| core 的 Python 相依 | 以 uv 照 `uv.lock` 安裝：先 `uv sync --frozen --no-install-project` 裝第三方套件，COPY 原始碼後再 `uv sync --frozen` 裝本專案；環境放在 `/opt/venv` | 與本機、CI 同一份 lock；只改原始碼時第一層仍吃快取；環境不放 `/app`，compose 掛載 `/app` 底下的目錄時不會蓋到它 |
 | editable 安裝 | 必須是 `-e`，不可一般安裝 | `core/config/paths.py` 以 `__file__` 推算專案根目錄，一般安裝會把程式複製進 site-packages，`results/`、`logs/` 就不會落在 `/app` 底下的掛載點 |
 | core 內含 `chromium` | apt 安裝並設 `BROWSER_PATH=/usr/bin/chromium` | 回測報表存 PNG 走 plotly → kaleido 1.x，它不內建瀏覽器，缺了會在報表最後一步失敗（CSV 已寫出、圖全沒有）。`plotly_get_chrome` 下載的 Chrome for Testing 沒有 linux arm64 版本，故用 Debian 套件 |
 | frontend 相依 | 只裝 `frontend/requirements.txt` | 前端映像不安裝本專案，只 COPY `performance_metrics.py` 那條最小鏈 |

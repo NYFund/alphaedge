@@ -2,7 +2,7 @@ import ast
 import re
 import tomllib
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Set
+from typing import Any, Dict, Iterator, List, Optional, Set
 
 import pytest
 
@@ -11,15 +11,16 @@ from core.config.paths import PROJECT_ROOT
 from core.config.settings import NUM_API
 
 """
-設定檔要跟程式對得上：`.env.example`、pyproject、requirements.txt
+設定檔要跟程式對得上：`.env.example`、pyproject、uv.lock
 
 這三份檔案都不會被執行，漂移了也不會有任何錯誤：
 
 - `.env.example` 少列鍵：新人照範本設定後，那個功能安靜地拿到 None。
 - per-file-ignores 指到搬走的路徑：豁免形同失效，設定卻看起來還在
   （`stock_tick_loader.py` 從 `core/pipeline/loaders/` 搬進 `tw/` 之後就是這樣）。
-- pyproject 的相依沒有鎖定版本：`pip install -r requirements.txt` 與 Docker 映像
-  裝到的是沒驗證過的版本，甚至根本沒裝。
+- 改了 pyproject 的相依卻沒重新 `uv lock`：本機 `uv sync` 會悄悄重新解析，
+  裝到的是沒驗證過的版本；Docker 映像以 `--frozen` 照舊 lock 裝，根本沒裝到新相依。
+  CI 的 `uv sync --locked` 也擋得下，但要推上去才知道，本檔讓 pytest 當場就紅。
 
 本檔不連網路、不需要資料庫。
 """
@@ -213,30 +214,55 @@ def test_per_file_ignores_point_to_existing_paths() -> None:
     assert missing == [], f"per-file-ignores 指到不存在的路徑：{missing}"
 
 
-# === requirements.txt ===
-def test_every_pyproject_dependency_is_pinned_in_requirements() -> None:
+# === uv.lock ===
+def normalize_requirement(requirement: str) -> str:
+    """把相依字串正規化成「名稱＋版本條件」，去掉空白，便於與 uv.lock 比對"""
+
+    name: str = canonical_name(requirement)
+    specifier: str = re.split(r"[<>=!~]", requirement, maxsplit=1)[0]
+    return name + requirement[len(specifier) :].split(";")[0].replace(" ", "")
+
+
+def test_uv_lock_matches_pyproject_dependencies() -> None:
     """
-    pyproject 的主相依在 requirements.txt 都要有鎖定版本，且最後一行是 `-e .`
+    uv.lock 記錄的本專案相依，必須與 pyproject 的主相依與各 extra 完全一致
 
-    少了 `-e .`，`pip install -r requirements.txt` 裝完仍無法在任意目錄 import core。
+    uv.lock 的本專案條目（`[package.metadata]` 的 `requires-dist`）是鎖定當下
+    pyproject 宣告的相依；兩邊對不上，代表改了 pyproject 卻沒重新 `uv lock`。
     """
 
-    dependencies: List[str] = load_pyproject()["project"]["dependencies"]
-    lines: List[str] = [
-        line.strip()
-        for line in (PROJECT_ROOT / "requirements.txt")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
-    effective: List[str] = [line for line in lines if line and not line.startswith("#")]
-    pinned: Set[str] = {canonical_name(line) for line in effective if "==" in line}
+    pyproject: Dict[str, Any] = load_pyproject()["project"]
+    declared: Set[str] = {
+        normalize_requirement(requirement) for requirement in pyproject["dependencies"]
+    }
+    for extra, requirements in pyproject["optional-dependencies"].items():
+        declared |= {
+            f"{normalize_requirement(requirement)}[{extra}]"
+            for requirement in requirements
+        }
 
-    unpinned: List[str] = sorted(
-        {canonical_name(dependency) for dependency in dependencies} - pinned
+    lock: Dict[str, Any] = tomllib.loads(
+        (PROJECT_ROOT / "uv.lock").read_text(encoding="utf-8")
     )
+    root: Dict[str, Any] = next(
+        package for package in lock["package"] if package["name"] == pyproject["name"]
+    )
+    locked: Set[str] = set()
+    for entry in root["metadata"]["requires-dist"]:
+        requirement: str = canonical_name(entry["name"]) + entry.get("specifier", "")
+        extra_match: Optional[re.Match] = re.fullmatch(
+            r"extra == '(.+)'", entry.get("marker", "")
+        )
+        locked.add(
+            f"{requirement}[{extra_match.group(1)}]" if extra_match else requirement
+        )
 
-    assert unpinned == [], f"requirements.txt 沒有鎖定這些主相依：{unpinned}"
-    assert effective[-1] == "-e ."
+    assert declared - locked == set(), (
+        f"pyproject 有、uv.lock 沒有（請執行 `uv lock`）：{sorted(declared - locked)}"
+    )
+    assert locked - declared == set(), (
+        f"uv.lock 有、pyproject 沒有（請執行 `uv lock`）：{sorted(locked - declared)}"
+    )
 
 
 # === 實盤設定 ===

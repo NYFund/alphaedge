@@ -141,7 +141,7 @@
 
 ## 8. 環境與重現方式
 
-於專案根目錄（與 `requirements.txt` 同層）：
+於專案根目錄（與 `pyproject.toml` 同層），先以 `uv sync --extra lab` 裝好 python-docx：
 
 ```bash
 # 建議使用專案虛擬環境。**一律用 `-m`**：`strategy_lab` 不在 pyproject 的
@@ -154,7 +154,7 @@
 # .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang en
 ```
 
-依賴與主專案相同（**numpy、pandas、yfinance、plotly、kaleido、python-docx** 等，見倉庫根目錄 `requirements.txt`）。若 `write_image` 失敗，仍會保留 `.html` 互動圖。
+依賴與主專案相同（**numpy、pandas、yfinance、plotly、kaleido、python-docx** 等，見倉庫根目錄 `pyproject.toml`，python-docx 屬 `lab` extra）。若 `write_image` 失敗，仍會保留 `.html` 互動圖。
 
 ---
 

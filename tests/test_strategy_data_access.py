@@ -333,7 +333,7 @@ def test_no_sys_path_injection_anywhere() -> None:
     """
     `sys.path.insert` 全專案應為 0 處
 
-    專案已 `pip install -e .`（CI 亦然），注入全部多餘——更麻煩的是它會
+    專案已以 editable 方式安裝（`uv sync`，CI 亦然），注入全部多餘——更麻煩的是它會
     **遮蔽「沒安裝就跑」的 import 錯誤**：測試在沒裝套件的環境照樣綠，
     直到有人在別的目錄執行才發現。
 

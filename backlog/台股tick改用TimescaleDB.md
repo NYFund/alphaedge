@@ -37,7 +37,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | Phase0-1 | `docker-compose.yml` 新增 TimescaleDB service | `docker-compose.yml`、`.env.example` | `psql` 連線後 `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'` 有值 | ⬜ | 與 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase0-1 共用同一個 service；Docker Desktop 磁碟上限要先調大 |
 | Phase0-2 | 新增 `TICK_DATABASE_URL` 設定 | `core/config/settings.py`、`.env.example`、`tests/test_config_consistency.py` | `pytest tests/test_config_consistency.py` 通過 | ⬜ | 刻意不用 `DATABASE_URL`，理由見步驟詳述 |
-| Phase0-3 | `[tick]` 選用相依改為 `psycopg`＋`connectorx` | `pyproject.toml`、`requirements.txt` | 乾淨 venv 安裝 `.[tick]` 後可 import 兩者 | ⬜ | `dolphindb` 的去留在 Phase5-2 裁示，本步驟先不移除 |
+| Phase0-3 | `[tick]` 選用相依改為 `psycopg`＋`connectorx` | `pyproject.toml`、`uv.lock` | `uv sync --extra tick` 後可 import 兩者 | ⬜ | `dolphindb` 的去留在 Phase5-2 裁示，本步驟先不移除 |
 | Phase1-1 | 建立 `core/db/` 連線層 | `core/db/__init__.py`、`core/db/timescale.py`、`scripts/check_layer_deps.py` | `python scripts/check_layer_deps.py` 通過；`SELECT 1` 可執行 | ⬜ | 相依 Phase0-2；PostgreSQL遷移計畫 Phase1-1 之後在同一目錄擴充 |
 | Phase1-2 | 建表：`stock_tick` hypertable 與 `stock_tick_load_log` | `core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py` | 建表函式重跑兩次不報錯；`timescaledb_information.hypertables` 查得到 | ⬜ | 相依 Phase1-1；schema 詳見〈資料表設計〉 |
 | Phase1-3 | 設定壓縮與壓縮 policy | 同上 | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ⬜ | 相依 Phase1-2 |
@@ -245,11 +245,11 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 - **目的**：寫入要用 psycopg 3 的 `COPY`，讀取要用 ConnectorX。
 - **做法**：
-  - `pyproject.toml` 的 `[project.optional-dependencies]` 改成 `tick = ["psycopg[binary]>=3.2", "connectorx>=0.4"]`，`requirements.txt` 鎖定精確版本。
+  - `pyproject.toml` 的 `[project.optional-dependencies]` 改成 `tick = ["psycopg[binary]>=3.2", "connectorx>=0.4"]`，執行 `uv lock` 鎖定精確版本。
   - **`dolphindb` 先搬到另一個 extra `futures-tick`**，不要直接刪。期貨 tick 仍在用它，最終去留在 Phase5-2 裁示。
   - 這兩個套件都是由 tick 模組惰性 import，比照現行 `dolphindb` 的寫法加註解，並把 `[tool.ruff.lint.per-file-ignores]` 那段的 F401 例外換成新模組。
-- **產出**：`pyproject.toml`、`requirements.txt`。
-- **驗證方式**：乾淨 venv 執行 `pip install -e ".[tick]"` 後，`python -c "import psycopg, connectorx"` 成功。
+- **產出**：`pyproject.toml`、`uv.lock`。
+- **驗證方式**：`uv sync --extra tick` 後，`python -c "import psycopg, connectorx"` 成功。
 - **相依**：無。
 
 ---

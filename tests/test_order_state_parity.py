@@ -31,7 +31,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 於是「用的是哪一份」連讀程式碼都看不出來。已刪掉被覆蓋的那行，
 兩份是否同步改由本測試盯住。
 
-**本檔量的是 `requirements.txt` 鎖定的 shioaji 版本**（CI 也裝同一份）。
+**本檔量的是 `uv.lock` 鎖定的 shioaji 版本**（本機、CI、Docker 都裝同一份）。
 shioaji 1.7 起 `OrderState` 改由原生模組提供、不再是 Python Enum——升版時本檔會紅，
 那是在提醒 `order_cb` 的比較前提變了，不是測試寫錯。
 
