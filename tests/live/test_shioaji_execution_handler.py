@@ -406,3 +406,97 @@ def test_recording_failure_does_not_break_the_callback(
 
     events: List[Union[ExecutionReport, OrderStatusEvent]] = drain(event_queue)
     assert len(events) == 1
+
+
+# === 以實測回報釘住欄位名（2026-09-21 台北 13:13，模擬環境）===
+# 帳號相關欄位換成假值；其餘欄位名、型別與結構照抄實際推播
+REAL_STOCK_ORDER_EVENT: Dict[str, Any] = {
+    "contract": {
+        "code": "2330",
+        "currency": "TWD",
+        "exchange": "TSE",
+        "security_type": "STK",
+    },
+    "event_id": "v1:SO:A1EGn1NBh:BOnXGyd:2",
+    "operation": {"op_code": "00", "op_msg": "", "op_type": "New"},
+    "order": {
+        "account": {
+            "account_id": "0000000",
+            "account_type": "S",
+            "broker_id": "XXXX",
+            "person_id": "",
+            "signed": True,
+        },
+        "action": "Buy",
+        "custom_field": "",
+        "id": "0087E4",
+        "order_cond": "Cash",
+        "order_lot": "Common",
+        "order_type": "ROD",
+        "ordno": "0EEC64",
+        "price": 2215.0,
+        "price_type": "LMT",
+        "quantity": 1,
+        "seqno": "0087E4",
+    },
+    "status": {
+        "cancel_quantity": 0,
+        "exchange_ts": 1789967612.079455,
+        "id": "0087E4",
+        "modified_price": 0,
+        "order_quantity": 1,
+        "web_id": "137",
+    },
+}
+
+
+def test_real_order_event_fields_are_parsed() -> None:
+    """
+    欄位名原本取自文件，**這條以實際推播核對**
+
+    parser 取值走 `.get()`，欄位名錯了只會靜靜變成空字串——委託序號變空的話，
+    成交回報就對不回委託，而那筆成交會被記成「無法歸屬」。
+    """
+
+    event = ShioajiExecutionHandler(queue.Queue()).parse_order_event(
+        REAL_STOCK_ORDER_EVENT
+    )
+
+    assert event.broker_seqno == "0087E4"
+    assert event.broker_order_id == "0EEC64"
+    assert (event.op_type, event.op_code) == ("New", "00")
+    assert event.symbol == "2330"
+
+
+def test_real_exchange_ts_is_seconds_not_nanoseconds() -> None:
+    """
+    委託回報的 `exchange_ts` 是**浮點秒**
+
+    與 `Snapshot.ts`（奈秒）不同。兩條路徑的時戳不可共用一套換算：
+    秒當成奈秒會得到 1970 年，奈秒當成秒則是一個遙遠的未來。
+    """
+
+    event = ShioajiExecutionHandler(queue.Queue()).parse_order_event(
+        REAL_STOCK_ORDER_EVENT
+    )
+
+    assert event.exchange_ts is not None
+    assert (event.exchange_ts.year, event.exchange_ts.month, event.exchange_ts.day) == (
+        2026,
+        9,
+        21,
+    )
+    assert (event.exchange_ts.hour, event.exchange_ts.minute) == (13, 13)
+
+
+def test_real_callback_does_not_carry_person_id() -> None:
+    """
+    實際推播的 `person_id` 是空字串
+
+    記下來是因為錄製會把原始訊息整份落地：若哪天券商開始帶身分證字號，
+    錄製檔就成了敏感資料，要跟著改成刮過再存。
+    """
+
+    account: Dict[str, Any] = REAL_STOCK_ORDER_EVENT["order"]["account"]
+
+    assert account["person_id"] == ""

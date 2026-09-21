@@ -48,6 +48,7 @@ class LiveTradeDAO(BaseDAO):
     DEFAULT_DB_PATH: Optional[Path] = TW_TRADING_DB_PATH
 
     # 交易模式的值域；與 `core/live/risk/trading_mode.py` 的狀態機一致
+    END_REASON_CRASHED: str = "CRASHED"  # 非正常結束（上次沒有走到 `finish_run()`）
     MODE_NORMAL: str = "NORMAL"
 
     # 跨日待辦的狀態
@@ -351,6 +352,67 @@ class LiveTradeDAO(BaseDAO):
         )
         self.conn.commit()
 
+    def update_account_mode(self, run_id: str, account_mode: str) -> None:
+        """
+        - Description:
+            即時寫入本次執行的帳戶層交易模式
+
+            **不能等 `finish_run()` 才寫**：崩潰時 `finish_run()` 根本不會被呼叫，
+            那一列的 `account_mode` 會停在插入時的 `NORMAL`，
+            重啟讀回來就是「什麼事都沒發生」——等於靜默解除 halt。
+        - Parameters:
+            - run_id: str
+                本次啟動的識別碼
+            - account_mode: str
+                目前的帳戶層交易模式
+        """
+
+        self.conn.execute(
+            f"UPDATE {LIVE_RUN_TABLE_NAME} SET account_mode = ? WHERE run_id = ?",
+            to_sql_params(account_mode, run_id),
+        )
+        self.conn.commit()
+
+    def mark_crashed_runs(
+        self, current_run_id: str, ended_at: datetime.datetime
+    ) -> List[str]:
+        """
+        - Description:
+            把還沒結束的舊紀錄標記為非正常結束
+
+            `ended_at IS NULL` 只有兩種可能：正在跑的這一次，或是**上次崩潰了**。
+            不標記的話 `get_last_account_mode()` 會跳過那一列（它只讀已結束的），
+            於是崩潰前的降級狀態讀不回來——按下重啟鍵就帶著錯誤部位繼續交易。
+
+            **不動 `account_mode`**：那一欄由 `update_account_mode()` 即時維護，
+            這裡覆寫等於把崩潰當下的模式擦掉。
+        - Parameters:
+            - current_run_id: str
+                本次啟動的識別碼；它自己不算崩潰
+            - ended_at: datetime.datetime
+                標記時間
+        - Return:
+            - List[str]
+                被標記的 `run_id`；空 list 表示上次是正常結束
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT run_id FROM {LIVE_RUN_TABLE_NAME} "
+            "WHERE ended_at IS NULL AND run_id != ?",
+            to_sql_params(current_run_id),
+        ).fetchall()
+        crashed: List[str] = [str(row[0]) for row in rows]
+        if not crashed:
+            return []
+
+        self.conn.execute(
+            f"UPDATE {LIVE_RUN_TABLE_NAME} "
+            "SET ended_at = ?, end_reason = ? WHERE ended_at IS NULL AND run_id != ?",
+            to_sql_params(ended_at, self.END_REASON_CRASHED, current_run_id),
+        )
+        self.conn.commit()
+        return crashed
+
     def get_last_account_mode(self) -> str:
         """
         - Description:
@@ -591,6 +653,28 @@ class LiveTradeDAO(BaseDAO):
             to_sql_params(run_date),
         ).fetchall()
         return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
+
+    def get_risk_events_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            取得某一交易日的所有風控事件
+
+            parity 比對以它歸因「實盤為什麼沒送這張單」——被誰擋下來當下就寫進去了，
+            事後用猜的一定會把跨策略守門與資金排擠混成同一類。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                事件清單，依發生時間排序
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_RISK_EVENT_TABLE_NAME} "
+            "WHERE date(occurred_at) = ? ORDER BY occurred_at, event_id",
+            to_sql_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_RISK_EVENT_TABLE_NAME, rows)
 
     def get_fills_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """

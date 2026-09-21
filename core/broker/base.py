@@ -1,6 +1,8 @@
 import queue
 from abc import ABC, abstractmethod
-from typing import List
+from typing import Any, Callable, List
+
+from loguru import logger
 
 from core.models import (
     BaseOrder,
@@ -12,6 +14,44 @@ from core.models import (
 )
 
 """BaseBroker: 市場與券商皆無關的下單、回報、帳務與行情介面"""
+
+
+class CallbackQueue:
+    """
+    - Description:
+        長得像 `queue.Queue` 但只把東西轉交出去的接收端
+
+        **為了讓「同一個事件 queue」成立而存在**：行情與回報的回呼各自對著自己的
+        `queue.Queue` 呼叫 `put()`，要把兩者匯進一條，最省事的做法就是換掉那兩個
+        queue 物件，而不是改每個回呼。
+
+        `get_nowait()` 一律拋 `Empty`：盤中模式下回報已經改走事件迴圈，
+        `drain_execution_queue()` 再撈一次就會撈到重複的（而且順序也亂了）。
+    """
+
+    def __init__(self, sink: Callable[[Any], None]) -> None:
+        """
+        - Description:
+            建立轉交端
+        - Parameters:
+            - sink: Callable[[Any], None]
+                收到東西時要呼叫的函式
+        """
+
+        self.sink: Callable[[Any], None] = sink
+
+    def put(self, item: Any) -> None:
+        """轉交；**例外吞在這裡**——這是跑在券商執行緒上的回呼路徑"""
+
+        try:
+            self.sink(item)
+        except Exception as exc:
+            logger.opt(exception=True).error(f"事件轉交失敗：{exc}")
+
+    def get_nowait(self) -> Any:
+        """一律視為空：盤中模式下不從這裡撈，避免與事件迴圈重複消化"""
+
+        raise queue.Empty
 
 
 class BaseBroker(ABC):
@@ -156,6 +196,53 @@ class BaseBroker(ABC):
         pass
 
     # === 共用工具 ===
+    def route_events(
+        self,
+        on_quote: Callable[[Any], None],
+        on_execution: Callable[[Any], None],
+    ) -> None:
+        """
+        - Description:
+            把行情與回報導向單一事件接收端（盤中模式）
+
+            骨架只導回報——它是所有閘道都有的。行情訂閱是市場特性，
+            有串流的閘道自己覆寫。
+
+            **導向之後 `drain_execution_queue()` 會一直是空的**：那是刻意的，
+            回報已經改由事件迴圈逐筆消化，兩邊都撈會重複且順序錯亂。
+        - Parameters:
+            - on_quote: Callable[[Any], None]
+                收到一筆行情時呼叫
+            - on_execution: Callable[[Any], None]
+                收到一筆回報時呼叫
+        """
+
+        self.execution_queue = CallbackQueue(on_execution)
+
+    def reconnect(self) -> bool:
+        """
+        - Description:
+            重新建立連線
+
+            **這是有預設實作的 hook，不是抽象方法**：多數閘道「關掉再連一次」
+            就夠了，真正需要退避與每日上限的（Shioaji 的登入額度）才覆寫。
+            宣告成抽象等於對每個新閘道說「重連這件事你得自己想」。
+
+            **本身不做恢復**：重新訂閱、接管委託與對帳要按順序做完才可以恢復
+            送單，那是引擎的責任——閘道層不知道有哪些策略、訂了哪些標的。
+        - Return:
+            - bool
+                是否重新連上
+        """
+
+        self.close()
+        try:
+            self.connect()
+        except Exception as exc:
+            logger.opt(exception=True).error(f"重連失敗：{exc}")
+            return False
+        return self.is_connected()
+
     def drain_execution_queue(self) -> List[ExecutionReport]:
         """
         - Description:

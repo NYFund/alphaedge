@@ -1,6 +1,7 @@
 import datetime
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
@@ -15,9 +16,16 @@ from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
+from core.live.intraday.session_guard import (
+    SessionGuard,
+    cover_action,
+    stops_after_cover,
+)
 from core.live.notify.base import notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
+from core.live.report.parity_checker import ParityChecker
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
 from core.live.risk.trading_mode import TradingMode, TradingModeState
@@ -26,7 +34,12 @@ from core.live.strategy_guard import resolve_hook_timing, verify_strategies
 from core.managers.base.position_manager import BasePositionManager
 from core.models import BaseAccount, BaseOrder, BaseQuote, ExecutionReport
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
+from core.utils import (
+    BarExecutionOrder,
+    DayTradeUncoveredPolicy,
+    ExecutionTiming,
+    LiveHook,
+)
 
 """
 LiveTrader：實盤引擎本體
@@ -136,6 +149,7 @@ class LiveTrader:
         reporter: Optional[LiveReporter] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
         sleep: Callable[[float], None] = time.sleep,
+        parity_checker: Optional[ParityChecker] = None,
     ) -> None:
         """
         - Description:
@@ -175,6 +189,8 @@ class LiveTrader:
                 事件推播；None 時不推播
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
+            - parity_checker: Optional[ParityChecker]
+                訊號 parity 比對器；只在盤後用得到，故直接轉給 `AfterCloseRunner`
             - sleep: Callable[[float], None]
                 等待函式
         """
@@ -222,12 +238,18 @@ class LiveTrader:
             run_id=run_id,
             notifier=notifier,
             now_provider=now_provider,
+            parity_checker=parity_checker,
         )
 
         # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。
         # **預設 True**：只有檢查實際判定為休市才會是 False，
         # 預設 False 會讓沒跑過 `prepare()` 的呼叫端誤以為今天休市
         self.is_trading_day: bool = True
+
+        # 日終強制動作（當沖回補）
+        self.session_guard: SessionGuard = SessionGuard(now_provider)
+        # 每檔最後一筆報價；回補單取價用
+        self._last_quotes: Dict[str, BaseQuote] = {}
 
     # === 主流程 ===
     def run(self, timing: ExecutionTiming) -> None:
@@ -263,7 +285,13 @@ class LiveTrader:
                 )
                 return
 
-            self.submit_segment(timing, window)
+            # 逐筆段落走事件迴圈，其餘走「收訊號 → 送單」一次性流程。
+            # **分派寫在這裡而不是讓兩條流程互相呼叫**：它們的生命週期不同，
+            # 一個跑一次就結束、一個要跑到收線
+            if timing is ExecutionTiming.IMMEDIATE:
+                self.run_intraday(window)
+            else:
+                self.submit_segment(timing, window)
         finally:
             self.finish(window)
 
@@ -277,6 +305,10 @@ class LiveTrader:
         """
 
         self.broker.connect()
+
+        # **先標記崩潰的舊紀錄再讀模式**：`get_last_account_mode()` 只讀已結束的
+        # 那些，不先標記就會跳過上次崩潰的那一列，等於把它的降級狀態擦掉
+        self.mark_previous_crash()
 
         self.mode_state.load()
         if self.resume_trading:
@@ -311,6 +343,293 @@ class LiveTrader:
         self._check_daily_loss()
 
         self.last_reconcile = self.reconciler.check(positions)
+
+    def mark_previous_crash(self) -> List[str]:
+        """
+        - Description:
+            把上次沒有正常結束的紀錄標記起來並告警
+
+            `ended_at IS NULL` 只有兩種可能：正在跑的這一次，或是上次崩潰了。
+            **崩潰要當成事件而不是沉默的常態**——沒有人知道上次是怎麼停的，
+            部位與委託就都處在未確認的狀態。
+        - Return:
+            - List[str]
+                被標記的 `run_id`
+        """
+
+        crashed: List[str] = self.dao.mark_crashed_runs(self.run_id, self._now())
+        if not crashed:
+            return []
+
+        message: str = (
+            f"上次執行沒有正常結束（{', '.join(crashed)}），"
+            "已標記為 CRASHED；本次將以券商為準重建部位並對帳"
+        )
+        logger.error(message)
+        self._notify("CRITICAL", "偵測到上次崩潰", message)
+        return crashed
+
+    # === 盤中逐筆 ===
+    def run_intraday(self, window: Optional[SegmentWindow]) -> LoopStats:
+        """
+        - Description:
+            盤中逐筆段落：訂閱 → 驅動事件迴圈 → 收線
+
+            **行情與回報共用一個事件 queue**，由 `broker.route_events()` 把兩條
+            回呼導過來。導過去之後 `drain_execution_queue()` 會一直是空的，
+            那是刻意的——回報已經改由迴圈逐筆消化，兩邊都撈會重複且順序錯亂。
+
+            **逐筆觸發只給宣告了 `is_intraday` 的策略**：其餘策略的鉤子一次要
+            一批報價，逐筆餵給它們等於每次只看得到一檔，訊號會完全不同。
+        - Parameters:
+            - window: Optional[SegmentWindow]
+                段落時窗；None 時不設收線時間
+        - Return:
+            - LoopStats
+                本段的事件統計
+        """
+
+        loop: IntradayEventLoop = IntradayEventLoop(
+            on_quote=self._on_intraday_quote,
+            on_execution=self._on_intraday_execution,
+            on_market_data_lost=self._on_market_data_lost,
+            now_provider=self._now,
+            on_heartbeat=self._run_session_guard,
+        )
+
+        symbols: List[str] = sorted(
+            {symbol for context in self.contexts for symbol in context.symbols}
+        )
+        self.broker.route_events(loop.submit_quote, loop.submit_execution)
+        if symbols:
+            self.broker.subscribe_quotes(symbols)
+
+        deadline: datetime.datetime = self._resolve_intraday_deadline(window)
+        logger.info(f"盤中逐筆開始，訂閱 {len(symbols)} 檔，收線 {deadline}")
+
+        stats: LoopStats = loop.run_until(deadline)
+        logger.info(
+            f"盤中逐筆結束：行情 {stats.quotes} 筆、回報 {stats.executions} 筆、"
+            f"心跳 {stats.heartbeats} 次、處理失敗 {stats.handler_errors} 筆"
+        )
+        return stats
+
+    def _resolve_intraday_deadline(
+        self, window: Optional[SegmentWindow]
+    ) -> datetime.datetime:
+        """
+        本段落跑到什麼時候
+
+        **沒有時窗時不可以無限跑**：常駐迴圈少了收線時間，盤後作業就永遠不會開始。
+        沒給就跑到今天結束。
+        """
+
+        today: datetime.date = self._now().date()
+        if window is None or window.submit_end is None:
+            return datetime.datetime.combine(
+                today, datetime.time.max, tzinfo=self._now().tzinfo
+            )
+        return datetime.datetime.combine(
+            today, window.submit_end, tzinfo=self._now().tzinfo
+        )
+
+    def _run_session_guard(self) -> None:
+        """
+        日終強制動作：回補時點一到就把未回補的當沖空單補掉
+
+        **掛在心跳而不是行情上**：行情停了 `on_quote` 就不會再被呼叫，
+        而日終回補正是不能因為沒行情就不做的事——現股當沖先賣未回補，
+        券商可能標借或直接違約交割。
+        """
+
+        if not self.session_guard.should_cover_now():
+            return
+
+        self.session_guard.mark_covered()
+        stop_after: bool = False
+
+        for context in self.contexts:
+            policy: DayTradeUncoveredPolicy = getattr(
+                context.strategy,
+                "day_trade_uncovered_policy",
+                DayTradeUncoveredPolicy.FORCE_COVER_AT_CLOSE,
+            )
+            orders, warning = self.session_guard.build_cover_orders(
+                context.account,
+                policy,
+                partial(self._build_cover_order_for, context),
+            )
+
+            if warning is not None:
+                logger.warning(f"{context.name}：{warning}")
+                self._notify("WARNING", "當沖回補政策在實盤被改寫", warning)
+
+            if orders:
+                logger.warning(
+                    f"{context.name} 有 {len(orders)} 筆當沖空單未回補，送出回補單"
+                )
+                # **不經跨策略守門**：回補是把自己的部位平掉、不是新開倉，
+                # 被守門擋下等於讓部位留倉過夜
+                self.dispatch([(context, order) for order in orders], None)
+
+            if stops_after_cover(policy):
+                stop_after = True
+
+        if stop_after:
+            self.risk_manager.on_degrade_event(
+                "當沖未回補且政策為 RAISE：已送出回補單，停止開新倉",
+                TradingMode.REDUCE_ONLY,
+            )
+
+    def _build_cover_order_for(
+        self, context: StrategyContext, position: Any
+    ) -> Optional[BaseOrder]:
+        """
+        把一個待回補部位換成回補單
+
+        **訂單型別走 `context.build_filled_order`**：本檔刻意不出現任何市場或
+        商品字樣（`check_layer_deps.py` 會擋），而 Phase7-2 注入的那個建構器
+        正是為此存在的。
+
+        價格取**該檔最後一筆報價**；取不到就回 None，由守門記 error。
+        """
+
+        quote: Optional[BaseQuote] = self._last_quotes.get(position.symbol)
+        if quote is None or context.build_filled_order is None:
+            return None
+
+        return context.build_filled_order(
+            position.symbol,
+            self._now(),
+            cover_action(position),
+            position.position_type,
+            float(quote.cur_price),
+            int(position.volume),
+        )
+
+    def _on_intraday_quote(self, quote: BaseQuote) -> None:
+        """
+        一筆行情 → 逐筆觸發策略
+
+        **只餵宣告了 `is_intraday` 的策略**，而且只餵有訂這檔的那些。
+        送單前先確認連線：斷線時繼續算訊號只會產生一批送不出去的單。
+        """
+
+        # 回補單的價格來源；**只留最後一筆**，留全部等於在記憶體裡重建一份行情庫
+        self._last_quotes[quote.symbol] = quote
+
+        if not self.ensure_connected():
+            return
+
+        for context in self.contexts:
+            if not getattr(context.strategy, "is_intraday", False):
+                continue
+            if quote.symbol not in context.symbols:
+                continue
+            self._submit_one_quote(context, quote)
+
+    def _submit_one_quote(self, context: StrategyContext, quote: BaseQuote) -> None:
+        """
+        把一筆報價餵給一支策略，並走完整條送單流程
+
+        **重用日頻那一條，不另寫一份**：跨策略守門、曝險截斷、資金保留與風控
+        在逐筆之下一樣要做。另寫一份必然漂移，而漂移的那一刻兩邊都看起來正確。
+        """
+
+        if self.mode_state.effective_mode(context.name) is TradingMode.HALTED:
+            return
+
+        try:
+            orders: List[BaseOrder] = self._invoke_hooks(
+                context, ExecutionTiming.IMMEDIATE, [quote]
+            )
+        except Exception as exc:
+            self._halt_strategy(context, f"逐筆鉤子執行失敗：{exc}")
+            return
+
+        if not orders:
+            return
+
+        survivors: List[Tuple[StrategyContext, BaseOrder]] = self.apply_cross_checks(
+            [(context, order) for order in orders]
+        )
+        self.dispatch(survivors, None)
+
+    def _on_intraday_execution(self, event: Any) -> None:
+        """一筆回報 → 更新委託狀態與帳戶；與日頻走同一份判定"""
+
+        fill: Optional[ExecutionReport] = self.order_manager.apply_event(event)
+        if fill is not None:
+            self.account_sync.apply_fill(fill)
+
+    def _on_market_data_lost(self, reason: str) -> None:
+        """
+        行情中斷 → 帳戶層降到 `REDUCE_ONLY`
+
+        **不降 `HALTED`**：部位還在場上，`HALTED` 連平倉都不送，
+        等於在看不到行情的時候把停損也關掉。
+        """
+
+        self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
+        self._notify("CRITICAL", "行情中斷", reason)
+
+    def ensure_connected(self) -> bool:
+        """
+        - Description:
+            確認連線還在；斷了就重連並走完恢復流程
+
+            **這是 `ShioajiSession.reconnect()` 唯一的呼叫端**。它連同退避與
+            每日登入上限都寫好了，但正式路徑上一個呼叫點都沒有——
+            斷線之後程式會一路跑到收盤，每一次送單都失敗。
+        - Return:
+            - bool
+                連線是否可用；False 時呼叫端不可再送單
+        """
+
+        if self.broker.is_connected():
+            return True
+
+        logger.error("偵測到連線中斷，嘗試重連")
+        if not self.broker.reconnect():
+            self._notify("CRITICAL", "重連失敗", "已停止送單，請人工確認")
+            return False
+
+        self.recover_after_reconnect()
+        return True
+
+    def recover_after_reconnect(self) -> None:
+        """
+        - Description:
+            重連成功之後的恢復流程
+
+            **順序固定，而且三件事都做完才可以恢復送單**：
+            1. 重新訂閱行情——重連換了一個 session，舊的訂閱一併失效；
+               不訂閱的話盤中迴圈收不到任何報價，然後心跳會判成「行情中斷」，
+               症狀看起來像券商的問題。
+            2. `order_manager.recover()`——斷線期間送出的委託可能已經成交，
+               回報卻在斷掉的那條連線上。不接管就會重複下單。
+            3. 對帳——前兩步都做完才知道本地到底是什麼狀態。
+
+            **失敗不吞**：恢復沒做完就繼續送單，等於拿一份不知道對不對的部位
+            去交易。例外往上拋，由呼叫端決定停或再試。
+        """
+
+        logger.warning("重連成功，開始恢復：重新訂閱 → 接管委託 → 對帳")
+
+        symbols: List[str] = sorted(
+            {symbol for context in self.contexts for symbol in context.symbols}
+        )
+        if symbols:
+            self.broker.subscribe_quotes(symbols)
+
+        self.order_manager.recover(self._now().date())
+
+        positions: List[Any] = self.broker.get_positions()
+        self.account_sync.rebuild_from_broker(positions)
+        self._refresh_capital()
+        self.last_reconcile = self.reconciler.check(positions)
+
+        logger.info("恢復完成，可以繼續送單")
 
     def submit_segment(
         self, timing: ExecutionTiming, window: Optional[SegmentWindow]

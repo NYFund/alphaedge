@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
-from core.broker.base import BaseBroker
+from core.broker.base import BaseBroker, CallbackQueue
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
 from core.broker.tw.shioaji_account_query import ShioajiAccountQuery
 from core.broker.tw.shioaji_contract_resolver import ShioajiContractResolver
@@ -20,6 +20,7 @@ from core.models import (
     FuturesOrder,
     OrderTicket,
     StockOrder,
+    StockQuote,
 )
 from core.utils import FuturesOCType, InstrumentType, LiveOrderStatus, Status
 
@@ -85,6 +86,17 @@ class ShioajiBroker(BaseBroker):
         """登入並組裝所有元件；任何一步失敗都拋出，不會留下半成品狀態"""
 
         self.session.connect()
+        self._bind_session()
+
+    def _bind_session(self) -> None:
+        """
+        以目前的 session 重建所有元件與回呼
+
+        **重連之後一定要重跑一次**：登入換了一個 api 物件，
+        舊的解析器、回呼與行情訂閱全掛在已經死掉的那一個上——
+        不重建的話行情與回報都進不來，而且不會有任何錯誤訊息。
+        """
+
         api: Any = self.session.api
 
         self.resolver = ShioajiContractResolver(api)
@@ -110,6 +122,52 @@ class ShioajiBroker(BaseBroker):
         """關閉連線；可重複呼叫"""
 
         self.session.close()
+
+    def route_events(
+        self,
+        on_quote: Callable[[Any], None],
+        on_execution: Callable[[Any], None],
+    ) -> None:
+        """
+        行情與回報都導向事件迴圈，**行情在這裡就轉成 `StockQuote`**
+
+        轉換放這一層而不是讓迴圈自己做：`to_tick_quote()` 是 Shioaji 的
+        anti-corruption layer，把它往上搬會讓引擎認得券商的資料形狀。
+
+        試撮與盤中零股由轉換層回 `None`，這裡直接略過——**它們不是報價**。
+        """
+
+        def forward_quote(item: Any) -> None:
+            kind, _exchange, message = item
+            if kind != "tick_stk":
+                # 委買賣（bidask）目前沒有消費者；轉成報價會讓「收到一筆行情」
+                # 的語意變成兩種東西，逐筆觸發的次數也會憑空變兩倍
+                return
+
+            quote: Optional[StockQuote] = self.quote_stream.to_tick_quote(message)
+            if quote is not None:
+                on_quote(quote)
+
+        super().route_events(on_quote, on_execution)
+        self.quote_queue = CallbackQueue(forward_quote)
+        self._bind_session()
+
+    def reconnect(self) -> bool:
+        """
+        以 session 的退避重連；**不用骨架那個「關掉再連」的預設**
+
+        Shioaji 的登入額度是每日 1,000 次，而需要重連 20 次的那一天本來就不該
+        繼續交易。退避與每日上限都在 `ShioajiSession.reconnect()` 裡。
+
+        重連成功後**回呼要重新註冊**：換了一個 api 物件，舊的回呼掛在已經死掉的
+        session 上——不重掛的話行情與回報都進不來，而且不會有任何錯誤。
+        """
+
+        if not self.session.reconnect():
+            return False
+
+        self._bind_session()
+        return self.session.is_connected()
 
     def is_connected(self) -> bool:
         """目前是否連線中"""

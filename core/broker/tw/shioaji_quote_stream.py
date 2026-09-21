@@ -217,6 +217,89 @@ class ShioajiQuoteStream:
         return paired
 
     # === 轉換 ===
+    def to_tick_quote(self, message: Any) -> Optional[StockQuote]:
+        """
+        - Description:
+            逐筆成交回呼 → `StockQuote`（`scale=TICK`）
+
+            **這是串流路徑，與 `to_stock_quote()`（快照路徑）的欄位語意不同**，
+            故不共用：tick 的 `datetime` 是真正的 `datetime`，而快照的 `ts` 是
+            **奈秒整數**。共用一份就得在裡面分支，而分支猜錯不會報錯。
+
+            **兩種訊息一律不轉成報價**（回 `None`，由呼叫端略過）：
+
+            1. `simtrade`——**試撮不是成交**。開盤前與收盤前的試撮價格會跳動，
+               拿它產生訊號等於對著假資料交易，而且完全不會報錯。
+            2. `intraday_odd`——盤中零股的 `volume` 單位是**股**不是張。
+               混進來的話成交量差 1000 倍，門檻型訊號會整組失效。
+
+            **價格是 `Decimal`**（實測 2026-09-21）：一律轉 float 再進模型，
+            與回測的型別對齊；混用會在某些路徑靜默降精度。
+        - Parameters:
+            - message: Any
+                Shioaji 的 `TickSTKv1`
+        - Return:
+            - Optional[StockQuote]
+                報價；試撮或盤中零股時為 None
+        """
+
+        if bool(getattr(message, "simtrade", False)):
+            return None
+        if bool(getattr(message, "intraday_odd", False)):
+            return None
+
+        close: float = self._as_float(message, "close")
+        return StockQuote(
+            stock_id=str(self._require(message, "code")),
+            scale=Scale.TICK,
+            date=self._localize(self._require(message, "datetime")),
+            cur_price=close,
+            # **當日累計成交量**；`volume` 是這一筆的量，取錯會讓
+            # 「當日成交量 ≥ N 張」這類門檻永遠不成立
+            volume=int(self._require(message, "total_volume")),
+            open=self._as_float(message, "open"),
+            high=self._as_float(message, "high"),
+            low=self._as_float(message, "low"),
+            close=close,
+        )
+
+    @staticmethod
+    def _require(message: Any, field: str) -> Any:
+        """
+        取一個**必要**欄位；缺了就拋
+
+        **刻意不給預設值**：欄位改名時給預設值會讓報價靜默變成 0 或空字串，
+        策略從此不產生任何訊號而沒有人知道。寧可當場炸——
+        本專案已經在 `Snapshot.ts`、`total_volume` 與合約檔日期上各踩過一次，
+        三次的共同症狀都是「單元測試一直是綠的」。
+        """
+
+        if not hasattr(message, field):
+            raise AttributeError(
+                f"逐筆行情缺少欄位 {field!r}（收到 {type(message).__name__}）；"
+                "shioaji 可能已改版，請重新錄製行情並核對欄位"
+            )
+        return getattr(message, field)
+
+    @classmethod
+    def _as_float(cls, message: Any, field: str) -> float:
+        """必要的價格欄位轉 float；來源是 `Decimal`"""
+
+        return float(cls._require(message, field))
+
+    def _localize(self, moment: datetime.datetime) -> datetime.datetime:
+        """
+        補上台北時區
+
+        **回呼給的 `datetime` 是 naive 的**（實測 2026-09-21），而專案的實盤時間
+        一律是 Asia/Taipei aware。直接拿去和 aware 的時間比較會 `TypeError`，
+        被當成 UTC 則整條時間軸偏 8 小時。
+        """
+
+        if moment.tzinfo is not None:
+            return moment
+        return moment.replace(tzinfo=get_live_timezone())
+
     def to_stock_quote(self, snapshot: Any) -> StockQuote:
         """
         - Description:

@@ -36,6 +36,22 @@ class BaseStrategy(ABC):
         # 策略是否為當沖：只是**推導預設值的輸入**，不是硬性開關。
         # 真正決定同一根 bar 能否開平同一標的的是 bar_execution_order（見下方區塊）
         self.enable_intraday: bool = True  # Allow day trade or not
+        # 是否為**盤中逐筆觸發**的策略。
+        #
+        # ⚠️ **與上面的 `enable_intraday` 是兩件完全不同的事**，名字像只是巧合：
+        # `enable_intraday` 是「允不允許當沖」（推導同一根 bar 的開平順序用），
+        # 本旗標是「實盤要不要每收到一筆 tick 就呼叫一次策略」。
+        #
+        # 宣告為 True 的策略，實盤每次鉤子只會拿到**一檔的一筆報價**
+        # （`List[StockQuote]` 長度為 1、`scale=TICK`）。需要橫斷面比較
+        # （挑最強的前 N 檔）的邏輯必須自己在策略內保存其他標的的最新報價——
+        # 逐筆之下沒有人會把全市場一次交給你。
+        #
+        # **它同時會擋掉 `Scale.TICK` 的整天回測**（見 `Backtester.__init__`）：
+        # 同一個 `check_open_signal(stock_quotes)`，實盤拿到長度 1 的 list、
+        # TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。
+        # 兩邊都跑得完、都不報錯，而訊號完全不一樣——那是最難查的一種錯。
+        self.is_intraday: bool = False  # 盤中逐筆觸發（實盤）
         self.init_capital: float = 0  # Initial capital
         # 同時可持有的最大檔數；**預設 None ＝ 不限制**。
         #

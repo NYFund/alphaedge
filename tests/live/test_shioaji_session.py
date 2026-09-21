@@ -327,6 +327,38 @@ def test_clock_off_by_days_refuses_to_start(
         session.connect()
 
 
+def test_contract_date_accepts_the_real_broker_format(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    Shioaji 實際回的是 `YYYY/MM/DD`，不是 ISO
+
+    **2026-09-21 模擬環境實連確認**。原本只以 `fromisoformat()` 解析，
+    拿到 `'2026/09/21'` 解析失敗被吞成 None，於是「本機日期差一天以上」那道守門
+    從來沒有生效過，只留下一行「略過本機日期檢查」——看起來像環境問題，
+    其實是程式問題。這條測試就是釘住那個格式。
+    """
+
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026/08/01"))
+    session: ShioajiSession = make_session(fixed_now, api=api)
+
+    with pytest.raises(RuntimeError, match="相差"):
+        session.connect()
+
+
+def test_contract_date_in_the_real_format_passes_when_current(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """同一個格式、日期正確時要放行——修完不可以變成一律拒絕啟動"""
+
+    today: str = fixed_now().date().strftime("%Y/%m/%d")
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date=today))
+    session: ShioajiSession = make_session(fixed_now, api=api)
+    session.connect()
+
+    assert session.is_connected() is True
+
+
 def test_unreadable_contract_date_only_warns(
     fixed_now: Callable[[], datetime.datetime],
 ) -> None:
@@ -577,3 +609,45 @@ def test_login_error_chain_is_cut(
 
     assert error.value.__cause__ is None
     assert error.value.__suppress_context__ is True
+
+
+# === 登出失敗不可以把 token 寫進 log ===
+def test_logout_failure_does_not_leak_the_session_token(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    登出失敗時的 log 不可以含 session token 或身分證字號
+
+    **2026-09-21 模擬環境實測撞到**：登出逾時的例外訊息帶著 token 與含身分證的
+    client 名稱，而 `close()` 原本直接 `opt(exception=True)` 印出——loguru 連
+    traceback 每一層的區域變數都印了，token 出現三次並一路寫進檔案 sink。
+    `connect()` 早就有刮過再記的做法，`close()` 沒跟上。
+    """
+
+    from loguru import logger
+
+    fake_token: str = (
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJmYWtlIjoidG9rZW4ifQ.SIGNATURESIGNATURE"
+    )
+
+    class LeakyLogout(FakeShioaji):
+        def logout(self) -> None:
+            raise TimeoutError(
+                "Topic: api/v1/auth/logout, Corr: c11, "
+                "Client: PYAPI/A123456789/0921/050257/787868/1.2.3.4, "
+                f"payload: {{'token': '{fake_token}'}}"
+            )
+
+    captured: List[str] = []
+    handle: int = logger.add(lambda message: captured.append(str(message)))
+    try:
+        session: ShioajiSession = make_session(fixed_now, api=LeakyLogout())
+        session.connect()
+        session.close()
+    finally:
+        logger.remove(handle)
+
+    text: str = "".join(captured)
+    assert "登出失敗" in text
+    assert fake_token not in text
+    assert "A123456789" not in text
