@@ -29,6 +29,28 @@ AlphaEdge 的回測系統提供策略回測與績效分析。支援哪些市場�
 self.scale: str = Scale.DAY  # 或 Scale.TICK
 ```
 
+### 逐筆觸發的策略跑不了 `Scale.TICK`
+
+宣告 `is_intraday = True`（實盤逐筆觸發）的策略，建立 `Backtester` 時會直接拋
+`IntradayScaleMismatchError`。**這不是限制，是擋住一種查不出來的錯**：
+
+| | 每次鉤子拿到的報價 |
+|---|---|
+| 實盤逐筆 | 一檔的**一筆** tick（list 長度 1） |
+| `Scale.TICK` 回測 | 該日**整天**的 tick（list 長度上萬） |
+
+同一個 `generate_open_signals(stock_quotes)`，兩邊的 list 語意根本不同。需要橫斷面的
+邏輯（挑當下最強的前 N 檔）在回測裡看起來完全正常，上了實盤每次只看得到一檔，
+訊號完全不同——**而且兩邊都跑得完、都不報錯**。
+
+要用回測估量級，把 `scale` 設成 `Scale.DAY`，或明確關掉 `is_intraday`。
+
+### 盤中策略的回測結果只能當量級參考
+
+即使改用 `Scale.DAY`，**逐筆策略的回測績效不可當實盤預估**：回測沒有 wall clock，
+跨股票的到達順序取決於券商推送、本來就不保證重現。實盤與回測的實際落差由每日
+訊號 parity 比對量出來（`core/live/report/parity_checker.py`）。
+
 ## 回測流程
 
 回測系統的執行流程如下：

@@ -71,6 +71,10 @@ def new_event_counts() -> Dict[str, int]:
     }
 
 
+class IntradayScaleMismatchError(RuntimeError):
+    """逐筆觸發的策略與整天一次給的 TICK 回測，報價語意不同"""
+
+
 class Backtester:
     """
     Backtest Framework: Tick and Daily price intervals
@@ -140,7 +144,41 @@ class Backtester:
         # 須單獨重產回歸 baseline（`scripts/run_regression.sh` 的兩條線）
         self.adjusted_price: bool = adjusted_price
 
+        self._reject_intraday_tick_backtest()
+
         self.setup()
+
+    def _reject_intraday_tick_backtest(self) -> None:
+        """
+        - Description:
+            逐筆觸發的策略不得跑 `Scale.TICK` 回測
+
+            同一個 `check_open_signal(stock_quotes)`，實盤逐筆拿到**長度 1** 的 list，
+            TICK 回測卻**一次拿到整天**的 tick——兩邊的 list 語意根本不同。
+            需要橫斷面的邏輯（挑當下最強的前 N 檔）在回測裡看起來完全正常，
+            上了實盤每次只看得到一檔，訊號完全不同，**而且兩邊都跑得完、都不報錯**。
+
+            **讓錯誤現形而不是留一個看起來正常的績效**：這是 `PreOpenQuote`
+            「讀 OHLC 就拋」在盤中這一側的對應物。要用回測估量級的人，
+            得自己明確把 `is_intraday` 關掉，不會在不知情的狀況下拿到一份
+            訊號語意不同的報表。
+        - Raise:
+            - IntradayScaleMismatchError
+                策略宣告 `is_intraday=True` 且 `scale` 為 `Scale.TICK`
+        """
+
+        if not getattr(self.strategy, "is_intraday", False):
+            return
+
+        if self.scale != Scale.TICK:
+            return
+
+        raise IntradayScaleMismatchError(
+            f"{type(self.strategy).__name__} 宣告 is_intraday=True（實盤逐筆觸發，"
+            "每次鉤子只拿到一檔的一筆報價），但現行 Scale.TICK 回測是"
+            "**整天的 tick 一次給**，兩者的報價 list 語意不同，訊號不可比。"
+            "要用回測估量級請明確改為 Scale.DAY，或把 is_intraday 關掉。"
+        )
 
     @property
     def intraday_range(self) -> Dict[str, Tuple[float, float]]:

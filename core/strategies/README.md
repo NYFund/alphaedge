@@ -524,6 +524,31 @@ def make_portfolio_constructor(self) -> StockPortfolioConstructor:
 - **`Scale.DAY`**: 日線回測，使用每日收盤價
 - **`Scale.TICK`**: 逐筆回測，使用每筆成交資料（僅台股；期貨 Tick 回測未實作）
 
+### 盤中逐筆策略：`is_intraday`
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `is_intraday` | `bool` | 實盤是否**每收到一筆 tick 就呼叫一次策略鉤子** | `False` |
+
+⚠️ **與 `enable_intraday` 是兩件完全不同的事**，名字像只是巧合：
+
+| 參數 | 回答的問題 | 影響 |
+|------|-----------|------|
+| `enable_intraday` | 允不允許當沖？ | 推導同一根 bar 的開平順序 |
+| `is_intraday` | 實盤要不要逐筆觸發？ | 鉤子的呼叫頻率與每次拿到的報價 |
+
+宣告 `is_intraday = True` 之後：
+
+1. **每次鉤子只拿到一檔的一筆報價**——`List[StockQuote]` 長度為 1、`scale=TICK`、
+   帶 bid/ask。Shioaji 訂閱後本來就是有報價就 callback 推進來，逐筆最貼近原生語意。
+2. **橫斷面邏輯要自己維護狀態**。日頻策略的 `generate_open_signals(stock_quotes)`
+   一次拿到一批，可以「挑最強的前 N 檔」；逐筆之下每次只有一檔，
+   需要跨標的比較的策略**必須自己在策略內保存其他標的的最新報價**。
+3. **不能跑 `Scale.TICK` 回測**。引擎會在建立時就拒絕（`IntradayScaleMismatchError`）——
+   同一個 `generate_open_signals(stock_quotes)`，實盤拿到長度 1 的 list、
+   TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。要用回測估量級，
+   把 `scale` 設成 `Scale.DAY` 或把 `is_intraday` 關掉。
+
 ### 單根 bar 的執行順序
 
 同一根 K 棒（或同一批 tick）內，引擎要先跑平倉還是先跑開倉，由 `bar_execution_order` 決定：
