@@ -51,6 +51,16 @@ jobs:
       - name: 文件路徑檢查
         run: uv run python scripts/check_doc_paths.py
 
+      # pre-commit 的其餘 hook：註解不得引用 backlog 步驟編號（CLAUDE.md §2.1）、
+      # 禁用 exc_info=、YAML／TOML 語法、檔尾換行、行尾空白、大檔。
+      # 它們原本只在裝了 hook 的本機生效，而本機多半沒裝——等於沒有閘門，
+      # HEAD 上曾累積十幾處引用步驟編號的註解。ruff 與兩支腳本上面已經各跑一次，
+      # 以 SKIP 略過，不重跑
+      - name: pre-commit 其餘檢查
+        env:
+          SKIP: ruff,ruff-format,check-layer-deps,check-doc-paths
+        run: uvx pre-commit run --all-files --show-diff-on-failure
+
       # `core/api` 的死介面閘門：零呼叫零測試的公開方法。
       # 它會 import `core/api`，故排在測試相依裝好之後
       - name: API 死介面檢查

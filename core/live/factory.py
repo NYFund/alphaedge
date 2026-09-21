@@ -91,7 +91,7 @@ TW_STOCK_SEGMENTS: SegmentSchedule = {
 # 台期貨的段落時窗。
 #
 # ⚠️ **時點尚未以 TAIFEX 公告逐條核對**（規劃要求實作前核對收盤規則）。
-# 目前沿用日盤 08:45~13:45 的常識值，Phase7-1 的演練要實際驗一次。
+# 目前沿用日盤 08:45~13:45 的常識值，要在模擬環境的連續演練中實際驗一次。
 TW_FUTURES_SEGMENTS: SegmentSchedule = {
     ExecutionTiming.AT_OPEN: SegmentWindow(
         submit_start=datetime.time(8, 45),

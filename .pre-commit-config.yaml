@@ -27,7 +27,9 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: end-of-file-fixer
+      # Markdown 行尾兩個空白是強制換行，不是多餘的空白；不保留會改掉排版
       - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
 
   - repo: local
     hooks:
@@ -48,11 +50,11 @@ repos:
       # 這條規則原本沒有機器護欄，規範訂下之後仍新增了數處。
       - id: no-doc-step-refs
         name: 註解不得引用 backlog 步驟／健檢編號
-        entry: (健檢|F-0[0-9]{2}|（S[0-9]+[）、]|backlog/)
+        entry: (健檢|F-0[0-9]{2}|（S[0-9]+[）、]|backlog/|Phase[0-9]+-[0-9]+)
         language: pygrep
         # `scripts/` 刻意不在範圍內：`check_doc_paths.py` 的職責就是掃描文件
         # 路徑，`backlog/` 這種字面值在那裡是資料不是引用
-        files: ^(core|tasks|tests|frontend|strategy_lab)/.*\.py$
+        files: ^((core|tasks|tests|frontend|strategy_lab)/.*\.py|run\.py)$
 
       # 分層相依閘門（反向 import、循環 import、市場語意洩漏、跨軸目錄污染）。
       # 這支腳本原本永遠 exit 1（strategy_lab 的循環 import 把整個閘門鎖住），

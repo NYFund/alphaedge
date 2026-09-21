@@ -330,7 +330,8 @@ class LiveTradeDAO(BaseDAO):
             """,
             f"CREATE INDEX IF NOT EXISTS idx_live_pending_due "
             f"ON {LIVE_PENDING_ACTION_TABLE_NAME}(status, due_date)",
-            # 實盤與回測的委託 diff。schema 集中在這裡定義，不散到 Phase4-8 再補建表
+            # 實盤與回測的委託 diff（`ParityChecker` 寫入）。schema 集中在這裡定義，
+            # 不散到比對器那邊另外補建表
             f"""
             CREATE TABLE IF NOT EXISTS {LIVE_PARITY_DIFF_TABLE_NAME} (
                 date          TEXT NOT NULL,

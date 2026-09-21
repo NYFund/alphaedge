@@ -19,7 +19,7 @@ from core.utils import ExecutionTiming, LiveHook, Scale
 """
 錄製行情的重放
 
-Phase5-1 的驗證條件之一是「同一份錄製 tick 餵兩次，訊號一致」。
+盤中逐筆策略的驗收條件之一是「同一份錄製 tick 餵兩次，訊號一致」。
 **逐筆策略的回測重現不了實盤**（回測沒有 wall clock，跨股票的到達順序取決於
 券商推送），所以「確定性」只能靠重放同一份錄製來驗——那也正是錄製的用途。
 
@@ -100,7 +100,7 @@ def test_recorded_message_has_no_dict_like_the_real_object() -> None:
         getattr(message, missing)
 
 
-# === Phase5-1 的驗證條件：餵兩次，訊號一致 ===
+# === 驗收條件：餵兩次，訊號一致 ===
 def test_same_recording_yields_identical_quotes_twice() -> None:
     """同一份錄製餵兩次，報價要逐筆相同"""
 
@@ -112,7 +112,7 @@ def test_same_recording_yields_identical_quotes_twice() -> None:
 
 def test_same_recording_yields_identical_signals_twice() -> None:
     """
-    **同一份錄製餵兩次，訊號要一致**（Phase5-1 的驗證條件）
+    **同一份錄製餵兩次，訊號要一致**（盤中逐筆策略的驗收條件）
 
     逐筆策略的回測重現不了實盤，所以確定性只能靠重放驗。這條測試釘住的是
     「轉換 ＋ 逐筆派送」這一段沒有隱藏狀態——有的話兩次的訊號會不一樣，

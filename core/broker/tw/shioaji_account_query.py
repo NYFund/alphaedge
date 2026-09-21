@@ -203,7 +203,7 @@ class ShioajiAccountQuery:
             - `settlements()` 的 `SettlementV1`：每列一筆，`T` 是第幾天、`amount` 是金額。
 
             兩種都支援不是為了通用，是因為專案裡兩支 API 都有人用（`core/utils/account.py`
-            用的是後者），而 Phase7-3 收斂前它們會並存。舊寫法 `loc[1:2, "amount"]`
+            用的是後者），舊的 `core/utils/` 工具收斂之前它們會並存。舊寫法 `loc[1:2, "amount"]`
             靠的是「第 1、2 列剛好是 T+1、T+2」——列數一變就會安靜地算到別的金額。
         - Parameters:
             - settlements: Any

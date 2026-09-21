@@ -50,8 +50,8 @@ EXIT_RECONCILE_MISMATCH: int = 4
 EXIT_KILL_SWITCH: int = 5
 EXIT_MODE_NOT_NORMAL: int = 6
 
-# 段落名 → 執行段落。`after_close` 的盤後作業由 Phase4-6 接上，
-# 這裡先讓它有一個明確的入口，而不是讓使用者打了之後什麼都沒發生
+# 段落名 → 執行段落。`after_close` 不在表內：盤後作業不送新倉單，
+# `run_live()` 另走 `run_after_close()` 那條流程
 PHASE_TO_TIMING: Dict[str, str] = {
     "open": "AT_OPEN",
     "close": "AT_CLOSE",

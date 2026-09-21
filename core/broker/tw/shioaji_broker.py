@@ -25,7 +25,8 @@ from core.models import (
 from core.utils import FuturesOCType, InstrumentType, LiveOrderStatus, Status
 
 """
-ShioajiBroker：把 Phase2-2~Phase2-7 的元件組成一個 `BaseBroker` 實作
+ShioajiBroker：把 session、合約解析、委託轉換、回報正規化、帳務查詢與行情這幾個
+元件組成一個 `BaseBroker` 實作
 
 **這一層只做委派與限流套用，不寫業務邏輯。** 委託前處理、風控、狀態機、歸屬
 都在上層；這裡放進來的話，換券商時要連同那些一起重寫，而那些跟券商無關。
