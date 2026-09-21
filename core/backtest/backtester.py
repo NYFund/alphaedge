@@ -98,6 +98,7 @@ class Backtester:
         reporter_cls: Type[BaseBacktestReporter],
         event_counts: Optional[Dict[str, int]] = None,
         adjusted_price: bool = False,
+        write_artifacts: bool = True,
     ) -> None:
         self.strategy: BaseStrategy = strategy  # 要回測的策略
         self.account: BaseAccount = account  # 虛擬帳戶資訊
@@ -143,6 +144,12 @@ class Backtester:
         # **預設關閉**：開啟會改變所有策略的訊號，LONG baseline 必然失效，
         # 須單獨重產回歸 baseline（`scripts/run_regression.sh` 的兩條線）
         self.adjusted_price: bool = adjusted_price
+
+        # 是否寫出回測報表與 backtest log。**實盤 parity 比對要關掉**：它每天對同一支
+        # 策略跑一天回測，報表會蓋掉研究者在 `results/<策略>/` 的多年期回測；
+        # backtest logger 是沒有 filter 的全域 sink，掛上之後實盤行程的 log
+        # 全都會一起寫進 `logs/backtest/<策略>.log`
+        self.write_artifacts: bool = write_artifacts
 
         self._reject_intraday_tick_backtest()
 
@@ -195,14 +202,15 @@ class Backtester:
     def setup(self) -> None:
         """Set Up the Config of Backtester"""
 
-        # 確保每個 strategy 有獨立的結果資料夾
-        self.strategy_result_dir: Path = (
-            Path(BACKTEST_RESULT_DIR_PATH) / self.strategy.strategy_name
-        )
-        self.strategy_result_dir.mkdir(parents=True, exist_ok=True)
+        if self.write_artifacts:
+            # 確保每個 strategy 有獨立的結果資料夾
+            self.strategy_result_dir = (
+                Path(BACKTEST_RESULT_DIR_PATH) / self.strategy.strategy_name
+            )
+            self.strategy_result_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set Log File Path
-        LogManager.setup_backtest_logger(self.strategy.strategy_name)
+            # Set Log File Path
+            LogManager.setup_backtest_logger(self.strategy.strategy_name)
 
         # load backtest dataset
         self.load_datasets()
@@ -439,7 +447,8 @@ class Backtester:
             """)
 
             # Generate Backtest Report
-            self.generate_backtest_report()
+            if self.write_artifacts:
+                self.generate_backtest_report()
 
         finally:
             # 關閉資料連線：不關的話，每次回測都會累積不再使用的連線
