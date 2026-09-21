@@ -128,6 +128,13 @@ class LiveTrader:
     # 超過就強制跳出並記 error
     MAX_WAIT_SECONDS: float = 1800.0
 
+    # 盤中迴圈沒有事件時多久跳一次心跳（秒）。斷線偵測與日終回補都掛在心跳上
+    INTRADAY_HEARTBEAT_SECONDS: float = 1.0
+
+    # 日終回補失敗時最多再試幾次心跳。有上限是因為取不到報價、被風控擋下這類原因
+    # 重試也不會好；每次失敗都推 CRITICAL，用完就交給人工
+    MAX_COVER_ATTEMPTS: int = 3
+
     def __init__(
         self,
         contexts: Sequence[StrategyContext],
@@ -248,6 +255,11 @@ class LiveTrader:
 
         # 日終強制動作（當沖回補）
         self.session_guard: SessionGuard = SessionGuard(now_provider)
+        # 當天已送出回補單的 `(交易日, 策略, 標的)`。重試時要跳過它們：
+        # 已送出但還沒成交的回補單，部位仍然算「未回補」，再送一次就是超買
+        self._cover_sent: Set[Tuple[datetime.date, str, str]] = set()
+        # 各交易日回補失敗的次數
+        self._cover_attempts: Dict[datetime.date, int] = {}
         # 每檔最後一筆報價；回補單取價用
         self._last_quotes: Dict[str, BaseQuote] = {}
 
@@ -271,6 +283,7 @@ class LiveTrader:
         window: Optional[SegmentWindow] = resolve_window(self.schedule, timing)
         logger.info(f"=== 段落 {timing.value} 開始（run_id={self.run_id}）===")
 
+        error: Optional[BaseException] = None
         try:
             self.prepare()
 
@@ -292,8 +305,12 @@ class LiveTrader:
                 self.run_intraday(window)
             else:
                 self.submit_segment(timing, window)
+        except BaseException as exc:
+            error = exc
+            raise
         finally:
             self.finish(window)
+            self.record_finish(error)
 
     def prepare(self) -> None:
         """
@@ -394,7 +411,8 @@ class LiveTrader:
             on_execution=self._on_intraday_execution,
             on_market_data_lost=self._on_market_data_lost,
             now_provider=self._now,
-            on_heartbeat=self._run_session_guard,
+            heartbeat_seconds=self.INTRADAY_HEARTBEAT_SECONDS,
+            on_heartbeat=self._on_heartbeat,
         )
 
         symbols: List[str] = sorted(
@@ -433,19 +451,45 @@ class LiveTrader:
             today, window.submit_end, tzinfo=self._now().tzinfo
         )
 
+    def _on_heartbeat(self) -> None:
+        """
+        - Description:
+            心跳工作：先確認連線，再跑日終強制動作
+
+            **斷線偵測一定要掛在心跳上**：session 斷了行情也跟著停，
+            只掛在行情回呼上的話 `ensure_connected()` 再也不會被呼叫——
+            迴圈只會在靜默 30 秒後降為 REDUCE_ONLY，然後空轉到收線，期間的回報全部遺失。
+
+            重連的退避是阻塞式的（最長 300 秒），這段時間迴圈停在這裡。
+            可以接受：連線斷著時本來就什麼都送不出去，而恢復流程要在
+            下一個事件被處理前做完。代價是收線時刻可能被延後一個退避週期。
+            連不回來時不跑日終動作，留給下一次心跳再試。
+        """
+
+        if not self.ensure_connected():
+            return
+        self._run_session_guard()
+
     def _run_session_guard(self) -> None:
         """
-        日終強制動作：回補時點一到就把未回補的當沖空單補掉
+        - Description:
+            日終強制動作：回補時點一到就把未回補的當沖空單補掉
 
-        **掛在心跳而不是行情上**：行情停了 `on_quote` 就不會再被呼叫，
-        而日終回補正是不能因為沒行情就不做的事——現股當沖先賣未回補，
-        券商可能標借或直接違約交割。
+            **掛在心跳而不是行情上**：行情停了 `on_quote` 就不會再被呼叫，
+            而日終回補正是不能因為沒行情就不做的事——現股當沖先賣未回補，
+            券商可能標借或直接違約交割。
+
+            **全部回補單都送出才標記「今天已回補」**：以前是先標記再送，
+            那一次心跳剛好送單失敗或取不到報價，當天就不會再試，
+            而且只留一行 log。現在失敗時寫 CRITICAL 風控事件並推播，
+            下一次心跳再試，最多 `MAX_COVER_ATTEMPTS` 次。
         """
 
         if not self.session_guard.should_cover_now():
             return
 
-        self.session_guard.mark_covered()
+        today: datetime.date = self._now().date()
+        failures: List[str] = []
         stop_after: bool = False
 
         for context in self.contexts:
@@ -454,10 +498,20 @@ class LiveTrader:
                 "day_trade_uncovered_policy",
                 DayTradeUncoveredPolicy.FORCE_COVER_AT_CLOSE,
             )
+            missing_price: List[str] = []
             orders, warning = self.session_guard.build_cover_orders(
                 context.account,
                 policy,
-                partial(self._build_cover_order_for, context),
+                partial(self._build_cover_order_tracked, context, today, missing_price),
+            )
+            orders = [
+                order
+                for order in orders
+                if (today, context.name, order.symbol) not in self._cover_sent
+            ]
+            failures.extend(
+                f"{context.name} {symbol} 取不到可成交價，無法產生回補單"
+                for symbol in missing_price
             )
 
             if warning is not None:
@@ -470,16 +524,81 @@ class LiveTrader:
                 )
                 # **不經跨策略守門**：回補是把自己的部位平掉、不是新開倉，
                 # 被守門擋下等於讓部位留倉過夜
-                self.dispatch([(context, order) for order in orders], None)
+                unsent: List[Tuple[StrategyContext, BaseOrder]] = self.dispatch(
+                    [(context, order) for order in orders], None
+                )
+                unsent_ids: Set[int] = {id(order) for _, order in unsent}
+                for order in orders:
+                    if id(order) in unsent_ids:
+                        failures.append(f"{context.name} {order.symbol} 回補單未送出")
+                    else:
+                        self._cover_sent.add((today, context.name, order.symbol))
 
             if stops_after_cover(policy):
                 stop_after = True
+
+        if failures:
+            self._record_cover_failure(today, failures)
+        else:
+            self.session_guard.mark_covered()
 
         if stop_after:
             self.risk_manager.on_degrade_event(
                 "當沖未回補且政策為 RAISE：已送出回補單，停止開新倉",
                 TradingMode.REDUCE_ONLY,
             )
+
+    def _record_cover_failure(self, today: datetime.date, failures: List[str]) -> None:
+        """
+        回補失敗：寫 CRITICAL 事件並推播；次數用完才標記今天已處理
+
+        **每一次失敗都要落地與推播**：部位留倉過夜是現股當沖最不能發生的事，
+        晚一分鐘有人知道就少一分鐘可以人工處理。
+        """
+
+        attempts: int = self._cover_attempts.get(today, 0) + 1
+        self._cover_attempts[today] = attempts
+        exhausted: bool = attempts >= self.MAX_COVER_ATTEMPTS
+
+        message: str = (
+            f"當沖回補第 {attempts}／{self.MAX_COVER_ATTEMPTS} 次失敗："
+            + "；".join(failures)
+            + ("。已停止重試，請立即人工處理" if exhausted else "。下一次心跳重試")
+        )
+        logger.error(message)
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "severity": "CRITICAL",
+                "category": "DAY_TRADE_COVER_FAILED",
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
+        self._notify("CRITICAL", "當沖回補失敗", message)
+
+        if exhausted:
+            self.session_guard.mark_covered()
+
+    def _build_cover_order_tracked(
+        self,
+        context: StrategyContext,
+        today: datetime.date,
+        missing_price: List[str],
+        position: Any,
+    ) -> Optional[BaseOrder]:
+        """
+        產生回補單，並把「取不到價格」的標的記進 `missing_price`
+
+        今天已送出過回補單的標的不算缺價：它可能只是報價暫時沒更新，
+        而那筆部位已經有一張單在路上了。
+        """
+
+        order: Optional[BaseOrder] = self._build_cover_order_for(context, position)
+        sent: bool = (today, context.name, position.symbol) in self._cover_sent
+        if order is None and not sent:
+            missing_price.append(position.symbol)
+        return order
 
     def _build_cover_order_for(
         self, context: StrategyContext, position: Any
@@ -610,6 +729,11 @@ class LiveTrader:
                回報卻在斷掉的那條連線上。不接管就會重複下單。
             3. 對帳——前兩步都做完才知道本地到底是什麼狀態。
 
+            **只對帳、不以券商部位重建本地帳**：`rebuild_from_broker()` 是啟動用的，
+            它把 lot 逐筆 `open_position()` 回去而不先清空，運行中呼叫一次部位就多一份，
+            策略會照兩倍的部位送平倉單。斷線期間漏接的成交由對帳抓出來並降級，
+            不在這裡自動補——自動補會把回報漏接這類問題蓋掉。
+
             **失敗不吞**：恢復沒做完就繼續送單，等於拿一份不知道對不對的部位
             去交易。例外往上拋，由呼叫端決定停或再試。
         """
@@ -625,8 +749,6 @@ class LiveTrader:
         self.order_manager.recover(self._now().date())
 
         positions: List[Any] = self.broker.get_positions()
-        self.account_sync.rebuild_from_broker(positions)
-        self._refresh_capital()
         self.last_reconcile = self.reconciler.check(positions)
 
         logger.info("恢復完成，可以繼續送單")
@@ -944,7 +1066,7 @@ class LiveTrader:
         self,
         candidates: List[Tuple[StrategyContext, BaseOrder]],
         window: Optional[SegmentWindow],
-    ) -> None:
+    ) -> List[Tuple[StrategyContext, BaseOrder]]:
         """
         - Description:
             逐單保留資金 → 風控 → 送出，期間持續消化回報
@@ -953,15 +1075,22 @@ class LiveTrader:
                 通過跨策略檢查的委託
             - window: Optional[SegmentWindow]
                 段落時窗
+        - Return:
+            - List[Tuple[StrategyContext, BaseOrder]]
+                沒有送出的委託（額度不足、風控擋下、送單失敗、已過時限）。
+                一般段落不需要它；日終回補靠它判斷要不要重試
         """
 
-        for context, order in candidates:
+        unsent: List[Tuple[StrategyContext, BaseOrder]] = []
+        for index, (context, order) in enumerate(candidates):
             if self._past(window, "submit_end"):
                 logger.warning("已過送單時限，其餘委託不再送出")
+                unsent.extend(candidates[index:])
                 break
 
             amount: float = context.notional(order)
             if not self.allocator.reserve(context.name, amount):
+                unsent.append((context, order))
                 continue
 
             decision: RiskDecision = self.risk_manager.check(
@@ -973,6 +1102,7 @@ class LiveTrader:
             )
             if not decision.passed:
                 self.allocator.release(context.name, amount)
+                unsent.append((context, order))
                 continue
 
             try:
@@ -981,10 +1111,13 @@ class LiveTrader:
                 # 送單失敗的保留一定要放掉，否則額度會單向消耗到策略再也送不出單
                 self.allocator.release(context.name, amount)
                 logger.opt(exception=True).error(f"{context.name} 送單失敗：{exc}")
+                unsent.append((context, order))
                 continue
 
             self._reserved_by_order[ticket.client_order_id] = (context.name, amount)
             self.drain_once()
+
+        return unsent
 
     # === 回報 ===
     def drain_once(self) -> List[ExecutionReport]:
@@ -1110,14 +1243,83 @@ class LiveTrader:
                 本次盤後作業的摘要（報表路徑、殘量筆數、滑價統計）
         """
 
-        summary: Dict[str, Any] = self.after_close.run()
+        try:
+            summary: Dict[str, Any] = self.after_close.run()
+        except BaseException as exc:
+            self.record_finish(exc)
+            raise
         self.last_reconcile = self.after_close.last_reconcile
+        self.record_finish(None)
         return summary
+
+    def resolve_end_reason(self, error: Optional[BaseException]) -> str:
+        """
+        - Description:
+            決定本次執行寫進 `live_run` 的結束原因
+
+            判定順序與 `run.py` 的退出碼一致（例外 → kill switch → 對帳不一致 →
+            帳戶層非 NORMAL）：存活監控只看這一欄決定要不要推播，
+            退出碼非 0 的執行在這裡卻寫成正常結束，推播就會漏掉。
+            非交易日與只跑對帳的段落算正常結束——那是預期中的行為。
+        - Parameters:
+            - error: Optional[BaseException]
+                中止本次執行的例外；正常跑完為 None
+        - Return:
+            - str
+                結束原因
+        """
+
+        if error is not None:
+            return f"例外中止：{type(error).__name__}: {error}"
+        if self.risk_manager.is_kill_switch_on():
+            return "kill switch"
+        if self.last_reconcile is not None and not self.last_reconcile.is_consistent:
+            return "對帳不一致"
+        mode: TradingMode = self.mode_state.account_mode
+        if mode is not TradingMode.NORMAL:
+            return f"帳戶層交易模式 {mode.value}"
+        return LiveTradeDAO.END_REASON_NORMAL
+
+    def record_finish(self, error: Optional[BaseException]) -> None:
+        """
+        - Description:
+            把本次執行的結束時間、原因與帳戶層模式寫進 `live_run`
+
+            沒有這一筆，`ended_at` 會一直是 NULL，要等下一次啟動才被標成崩潰——
+            正常結束與崩潰分不出來，存活監控會對每個跑完的段落報「沒有結束紀錄」。
+            行程被直接殺掉時這裡跑不到，那種情況仍由下一次啟動的
+            `mark_crashed_runs()` 補標。
+
+            **本身失敗只記 log 不往外拋**：它在 `finally` 裡執行，
+            拋出去會蓋掉真正讓段落中止的那個例外。
+        - Parameters:
+            - error: Optional[BaseException]
+                中止本次執行的例外；正常跑完為 None
+        """
+
+        try:
+            end_reason: str = self.resolve_end_reason(error)
+            self.dao.finish_run(
+                self.run_id,
+                self._now(),
+                end_reason,
+                self.mode_state.account_mode.value,
+            )
+        except Exception as exc:
+            logger.opt(exception=True).error(f"寫入段落結束紀錄失敗：{exc}")
 
     def apply_pending_actions(self) -> int:
         """
         - Description:
             執行到期的跨日待辦（次日開盤段的第一件事）
+
+            **數量截到目前還持有的量**：待辦寫下之後部位可能已經變了——遲到的成交、
+            人工在券商端平倉、重建後部位已不在。照原數量送出的話，
+            多出來的部分不是「多平一點」，是直接把部位做反。持有量為 0 就標 `DONE`
+            並記一筆事件，不送單。
+
+            **送單走 `dispatch()`**：與一般委託同一條管線（資金保留、事前風控、
+            送出後消化回報），不另外直接呼叫 OMS。
 
             成功送出才標 `DONE`；送不出去就**留在 `PENDING` 並把到期日滾到次日**，
             同時再推播一次——一張補不成的平倉單不會因為換了一天就變得不重要。
@@ -1146,30 +1348,93 @@ class LiveTrader:
                 )
                 continue
 
-            order: Optional[BaseOrder] = self._build_cover_order(context, action)
+            volume: Optional[int] = self._pending_volume_to_cover(context, action)
+            if volume is None:
+                continue
+
+            order: Optional[BaseOrder] = self._build_cover_order(
+                context, {**action, "volume": volume}
+            )
             if order is None:
                 continue
 
-            try:
-                self.order_manager.submit(order, context.name)
-                self.dao.resolve_pending_action(
-                    str(action["action_id"]), self.dao.ACTION_DONE, self._now()
-                )
-                submitted += 1
-            except Exception as exc:
-                logger.opt(exception=True).error(
-                    f"補平單送出失敗，待辦保留：{action['action_id']}：{exc}"
-                )
+            if self.dispatch([(context, order)], None):
+                logger.error(f"補平單未送出，待辦保留：{action['action_id']}")
                 self.dao.postpone_pending_action(
                     str(action["action_id"]), today + datetime.timedelta(days=1)
                 )
                 self._notify(
                     "CRITICAL",
                     "補平單送出失敗",
-                    f"{action['symbol']} 殘量 {action['volume']} 仍未平掉",
+                    f"{action['symbol']} 殘量 {volume} 仍未平掉",
                 )
+                continue
+
+            self.dao.resolve_pending_action(
+                str(action["action_id"]), self.dao.ACTION_DONE, self._now()
+            )
+            submitted += 1
 
         return submitted
+
+    def _pending_volume_to_cover(
+        self, context: StrategyContext, action: Dict[str, Any]
+    ) -> Optional[int]:
+        """
+        - Description:
+            待辦實際要補平的數量：待辦數量與歸屬帳目前持有量取小
+
+            持有量為 0 時把待辦標成 `DONE` 並寫事件；數量被截短時也寫事件——
+            兩者都代表「寫待辦之後部位變了」，事後要查得到是怎麼變的。
+            待辦沒有部位方向時無從比對，留給人工。
+        - Parameters:
+            - context: StrategyContext
+                待辦所屬的策略
+            - action: Dict[str, Any]
+                待辦內容
+        - Return:
+            - Optional[int]
+                要送出的數量；None 表示本筆不送
+        """
+
+        action_id: str = str(action["action_id"])
+        symbol: str = str(action["symbol"])
+        wanted: int = int(action["volume"])
+        direction: str = str(action.get("position_type") or "")
+        if not direction:
+            logger.warning(f"待辦 {action_id} 沒有部位方向，無法比對持有量，需人工處理")
+            return None
+
+        held: int = self.ledger.get_strategy_positions(context.name).get(
+            (symbol, direction), 0
+        )
+        volume: int = min(wanted, held)
+        if volume == wanted:
+            return volume
+
+        message: str = (
+            f"待辦 {action_id} 要補平 {symbol} {direction} {wanted}，"
+            f"歸屬帳目前只持有 {held}，"
+            + ("已無部位，不送單" if volume <= 0 else f"改送 {volume}")
+        )
+        logger.warning(message)
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": context.name,
+                "severity": "WARNING",
+                "category": "PENDING_ACTION_TRUNCATED",
+                "symbol": symbol,
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
+        if volume <= 0:
+            self.dao.resolve_pending_action(
+                action_id, self.dao.ACTION_DONE, self._now()
+            )
+            return None
+        return volume
 
     def _build_cover_order(
         self, context: StrategyContext, action: Dict[str, Any]

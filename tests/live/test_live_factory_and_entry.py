@@ -197,6 +197,19 @@ def test_run_record_carries_audit_fields(dao: LiveTradeDAO) -> None:
     assert row[2] == 1
 
 
+def test_run_record_carries_the_phase(dao: LiveTradeDAO) -> None:
+    """
+    啟動紀錄要寫段落名
+
+    存活監控依段落名比對「該跑的有沒有跑」；寫空字串的話，它對每個段落都會報
+    「沒有任何紀錄」——每天都誤報的監控很快就會被靜音。
+    """
+
+    build([LiveStockStrategy()], dao, phase="close")
+
+    assert dao.conn.execute("SELECT phase FROM live_run").fetchone()[0] == "close"
+
+
 def test_notional_uses_the_instrument_unit(dao: LiveTradeDAO) -> None:
     """
     金額換算要走商品規格
@@ -406,15 +419,20 @@ def test_after_close_is_wired_not_refused(monkeypatch: pytest.MonkeyPatch) -> No
         def run(self, timing: Any) -> None:
             calls.append(f"run:{timing}")
 
-    monkeypatch.setattr(
-        "core.live.factory.build_live_trader",
-        lambda *arguments, **kwargs: AfterCloseTrader(),
-    )
+    build_kwargs: Dict[str, Any] = {}
+
+    def fake_build(*arguments: Any, **kwargs: Any) -> AfterCloseTrader:
+        build_kwargs.update(kwargs)
+        return AfterCloseTrader()
+
+    monkeypatch.setattr("core.live.factory.build_live_trader", fake_build)
 
     code: int = run_module.run_live(args, {"Alpha": LiveStockStrategy})
 
     assert calls == ["after_close"]
     assert code == 0
+    # 段落名要傳進 factory 寫進 `live_run`，存活監控才比對得到
+    assert build_kwargs["phase"] == "after_close"
 
 
 def test_exit_codes_are_distinct() -> None:

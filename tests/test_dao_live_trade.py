@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -359,6 +359,96 @@ def test_no_history_defaults_to_normal(dao: LiveTradeDAO) -> None:
     """第一次啟動時沒有紀錄，預設 NORMAL"""
 
     assert dao.get_last_account_mode() == "NORMAL"
+
+
+TAIPEI: datetime.timezone = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def at(hour: int, minute: int = 0) -> datetime.datetime:
+    """`TODAY` 的台北時間（與 `now_live()` 一樣是 aware）"""
+
+    return datetime.datetime.combine(TODAY, datetime.time(hour, minute), tzinfo=TAIPEI)
+
+
+@pytest.mark.parametrize("insert_order", [("open", "close"), ("close", "open")])
+def test_same_day_halt_is_read_back_by_end_time(
+    dao: LiveTradeDAO, insert_order: Tuple[str, str]
+) -> None:
+    """
+    同一天兩段執行，讀回的是**較晚結束**那段的模式
+
+    時間欄位只存日期時，兩筆的 `ended_at` 一樣，`ORDER BY ended_at` 等於任挑一筆——
+    收盤段因 kill switch 停下，下次啟動卻讀回開盤段的 NORMAL，halt 就這樣被解除了。
+    兩種寫入順序都要讀回 HALTED，確認判定靠的是時間而不是寫入順序。
+    """
+
+    started_at: Dict[str, datetime.datetime] = {"open": at(8, 30), "close": at(13, 20)}
+    for run_id in insert_order:
+        dao.insert_run(
+            {
+                "run_id": run_id,
+                "started_at": started_at[run_id],
+                "phase": run_id,
+                "simulation": 1,
+            }
+        )
+    dao.finish_run("close", at(13, 35), "kill switch", "HALTED")
+    dao.finish_run("open", at(9, 5), "正常結束", "NORMAL")
+
+    assert dao.get_last_account_mode() == "HALTED"
+
+
+def test_time_columns_keep_the_full_timestamp(dao: LiveTradeDAO) -> None:
+    """時間欄位存完整時間（含時區）；日期欄位仍只存日期"""
+
+    dao.insert_run(
+        {"run_id": "run1", "started_at": at(8, 30), "phase": "open", "simulation": 1}
+    )
+    dao.insert_pending_action(make_action())
+
+    started_at: str = dao.conn.execute("SELECT started_at FROM live_run").fetchone()[0]
+    due_date: str = dao.conn.execute(
+        "SELECT due_date FROM live_pending_action"
+    ).fetchone()[0]
+
+    assert started_at == "2026-09-19T08:30:00+08:00"
+    assert due_date == "2026-09-19"
+
+
+def test_early_morning_records_stay_on_their_own_day(dao: LiveTradeDAO) -> None:
+    """
+    台北 08:00 以前的紀錄仍歸在當天
+
+    SQLite 的 `date()` 會先把帶時區的時間換算成 UTC，07:30+08:00 會變成前一天——
+    盤前送出的委託與風控事件就會從當天的報表裡消失。
+    """
+
+    order: Dict[str, Any] = make_order()
+    order["created_at"] = at(7, 30)
+    dao.upsert_order(order)
+    dao.insert_risk_event(
+        {
+            "severity": "WARNING",
+            "category": "TEST",
+            "message": "盤前事件",
+            "occurred_at": at(7, 45),
+        }
+    )
+
+    assert len(dao.get_orders_by_date(TODAY)) == 1
+    assert len(dao.get_unfinished_orders(TODAY)) == 1
+    assert len(dao.get_risk_events_by_date(TODAY)) == 1
+    assert dao.get_orders_by_date(TODAY - datetime.timedelta(days=1)) == []
+
+
+def test_legacy_date_only_rows_are_still_readable(dao: LiveTradeDAO) -> None:
+    """改版前寫入的紀錄只有日期，讀取端要照樣篩得到"""
+
+    order: Dict[str, Any] = make_order()
+    order["created_at"] = TODAY.isoformat()
+    dao.upsert_order(order)
+
+    assert len(dao.get_orders_by_date(TODAY)) == 1
 
 
 def test_strategy_mode_is_persisted_per_strategy(dao: LiveTradeDAO) -> None:

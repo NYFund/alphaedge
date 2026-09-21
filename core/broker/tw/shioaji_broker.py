@@ -83,7 +83,9 @@ class ShioajiBroker(BaseBroker):
         self.quote_stream: Optional[ShioajiQuoteStream] = None
         self.execution_handler: Optional[ShioajiExecutionHandler] = None
 
-        # client_order_id → Shioaji 的 `Trade`。撤單與改價都要傳回原本那個物件
+        # broker_seqno → Shioaji 的 `Trade`。撤單與改價都要傳回原本那個物件。
+        # **以 seqno 為鍵**：它是券商配發、跨行程不變的編號；以 client order id 為鍵的話，
+        # 重啟後由 `refresh_order_status()` 接管的單查不到（那時還不知道 client id）
         self._trades: Dict[str, Any] = {}
 
     # === 連線 ===
@@ -211,8 +213,8 @@ class ShioajiBroker(BaseBroker):
             contract, broker_order, timeout=self.ORDER_TIMEOUT_MS
         )
 
-        self._trades[ticket.client_order_id] = trade
         self._apply_trade(ticket, trade)
+        self._remember_trade(ticket, trade)
         ticket.updated_at = self._now()
         return ticket
 
@@ -223,7 +225,14 @@ class ShioajiBroker(BaseBroker):
         if order is None:
             raise ValueError(f"委託 {ticket.client_order_id} 沒有訂單內容")
 
-        custom_field: str = self._compress(ticket.client_order_id)
+        # 壓縮碼只由 OMS 產生；這裡另算一份的話，送出去的與本地存的對不上，
+        # 重啟接管的精確比對就永遠比不到
+        custom_field: Optional[str] = ticket.custom_field
+        if not custom_field:
+            raise ValueError(
+                f"委託 {ticket.client_order_id} 沒有 custom_field；"
+                "壓縮碼要由 OrderManager 在送單前產生"
+            )
 
         if isinstance(order, StockOrder):
             contract: Any = self.resolver.resolve_stock(order.stock_id)
@@ -265,7 +274,7 @@ class ShioajiBroker(BaseBroker):
         if ticket.is_terminal:
             return ticket
 
-        trade: Optional[Any] = self._trades.get(ticket.client_order_id)
+        trade: Optional[Any] = self._find_trade(ticket)
         if trade is None:
             raise LookupError(
                 f"找不到 {ticket.client_order_id} 對應的 Trade，無法撤單；"
@@ -297,7 +306,7 @@ class ShioajiBroker(BaseBroker):
         if ticket.is_terminal:
             raise ValueError(f"委託 {ticket.client_order_id} 已終結，不可改價")
 
-        trade: Optional[Any] = self._trades.get(ticket.client_order_id)
+        trade: Optional[Any] = self._find_trade(ticket)
         if trade is None:
             raise LookupError(f"找不到 {ticket.client_order_id} 對應的 Trade，無法改價")
 
@@ -331,11 +340,28 @@ class ShioajiBroker(BaseBroker):
 
         tickets: List[OrderTicket] = []
         for trade in api.list_trades() or []:
+            # 券商端的單還不知道對應哪一張本地委託，`client_order_id` 留空；
+            # 由 OMS 以 seqno／`custom_field` 比對後接管
             ticket: OrderTicket = OrderTicket(updated_at=self._now())
             self._apply_trade(ticket, trade)
-            self._trades[ticket.client_order_id or ticket.broker_seqno or ""] = trade
+            self._remember_trade(ticket, trade)
             tickets.append(ticket)
         return tickets
+
+    def _remember_trade(self, ticket: OrderTicket, trade: Any) -> None:
+        """保管 `Trade`；沒有 seqno（券商未配發）時退而以 client order id 為鍵"""
+
+        key: str = ticket.broker_seqno or ticket.client_order_id
+        if key:
+            self._trades[key] = trade
+
+    def _find_trade(self, ticket: OrderTicket) -> Optional[Any]:
+        """依 seqno、再依 client order id 找回保管的 `Trade`"""
+
+        for key in (ticket.broker_seqno, ticket.client_order_id):
+            if key and key in self._trades:
+                return self._trades[key]
+        return None
 
     # === 帳務 ===
     def get_positions(self) -> List[BrokerPositionSnapshot]:
@@ -401,8 +427,8 @@ class ShioajiBroker(BaseBroker):
             ticket.broker_seqno = str(getattr(order, "seqno", "") or "") or None
             ticket.broker_order_id = str(getattr(order, "ordno", "") or "") or None
             custom_field: str = str(getattr(order, "custom_field", "") or "")
-            if custom_field and not ticket.client_order_id:
-                ticket.client_order_id = custom_field
+            if custom_field and not ticket.custom_field:
+                ticket.custom_field = custom_field
 
         if status is not None:
             ticket.status = self.to_live_status(getattr(status, "status", None))
@@ -440,17 +466,6 @@ class ShioajiBroker(BaseBroker):
         if text not in mapping:
             logger.warning(f"未知的券商委託狀態：{text!r}，本地記為 FAILED")
         return mapping.get(text, LiveOrderStatus.FAILED)
-
-    @staticmethod
-    def _compress(client_order_id: str) -> str:
-        """
-        把 client order id 壓成 6 個字元放進 `custom_field`
-
-        目前取末 6 碼；正式的 base36 壓縮碼在 OMS 產生識別碼時一併定案
-        （那裡才知道 run 序號與委託序號的位數）。
-        """
-
-        return client_order_id[-ShioajiOrderMapper.CUSTOM_FIELD_MAX_LENGTH :]
 
     # === 期貨專用 ===
     def get_futures_account(self) -> BrokerAccountSnapshot:

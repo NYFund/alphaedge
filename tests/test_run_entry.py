@@ -150,6 +150,30 @@ def test_failure_paths_never_exit_zero(args: List[str]) -> None:
     assert run_entry(*args).returncode != 0
 
 
+def test_resync_from_broker_is_refused_not_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    `--resync-from-broker` 還沒接上重建流程，帶上就要明確拒絕
+
+    以前旗標有解析、卻沒有任何程式讀它：人工確認要重建後帶上旗標，
+    程式照一般流程跑、什麼都沒重建，對帳照樣不一致，看起來卻像旗標生效了。
+    **在建立任何連線之前就拒絕**，所以這裡讓組裝引擎直接失敗，確認根本沒走到那一步。
+    """
+
+    import run as run_module
+
+    def must_not_build(*args: object, **kwargs: object) -> None:
+        raise AssertionError("帶 --resync-from-broker 時不可以組裝實盤引擎")
+
+    monkeypatch.setattr("core.live.factory.build_live_trader", must_not_build)
+    args: argparse.Namespace = make_live_args()
+    args.resync_from_broker = True
+
+    # 策略要找得到：找不到策略也回用法錯誤，會讓這條在沒擋旗標時照樣通過
+    assert run_module.run_live(args, {"Alpha": object}) == EXIT_USAGE_ERROR
+
+
 # === 實盤啟動檢查對應的退出碼 ===
 def make_live_args() -> argparse.Namespace:
     """一組最小可用的實盤參數（模擬環境、fake 券商）"""

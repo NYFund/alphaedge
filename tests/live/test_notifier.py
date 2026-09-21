@@ -377,6 +377,87 @@ def test_watchdog_reads_the_database_read_only(tmp_path: Path) -> None:
     assert rows[0][0] == "open"
 
 
+TAIPEI: datetime.timezone = datetime.timezone(datetime.timedelta(hours=8))
+
+
+def test_aware_now_does_not_crash_the_watchdog() -> None:
+    """
+    正式環境傳進來的 `now` 是 aware（`now_live()`）
+
+    截止時刻若以 naive 組出來，兩者一比就拋 TypeError——watchdog 會在第一個段落
+    到期時自己崩潰，而它崩潰時不會有任何人收到通知。
+    """
+
+    aware_now: datetime.datetime = NOW.replace(tzinfo=TAIPEI)
+
+    statuses: List[PhaseStatus] = check_phases(
+        [], {"open": datetime.time(8, 30)}, aware_now, grace_minutes=15
+    )
+
+    assert "沒有任何紀錄" in statuses[0].problem
+
+
+def test_watchdog_judges_real_dao_records(tmp_path: Path) -> None:
+    """
+    以真的 DAO 寫入的 `live_run` 判定，不用手寫的字串
+
+    手寫 `"2026-09-21 08:30:00"` 測不到 DAO 實際存成什麼：DAO 曾經只存日期，
+    watchdog 把它解析成 00:00，盤中常駐的段落一過截止時刻就被誤報。
+    也涵蓋台北 08:00 以前開始的段落——SQLite 的 `date()` 會把它算到前一天。
+    """
+
+    path: Path = tmp_path / "tw_trading.db"
+    dao: LiveTradeDAO = LiveTradeDAO(db_path=path)
+    dao.ensure_tables()
+    dao.insert_run(
+        {
+            "run_id": "pre",
+            "started_at": datetime.datetime(2026, 9, 21, 7, 30, tzinfo=TAIPEI),
+            "phase": "pre_open",
+            "simulation": 1,
+        }
+    )
+    dao.insert_run(
+        {
+            "run_id": "intraday",
+            "started_at": datetime.datetime(2026, 9, 21, 13, 50, tzinfo=TAIPEI),
+            "phase": "intraday",
+            "simulation": 1,
+        }
+    )
+    dao.conn.commit()
+    dao.close()
+
+    rows: List[Tuple[Any, ...]] = fetch_runs(str(path), TODAY)
+    statuses: List[PhaseStatus] = check_phases(
+        rows,
+        {"intraday": datetime.time(13, 30)},
+        NOW.replace(tzinfo=TAIPEI),
+        grace_minutes=15,
+    )
+
+    assert [row[0] for row in rows] == ["pre_open", "intraday"]
+    # 13:50 開始、14:00 檢查：才跑 10 分鐘，不是停滯
+    assert statuses[0].is_healthy is True
+
+
+def test_date_only_legacy_record_is_not_reported_as_stale() -> None:
+    """
+    舊紀錄只有日期，算不出跑了多久
+
+    當成 00:00 的話，每一段未結束的舊紀錄都會被報成停滯了十幾個小時。
+    """
+
+    statuses: List[PhaseStatus] = check_phases(
+        [make_row("open", started_at="2026-09-21", ended_at=None, end_reason=None)],
+        {"open": datetime.time(8, 30)},
+        NOW.replace(tzinfo=TAIPEI),
+        grace_minutes=15,
+    )
+
+    assert statuses[0].is_healthy is True
+
+
 def test_unreadable_database_is_critical_not_silent(tmp_path: Path) -> None:
     """
     **開不了紀錄庫本身就是 CRITICAL**

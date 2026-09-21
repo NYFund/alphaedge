@@ -14,6 +14,7 @@ from core.config.settings import (
     now_live,
 )
 from core.dao.connection import DBError, connect_live_trading
+from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import BaseNotifier, NotifyLevel
 from core.live.notify.factory import build_notifier
 
@@ -167,8 +168,10 @@ def check_phases(
 
     results: List[PhaseStatus] = []
     for phase, expected_at in sorted(expected.items(), key=lambda item: item[1]):
+        # 截止時刻沿用 `now` 的時區：`now_live()` 是 aware，不帶時區地組出來的
+        # naive 時刻一比就拋 TypeError，watchdog 會在第一個段落到期時自己崩潰
         deadline: datetime.datetime = datetime.datetime.combine(
-            now.date(), expected_at
+            now.date(), expected_at, tzinfo=now.tzinfo
         ) + datetime.timedelta(minutes=grace_minutes)
         if now < deadline:
             continue
@@ -197,7 +200,7 @@ def check_phases(
                     f"{phase} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
                     "（跑到一半死掉，或卡在等待回報）"
                 )
-        elif row[3] and str(row[3]) != "正常結束":
+        elif row[3] and str(row[3]) != LiveTradeDAO.END_REASON_NORMAL:
             problem = f"{phase} 以非正常原因結束：{row[3]}"
 
         results.append(PhaseStatus(phase, expected_at, started_at, ended_at, problem))
@@ -206,9 +209,13 @@ def check_phases(
 
 
 def _minutes_since(started_at: Optional[str], now: datetime.datetime) -> float:
-    """開始到現在經過幾分鐘；時戳解不開時回 0（不誤報）"""
+    """
+    開始到現在經過幾分鐘；時戳解不開或只有日期時回 0（不誤報）
 
-    if not started_at:
+    只有日期的是舊紀錄：當成當天 00:00 的話，盤中常駐的段落一過截止時刻就會被誤報。
+    """
+
+    if not started_at or len(str(started_at)) <= len("YYYY-MM-DD"):
         return 0.0
     try:
         started: datetime.datetime = datetime.datetime.fromisoformat(str(started_at))
@@ -217,6 +224,8 @@ def _minutes_since(started_at: Optional[str], now: datetime.datetime) -> float:
 
     if started.tzinfo is not None and now.tzinfo is None:
         started = started.replace(tzinfo=None)
+    elif started.tzinfo is None and now.tzinfo is not None:
+        started = started.replace(tzinfo=now.tzinfo)
     return (now - started).total_seconds() / 60.0
 
 
@@ -227,6 +236,9 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
 
         **只以唯讀開啟、不連券商**：實盤行程是唯一寫入者，而 watchdog 不該
         佔用同帳號的連線額度或任何一類限流。
+
+        以 `substr(started_at, 1, 10)` 取日期而不是 SQLite 的 `date()`：
+        後者會把帶時區的時間換算成 UTC，台北早上 08:00 以前開始的段落會被算到前一天。
     - Parameters:
         - db_path: str
             紀錄庫路徑
@@ -244,7 +256,7 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
     try:
         return connection.execute(
             "SELECT phase, started_at, ended_at, end_reason FROM live_run "
-            "WHERE date(started_at) = ? ORDER BY started_at",
+            "WHERE substr(started_at, 1, 10) = ? ORDER BY started_at, rowid",
             (today.isoformat(),),
         ).fetchall()
     finally:

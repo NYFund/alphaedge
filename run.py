@@ -148,7 +148,7 @@ def _add_live_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--resync-from-broker",
         action="store_true",
-        help="以券商部位重建本地部位（對帳不一致、人工確認後才用）",
+        help="以券商部位重建本地部位（尚未實作；帶上會以用法錯誤拒絕）",
     )
     group.add_argument(
         "--resume-trading",
@@ -190,6 +190,16 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         print("實盤模式必須指定 --phase", file=sys.stderr)
         return EXIT_USAGE
 
+    if args.resync_from_broker:
+        # 重建流程還沒接上：以前帶上旗標和沒帶一樣，會默默走一般流程——
+        # 人工確認要重建之後，實際上什麼都沒重建，對帳照樣不一致、照樣以結束碼 4 退出
+        print(
+            "--resync-from-broker 尚未實作：目前沒有以券商部位重建本地部位的流程，"
+            "請人工處理歸屬帳（live_position_lot）後再啟動",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if not args.simulation and not args.confirm_production:
         # 兩個旗標才開得了正式環境；**刻意沒有對應的環境變數**——
         # `.env` 的設定會留在機器上，某天排程就會默默連上去下真單
@@ -224,6 +234,7 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
             simulation=args.simulation,
             dry_run=args.dry_run,
             resume_trading=args.resume_trading is not None,
+            phase=args.phase,
         )
     except (UnsupportedMarketError, ValueError) as exc:
         print(str(exc), file=sys.stderr)

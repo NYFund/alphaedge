@@ -38,6 +38,7 @@ from core.utils import InstrumentType, Market, PositionType, ShortMethod
 def build_backtester(
     strategy: BaseStrategy,
     adjusted_price: bool = True,
+    write_artifacts: bool = True,
 ) -> Backtester:
     """
     - Description:
@@ -57,6 +58,8 @@ def build_backtester(
             當成真實漲跌，是資料正確性問題而非可選功能。
             `Backtester` 那一層的預設維持 False——引擎不預設任何政策，
             要用哪種價格由 factory 這個「政策層」決定
+        - write_artifacts: bool
+            是否寫出回測報表與 backtest log；實盤 parity 比對傳 False
     - Return:
         - Backtester
             已注入該（市場, 商品）組合對應 model 組合的引擎
@@ -66,7 +69,7 @@ def build_backtester(
         Market.TW,
         InstrumentType.STOCK,
     ):
-        return build_tw_stock_backtester(strategy, adjusted_price)
+        return build_tw_stock_backtester(strategy, adjusted_price, write_artifacts)
 
     if (strategy.market, strategy.instrument_type) == (
         Market.TW,
@@ -74,7 +77,7 @@ def build_backtester(
     ):
         # `adjusted_price` 不往下傳：期貨沒有除權息還原的概念，見
         # `build_tw_futures_backtester()`
-        return build_tw_futures_backtester(strategy)
+        return build_tw_futures_backtester(strategy, write_artifacts)
 
     raise ValueError(
         f"尚未支援的（市場, 商品）組合：{strategy.market}, {strategy.instrument_type}"
@@ -84,6 +87,7 @@ def build_backtester(
 def build_tw_stock_backtester(
     strategy: BaseStockStrategy,
     adjusted_price: bool = True,
+    write_artifacts: bool = True,
 ) -> Backtester:
     """組裝台股的 model 組合"""
 
@@ -130,10 +134,13 @@ def build_tw_stock_backtester(
         reporter_cls=StockBacktestReporter,
         event_counts=event_counts,
         adjusted_price=adjusted_price,
+        write_artifacts=write_artifacts,
     )
 
 
-def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
+def build_tw_futures_backtester(
+    strategy: BaseFuturesStrategy, write_artifacts: bool = True
+) -> Backtester:
     """
     - Description:
         組裝台期貨的 model 組
@@ -157,6 +164,8 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
     - Parameters:
         - strategy: BaseFuturesStrategy
             要回測的台期貨策略
+        - write_artifacts: bool
+            是否寫出回測報表與 backtest log
     - Return:
         - Backtester
             已注入台期貨 model 組的引擎
@@ -246,6 +255,7 @@ def build_tw_futures_backtester(strategy: BaseFuturesStrategy) -> Backtester:
         reporter_cls=FuturesBacktestReporter,
         event_counts=event_counts,
         adjusted_price=False,
+        write_artifacts=write_artifacts,
     )
 
 

@@ -329,3 +329,112 @@ def test_heartbeat_does_nothing_before_the_cover_time() -> None:
     harness.trader._run_session_guard()
 
     assert harness.broker.placed_count == before
+
+
+# === 接線：回補失敗要重試並告警 ===
+def make_cover_harness(*symbols: str) -> Any:
+    """已過回補時點、帳上有未回補當沖空單的整組替身；只有 2330 有報價"""
+
+    from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Any = Harness([Alpha()])
+    harness.trader.prepare()
+    harness.contexts[0].account.positions = [
+        make_position(symbol) for symbol in symbols or ("2330",)
+    ]
+    harness.trader._last_quotes["2330"] = harness.broker.quotes["2330"]
+    harness.trader.session_guard = SessionGuard(lambda: at(2026, 9, 21, 13, 25))
+    return harness
+
+
+def cover_failures(harness: Any) -> List[Any]:
+    """已寫入的回補失敗事件 `(severity, message)`"""
+
+    return harness.dao.conn.execute(
+        "SELECT severity, message FROM live_risk_event "
+        "WHERE category = 'DAY_TRADE_COVER_FAILED' ORDER BY event_id"
+    ).fetchall()
+
+
+def test_failed_cover_is_retried_on_the_next_heartbeat() -> None:
+    """
+    送單失敗時不標記「今天已回補」，下一次心跳再送
+
+    以前是先標記再送：那一次心跳剛好斷線，當天就不會再試，
+    現股當沖空單留倉過夜，而且只留一行 log。
+    """
+
+    harness: Any = make_cover_harness()
+    harness.broker.close()
+    before: int = harness.broker.placed_count
+
+    harness.trader._run_session_guard()
+
+    assert harness.broker.placed_count == before
+    assert harness.trader.session_guard.should_cover_now() is True
+    assert [row[0] for row in cover_failures(harness)] == ["CRITICAL"]
+
+    harness.broker.connect()
+    harness.trader._run_session_guard()
+
+    assert harness.broker.placed_count == before + 1
+    assert harness.trader.session_guard.should_cover_now() is False
+
+
+def test_heartbeat_covers_once_the_connection_is_back() -> None:
+    """首次心跳連不上就先不回補，第二次心跳重連成功後送出"""
+
+    harness: Any = make_cover_harness()
+    harness.broker.close()
+    harness.broker.fail_connect = True
+    before: int = harness.broker.placed_count
+
+    harness.trader._on_heartbeat()
+    assert harness.broker.placed_count == before
+
+    harness.broker.fail_connect = False
+    harness.trader._on_heartbeat()
+    assert harness.broker.placed_count == before + 1
+
+
+def test_missing_price_is_a_critical_event_until_attempts_run_out() -> None:
+    """
+    取不到報價要寫 CRITICAL 事件並推播，次數用完才停
+
+    以前只記 `logger.error`：沒有推播、沒有 risk event，要等隔天翻 log 才知道。
+    """
+
+    harness: Any = make_cover_harness("2317")
+
+    for _ in range(harness.trader.MAX_COVER_ATTEMPTS + 2):
+        harness.trader._run_session_guard()
+
+    failures: List[Any] = cover_failures(harness)
+    assert len(failures) == harness.trader.MAX_COVER_ATTEMPTS
+    assert all(severity == "CRITICAL" for severity, _ in failures)
+    assert "2317" in failures[0][1]
+    assert "人工處理" in failures[-1][1]
+    assert harness.trader.session_guard.should_cover_now() is False
+
+
+def test_retry_does_not_resend_a_cover_already_on_its_way() -> None:
+    """
+    重試時不重送已送出、還沒成交的回補單
+
+    回補單沒成交前，部位仍然算「未回補」。只因為另一檔失敗而整批重試的話，
+    已送出的那一檔會再送一次——空單一張，買回兩張。
+    """
+
+    harness: Any = make_cover_harness("2330", "2317")
+    harness.broker.fill_ratio = 0
+    before: int = harness.broker.placed_count
+
+    harness.trader._run_session_guard()
+    harness.trader._run_session_guard()
+
+    assert harness.broker.placed_count == before + 1
+    assert len(cover_failures(harness)) == 2

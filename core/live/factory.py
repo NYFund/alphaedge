@@ -121,6 +121,7 @@ def build_live_trader(
     dao: Optional[LiveTradeDAO] = None,
     risk_config: Optional[RiskConfig] = None,
     now_provider: Callable[[], datetime.datetime] = now_live,
+    phase: str = "",
 ) -> LiveTrader:
     """
     - Description:
@@ -149,6 +150,9 @@ def build_live_trader(
             風控設定；None 時用預設值
         - now_provider: Callable[[], datetime.datetime]
             取得目前時間
+        - phase: str
+            本次要跑的段落名（`run.py --phase` 的值），寫進 `live_run`；
+            存活監控依它比對「該跑的段落有沒有跑」
     - Return:
         - LiveTrader
             組裝好的引擎
@@ -261,6 +265,7 @@ def build_live_trader(
         dry_run,
         not isinstance(notifier, NullNotifier),
         now_provider,
+        phase,
     )
 
     return LiveTrader(
@@ -398,7 +403,9 @@ def make_daily_backtest_runner(
         replica.start_date = run_date
         replica.end_date = run_date
 
-        backtester: Backtester = build_backtester(replica)
+        # 不寫報表與 backtest log：盤後每天跑一次，寫的話會蓋掉
+        # `results/<策略>/` 的研究用回測，並把實盤的 log 一併寫進 backtest log
+        backtester: Backtester = build_backtester(replica, write_artifacts=False)
         backtester.run()
         return [order for _, _, order in backtester.submitted_orders]
 
@@ -515,6 +522,7 @@ def _record_run(
     dry_run: bool,
     notify_enabled: bool,
     now_provider: Callable[[], datetime.datetime],
+    phase: str,
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -538,7 +546,7 @@ def _record_run(
         {
             "run_id": run_id,
             "started_at": now_provider(),
-            "phase": "",
+            "phase": phase,
             "simulation": int(simulation),
             "dry_run": int(dry_run),
             "notify_enabled": int(notify_enabled),
