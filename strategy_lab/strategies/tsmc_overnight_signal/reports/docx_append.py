@@ -1,7 +1,7 @@
 """
 Chinese / English narrative bodies for TSMC overnight quant Word reports.
 
-Called from generate_quant_report_docx.build_report with document helper callbacks.
+Called from generate_docx.build_report with document helper callbacks.
 """
 
 from __future__ import annotations
@@ -71,7 +71,9 @@ def _baseline_numeric_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
 def _coef_rows() -> List[List[str]]:
     p = g._OUTPUT / "ridge_coefficients.csv"
     if not p.exists():
-        return [["(run run_overnight_signal.py)", "—"]]
+        return [
+            ["(run python -m strategy_lab.strategies.tsmc_overnight_signal.run)", "—"]
+        ]
     df = pd.read_csv(p)
     return [
         [g.sanitize_for_word(str(r["feature"])), f"{float(r['coefficient']):.6f}"]
@@ -610,7 +612,8 @@ def append_zh_report(
         )
     else:
         _paragraph(
-            doc, "（尚無 baseline_comparison.csv，請先執行 run_overnight_signal.py）"
+            doc,
+            "（尚無 baseline_comparison.csv，請先執行 python -m strategy_lab.strategies.tsmc_overnight_signal.run）",
         )
     doc.add_heading("（二）被動基準（測試集）", level=2)
     pb_h, pb_r = _passive_benchmark_rows("zh")
@@ -663,7 +666,7 @@ def append_zh_report(
     else:
         _paragraph(
             doc,
-            "（缺少 metrics_vectorized_summary.csv，請先執行 run_overnight_signal.py）",
+            "（缺少 metrics_vectorized_summary.csv，請先執行 python -m strategy_lab.strategies.tsmc_overnight_signal.run）",
         )
 
     doc.add_heading("七、貼近實務之回測（整數張數，主結果）", level=1)
@@ -882,7 +885,7 @@ def append_zh_report(
     doc.add_heading("重現方式", level=1)
     _paragraph(
         doc,
-        "於專案根目錄執行 .venv/bin/python strategy_lab/run_overnight_signal.py，再執行 .venv/bin/python strategy_lab/generate_quant_report_docx.py。"
+        "於專案根目錄執行 .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.run，再執行 .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx。"
         "若需列印或繳交 PDF，建議將附錄圖表以約 200–300 dpi 重新匯出後替換 output 內 PNG，以維持字級清晰。",
     )
 
@@ -1040,7 +1043,8 @@ def append_en_report(
         )
     else:
         _paragraph(
-            doc, "baseline_comparison.csv not found; run run_overnight_signal.py."
+            doc,
+            "baseline_comparison.csv not found; run python -m strategy_lab.strategies.tsmc_overnight_signal.run.",
         )
     doc.add_heading("4.2 Passive benchmarks (test window)", level=2)
     pb_h, pb_r = _passive_benchmark_rows("en")
@@ -1097,7 +1101,8 @@ def append_en_report(
         )
     else:
         _paragraph(
-            doc, "Missing metrics_vectorized_summary.csv; run run_overnight_signal.py."
+            doc,
+            "Missing metrics_vectorized_summary.csv; run python -m strategy_lab.strategies.tsmc_overnight_signal.run.",
         )
 
     doc.add_heading("7. Realistic Backtest (Integer Lots — Primary)", level=1)
@@ -1324,8 +1329,8 @@ def append_en_report(
     doc.add_heading("Reproducibility", level=1)
     _paragraph(
         doc,
-        "From the AlphaEdge repo root: .venv/bin/python strategy_lab/run_overnight_signal.py then "
-        ".venv/bin/python strategy_lab/generate_quant_report_docx.py [--lang zh|en|both]. "
+        "From the AlphaEdge repo root: .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.run then "
+        ".venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx [--lang zh|en|both]. "
         "For PDF submission, re-export appendix figures at roughly 200–300 dpi for crisp text.",
     )
 

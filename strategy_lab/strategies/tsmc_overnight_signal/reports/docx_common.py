@@ -438,9 +438,9 @@ def _add_figure(
     if not png_path.exists():
         p = document.add_paragraph()
         miss = (
-            f"[{prefix} {fig_no} missing: {png_path.name}; run run_overnight_signal.py]"
+            f"[{prefix} {fig_no} missing: {png_path.name}; run python -m strategy_lab.strategies.tsmc_overnight_signal.run]"
             if lang == "en"
-            else f"〔{prefix} {fig_no} 缺檔：{png_path.name}，請先執行 run_overnight_signal.py〕"
+            else f"〔{prefix} {fig_no} 缺檔：{png_path.name}，請先執行 python -m strategy_lab.strategies.tsmc_overnight_signal.run〕"
         )
         mr = p.add_run(miss)
         mr.italic = True

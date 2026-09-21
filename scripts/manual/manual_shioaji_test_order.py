@@ -130,7 +130,7 @@ def place_futures_order(api: Any, contract: Any, price: float) -> Any:
        `LMT` 剛好同值所以不會當場炸，但期貨多一個 `MKP`（範圍市價），
        混用遲早會送出一個股票那邊沒有的值，而錯誤要到券商退單才出現。
     2. **`order_type` 是共用的 `OrderType`，沒有 `FuturesOrderType`**：
-       shioaji 1.3.3 只有 `OrderType`（ROD／IOC／FOK），
+       shioaji 只有 `OrderType`（ROD／IOC／FOK；1.3.3 與 1.7.5 皆然，2026-09-21 實查），
        寫成 `FuturesOrderType` 會在送單前就 `AttributeError`。
     """
 

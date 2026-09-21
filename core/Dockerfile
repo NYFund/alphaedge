@@ -1,8 +1,11 @@
 FROM python:3.12-bookworm
 
+# `TZ=Asia/Taipei`：實盤一律用 aware datetime，但 ETL 與部分判斷仍用 `date.today()`，
+# 映像預設 UTC 時，台北 08:00 以前會被算成前一天；log 的時間戳也跟著偏八小時
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    BROWSER_PATH=/usr/bin/chromium
+    BROWSER_PATH=/usr/bin/chromium \
+    TZ=Asia/Taipei
 
 WORKDIR /app
 
