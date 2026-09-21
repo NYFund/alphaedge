@@ -121,3 +121,53 @@ def test_dealer_totals_are_consistent_after_cleaning(
         row: pd.Series = cleaner.clean_twse_chip(raw, date).iloc[0]
 
         assert row["自營商買進股數"] - row["自營商賣出股數"] == row["自營商買賣超股數"]
+
+
+# === TPEX 中段版面（2014-12-01 ~ 2018-01-14）===
+TPEX_MIDDLE: datetime.date = datetime.date(2016, 6, 1)
+
+
+def tpex_middle_raw() -> pd.DataFrame:
+    """
+    TPEX 中段版面：16 欄依位置命名，只有自營商買賣超合計、沒有買進與賣出合計
+
+    最後一列是來源附的合計列、清洗時會被移除。
+    """
+
+    row: list = [
+        "6488",
+        "環球晶",
+        3_000,
+        1_000,
+        2_000,
+        500,
+        0,
+        500,
+        1_307,
+        1_500,
+        300,
+        1_200,
+        200,
+        93,
+        107,
+        3_807,
+    ]
+    footer: list = ["合計"] + [0] * 15
+    return pd.DataFrame([row, footer], columns=[f"c{i}" for i in range(16)])
+
+
+def test_tpex_middle_layout_fills_the_dealer_totals(
+    cleaner: StockChipCleaner,
+) -> None:
+    """
+    TPEX 中段的自營商買進、賣出合計要由拆分欄相加而來
+
+    以前這段沒有相加，reindex 把合計欄補成 0：庫裡 2014-12 ~ 2018-01 的上櫃資料
+    出現十幾萬列「買賣皆 0、買賣超非 0」。
+    """
+
+    row: pd.Series = cleaner.clean_tpex_chip(tpex_middle_raw(), TPEX_MIDDLE).iloc[0]
+
+    assert row["自營商買進股數"] == 1_700
+    assert row["自營商賣出股數"] == 393
+    assert row["自營商買進股數"] - row["自營商賣出股數"] == row["自營商買賣超股數"]
