@@ -39,3 +39,29 @@ updates:
       prefix: "chore(ci)"
     labels:
       - dependencies
+
+  # 前端映像**不安裝本專案**，相依只來自 `frontend/requirements.txt`，
+  # uv 那一組看不到它；base image 同理，要各自列出才會被監控。
+  # 與上面兩組一樣暫停開 PR（上限 0），只保留 security alerts
+  - package-ecosystem: pip
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+
+  - package-ecosystem: docker
+    directories:
+      - /core
+      - /frontend
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - dependencies

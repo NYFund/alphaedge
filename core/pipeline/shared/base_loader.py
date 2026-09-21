@@ -18,8 +18,11 @@ class BaseDataLoader(ABC):
     SYMBOL_COLUMN: str = "stock_id"
     SYMBOL_NAME_COLUMN: str = "證券名稱"
 
-    # 全半形空白與全額交割註記只是同一個名稱的不同寫法，不代表另一檔證券
-    NAME_NOISE_PATTERN: str = r"[\s\u3000*＊]"
+    # 全半形空白與全額交割註記只是同一個名稱的不同寫法，不代表另一檔證券。
+    # **全形空白要寫成字元本身，不可寫 `r"\u3000"`**：pandas 3 在裝了 pyarrow 時
+    # 字串欄走 pyarrow 的 RE2，RE2 不認得 `\u` 跳脫，會直接拋 ArrowInvalid
+    # （streamlit 會帶進 pyarrow，前端 extra 一裝，三條日頻 loader 全壞）
+    NAME_NOISE_PATTERN: str = "[\\s\u3000*＊]"
 
     def __init__(self) -> None:
         pass
