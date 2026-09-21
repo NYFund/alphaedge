@@ -212,6 +212,44 @@ def test_disconnected_broker_is_reconnected_then_recovered() -> None:
     assert harness.broker.subscribed == {"2330"}
 
 
+def test_reconnect_does_not_duplicate_existing_positions() -> None:
+    """
+    盤中重連後，帳上的部位數量不變
+
+    重連曾經以券商部位重建本地帳，而重建是逐筆 `open_position()` 回去、不先清空：
+    已有 2330 一張，重連一次變兩張、再一次三張。策略會照兩倍的部位送平倉單，
+    超賣或誤開空單；`max_holdings` 與曝險判定也跟著算錯。
+    """
+
+    from core.models import BrokerPositionSnapshot
+    from core.utils import ExecutionTiming, PositionType
+
+    harness: Any = make_harness()
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+    account: Any = harness.contexts[0].account
+    held: List[Any] = [
+        (position.stock_id, position.volume) for position in account.positions
+    ]
+    assert held  # 前提：段落跑完帳上真的有部位
+
+    harness.broker.positions = [
+        BrokerPositionSnapshot(
+            symbol="2330",
+            direction=PositionType.LONG,
+            volume=sum(volume for _, volume in held),
+            avg_price=1000.0,
+        )
+    ]
+    harness.broker.connect()
+    harness.trader.recover_after_reconnect()
+    harness.trader.recover_after_reconnect()
+
+    assert [
+        (position.stock_id, position.volume) for position in account.positions
+    ] == held
+    assert harness.trader.last_reconcile.is_consistent is True
+
+
 def test_failed_reconnect_stops_submitting() -> None:
     """
     重連失敗要回 False 讓呼叫端停手

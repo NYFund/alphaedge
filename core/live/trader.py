@@ -615,6 +615,11 @@ class LiveTrader:
                回報卻在斷掉的那條連線上。不接管就會重複下單。
             3. 對帳——前兩步都做完才知道本地到底是什麼狀態。
 
+            **只對帳、不以券商部位重建本地帳**：`rebuild_from_broker()` 是啟動用的，
+            它把 lot 逐筆 `open_position()` 回去而不先清空，運行中呼叫一次部位就多一份，
+            策略會照兩倍的部位送平倉單。斷線期間漏接的成交由對帳抓出來並降級，
+            不在這裡自動補——自動補會把回報漏接這類問題蓋掉。
+
             **失敗不吞**：恢復沒做完就繼續送單，等於拿一份不知道對不對的部位
             去交易。例外往上拋，由呼叫端決定停或再試。
         """
@@ -630,8 +635,6 @@ class LiveTrader:
         self.order_manager.recover(self._now().date())
 
         positions: List[Any] = self.broker.get_positions()
-        self.account_sync.rebuild_from_broker(positions)
-        self._refresh_capital()
         self.last_reconcile = self.reconciler.check(positions)
 
         logger.info("恢復完成，可以繼續送單")
