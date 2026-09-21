@@ -23,7 +23,7 @@
 | S1 | 產生 `uv.lock` 並對齊現行版本 | `uv.lock`、`.python-version`、`pyproject.toml` | `uv export` 與 `requirements.txt` 逐套件比對，版本全數相同（或差異逐項記錄並說明） | ✅ | 2026-09-21：101 個套件版本全數相同；不需 `environments` 限定平台 |
 | S2 | 盤點 `requirements.txt` 多出的套件 | `pyproject.toml`、本文件 | 每個「lock 裡沒有、freeze 裡有」的套件都有保留／移除的結論 | ✅ | 2026-09-21：`requirements.txt` 對 lock 差集為空；本機 venv 多出 13 個套件全數零 import、移除。**`ta` 是 finmind 的相依**，`架構重構與冗餘收斂.md` 的結論不成立 |
 | S3 | 本機切換到 uv 環境 | `.venv`（不進版控） | 驗收標準第 1 條 | ✅ | 2026-09-21：pytest 2003 passed（含 `slow`、0 skip）、ruff 全綠、回歸雙線通過 |
-| S4 | CI 改用 uv | `.github/workflows/ci.yml` | CI 綠燈，且 `uv lock --check` 在 lock 過期時會紅 | 🔄 | 設定已改、本機逐步驗過；**待 push 後看 CI**。`main` 既有的「API 死介面檢查」紅燈已於 2026-09-21 補測試修掉 |
+| S4 | CI 改用 uv | `.github/workflows/ci.yml` | CI 綠燈，且 `uv lock --check` 在 lock 過期時會紅 | 🔄 | 設定已改、本機逐步驗過；2026-09-21 push 後：安裝、lint、閘門、SHORT 回歸全綠；**`not slow` 測試有 8 條既有失敗**（CI 無資料庫卻直接開 DB），與 uv 無關，見 S4 章節 |
 | S5 | `core/Dockerfile` 改用 uv | `core/Dockerfile` | 映像建得起來、`run.py --help` 可執行、仍是 editable 安裝 | 🔄 | Dockerfile 已改；**待開 Docker daemon 建置驗證** |
 | S6 | 測試與 Dependabot 護欄改指 `uv.lock` | `tests/test_config_consistency.py`、`tests/test_order_state_parity.py`、`.github/dependabot.yml`、`pyproject.toml` | 護欄測試改寫後全綠；刻意讓 lock 過期時會被擋下 | ✅ | 2026-09-21：改寫為靜態比對 lock 的 `requires-dist`，反向驗證會紅 |
 | S7 | 文件改寫並刪除 `requirements.txt` | `README.md`、`README_en.md`、`docs/**`、`frontend/README.md`、`strategy_lab/strategies/tsmc_overnight_signal/README.md`、相關 `backlog/*.md` | `grep -rn "requirements.txt"` 只剩 `frontend/requirements.txt` 相關；`python scripts/check_doc_paths.py` 全綠 | ✅ | 2026-09-21：`架構重構與冗餘收斂.md` 三處殘留**刻意保留**，依施作順序於最後一步統一修正 |
@@ -104,7 +104,10 @@
 
 > **🔄 進度（2026-09-21）**
 > - 已完成：`actions/setup-python` 換成 `astral-sh/setup-uv@v10.1.0`（第一次寫成 `@v10`，CI 在 Set up job 就失敗：setup-uv 不發佈浮動主版本 tag），並把 uv 版本釘在 `0.12.17`（與本機相同）；Python 版本改由 `.python-version` 決定。安裝改為 `uv sync --locked --extra dev`，其餘步驟都加上 `uv run`。本機依 CI 順序逐步執行：除下述既有問題外全數通過（`not slow` 1982 passed、SHORT 回歸 6 passed）；`uv lock --check` 在 lock 過期時會提示重新 lock。
-> - 未完成：push 後在 GitHub Actions 上看到結果，以及「故意讓 lock 過期」的 CI 端驗證。
+> - 2026-09-21 push 到 `feature/uv-migration` 後的 CI 結果（commit `f9cd550`）：`uv sync --locked`、ruff、三支閘門腳本、SHORT 回歸全綠；`pytest -m "not slow"` **1974 passed、8 failed**。
+>   - 8 條失敗都是 `sqlite3.OperationalError: unable to open database file`：測試直接建立真的 `FuturesPriceAPI`、`StockLiveDataFeed` 等物件，去開 `data/db/` 底下的資料庫，而 CI 上沒有資料庫。分別是 `test_reporter_falls_back_to_the_near_month_splice`、`test_intraday_strategy_may_still_run_day_backtest`、`test_non_intraday_tick_backtest_is_untouched`、`test_single_strategy_is_not_a_special_path`、`test_singletons_are_shared_across_strategies`、`test_run_record_carries_audit_fields`、`test_notional_uses_the_instrument_unit`、`test_mixing_markets_with_disjoint_windows_is_refused`。
+>   - **與 uv 無關**：本機以 `ALPHAEDGE_DATA_DIR` 指向空目錄模擬 CI，本分支與 `main` 都是同樣 8 條失敗。之所以一直沒被發現，是因為 `main` 的 CI 至少從 2026-09-19 起的 12 次都停在前面的「API 死介面檢查」，測試步驟根本沒有執行到；本機有資料庫，所以都是綠的。
+> - 未完成：上述 8 條修好後 CI 全綠；「故意讓 lock 過期」的 CI 端驗證。
 > - **既有問題，與本工作無關**：`main` 最近三次 CI（2026-09-20～21）都紅在「API 死介面檢查」，原因是 `FuturesMarginAPI.calculate_stock_futures_maintenance_margin` 既沒有呼叫點也沒有測試。把本工作的改動 stash 掉之後照樣紅。2026-09-21 決定補測試：`tests/test_api_public_interfaces.py` 新增 `test_calculate_stock_futures_maintenance_margin`，另外以一筆獨立的 commit 修正。
 
 ### S5. `core/Dockerfile` 改用 uv 🔄
@@ -166,3 +169,4 @@
 2. **`架構重構與冗餘收斂.md` 對 `ta` 的結論要修正**：它是 finmind 的相依，不是「零反向相依」（見 S2）。另外，那份文件中「照 README 只裝 requirements.txt 的人跑 `generate_docx.py` 會 `ModuleNotFoundError`」那一項，在 uv 之後仍然成立，只是指令變成 `uv sync` 不含 `lab`；那一步的敘述要改寫。
 3. **本機 `.venv` 曾與 `requirements.txt` 不一致**（8 個版本不同、13 個多餘套件，見 S2）：這正是本工作要解決的問題，已隨 S3 消除，不需另外處理，只記錄在這裡作為佐證。
 4. **`main` 的 CI 既有紅燈**（API 死介面檢查，見 S4）：與 uv 無關，2026-09-21 已補測試修掉，不需另外處理。
+5. **8 條 `not slow` 測試在沒有資料庫的環境會失敗**（見 S4）：與 uv 無關，被死介面檢查擋在前面才沒被發現。修法有兩種：標成 `slow`，或改成注入 in-memory DAO。會卡住本文件 S4 的 CI 驗收。
