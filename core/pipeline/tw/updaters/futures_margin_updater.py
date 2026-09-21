@@ -14,7 +14,7 @@ from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleane
 from core.pipeline.tw.crawlers.futures_margin_crawler import FuturesMarginCrawler
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
 from core.pipeline.utils.data_utils import DataUtils
-from core.pipeline.utils.exceptions import DataLoadError
+from core.pipeline.utils.exceptions import AnnouncementParseError, DataLoadError
 from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -354,6 +354,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
             "download_failed": 0,
             "no_csv": 0,
             "no_futures_rows": 0,
+            "parse_failed": 0,
             "chain_gaps": 0,
         }
         gap_products: set = set()
@@ -373,16 +374,23 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 continue
 
             text: Optional[str] = self.crawler.crawl_announcement_csv(csv_url)
-            cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
-                None
-                if text is None
-                else self.cleaner.clean_margin_announcement(
-                    text, announcement["title"], announcement_date
-                )
-            )
             if text is None:
                 # 下載失敗不記進處理紀錄，下次回補重試
                 stats["download_failed"] += 1
+                time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
+                continue
+
+            try:
+                cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
+                    self.cleaner.clean_margin_announcement(
+                        text, announcement["title"], announcement_date
+                    )
+                )
+            except AnnouncementParseError as error:
+                # 比照下載失敗：不記進處理紀錄，下次回補重試。記成「沒有期貨列」
+                # 的話，版面改制或下載到錯誤頁的公告從此不再下載
+                logger.warning(f"[Futures Margin] {error}；不寫處理紀錄，下次重試")
+                stats["parse_failed"] += 1
                 time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
                 continue
             if cleaned is None:
@@ -462,7 +470,8 @@ class FuturesMarginUpdater(BaseDataUpdater):
             f"📊 回補統計：金額新增 {stats['loaded']} 列、比例新增 "
             f"{stats['loaded_rates']} 列、已存在跳過 {stats['skipped_existing']} 則、"
             f"無 CSV 附件 {stats['no_csv']} 則、無期貨列 {stats['no_futures_rows']} 則、"
-            f"附件下載失敗 {stats['download_failed']} 則"
+            f"附件下載失敗 {stats['download_failed']} 則、"
+            f"附件解析失敗 {stats['parse_failed']} 則"
         )
         if stats["chain_gaps"]:
             logger.warning(

@@ -15,6 +15,7 @@ from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
 from core.pipeline.tw.updaters.futures_margin_updater import FuturesMarginUpdater
+from core.pipeline.utils.exceptions import AnnouncementParseError
 from core.utils import FUTURES_MULTIPLIER
 
 """
@@ -913,6 +914,49 @@ def test_wrong_header_yields_none(cleaner: FuturesMarginCleaner) -> None:
         )
         is None
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "<!DOCTYPE html><html><body>系統忙碌中</body></html>",
+        # 契約代碼與保證金欄都在，只是順序換了：保證金附件改版
+        "契約代碼,契約中文簡稱,契約ABC值,調整後原始保證金,調整後維持保證金,"
+        "調整後結算保證金\nTX,臺股期貨,,300000,230000,220000\n",
+    ],
+    ids=["empty", "html-page", "reordered-margin-header"],
+)
+def test_unparsable_attachment_raises_instead_of_none(
+    cleaner: FuturesMarginCleaner, text: str
+) -> None:
+    """
+    解析不了的附件要拋出，不可與「沒有期貨列」一樣回 None
+
+    回 None 會被 updater 記成「沒有期貨列」寫進處理紀錄，這則公告從此不再下載；
+    期交所改版或下載到錯誤頁時，只能整批強制重抓才救得回來。
+    """
+
+    with pytest.raises(AnnouncementParseError):
+        cleaner.clean_margin_announcement(text, ANNOUNCEMENT_TITLE, ANNOUNCEMENT_DATE)
+
+
+def test_parse_failure_is_retried_on_the_next_backfill(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, summaries: List[str]
+) -> None:
+    """解析失敗的公告不寫處理紀錄，下一次回補會再下載"""
+
+    updater, crawler = make_history_updater(tmp_path, monkeypatch)
+    crawler.contents["https://taifex/attach/index.csv"] = "<html>系統忙碌中</html>"
+
+    updater.update_history()
+
+    assert "附件解析失敗 1 則" in summaries[-1]
+
+    crawler.downloaded_urls.clear()
+    updater.update_history()
+
+    assert "https://taifex/attach/index.csv" in crawler.downloaded_urls
 
 
 # === 入庫：公告覆蓋一覽表 ===

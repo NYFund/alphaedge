@@ -221,6 +221,20 @@ class ColumnLayoutError(PipelineError):
         )
 
 
+class AnnouncementParseError(PipelineError):
+    """公告附件解析不了：空白、下載到錯誤頁，或保證金附件的版面改了。
+
+    與「附件正常、只是沒有期貨列」（選擇權、部位限制公告）必須分開：後者寫進
+    處理紀錄、以後不再下載；前者若也寫進去，這則公告就永遠不會再被重抓，
+    只能整批強制重下。
+    """
+
+    def __init__(self, announcement_date: Any, reason: str) -> None:
+        self.announcement_date: Any = announcement_date
+        self.reason: str = reason
+        super().__init__(f"{announcement_date} 公告附件解析失敗：{reason}")
+
+
 class CleanFailureError(PipelineError):
     """部分來源的清洗失敗（版面改制），整批更新不算成功。
 
