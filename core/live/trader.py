@@ -920,8 +920,8 @@ class LiveTrader:
         增加；實盤是非同步的，一批 8 張單送出時全部尚未成交，只看持倉的話整批
         都會放行——`max_holdings` 等於沒有設。
 
-        已持有或已掛單的標的不佔新名額：那是加碼，與 `get_position_count()`
-        「同一檔加碼多次只算一檔」的檔數語意一致。
+        已持有或已掛單的標的不佔新名額（加碼），豁免寫在共用的
+        `order_preprocess.check_max_holdings()`，與回測同一份。
         """
 
         if context.strategy.max_holdings is None:
@@ -930,12 +930,8 @@ class LiveTrader:
         occupied: Set[str] = self._occupied_symbols(context)
         kept: List[BaseOrder] = []
         for order in orders:
-            if order.symbol in occupied:
-                kept.append(order)
-                continue
-
             if not order_preprocess.check_max_holdings(
-                order, context.strategy.max_holdings, len(occupied)
+                order, context.strategy.max_holdings, occupied
             ):
                 self._write_max_holdings_event(context, order)
                 continue

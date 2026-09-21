@@ -591,6 +591,9 @@ class Backtester:
             「資金要切成幾份」，張數不足 1 張的候選不佔名額；這邊是逐單階段的硬上限，
             看即時持倉數——未成交的單不增加持倉，後面的單因此仍可能被放行。
             兩者不等價，少任何一道都會漏掉對方擋得住的情況。
+
+            已持有標的的加碼單不佔新名額，判定在共用的
+            `order_preprocess.check_max_holdings()`，與實盤同一份。
         - Parameters:
             - order: BaseOrder
                 待執行的開倉單
@@ -599,11 +602,13 @@ class Backtester:
                 True 表示可以開倉
         """
 
+        held_symbols: Set[str] = {
+            position.symbol
+            for position in self.account.positions
+            if not position.is_closed
+        }
         return order_preprocess.check_max_holdings(
-            order,
-            self.max_holdings,
-            self.account.get_position_count(),
-            self.event_counts,
+            order, self.max_holdings, held_symbols, self.event_counts
         )
 
     def execute_close_signal(self, quotes: List[BaseQuote]) -> List[BaseTradeRecord]:
