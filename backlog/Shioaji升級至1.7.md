@@ -43,7 +43,7 @@
   - 已知的一項：`OrderState` 在 1.7 起改由原生模組提供、不再是 Python Enum（`tests/test_order_state_parity.py` 與 CI 註解已記錄），會影響 `core/utils/callback.py` 的 `order_cb` 比較前提。
 - **產出**：本文件新增〈差異盤點〉章節（符號、1.3.3 行為、1.7.5 行為、影響位置、處置）。
 - **驗證方式**：「符號 → 使用位置」表中每個符號都在差異表出現，註明「無變動」或具體變動。
-- **相依**：[改用uv管理套件.md](改用uv管理套件.md) S3（以 uv 建立對照環境並用 `uv lock --upgrade-package` 升版）。
+- **相依**：改用 uv 管理套件（2026-09-21 已完成並移出 backlog；以 uv 建立對照環境並用 `uv lock --upgrade-package` 升版）。
 
 > **✅ 完成紀錄（2026-09-21）**
 >
@@ -208,11 +208,6 @@
 
 ## 另案處理
 
-升版途中發現、但依範圍界線不在本文件處理的項目記在這裡：新版的新能力（Contract V2 lazy lookup、即時 KBar 等），以及舊程式在新版下仍能運作、但寫法可以改善的地方。會讓程式失效的不相容一律在 S3 當場修，不記在這裡。
-
-本文件與 [改用uv管理套件.md](改用uv管理套件.md) 都完成後，兩份文件的這個章節合併整理成一份新的 backlog 文件，再回頭更新 [架構重構與冗餘收斂.md](架構重構與冗餘收斂.md)（重點是 Phase1-3 的 `market_calendar.py` 與 Phase7-6「未裝 shioaji 的環境」驗收）。
-
-1. `Deal` 新增 tz-aware 的 `datetime` 欄位：成交時間可以直接讀，不必再自己從 `ts` 換算（差異盤點 #10）。
-2. 新版多了原生的非同步 API（`ShioajiAsync`）與 receiver 模式（`get_tick_stk_v1_receiver()`），可以取代「回呼丟進 queue」的寫法；這屬於架構變更，不在升版時處理。
-3. **合約查詢改用 `api.contracts`（Contract V2）**：`api.Contracts` 已標為棄用（使用時發出預設隱藏的 `DeprecationWarning`），官方建議改用 `api.contracts.get(code)`、`futures(root)`，並可取得 `sbl_shortable`、`margin_shortable` 等券賣資格欄位。這次 S3 只把 facade 的用法改成 1.7 仍支援的寫法，沒有換 API。
-4. `shioaji[speed]` extra：import 時會提示安裝以提升效能。在 1.3.3 就已存在，是否加上留到升版後評估（來源：`改用uv管理套件.md` 的後續改善章節）。
+升版途中發現、但依範圍界線不在本文件處理的項目（新版的新能力、仍能運作但可改善的寫法），
+已於 2026-09-21 統一移到 [專案優化與改善清單.md](專案優化與改善清單.md) 的 Phase7。
+之後再發現的同類項目直接寫進那份文件，不在這裡累積。會讓程式失效的不相容一律在 S3 當場修。
