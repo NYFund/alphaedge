@@ -57,3 +57,6 @@ site/
 # ruff 與 pytest 的 cache 目錄會自行寫入 .gitignore 自我排除，不需列在這裡
 *.egg-info/
 .coverage
+
+# 個人 notebook：常拿來貼金鑰做臨時測試，不可進版控
+*.ipynb
