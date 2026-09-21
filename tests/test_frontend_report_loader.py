@@ -230,3 +230,25 @@ def test_sort_by_exit_date_keeps_balance_monotonic(trading_df: pd.DataFrame) -> 
     assert by_exit["Cumulative Balance"].tolist() == (
         trading_df["Cumulative Balance"].tolist()
     )
+
+
+def test_only_directories_with_a_report_are_listed(tmp_path: Path) -> None:
+    """
+    下拉選單只列有 trading report 的資料夾
+
+    實盤輸出 `results/live/` 以前會被列成一支策略，選了之後停在
+    「找不到 trading report CSV」；`logs/` 同理。
+    """
+
+    import shutil
+
+    from frontend.services.report_loader import list_strategy_dirs
+
+    shutil.copytree(_FIXTURE_DIR, tmp_path / "Foreign-Sell-Short-Day-Trade")
+    (tmp_path / "live" / "Alpha").mkdir(parents=True)
+    (tmp_path / "live" / "Alpha" / "2026-09-21_orders.csv").write_text("x\n")
+    (tmp_path / "logs").mkdir()
+
+    assert [path.name for path in list_strategy_dirs(tmp_path)] == [
+        "Foreign-Sell-Short-Day-Trade"
+    ]

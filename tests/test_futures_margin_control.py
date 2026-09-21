@@ -379,7 +379,26 @@ def test_margin_call_ratio_triggers_earlier() -> None:
 
 
 # === 回測接線 ===
-def test_datafeed_injects_the_margin_api_into_the_shared_config() -> None:
+@pytest.fixture
+def isolated_futures_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """
+    DataFeed 的期貨連線改開在暫存路徑
+
+    `setup()` 會以寫入模式連 `TW_FUTURES_DB_PATH`：沒有資料庫的機器上，這會在
+    `data/db/` 建出 0 byte 的 `tw_futures.db`，之後「檔案存在才跑」的測試就不再
+    跳過、改以 no such table 失敗——第一次跑 1 skipped、第二次 FAILED。
+    """
+
+    import core.backtest.datafeed.tw.futures_datafeed as datafeed_module
+
+    db_path: Path = tmp_path / "tw_futures.db"
+    monkeypatch.setattr(datafeed_module, "TW_FUTURES_DB_PATH", db_path)
+    return db_path
+
+
+def test_datafeed_injects_the_margin_api_into_the_shared_config(
+    isolated_futures_db: Path,
+) -> None:
     """
     保證金 API 由 DataFeed 注入**策略與部位管理層共用的那一個設定物件**
 
@@ -419,7 +438,7 @@ def test_datafeed_injects_the_margin_api_into_the_shared_config() -> None:
         backtester.data_feed.close()
 
 
-def test_ratio_mode_is_not_injected() -> None:
+def test_ratio_mode_is_not_injected(isolated_futures_db: Path) -> None:
     """明確宣告比率近似時不注入 API——否則使用者的降級表態會被無聲推翻"""
 
     from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed

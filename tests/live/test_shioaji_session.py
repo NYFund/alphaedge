@@ -13,8 +13,8 @@ from core.broker.tw.shioaji_session import ShioajiSession
 """
 `ShioajiSession`：登入、憑證、帳號與時鐘檢查，以及斷線重連
 
-全部以假 API 物件驗證，不連網。真正要連上模擬環境才能確認的事項另記在
-`backlog/實盤下單架構規劃.md` 的 Phase2-2 完成紀錄裡——本檔驗的是
+全部以假 API 物件驗證，不連網。真正要連上模擬環境才能確認的事項由
+`scripts/manual/manual_shioaji_login.py` 手動冒煙——本檔驗的是
 「程式在各種回應下的行為」，不是「券商會回什麼」。
 
 擋的事故：

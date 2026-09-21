@@ -16,7 +16,7 @@ from .conftest import FakeBroker
 本檔刻意只驗介面層面的行為（連線、狀態轉移、回報入列、查無資料的處理、
 訂閱上限），不驗某家券商的特有語意——那些留給各實作自己的測試。
 
-`ShioajiBroker`（Phase2-8）完成後會以 `-m shioaji_sim` 在模擬環境跑同一份，
+`ShioajiBroker` 要以 `-m shioaji_sim` 在模擬環境跑同一份，
 兩邊都通過才算介面成立。只靠假券商測出來的東西到了實盤不算數：
 假券商永遠照著腳本走，而真券商會在你沒想到的地方回一個 None。
 """

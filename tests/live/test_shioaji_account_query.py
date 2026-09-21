@@ -166,7 +166,7 @@ def test_settlement_sum_handles_the_row_shape() -> None:
     逐列形狀：依 `T` 欄位判斷，不依列的順序
 
     專案裡兩支 API 都有人用（`core/utils/account.py` 用的是這一種），
-    Phase7-3 收斂前它們會並存。
+    舊的 `core/utils/` 工具收斂之前它們會並存。
     """
 
     rows: List[FakeSettlementV1] = [

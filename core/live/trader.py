@@ -607,7 +607,7 @@ class LiveTrader:
         把一個待回補部位換成回補單
 
         **訂單型別走 `context.build_filled_order`**：本檔刻意不出現任何市場或
-        商品字樣（`check_layer_deps.py` 會擋），而 Phase7-2 注入的那個建構器
+        商品字樣（`check_layer_deps.py` 會擋），而 factory 依市場注入的那個建構器
         正是為此存在的。
 
         價格取**該檔最後一筆報價**；取不到就回 None，由守門記 error。

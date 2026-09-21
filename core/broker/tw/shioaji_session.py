@@ -30,7 +30,7 @@ ShioajiSession：登入、憑證、模擬旗標、斷線重連與時鐘檢查
 
 # 登入失敗的例外訊息會**整串帶著簽章負載**（`payload: {'msg': ..., 'sign': ...}`），
 # 那是由 API secret 衍生出來的，而例外一旦沒被接住就會連著 traceback 印到終端與 log，
-# 之後還會被 Phase4-7 的推播原樣送出去。
+# 之後還會被告警推播（`core/live/notify/`）原樣送出去。
 #
 # 附帶的好處是可讀性：實測一次逾時的訊息有 400 多字，真正的原因
 # （`Info: Session connect timeout`）被埋在負載後面，肉眼根本掃不到。

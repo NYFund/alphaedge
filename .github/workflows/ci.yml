@@ -30,8 +30,11 @@ jobs:
       # 少了它，改了 pyproject 卻忘了更新 lock 時，CI 會照新解析的版本裝，
       # 測到的就不是本機與 Docker 在跑的版本（shioaji 1.7 的 `OrderState`
       # 已不是 Enum，同一條測試曾因此在 CI 紅、在本機綠）
+      #
+      # `--extra frontend`：`tests/test_frontend_app_smoke.py` 要真的把 `frontend/app.py`
+      # 跑一遍，沒有 streamlit 就只會被 skip——等於沒測
       - name: 安裝專案與開發相依
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --extra frontend
 
       - name: Lint（CLAUDE.md §2.5 import 排序、§2.10 行寬與引號）
         run: uv run ruff check .
@@ -50,6 +53,16 @@ jobs:
       # （健檢第四輪 S2）。純靜態掃描，不需要資料庫，約 0.3 秒
       - name: 文件路徑檢查
         run: uv run python scripts/check_doc_paths.py
+
+      # pre-commit 的其餘 hook：註解不得引用 backlog 步驟編號（CLAUDE.md §2.1）、
+      # 禁用 exc_info=、YAML／TOML 語法、檔尾換行、行尾空白、大檔。
+      # 它們原本只在裝了 hook 的本機生效，而本機多半沒裝——等於沒有閘門，
+      # HEAD 上曾累積十幾處引用步驟編號的註解。ruff 與兩支腳本上面已經各跑一次，
+      # 以 SKIP 略過，不重跑
+      - name: pre-commit 其餘檢查
+        env:
+          SKIP: ruff,ruff-format,check-layer-deps,check-doc-paths
+        run: uvx pre-commit run --all-files --show-diff-on-failure
 
       # `core/api` 的死介面閘門：零呼叫零測試的公開方法。
       # 它會 import `core/api`，故排在測試相依裝好之後
@@ -76,3 +89,32 @@ jobs:
       - name: 測試覆蓋率（僅報告，不阻擋）
         continue-on-error: true
         run: uv run pytest -m "not slow" --cov=core --cov-report=term-missing
+
+  # 兩個 Docker 映像：以前 CI 從不 build，映像壞掉要等有人手動 build 才發現
+  # （`frontend/Dockerfile` 開頭的註解記錄的就是一次這樣的迴歸）。
+  # 與 `check` 平行跑，不必等測試
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 建置 core 映像
+        run: docker build -f core/Dockerfile -t alphaedge-core .
+
+      # 進入點是 `python run.py`，預設參數 `--help`：跑得起來代表相依裝齊、
+      # editable 安裝與 `core/config/paths.py` 的路徑推導都正常
+      - name: core 映像冒煙
+        run: docker run --rm alphaedge-core
+
+      - name: 建置 frontend 映像
+        run: docker build -f frontend/Dockerfile -t alphaedge-frontend .
+
+      # **工作目錄刻意切到 `/`**：`python -c` 會把工作目錄放進 `sys.path`，
+      # 在 `/app` 底下跑的話，拿掉 `PYTHONPATH=/app` 也照樣 import 得到，
+      # 就驗不到 Streamlit 實際執行時的那個條件。三個套件是 `app.py` 的相依，
+      # 缺一個就是「映像裝得起來、一開頁就 ModuleNotFoundError」
+      - name: frontend 映像冒煙
+        run: >-
+          docker run --rm -w / alphaedge-frontend
+          python -c "import frontend.config, streamlit, plotly, pandas"
