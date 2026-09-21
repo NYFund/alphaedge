@@ -33,8 +33,10 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 # 相依分兩層裝：先照 uv.lock 裝第三方套件，只改原始碼時這層仍吃快取。
 # `--no-install-project`：此時原始碼還沒進來，本專案留到下方再裝。
 # `--frozen`：直接照 lock 裝、不檢查 pyproject 是否變動——一致性由 CI 的 `--locked` 把關
+# `--no-dev`：`dev` 是預設會裝的 dependency group，正式映像不需要 pytest 與 ruff。
+# 兩行 `uv sync` 都要帶，漏一行就會在第二次同步時把它們裝回來
 COPY pyproject.toml uv.lock /app/
-RUN uv sync --frozen --no-install-project --no-cache
+RUN uv sync --frozen --no-dev --no-install-project --no-cache
 
 # NOTE:
 # Build this Dockerfile with project root as context:
@@ -49,7 +51,7 @@ COPY tasks /app/tasks
 # **必須是 editable**（uv sync 對本專案預設即是）：`core/config/paths.py` 以 `__file__`
 # 推算專案根目錄，一般安裝會把程式複製進 site-packages，`results/`、`logs/`
 # 就不會落在掛載的 /app 底下
-RUN uv sync --frozen --no-cache && uv pip check --python /opt/venv/bin/python
+RUN uv sync --frozen --no-dev --no-cache && uv pip check --python /opt/venv/bin/python
 
 ENTRYPOINT ["python", "run.py"]
 CMD ["--help"]

@@ -15,7 +15,7 @@
 
 ## 安裝
 
-本機：在專案根目錄以 uv 補裝 frontend extra（開發時要保留 `dev` 就一起列出：`uv sync --extra dev --extra frontend`）：
+本機：在專案根目錄以 uv 補裝 frontend extra（開發工具是預設會裝的 `dev` group，不會因此被移除）：
 
 ```bash
 uv sync --extra frontend

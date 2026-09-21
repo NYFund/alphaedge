@@ -317,17 +317,17 @@ cp .env.example .env
 
 ### 4. Developer tools (when changing code)
 
-In the Option 1 environment, add the dev extras:
+The dev tools (pytest, pytest-timeout, pytest-cov, ruff) are the `dev` dependency group, **installed by `uv sync` by default**:
 
 ```bash
-uv sync --extra dev   # pytest, pytest-timeout, pytest-cov, ruff
+uv sync               # dependencies + the project + dev tools
 ```
 
 Other optional extras: `frontend` (Streamlit UI), `tick` (DolphinDB tick storage), `lab` (`strategy_lab` report output);
 the backtest and ETL paths run without them.
 
-**`uv sync` makes the environment match exactly what you ask for**: extras not listed on the command are removed.
-To keep several, list them together, e.g. `uv sync --extra dev --extra frontend`, or use `uv sync --all-extras`.
+**`uv sync` makes the environment match exactly what you ask for**: extras not listed on the command are removed (the dev tools are not affected).
+To keep several extras, list them together, e.g. `uv sync --extra frontend --extra lab`, or use `uv sync --all-extras`.
 
 **Lint, format and tests**
 

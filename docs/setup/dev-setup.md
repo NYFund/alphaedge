@@ -13,19 +13,21 @@
 ## 1) 建立環境並安裝套件
 
 ```bash
-uv sync --extra dev          # 建立 .venv，裝相依、專案本身與開發工具
+uv sync                      # 建立 .venv，裝相依、專案本身與開發工具
 source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 ```
 
 `uv sync` 依 `uv.lock` 安裝每個套件的精確版本，並把專案本身裝成 editable，
 因此**一行指令就完成環境建置**。安裝後 `core` / `tasks` / `tests` 於**任意工作目錄**皆可 import，
-不需再設 `PYTHONPATH`。`.venv` 是可以隨時重建的產物：壞了就 `rm -rf .venv && uv sync --extra dev`。
+不需再設 `PYTHONPATH`。`.venv` 是可以隨時重建的產物：壞了就 `rm -rf .venv && uv sync`。
 
-`dev` extra 內含 pytest、pytest-timeout、pytest-cov、ruff。其他選用相依（預設不裝，主流程不需要）：
+開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `pyproject.toml` 的 `[dependency-groups].dev`，
+`uv sync` 預設就會裝，正式映像以 `--no-dev` 排除。其他選用相依（預設不裝，主流程不需要）：
 `frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、`lab` `strategy_lab` 報告輸出。
 
-**`uv sync` 會把環境同步成「剛好」指定的內容**，沒列在指令上的 extra 會被移除。
-要同時使用多組時一起列出（`uv sync --extra dev --extra frontend`），或用 `uv sync --all-extras`。
+**`uv sync` 會把環境同步成「剛好」指定的內容**，沒列在指令上的 extra 會被移除（`dev` group 不受影響）。
+要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab`），或用 `uv sync --all-extras`。
+以 pip 安裝時，開發工具要用 `pip install --group dev`（pip 25.1 起支援），不再是 `.[dev]`。
 
 ## 2) 相依的宣告與鎖定
 

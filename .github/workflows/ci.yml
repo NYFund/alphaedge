@@ -31,10 +31,11 @@ jobs:
       # 測到的就不是本機與 Docker 在跑的版本（shioaji 1.7 的 `OrderState`
       # 已不是 Enum，同一條測試曾因此在 CI 紅、在本機綠）
       #
+      # 開發工具是預設會裝的 `dev` dependency group，不必另外列。
       # `--extra frontend`：`tests/test_frontend_app_smoke.py` 要真的把 `frontend/app.py`
       # 跑一遍，沒有 streamlit 就只會被 skip——等於沒測
       - name: 安裝專案與開發相依
-        run: uv sync --locked --extra dev --extra frontend
+        run: uv sync --locked --extra frontend
 
       - name: Lint（CLAUDE.md §2.5 import 排序、§2.10 行寬與引號）
         run: uv run ruff check .
