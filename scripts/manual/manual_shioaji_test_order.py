@@ -38,6 +38,13 @@ FUTURES_PRODUCT: str = "TXF"
 # 週選的代號尾碼；近月合約要把它們排除
 WEEKLY_SUFFIXES: Tuple[str, ...] = ("R1", "R2")
 
+# 送單、撤單、查狀態都**等券商回覆**，單位毫秒。
+#
+# **不可以用 `timeout=0`**：那是非阻塞，`place_order()` 會在券商確認之前就回傳，
+# 於是狀態一定是 `Inactive`、委託序號一定是空的——看起來像被拒，其實只是
+# 還沒收到回覆。2026-09-21 第一次實跑就是這樣，完全判斷不出委託到底有沒有進去
+ORDER_TIMEOUT_MS: int = 5000
+
 
 def parse_arguments() -> argparse.Namespace:
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
@@ -110,7 +117,7 @@ def place_stock_order(api: Any, contract: Any, price: float) -> Any:
         order_type=sj_constant.OrderType.ROD,
         account=api.stock_account,
     )
-    return api.place_order(contract, order, timeout=0)
+    return api.place_order(contract, order, timeout=ORDER_TIMEOUT_MS)
 
 
 def place_futures_order(api: Any, contract: Any, price: float) -> Any:
@@ -136,7 +143,7 @@ def place_futures_order(api: Any, contract: Any, price: float) -> Any:
         octype=sj_constant.FuturesOCType.Auto,
         account=api.futopt_account,
     )
-    return api.place_order(contract, order, timeout=0)
+    return api.place_order(contract, order, timeout=ORDER_TIMEOUT_MS)
 
 
 def main() -> int:
@@ -204,18 +211,18 @@ def main() -> int:
                     ("期貨", place_futures_order(api, futures_contract, futures_price))
                 )
 
-        api.update_status(timeout=0)
+        api.update_status(timeout=ORDER_TIMEOUT_MS)
         for label, trade in trades:
             logger.info(f"{label}委託：{describe(trade)}")
 
         if args.cancel:
             for label, trade in trades:
                 try:
-                    api.cancel_order(trade, timeout=0)
+                    api.cancel_order(trade, timeout=ORDER_TIMEOUT_MS)
                     logger.info(f"{label}委託已送出撤單")
                 except Exception as exc:
                     logger.warning(f"{label}撤單失敗（跌停買單本來就不會成交）：{exc}")
-            api.update_status(timeout=0)
+            api.update_status(timeout=ORDER_TIMEOUT_MS)
             for label, trade in trades:
                 logger.info(f"{label}撤單後：{describe(trade)}")
 

@@ -609,3 +609,45 @@ def test_login_error_chain_is_cut(
 
     assert error.value.__cause__ is None
     assert error.value.__suppress_context__ is True
+
+
+# === 登出失敗不可以把 token 寫進 log ===
+def test_logout_failure_does_not_leak_the_session_token(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    登出失敗時的 log 不可以含 session token 或身分證字號
+
+    **2026-09-21 模擬環境實測撞到**：登出逾時的例外訊息帶著 token 與含身分證的
+    client 名稱，而 `close()` 原本直接 `opt(exception=True)` 印出——loguru 連
+    traceback 每一層的區域變數都印了，token 出現三次並一路寫進檔案 sink。
+    `connect()` 早就有刮過再記的做法，`close()` 沒跟上。
+    """
+
+    from loguru import logger
+
+    fake_token: str = (
+        "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJmYWtlIjoidG9rZW4ifQ.SIGNATURESIGNATURE"
+    )
+
+    class LeakyLogout(FakeShioaji):
+        def logout(self) -> None:
+            raise TimeoutError(
+                "Topic: api/v1/auth/logout, Corr: c11, "
+                "Client: PYAPI/A123456789/0921/050257/787868/1.2.3.4, "
+                f"payload: {{'token': '{fake_token}'}}"
+            )
+
+    captured: List[str] = []
+    handle: int = logger.add(lambda message: captured.append(str(message)))
+    try:
+        session: ShioajiSession = make_session(fixed_now, api=LeakyLogout())
+        session.connect()
+        session.close()
+    finally:
+        logger.remove(handle)
+
+    text: str = "".join(captured)
+    assert "登出失敗" in text
+    assert fake_token not in text
+    assert "A123456789" not in text

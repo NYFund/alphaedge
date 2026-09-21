@@ -403,7 +403,10 @@ class ShioajiSession:
         try:
             self.connect()
         except Exception as exc:
-            logger.opt(exception=True).error(f"重連失敗：{exc}")
+            # 同 `close()`：traceback 的區域變數含有登入負載，一律只記刮過的訊息
+            logger.error(
+                f"重連失敗（{type(exc).__name__}）：{self.redact_credentials(str(exc))}"
+            )
             return False
 
         logger.info("重連成功")
@@ -432,7 +435,14 @@ class ShioajiSession:
             self.api.logout()
             logger.info("Shioaji 已登出")
         except Exception as exc:
-            logger.opt(exception=True).warning(f"Shioaji 登出失敗（忽略）：{exc}")
+            # **不印 traceback、訊息要先刮過**：登出失敗的例外訊息帶著 session token
+            # 與含身分證字號的 client 名稱，而 `opt(exception=True)` 會讓 loguru
+            # 連 traceback 裡每一層的區域變數都印出來——token 因此出現好幾次，
+            # 並一路寫進檔案 sink。與 `connect()` 的處理方式一致
+            logger.warning(
+                f"Shioaji 登出失敗（{type(exc).__name__}，忽略）："
+                f"{self.redact_credentials(str(exc))}"
+            )
         finally:
             self.connected = False
             self.api = None
