@@ -32,7 +32,37 @@ from core.dao.connection import connect_live_trading
 **寫入的冪等性靠主鍵**，不靠呼叫端記得檢查：成交以 `(broker_seqno, broker_trade_id)`
 為主鍵並走 `INSERT OR IGNORE`，同一筆重放幾次都只會有一列。實盤的回報會重複推送，
 而重複記一筆成交等於帳上多了一個不存在的部位。
+
+**時間欄位存完整時間（含時區），日期欄位存日期**：研究庫共用的 `to_sql_params()`
+會把 `datetime` 截成日期，那是日頻資料要的；但這裡同一天會有好幾段執行，
+截成日期之後「哪一筆最後結束」「事件先後」全都分不出來。
+依日期篩選一律用 `substr(欄位, 1, 10)` 而不是 SQLite 的 `date()`：後者會先把
+帶時區的時間換算成 UTC，台北早上 08:00 以前的紀錄會被歸到前一天。
 """
+
+
+def _to_live_params(*values: Any) -> Tuple[Any, ...]:
+    """
+    - Description:
+        實盤紀錄庫的參數轉換：`datetime` 保留完整 ISO 時間，其餘沿用 `to_sql_params()`
+
+        `date` 與 `datetime` 要分開判斷且先判 `datetime`（它是 `date` 的子類別）。
+        呼叫端寫日期欄位（`open_date`、`due_date`、快照的 `date`）時傳的是 `date`，
+        寫時間欄位時傳的是 `datetime`，型別本身就決定了格式。
+    - Parameters:
+        - values: Any
+            查詢參數
+    - Return:
+        - Tuple[Any, ...]
+            可直接傳給 `execute()` 的 tuple
+    """
+
+    return tuple(
+        value.isoformat()
+        if isinstance(value, datetime.datetime)
+        else to_sql_params(value)[0]
+        for value in values
+    )
 
 
 class LiveTradeDAO(BaseDAO):
@@ -348,7 +378,7 @@ class LiveTradeDAO(BaseDAO):
         self.conn.execute(
             f"UPDATE {LIVE_RUN_TABLE_NAME} "
             "SET ended_at = ?, end_reason = ?, account_mode = ? WHERE run_id = ?",
-            to_sql_params(ended_at, end_reason, account_mode, run_id),
+            _to_live_params(ended_at, end_reason, account_mode, run_id),
         )
         self.conn.commit()
 
@@ -369,7 +399,7 @@ class LiveTradeDAO(BaseDAO):
 
         self.conn.execute(
             f"UPDATE {LIVE_RUN_TABLE_NAME} SET account_mode = ? WHERE run_id = ?",
-            to_sql_params(account_mode, run_id),
+            _to_live_params(account_mode, run_id),
         )
         self.conn.commit()
 
@@ -399,7 +429,7 @@ class LiveTradeDAO(BaseDAO):
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT run_id FROM {LIVE_RUN_TABLE_NAME} "
             "WHERE ended_at IS NULL AND run_id != ?",
-            to_sql_params(current_run_id),
+            _to_live_params(current_run_id),
         ).fetchall()
         crashed: List[str] = [str(row[0]) for row in rows]
         if not crashed:
@@ -408,7 +438,7 @@ class LiveTradeDAO(BaseDAO):
         self.conn.execute(
             f"UPDATE {LIVE_RUN_TABLE_NAME} "
             "SET ended_at = ?, end_reason = ? WHERE ended_at IS NULL AND run_id != ?",
-            to_sql_params(ended_at, self.END_REASON_CRASHED, current_run_id),
+            _to_live_params(ended_at, self.END_REASON_CRASHED, current_run_id),
         )
         self.conn.commit()
         return crashed
@@ -420,6 +450,9 @@ class LiveTradeDAO(BaseDAO):
 
             **取最近一筆「已結束」的紀錄**：正在跑的那一筆（`ended_at IS NULL`）
             可能就是本次自己，讀它等於什麼都沒讀到。
+
+            `rowid` 是次要排序鍵：舊紀錄的 `ended_at` 只有日期，同一天的幾筆
+            比不出先後，這時以寫入順序決定，至少不會任挑一筆。
         - Return:
             - str
                 交易模式；沒有任何紀錄時為 `NORMAL`
@@ -427,7 +460,7 @@ class LiveTradeDAO(BaseDAO):
 
         row: Optional[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT account_mode FROM {LIVE_RUN_TABLE_NAME} "
-            "WHERE ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 1"
+            "WHERE ended_at IS NOT NULL ORDER BY ended_at DESC, rowid DESC LIMIT 1"
         ).fetchone()
         return row[0] if row else self.MODE_NORMAL
 
@@ -476,7 +509,7 @@ class LiveTradeDAO(BaseDAO):
         self.conn.execute(
             f"UPDATE {LIVE_FILL_TABLE_NAME} SET actual_fee = ?, actual_tax = ? "
             "WHERE broker_seqno = ? AND broker_trade_id = ?",
-            to_sql_params(actual_fee, actual_tax, broker_seqno, broker_trade_id),
+            _to_live_params(actual_fee, actual_tax, broker_seqno, broker_trade_id),
         )
         self.conn.commit()
 
@@ -519,7 +552,7 @@ class LiveTradeDAO(BaseDAO):
 
         self.conn.execute(
             f"UPDATE {LIVE_POSITION_LOT_TABLE_NAME} SET closed_at = ? WHERE lot_id = ?",
-            to_sql_params(closed_at, lot_id),
+            _to_live_params(closed_at, lot_id),
         )
 
     def reduce_lot(self, lot_id: str, volume: int) -> None:
@@ -528,7 +561,7 @@ class LiveTradeDAO(BaseDAO):
         self.conn.execute(
             f"UPDATE {LIVE_POSITION_LOT_TABLE_NAME} SET volume = volume - ? "
             "WHERE lot_id = ?",
-            to_sql_params(volume, lot_id),
+            _to_live_params(volume, lot_id),
         )
 
     def get_open_lots(
@@ -603,10 +636,10 @@ class LiveTradeDAO(BaseDAO):
 
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} "
-            "WHERE date(created_at) = ? "
+            "WHERE substr(created_at, 1, 10) = ? "
             "AND status NOT IN ('FILLED', 'CANCELLED', 'REJECTED', 'FAILED') "
             "ORDER BY created_at",
-            to_sql_params(run_date),
+            _to_live_params(run_date),
         ).fetchall()
         return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
 
@@ -649,8 +682,8 @@ class LiveTradeDAO(BaseDAO):
 
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} "
-            "WHERE date(created_at) = ? ORDER BY created_at, client_order_id",
-            to_sql_params(run_date),
+            "WHERE substr(created_at, 1, 10) = ? ORDER BY created_at, client_order_id",
+            _to_live_params(run_date),
         ).fetchall()
         return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
 
@@ -671,8 +704,8 @@ class LiveTradeDAO(BaseDAO):
 
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT * FROM {LIVE_RISK_EVENT_TABLE_NAME} "
-            "WHERE date(occurred_at) = ? ORDER BY occurred_at, event_id",
-            to_sql_params(run_date),
+            "WHERE substr(occurred_at, 1, 10) = ? ORDER BY occurred_at, event_id",
+            _to_live_params(run_date),
         ).fetchall()
         return self._to_dicts(LIVE_RISK_EVENT_TABLE_NAME, rows)
 
@@ -693,8 +726,8 @@ class LiveTradeDAO(BaseDAO):
 
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT * FROM {LIVE_FILL_TABLE_NAME} "
-            "WHERE date(filled_at) = ? ORDER BY filled_at, broker_trade_id",
-            to_sql_params(run_date),
+            "WHERE substr(filled_at, 1, 10) = ? ORDER BY filled_at, broker_trade_id",
+            _to_live_params(run_date),
         ).fetchall()
         return self._to_dicts(LIVE_FILL_TABLE_NAME, rows)
 
@@ -713,7 +746,7 @@ class LiveTradeDAO(BaseDAO):
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT * FROM {LIVE_POSITION_SNAPSHOT_TABLE_NAME} "
             "WHERE date = ? ORDER BY source, strategy_name, symbol",
-            to_sql_params(run_date),
+            _to_live_params(run_date),
         ).fetchall()
         return self._to_dicts(LIVE_POSITION_SNAPSHOT_TABLE_NAME, rows)
 
@@ -742,7 +775,7 @@ class LiveTradeDAO(BaseDAO):
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT * FROM {LIVE_PENDING_ACTION_TABLE_NAME} "
             "WHERE status = ? AND due_date <= ? ORDER BY due_date, action_id",
-            to_sql_params(self.ACTION_PENDING, due_date),
+            _to_live_params(self.ACTION_PENDING, due_date),
         ).fetchall()
         return self._to_dicts(LIVE_PENDING_ACTION_TABLE_NAME, rows)
 
@@ -754,7 +787,7 @@ class LiveTradeDAO(BaseDAO):
         self.conn.execute(
             f"UPDATE {LIVE_PENDING_ACTION_TABLE_NAME} "
             "SET status = ?, resolved_at = ? WHERE action_id = ?",
-            to_sql_params(status, resolved_at, action_id),
+            _to_live_params(status, resolved_at, action_id),
         )
         self.conn.commit()
 
@@ -764,7 +797,7 @@ class LiveTradeDAO(BaseDAO):
         self.conn.execute(
             f"UPDATE {LIVE_PENDING_ACTION_TABLE_NAME} SET due_date = ? "
             "WHERE action_id = ?",
-            to_sql_params(due_date, action_id),
+            _to_live_params(due_date, action_id),
         )
         self.conn.commit()
 
@@ -805,7 +838,7 @@ class LiveTradeDAO(BaseDAO):
 
         return self.conn.execute(
             f"INSERT OR IGNORE INTO {table} ({quoted}) VALUES ({placeholders})",
-            to_sql_params(*(row[column] for column in columns)),
+            _to_live_params(*(row[column] for column in columns)),
         )
 
     def _upsert(
@@ -847,7 +880,7 @@ class LiveTradeDAO(BaseDAO):
         return self.conn.execute(
             f"INSERT INTO {table} ({quoted}) VALUES ({placeholders}) "
             f"ON CONFLICT({target}) DO UPDATE SET {assignments}",
-            to_sql_params(*(row[column] for column in columns)),
+            _to_live_params(*(row[column] for column in columns)),
         )
 
     def _to_dicts(
