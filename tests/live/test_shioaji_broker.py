@@ -21,10 +21,12 @@ from core.utils import Action, LiveOrderStatus, Status, StockPriceType
 
 
 class FakeOrder:
-    def __init__(self, seqno: str = "000001", ordno: str = "AB123") -> None:
+    def __init__(
+        self, seqno: str = "000001", ordno: str = "AB123", custom_field: str = "010001"
+    ) -> None:
         self.seqno: str = seqno
         self.ordno: str = ordno
-        self.custom_field: str = "1-0001"
+        self.custom_field: str = custom_field
 
 
 class FakeStatus:
@@ -38,10 +40,14 @@ class FakeStatus:
 
 class FakeTrade:
     def __init__(
-        self, status: str = "Submitted", deal_quantity: int = 0, msg: str = ""
+        self,
+        status: str = "Submitted",
+        deal_quantity: int = 0,
+        msg: str = "",
+        order: Optional[FakeOrder] = None,
     ) -> None:
         self.contract: Any = None
-        self.order: FakeOrder = FakeOrder()
+        self.order: FakeOrder = order or FakeOrder()
         self.status: FakeStatus = FakeStatus(status, deal_quantity, msg)
 
 
@@ -91,6 +97,7 @@ class FakeApi:
         self.cancelled: List[Any] = []
         self.updated: List[tuple] = []
         self.status_refreshes: int = 0
+        self.on_broker: List[FakeTrade] = []  # 券商端當日的委託
         self.order_callback: Any = None
         # 每次下單類呼叫帶的 timeout；**假物件要求必填**，漏傳就會 TypeError
         self.timeouts: List[int] = []
@@ -113,7 +120,14 @@ class FakeApi:
     def place_order(self, contract: Any, order: Any, timeout: int) -> FakeTrade:
         self.placed.append((contract, order))
         self.timeouts.append(timeout)
-        return FakeTrade()
+        # 與真券商一樣：配發 seqno，`custom_field` 原樣帶回
+        trade: FakeTrade = FakeTrade(
+            order=FakeOrder(
+                seqno=f"{len(self.placed):06d}", custom_field=order.custom_field
+            )
+        )
+        self.on_broker.append(trade)
+        return trade
 
     def cancel_order(self, trade: Any, timeout: int) -> FakeTrade:
         self.cancelled.append(trade)
@@ -130,7 +144,9 @@ class FakeApi:
         self.timeouts.append(timeout)
 
     def list_trades(self) -> List[FakeTrade]:
-        return [FakeTrade(status="Filled", deal_quantity=2)]
+        # 送過單就回那些單（跨 broker 實例共用同一個 api 即模擬「重啟後向券商查」）；
+        # 沒送過時回一筆已成交的單，供只驗查詢本身的測試使用
+        return list(self.on_broker) or [FakeTrade(status="Filled", deal_quantity=2)]
 
 
 class FakeSession:
@@ -174,6 +190,7 @@ def broker(api: FakeApi, limiter: RateLimiter) -> ShioajiBroker:
 def make_ticket(volume: int = 2, price: float = 1000.0) -> OrderTicket:
     return OrderTicket(
         client_order_id="run1-0001",
+        custom_field="010001",
         strategy_name="MomentumStrategy1",
         order=StockOrder(
             stock_id="2330",
@@ -435,9 +452,95 @@ def test_snapshots_resolve_symbols_first(broker: ShioajiBroker) -> None:
         broker.get_snapshots(["2330", "9999"])
 
 
-def test_custom_field_fits_the_six_character_limit(broker: ShioajiBroker) -> None:
-    """壓縮碼必須塞得進 6 個字元，否則 shioaji 的欄位驗證會擋下整張單"""
+def test_custom_field_is_the_one_oms_generated(
+    broker: ShioajiBroker, api: FakeApi
+) -> None:
+    """
+    送給券商的 `custom_field` 就是 OMS 產生、存進 DB 的那一個
 
-    compressed: str = ShioajiBroker._compress("run1-0001")
+    broker 以前自己取 client id 末 6 碼：`20260919090512-0001` 與
+    `20260919132032-0001` 送出去都是 `2-0001`，OMS 存的卻是 base36 壓縮碼——
+    重啟接管的精確比對永遠比不到，同一天不同 run 的單還會互撞。
+    """
 
-    assert len(compressed) <= 6
+    ticket: OrderTicket = make_ticket()
+    ticket.custom_field = "u80001"
+    broker.place_order(ticket)
+
+    assert api.placed[0][1].custom_field == "u80001"
+
+
+def test_order_without_custom_field_is_refused(broker: ShioajiBroker) -> None:
+    """沒有壓縮碼的委託不送：另算一份就是兩邊對不上的開始"""
+
+    ticket: OrderTicket = make_ticket()
+    ticket.custom_field = None
+
+    with pytest.raises(ValueError, match="custom_field"):
+        broker.place_order(ticket)
+
+
+def test_refreshed_ticket_keeps_custom_field_out_of_client_id(
+    broker: ShioajiBroker,
+) -> None:
+    """
+    刷新回來的委託，壓縮碼放在自己的欄位
+
+    塞進 `client_order_id` 的話，後續以 client id 找 `Trade` 會找到一個
+    不存在的 id，接管後的單就撤不掉。
+    """
+
+    broker.place_order(make_ticket())
+
+    refreshed: List[OrderTicket] = broker.refresh_order_status()
+
+    assert refreshed[0].custom_field == "010001"
+    assert refreshed[0].client_order_id == ""
+
+
+@pytest.mark.parametrize("seqno_saved", [True, False])
+def test_recovered_order_can_be_cancelled_by_a_new_broker(
+    api: FakeApi, limiter: RateLimiter, seqno_saved: bool
+) -> None:
+    """
+    送單 → 行程重啟（新的 broker 與 OMS）→ 接管 → 撤單，撤單請求要真的送出
+
+    接管後的單撤不掉的話，`finish()` 吞掉 `LookupError`，單子就留在場上過夜。
+    `seqno_saved=False` 模擬在 `place_order()` 回傳前崩潰、本地沒存到 seqno——
+    那時只剩 `custom_field` 能精確比對，兩邊的壓縮碼不一致就只能退回模糊比對。
+    """
+
+    import datetime
+    import sqlite3
+
+    from core.dao.tw.live_trade_dao import LiveTradeDAO
+    from core.live.oms.order_manager import OrderManager
+
+    now: datetime.datetime = datetime.datetime(2026, 9, 19, 9, 5, 12)
+    dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
+    dao.ensure_tables()
+
+    first_broker: ShioajiBroker = ShioajiBroker(FakeSession(api, limiter), limiter)
+    first_broker.connect()
+    first_oms: OrderManager = OrderManager(
+        first_broker, dao, "20260919090512", run_index=1, now_provider=lambda: now
+    )
+    submitted: OrderTicket = first_oms.submit(make_ticket().order, "Alpha")
+    if not seqno_saved:
+        dao.conn.execute("UPDATE live_order SET broker_seqno = NULL")
+        dao.conn.commit()
+
+    # 重啟：券商端的單還在（同一個 api），本地的 broker 與 OMS 都是新的
+    second_broker: ShioajiBroker = ShioajiBroker(FakeSession(api, limiter), limiter)
+    second_broker.connect()
+    second_oms: OrderManager = OrderManager(
+        second_broker, dao, "20260919132032", run_index=2, now_provider=lambda: now
+    )
+    recovered: List[OrderTicket] = second_oms.recover(now.date())
+    second_oms.cancel_open_orders()
+
+    assert submitted.custom_field == first_oms.compress(submitted.client_order_id)
+    assert api.placed[0][1].custom_field == submitted.custom_field
+    assert recovered[0].custom_field == submitted.custom_field
+    assert recovered[0].broker_seqno == "000001"
+    assert len(api.cancelled) == 1

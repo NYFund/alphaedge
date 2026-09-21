@@ -39,9 +39,16 @@ class OrderTicket:
         updated_at: Optional[datetime.datetime] = None,
         reject_reason: Optional[str] = None,
         dry_run: bool = False,
+        custom_field: Optional[str] = None,
     ) -> None:
         # Identity
         self.client_order_id: str = client_order_id  # 本地識別碼（FIX 的 ClOrdID）
+
+        # 隨委託往返券商的 6 字元壓縮碼。**只由 OMS 產生一次**，券商閘道原樣送出、
+        # 刷新時原樣帶回：兩邊各算一份的話，重啟接管的精確比對永遠比不到，
+        # 接管後的單也撤不掉。券商端刷新回來、還沒對上本地委託的 ticket，
+        # `client_order_id` 為空、只有這個欄位——不可把它塞進 `client_order_id`
+        self.custom_field: Optional[str] = custom_field
 
         # 歸屬到哪一支策略。**不可為空**：一個帳戶跑多支策略時，券商端只有一本
         # 合併帳，這個欄位是「這張單、這筆成交、這口部位屬於誰」整條歸屬鏈的起點
@@ -54,7 +61,7 @@ class OrderTicket:
         # Broker Info
         #
         # 兩個編號都可能是 None：在 `place_order()` 回傳前崩潰的委託沒有 seqno，
-        # 那正是重啟接管時最棘手的一類——要靠 `client_order_id` 的壓縮碼回券商精確比對
+        # 那正是重啟接管時最棘手的一類——要靠 `custom_field` 回券商精確比對
         self.broker_order_id: Optional[str] = broker_order_id  # Shioaji 的 ordno
         self.broker_seqno: Optional[str] = broker_seqno  # Shioaji 的 seqno
 

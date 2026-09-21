@@ -215,6 +215,7 @@ class OrderManager:
             status=LiveOrderStatus.PENDING_SUBMIT,
             created_at=self._now(),
             dry_run=self.dry_run,
+            custom_field=self.compress(client_order_id),
         )
         self.tickets[client_order_id] = ticket
         self._persist(ticket)
@@ -551,9 +552,9 @@ class OrderManager:
             if ticket.broker_seqno
         }
         by_custom_field: Dict[str, OrderTicket] = {
-            ticket.client_order_id: ticket
+            ticket.custom_field: ticket
             for ticket in broker_tickets
-            if ticket.client_order_id
+            if ticket.custom_field
         }
 
         recovered: List[OrderTicket] = []
@@ -630,6 +631,9 @@ class OrderManager:
             filled_volume=int(row.get("filled_volume") or 0),
             avg_fill_price=float(row.get("avg_fill_price") or 0.0),
             dry_run=bool(row.get("dry_run")),
+            # 沿用當初送出的壓縮碼，不重算：run 序號屬於送單的那一次 run，
+            # 以本次 run 重算會得到另一個碼，寫回 DB 後就再也比對不到
+            custom_field=row.get("custom_field"),
         )
 
     # === 內部 ===
@@ -674,7 +678,7 @@ class OrderManager:
                 "status": ticket.status.value,
                 "broker_order_id": ticket.broker_order_id,
                 "broker_seqno": ticket.broker_seqno,
-                "custom_field": self.compress(ticket.client_order_id),
+                "custom_field": ticket.custom_field,
                 "filled_volume": ticket.filled_volume,
                 "avg_fill_price": ticket.avg_fill_price,
                 "reject_reason": ticket.reject_reason,
