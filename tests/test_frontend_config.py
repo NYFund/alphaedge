@@ -1,5 +1,6 @@
 import warnings
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -40,17 +41,16 @@ def test_default_results_root_is_project_results() -> None:
     assert (PROJECT_ROOT / "pyproject.toml").is_file()
 
 
-def test_default_matches_backend_results_dir() -> None:
+def test_default_matches_backend_results_dir(pristine_config_paths: ModuleType) -> None:
     """
-    與後端 `core/config` 的 `RESULTS_DIR_PATH` 指向同一個目錄
+    與後端 `core/config` 的 `RESULTS_DIR_PATH` **預設值**指向同一個目錄
 
     後端寫哪、前端就得讀哪。兩邊各算一次是為了讓前端映像不必帶 `core/`，
     代價就是要有這條測試——否則下次有人改後端，前端會安靜地繼續讀舊的地方。
+    後端以沒有覆寫的副本來比：測試期間 `results/` 已被導到暫存目錄。
     """
 
-    from core.config import RESULTS_DIR_PATH
-
-    assert DEFAULT_RESULTS_ROOT == RESULTS_DIR_PATH
+    assert DEFAULT_RESULTS_ROOT == pristine_config_paths.RESULTS_DIR_PATH
 
 
 def test_env_var_name_matches_backend() -> None:
