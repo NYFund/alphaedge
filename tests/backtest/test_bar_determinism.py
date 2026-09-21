@@ -284,3 +284,27 @@ def test_close_then_open_reopens_same_symbol_in_one_bar(
     assert len(backtester.account.positions) == 1
     assert backtester.account.positions[0].date == DAY_2
     assert backtester.account.positions[0].price == 105.0
+
+
+# === 委託紀錄的日期 ===
+def test_submitted_orders_carry_the_bar_date(
+    make_strategy, make_backtester, make_quote
+) -> None:
+    """
+    `submitted_orders` 每一筆的日期是它所屬那根 bar 的日期
+
+    `cur_date` 以前只在建構時設成起始日，之後從不前進：多日回測的每一筆
+    都記成起始日。parity 比對取這份清單時日期全錯，而且不會報錯。
+    """
+
+    day_3: datetime.date = datetime.date(2024, 1, 4)
+    days: List[datetime.date] = [DAY_1, DAY_2, day_3]
+    strategy = make_strategy(
+        open_script={day: [buy_order("2330", date=day)] for day in days},
+    )
+    backtester: Backtester = make_backtester(strategy)
+
+    for day in days:
+        backtester.execute_bar(day, [make_quote(stock_id="2330", date=day)])
+
+    assert [date for date, _, _ in backtester.submitted_orders] == days

@@ -501,6 +501,10 @@ class Backtester:
                 當根 bar 的報價
         """
 
+        # `submitted_orders` 以它標記每張委託的日期；不跟著前進的話，
+        # 多日回測的每一筆都會記成起始日，parity 比對日期全錯且不報錯
+        self.cur_date = date
+
         # 除權息日的漲跌停基準由交易所另行公告，須在下任何單之前覆寫，
         # 否則整段漲跌停區間會沿用偏高的前一交易日收盤而失準
         self.fill_model.apply_price_limit_basis(
