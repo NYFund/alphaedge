@@ -18,6 +18,7 @@ from core.pipeline.tw.crawlers.futures_stock_universe_crawler import (
 from core.pipeline.tw.loaders.futures_stock_universe_loader import (
     FuturesStockUniverseLoader,
 )
+from core.pipeline.utils.exceptions import DataLoadError
 from core.utils import StockFuturesType, TimeUtils
 from core.utils.log_manager import LogManager
 
@@ -105,17 +106,22 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
 
         logger.info(f"* Start Updating TAIFEX Stock Futures Universe: {snapshot_date}")
 
+        # **抓空與洗空都要讓 target 失敗**：只記 warning 就回傳的話，行程以成功
+        # 結束，下游 `futures_stock_price` 悄悄沿用舊快照，缺漏要事後對帳才發現。
+        # 與 `FuturesMarginUpdater` 取不到一覽表時的處理一致
         raw_df: Optional[pd.DataFrame] = self.crawler.crawl_stock_universe()
         if raw_df is None or raw_df.empty:
-            logger.warning("[Futures Universe] 未取得標的清單，本次不入庫")
-            return
+            raise DataLoadError(
+                "futures_stock_universe", [f"{snapshot_date}: 未取得標的清單"]
+            )
 
         cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_stock_universe(
             raw_df, snapshot_date
         )
         if cleaned_df is None or cleaned_df.empty:
-            logger.warning("[Futures Universe] 清洗後無有效資料，本次不入庫")
-            return
+            raise DataLoadError(
+                "futures_stock_universe", [f"{snapshot_date}: 清洗後無有效資料"]
+            )
 
         # 差分要拿「入庫前」的最近一份快照比，入庫後就比不出差異了
         previous_date: Optional[str] = self.get_latest_snapshot_date(

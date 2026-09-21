@@ -204,6 +204,35 @@ def test_updater_and_loader_share_one_connection(
     assert updater.dao.conn is None
 
 
+@pytest.mark.parametrize("stage", ["crawl", "clean"])
+def test_empty_universe_fails_the_target(
+    updater: FuturesStockUniverseUpdater,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    """
+    抓不到或洗完是空的都要拋 `DataLoadError`，讓 target 記成失敗
+
+    以前只記 warning 就回傳，行程以成功結束，下游 `futures_stock_price`
+    悄悄沿用舊快照，缺漏要事後對帳才發現。
+    """
+
+    from core.pipeline.utils.exceptions import DataLoadError
+
+    raw: pd.DataFrame = pd.DataFrame({"x": [1]})
+    monkeypatch.setattr(
+        updater.crawler,
+        "crawl_stock_universe",
+        lambda: None if stage == "crawl" else raw,
+    )
+    monkeypatch.setattr(
+        updater.cleaner, "clean_stock_universe", lambda df, date: pd.DataFrame()
+    )
+
+    with pytest.raises(DataLoadError):
+        updater.update(snapshot_date=datetime.date(2026, 8, 3))
+
+
 def test_underlying_match_without_stock_db(
     updater: FuturesStockUniverseUpdater, tmp_path: Path
 ) -> None:
