@@ -167,6 +167,13 @@ class StubContinuousAPI:
         pass
 
 
+class StubFuturesPriceAPI:
+    """近月拼接用的 `FuturesPriceAPI` 替身；只需要能被關閉"""
+
+    def close(self) -> None:
+        """不持有連線，無事可做"""
+
+
 @pytest.fixture
 def stub_continuous(monkeypatch: pytest.MonkeyPatch):
     """把 reporter 用的連續合約 API 換成 stub"""
@@ -229,6 +236,9 @@ def test_reporter_falls_back_to_the_near_month_splice(
         "build_near_month_close_series",
         lambda self, futures_price: spliced,
     )
+    # 拼接本身已換成固定序列，reporter 自己 new 的 `FuturesPriceAPI` 只剩開關連線；
+    # 不換的話它會去開 `tw_futures.db`，沒有資料庫的環境（CI）當場失敗
+    monkeypatch.setattr(futures_reporter_module, "FuturesPriceAPI", StubFuturesPriceAPI)
 
     reporter: FuturesBacktestReporter = FuturesBacktestReporter(
         ScriptedFuturesStrategy(), tmp_path
