@@ -310,20 +310,41 @@ class OrderManager:
 
         new_fills: List[ExecutionReport] = []
         for event in self.broker.drain_execution_queue():
-            if not self._dedup.is_new(event):
-                continue
-            try:
-                if isinstance(event, ExecutionReport):
-                    if self._apply_fill(event):
-                        new_fills.append(event)
-                elif isinstance(event, OrderStatusEvent):
-                    self._apply_order_event(event)
-            except OrderStateError as exc:
-                # **單筆跳過，不中斷整個迴圈**：一筆狀態矛盾的回報（例如已成交的單
-                # 又收到拒單事件）若讓例外往上拋，佇列裡後面那些正常的成交就全丟了。
-                # 矛盾本身已經寫進 `live_risk_event`，該知道的人會知道
-                logger.warning(f"回報與本地狀態矛盾，已跳過本筆：{exc}")
+            fill: Optional[ExecutionReport] = self.apply_event(event)
+            if fill is not None:
+                new_fills.append(fill)
         return new_fills
+
+    def apply_event(self, event: Any) -> Optional[ExecutionReport]:
+        """
+        - Description:
+            處理**單一筆**回報
+
+            與 `drain_executions()` 拆開，是因為盤中事件迴圈的行情與回報共用
+            一個 queue：那條路徑一次只拿得到一筆，沒有「整批」可以消化。
+            日頻那條仍走 `drain_executions()`，兩者共用同一份判定。
+        - Parameters:
+            - event: Any
+                `ExecutionReport` 或 `OrderStatusEvent`
+        - Return:
+            - Optional[ExecutionReport]
+                新成交；重複、非成交或狀態矛盾時為 None
+        """
+
+        if not self._dedup.is_new(event):
+            return None
+
+        try:
+            if isinstance(event, ExecutionReport):
+                return event if self._apply_fill(event) else None
+            if isinstance(event, OrderStatusEvent):
+                self._apply_order_event(event)
+        except OrderStateError as exc:
+            # **單筆跳過，不中斷整個迴圈**：一筆狀態矛盾的回報（例如已成交的單
+            # 又收到拒單事件）若讓例外往上拋，佇列裡後面那些正常的成交就全丟了。
+            # 矛盾本身已經寫進 `live_risk_event`，該知道的人會知道
+            logger.warning(f"回報與本地狀態矛盾，已跳過本筆：{exc}")
+        return None
 
     def _apply_fill(self, report: ExecutionReport) -> bool:
         """把一筆成交套進對應的委託；找不到委託時記事件但仍保留成交"""

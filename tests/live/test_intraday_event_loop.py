@@ -330,3 +330,30 @@ def test_frozen_clock_does_not_hang_the_loop() -> None:
 
     assert stats.quotes == 0
     assert stats.heartbeats <= 5
+
+
+# === 接線：run() 要分派到逐筆迴圈 ===
+def test_immediate_timing_drives_the_event_loop() -> None:
+    """
+    `--phase intraday` 要走事件迴圈，不是日頻的一次性流程
+
+    接上之前 `run()` 一律呼叫 `submit_segment()`，`run_intraday()` 沒有任何
+    呼叫端——逐筆段落會安靜地跑成一次性的日頻流程。
+    """
+
+    from core.utils import ExecutionTiming
+    from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness = Harness([Alpha()])
+    calls: List[str] = []
+    harness.trader.run_intraday = lambda window: calls.append("intraday")
+    harness.trader.submit_segment = lambda timing, window: calls.append("segment")
+
+    harness.trader.run(ExecutionTiming.IMMEDIATE)
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert calls == ["intraday", "segment"]

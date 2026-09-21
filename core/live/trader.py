@@ -15,6 +15,7 @@ from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
 from core.live.notify.base import notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
@@ -268,7 +269,13 @@ class LiveTrader:
                 )
                 return
 
-            self.submit_segment(timing, window)
+            # 逐筆段落走事件迴圈，其餘走「收訊號 → 送單」一次性流程。
+            # **分派寫在這裡而不是讓兩條流程互相呼叫**：它們的生命週期不同，
+            # 一個跑一次就結束、一個要跑到收線
+            if timing is ExecutionTiming.IMMEDIATE:
+                self.run_intraday(window)
+            else:
+                self.submit_segment(timing, window)
         finally:
             self.finish(window)
 
@@ -345,6 +352,132 @@ class LiveTrader:
         logger.error(message)
         self._notify("CRITICAL", "偵測到上次崩潰", message)
         return crashed
+
+    # === 盤中逐筆 ===
+    def run_intraday(self, window: Optional[SegmentWindow]) -> LoopStats:
+        """
+        - Description:
+            盤中逐筆段落：訂閱 → 驅動事件迴圈 → 收線
+
+            **行情與回報共用一個事件 queue**，由 `broker.route_events()` 把兩條
+            回呼導過來。導過去之後 `drain_execution_queue()` 會一直是空的，
+            那是刻意的——回報已經改由迴圈逐筆消化，兩邊都撈會重複且順序錯亂。
+
+            **逐筆觸發只給宣告了 `is_intraday` 的策略**：其餘策略的鉤子一次要
+            一批報價，逐筆餵給它們等於每次只看得到一檔，訊號會完全不同。
+        - Parameters:
+            - window: Optional[SegmentWindow]
+                段落時窗；None 時不設收線時間
+        - Return:
+            - LoopStats
+                本段的事件統計
+        """
+
+        loop: IntradayEventLoop = IntradayEventLoop(
+            on_quote=self._on_intraday_quote,
+            on_execution=self._on_intraday_execution,
+            on_market_data_lost=self._on_market_data_lost,
+            now_provider=self._now,
+        )
+
+        symbols: List[str] = sorted(
+            {symbol for context in self.contexts for symbol in context.symbols}
+        )
+        self.broker.route_events(loop.submit_quote, loop.submit_execution)
+        if symbols:
+            self.broker.subscribe_quotes(symbols)
+
+        deadline: datetime.datetime = self._resolve_intraday_deadline(window)
+        logger.info(f"盤中逐筆開始，訂閱 {len(symbols)} 檔，收線 {deadline}")
+
+        stats: LoopStats = loop.run_until(deadline)
+        logger.info(
+            f"盤中逐筆結束：行情 {stats.quotes} 筆、回報 {stats.executions} 筆、"
+            f"心跳 {stats.heartbeats} 次、處理失敗 {stats.handler_errors} 筆"
+        )
+        return stats
+
+    def _resolve_intraday_deadline(
+        self, window: Optional[SegmentWindow]
+    ) -> datetime.datetime:
+        """
+        本段落跑到什麼時候
+
+        **沒有時窗時不可以無限跑**：常駐迴圈少了收線時間，盤後作業就永遠不會開始。
+        沒給就跑到今天結束。
+        """
+
+        today: datetime.date = self._now().date()
+        if window is None or window.submit_end is None:
+            return datetime.datetime.combine(
+                today, datetime.time.max, tzinfo=self._now().tzinfo
+            )
+        return datetime.datetime.combine(
+            today, window.submit_end, tzinfo=self._now().tzinfo
+        )
+
+    def _on_intraday_quote(self, quote: BaseQuote) -> None:
+        """
+        一筆行情 → 逐筆觸發策略
+
+        **只餵宣告了 `is_intraday` 的策略**，而且只餵有訂這檔的那些。
+        送單前先確認連線：斷線時繼續算訊號只會產生一批送不出去的單。
+        """
+
+        if not self.ensure_connected():
+            return
+
+        for context in self.contexts:
+            if not getattr(context.strategy, "is_intraday", False):
+                continue
+            if quote.symbol not in context.symbols:
+                continue
+            self._submit_one_quote(context, quote)
+
+    def _submit_one_quote(self, context: StrategyContext, quote: BaseQuote) -> None:
+        """
+        把一筆報價餵給一支策略，並走完整條送單流程
+
+        **重用日頻那一條，不另寫一份**：跨策略守門、曝險截斷、資金保留與風控
+        在逐筆之下一樣要做。另寫一份必然漂移，而漂移的那一刻兩邊都看起來正確。
+        """
+
+        if self.mode_state.effective_mode(context.name) is TradingMode.HALTED:
+            return
+
+        try:
+            orders: List[BaseOrder] = self._invoke_hooks(
+                context, ExecutionTiming.IMMEDIATE, [quote]
+            )
+        except Exception as exc:
+            self._halt_strategy(context, f"逐筆鉤子執行失敗：{exc}")
+            return
+
+        if not orders:
+            return
+
+        survivors: List[Tuple[StrategyContext, BaseOrder]] = self.apply_cross_checks(
+            [(context, order) for order in orders]
+        )
+        self.dispatch(survivors, None)
+
+    def _on_intraday_execution(self, event: Any) -> None:
+        """一筆回報 → 更新委託狀態與帳戶；與日頻走同一份判定"""
+
+        fill: Optional[ExecutionReport] = self.order_manager.apply_event(event)
+        if fill is not None:
+            self.account_sync.apply_fill(fill)
+
+    def _on_market_data_lost(self, reason: str) -> None:
+        """
+        行情中斷 → 帳戶層降到 `REDUCE_ONLY`
+
+        **不降 `HALTED`**：部位還在場上，`HALTED` 連平倉都不送，
+        等於在看不到行情的時候把停損也關掉。
+        """
+
+        self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
+        self._notify("CRITICAL", "行情中斷", reason)
 
     def ensure_connected(self) -> bool:
         """

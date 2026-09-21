@@ -225,3 +225,41 @@ def test_failed_reconnect_stops_submitting() -> None:
     harness.broker.fail_connect = True
 
     assert harness.trader.ensure_connected() is False
+
+
+# === 單一事件 queue 的接線 ===
+def test_routing_sends_executions_to_the_sink_not_the_queue() -> None:
+    """
+    導向之後 `drain_execution_queue()` 要是空的
+
+    兩邊都撈會把同一筆回報消化兩次，而且順序會亂——事件迴圈存在的理由
+    就是讓順序確定。
+    """
+
+    harness: Any = make_harness()
+    received: List[Any] = []
+    harness.broker.connect()
+    harness.broker.route_events(lambda quote: None, received.append)
+
+    harness.broker.execution_queue.put("fake-report")
+
+    assert received == ["fake-report"]
+    assert harness.broker.drain_execution_queue() == []
+
+
+def test_routing_failure_does_not_kill_the_callback_thread() -> None:
+    """
+    轉交端拋例外要吞掉
+
+    這條路徑跑在券商的執行緒上，例外往上拋會讓那條執行緒死掉，
+    之後所有回報靜默消失——而策略還在跑。
+    """
+
+    harness: Any = make_harness()
+    harness.broker.connect()
+
+    def exploding(item: Any) -> None:
+        raise ValueError("轉交失敗")
+
+    harness.broker.route_events(lambda quote: None, exploding)
+    harness.broker.execution_queue.put("fake-report")
