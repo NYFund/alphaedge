@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.account_sync import AccountSynchronizer
+from core.live.account_sync import AccountSynchronizer, build_stock_order
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
@@ -244,6 +244,9 @@ class Harness:
                     risk_config=RiskConfig(),
                     symbols=["2330"],
                     calculate_notional=lambda order: order.price * order.volume * 1000,
+                    # 與 `factory._build_context()` 一致；少了它，
+                    # 任何需要還原訂單的路徑（帳戶同步、當沖回補）都會靜靜做不了事
+                    build_filled_order=build_stock_order,
                 )
             )
 

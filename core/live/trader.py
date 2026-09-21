@@ -1,6 +1,7 @@
 import datetime
 import time
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
@@ -16,6 +17,11 @@ from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
+from core.live.intraday.session_guard import (
+    SessionGuard,
+    cover_action,
+    stops_after_cover,
+)
 from core.live.notify.base import notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
@@ -28,7 +34,12 @@ from core.live.strategy_guard import resolve_hook_timing, verify_strategies
 from core.managers.base.position_manager import BasePositionManager
 from core.models import BaseAccount, BaseOrder, BaseQuote, ExecutionReport
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
+from core.utils import (
+    BarExecutionOrder,
+    DayTradeUncoveredPolicy,
+    ExecutionTiming,
+    LiveHook,
+)
 
 """
 LiveTrader：實盤引擎本體
@@ -235,6 +246,11 @@ class LiveTrader:
         # 預設 False 會讓沒跑過 `prepare()` 的呼叫端誤以為今天休市
         self.is_trading_day: bool = True
 
+        # 日終強制動作（當沖回補）
+        self.session_guard: SessionGuard = SessionGuard(now_provider)
+        # 每檔最後一筆報價；回補單取價用
+        self._last_quotes: Dict[str, BaseQuote] = {}
+
     # === 主流程 ===
     def run(self, timing: ExecutionTiming) -> None:
         """
@@ -378,6 +394,7 @@ class LiveTrader:
             on_execution=self._on_intraday_execution,
             on_market_data_lost=self._on_market_data_lost,
             now_provider=self._now,
+            on_heartbeat=self._run_session_guard,
         )
 
         symbols: List[str] = sorted(
@@ -416,6 +433,80 @@ class LiveTrader:
             today, window.submit_end, tzinfo=self._now().tzinfo
         )
 
+    def _run_session_guard(self) -> None:
+        """
+        日終強制動作：回補時點一到就把未回補的當沖空單補掉
+
+        **掛在心跳而不是行情上**：行情停了 `on_quote` 就不會再被呼叫，
+        而日終回補正是不能因為沒行情就不做的事——現股當沖先賣未回補，
+        券商可能標借或直接違約交割。
+        """
+
+        if not self.session_guard.should_cover_now():
+            return
+
+        self.session_guard.mark_covered()
+        stop_after: bool = False
+
+        for context in self.contexts:
+            policy: DayTradeUncoveredPolicy = getattr(
+                context.strategy,
+                "day_trade_uncovered_policy",
+                DayTradeUncoveredPolicy.FORCE_COVER_AT_CLOSE,
+            )
+            orders, warning = self.session_guard.build_cover_orders(
+                context.account,
+                policy,
+                partial(self._build_cover_order_for, context),
+            )
+
+            if warning is not None:
+                logger.warning(f"{context.name}：{warning}")
+                self._notify("WARNING", "當沖回補政策在實盤被改寫", warning)
+
+            if orders:
+                logger.warning(
+                    f"{context.name} 有 {len(orders)} 筆當沖空單未回補，送出回補單"
+                )
+                # **不經跨策略守門**：回補是把自己的部位平掉、不是新開倉，
+                # 被守門擋下等於讓部位留倉過夜
+                self.dispatch([(context, order) for order in orders], None)
+
+            if stops_after_cover(policy):
+                stop_after = True
+
+        if stop_after:
+            self.risk_manager.on_degrade_event(
+                "當沖未回補且政策為 RAISE：已送出回補單，停止開新倉",
+                TradingMode.REDUCE_ONLY,
+            )
+
+    def _build_cover_order_for(
+        self, context: StrategyContext, position: Any
+    ) -> Optional[BaseOrder]:
+        """
+        把一個待回補部位換成回補單
+
+        **訂單型別走 `context.build_filled_order`**：本檔刻意不出現任何市場或
+        商品字樣（`check_layer_deps.py` 會擋），而 Phase7-2 注入的那個建構器
+        正是為此存在的。
+
+        價格取**該檔最後一筆報價**；取不到就回 None，由守門記 error。
+        """
+
+        quote: Optional[BaseQuote] = self._last_quotes.get(position.symbol)
+        if quote is None or context.build_filled_order is None:
+            return None
+
+        return context.build_filled_order(
+            position.symbol,
+            self._now(),
+            cover_action(position),
+            position.position_type,
+            float(quote.cur_price),
+            int(position.volume),
+        )
+
     def _on_intraday_quote(self, quote: BaseQuote) -> None:
         """
         一筆行情 → 逐筆觸發策略
@@ -423,6 +514,9 @@ class LiveTrader:
         **只餵宣告了 `is_intraday` 的策略**，而且只餵有訂這檔的那些。
         送單前先確認連線：斷線時繼續算訊號只會產生一批送不出去的單。
         """
+
+        # 回補單的價格來源；**只留最後一筆**，留全部等於在記憶體裡重建一份行情庫
+        self._last_quotes[quote.symbol] = quote
 
         if not self.ensure_connected():
             return

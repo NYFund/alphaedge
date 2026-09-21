@@ -80,6 +80,7 @@ class IntradayEventLoop:
         stale_quote_seconds: float = 30.0,
         event_queue: Optional[queue.Queue] = None,
         stuck_clock_heartbeats: int = 60,
+        on_heartbeat: Optional[Callable[[], None]] = None,
     ) -> None:
         """
         - Description:
@@ -104,6 +105,10 @@ class IntradayEventLoop:
             - stuck_clock_heartbeats: int
                 連續幾次心跳都讀到同一個時刻就判定時鐘停住並跳出；
                 以預設心跳 1 秒計約 60 秒
+            - on_heartbeat: Optional[Callable[[], None]]
+                每次心跳要做的事（日終強制動作這類「到點就要做」的工作）。
+                **不可放在 `on_quote` 裡**：行情停了它就不會再被呼叫，
+                而日終回補正是不能因為沒行情就不做的事
         """
 
         self.on_quote: Callable[[BaseQuote], None] = on_quote
@@ -115,6 +120,7 @@ class IntradayEventLoop:
         self.silence_limit_seconds: float = silence_limit_seconds
         self.stale_quote_seconds: float = stale_quote_seconds
         self.stuck_clock_heartbeats: int = stuck_clock_heartbeats
+        self.on_heartbeat: Optional[Callable[[], None]] = on_heartbeat
 
         self.events: queue.Queue = (
             event_queue if event_queue is not None else queue.Queue()
@@ -187,12 +193,25 @@ class IntradayEventLoop:
             if event is None:
                 stats.heartbeats += 1
                 self._check_market_data_silence()
+                self._beat(stats)
                 continue
 
             self._dispatch(event, stats)
 
         stats.stale_symbols = self.stale_symbols()
         return stats
+
+    def _beat(self, stats: LoopStats) -> None:
+        """跑一次心跳工作；**失敗不中斷迴圈**，但要計進統計"""
+
+        if self.on_heartbeat is None:
+            return
+
+        try:
+            self.on_heartbeat()
+        except Exception as exc:
+            stats.handler_errors += 1
+            logger.opt(exception=True).error(f"心跳工作失敗，迴圈繼續：{exc}")
 
     def _next_event(self) -> Optional[Event]:
         """取下一個事件；逾時回 None（那就是一次心跳）"""
