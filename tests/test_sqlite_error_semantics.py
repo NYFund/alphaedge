@@ -302,11 +302,11 @@ def test_updater_falls_back_to_default_start_when_table_missing(
 # -----------------------------------------------------------------------
 
 
-def test_monthly_revenue_start_raises_when_db_locked(tmp_path: Path) -> None:
+def test_monthly_revenue_plan_raises_when_db_locked(tmp_path: Path) -> None:
     """
-    月營收續跑起點：被鎖住時拋，而不是退回預設起點
+    月營收待更新年月：被鎖住時拋，而不是當成「表是空的」
 
-    吞掉的代價是靜默從 2013/1 整段重爬（約 164 個月 × 4 次請求）。
+    吞掉的代價是靜默把整段區間當成全缺而重爬（約 164 個月 × 4 次請求）。
     """
 
     conn: sqlite3.Connection = _make_locked_db(
@@ -316,7 +316,7 @@ def test_monthly_revenue_start_raises_when_db_locked(tmp_path: Path) -> None:
     updater.dao = MonthlyRevenueDAO(conn=conn)
 
     with pytest.raises(sqlite3.Error):
-        updater.get_actual_update_start_year_month()
+        updater.plan_pending_year_months(2013, 1, 2013, 12)
 
 
 def test_fs_target_stock_ids_raises_when_db_locked(tmp_path: Path) -> None:
