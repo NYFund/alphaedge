@@ -66,14 +66,23 @@ class BacktestReport:
 
 
 def list_strategy_dirs(results_root: Path) -> List[Path]:
+    """
+    列出結果根目錄底下的回測策略資料夾
+
+    **只列出有 trading report CSV 的資料夾**，不靠排除清單：結果根目錄底下還有
+    `logs/`、實盤輸出 `live/` 等非回測資料夾，以前只排除 `logs`，`live` 就在
+    下拉選單裡顯示成一支策略，選了之後停在「找不到 trading report CSV」。
+    排除清單每多一種輸出就要記得補一次，判斷「有沒有報表」則不會漏。
+    """
+
     if not results_root.exists() or not results_root.is_dir():
         return []
-    excluded_dir_names = {"logs"}
     return sorted(
         [
             path
             for path in results_root.iterdir()
-            if path.is_dir() and path.name.lower() not in excluded_dir_names
+            if path.is_dir()
+            and _pick_first_match(path, CSV_FILE_CANDIDATES) is not None
         ],
         key=lambda path: path.name.lower(),
     )
