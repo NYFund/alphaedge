@@ -429,6 +429,24 @@ def test_calculate_stock_futures_margin_returns_none_when_unavailable(
     )
 
 
+def test_calculate_stock_futures_maintenance_margin(
+    futures_margin_api: FuturesMarginAPI,
+) -> None:
+    """
+    每口維持保證金取「維持保證金適用比例」那一欄，不是原始比例打折
+
+    兩個日期各驗一次：取錯欄會在第一個日期就對不上，
+    取到最新一版而非當日生效版則會在第二個日期之前就露餡
+    """
+
+    assert futures_margin_api.calculate_stock_futures_maintenance_margin(
+        "CDF", datetime.date(2024, 1, 2), price=100.0
+    ) == pytest.approx(100.0 * 2000 * 0.115)
+    assert futures_margin_api.calculate_stock_futures_maintenance_margin(
+        "CDF", datetime.date(2024, 1, 3), price=100.0
+    ) == pytest.approx(100.0 * 2000 * 0.1533)
+
+
 # === tick ===
 def test_get_last_tick_takes_the_last_row() -> None:
     """
