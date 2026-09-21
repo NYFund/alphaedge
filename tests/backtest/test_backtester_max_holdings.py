@@ -155,3 +155,38 @@ def test_adding_to_the_same_symbol_uses_one_slot(
 
     assert backtester.account.get_position_count() == 1
     assert backtester.event_counts["rejected_max_holdings"] == 0
+
+
+def test_adding_to_a_held_symbol_is_allowed_when_full(
+    make_strategy, make_backtester, make_quote
+) -> None:
+    """
+    滿額時對已持有標的加碼，回測要放行（與實盤一致）
+
+    上限 2、已持有 2330 與 2317，再開 2330：以前回測只比「持倉數 < 上限」而剔除，
+    實盤則因為是加碼而放行——parity 比對每天多一筆 `UNEXPLAINED`。
+    """
+
+    strategy = make_strategy(
+        max_holdings=2,
+        open_script={
+            DAY_1: [
+                make_open_order("2317"),
+                make_open_order("2330"),
+                make_open_order("2330"),
+            ]
+        },
+    )
+    backtester: Backtester = make_backtester(strategy)
+
+    backtester.execute_bar(
+        DAY_1,
+        [
+            make_quote(stock_id="2317", date=DAY_1),
+            make_quote(stock_id="2330", date=DAY_1),
+        ],
+    )
+
+    assert backtester.account.get_position_count() == 2
+    assert len(backtester.account.positions) == 3
+    assert backtester.event_counts["rejected_max_holdings"] == 0

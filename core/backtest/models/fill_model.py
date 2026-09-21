@@ -126,7 +126,14 @@ class BaseFillModel(ABC):
 
     @abstractmethod
     def on_bar_open(self, quotes: List[BaseQuote]) -> None:
-        """一根 bar 開始：重置並累計盤中已發生的高低點"""
+        """
+        一根 bar 開始：重置並累計盤中已發生的高低點
+
+        **TICK 回測在這裡有前視**：引擎把整天的 tick 當成同一根 bar 一次傳進來，
+        累計出來的是全日高低點，而不是「下單當下以前」的高低點——盤中較早的委託
+        會通過稍後才出現的價位。目前沒有 TICK 策略；要做逐筆回測前，得先改成
+        逐筆餵入並逐筆更新區間。
+        """
         pass
 
     @abstractmethod
@@ -195,6 +202,8 @@ class BaseFillModel(ABC):
     ) -> Tuple[Optional[float], Optional[float]]:
         """
         取得該報價可成交的價格區間：日 K 用 OHLC，Tick 用當日累計高低點
+
+        Tick 的區間目前是全日高低點而非下單當下以前的，有前視（見 `on_bar_open()`）。
 
         **放在基底而不是各市場一份**：台股與期貨的答案一模一樣，各寫一次必然漂移；
         夾價與平倉腿的區間警告都以此為唯一判準。
@@ -454,7 +463,12 @@ class TwStockFillModel(BaseFillModel):
         self.update_intraday_range(quotes)
 
     def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
-        """更新 Tick 級別的當日累計高低點（只納入已發生的報價，本身即防前視）"""
+        """
+        更新 Tick 級別的當日累計高低點
+
+        只納入傳進來的報價；防不防前視取決於呼叫端怎麼餵。目前 `on_bar_open()`
+        一次餵整天，得到的是全日區間（限制見基底的 `on_bar_open()`）。
+        """
 
         for quote in quotes:
             price: float = quote.cur_price or quote.close
@@ -792,7 +806,12 @@ class TwFuturesFillModel(BaseFillModel):
         self.update_intraday_range(quotes)
 
     def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
-        """更新 Tick 級別的當日累計高低點（只納入已發生的報價，本身即防前視）"""
+        """
+        更新 Tick 級別的當日累計高低點
+
+        只納入傳進來的報價；防不防前視取決於呼叫端怎麼餵。目前 `on_bar_open()`
+        一次餵整天，得到的是全日區間（限制見基底的 `on_bar_open()`）。
+        """
 
         for quote in quotes:
             price: float = quote.cur_price or quote.close

@@ -56,6 +56,7 @@ def new_event_counts() -> Dict[str, int]:
         "forced_cover_no_quote": 0,  # 連續無報價（停牌／下市）強制出場
         "limit_up_cover_failed": 0,  # 漲停鎖死無法回補
         "rejected_max_holdings": 0,  # 超過最大持倉檔數被引擎剔除的開倉單
+        "rejected_no_quote": 0,  # 當日查不到報價（停牌、非股票池）被拒的開倉單
         "rejected_insufficient_balance": 0,  # 餘額不足以支應做多開倉（部位價值 ＋ 開倉成本）
         "rejected_no_borrow": 0,  # 融券餘額不足被拒的放空開倉單
         "rejected_short_suspended": 0,  # 停券期間被拒的融券放空開倉單
@@ -455,7 +456,13 @@ class Backtester:
             self.data_feed.close()
 
     def run_tick_backtest(self, date: datetime.date) -> None:
-        """Tick 級別的回測架構"""
+        """
+        Tick 級別的回測架構
+
+        **已知前視**：整天的 tick 一次交給 `fill_model.on_bar_open()`，成交驗證用的是
+        全日高低點，盤中較早的委託會通過稍後才出現的價位。TICK 回測的結果只能
+        當量級參考，要精確得先改成逐筆餵入。
+        """
 
         quotes: List[BaseQuote] = self.data_feed.get_quotes(date, Scale.TICK)
 
@@ -499,6 +506,10 @@ class Backtester:
             - quotes: List[BaseQuote]
                 當根 bar 的報價
         """
+
+        # `submitted_orders` 以它標記每張委託的日期；不跟著前進的話，
+        # 多日回測的每一筆都會記成起始日，parity 比對日期全錯且不報錯
+        self.cur_date = date
 
         # 除權息日的漲跌停基準由交易所另行公告，須在下任何單之前覆寫，
         # 否則整段漲跌停區間會沿用偏高的前一交易日收盤而失準
@@ -561,7 +572,17 @@ class Backtester:
             self.submitted_orders.append((self.cur_date, "open", order))
 
             quote: Optional[BaseQuote] = quote_map.get(order.symbol)
-            if quote and not self.validate_fill_price(order, quote):
+            if quote is None:
+                # **查不到報價的開倉單一律拒單**：放行的話成交驗證與成交模型都會
+                # 被跳過（不查區間、漲跌停、成交量上限，也不吃滑價），直接以
+                # 策略給的價格建倉——停牌的標的也開得進去。平倉腿不在此列：
+                # 拒掉平倉會讓部位被迫留倉，那由結算層的連續無報價出場處理
+                logger.warning(
+                    f"[No Quote] {order.symbol} 當日查不到報價，開倉單已拒絕"
+                )
+                self.event_counts["rejected_no_quote"] += 1
+                continue
+            if not self.validate_fill_price(order, quote):
                 continue
 
             filled_order: Optional[BaseOrder] = self.apply_fill_model(order, quote)
@@ -591,6 +612,9 @@ class Backtester:
             「資金要切成幾份」，張數不足 1 張的候選不佔名額；這邊是逐單階段的硬上限，
             看即時持倉數——未成交的單不增加持倉，後面的單因此仍可能被放行。
             兩者不等價，少任何一道都會漏掉對方擋得住的情況。
+
+            已持有標的的加碼單不佔新名額，判定在共用的
+            `order_preprocess.check_max_holdings()`，與實盤同一份。
         - Parameters:
             - order: BaseOrder
                 待執行的開倉單
@@ -599,11 +623,13 @@ class Backtester:
                 True 表示可以開倉
         """
 
+        held_symbols: Set[str] = {
+            position.symbol
+            for position in self.account.positions
+            if not position.is_closed
+        }
         return order_preprocess.check_max_holdings(
-            order,
-            self.max_holdings,
-            self.account.get_position_count(),
-            self.event_counts,
+            order, self.max_holdings, held_symbols, self.event_counts
         )
 
     def execute_close_signal(self, quotes: List[BaseQuote]) -> List[BaseTradeRecord]:

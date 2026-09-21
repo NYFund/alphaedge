@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -38,6 +38,12 @@ class TwStockDataFeed(BaseDataFeed):
     # 會在 end_date 之後，只查回測區間本身會整段漏掉
     FORCE_COVER_LOOKAHEAD_DAYS: int = 21
 
+    # 推導停券日時往前多查的曆日數：除權息交易日落在回測頭 4 個交易日內時，
+    # 回補日在 start_date 之前，交易日清單只從 start_date 起算就推不出回補日，
+    # 整段停券會被略過——頭幾天可以開融券空單並持有跨過除權息。
+    # 21 個曆日足以涵蓋 4 個營業日加上農曆年連假
+    FORCE_COVER_LOOKBACK_DAYS: int = 21
+
     def __init__(self) -> None:
         # 單次回測共用一條 SQLite 連線：四個 API 查的是同一個 DB 檔，
         # 各開一條沒有任何好處，只會讓連線數隨 API 數量線性成長
@@ -61,6 +67,10 @@ class TwStockDataFeed(BaseDataFeed):
         self.force_cover_map: Optional[Dict[datetime.date, Set[str]]] = None
         # 停券期間（回補日 ~ 除權息交易日前一日）的逐日標的表，同樣只建一次
         self.short_suspended_map: Optional[Dict[datetime.date, Set[str]]] = None
+        # 上面兩張表共用的推導結果：`(交易日清單, [(stock_id, 回補日, 除權息交易日)])`
+        self._suspension_schedule: Optional[
+            Tuple[List[datetime.date], List[Tuple[str, datetime.date, datetime.date]]]
+        ] = None
 
         # 回測區間內的交易日集合；`setup()` 建一次，供 `is_market_open()` 查表。
         # **不建的話每個曆日都會對 price 表做一次 `SELECT *` 只為了判斷空不空**：
@@ -247,43 +257,17 @@ class TwStockDataFeed(BaseDataFeed):
             回補日本身包含在內（當天已不得新增融券賣出，只能回補），
             除權息交易日當天不含——該日融券恢復交易。
 
-            整場回測只建一次，與 `build_force_cover_map()` 共用同一份行事曆推導。
+            整場回測只建一次，與 `build_force_cover_map()` 共用
+            `_derive_suspension_schedule()` 的同一份行事曆推導。
         - Return:
             - Dict[datetime.date, Set[str]]
                 `{交易日: {stock_id}}`；資料不足時為空 dict
         """
 
-        if self.start_date is None or self.end_date is None:
-            return {}
-
-        lookahead_end: datetime.date = self.end_date + datetime.timedelta(
-            days=self.FORCE_COVER_LOOKAHEAD_DAYS
-        )
-        trading_days: List[datetime.date] = self.price.get_trading_days(
-            self.start_date, lookahead_end
-        )
-        if not trading_days:
-            return {}
-
-        ex_dividend_df: pd.DataFrame = self.dividend.get_range(
-            self.start_date, lookahead_end
-        )
-        if ex_dividend_df.empty:
-            return {}
+        trading_days, schedule = self._derive_suspension_schedule()
 
         suspended_map: Dict[datetime.date, Set[str]] = {}
-        for ex_date, stock_id in zip(
-            pd.to_datetime(ex_dividend_df["date"]).dt.date,
-            ex_dividend_df["stock_id"].astype(str),
-        ):
-            cover_date: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-                trading_days,
-                ex_date,
-                -self.FORCE_COVER_TRADING_DAYS_BEFORE_EX_DATE,
-            )
-            if cover_date is None:
-                continue
-
+        for stock_id, cover_date, ex_date in schedule:
             for trading_day in trading_days:
                 if trading_day < cover_date:
                     continue
@@ -307,32 +291,73 @@ class TwStockDataFeed(BaseDataFeed):
             （常會、臨時會的停止過戶日），目前無資料源。因此本方法產出的回補日
             是實際停券日的**子集**，留倉放空的持有天數仍會被高估一部分。
 
+            回補日早於 `start_date` 的不列入：回測開始時沒有任何部位，
+            那天不會有東西要回補；那段停券落在回測內的部分由停券表擋新倉。
+
             整場回測只建一次：`dividend` 與 `price` 表在回測期間不會變動。
         - Return:
             - Dict[datetime.date, Set[str]]
                 `{融券最後回補日: {stock_id}}`；資料不足時回傳空 dict
         """
 
-        if self.start_date is None or self.end_date is None:
-            return {}
+        _trading_days, schedule = self._derive_suspension_schedule()
 
-        # 回補日在回測區間內，其對應的除權息交易日則可能落在 end_date 之後
+        force_cover_map: Dict[datetime.date, Set[str]] = {}
+        for stock_id, cover_date, _ex_date in schedule:
+            if self.start_date is not None and cover_date < self.start_date:
+                continue
+            force_cover_map.setdefault(cover_date, set()).add(stock_id)
+
+        return force_cover_map
+
+    def _derive_suspension_schedule(
+        self,
+    ) -> Tuple[List[datetime.date], List[Tuple[str, datetime.date, datetime.date]]]:
+        """
+        - Description:
+            推導回測區間內每筆除權息的融券最後回補日；停券表與回補表共用這一份
+
+            **交易日清單往前多抓 `FORCE_COVER_LOOKBACK_DAYS`**：除權息交易日落在
+            回測頭 4 個交易日內時，回補日在 `start_date` 之前，清單從 `start_date`
+            起算的話 `shift_trading_days()` 會回 None，那筆停券整段被略過。
+            往後多抓 `FORCE_COVER_LOOKAHEAD_DAYS` 的理由對稱：回補日在區間末段的，
+            除權息交易日在 `end_date` 之後。
+
+            結果快取在實例上：兩張表各推一次的話是兩次查詢、兩份一樣的迴圈。
+        - Return:
+            - Tuple[List[datetime.date], List[Tuple[str, datetime.date, datetime.date]]]
+                `(交易日清單, [(stock_id, 回補日, 除權息交易日)])`；資料不足時兩者皆空
+        """
+
+        if self._suspension_schedule is not None:
+            return self._suspension_schedule
+
+        # 區間還沒設定時不快取：之後 `setup()` 補上區間，要能重新推導
+        if self.start_date is None or self.end_date is None:
+            return ([], [])
+
+        self._suspension_schedule = ([], [])
+
+        lookback_start: datetime.date = self.start_date - datetime.timedelta(
+            days=self.FORCE_COVER_LOOKBACK_DAYS
+        )
         lookahead_end: datetime.date = self.end_date + datetime.timedelta(
             days=self.FORCE_COVER_LOOKAHEAD_DAYS
         )
         trading_days: List[datetime.date] = self.price.get_trading_days(
-            self.start_date, lookahead_end
+            lookback_start, lookahead_end
         )
         if not trading_days:
-            return {}
+            return self._suspension_schedule
 
         ex_dividend_df: pd.DataFrame = self.dividend.get_range(
             self.start_date, lookahead_end
         )
         if ex_dividend_df.empty:
-            return {}
+            self._suspension_schedule = (trading_days, [])
+            return self._suspension_schedule
 
-        force_cover_map: Dict[datetime.date, Set[str]] = {}
+        schedule: List[Tuple[str, datetime.date, datetime.date]] = []
         for ex_date, stock_id in zip(
             pd.to_datetime(ex_dividend_df["date"]).dt.date,
             ex_dividend_df["stock_id"].astype(str),
@@ -342,14 +367,13 @@ class TwStockDataFeed(BaseDataFeed):
                 ex_date,
                 -self.FORCE_COVER_TRADING_DAYS_BEFORE_EX_DATE,
             )
-            # 回補日早於 start_date 時 shift 會回傳 None（清單起點就是 start_date），
-            # 代表那筆除權息的停券已發生在回測開始之前，本場回測不需要處理
+            # 往前多抓之後仍推不出來，代表交易日資料本身不足，不猜
             if cover_date is None:
                 continue
+            schedule.append((stock_id, cover_date, ex_date))
 
-            force_cover_map.setdefault(cover_date, set()).add(stock_id)
-
-        return force_cover_map
+        self._suspension_schedule = (trading_days, schedule)
+        return self._suspension_schedule
 
     def get_cash_dividend_map(self, date: datetime.date) -> Dict[str, float]:
         """

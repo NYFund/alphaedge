@@ -155,7 +155,7 @@ def validate_orders(
 def check_max_holdings(
     order: BaseOrder,
     max_holdings: Optional[int],
-    current_holdings: int,
+    held_symbols: Set[str],
     event_counts: Optional[Dict[str, int]] = None,
 ) -> bool:
     """
@@ -170,13 +170,18 @@ def check_max_holdings(
         「資金要切成幾份」，張數不足 1 張的候選不佔名額；這邊是逐單階段的硬上限，
         看**即時**持倉數——未成交的單不增加持倉，後面的單因此仍可能被放行。
         兩者不等價，少任何一道都會漏掉對方擋得住的情況。
+
+        **已佔名額的標的一律放行**：那是加碼，不增加檔數，與
+        `get_position_count()`「同一檔加碼多次只算一檔」的語意一致。
+        這條豁免寫在這裡、回測與實盤共用：以前只有實盤豁免，滿額時的加碼單
+        回測剔除、實盤送出，parity 比對每天都會多一筆 `UNEXPLAINED`。
     - Parameters:
         - order: BaseOrder
             待執行的開倉單
         - max_holdings: Optional[int]
             持倉檔數上限；None 表示不限制（與 `EqualWeightSizer` 的語意一致）
-        - current_holdings: int
-            目前的持倉檔數
+        - held_symbols: Set[str]
+            目前佔住名額的標的（回測是未平倉部位；實盤另含尚未終結的委託）
         - event_counts: Optional[Dict[str, int]]
             事件計數器；key 為 `rejected_max_holdings`（**不可更名**）
     - Return:
@@ -187,7 +192,7 @@ def check_max_holdings(
     if max_holdings is None:
         return True
 
-    if current_holdings < max_holdings:
+    if order.symbol in held_symbols or len(held_symbols) < max_holdings:
         return True
 
     logger.warning(

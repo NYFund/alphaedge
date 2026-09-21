@@ -156,7 +156,7 @@ def test_event_count_keys_are_stable() -> None:
     order_preprocess.validate_orders(
         [make_order(action=Action.SELL)], "open", {PositionType.LONG}, counts
     )
-    order_preprocess.check_max_holdings(make_order(), 1, 1, counts)
+    order_preprocess.check_max_holdings(make_order(), 1, {"2317"}, counts)
 
     assert set(counts) == {"rejected_direction", "rejected_max_holdings"}
 
@@ -174,7 +174,8 @@ def test_validation_works_without_a_counter() -> None:
 def test_none_means_unlimited() -> None:
     """None 表示不限制，與 `EqualWeightSizer` 的語意一致"""
 
-    assert order_preprocess.check_max_holdings(make_order(), None, 999) is True
+    held: Set[str] = {str(index) for index in range(999)}
+    assert order_preprocess.check_max_holdings(make_order(), None, held) is True
 
 
 def test_max_holdings_uses_live_position_count() -> None:
@@ -185,8 +186,25 @@ def test_max_holdings_uses_live_position_count() -> None:
     `EqualWeightSizer.size()` 的同名檢查不等價的地方，兩道都要有。
     """
 
-    assert order_preprocess.check_max_holdings(make_order(), 5, 4) is True
-    assert order_preprocess.check_max_holdings(make_order(), 5, 5) is False
+    four: Set[str] = {"1101", "1102", "1103", "1104"}
+    assert order_preprocess.check_max_holdings(make_order(), 5, four) is True
+    assert (
+        order_preprocess.check_max_holdings(make_order(), 5, four | {"1105"}) is False
+    )
+
+
+def test_adding_to_a_held_symbol_is_exempt_even_when_full() -> None:
+    """
+    滿額時對已持有標的加碼照樣放行：加碼不增加檔數
+
+    這條豁免以前只寫在實盤：上限 2、已持有 A 與 B，再開 A——回測剔除、實盤送出，
+    parity 比對每天多一筆 `UNEXPLAINED`。現在兩邊呼叫同一份判定。
+    """
+
+    held: Set[str] = {"2330", "2317"}
+
+    assert order_preprocess.check_max_holdings(make_order("2330"), 2, held) is True
+    assert order_preprocess.check_max_holdings(make_order("2454"), 2, held) is False
 
 
 # === 排序 ===
