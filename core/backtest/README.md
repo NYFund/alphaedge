@@ -221,6 +221,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 | `rejected_limit_down_locked` | 全日鎖跌停，放空開倉被拒 |
 | `rejected_volume_cap` | 超過成交量上限且政策為拒單（或上限不足一張） |
 | `rejected_insufficient_balance` | 餘額不足以支應**做多**開倉（部位價值 ＋ 開倉成本）；放空另有自己的 warning，不計入本 key |
+| `rejected_no_quote` | 當日查不到報價（停牌、不在股票池）的開倉單被拒；平倉腿不拒，由連續無報價出場處理 |
 | `truncated_by_volume` | 超過成交量上限被縮量 |
 | `forced_cover_suspended` | 觸及停券強制回補日（除權息推導或手動指定） |
 | `rejected_short_suspended` | 停券期間（回補日 ~ 除權息交易日）的融券放空開倉被拒 |

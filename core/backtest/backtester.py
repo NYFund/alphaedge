@@ -56,6 +56,7 @@ def new_event_counts() -> Dict[str, int]:
         "forced_cover_no_quote": 0,  # 連續無報價（停牌／下市）強制出場
         "limit_up_cover_failed": 0,  # 漲停鎖死無法回補
         "rejected_max_holdings": 0,  # 超過最大持倉檔數被引擎剔除的開倉單
+        "rejected_no_quote": 0,  # 當日查不到報價（停牌、非股票池）被拒的開倉單
         "rejected_insufficient_balance": 0,  # 餘額不足以支應做多開倉（部位價值 ＋ 開倉成本）
         "rejected_no_borrow": 0,  # 融券餘額不足被拒的放空開倉單
         "rejected_short_suspended": 0,  # 停券期間被拒的融券放空開倉單
@@ -561,7 +562,17 @@ class Backtester:
             self.submitted_orders.append((self.cur_date, "open", order))
 
             quote: Optional[BaseQuote] = quote_map.get(order.symbol)
-            if quote and not self.validate_fill_price(order, quote):
+            if quote is None:
+                # **查不到報價的開倉單一律拒單**：放行的話成交驗證與成交模型都會
+                # 被跳過（不查區間、漲跌停、成交量上限，也不吃滑價），直接以
+                # 策略給的價格建倉——停牌的標的也開得進去。平倉腿不在此列：
+                # 拒掉平倉會讓部位被迫留倉，那由結算層的連續無報價出場處理
+                logger.warning(
+                    f"[No Quote] {order.symbol} 當日查不到報價，開倉單已拒絕"
+                )
+                self.event_counts["rejected_no_quote"] += 1
+                continue
+            if not self.validate_fill_price(order, quote):
                 continue
 
             filled_order: Optional[BaseOrder] = self.apply_fill_model(order, quote)
