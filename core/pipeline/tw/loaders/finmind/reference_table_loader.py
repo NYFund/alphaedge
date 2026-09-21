@@ -15,7 +15,7 @@ from core.pipeline.utils.exceptions import DataLoadError
 FinMind「參考資料表」的共用入庫流程
 
 台股總覽、台股總覽（含權證）、證券商資訊三張表都是**單鍵的現況快照**：
-一支 CSV 對一張表、以單一欄位為主鍵、重跑只補新增的列。三者原本是三份逐字
+一支 CSV 對一張表、以單一欄位為主鍵、重跑以新值覆蓋同鍵的舊值。三者原本是三份逐字
 複製的實作（約 85% 相同），只有四個東西不同——資料表、CSV 檔名、去重鍵、
 欄位順序——改一處要記得改三處。
 
@@ -49,8 +49,13 @@ def load_reference_table(
     - Description:
         將單鍵參考資料表的 CSV 載入資料庫，成功後 commit
 
-        流程：讀 CSV → 檔內去重 → 依 `column_order` 排欄 → `INSERT OR IGNORE`。
-        **已存在的列一律跳過而非更新**：這三張表的既有語意就是「只補新增」。
+        流程：讀 CSV → 檔內去重 → 依 `column_order` 排欄 → `INSERT OR REPLACE`。
+
+        **已存在的列以新值覆蓋**：它們是現況快照，欄位會變。新股上市櫃前一定先在
+        興櫃交易，第一次入庫的 `type` 必然是 `emerging`；以前「只補新增」，這個值
+        永遠不會更新，而以 `type IN ('twse', 'tpex')` 取清單的地方（財報權益變動表）
+        就永遠排除這檔、不會有 warning。更名、產業別變更也同樣進不來。
+        **快照裡沒有的舊列不刪**：下市的標的仍要查得到歷史。
 
         **舊版每次都把整張表的主鍵讀進記憶體再比對**，現在交給資料庫的主鍵約束；
         寫入包在 savepoint 內，失敗時整檔回滾。成功就 commit，與舊版 `to_sql`
@@ -103,19 +108,17 @@ def load_reference_table(
         # 確保欄位順序與 crawler schema 註解一致
         df = df[spec.column_order]
 
-        inserted: int
+        before: int = dao.count_rows()
         with dao.savepoint():
-            inserted, _ = dao.insert_or_ignore(df)
+            written: int = dao.insert_or_replace(df)
         dao.commit()
 
-        if inserted == 0:
-            logger.info(f"Skipped {csv_path.name} (all data already exists)")
-            return
-
-        skipped_rows: int = original_count - inserted
-        if skipped_rows > 0:
+        inserted: int = dao.count_rows() - before
+        refreshed: int = written - inserted
+        if refreshed > 0:
             logger.info(
-                f"Saved {csv_path.name} into database ({inserted} new rows, {skipped_rows} skipped)"
+                f"Saved {csv_path.name} into database "
+                f"({inserted} new rows, {refreshed} refreshed)"
             )
         else:
             logger.info(f"Saved {csv_path.name} into database ({inserted} rows)")

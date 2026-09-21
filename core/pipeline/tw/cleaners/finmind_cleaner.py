@@ -24,6 +24,29 @@ class FinMindCleaner(BaseDataCleaner):
         # Generate downloads directory
         self.finmind_dir.mkdir(parents=True, exist_ok=True)
 
+    @staticmethod
+    def keep_latest_per_stock(df: pd.DataFrame) -> pd.DataFrame:
+        """
+        - Description:
+            同一個 `stock_id` 只留日期最新的一列
+
+            FinMind 的台股總覽**每個身分各給一列**：興櫃轉上市櫃的公司同時有
+            「emerging（轉板前一天）」與「twse／tpex（今天）」兩列，而且舊的那列
+            排在前面。直接 `keep="first"` 會留下過期的興櫃身分，以 `type` 取上市櫃
+            清單的地方（財報權益變動表）就把它排除。同一天多列（產業別不同）時
+            保留原本排在前面的那列，與舊行為一致。沒有 `date` 欄時退回原順序。
+        - Parameters:
+            - df: pd.DataFrame
+                原始總覽資料
+        - Return:
+            - pd.DataFrame
+                每檔一列
+        """
+
+        if "date" in df.columns:
+            df = df.sort_values("date", ascending=False, kind="stable")
+        return df.drop_duplicates(subset=["stock_id"], keep="first").sort_index()
+
     def clean_stock_info(self, df: pd.DataFrame) -> Optional[pd.DataFrame]:
         """
         清洗台股總覽資料 (TaiwanStockInfo)
@@ -49,8 +72,8 @@ class FinMindCleaner(BaseDataCleaner):
             )
             return None
 
-        # 移除重複資料
-        df = df.drop_duplicates(subset=["stock_id"], keep="first")
+        # 移除重複資料：同一檔保留**日期最新**的那一列
+        df = self.keep_latest_per_stock(df)
 
         # 存入 CSV 檔案到各自的資料夾
         data_type_dir: Path = (
@@ -88,8 +111,8 @@ class FinMindCleaner(BaseDataCleaner):
             )
             return None
 
-        # 移除重複資料
-        df = df.drop_duplicates(subset=["stock_id"], keep="first")
+        # 移除重複資料：同一檔保留**日期最新**的那一列
+        df = self.keep_latest_per_stock(df)
 
         # 存入 CSV 檔案到各自的資料夾
         data_type_dir: Path = (

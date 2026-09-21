@@ -230,6 +230,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 | `dividend_compensation_unknown` | 權息並存拆不出現金股利，該筆補償被跳過（成本低估） |
 | `dividend_received` | 跨除息日的做多部位收到現金股利 |
 | `share_adjustment_applied` | 配股、分割、減資造成的股數與每股成本調整 |
+| `share_adjustment_unknown` | 權息並存拆不出配股率，股數未調整（帳面低估配股價值） |
 | `forced_exit_no_quote` | 做多部位連續無報價（停牌／下市）達上限被強制出場 |
 | `fill_price_clamped` | 滑價把**開倉**成交價推出當日區間，被夾回 |
 | `close_price_out_of_range` | **平倉腿與引擎強制出場**的成交價超出當日區間（只計數不夾回） |

@@ -88,15 +88,8 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         logger.info("* Start Updating TWSE & TPEX Monthly Revenue Report Data...")
 
         # Step 1: Crawl
-        # 取得要開始更新的年份、月份
-        start_year: int
-        start_month: int
-        start_year, start_month = self.get_actual_update_start_year_month(
-            default_year=start_year,
-            default_month=start_month,
-        )
-
-        logger.info(f"Latest data date in database: {start_year}/{start_month}")
+        # 起點原樣交給差集，**不先改成表內最新 +1**：那樣會跳過中間缺的月份，
+        # 也會讓申報期內只收到一部分公司的那個月從此不再重問
         year_months: List[Tuple[int, int]] = self.plan_pending_year_months(
             start_year, start_month, end_year, end_month
         )
@@ -253,39 +246,3 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         ) + datetime.timedelta(days=cls.FILING_GRACE_DAYS)
 
         return (today or datetime.date.today()) > deadline
-
-    def get_actual_update_start_year_month(
-        self,
-        default_year: int = 2025,
-        default_month: int = 1,
-    ) -> Tuple[int, int]:
-        """
-        - Description:
-            回傳下一筆應更新的 (year, month)；表不存在或為空時回傳預設值
-
-            **查詢錯誤一律往外拋**：舊版 `except Exception` 後回傳預設值，
-            「DB 被鎖住、欄位打錯」會被當成「表是空的」，從預設起點靜默重跑整段回補。
-        - Parameters:
-            - default_year: int
-                無資料時的起始年
-            - default_month: int
-                無資料時的起始月
-        - Return:
-            - Tuple[int, int]
-                下一個要更新的（year, month）
-        """
-
-        # Step 1: 先取得資料表中最新的（year, month）
-        latest: Optional[Tuple[int, int]] = self.dao.get_latest_year_month()
-        if latest is None:
-            return default_year, default_month
-
-        latest_year: int
-        latest_month: int
-        latest_year, latest_month = latest
-
-        # Step 2: 計算下一個月份（處理進位）
-        if latest_month == 12:
-            return latest_year + 1, 1
-        else:
-            return latest_year, latest_month + 1

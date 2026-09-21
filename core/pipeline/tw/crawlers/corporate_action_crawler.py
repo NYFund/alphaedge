@@ -7,6 +7,7 @@ from loguru import logger
 
 from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import FetchResult, RequestUtils
+from core.pipeline.tw.utils.tpex_date_range import check_tpex_date_range
 from core.pipeline.tw.utils.url_manager import URLManager
 from core.utils import TimeUtils
 
@@ -123,7 +124,8 @@ class CorporateActionCrawler(BaseDataCrawler):
             TPEX（櫃買中心）減資恢復買賣參考價區間爬蟲
 
             **日期必須用斜線格式**（與 `TPEX_EX_RIGHT_URL` 同一個坑）：傳
-            `20240101` 不會報錯，會靜默退回預設區間。
+            `20240101` 不會報錯，回應會不帶區間。故以 `check_tpex_date_range()`
+            比對回應的 `date`，不符即為 `FAILED`。
 
             **帶重試層**：本端點會間歇回 HTTP 520。重試耗盡時回 `FAILED`，
             **不可回 `NO_DATA`**——後者會讓這一年被記成「確認沒有事件」而不再補。
@@ -180,6 +182,13 @@ class CorporateActionCrawler(BaseDataCrawler):
             # **重試耗盡是 FAILED 不是 NO_DATA**：記成後者這一年就再也不會被補
             logger.error(f"{label}: {TPEX_MAX_RETRIES} 次皆失敗（{last_reason}）")
             return CrawlResult.failed(f"retries_exhausted: {last_reason}")
+
+        # 區間不符代表送出的日期格式被站方靜靜忽略，拿到的不是這一年的資料。
+        # 這是取錯資料而不是沒有資料，故為 FAILED——記成 NO_DATA 這一年就再也不補
+        if not check_tpex_date_range(
+            payload, start_date, end_date, "TPEX corporate action"
+        ):
+            return CrawlResult.failed("date_range_mismatch")
 
         tables: List[Dict[str, Any]] = payload.get("tables") or []
         if not tables:

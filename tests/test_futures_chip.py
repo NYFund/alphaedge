@@ -365,6 +365,37 @@ def test_no_retry_when_the_window_has_no_trading_day() -> None:
     assert len(attempts) == 1
 
 
+def test_today_without_chips_is_not_treated_as_blocked() -> None:
+    """
+    當天的籌碼還沒公布不算被擋：不重試、不記成缺口
+
+    同一個 job 裡行情已入庫、籌碼尚未公布時，今天以前會被判成「該有資料卻沒拿到」，
+    白等兩次重試（30、60 秒）後拋 `DataLoadError`。昨天以前才是該有資料的日子。
+    """
+
+    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+
+    today: datetime.date = datetime.date(2026, 9, 21)
+    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    updater.today = lambda: today
+
+    class StubPriceAPI:
+        dao = type("DAO", (), {"table_exists": staticmethod(lambda: True)})()
+
+        def get_trading_days(self, start, end):
+            return [
+                day
+                for day in (today - datetime.timedelta(days=3), today)
+                if start <= day <= end
+            ]
+
+    updater.price_api = StubPriceAPI()
+
+    assert updater.has_trading_days(today, today) is False
+    # 區間含昨天以前的交易日時照舊判定為該有資料
+    assert updater.has_trading_days(today - datetime.timedelta(days=5), today) is True
+
+
 def test_institutional_start_date_is_clamped_to_source_earliest() -> None:
     """
     **三大法人的歷史只回溯到 2023-09-04**（2026-09-05 實測）
@@ -450,6 +481,59 @@ def test_update_resolves_start_dates_for_every_dataset(monkeypatch) -> None:
     # 三大法人被夾到來源下限，其餘兩個維持 2015
     assert called[0][1] > datetime.date(2015, 1, 1)
     assert called[1][1] == datetime.date(2015, 1, 1)
+
+
+def test_gap_month_inside_the_table_is_backfilled_on_resume() -> None:
+    """
+    表內中間缺的月份，下一次續跑會先補
+
+    被擋的月份以前只記 error、叫人「稍後重跑」，但預設 `resume=True` 的起點是
+    表內最新 +1，那個月被後面已入庫的月份蓋過去——結束碼 0、缺口仍在。
+    """
+
+    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+
+    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    chip_dates: List[datetime.date] = [
+        datetime.date(2026, 6, 1),
+        datetime.date(2026, 8, 3),
+    ]
+    trading_days: List[datetime.date] = chip_dates + [datetime.date(2026, 7, 1)]
+
+    class StubLoader:
+        def get_earliest_date(self, table):
+            return "2026-06-01"
+
+        def get_latest_date(self, table):
+            return "2026-08-03"
+
+        def get_dates(self, table, start, end):
+            return chip_dates
+
+    class StubPriceAPI:
+        dao = type("DAO", (), {"table_exists": staticmethod(lambda: True)})()
+
+        def get_trading_days(self, start, end):
+            return sorted(trading_days)
+
+    updater.loader = StubLoader()
+    updater.price_api = StubPriceAPI()
+    updater.get_datasets = lambda: [
+        (FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr", None, None),
+    ]
+    called: List[tuple] = []
+
+    def record_dataset(table, label, crawl, clean, start, end):
+        called.append((start, end))
+        return 0, []
+
+    updater.update_dataset = record_dataset
+
+    updater.update(end_date=datetime.date(2026, 8, 3))
+
+    assert called[0] == (datetime.date(2026, 7, 1), datetime.date(2026, 7, 31))
+    # 之後照常從表內最新 +1 接續
+    assert called[-1][0] == datetime.date(2026, 8, 4)
 
 
 def test_update_only_touches_requested_tables(monkeypatch) -> None:

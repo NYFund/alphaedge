@@ -867,3 +867,37 @@ def test_isolated_crawl_errors_do_not_trip_the_breaker(tmp_path: Path) -> None:
     assert stats.unreachable == 3
     assert crawled_stock_ids(conn, 2013, 1) == {"1102", "1104"}
     conn.close()
+
+
+# === 目標清單的倖存者偏差 ===
+def test_delisted_companies_in_the_balance_sheet_are_requested(
+    tmp_path: Path,
+) -> None:
+    """
+    沒指定清單時，每季要併入當季資產負債表的公司（含後來下市的）
+
+    現存清單取自 FinMind 台股總覽，只收錄一部分已下市的公司：歷史回補只照它爬，
+    當年存在、後來下市的公司整段缺權益變動表，而且不會有任何錯誤。
+    資產負債表是全市場查詢，當季有申報的都在；非四碼代號不併入。
+    """
+
+    conn: sqlite3.Connection = make_db(tmp_path)
+    conn.execute("CREATE TABLE balance_sheet (year INT, season INT, stock_id TEXT)")
+    conn.executemany(
+        "INSERT INTO balance_sheet VALUES (?, ?, ?)",
+        [(2013, 1, "1101"), (2013, 1, "8888"), (2013, 1, "00878"), (2013, 2, "7777")],
+    )
+    conn.commit()
+    crawler: FakeCrawler = FakeCrawler()
+    updater: FinancialStatementUpdater = make_updater(
+        tmp_path, conn, crawler, RecordingLoader(conn)
+    )
+    updater.get_target_stock_ids = lambda: ["1101"]
+
+    updater.update_equity_changes(2013, 2013, 1, 1)
+
+    # 其餘請求是 `is_season_filed()` 以權值股試探申報狀態，與清單無關
+    assert {"1101", "8888"} <= set(crawler.requested)
+    assert "00878" not in crawler.requested
+    assert "7777" not in crawler.requested  # 別季的公司不併入
+    conn.close()

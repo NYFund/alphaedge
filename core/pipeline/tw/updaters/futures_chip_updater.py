@@ -1,7 +1,7 @@
 import datetime
 import random
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -181,6 +181,18 @@ class FuturesChipUpdater(BaseDataUpdater):
             return
 
         for table, label, crawl, clean in datasets:
+            # 續跑時先補表內中間缺的月份：起點是「最新 +1」，被擋掉、之後又有
+            # 月份成功入庫的那幾個月它看不到
+            if resume:
+                for gap_start, gap_end in self.find_gap_windows(table):
+                    _, gap_blocked = self.update_dataset(
+                        table, label, crawl, clean, gap_start, gap_end
+                    )
+                    blocked.extend(
+                        f"{table} {window_start}~{window_end}"
+                        for window_start, window_end in gap_blocked
+                    )
+
             start: datetime.date = self.resolve_start_date(
                 table, start_date, resume=resume
             )
@@ -198,6 +210,54 @@ class FuturesChipUpdater(BaseDataUpdater):
         # 於是被擋的月份會被當成「那幾個月沒有籌碼」而永遠不再補。
         if blocked:
             raise DataLoadError("futures_chip", blocked)
+
+    def find_gap_windows(self, table: str) -> List[Tuple[datetime.date, datetime.date]]:
+        """
+        - Description:
+            表內最早與最新日期之間，期貨有交易卻沒有籌碼的月份
+
+            以前被擋的月份只記 error、叫人「稍後重跑」，但照預設 `resume=True`
+            重跑，起點是表內最新 +1，那個月被後面已入庫的月份蓋過去，
+            結束碼 0、缺口仍在。交易日以 `futures_price_daily` 為準
+            （與 `has_trading_days()` 同一個判準）。
+        - Parameters:
+            - table: str
+                籌碼資料表
+        - Return:
+            - List[Tuple[datetime.date, datetime.date]]
+                缺口所在月份的 `(起, 迄)`，頭尾夾在表內的日期範圍內
+        """
+
+        earliest: Optional[str] = self.loader.get_earliest_date(table)
+        latest: Optional[str] = self.loader.get_latest_date(table)
+        if earliest is None or latest is None:
+            return []
+
+        first: datetime.date = datetime.date.fromisoformat(earliest)
+        last: datetime.date = datetime.date.fromisoformat(latest)
+        if first >= last or not self.price_api.dao.table_exists():
+            return []
+
+        existing: Set[datetime.date] = set(self.loader.get_dates(table, first, last))
+        missing: List[datetime.date] = [
+            date
+            for date in self.price_api.get_trading_days(first, last)
+            if date not in existing
+        ]
+        if not missing:
+            return []
+
+        months: Set[Tuple[int, int]] = {(date.year, date.month) for date in missing}
+        windows: List[Tuple[datetime.date, datetime.date]] = [
+            window
+            for window in self.split_months(first, last)
+            if (window[0].year, window[0].month) in months
+        ]
+        logger.warning(
+            f"[Futures Chip] {table} 表內有 {len(missing)} 個交易日沒有籌碼"
+            f"（{len(windows)} 個月），本次一併回補：{[str(d) for d in missing[:10]]}"
+        )
+        return windows
 
     def resolve_start_date(
         self,
@@ -296,7 +356,8 @@ class FuturesChipUpdater(BaseDataUpdater):
         if blocked_windows:
             logger.error(
                 f"[Futures Chip] {table} 有 {len(blocked_windows)} 個月份「該有資料卻沒拿到」，"
-                f"多半是被擋流量，請稍後重跑：{blocked_windows[:5]}"
+                f"多半是被擋流量，稍後照常重跑即可（續跑會先補表內中間的缺口；"
+                f"缺的是最新的月份時，同樣會從表內最新日往後接）：{blocked_windows[:5]}"
             )
 
         logger.info(f"[Futures Chip] {table}：本次新增 {inserted} 列")
@@ -353,15 +414,29 @@ class FuturesChipUpdater(BaseDataUpdater):
         該區間內是否有交易日（依 `futures_price_daily`）
 
         **這是「被擋」與「真的沒資料」的唯一判準**。行情表本身還沒建立時
-        一律回 True（寧可多重試幾次，也不要把被擋當成沒資料）。
+        一律回 True（寧可多重試幾次，也不要把被擋當成沒資料）；區間只到今天時
+        一律回 False（今天的籌碼可能還沒公布）。
 
         舊版以 `except Exception: return True` 表達「表不存在」，連 `database is locked`
         也一起吞；改為只判斷表存不存在，其他錯誤往外拋。
         """
 
+        # **今天不算**：同一個 job 裡行情已入庫、籌碼還沒公布時，今天會被判成
+        # 「該有資料卻沒拿到」，白等兩次重試後拋 `DataLoadError`——而盤中與
+        # 收盤後不久拿不到籌碼是正常狀態。昨天以前才是該有資料的日子
+        end: datetime.date = min(end_date, self.today() - datetime.timedelta(days=1))
+        if start_date > end:
+            return False
+
         if not self.price_api.dao.table_exists():
             return True
-        return bool(self.price_api.get_trading_days(start_date, end_date))
+        return bool(self.price_api.get_trading_days(start_date, end))
+
+    @staticmethod
+    def today() -> datetime.date:
+        """今天的日期；抽成方法讓測試能固定「今天」"""
+
+        return datetime.date.today()
 
     @staticmethod
     def split_months(

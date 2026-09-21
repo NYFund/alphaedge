@@ -791,11 +791,24 @@ class TwStockSettlementModel(BaseSettlementModel):
 
         for position in account.get_positions():
             ratio: float = self.share_ratios.get(position.symbol, 1.0)
-            if ratio <= 0 or ratio == 1.0:
-                continue
 
             # 除權交易日當天開倉者不含權
             if TimeUtils.to_date(position.date) >= date:
+                continue
+
+            # 配股率未知（權息並存拆不出來）：不猜倍率，記 warning 與計數，
+            # 讓報表看得見這筆部位的帳面少算了配股那一段
+            if math.isnan(ratio):
+                logger.warning(
+                    f"[Corporate Action] {position.symbol} 於 {date} 除權但配股率未知，"
+                    "股數未調整，帳面會低估配股的價值"
+                )
+                event_counts["share_adjustment_unknown"] = (
+                    event_counts.get("share_adjustment_unknown", 0) + 1
+                )
+                continue
+
+            if ratio <= 0 or ratio == 1.0:
                 continue
 
             old_volume: int = position.volume

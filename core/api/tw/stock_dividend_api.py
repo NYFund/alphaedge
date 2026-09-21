@@ -149,9 +149,14 @@ class StockDividendAPI(BaseDataAPI):
         - Parameters:
             - date: datetime.date
                 交易日（除權息交易日／恢復買賣日）
+            **配股率為 NULL 時回傳 NaN，不當成 0**：上市權息並存的列拆不出配股率，
+            cleaner 刻意留 NULL。當成 0 就是「沒有配股」，做多部位持有過除權日時
+            價格已除權、張數卻沒放大，帳面憑空虧掉配股那一段。NaN 交給結算層
+            記 warning 並計數，與現金股利 NULL 的口徑一致。
         - Return:
             - Dict[str, float]
-                `{stock_id: 股數倍率}`；倍率為 1（無變動）者不列入
+                `{stock_id: 股數倍率}`；倍率為 1（無變動）者不列入，
+                配股率未知者為 NaN
         """
 
         ratios: Dict[str, float] = {}
@@ -165,11 +170,25 @@ class StockDividendAPI(BaseDataAPI):
                 ratios[str(stock_id)] = 1 / value
 
         for stock_id, share_ratio in self.get_stock_dividend_ratio_map(date).items():
+            if self.is_missing(share_ratio):
+                ratios[str(stock_id)] = math.nan
+                continue
             value = self.to_float(share_ratio)
             if value > 0:
                 ratios[str(stock_id)] = 1 + value
 
         return ratios
+
+    @staticmethod
+    def is_missing(value: Any) -> bool:
+        """資料表的 NULL（讀進來是 None 或 NaN）"""
+
+        if value is None:
+            return True
+        try:
+            return math.isnan(float(value))
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def to_float(value: Any) -> float:

@@ -144,3 +144,17 @@ def test_price_limits_match_official_announcement() -> None:
         836.0,
         1020.0,
     )
+
+
+# === 普通股篩選 ===
+def test_common_stock_filter_keeps_codes_above_9958() -> None:
+    """
+    9960、9962 這類上櫃普通股要留在股票池
+
+    以前代號上限卡在 9958，它們被靜默排除在回測股票池與券商分點更新之外；
+    ETF（00 開頭）與權證（6 碼）本來就擋得掉，上限沒有多擋到任何東西。
+    """
+
+    assert StockUtils.filter_common_stocks(
+        ["2330", "9960", "9962", "0050", "00878", "030001", "1000"]
+    ) == ["2330", "9960", "9962"]

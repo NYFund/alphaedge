@@ -6,6 +6,7 @@ from loguru import logger
 
 from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import FetchResult, RequestUtils
+from core.pipeline.tw.utils.tpex_date_range import check_tpex_date_range
 from core.pipeline.tw.utils.url_manager import URLManager
 from core.utils import TimeUtils
 
@@ -138,7 +139,7 @@ class StockDividendCrawler(BaseDataCrawler):
 
         # 區間不符代表**送出的日期格式被站方靜靜忽略**，拿到的是「近三日」而非整年。
         # 這是取錯資料，不是沒有資料，故為 FAILED——記成 NO_DATA 會讓這一年再也不補。
-        if not self.check_tpex_date_range(payload, start_date, end_date):
+        if not check_tpex_date_range(payload, start_date, end_date, "TPEX dividend"):
             return CrawlResult.failed("date_range_mismatch")
 
         tables: List[Dict[str, Any]] = payload.get("tables") or []
@@ -158,43 +159,3 @@ class StockDividendCrawler(BaseDataCrawler):
             return CrawlResult.no_data("區間內無除權息")
 
         return CrawlResult.ok(pd.DataFrame(rows, columns=fields))
-
-    @staticmethod
-    def check_tpex_date_range(
-        payload: Dict[str, Any],
-        start_date: datetime.date,
-        end_date: datetime.date,
-    ) -> bool:
-        """
-        - Description:
-            確認 TPEX 回傳的區間與送出的區間一致
-
-            日期格式錯誤時該端點會**靜默**回傳預設的「近三日」而非報錯，
-            不擋下來會讓三天的資料被當成整年入庫，且不會有任何錯誤訊息
-
-        - Parameters:
-            - payload: Dict[str, Any]
-                端點回傳的 JSON
-            - start_date: datetime.date
-                送出的查詢起日
-            - end_date: datetime.date
-                送出的查詢迄日
-
-        - Return:
-            - bool
-                區間相符為 True
-        """
-
-        expected: str = (
-            f"{TimeUtils.format_date(start_date)}~{TimeUtils.format_date(end_date)}"
-        )
-        actual: str = str(payload.get("date", ""))
-
-        if actual != expected:
-            logger.warning(
-                f"TPEX dividend date range mismatch: requested {expected}, got {actual}. "
-                f"Aborting to avoid ingesting the wrong period"
-            )
-            return False
-
-        return True

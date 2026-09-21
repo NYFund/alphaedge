@@ -128,37 +128,48 @@ def make_updater(conn: sqlite3.Connection) -> MonthlyRevenueReportUpdater:
     return updater
 
 
-def test_start_year_month_uses_default_when_table_is_empty() -> None:
-    """表不存在或為空時從預設年月開始，不可先跳過一個月"""
+def test_update_backfills_missing_months_instead_of_starting_after_latest(
+    dao: MonthlyRevenueDAO, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    `update()` 走差集：表內缺的月份與區間內尚未有的月份都要重爬
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    updater: MonthlyRevenueReportUpdater = make_updater(conn)
+    以前 `update()` 先把起點改成「表內最新 +1」才算差集：表內 1~8 月但缺 5 月時，
+    只會從 9 月起爬，5 月永久缺資料；每月初跑一次日常更新，申報期內只收到一部分
+    公司的那個月也會就此不再重問。舊測試直接呼叫差集函式，沒走 `update()`，所以沒抓到。
+    """
 
-    assert updater.get_actual_update_start_year_month(2013, 1) == (2013, 1)
+    import core.pipeline.tw.updaters.monthly_revenue_report_updater as updater_module
 
-    updater.dao.ensure_table(MRR_COLUMNS)
-    assert updater.get_actual_update_start_year_month(2013, 1) == (2013, 1)
-
-
-def test_start_year_month_rolls_over_december(dao: MonthlyRevenueDAO) -> None:
-    """最新為 2024/12 時下一個是 2025/1"""
-
-    dao.insert_or_ignore(make_mrr_rows([(2024, 12)]))
+    dao.insert_or_ignore(
+        make_mrr_rows([(2024, month) for month in range(1, 9) if month != 5])
+    )
     updater: MonthlyRevenueReportUpdater = make_updater(dao.conn)
+    crawled: List[Tuple[int, int]] = []
 
-    assert updater.get_actual_update_start_year_month(2013, 1) == (2025, 1)
+    class RecordingCrawler:
+        def crawl(self, year: int, month: int) -> object:
+            crawled.append((year, month))
+            return type("Result", (), {"is_ok": False})()
 
+    class NullLoader:
+        def add_to_db(self, remove_files: bool = False) -> None:
+            pass
 
-def test_start_year_month_query_error_is_raised() -> None:
-    """查詢錯誤往外拋，不可當成「表是空的」從預設起點重跑整段"""
+    class NullStats:
+        def record(self, result: object) -> None:
+            pass
 
-    conn: sqlite3.Connection = sqlite3.connect(":memory:")
-    # 故意缺 month 欄
-    conn.execute("CREATE TABLE monthly_revenue (year INT, stock_id TEXT)")
-    updater: MonthlyRevenueReportUpdater = make_updater(conn)
+        def report(self, label: str) -> None:
+            pass
 
-    with pytest.raises(sqlite3.OperationalError):
-        updater.get_actual_update_start_year_month(2013, 1)
+    updater.crawler = RecordingCrawler()
+    updater.loader = NullLoader()
+    monkeypatch.setattr(updater_module, "UpdateStats", NullStats)
+
+    updater.update(start_year=2024, end_year=2024, start_month=1, end_month=9)
+
+    assert crawled == [(2024, 5), (2024, 9)]
 
 
 # === loader ===

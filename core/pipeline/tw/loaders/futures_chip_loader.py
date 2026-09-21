@@ -1,5 +1,6 @@
+import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -138,6 +139,20 @@ class FuturesChipLoader(BaseDataLoader):
 
         self.connect()
         return self.get_dao(table).get_latest_date()
+
+    def get_earliest_date(self, table: str) -> Optional[str]:
+        """表內最早的資料日期（表不存在時為 None）"""
+
+        self.connect()
+        return self.get_dao(table).get_earliest_date()
+
+    def get_dates(
+        self, table: str, start_date: datetime.date, end_date: datetime.date
+    ) -> List[datetime.date]:
+        """表內在區間內有資料的日期（已排序、去重）"""
+
+        self.connect()
+        return self.get_dao(table).get_distinct_dates(start_date, end_date)
 
     def save_csv(self, df: pd.DataFrame, file_name: str) -> Optional[Path]:
         """留一份中繼檔供稽核（與其他 ETL 一致）"""

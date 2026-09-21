@@ -39,8 +39,8 @@ If `--target` is omitted, the default is `no_tick` (all datasets except **both**
 | `futures_continuous` | Continuous futures contracts (rebuilt from `futures_price_daily`, no network access) |
 | `futures_margin` | Futures margin (change series, written to `tw_futures.db`) |
 | `futures_chip` | Futures chips (institutional investors, large traders, option PCR) |
-| `futures_tick` | Futures tick trades (Shioaji → DolphinDB; requires the `[tick]` extra and credentials) |
-| `all` | All datasets (including tick) |
+| `futures_tick` | Futures tick trades (Shioaji → DolphinDB; requires the `[tick]` extra and credentials). **Not included in `all` or `no_tick`**: it has no resume record and re-running writes duplicate rows, so it only runs when named explicitly |
+| `all` | All datasets (including tick; excludes `futures_tick` and `futures_stock_price`) |
 | `no_tick` | All datasets except `tick` **and** `futures_tick` (default). Both need Shioaji credentials and the `[tick]` extra; without the exclusion a machine lacking them would exit 1 every night |
 
 ### Single Target Examples

@@ -48,6 +48,11 @@ def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FuturesPriceUpda
     )
     # 空產出重試的等待在測試中一律歸零，否則每個空日都要真的睡 60 秒
     futures_price_updater.EMPTY_RETRY_DELAY_SECONDS = 0
+    # 現貨交易日曆預設取不到：不讓測試去讀正式的 tw_stock.db，
+    # 需要日曆的測試自己換成固定的交易日清單
+    monkeypatch.setattr(
+        futures_price_updater, "get_stock_trading_days", lambda *_: None
+    )
     return futures_price_updater
 
 
@@ -184,6 +189,41 @@ def test_daily_update_still_resumes(
     )
 
     assert requested == []
+
+
+def test_gap_inside_the_table_is_requested_again_on_resume(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    表內中間缺的交易日，下一次續跑會再請求
+
+    續跑起點是「表內最新 +1」：被擋掉、之後又有日子成功入庫的那一天被越過，
+    照預設 `resume=True` 重跑以結束碼 0 成功而缺口仍在；`FuturesCalendar` 的
+    交易日取自行情表，那一天在回測裡被當成休市。以現貨交易日曆比對才抓得到。
+    """
+
+    d1, d2, d3 = (
+        datetime.date(2026, 8, 25),
+        datetime.date(2026, 8, 26),
+        datetime.date(2026, 8, 27),
+    )
+    insert_row(updater.conn, str(d1), "TX")
+    insert_row(updater.conn, str(d3), "TX")
+    requested: List[datetime.date] = []
+
+    monkeypatch.setattr(
+        updater.crawler,
+        "crawl_futures_price",
+        lambda date, product, session: requested.append(date) or None,
+    )
+    monkeypatch.setattr(updater, "get_stock_trading_days", lambda *_: [d1, d2, d3])
+    monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
+    updater.BATCH_RANDOM_DELAY_MIN = 0
+    updater.BATCH_RANDOM_DELAY_MAX = 0
+
+    updater.update(start_date=d1, end_date=d3, products=["TX"])
+
+    assert set(requested) == {d2}
 
 
 def test_empty_day_is_retried_before_being_counted_as_no_data(

@@ -10,6 +10,7 @@ from loguru import logger
 
 from core.config import FUTURES_MARGIN_DOWNLOADS_PATH
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
+from core.pipeline.utils.exceptions import AnnouncementParseError
 from core.utils import FUTURES_MULTIPLIER, FileEncoding
 
 """
@@ -743,11 +744,20 @@ class FuturesMarginCleaner(BaseDataCleaner):
         - Return:
             - Optional[Dict[str, Optional[pd.DataFrame]]]
                 `{"margin": 金額列, "rate": 比例列}`，兩者皆含「調整前」欄供鏈式驗證；
-                **入庫時只取各自的 cleaned_cols**。完全沒有期貨列時為 None
+                **入庫時只取各自的 cleaned_cols**。完全沒有期貨列、或附件不是
+                保證金調整表時為 None
+        - Raise:
+            - AnnouncementParseError
+                附件空白、是 HTML 頁面，或保證金附件的表頭改版
         """
 
+        # **解析不了與「沒有期貨列」要分開**：前者拋出、由 updater 當成下載失敗
+        # 下次重試；後者回 None、寫進處理紀錄不再下載。混在一起的話，期交所
+        # 改版或下載到錯誤頁的那則公告會被記成「沒有期貨列」，從此不再重抓
         if not text or not text.strip():
-            return None
+            raise AnnouncementParseError(announcement_date, "附件內容是空的")
+        if text.lstrip()[:1] == "<":
+            raise AnnouncementParseError(announcement_date, "下載到的是 HTML 頁面")
 
         rows: List[List[str]] = [
             [cell.strip() for cell in row]
@@ -755,7 +765,16 @@ class FuturesMarginCleaner(BaseDataCleaner):
             if any(cell.strip() for cell in row)
         ]
         if not rows or rows[0][: len(ANNOUNCEMENT_HEADER)] != ANNOUNCEMENT_HEADER:
-            logger.warning(f"[Futures Margin] {announcement_date} 附件表頭不符，跳過")
+            header: List[str] = rows[0] if rows else []
+            # 表頭有契約代碼與保證金欄、只是排列不同 → 保證金附件改版了；
+            # 完全是別的欄位 → 部位限制等其他公告，沒有期貨保證金可收
+            if "契約代碼" in header and any("保證金" in cell for cell in header):
+                raise AnnouncementParseError(
+                    announcement_date, f"保證金附件的表頭與預期不符：{header}"
+                )
+            logger.info(
+                f"[Futures Margin] {announcement_date} 附件不是保證金調整表，跳過"
+            )
             return None
 
         effective_date: datetime.date = self.parse_announcement_effective_date(

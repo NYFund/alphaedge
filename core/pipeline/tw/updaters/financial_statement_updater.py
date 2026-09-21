@@ -520,7 +520,8 @@ class FinancialStatementUpdater(BaseDataUpdater):
             - start_year / end_year / start_season / end_season: int
                 更新區間
             - stock_ids: Optional[List[str]]
-                要爬的股票清單；None 時取 `taiwan_stock_info` 的上市櫃股票
+                要爬的股票清單；None 時取 `taiwan_stock_info` 的上市櫃股票，
+                並逐季併入當季資產負債表的公司（見 `get_season_target_stock_ids()`）
         - Raise:
             - DataLoadError
                 有批次入庫失敗時，於整段跑完後拋出（中途不中斷）
@@ -557,9 +558,18 @@ class FinancialStatementUpdater(BaseDataUpdater):
                         stopped = True
                         break
 
+                    # 呼叫端沒指定清單時，每季再併入當季資產負債表的公司
+                    season_targets: List[str] = (
+                        target_stock_ids
+                        if stock_ids is not None
+                        else self.get_season_target_stock_ids(
+                            target_stock_ids, year, season
+                        )
+                    )
+
                     # Step 1: 逐檔 resume——只補這個年季還沒入庫的公司
                     pending_stock_ids: List[str] = self.plan_pending_stock_ids(
-                        target_stock_ids=target_stock_ids,
+                        target_stock_ids=season_targets,
                         progress=progress,
                         year=year,
                         season=season,
@@ -572,7 +582,7 @@ class FinancialStatementUpdater(BaseDataUpdater):
                     # Step 2: 有待補的公司才與磁碟對帳（整季已完成時掃全季 CSV 純屬浪費）
                     if self.reconcile_season_csv_files(year, season, failed_files):
                         pending_stock_ids = self.plan_pending_stock_ids(
-                            target_stock_ids=target_stock_ids,
+                            target_stock_ids=season_targets,
                             progress=progress,
                             year=year,
                             season=season,
@@ -1118,6 +1128,37 @@ class FinancialStatementUpdater(BaseDataUpdater):
         """
 
         return StockInfoDAO(conn=self.conn).get_listed_common_stock_ids()
+
+    def get_season_target_stock_ids(
+        self, listed_stock_ids: List[str], year: int, season: int
+    ) -> List[str]:
+        """
+        - Description:
+            某一年季要逐檔爬權益變動表的清單：現存上市櫃清單 ∪ 當季資產負債表的公司
+
+            **現存清單有倖存者偏差**：FinMind 台股總覽只收錄一部分已下市的公司
+            （2026-09-21 實查：2025 年前停止交易的 163 檔四碼代號只有 109 檔在表內），
+            歷史回補只照它爬的話，當年存在、後來下市的公司整段缺權益變動表，
+            而且不會有任何錯誤。資產負債表是全市場查詢，當季有申報的公司都在裡面，
+            併進來就補得到；只取四碼代號，與現存清單的篩選一致。
+        - Parameters:
+            - listed_stock_ids: List[str]
+                現存上市櫃普通股清單
+            - year / season: int
+                年季
+        - Return:
+            - List[str]
+                合併後的清單（已排序）
+        """
+
+        filed: Set[str] = {
+            stock_id
+            for stock_id in self.get_dao(BALANCE_SHEET_TABLE_NAME).get_stock_ids(
+                year, season
+            )
+            if len(stock_id) == 4 and stock_id.isdigit()
+        }
+        return sorted(set(listed_stock_ids) | filed)
 
     def get_crawled_stock_ids(self, year: int, season: int) -> Set[str]:
         """取得指定年季已入庫的 stock_id，供逐檔爬取的中斷續跑使用；查詢錯誤往外拋"""

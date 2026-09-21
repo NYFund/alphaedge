@@ -261,6 +261,13 @@ class StockChipCleaner(BaseDataCleaner):
         )
         aligned_df = DataUtils.fill_nan(aligned_df, 0)
 
+        # 中段（第一次到第二次改制之間）來源只有「自行買賣／避險」兩組拆分欄、
+        # 沒有買進與賣出的合計欄；不補的話 reindex 把合計填成 0，庫裡就出現
+        # 「買賣皆 0、買賣超非 0」。放在轉成數值之後：拆分欄此時保證是數字，
+        # 不必依賴爬蟲那一端有沒有把千分位解析掉
+        if self.tpex_first_reform_date <= date < self.tpex_second_reform_date:
+            self.combine_dealer_columns(aligned_df)
+
         # 根據指定 columns 移除重複的 rows
         aligned_df = DataUtils.remove_duplicate_rows(
             df=aligned_df,

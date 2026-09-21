@@ -316,16 +316,22 @@ class StockUtils:
     @staticmethod
     def filter_common_stocks(stock_ids: List[str]) -> List[str]:
         """
-        - Description: 過濾出一般股票（排除 ETF、權證等），僅保留 4 位數且在 1001~9958 間的股票代號
+        - Description:
+            過濾出一般股票（排除 ETF、權證等）：保留 4 位數字且不小於 1001 的代號
+
+            **不設上限**：以前卡在 9958，9960（邁達康）、9962（有益）這類真實存在的
+            上櫃普通股被靜默排除在回測股票池與券商分點更新之外。ETF（00 開頭）與
+            權證（6 碼）本來就被「4 位數字、不小於 1001」擋掉，上限擋不到別的東西。
         - Parameters:
-            - stock_ids: 所有股票代號的 List[str]
+            - stock_ids: List[str]
+                所有股票代號
         - Return:
-            - List[str]：符合條件的一般股票代號清單
+            - List[str]
+                符合條件的一般股票代號清單
         """
+
         return [
             stock_id
             for stock_id in stock_ids
-            if stock_id.isdigit()
-            and len(stock_id) == 4
-            and 1001 <= int(stock_id) <= 9958
+            if stock_id.isdigit() and len(stock_id) == 4 and int(stock_id) >= 1001
         ]
