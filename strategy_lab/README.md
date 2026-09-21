@@ -290,9 +290,9 @@ buy_cost, sell_cost = StockUtils.calculate_transaction_cost(
 profit = StockUtils.calculate_net_profit(buy_price=600.0, sell_price=620.0, volume=5)
 roi    = StockUtils.calculate_roi(buy_price=600.0, sell_price=620.0, volume=5)  # %
 
-# 6) 過濾出「普通股」（4 位數、代號 1001~9958，排除 ETF / 權證）
-common_ids = StockUtils.filter_common_stocks(stock_ids=["2330", "0050", "9999", "00878"])
-# → ['2330']
+# 6) 過濾出「普通股」（4 位數字且不小於 1001，排除 ETF / 權證）
+common_ids = StockUtils.filter_common_stocks(stock_ids=["2330", "0050", "9962", "00878"])
+# → ['2330', '9962']
 ```
 
 ### Units / Commission — 單位與成本常數
