@@ -41,6 +41,7 @@
 | `manual_init_tick_metadata.py` | 初始化 tick metadata | 寫入 |
 | `../live_watchdog.py` | 實盤存活監控（**不在本目錄**，是排程用的獨立行程）：比對段落表與 `live_run`，發現「該跑而沒有紀錄」或「跑到一半死掉」就推播；唯讀開啟紀錄庫、不連券商 | 唯讀 |
 | `manual_shioaji_login.py` | `ShioajiSession` 的模擬環境冒煙：登入、列出帳號、核對合約欄位實際值與型別、列出期貨分類代碼、登出（**不下單**，也不提供連正式環境的選項） | — |
+| `manual_shioaji_quote_record.py` | 盤中行情錄製：訂閱逐筆與委買賣、把原始回呼存成 JSONL 並印出**欄位名、型別與範例值**。**要在交易日盤中跑**；不下單、不連正式環境。輸出落 `data/records/`（已被 gitignore） | 寫入 |
 | `manual_tick_crawler.py` | tick 爬蟲的手動驗證（需 Shioaji 金鑰） | — |
 | `manual_tick_updater.py` | tick updater 的手動驗證（需 DolphinDB） | 寫入 |
 
