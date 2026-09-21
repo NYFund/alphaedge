@@ -1313,6 +1313,14 @@ class LiveTrader:
         - Description:
             執行到期的跨日待辦（次日開盤段的第一件事）
 
+            **數量截到目前還持有的量**：待辦寫下之後部位可能已經變了——遲到的成交、
+            人工在券商端平倉、重建後部位已不在。照原數量送出的話，
+            多出來的部分不是「多平一點」，是直接把部位做反。持有量為 0 就標 `DONE`
+            並記一筆事件，不送單。
+
+            **送單走 `dispatch()`**：與一般委託同一條管線（資金保留、事前風控、
+            送出後消化回報），不另外直接呼叫 OMS。
+
             成功送出才標 `DONE`；送不出去就**留在 `PENDING` 並把到期日滾到次日**，
             同時再推播一次——一張補不成的平倉單不會因為換了一天就變得不重要。
         - Return:
@@ -1340,30 +1348,93 @@ class LiveTrader:
                 )
                 continue
 
-            order: Optional[BaseOrder] = self._build_cover_order(context, action)
+            volume: Optional[int] = self._pending_volume_to_cover(context, action)
+            if volume is None:
+                continue
+
+            order: Optional[BaseOrder] = self._build_cover_order(
+                context, {**action, "volume": volume}
+            )
             if order is None:
                 continue
 
-            try:
-                self.order_manager.submit(order, context.name)
-                self.dao.resolve_pending_action(
-                    str(action["action_id"]), self.dao.ACTION_DONE, self._now()
-                )
-                submitted += 1
-            except Exception as exc:
-                logger.opt(exception=True).error(
-                    f"補平單送出失敗，待辦保留：{action['action_id']}：{exc}"
-                )
+            if self.dispatch([(context, order)], None):
+                logger.error(f"補平單未送出，待辦保留：{action['action_id']}")
                 self.dao.postpone_pending_action(
                     str(action["action_id"]), today + datetime.timedelta(days=1)
                 )
                 self._notify(
                     "CRITICAL",
                     "補平單送出失敗",
-                    f"{action['symbol']} 殘量 {action['volume']} 仍未平掉",
+                    f"{action['symbol']} 殘量 {volume} 仍未平掉",
                 )
+                continue
+
+            self.dao.resolve_pending_action(
+                str(action["action_id"]), self.dao.ACTION_DONE, self._now()
+            )
+            submitted += 1
 
         return submitted
+
+    def _pending_volume_to_cover(
+        self, context: StrategyContext, action: Dict[str, Any]
+    ) -> Optional[int]:
+        """
+        - Description:
+            待辦實際要補平的數量：待辦數量與歸屬帳目前持有量取小
+
+            持有量為 0 時把待辦標成 `DONE` 並寫事件；數量被截短時也寫事件——
+            兩者都代表「寫待辦之後部位變了」，事後要查得到是怎麼變的。
+            待辦沒有部位方向時無從比對，留給人工。
+        - Parameters:
+            - context: StrategyContext
+                待辦所屬的策略
+            - action: Dict[str, Any]
+                待辦內容
+        - Return:
+            - Optional[int]
+                要送出的數量；None 表示本筆不送
+        """
+
+        action_id: str = str(action["action_id"])
+        symbol: str = str(action["symbol"])
+        wanted: int = int(action["volume"])
+        direction: str = str(action.get("position_type") or "")
+        if not direction:
+            logger.warning(f"待辦 {action_id} 沒有部位方向，無法比對持有量，需人工處理")
+            return None
+
+        held: int = self.ledger.get_strategy_positions(context.name).get(
+            (symbol, direction), 0
+        )
+        volume: int = min(wanted, held)
+        if volume == wanted:
+            return volume
+
+        message: str = (
+            f"待辦 {action_id} 要補平 {symbol} {direction} {wanted}，"
+            f"歸屬帳目前只持有 {held}，"
+            + ("已無部位，不送單" if volume <= 0 else f"改送 {volume}")
+        )
+        logger.warning(message)
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": context.name,
+                "severity": "WARNING",
+                "category": "PENDING_ACTION_TRUNCATED",
+                "symbol": symbol,
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
+        if volume <= 0:
+            self.dao.resolve_pending_action(
+                action_id, self.dao.ACTION_DONE, self._now()
+            )
+            return None
+        return volume
 
     def _build_cover_order(
         self, context: StrategyContext, action: Dict[str, Any]
