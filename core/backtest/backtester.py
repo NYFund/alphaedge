@@ -68,6 +68,7 @@ def new_event_counts() -> Dict[str, int]:
         "dividend_compensation_unknown": 0,  # 因權息並存無法拆分股利而跳過補償的空單
         "dividend_received": 0,  # 除息日收到現金股利的做多部位
         "share_adjustment_applied": 0,  # 配股、分割、減資造成股數調整的部位
+        "share_adjustment_unknown": 0,  # 權息並存拆不出配股率而未調整股數的部位
         "forced_exit_no_quote": 0,  # 連續無報價（停牌／下市）強制出場的做多部位
     }
 

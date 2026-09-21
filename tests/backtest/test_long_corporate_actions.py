@@ -158,6 +158,26 @@ def test_stock_dividend_adjusts_volume_and_cost() -> None:
     assert event_counts["share_adjustment_applied"] == 1
 
 
+def test_unknown_share_ratio_is_counted_not_guessed() -> None:
+    """
+    配股率未知時不調整股數，但要記 warning 並計數
+
+    以前 NULL 被當成 0 靜靜跳過，報表看不出哪些部位少算了配股；
+    現金股利 NULL 早就是「不猜、記 warning、計數」，兩者口徑一致。
+    """
+
+    account: StockAccount = make_account(make_long_position(price=100.0, volume=2))
+    settlement: TwStockSettlementModel = make_settlement(account)
+    settlement.apply_share_ratios({STOCK_ID: float("nan")})
+    event_counts: Dict[str, int] = new_event_counts()
+
+    settlement.apply_corporate_actions(EX_DATE, account, event_counts)
+
+    assert account.positions[0].volume == 2
+    assert event_counts["share_adjustment_unknown"] == 1
+    assert event_counts["share_adjustment_applied"] == 0
+
+
 def test_split_keeps_the_equity_continuous() -> None:
     """
     分割：張數加倍、價格砍半時權益不變

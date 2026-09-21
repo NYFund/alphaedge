@@ -1,4 +1,5 @@
 import datetime
+import math
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -121,6 +122,34 @@ def test_get_stock_dividend_ratio_map(dividend_api: StockDividendAPI) -> None:
 
     assert ratio_map == {"2330": 0.05, "2317": 0.0}
     assert dividend_api.get_stock_dividend_ratio_map(datetime.date(2024, 6, 1)) == {}
+
+
+def test_share_ratio_map_marks_unknown_ratio_as_nan(
+    dividend_api: StockDividendAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    配股率 NULL（權息並存拆不出來）回 NaN，不當成 0
+
+    當成 0 就是「沒有配股」：做多部位持有過除權日時價格已除權、張數卻沒放大，
+    帳面憑空虧掉配股那一段，而且不留任何痕跡。純除息的 0 仍然不列入。
+    """
+
+    monkeypatch.setattr(
+        dividend_api,
+        "get_stock_dividend_ratio_map",
+        lambda date: {"2330": None, "2317": 0.0, "2454": 0.1},
+    )
+    monkeypatch.setattr(
+        dividend_api.corporate_action_dao,
+        "get_adjust_ratios_by_date",
+        lambda date: pd.DataFrame(columns=["stock_id", "調整倍率"]),
+    )
+
+    ratios: Dict[str, float] = dividend_api.get_share_ratio_map(DAY_2)
+
+    assert set(ratios) == {"2330", "2454"}
+    assert math.isnan(ratios["2330"])
+    assert ratios["2454"] == pytest.approx(1.1)
 
 
 def test_get_ex_dividend_dates_are_sorted_and_deduped(
