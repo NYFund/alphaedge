@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterator, List, Optional
 
 import pytest
 
@@ -54,6 +54,21 @@ from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
 """
 
 
+# 持有排他鎖的連線。**不可以只是 `_make_locked_db()` 的區域變數**：函式一回傳它就
+# 可能被回收、連線關閉、鎖跟著釋放，之後的查詢就不會被擋——測試會視回收時機
+# 偶爾「DID NOT RAISE」（只跑部分測試時重現過）。由下方 fixture 在測試結束時關閉
+_LOCK_HOLDERS: List[sqlite3.Connection] = []
+
+
+@pytest.fixture(autouse=True)
+def release_locks() -> Iterator[None]:
+    """每條測試結束後放掉它建立的排他鎖"""
+
+    yield
+    while _LOCK_HOLDERS:
+        _LOCK_HOLDERS.pop().close()
+
+
 def _make_locked_db(db_path: Path, table_name: str) -> sqlite3.Connection:
     """
     建好資料表後用另一條連線鎖住整個資料庫，回傳一條讀不到東西的連線
@@ -67,6 +82,7 @@ def _make_locked_db(db_path: Path, table_name: str) -> sqlite3.Connection:
     writer.execute(f"CREATE TABLE {table_name} (date TEXT)")
     writer.commit()
     writer.execute("BEGIN EXCLUSIVE")
+    _LOCK_HOLDERS.append(writer)
 
     return sqlite3.connect(db_path, timeout=0)
 
