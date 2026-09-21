@@ -37,8 +37,8 @@
 | `futures_continuous`      | 台期貨連續合約（由 `futures_price_daily` 建出，不連網路） |
 | `futures_margin`          | 台期貨保證金（變動序列，寫入 `tw_futures.db`） |
 | `futures_chip`            | 台期貨籌碼（三大法人、大額交易人、選擇權 PCR） |
-| `futures_tick`            | 台期貨逐筆成交（Shioaji → DolphinDB；需 `[tick]` 相依與金鑰） |
-| `all`                     | 全部資料（含 tick）                  |
+| `futures_tick`            | 台期貨逐筆成交（Shioaji → DolphinDB；需 `[tick]` 相依與金鑰）。**不含在 `all`／`no_tick` 內**：沒有續跑紀錄、重跑會重複寫入，只在明確點名時才跑 |
+| `all`                     | 全部資料（含 tick；不含 `futures_tick` 與 `futures_stock_price`） |
 | `no_tick`                 | 全部資料（不含 `tick` **與** `futures_tick`，預設）。兩者都需要 Shioaji 金鑰與 `[tick]` 選用相依，不排除的話，沒有金鑰的機器每晚都會以結束碼 1 收場 |
 
 ### 單一 target 範例

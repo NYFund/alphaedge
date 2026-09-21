@@ -10,14 +10,15 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 """
 入口與日誌的四個坑，共通點是**平常不會有人發現**
 
-1. 預設 `no_tick` 仍包含 `futures_tick`，沒有 Shioaji 金鑰的機器每晚紅燈。
+1. 預設 `no_tick` 仍包含 `futures_tick`，沒有 Shioaji 金鑰的機器每晚紅燈；
+   `all` 也不可帶到它（重跑會重複寫入）。
 2. `delete_price_data` 沒有預覽也沒有確認，打錯日期就少一整天行情。
 3. `.env` 缺 `DDB_PATH` 時路徑被拼成 `"NonetickDB"`。
 4. `logs/api/` 每天長約 100 MB。
 """
 
 
-# === no_tick 要排除所有 tick ===
+# === target 捷徑的展開 ===
 def test_no_tick_excludes_futures_tick() -> None:
     """
     預設的 `python -m tasks.update_db` 不可去跑期貨 tick
@@ -27,11 +28,9 @@ def test_no_tick_excludes_futures_tick() -> None:
     """
 
     from core.pipeline.utils import DataType
-    from tasks.update_db import TICK_DATA_TYPES
+    from tasks.update_db import expand_targets
 
-    expanded: Set[str] = {
-        dt.name.lower() for dt in DataType if dt not in TICK_DATA_TYPES
-    }
+    expanded: Set[str] = expand_targets({"no_tick"})
 
     assert DataType.FUTURES_TICK.name.lower() not in expanded
     assert DataType.TICK.name.lower() not in expanded
@@ -40,15 +39,29 @@ def test_no_tick_excludes_futures_tick() -> None:
     assert DataType.FUTURES_PRICE.name.lower() in expanded
 
 
-def test_all_still_includes_every_tick_target() -> None:
-    """`--target all` 仍要涵蓋兩種 tick，否則就沒有「全部」了"""
+def test_all_excludes_futures_tick_until_it_can_resume() -> None:
+    """
+    `--target all` 不含期貨 tick：它每跑一次就重複寫入一份
+
+    沒有續跑依據、DolphinDB 表允許重複、loader 每次重放整個目錄，
+    成交量會隨執行次數被放大。現貨 tick 仍在 `all` 內。
+    """
 
     from core.pipeline.utils import DataType
+    from tasks.update_db import expand_targets
 
-    expanded: Set[str] = {dt.name.lower() for dt in DataType}
+    expanded: Set[str] = expand_targets({"all"})
 
+    assert DataType.FUTURES_TICK.name.lower() not in expanded
     assert DataType.TICK.name.lower() in expanded
-    assert DataType.FUTURES_TICK.name.lower() in expanded
+
+
+def test_explicit_futures_tick_is_still_honoured() -> None:
+    """明確點名的 target 一定保留：暫停的是捷徑，不是這個功能"""
+
+    from tasks.update_db import expand_targets
+
+    assert "futures_tick" in expand_targets({"futures_tick"})
 
 
 # === delete_price_data 預設不刪 ===

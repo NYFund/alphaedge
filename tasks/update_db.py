@@ -97,7 +97,8 @@ Target 對照表
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
   futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
                               **不含在 all／no_tick 內**，只在此處點名才會跑）
-  futures_tick                台期貨逐筆成交（Shioaji → DolphinDB；需 [tick] 相依與金鑰）
+  futures_tick                台期貨逐筆成交（Shioaji → DolphinDB；需 [tick] 相依與金鑰；
+                              **不含在 all／no_tick 內**：重跑會重複寫入，只在點名時跑）
   fs                          財報 (Financial Statement)
   mrr                         月營收報表 (Monthly Revenue Report)
   finmind                     全部 FinMind（台股總覽 + 證券商 + 券商分點）
@@ -105,7 +106,7 @@ Target 對照表
   stock_info_with_warrant     FinMind 台股總覽（含權證）
   broker_info                 FinMind 證券商資訊
   broker_trading              FinMind 券商分點統計
-  all                         全部資料（含 tick 與 futures_tick；不含 futures_stock_price）
+  all                         全部資料（含 tick；不含 futures_tick 與 futures_stock_price）
   no_tick                     全部資料（不含 tick、futures_tick 與 futures_stock_price，預設）
 
 ================================================================================
@@ -196,7 +197,54 @@ TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 # 330 個交易日，單一商品 11 年就要 8.6 小時，320 檔是 100 天以上。
 # 這種量級的回補必須是人明確要求的動作，不能被 `python -m tasks.update_db`
 # 的預設值一腳踩進去，更不能卡住排在它後面的 futures_chip、fs、mrr 等 target
-EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {DataType.FUTURES_STOCK_PRICE}
+#
+# 期貨 tick 同樣只能點名：它沒有續跑依據（逐日逐契約爬、沒有已爬紀錄），
+# DolphinDB 表又是 `keepDuplicates=ALL`、loader 每次重放整個目錄——每跑一次
+# 近月契約就重抓並多寫一份，成交量被放大 N 倍，每個候選日還先耗一次
+# `api.usage()` 配額。在加上「契約 × 日」的載入紀錄之前，不能讓 `all` 帶到它
+EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
+    DataType.FUTURES_STOCK_PRICE,
+    DataType.FUTURES_TICK,
+}
+
+
+def expand_targets(targets: Set[str]) -> Set[str]:
+    """
+    - Description:
+        把 `all`／`no_tick` 兩個集合捷徑展開成實際的 target
+
+        `EXPLICIT_ONLY_DATA_TYPES` 兩個捷徑都不含，只有明確點名才會跑；
+        `no_tick` 另外排除所有需要 Shioaji 金鑰與 `[tick]` 相依的 target。
+    - Parameters:
+        - targets: Set[str]
+            命令列給的 target（可含捷徑）
+    - Return:
+        - Set[str]
+            展開後的 target（原本點名的一律保留）
+    """
+
+    expanded: Set[str] = set(targets)
+
+    # all = 所有資料類型（包含 tick 和 finmind），但不含 EXPLICIT_ONLY_DATA_TYPES
+    if "all" in expanded:
+        expanded.update(
+            dt.name.lower() for dt in DataType if dt not in EXPLICIT_ONLY_DATA_TYPES
+        )
+
+    # no_tick = 所有資料類型 − **所有** tick（包含 finmind）
+    #
+    # **`futures_tick` 也要排除**：舊版只排除 `DataType.TICK`，
+    # 於是預設的 `python -m tasks.update_db` 會去跑期貨 tick——那需要 Shioaji
+    # 金鑰與 `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
+    # 久了就沒人在看那個紅燈了。
+    if "no_tick" in expanded:
+        expanded.update(
+            dt.name.lower()
+            for dt in DataType
+            if dt not in TICK_DATA_TYPES and dt not in EXPLICIT_ONLY_DATA_TYPES
+        )
+
+    return expanded
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -388,24 +436,7 @@ def main() -> None:
     if from_date is not None:
         logger.info(f"--from {from_date}：以日期為單位的 target 一律由此日起算")
 
-    # all = 所有資料類型（包含 tick 和 finmind），但不含 EXPLICIT_ONLY_DATA_TYPES
-    if "all" in targets:
-        targets.update(
-            dt.name.lower() for dt in DataType if dt not in EXPLICIT_ONLY_DATA_TYPES
-        )
-
-    # no_tick = 所有資料類型 − **所有** tick（包含 finmind）
-    #
-    # **`futures_tick` 也要排除**：舊版只排除 `DataType.TICK`，
-    # 於是預設的 `python -m tasks.update_db` 會去跑期貨 tick——那需要 Shioaji
-    # 金鑰與 `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
-    # 久了就沒人在看那個紅燈了。
-    if "no_tick" in targets:
-        targets.update(
-            dt.name.lower()
-            for dt in DataType
-            if dt not in TICK_DATA_TYPES and dt not in EXPLICIT_ONLY_DATA_TYPES
-        )
+    targets = expand_targets(targets)
 
     if DataType.TICK.name.lower() in targets:
         with target_guard("tick", failed_targets):
