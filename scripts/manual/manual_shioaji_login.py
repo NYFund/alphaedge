@@ -1,11 +1,11 @@
 import argparse
-import datetime
 import sys
 from typing import Any, List, Optional
 
 from loguru import logger
 
 from core.broker.tw.shioaji_session import ShioajiSession
+from core.config.settings import now_live
 
 """
 `ShioajiSession` 的模擬環境冒煙腳本：登入 → 列出帳號 → 核對合約欄位 → 登出
@@ -129,7 +129,10 @@ def main() -> int:
             return 1
 
         api: Optional[Any] = session.api
-        logger.info(f"連線時間（台北）：{datetime.datetime.now().isoformat()}")
+        # **一定要用 `now_live()`**：`datetime.now()` 回的是本機時區，
+        # 在非台灣的機器上會印出一個標著「台北」卻不是台北的時間——
+        # 而這支腳本正是拿來查時鐘問題的
+        logger.info(f"連線時間（台北）：{now_live().isoformat()}")
         logger.info(f"stock_account: {getattr(api, 'stock_account', None)}")
         logger.info(f"futopt_account: {getattr(api, 'futopt_account', None)}")
 

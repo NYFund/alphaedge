@@ -1,7 +1,7 @@
 import datetime
 import re
 import time
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 import shioaji as sj
 from loguru import logger
@@ -273,22 +273,49 @@ class ShioajiSession:
                 "請先校正系統時間與時區（實盤一律使用 Asia/Taipei）"
             )
 
+    # 合約檔更新日可能的格式。**實測 Shioaji 1.3.3 回的是 `YYYY/MM/DD`**
+    # （2026-09-21 模擬環境實連），而不是 ISO 的 `YYYY-MM-DD`
+    CONTRACT_DATE_FORMATS: Tuple[str, ...] = ("%Y/%m/%d", "%Y-%m-%d")
+
     def _fetch_contract_update_date(self) -> Optional[datetime.date]:
         """
         取一張上市股票合約的 `update_date`
 
         取不到就回 `None`，不拋出：這是輔助檢查，不該成為啟動的硬條件。
+
+        **格式不只一種，而且猜錯的代價是整道檢查靜默失效**：欄位原本只以
+        `fromisoformat()` 解析，實際拿到 `'2026/09/21'` 時解析失敗被吞成 None，
+        於是「本機日期差一天以上」那道守門從來沒有生效過，只留下一行
+        「略過本機日期檢查」的 warning——看起來像環境問題，其實是程式問題。
         """
 
+        contract: Any = None
         try:
-            contract: Any = self.api.Contracts.Stocks.TSE["2330"]
-            raw: Any = getattr(contract, "update_date", None)
-            if isinstance(raw, datetime.date):
-                return raw
-            return datetime.date.fromisoformat(str(raw))
+            contract = self.api.Contracts.Stocks.TSE["2330"]
         except Exception as exc:
-            logger.opt(exception=True).debug(f"取合約檔更新日期失敗：{exc}")
+            logger.opt(exception=True).debug(f"取不到合約：{exc}")
             return None
+
+        raw: Any = getattr(contract, "update_date", None)
+        if isinstance(raw, datetime.date):
+            return raw
+        if raw is None:
+            return None
+
+        text: str = str(raw)
+        for pattern in self.CONTRACT_DATE_FORMATS:
+            try:
+                return datetime.datetime.strptime(text, pattern).date()
+            except ValueError:
+                continue
+
+        # 欄位在、但格式不認得 → 這是**程式該更新**的訊號，不是環境問題，
+        # 故記 warning 而不是 debug：debug 等於沒有人會看到
+        logger.warning(
+            f"合約檔更新日 {text!r} 的格式不在已知清單 {self.CONTRACT_DATE_FORMATS} 內，"
+            "本機日期檢查將被略過；請補上該格式"
+        )
+        return None
 
     def check_report_clock_skew(self, report_ts: datetime.datetime) -> float:
         """

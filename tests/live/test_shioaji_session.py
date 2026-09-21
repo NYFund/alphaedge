@@ -327,6 +327,38 @@ def test_clock_off_by_days_refuses_to_start(
         session.connect()
 
 
+def test_contract_date_accepts_the_real_broker_format(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    Shioaji 實際回的是 `YYYY/MM/DD`，不是 ISO
+
+    **2026-09-21 模擬環境實連確認**。原本只以 `fromisoformat()` 解析，
+    拿到 `'2026/09/21'` 解析失敗被吞成 None，於是「本機日期差一天以上」那道守門
+    從來沒有生效過，只留下一行「略過本機日期檢查」——看起來像環境問題，
+    其實是程式問題。這條測試就是釘住那個格式。
+    """
+
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026/08/01"))
+    session: ShioajiSession = make_session(fixed_now, api=api)
+
+    with pytest.raises(RuntimeError, match="相差"):
+        session.connect()
+
+
+def test_contract_date_in_the_real_format_passes_when_current(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """同一個格式、日期正確時要放行——修完不可以變成一律拒絕啟動"""
+
+    today: str = fixed_now().date().strftime("%Y/%m/%d")
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date=today))
+    session: ShioajiSession = make_session(fixed_now, api=api)
+    session.connect()
+
+    assert session.is_connected() is True
+
+
 def test_unreadable_contract_date_only_warns(
     fixed_now: Callable[[], datetime.datetime],
 ) -> None:
