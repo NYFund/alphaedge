@@ -1,4 +1,5 @@
 import datetime
+import math
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -380,8 +381,15 @@ class FuturesContinuousUpdater(BaseDataUpdater):
             if old_row is None or new_row is None:
                 continue
 
-            old_close: float = float(old_row[close_column])
-            new_close: float = float(new_row[close_column])
+            old_close: Optional[float] = self._finite_close(old_row[close_column])
+            new_close: Optional[float] = self._finite_close(new_row[close_column])
+            # **列存在不代表有價**：cleaner 刻意把來源的 `-`（整天零成交）保留成 NaN。
+            # 拿 NaN 相減得 NaN，由後往前累加時一次污染，該次換月之前的整段
+            # BACKWARD／RATIO 價格全變 NaN，而且只記一行「寫入 N 列」、不報錯。
+            # 次月常整天零成交的商品（ZFF、ZEF、TF、TE）最容易踩到
+            if old_close is None or new_close is None:
+                continue
+
             ratio: float = new_close / old_close if old_close else 1.0
             return (new_close - old_close, ratio)
 
@@ -390,6 +398,15 @@ class FuturesContinuousUpdater(BaseDataUpdater):
             f"但找不到兩者都有報價的日子，展期價差以 0 計"
         )
         return (0.0, 1.0)
+
+    @staticmethod
+    def _finite_close(value: Any) -> Optional[float]:
+        """收盤價轉成 float；None 或 NaN（整天零成交）回 None"""
+
+        if value is None:
+            return None
+        close: float = float(value)
+        return None if math.isnan(close) else close
 
     # === 價格調整 ===
     def apply_adjustment(

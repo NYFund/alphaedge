@@ -227,6 +227,39 @@ def test_roll_gap_comes_from_the_same_day(updater) -> None:
     assert roll_row["roll_ratio"] == pytest.approx(20120 / 20200)
 
 
+def test_roll_gap_skips_a_day_with_no_trade(updater) -> None:
+    """
+    換月前一天新契約整天零成交（收盤 NaN）時，往前找再前一天的價差
+
+    列存在不代表有價：cleaner 把來源的 `-` 保留成 NaN。以前只檢查列在不在，
+    NaN 相減得 NaN，由後往前累加時一次污染，換月之前的整段調整價全變 NaN、不報錯。
+    """
+
+    prices: List[Dict[str, Any]] = [
+        dict(row, close=float("nan"))
+        if (row["date"], row["expiry"]) == ("2024-03-20", "202404")
+        else row
+        for row in PRICES
+    ]
+    price_df: pd.DataFrame = make_price_df(prices)
+    planner: FuturesRollPlanner = FuturesRollPlanner(
+        make_calendar(), rule=FuturesRollRule.LAST_TRADING_DAY
+    )
+    schedule = planner.build_roll_schedule(
+        dates=[datetime.date.fromisoformat(d) for d in TRADING_DAYS],
+        expiries_by_date=updater.build_expiries_by_date(price_df),
+        open_interest_by_date=updater.build_open_interest_by_date(price_df),
+    )
+    series: pd.DataFrame = updater.build_series(price_df, schedule)
+    roll_row: pd.Series = series[series["roll_flag"] == 1].iloc[0]
+
+    # 03-19：202404 收 20,010、202403 收 20,100
+    assert roll_row["roll_gap"] == pytest.approx(-90.0)
+    for method in (FuturesAdjustMethod.BACKWARD, FuturesAdjustMethod.RATIO):
+        adjusted: pd.DataFrame = updater.apply_adjustment(series.copy(), method)
+        assert adjusted["adj_factor"].notna().all()
+
+
 def test_no_artificial_gap_at_roll(updater) -> None:
     """
     **調整後的換月日變動 ＝ 新契約自己的日變動**
