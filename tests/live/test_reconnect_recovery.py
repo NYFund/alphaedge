@@ -250,6 +250,49 @@ def test_reconnect_does_not_duplicate_existing_positions() -> None:
     assert harness.trader.last_reconcile.is_consistent is True
 
 
+def test_heartbeat_reconnects_without_any_quote() -> None:
+    """
+    沒有任何行情時，心跳也要把斷掉的連線接回來
+
+    斷線偵測以前只掛在行情回呼上。session 斷了行情也跟著停，
+    `ensure_connected()` 就再也不會被呼叫——迴圈空轉到收線，期間的回報全部遺失。
+    這裡跑真的事件迴圈、一筆行情都不給，只靠心跳。
+    """
+
+    harness: Any = make_harness()
+    harness.contexts[0].symbols = ["2330"]
+    harness.trader.INTRADAY_HEARTBEAT_SECONDS = 0.001
+    harness.broker.connect()
+
+    # 訂閱完就斷線：迴圈開始後一筆行情都不會來
+    original_subscribe: Any = harness.broker.subscribe_quotes
+    subscribed_once: List[bool] = []
+
+    def subscribe_then_drop(symbols: List[str]) -> None:
+        original_subscribe(symbols)
+        if not subscribed_once:
+            subscribed_once.append(True)
+            harness.broker.close()
+
+    harness.broker.subscribe_quotes = subscribe_then_drop
+
+    reconnects: List[bool] = []
+    original_reconnect: Any = harness.broker.reconnect
+
+    def counting_reconnect() -> bool:
+        reconnects.append(True)
+        return original_reconnect()
+
+    harness.broker.reconnect = counting_reconnect
+
+    # Harness 的時鐘只在 sleep 時前進，迴圈會在時鐘停住的保險絲觸發後結束
+    stats: Any = harness.trader.run_intraday(None)
+
+    assert stats.quotes == 0
+    assert reconnects == [True]
+    assert harness.broker.is_connected() is True
+
+
 def test_failed_reconnect_stops_submitting() -> None:
     """
     重連失敗要回 False 讓呼叫端停手
