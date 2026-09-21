@@ -452,6 +452,59 @@ def test_update_resolves_start_dates_for_every_dataset(monkeypatch) -> None:
     assert called[1][1] == datetime.date(2015, 1, 1)
 
 
+def test_gap_month_inside_the_table_is_backfilled_on_resume() -> None:
+    """
+    表內中間缺的月份，下一次續跑會先補
+
+    被擋的月份以前只記 error、叫人「稍後重跑」，但預設 `resume=True` 的起點是
+    表內最新 +1，那個月被後面已入庫的月份蓋過去——結束碼 0、缺口仍在。
+    """
+
+    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+
+    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    chip_dates: List[datetime.date] = [
+        datetime.date(2026, 6, 1),
+        datetime.date(2026, 8, 3),
+    ]
+    trading_days: List[datetime.date] = chip_dates + [datetime.date(2026, 7, 1)]
+
+    class StubLoader:
+        def get_earliest_date(self, table):
+            return "2026-06-01"
+
+        def get_latest_date(self, table):
+            return "2026-08-03"
+
+        def get_dates(self, table, start, end):
+            return chip_dates
+
+    class StubPriceAPI:
+        dao = type("DAO", (), {"table_exists": staticmethod(lambda: True)})()
+
+        def get_trading_days(self, start, end):
+            return sorted(trading_days)
+
+    updater.loader = StubLoader()
+    updater.price_api = StubPriceAPI()
+    updater.get_datasets = lambda: [
+        (FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr", None, None),
+    ]
+    called: List[tuple] = []
+
+    def record_dataset(table, label, crawl, clean, start, end):
+        called.append((start, end))
+        return 0, []
+
+    updater.update_dataset = record_dataset
+
+    updater.update(end_date=datetime.date(2026, 8, 3))
+
+    assert called[0] == (datetime.date(2026, 7, 1), datetime.date(2026, 7, 31))
+    # 之後照常從表內最新 +1 接續
+    assert called[-1][0] == datetime.date(2026, 8, 4)
+
+
 def test_update_only_touches_requested_tables(monkeypatch) -> None:
     """
     `tables` 指定時只跑那幾個資料集

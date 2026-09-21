@@ -171,6 +171,17 @@ class FuturesChipDAO(BaseDAO):
         )
         return row[0] if row else None
 
+    def get_earliest_date(self) -> Optional[str]:
+        """表內最早的資料日期；表不存在時為 None（缺口偵測的下界）"""
+
+        if not self.table_exists():
+            return None
+
+        row: Optional[Tuple[Any, ...]] = self.fetch_one(
+            f"SELECT MIN(date) FROM {self.TABLE_NAME}"
+        )
+        return row[0] if row else None
+
     def get_latest_date_before(self, date: datetime.date) -> Optional[str]:
         """
         - Description:

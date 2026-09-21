@@ -42,12 +42,12 @@ updater 負責串起流程與決定要處理哪些日期。
 | `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinMindUpdater`（台股總覽、含權證、證券商資訊） | 每張表一次 | 無（現況快照，每次整份重抓） | `INSERT OR REPLACE`（同鍵以最新快照覆蓋；快照裡已沒有的舊列保留） | `DataLoadError` |
 | `StockTickUpdater` | 全部跑完 | 固定起日 ＋ `tick_metadata.json` | **無**（`keepDuplicates=ALL`） | `DataLoadError` |
-| `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1 | `INSERT OR IGNORE` | `DataLoadError` |
+| `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1，**加上**表內最早與最新之間、現貨有開市卻沒有行情的日子（日曆取自 `tw_stock.db` 的 `price` 表，2013 年前偵測不到） | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesStockUniverseUpdater` | 一次（單次請求） | 當日快照是否已入庫 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品最新 `date` +1；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesMarginUpdater` | 一次（單次請求） | 主鍵 `(effective_date, product)` 相同即略過 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesContinuousUpdater` | 每組（商品, 換月規則）寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
-| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1 | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
+| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1，**加上**表內最早與最新之間、期貨有交易卻沒有籌碼的月份（交易日取自 `futures_price_daily`） | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
 | `FuturesTickUpdater` | 全部跑完 | 以日線行情表決定契約、預設只爬近月 | **無**（DolphinDB `keepDuplicates=ALL`，寫入路徑尚未實測） | `DataLoadError` |
 
 **未分批的幾個並非疏漏**：dividend／mrr／fs 的量級是十餘年 × 數十個年月或年季，

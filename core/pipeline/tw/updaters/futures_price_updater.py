@@ -175,25 +175,80 @@ class FuturesPriceUpdater(BaseDataUpdater):
                 區間內開市的週末日期
         """
 
+        trading_days: Optional[List[datetime.date]] = self.get_stock_trading_days(
+            start_date, end_date
+        )
+        if trading_days is None:
+            logger.warning("無法取得現貨交易日曆，無法判斷補行交易日，本次一律跳過週末")
+            return set()
+
+        return {date for date in trading_days if date.weekday() >= SATURDAY}
+
+    def get_stock_trading_days(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> Optional[List[datetime.date]]:
+        """
+        區間內的現貨交易日（期貨與現貨共用同一份行事曆）
+
+        `tw_stock.db` 或 `price` 表不存在（只跑期貨的環境）時回 None，由呼叫端決定
+        怎麼退化；其他查詢錯誤往外拋。連線以唯讀開啟，第一次用到才開。
+        """
+
         if self.stock_price_dao is None:
             if not TW_STOCK_DB_PATH.exists():
-                logger.warning(
-                    f"找不到 {TW_STOCK_DB_PATH}，無法判斷補行交易日，本次一律跳過週末"
-                )
-                return set()
+                logger.warning(f"找不到 {TW_STOCK_DB_PATH}")
+                return None
             self.stock_price_dao = StockPriceDAO(
                 db_path=TW_STOCK_DB_PATH, read_only=True
             )
 
         if not self.stock_price_dao.table_exists():
-            logger.warning("price 表不存在，無法判斷補行交易日，本次一律跳過週末")
-            return set()
+            logger.warning("tw_stock.db 的 price 表不存在")
+            return None
 
-        return {
-            date
-            for date in self.stock_price_dao.get_trading_days(start_date, end_date)
-            if date.weekday() >= SATURDAY
-        }
+        return self.stock_price_dao.get_trading_days(start_date, end_date)
+
+    def find_gap_dates(self, product: str) -> List[datetime.date]:
+        """
+        - Description:
+            該商品在表內最早與最新日期之間、現貨有開市卻沒有期貨行情的日子
+
+            **續跑起點是「表內最新 +1」，中間的缺口它看不到**：被站方擋掉的日子
+            重試後仍拿不到時會被當成沒開盤，之後的日子照常入庫、`MAX(date)` 越過
+            它，這一天從此不會再被請求；`FuturesCalendar` 的交易日又取自行情表，
+            缺掉的日子在回測裡被當成休市。以現貨交易日曆比對才分得出「沒開盤」
+            與「沒拿到」。
+
+            **已知限制**：`price` 表自 2013 年起才有資料，更早的缺口偵測不到；
+            取不到現貨日曆時不偵測（回空清單並警告），不猜。
+        - Parameters:
+            - product: str
+                商品代碼
+        - Return:
+            - List[datetime.date]
+                缺口日期（已排序）
+        """
+
+        summary: Optional[Tuple[int, str, str]] = self.dao.get_product_summary(product)
+        if summary is None:
+            return []
+
+        first: datetime.date = TimeUtils.to_date(summary[1])
+        last: datetime.date = TimeUtils.to_date(summary[2])
+        if first >= last:
+            return []
+
+        calendar: Optional[List[datetime.date]] = self.get_stock_trading_days(
+            first, last
+        )
+        if calendar is None:
+            logger.warning(f"* {product} 取不到現貨交易日曆，本次不偵測中間缺口")
+            return []
+
+        existing: Set[datetime.date] = set(
+            self.dao.get_trading_days(first, last, product=product)
+        )
+        return [date for date in calendar if date not in existing]
 
     def get_candidate_dates(
         self, start_date: datetime.date, end_date: datetime.date
@@ -555,11 +610,22 @@ class FuturesPriceUpdater(BaseDataUpdater):
             else start_date
         )
         actual_start = self.clamp_to_listing_date(product, actual_start)
-        if actual_start > end_date:
+
+        # 續跑時先補表內中間的缺口：起點是「最新 +1」，看不到被擋掉的那幾天
+        gaps: List[datetime.date] = self.find_gap_dates(product) if resume else []
+        if gaps:
+            logger.warning(
+                f"* {product} 表內有 {len(gaps)} 個現貨有開市卻沒有行情的日子，"
+                f"本次一併回補：{[str(date) for date in gaps[:10]]}"
+            )
+
+        if actual_start > end_date and not gaps:
             logger.info(f"* {product} 已是最新（起點 {actual_start} 晚於 {end_date}）")
             return
 
-        dates: List[datetime.date] = self.get_candidate_dates(actual_start, end_date)
+        dates: List[datetime.date] = sorted(
+            set(gaps) | set(self.get_candidate_dates(actual_start, end_date))
+        )
         logger.info(f"* {product}: {actual_start} ~ {end_date}，共 {len(dates)} 天")
 
         file_cnt: int = 0
