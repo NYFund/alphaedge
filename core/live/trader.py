@@ -283,6 +283,10 @@ class LiveTrader:
 
         self.broker.connect()
 
+        # **先標記崩潰的舊紀錄再讀模式**：`get_last_account_mode()` 只讀已結束的
+        # 那些，不先標記就會跳過上次崩潰的那一列，等於把它的降級狀態擦掉
+        self.mark_previous_crash()
+
         self.mode_state.load()
         if self.resume_trading:
             # 人工恢復；**只能由命令列旗標觸發**，程式不自動呼叫
@@ -316,6 +320,89 @@ class LiveTrader:
         self._check_daily_loss()
 
         self.last_reconcile = self.reconciler.check(positions)
+
+    def mark_previous_crash(self) -> List[str]:
+        """
+        - Description:
+            把上次沒有正常結束的紀錄標記起來並告警
+
+            `ended_at IS NULL` 只有兩種可能：正在跑的這一次，或是上次崩潰了。
+            **崩潰要當成事件而不是沉默的常態**——沒有人知道上次是怎麼停的，
+            部位與委託就都處在未確認的狀態。
+        - Return:
+            - List[str]
+                被標記的 `run_id`
+        """
+
+        crashed: List[str] = self.dao.mark_crashed_runs(self.run_id, self._now())
+        if not crashed:
+            return []
+
+        message: str = (
+            f"上次執行沒有正常結束（{', '.join(crashed)}），"
+            "已標記為 CRASHED；本次將以券商為準重建部位並對帳"
+        )
+        logger.error(message)
+        self._notify("CRITICAL", "偵測到上次崩潰", message)
+        return crashed
+
+    def ensure_connected(self) -> bool:
+        """
+        - Description:
+            確認連線還在；斷了就重連並走完恢復流程
+
+            **這是 `ShioajiSession.reconnect()` 唯一的呼叫端**。它連同退避與
+            每日登入上限都寫好了，但正式路徑上一個呼叫點都沒有——
+            斷線之後程式會一路跑到收盤，每一次送單都失敗。
+        - Return:
+            - bool
+                連線是否可用；False 時呼叫端不可再送單
+        """
+
+        if self.broker.is_connected():
+            return True
+
+        logger.error("偵測到連線中斷，嘗試重連")
+        if not self.broker.reconnect():
+            self._notify("CRITICAL", "重連失敗", "已停止送單，請人工確認")
+            return False
+
+        self.recover_after_reconnect()
+        return True
+
+    def recover_after_reconnect(self) -> None:
+        """
+        - Description:
+            重連成功之後的恢復流程
+
+            **順序固定，而且三件事都做完才可以恢復送單**：
+            1. 重新訂閱行情——重連換了一個 session，舊的訂閱一併失效；
+               不訂閱的話盤中迴圈收不到任何報價，然後心跳會判成「行情中斷」，
+               症狀看起來像券商的問題。
+            2. `order_manager.recover()`——斷線期間送出的委託可能已經成交，
+               回報卻在斷掉的那條連線上。不接管就會重複下單。
+            3. 對帳——前兩步都做完才知道本地到底是什麼狀態。
+
+            **失敗不吞**：恢復沒做完就繼續送單，等於拿一份不知道對不對的部位
+            去交易。例外往上拋，由呼叫端決定停或再試。
+        """
+
+        logger.warning("重連成功，開始恢復：重新訂閱 → 接管委託 → 對帳")
+
+        symbols: List[str] = sorted(
+            {symbol for context in self.contexts for symbol in context.symbols}
+        )
+        if symbols:
+            self.broker.subscribe_quotes(symbols)
+
+        self.order_manager.recover(self._now().date())
+
+        positions: List[Any] = self.broker.get_positions()
+        self.account_sync.rebuild_from_broker(positions)
+        self._refresh_capital()
+        self.last_reconcile = self.reconciler.check(positions)
+
+        logger.info("恢復完成，可以繼續送單")
 
     def submit_segment(
         self, timing: ExecutionTiming, window: Optional[SegmentWindow]

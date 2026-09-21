@@ -2,6 +2,8 @@ import queue
 from abc import ABC, abstractmethod
 from typing import List
 
+from loguru import logger
+
 from core.models import (
     BaseOrder,
     BaseQuote,
@@ -156,6 +158,30 @@ class BaseBroker(ABC):
         pass
 
     # === 共用工具 ===
+    def reconnect(self) -> bool:
+        """
+        - Description:
+            重新建立連線
+
+            **這是有預設實作的 hook，不是抽象方法**：多數閘道「關掉再連一次」
+            就夠了，真正需要退避與每日上限的（Shioaji 的登入額度）才覆寫。
+            宣告成抽象等於對每個新閘道說「重連這件事你得自己想」。
+
+            **本身不做恢復**：重新訂閱、接管委託與對帳要按順序做完才可以恢復
+            送單，那是引擎的責任——閘道層不知道有哪些策略、訂了哪些標的。
+        - Return:
+            - bool
+                是否重新連上
+        """
+
+        self.close()
+        try:
+            self.connect()
+        except Exception as exc:
+            logger.opt(exception=True).error(f"重連失敗：{exc}")
+            return False
+        return self.is_connected()
+
     def drain_execution_queue(self) -> List[ExecutionReport]:
         """
         - Description:

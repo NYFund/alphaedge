@@ -241,11 +241,17 @@ class TradingModeState:
         """
         落地模式
 
-        帳戶層在 `live_run` 上（由 `finish_run()` 寫入結束時的值），
-        策略層每次變動就寫 `live_strategy_mode`——它沒有「結束」這個時點。
+        **兩層都要即時寫，不能等結束**：崩潰時 `finish_run()` 根本不會被呼叫，
+        只靠它寫帳戶層的話，`live_run.account_mode` 會停在插入時的 `NORMAL`，
+        重啟讀回來就是「什麼事都沒發生」——那正是 `load()` 要防的事故型態，
+        只是換成程式自己崩潰而不是人按重啟。
         """
 
-        if self.dao is None or strategy_name is None:
+        if self.dao is None:
+            return
+
+        if strategy_name is None:
+            self.dao.update_account_mode(self.run_id, mode.value)
             return
 
         self.dao.upsert_strategy_mode(

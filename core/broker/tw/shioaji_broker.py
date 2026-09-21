@@ -85,6 +85,17 @@ class ShioajiBroker(BaseBroker):
         """登入並組裝所有元件；任何一步失敗都拋出，不會留下半成品狀態"""
 
         self.session.connect()
+        self._bind_session()
+
+    def _bind_session(self) -> None:
+        """
+        以目前的 session 重建所有元件與回呼
+
+        **重連之後一定要重跑一次**：登入換了一個 api 物件，
+        舊的解析器、回呼與行情訂閱全掛在已經死掉的那一個上——
+        不重建的話行情與回報都進不來，而且不會有任何錯誤訊息。
+        """
+
         api: Any = self.session.api
 
         self.resolver = ShioajiContractResolver(api)
@@ -110,6 +121,23 @@ class ShioajiBroker(BaseBroker):
         """關閉連線；可重複呼叫"""
 
         self.session.close()
+
+    def reconnect(self) -> bool:
+        """
+        以 session 的退避重連；**不用骨架那個「關掉再連」的預設**
+
+        Shioaji 的登入額度是每日 1,000 次，而需要重連 20 次的那一天本來就不該
+        繼續交易。退避與每日上限都在 `ShioajiSession.reconnect()` 裡。
+
+        重連成功後**回呼要重新註冊**：換了一個 api 物件，舊的回呼掛在已經死掉的
+        session 上——不重掛的話行情與回報都進不來，而且不會有任何錯誤。
+        """
+
+        if not self.session.reconnect():
+            return False
+
+        self._bind_session()
+        return self.session.is_connected()
 
     def is_connected(self) -> bool:
         """目前是否連線中"""
