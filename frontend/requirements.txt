@@ -1,7 +1,7 @@
 # 前端映像的相依
 #
-# `frontend/Dockerfile` **不安裝本專案**：它只 COPY `frontend/` 與
-# `core/backtest/analysis/risk_metrics.py` 那條最小鏈（見該 Dockerfile 的註解），
+# `frontend/Dockerfile` **不安裝本專案**：它只 COPY `frontend/`——前端完全不
+# import `core`，績效指標一律讀 reporter 落地的 CSV（見該 Dockerfile 的註解），
 # 所以 `pyproject.toml` 的 `dependencies` 與 `[frontend]` extra 都不會生效，
 # 這一份是那個映像唯一的相依來源。
 #

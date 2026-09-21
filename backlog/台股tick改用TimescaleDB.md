@@ -492,6 +492,10 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **需使用者裁示：期貨 tick 的 DolphinDB 程式怎麼處理**（`futures_tick_crawler.py`／`cleaner`／`updater`／`loader`、`DDB_PATH`、`futures-tick` extra）：
     - **選項 A（建議）**：一併刪除。期貨 tick 已裁示不做（2026-09-15），這些程式沒有落地目標；日後要做時，比照本文件另立 backlog 改寫成 TimescaleDB 的 `futures_tick` 表。`tasks/update_db.py` 的 `futures_tick` target 與 `DataType.FUTURES_TICK` 一併移除，`tests/test_futures_tick.py` 與 `test_entrypoint_and_logging.py` 的兩個相關測試跟著調整。
     - **選項 B**：原樣保留，`DDB_PATH` 與 `futures-tick` extra 繼續存在，只刪台股的部分。
+    - **裁示的依據補充（2026-09-21，[專案優化與改善清單.md](專案優化與改善清單.md) Phase3-8 的發現）**：
+      - 期貨 tick 目前**每跑一次就重複寫入一份**：`futures_tick_updater.py` 逐日逐契約爬取、沒有已爬紀錄可續跑；DolphinDB 表設 `keepDuplicates=ALL`（`futures_tick_loader.py`）；`load_csv_files()` 每次重放整個目錄。近月契約的成交量會隨執行次數被放大，每個候選日還先耗一次 `api.usage()` 配額。
+      - 在那之前 `--target all` 會帶到它；Phase3-8 已把 `futures_tick` 改為只能明確點名（與 `futures_stock_price` 同列），`all`／`no_tick` 都不再執行。
+      - 因此**選項 B 不能「原樣」保留**：選 B 時至少要補「契約 × 日」的載入紀錄並讓 loader 只載本次新增的檔，否則點名執行一次就多一份重複資料。選項 A 不受影響。
 - **DolphinDB 殘留的完整盤點**（施作時直接照這份走，不必重新掃）：
   - **程式**：`core/api/tw/stock_tick_api.py`（本規劃改寫成 TimescaleDB，不刪）；`core/pipeline/tw/crawlers/{stock,futures}_tick_crawler.py`、`cleaners/{stock,futures}_tick_cleaner.py`、`loaders/{stock,futures}_tick_loader.py`、`updaters/{stock,futures}_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`；`core/backtest/datafeed/tw/stock_datafeed.py` 的 `Scale.TICK` 分支；`tasks/update_db.py` 的 `tick`／`futures_tick` target；`scripts/manual/manual_tick_{crawler,updater}.py`、`manual_init_tick_metadata.py`。
   - **設定**：`core/config/settings.py`（`TICK_UPDATE_START_DATE`、`DDB_*`、tick 爬蟲多帳號 `API_KEYS`）、`core/config/schema.py`（`TICK_DB_*`、`require_tick_db_path()`、`TICK_TABLE_NAME`、`FUTURES_TICK_TABLE_NAME`）、`core/config/__init__.py`、`core/pipeline/utils/constant.py`、`pyproject.toml`（`tick` extra 與 per-file-ignores）、`.env.example`。

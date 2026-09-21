@@ -235,7 +235,8 @@ def require_shioaji_ca() -> Tuple[Path, str]:
 # 實盤整份流程由時點驅動（08:30 開盤段／13:20 取快照／13:25 送單／15:00 盤後），
 # 時間一律用 `Asia/Taipei` 的 aware datetime，**不要用 naive 的 `datetime.now()`**：
 # 主機時區是 UTC 而程式讀本地 naive 時間時，尾盤段會整段跑在錯的時刻，
-# 而且不會有任何錯誤訊息。容器與排程環境另外設 `TZ=Asia/Taipei`
+# 而且不會有任何錯誤訊息。`core/Dockerfile` 另設 `TZ=Asia/Taipei`，給仍用
+# `date.today()` 的 ETL 與 log 時間戳；在容器外排程時，主機也要設同一個時區
 LIVE_TIMEZONE_NAME: str = "Asia/Taipei"
 
 

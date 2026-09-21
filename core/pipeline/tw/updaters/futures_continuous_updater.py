@@ -41,8 +41,9 @@ Futures Continuous Updater: 由各月份契約建出可跨月的連續序列
 **逆向調整是「往回減」不是「往前加」**：以最新一段為基準，把更早的價格各自
 減去其後所有展期價差的總和。因此**最新那一段的價格等於真實成交價**，
 而歷史價格會與當時的成交價不同——這是刻意的，也是業界（Panama 調整）的慣例。
-`adj_factor` 欄存下已套用的調整量，`原始價 ＝ 調整價 ＋ adj_factor`
-（RATIO 則為 `原始價 ＝ 調整價 × adj_factor`），隨時可還原檢查。
+`adj_factor` 欄存下已套用的調整量，`原始價 ＝ 調整價 − adj_factor`
+（RATIO 則為 `原始價 ＝ 調整價 ÷ adj_factor`），隨時可還原檢查——與
+`FuturesContinuousDAO` 的欄位說明及 `test_adjustments_are_reversible` 一致。
 """
 
 

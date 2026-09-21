@@ -471,14 +471,16 @@ print(realistic_pnl(600.0, 620.0, 5))
 
 1. 在 `core/strategies/stock/` 建立 `<your_strategy>.py`，繼承 `BaseStockStrategy`。
 2. 把研究階段的訊號邏輯抽成 `_build_signals()`，
-   並實作框架要求的 6 個 method：
-   `setup_account / setup_apis / check_open_signal / check_close_signal / check_stop_loss_signal / calculate_position_size`。
+   並實作框架要求的 5 個 method：
+   `setup_account / setup_apis / generate_open_signals / generate_close_signals / generate_stop_loss_signals`。
+   `check_*_signal` 由基底提供、**不要覆寫**（覆寫會讓基底實作靜默失效），
+   開倉張數由 `core/portfolio/` 換算，也不必寫 `calculate_position_size`。
 3. 跑回測：
 
    ```bash
    .venv/bin/python run.py --strategy <YourStrategyName>
    ```
-4. 結果會落到 `results/<YourStrategyName>/`，
+4. 結果會落到 `results/<strategy_name>/`（資料夾名稱取自策略的 `self.strategy_name`，不是類別名稱），
    會自動產出 `balance_curve.png / balance_mdd.png / trading_report.csv` 等標準報表。
 
 > 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`core/strategies/README.md`](../core/strategies/README.md)。
