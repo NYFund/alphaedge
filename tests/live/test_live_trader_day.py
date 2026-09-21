@@ -972,3 +972,135 @@ def test_close_orders_are_not_limited_by_max_holdings() -> None:
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
     assert harness.broker.placed_count == 1
+
+
+# === live_run 生命週期 ===
+def start_run(harness: Harness, phase: str = "close") -> None:
+    """寫入本次的啟動紀錄（正式流程由 factory 寫，Harness 直接組引擎所以要自己補）"""
+
+    harness.dao.insert_run(
+        {"run_id": "run1", "started_at": NOW, "phase": phase, "simulation": 1}
+    )
+
+
+def run_row(harness: Harness) -> Any:
+    """`(phase, started_at, ended_at, end_reason, account_mode)`"""
+
+    return harness.dao.conn.execute(
+        "SELECT phase, started_at, ended_at, end_reason, account_mode "
+        "FROM live_run WHERE run_id = 'run1'"
+    ).fetchone()
+
+
+def test_finished_segment_is_recorded_as_normal() -> None:
+    """
+    正常跑完的段落要寫結束紀錄，存活監控據此判定健康
+
+    沒寫的話 `ended_at` 一直是 NULL：監控對每個跑完的段落報「沒有結束紀錄」，
+    下一次啟動還會把它標成崩潰——正常結束與崩潰分不出來。
+    """
+
+    from scripts.live_watchdog import check_phases
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    start_run(harness)
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    row: Any = run_row(harness)
+    assert row[2] is not None
+    assert row[3] == LiveTradeDAO.END_REASON_NORMAL
+    assert row[4] == TradingMode.NORMAL.value
+
+    statuses = check_phases(
+        [row[:4]],
+        {"close": datetime.time(13, 20)},
+        NOW + datetime.timedelta(hours=1),
+        grace_minutes=15,
+    )
+    assert statuses[0].is_healthy is True
+
+
+def test_aborted_segment_records_the_exception() -> None:
+    """例外中止時結束原因要寫出例外，且例外照樣往外拋給 `run.py`"""
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    start_run(harness)
+    harness.broker.fail_connect = True
+
+    with pytest.raises(ConnectionError):
+        harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert run_row(harness)[3].startswith("例外中止：ConnectionError")
+
+
+def test_kill_switch_end_is_not_recorded_as_normal() -> None:
+    """
+    kill switch 停下的段落不可寫成正常結束
+
+    `run.py` 以結束碼 5 退出，監控卻只看這一欄；寫成正常結束的話推播就漏了。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    start_run(harness)
+
+    class Present:
+        def exists(self) -> bool:
+            return True
+
+    harness.risk.kill_switch_path = Present()
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    row: Any = run_row(harness)
+    assert row[3] == "kill switch"
+    assert row[4] == TradingMode.HALTED.value
+
+
+def test_after_close_is_recorded(tmp_path: Path) -> None:
+    """盤後作業同樣要寫結束紀錄：它也是存活監控檢查的段落"""
+
+    from core.live.report.live_reporter import LiveReporter
+
+    harness: Harness = Harness([ScriptedStrategy("Alpha", [])])
+    start_run(harness, phase="after_close")
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+
+    harness.trader.run_after_close()
+
+    row: Any = run_row(harness)
+    assert row[2] is not None
+    assert row[3] == LiveTradeDAO.END_REASON_NORMAL
+
+
+def test_failed_finish_record_does_not_mask_the_real_error() -> None:
+    """
+    寫結束紀錄本身失敗時，拋出去的仍是讓段落中止的那個例外
+
+    它在 `finally` 裡執行；它一拋，真正的原因就被蓋掉，事後只看得到「寫 DB 失敗」。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fail_connect = True
+
+    def broken_finish_run(*args: Any, **kwargs: Any) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    harness.dao.finish_run = broken_finish_run  # type: ignore[method-assign]
+
+    with pytest.raises(ConnectionError):
+        harness.trader.run(ExecutionTiming.AT_CLOSE)

@@ -78,6 +78,8 @@ class LiveTradeDAO(BaseDAO):
     DEFAULT_DB_PATH: Optional[Path] = TW_TRADING_DB_PATH
 
     # 交易模式的值域；與 `core/live/risk/trading_mode.py` 的狀態機一致
+    # 結束原因；存活監控以「是否等於正常結束」判定要不要推播，兩邊共用這個常數
+    END_REASON_NORMAL: str = "正常結束"
     END_REASON_CRASHED: str = "CRASHED"  # 非正常結束（上次沒有走到 `finish_run()`）
     MODE_NORMAL: str = "NORMAL"
 

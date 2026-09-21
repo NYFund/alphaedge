@@ -14,6 +14,7 @@ from core.config.settings import (
     now_live,
 )
 from core.dao.connection import DBError, connect_live_trading
+from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import BaseNotifier, NotifyLevel
 from core.live.notify.factory import build_notifier
 
@@ -199,7 +200,7 @@ def check_phases(
                     f"{phase} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
                     "（跑到一半死掉，或卡在等待回報）"
                 )
-        elif row[3] and str(row[3]) != "正常結束":
+        elif row[3] and str(row[3]) != LiveTradeDAO.END_REASON_NORMAL:
             problem = f"{phase} 以非正常原因結束：{row[3]}"
 
         results.append(PhaseStatus(phase, expected_at, started_at, ended_at, problem))

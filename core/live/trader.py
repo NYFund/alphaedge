@@ -271,6 +271,7 @@ class LiveTrader:
         window: Optional[SegmentWindow] = resolve_window(self.schedule, timing)
         logger.info(f"=== 段落 {timing.value} 開始（run_id={self.run_id}）===")
 
+        error: Optional[BaseException] = None
         try:
             self.prepare()
 
@@ -292,8 +293,12 @@ class LiveTrader:
                 self.run_intraday(window)
             else:
                 self.submit_segment(timing, window)
+        except BaseException as exc:
+            error = exc
+            raise
         finally:
             self.finish(window)
+            self.record_finish(error)
 
     def prepare(self) -> None:
         """
@@ -1110,9 +1115,70 @@ class LiveTrader:
                 本次盤後作業的摘要（報表路徑、殘量筆數、滑價統計）
         """
 
-        summary: Dict[str, Any] = self.after_close.run()
+        try:
+            summary: Dict[str, Any] = self.after_close.run()
+        except BaseException as exc:
+            self.record_finish(exc)
+            raise
         self.last_reconcile = self.after_close.last_reconcile
+        self.record_finish(None)
         return summary
+
+    def resolve_end_reason(self, error: Optional[BaseException]) -> str:
+        """
+        - Description:
+            決定本次執行寫進 `live_run` 的結束原因
+
+            判定順序與 `run.py` 的退出碼一致（例外 → kill switch → 對帳不一致 →
+            帳戶層非 NORMAL）：存活監控只看這一欄決定要不要推播，
+            退出碼非 0 的執行在這裡卻寫成正常結束，推播就會漏掉。
+            非交易日與只跑對帳的段落算正常結束——那是預期中的行為。
+        - Parameters:
+            - error: Optional[BaseException]
+                中止本次執行的例外；正常跑完為 None
+        - Return:
+            - str
+                結束原因
+        """
+
+        if error is not None:
+            return f"例外中止：{type(error).__name__}: {error}"
+        if self.risk_manager.is_kill_switch_on():
+            return "kill switch"
+        if self.last_reconcile is not None and not self.last_reconcile.is_consistent:
+            return "對帳不一致"
+        mode: TradingMode = self.mode_state.account_mode
+        if mode is not TradingMode.NORMAL:
+            return f"帳戶層交易模式 {mode.value}"
+        return LiveTradeDAO.END_REASON_NORMAL
+
+    def record_finish(self, error: Optional[BaseException]) -> None:
+        """
+        - Description:
+            把本次執行的結束時間、原因與帳戶層模式寫進 `live_run`
+
+            沒有這一筆，`ended_at` 會一直是 NULL，要等下一次啟動才被標成崩潰——
+            正常結束與崩潰分不出來，存活監控會對每個跑完的段落報「沒有結束紀錄」。
+            行程被直接殺掉時這裡跑不到，那種情況仍由下一次啟動的
+            `mark_crashed_runs()` 補標。
+
+            **本身失敗只記 log 不往外拋**：它在 `finally` 裡執行，
+            拋出去會蓋掉真正讓段落中止的那個例外。
+        - Parameters:
+            - error: Optional[BaseException]
+                中止本次執行的例外；正常跑完為 None
+        """
+
+        try:
+            end_reason: str = self.resolve_end_reason(error)
+            self.dao.finish_run(
+                self.run_id,
+                self._now(),
+                end_reason,
+                self.mode_state.account_mode.value,
+            )
+        except Exception as exc:
+            logger.opt(exception=True).error(f"寫入段落結束紀錄失敗：{exc}")
 
     def apply_pending_actions(self) -> int:
         """

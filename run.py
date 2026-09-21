@@ -224,6 +224,7 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
             simulation=args.simulation,
             dry_run=args.dry_run,
             resume_trading=args.resume_trading is not None,
+            phase=args.phase,
         )
     except (UnsupportedMarketError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
