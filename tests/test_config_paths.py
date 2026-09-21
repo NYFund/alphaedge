@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -34,16 +35,20 @@ def test_project_root_is_repo_root() -> None:
     "name",
     ["DATA_DIR_PATH", "RESULTS_DIR_PATH", "LOGS_DIR_PATH"],
 )
-def test_artifact_roots_live_outside_core(name: str) -> None:
+def test_artifact_roots_live_outside_core(
+    name: str, pristine_config_paths: ModuleType
+) -> None:
     """
-    三個產物根一律在 `core/` 之外
+    三個產物根一律在 `core/` 之外，且預設就在專案根底下
 
-    `core/` 是被讀的，產物根是被寫的。
+    `core/` 是被讀的，產物根是被寫的。**預設值要以沒有任何覆寫的副本來驗**：
+    測試期間 `results/`、`logs/` 已被導到暫存目錄，直接讀 `config` 量到的是覆寫值。
     """
 
-    path: Path = getattr(config, name)
-    assert config.BASE_DIR_PATH not in path.parents
-    assert path.parent == config.PROJECT_ROOT
+    pristine: ModuleType = pristine_config_paths
+    path: Path = getattr(pristine, name)
+    assert pristine.BASE_DIR_PATH not in path.parents
+    assert path.parent == pristine.PROJECT_ROOT == config.PROJECT_ROOT
 
 
 @pytest.mark.parametrize(

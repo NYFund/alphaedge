@@ -1,25 +1,29 @@
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from loguru import logger
 
 from core.utils import SHIOAJI_FUTURES_CATEGORY
 
 """
-合約解析：把領域識別（`stock_id`、`product` ＋ `expiry`）換成 Shioaji 的 `Contract`
+合約解析：把領域識別（`stock_id`、`product` ＋ `expiry`）換成 Shioaji 的合約
 
-**查不到一律拋 `LookupError`，絕不回 `None`。** 這不是潔癖——Shioaji 的
-`MultiContract.__getitem__` 實作是 `getattr(self, key, self._code2contract.get(key, None))`，
-**查不到回 None 而且從不拋例外**。舊的 `OrderUtils` 就這樣把 `None` 往下傳給
-`api.Order`，錯誤訊息完全指不到「代號打錯了」這個真正的原因。
+**查不到一律拋 `LookupError`，絕不回 `None`。** Shioaji 查不到合約時回的是 `None`，
+舊的 `OrderUtils` 就這樣把 `None` 往下傳給下單，錯誤訊息完全指不到「代號打錯了」
+這個真正的原因。
 
-合約的查詢鍵有兩組，不要混用：
-- `symbol`：物件屬性名。股票是 `TSE2330`、期貨是 `TXF202601`（`{分類}{YYYYMM}`）。
-- `code`：另一組代碼。股票是 `2330`，期貨是 `TXFI6`（月份字母 ＋ 年末碼）——
-  **期貨的 `code` 不可使用**，字母碼跨年會重複。
+只用 shioaji 1.7 合約容器明確提供的操作：`get(code)`、屬性取分類、迭代。
+舊版的 `keys()`、`_code2contract` 索引與合約的 `symbol` 屬性（`TXF202601`）在 1.7
+都已不存在，期貨月份一律比對 `delivery_month`（`YYYYMM`）：
+- **期貨的 `code` 不可拿來推月份**：它是 `TXFI6` 這種月份字母碼，跨年會重複。
+- 連續月別名（`TXFR1`／`TXFR2`）與真實月份合約的 `delivery_month` 相同，
+  要排除，否則同一個月份會對到兩張合約。
 
-`_code2contract` 是以 `code` 建的索引，且 `api.Contracts.Stocks` 這一層已把各交易所
-（TSE／OTC／興櫃）合併，所以股票只要用代號查一次就涵蓋上市與上櫃。
+`api.Contracts.Stocks` 這一層已把各交易所（TSE／OTC／興櫃）合併，
+股票只要用代號查一次就涵蓋上市與上櫃。
 """
+
+# 期貨連續月別名的代碼結尾；它們與真實月份合約同月份，解析時要排除
+CONTINUOUS_ALIAS_SUFFIXES: Tuple[str, ...] = ("R1", "R2")
 
 
 class ShioajiContractResolver:
@@ -31,16 +35,13 @@ class ShioajiContractResolver:
         操作，每次下單都重掃會拖垮尾盤那 4 分鐘。
     """
 
-    # 保留策略名以外的識別；`__getattr__` 開頭為底線的 slot 是 Shioaji 內部用的
-    _INTERNAL_PREFIX: str = "_"
-
     def __init__(self, api: Any) -> None:
         """
         - Description:
             建立解析器
         - Parameters:
             - api: Any
-                已登入的 Shioaji API 物件（合約檔需已下載完成）
+                已登入的 Shioaji API 物件（合約於第一次查詢時才載入）
         """
 
         self.api: Any = api
@@ -62,7 +63,7 @@ class ShioajiContractResolver:
                 合約檔裡沒有這個代號
         """
 
-        contract: Optional[Any] = self.api.Contracts.Stocks[stock_id]
+        contract: Optional[Any] = self.api.Contracts.Stocks.get(stock_id)
         if contract is None:
             raise LookupError(
                 f"合約檔查無股票 {stock_id}；請確認代號正確且該檔仍在交易"
@@ -90,7 +91,7 @@ class ShioajiContractResolver:
         resolved: Dict[str, Any] = {}
         missing: List[str] = []
         for stock_id in stock_ids:
-            contract: Optional[Any] = self.api.Contracts.Stocks[stock_id]
+            contract: Optional[Any] = self.api.Contracts.Stocks.get(stock_id)
             if contract is None:
                 missing.append(stock_id)
             else:
@@ -126,15 +127,14 @@ class ShioajiContractResolver:
                 "兩邊的代碼沒有規律（MTX→MXF、TE→EXF），請實際登入核對後再加進對照表"
             )
 
-        group: Optional[Any] = self.api.Contracts.Futures[category]
+        group: Optional[Any] = getattr(self.api.Contracts.Futures, category, None)
         if group is None:
             raise LookupError(f"合約檔查無期貨分類 {category}（商品 {product}）")
 
-        symbol: str = f"{category}{expiry}"
-        contract: Optional[Any] = group[symbol]
+        contract: Optional[Any] = self._find_by_delivery_month(group, expiry)
         if contract is None:
             raise LookupError(
-                f"合約檔查無期貨合約 {symbol}；請確認該月份仍可交易"
+                f"合約檔查無期貨合約 {category} {expiry}；請確認該月份仍可交易"
                 "（已到期、尚未掛牌都會走到這裡）"
             )
         return contract
@@ -146,7 +146,8 @@ class ShioajiContractResolver:
             掃描合約檔，建立「標的股票代號 → 期貨分類代碼」對照表並快取
 
             股期的分類代碼與標的股票代號沒有對應規則，只能從合約的
-            `underlying_code` 反查。這是一次掃過三百多檔的操作，故快取；
+            `underlying_code` 反查；分類代碼取合約自己的 `root`（1.7 起）或
+            `category`。這是一次掃過三百多檔的操作，故快取；
             **每次下單都重掃會吃掉尾盤那 4 分鐘**。
 
             同一檔股票對到多個分類時取第一個並記 warning：那代表標準型與小型
@@ -166,13 +167,11 @@ class ShioajiContractResolver:
         duplicated: List[str] = []
         futures: Any = self.api.Contracts.Futures
 
-        for category in self._category_names(futures):
-            group: Optional[Any] = futures[category]
-            if group is None:
-                continue
+        for group in futures:
             for contract in group:
                 underlying: Optional[str] = getattr(contract, "underlying_code", None)
-                if not underlying:
+                category: Optional[str] = self._category_of(contract)
+                if not underlying or not category:
                     continue
                 if underlying in index and index[underlying] != category:
                     duplicated.append(underlying)
@@ -213,27 +212,57 @@ class ShioajiContractResolver:
                 f"標的 {stock_id} 沒有對應的股票期貨（合約檔共 {len(index)} 檔標的）"
             )
 
-        group: Optional[Any] = self.api.Contracts.Futures[category]
-        symbol: str = f"{category}{expiry}"
-        contract: Optional[Any] = None if group is None else group[symbol]
+        group: Optional[Any] = getattr(self.api.Contracts.Futures, category, None)
+        contract: Optional[Any] = (
+            None if group is None else self._find_by_delivery_month(group, expiry)
+        )
         if contract is None:
             raise LookupError(
-                f"合約檔查無股票期貨 {symbol}（標的 {stock_id}）；請確認該月份仍可交易"
+                f"合約檔查無股票期貨 {category} {expiry}（標的 {stock_id}）；"
+                "請確認該月份仍可交易"
             )
         return contract
 
     # === 共用 ===
     @staticmethod
-    def _category_names(futures: Any) -> List[str]:
-        """
-        取得期貨分類代碼清單
+    def _category_of(contract: Any) -> Optional[str]:
+        """期貨合約的分類代碼（Ex: TXF、CDF）；1.7 起欄位名是 `root`"""
 
-        Shioaji 的 `BaseIterContracts.keys()` 會濾掉底線開頭的內部 slot；
-        **直接迭代物件拿到的是合約群組而不是名稱**，兩者不要搞混。
+        return getattr(contract, "root", None) or getattr(contract, "category", None)
+
+    @staticmethod
+    def _find_by_delivery_month(group: Any, expiry: str) -> Optional[Any]:
+        """
+        - Description:
+            在同一分類裡找到期月份相符的合約
+
+            **排除連續月別名**：`TXFR1` 與當月合約的 `delivery_month` 相同，
+            不排除的話同一月份會對到兩張，取到哪張由迭代順序決定。
+            排除後仍有多張時拋出，不猜。
+        - Parameters:
+            - group: Any
+                某一期貨分類的合約群組
+            - expiry: str
+                到期月份（Ex: 202601）
+        - Return:
+            - Optional[Any]
+                相符的合約；沒有時為 None
+        - Raise:
+            - LookupError
+                同一月份有多張非別名合約
         """
 
-        return [
-            name
-            for name in futures.keys()
-            if not name.startswith(ShioajiContractResolver._INTERNAL_PREFIX)
+        matches: List[Any] = [
+            contract
+            for contract in group
+            if str(getattr(contract, "delivery_month", "")) == expiry
+            and not str(getattr(contract, "code", "")).endswith(
+                CONTINUOUS_ALIAS_SUFFIXES
+            )
         ]
+        if len(matches) > 1:
+            raise LookupError(
+                f"到期月份 {expiry} 對到多張合約："
+                f"{sorted(str(getattr(c, 'code', '')) for c in matches)}"
+            )
+        return matches[0] if matches else None

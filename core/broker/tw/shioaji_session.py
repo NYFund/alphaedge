@@ -49,9 +49,6 @@ class ShioajiSession:
     每個都以為自己還有額度，合起來必然超額。
     """
 
-    # 合約檔載入逾時（毫秒）；沿用既有 `ShioajiAccount.CONTRACTS_TIMEOUT_MS`
-    CONTRACTS_TIMEOUT_MS: int = 30000
-
     # 簽章有效視窗（毫秒）。**這就是伺服器端的時鐘偏差檢查**：本機時鐘與券商相差
     # 超過這個範圍時，`login()` 直接失敗。明寫而不用預設值，是為了讓「登入失敗」
     # 與「時鐘飄掉」在程式碼裡看得出關聯
@@ -181,7 +178,6 @@ class ShioajiSession:
             accounts: List[Any] = self.api.login(
                 api_key=API_KEY,
                 secret_key=API_SECRET_KEY,
-                contracts_timeout=self.CONTRACTS_TIMEOUT_MS,
                 receive_window=self.RECEIVE_WINDOW_MS,
             )
         except Exception as exc:
@@ -273,8 +269,9 @@ class ShioajiSession:
                 "請先校正系統時間與時區（實盤一律使用 Asia/Taipei）"
             )
 
-    # 合約檔更新日可能的格式。**實測 Shioaji 1.3.3 回的是 `YYYY/MM/DD`**
-    # （2026-09-21 模擬環境實連），而不是 ISO 的 `YYYY-MM-DD`
+    # 合約檔更新日為字串時可能的格式。**實測 Shioaji 1.3.3 回的是 `YYYY/MM/DD`**
+    # （2026-09-21 模擬環境實連），而不是 ISO 的 `YYYY-MM-DD`；
+    # 1.7 起改回 `datetime.date`，由 `_fetch_contract_update_date()` 直接採用
     CONTRACT_DATE_FORMATS: Tuple[str, ...] = ("%Y/%m/%d", "%Y-%m-%d")
 
     def _fetch_contract_update_date(self) -> Optional[datetime.date]:
@@ -291,7 +288,7 @@ class ShioajiSession:
 
         contract: Any = None
         try:
-            contract = self.api.Contracts.Stocks.TSE["2330"]
+            contract = self.api.Contracts.Stocks.get("2330")
         except Exception as exc:
             logger.opt(exception=True).debug(f"取不到合約：{exc}")
             return None

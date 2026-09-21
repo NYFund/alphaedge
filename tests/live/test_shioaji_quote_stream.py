@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence
 
 import pytest
-import shioaji.constant as sj_constant
+import shioaji as sj
 
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
 from core.broker.tw.shioaji_quote_stream import (
@@ -63,11 +63,20 @@ class FakeContract:
         self.unit: int = unit
 
 
-class FakeQuoteManager:
-    def __init__(self) -> None:
+class FakeApi:
+    """
+    shioaji 1.7 的形狀：行情回呼與訂閱直接掛在 api 上
+
+    **不提供 `api.quote`**：1.7 起那只是已棄用的轉接層，假物件若還提供，
+    程式退回舊寫法時這份測試也驗不出來。
+    """
+
+    def __init__(self, snapshots: Optional[List[FakeSnapshot]] = None) -> None:
         self.callbacks: Dict[str, Any] = {}
         self.subscribed: List[tuple] = []
         self.unsubscribed: List[tuple] = []
+        self._snapshots: List[FakeSnapshot] = snapshots or []
+        self.snapshot_calls: List[int] = []
 
     def set_on_tick_stk_v1_callback(self, func: Any) -> None:
         self.callbacks["tick_stk"] = func
@@ -86,13 +95,6 @@ class FakeQuoteManager:
 
     def unsubscribe(self, contract: Any, quote_type: Any, version: Any) -> None:
         self.unsubscribed.append((contract.code, quote_type))
-
-
-class FakeApi:
-    def __init__(self, snapshots: Optional[List[FakeSnapshot]] = None) -> None:
-        self.quote: FakeQuoteManager = FakeQuoteManager()
-        self._snapshots: List[FakeSnapshot] = snapshots or []
-        self.snapshot_calls: List[int] = []
 
     def snapshots(self, contracts: Sequence[Any]) -> List[FakeSnapshot]:
         self.snapshot_calls.append(len(contracts))
@@ -323,9 +325,9 @@ def test_subscribe_registers_tick_and_bidask(limiter: RateLimiter) -> None:
     api: FakeApi = FakeApi()
     make_stream(api, limiter).subscribe([FakeContract(code="2330")])
 
-    assert set(api.quote.subscribed) == {
-        ("2330", sj_constant.QuoteType.Tick),
-        ("2330", sj_constant.QuoteType.BidAsk),
+    assert set(api.subscribed) == {
+        ("2330", sj.QuoteType.Tick),
+        ("2330", sj.QuoteType.BidAsk),
     }
 
 
@@ -347,7 +349,7 @@ def test_subscription_limit_raises_before_subscribing(limiter: RateLimiter) -> N
     with pytest.raises(ValueError, match="上限"):
         stream.subscribe(contracts)
 
-    assert api.quote.subscribed == []
+    assert api.subscribed == []
     assert stream.subscribed == set()
 
 
@@ -377,18 +379,20 @@ def test_callbacks_only_enqueue(limiter: RateLimiter) -> None:
     stream: ShioajiQuoteStream = ShioajiQuoteStream(api, limiter, quote_queue)
     stream.register_callbacks()
 
-    assert set(api.quote.callbacks) == {
+    assert set(api.callbacks) == {
         "tick_stk",
         "bidask_stk",
         "tick_fop",
         "bidask_fop",
     }
 
-    api.quote.callbacks["tick_stk"]("TSE", {"code": "2330"})
+    # shioaji 1.7 的回呼只收一個參數；交易所改從行情物件自身的 `exchange` 取
+    tick: Any = type("Tick", (), {"code": "2330", "exchange": "TSE"})()
+    api.callbacks["tick_stk"](tick)
     kind, exchange, message = quote_queue.get_nowait()
 
     assert (kind, exchange) == ("tick_stk", "TSE")
-    assert message == {"code": "2330"}
+    assert message is tick
 
 
 # === 逐筆成交 → StockQuote（欄位取自 2026-09-21 模擬環境實錄）===

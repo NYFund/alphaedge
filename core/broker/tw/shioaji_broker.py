@@ -38,6 +38,11 @@ ShioajiBroker：把 Phase2-2~Phase2-7 的元件組成一個 `BaseBroker` 實作
 class ShioajiBroker(BaseBroker):
     """永豐金 Shioaji 的券商閘道實作"""
 
+    # 下單類呼叫（送單、撤單、改價、查狀態）的阻塞上限（毫秒）。**明寫而不用預設值**：
+    # shioaji 1.7 把預設從 5 秒改成 30 秒，尾盤段只有 4 分鐘，
+    # 一張卡住的單不能吃掉整段送單時間，這個上限不該跟著套件版本浮動
+    ORDER_TIMEOUT_MS: int = 5000
+
     def __init__(
         self,
         session: ShioajiSession,
@@ -202,7 +207,9 @@ class ShioajiBroker(BaseBroker):
         contract, broker_order = self._build_order(ticket)
 
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
-        trade: Any = api.place_order(contract, broker_order)
+        trade: Any = api.place_order(
+            contract, broker_order, timeout=self.ORDER_TIMEOUT_MS
+        )
 
         self._trades[ticket.client_order_id] = trade
         self._apply_trade(ticket, trade)
@@ -266,7 +273,9 @@ class ShioajiBroker(BaseBroker):
             )
 
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
-        self._apply_trade(ticket, api.cancel_order(trade))
+        self._apply_trade(
+            ticket, api.cancel_order(trade, timeout=self.ORDER_TIMEOUT_MS)
+        )
         ticket.updated_at = self._now()
         return ticket
 
@@ -294,7 +303,10 @@ class ShioajiBroker(BaseBroker):
 
         aligned: float = self.mapper.align_price(price, ticket.order.action)
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
-        self._apply_trade(ticket, api.update_order(trade, price=aligned))
+        self._apply_trade(
+            ticket,
+            api.update_order(trade, price=aligned, timeout=self.ORDER_TIMEOUT_MS),
+        )
         ticket.updated_at = self._now()
         return ticket
 
@@ -313,7 +325,9 @@ class ShioajiBroker(BaseBroker):
         api: Any = self._require_ready()
 
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
-        api.update_status(getattr(api, "stock_account", None))
+        api.update_status(
+            getattr(api, "stock_account", None), timeout=self.ORDER_TIMEOUT_MS
+        )
 
         tickets: List[OrderTicket] = []
         for trade in api.list_trades() or []:

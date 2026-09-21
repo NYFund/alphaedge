@@ -1,8 +1,10 @@
 import datetime
-from typing import Any, Callable, Dict, List, Optional
+import inspect
+from typing import Any, Callable, Dict, List, Optional, Set
 from zoneinfo import ZoneInfo
 
 import pytest
+import shioaji as sj
 
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw import shioaji_session as session_module
@@ -30,19 +32,19 @@ class FakeContract:
         self.update_date: Any = update_date
 
 
-class FakeContractTable:
+class FakeStockCategory:
+    """對應 shioaji 1.7 的 `api.Contracts.Stocks`：以 `get(code)` 查，查不到回 None"""
+
     def __init__(self, contract: Optional[FakeContract]) -> None:
         self._contract: Optional[FakeContract] = contract
 
-    def __getitem__(self, code: str) -> FakeContract:
-        if self._contract is None:
-            raise KeyError(code)
+    def get(self, code: str) -> Optional[FakeContract]:
         return self._contract
 
 
 class FakeContracts:
     def __init__(self, contract: Optional[FakeContract]) -> None:
-        self.Stocks = type("Stocks", (), {"TSE": FakeContractTable(contract)})()
+        self.Stocks: FakeStockCategory = FakeStockCategory(contract)
 
 
 class FakeShioaji:
@@ -258,7 +260,7 @@ def test_missing_credentials_raise_before_building_the_api(
 
 
 # === 登入參數 ===
-def test_login_passes_timeout_and_receive_window(
+def test_login_passes_receive_window(
     fixed_now: Callable[[], datetime.datetime],
 ) -> None:
     """
@@ -271,8 +273,24 @@ def test_login_passes_timeout_and_receive_window(
     api: FakeShioaji = FakeShioaji()
     make_session(fixed_now, api=api).connect()
 
-    assert api.login_kwargs["contracts_timeout"] == ShioajiSession.CONTRACTS_TIMEOUT_MS
     assert api.login_kwargs["receive_window"] == ShioajiSession.RECEIVE_WINDOW_MS
+
+
+def test_login_kwargs_are_accepted_by_the_installed_shioaji(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    傳給 `login()` 的參數都要是**安裝中的 shioaji** 認得的
+
+    假物件什麼參數都收，真品不是：shioaji 1.7 拿掉了 `contracts_timeout`，
+    照舊傳的話登入當場 `TypeError`，而單元測試全程是綠的。
+    """
+
+    api: FakeShioaji = FakeShioaji()
+    make_session(fixed_now, api=api).connect()
+
+    accepted: Set[str] = set(inspect.signature(sj.Shioaji.login).parameters)
+    assert set(api.login_kwargs) - accepted == set()
 
 
 def test_login_failure_propagates(fixed_now: Callable[[], datetime.datetime]) -> None:
@@ -331,7 +349,7 @@ def test_contract_date_accepts_the_real_broker_format(
     fixed_now: Callable[[], datetime.datetime],
 ) -> None:
     """
-    Shioaji 實際回的是 `YYYY/MM/DD`，不是 ISO
+    Shioaji 1.3.3 實際回的是 `YYYY/MM/DD`，不是 ISO
 
     **2026-09-21 模擬環境實連確認**。原本只以 `fromisoformat()` 解析，
     拿到 `'2026/09/21'` 解析失敗被吞成 None，於是「本機日期差一天以上」那道守門
@@ -344,6 +362,28 @@ def test_contract_date_accepts_the_real_broker_format(
 
     with pytest.raises(RuntimeError, match="相差"):
         session.connect()
+
+
+def test_contract_date_as_date_object_is_checked(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    shioaji 1.7 的 `update_date` 是 `datetime.date`，同樣要做日期檢查
+
+    1.3.3 回的是 `'YYYY/MM/DD'` 字串；兩種型別都要能判斷，否則換版後這道守門
+    又會像當初那樣靜默失效。
+    """
+
+    stale: datetime.date = fixed_now().date() - datetime.timedelta(days=30)
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date=stale))
+
+    with pytest.raises(RuntimeError, match="相差"):
+        make_session(fixed_now, api=api).connect()
+
+    current: FakeShioaji = FakeShioaji(
+        contract=FakeContract(update_date=fixed_now().date())
+    )
+    make_session(fixed_now, api=current).connect()
 
 
 def test_contract_date_in_the_real_format_passes_when_current(

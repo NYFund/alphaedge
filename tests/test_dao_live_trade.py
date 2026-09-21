@@ -135,16 +135,20 @@ def test_every_planned_table_exists(dao: LiveTradeDAO) -> None:
     } <= names
 
 
-def test_trading_db_is_separate_from_research_db() -> None:
+def test_trading_db_is_separate_from_research_db(production_live_db_path: Path) -> None:
     """
     交易紀錄獨立一庫
 
     研究資料重跑爬蟲就回來，交易紀錄不能重建。併庫之後，任何一次
     「砍掉重建研究庫」都會連委託與成交一起帶走。
+
+    正式環境的預設值要讀替換前的原值：測試期間 `DEFAULT_DB_PATH` 已被根目錄的
+    `conftest.py` 換成暫存路徑，第三條斷言確認這層隔離確實生效。
     """
 
-    assert LiveTradeDAO.DEFAULT_DB_PATH == TW_TRADING_DB_PATH
+    assert production_live_db_path == TW_TRADING_DB_PATH
     assert TW_TRADING_DB_PATH != TW_STOCK_DB_PATH
+    assert LiveTradeDAO.DEFAULT_DB_PATH != TW_TRADING_DB_PATH
 
 
 # === 連線設定 ===

@@ -28,7 +28,7 @@ ORDER_TYPE_FOK = "FOK"
 
 # 定義報價模式常量
 QUOTE_TYPE_TICK = "tick"
-QUOTE_TYPE_BIDASK = "bidask"
+QUOTE_TYPE_BIDASK = "bid_ask"
 QUOTE_TYPE_QUOTE = "quote"
 
 # 定義股票下單單位常量
@@ -232,12 +232,11 @@ class StockOrderCond(str, Enum):
     """
     股票委託條件（現股／融資／融券／借券）
 
-    成員名與值都對齊 `shioaji.constant.StockOrderCond`，由
+    成員名與值都對齊 shioaji 的 `StockOrderCond`，由
     `tests/test_order_state_parity.py` 盯住。
 
-    ⚠️ **`SBLShort` 在 shioaji 1.3.3 沒有對應成員**（該版只有 Cash／MarginTrading／
-    ShortSelling）。借券賣出是回測已支援的放空管道之一，所以本專案的 Enum 先留著它；
-    真正要送借券單時得先升 shioaji，mapper 在查不到對應值時必須當場拋出，
+    shioaji 另有 `SBLShortPriceExempt`／`Netting`／`Emerging`，本專案沒有對應的交易路徑，
+    故不鏡像。若 shioaji 某版缺少這裡的成員，mapper 必須當場拋出，
     不可退回 `ShortSelling`——那會變成用融券的券源與成本送出一張以為是借券的單。
     """
 
@@ -360,9 +359,9 @@ class ShortCost(float, Enum):
 # 本表於 2026-09-02 以實際登入 Shioaji 列出 `api.Contracts.Futures` 逐一核對，
 # **不是從命名規則推的**。要新增商品請照同一種方式查證，不要猜。
 #
-# Shioaji 的契約 `symbol` 格式為 `{分類}{YYYYMM}`（Ex: `TXF202609`），
-# 可直接以 `api.Contracts.Futures[分類][symbol]` 取得；另有 `code` 欄位
-# （Ex: `TXFI6`，月份字母 ＋ 年末碼）**不要用它**，字母碼跨年會重複。
+# 取特定月份的契約：以 `api.Contracts.Futures.<分類>` 取得分類，再比對契約的
+# `delivery_month`（`YYYYMM`）。契約的 `code`（Ex: `TXFI6`，月份字母 ＋ 年末碼）
+# **不要拿來定位月份**，字母碼跨年會重複；shioaji 1.7 起契約也已沒有 `symbol`。
 SHIOAJI_FUTURES_CATEGORY: dict = {
     FUTURES_PRODUCT_TX: "TXF",  # 臺股期貨
     FUTURES_PRODUCT_MTX: "MXF",  # 小型臺指（**不是 MTXF**）

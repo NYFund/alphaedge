@@ -1,10 +1,13 @@
 import argparse
 import datetime
+import os
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List
 
 import pytest
 
@@ -18,6 +21,7 @@ from core.live.factory import (
     _merge_schedules,
     build_live_trader,
 )
+from core.live.risk.trading_mode import TradingMode
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader
 from core.strategies.base import BaseStrategy
@@ -272,14 +276,36 @@ def test_disjoint_windows_are_refused_not_patched() -> None:
 
 # === CLI ===
 def _run_cli(*arguments: str) -> subprocess.CompletedProcess:
-    """以子行程跑 `run.py`，取得真實的退出碼"""
+    """
+    以子行程跑 `run.py`，取得真實的退出碼
 
-    return subprocess.run(
-        [sys.executable, "run.py", *arguments],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-    )
+    **子行程的環境一律隔離**：產物根指到暫存目錄、金鑰清空。這裡的案例都應該在
+    參數檢查就退出；萬一哪天某個案例走過了檢查，也只會在暫存目錄裡失敗，
+    不會拿本機 `.env` 的金鑰登入券商、寫進正式的實盤紀錄庫。
+    """
+
+    sandbox: Path = Path(tempfile.mkdtemp(prefix="alphaedge-cli-"))
+    (sandbox / "data" / "db").mkdir(parents=True)
+    env: Dict[str, str] = {
+        **os.environ,
+        "ALPHAEDGE_DATA_DIR": str(sandbox / "data"),
+        "ALPHAEDGE_RESULTS_DIR": str(sandbox / "results"),
+        "ALPHAEDGE_LOGS_DIR": str(sandbox / "logs"),
+        "ALPHAEDGE_LIVE_KILL_SWITCH_PATH": str(sandbox / "KILL_SWITCH"),
+        # 空字串而非刪除：`load_dotenv()` 不覆寫已存在的鍵，`.env` 就補不回來
+        "API_KEY": "",
+        "API_SECRET_KEY": "",
+    }
+    try:
+        return subprocess.run(
+            [sys.executable, "run.py", *arguments],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def test_production_without_confirmation_is_refused() -> None:
@@ -343,22 +369,52 @@ def test_unknown_strategy_is_reported() -> None:
     assert "Available strategies" in result.stderr
 
 
-def test_after_close_is_wired_not_refused() -> None:
+def test_after_close_is_wired_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     `--phase after_close` 要真的走盤後流程
 
     **前身是「尚未實作，明確拒絕」**。接上之後守的東西變成：它不可以再被當成
     用法錯誤擋掉——否則排程會以為自己打錯參數，而盤後其實從來沒跑過。
 
-    這裡連不到券商是預期的（測試環境沒有金鑰），所以只驗「不是 2」：
-    退出碼 2 代表它還停在參數檢查那一關。
+    **在行程內驗、不起子行程**：子行程會沿用本機 `.env` 的金鑰登入模擬環境，
+    並把整次執行寫進正式的實盤紀錄庫。這裡改以替身引擎驗兩件事：參數解析器收下
+    `after_close`，以及 `run_live()` 呼叫的是 `run_after_close()` 而不是一般段落。
     """
 
-    result: subprocess.CompletedProcess = _run_cli(
-        "--mode", "live", "--strategy", "MomentumStrategy1", "--phase", "after_close"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run.py", "--mode", "live", "--strategy", "Alpha", "--phase", "after_close"],
+    )
+    args: argparse.Namespace = run_module.parse_arguments()
+
+    calls: List[str] = []
+
+    class AfterCloseTrader:
+        """只記錄被呼叫的是哪一條流程；其餘屬性供結束碼判定讀取"""
+
+        last_reconcile: Any = None
+        risk_manager: Any = type(
+            "Risk", (), {"is_kill_switch_on": staticmethod(lambda: False)}
+        )()
+        mode_state: Any = type("Mode", (), {"account_mode": TradingMode.NORMAL})()
+
+        def run_after_close(self) -> dict:
+            calls.append("after_close")
+            return {"pending_actions": 0}
+
+        def run(self, timing: Any) -> None:
+            calls.append(f"run:{timing}")
+
+    monkeypatch.setattr(
+        "core.live.factory.build_live_trader",
+        lambda *arguments, **kwargs: AfterCloseTrader(),
     )
 
-    assert result.returncode != run_module.EXIT_USAGE
+    code: int = run_module.run_live(args, {"Alpha": LiveStockStrategy})
+
+    assert calls == ["after_close"]
+    assert code == 0
 
 
 def test_exit_codes_are_distinct() -> None:

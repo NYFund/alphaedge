@@ -84,7 +84,7 @@ class ShioajiExecutionHandler:
             也不要丟掉之後的每一筆。
         - Parameters:
             - stat: Any
-                `shioaji.constant.OrderState`
+                `shioaji.OrderState`
             - msg: Dict[str, Any]
                 回報內容
         """

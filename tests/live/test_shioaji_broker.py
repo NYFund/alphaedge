@@ -2,7 +2,7 @@ import inspect
 from typing import Any, Dict, List, Optional
 
 import pytest
-import shioaji.account as sj_account
+import shioaji as sj
 
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
@@ -48,37 +48,28 @@ class FakeTrade:
 class FakeContract:
     def __init__(self, code: str = "2330") -> None:
         self.code: str = code
-        self.symbol: str = f"TSE{code}"
         self.limit_up: float = 1100.0
         self.limit_down: float = 900.0
 
 
 class FakeStocks:
-    def __getitem__(self, key: str) -> Optional[FakeContract]:
+    """對應 shioaji 1.7 的 `api.Contracts.Stocks`：`get(code)` 查不到回 None"""
+
+    def get(self, key: str) -> Optional[FakeContract]:
         return FakeContract(key) if key == "2330" else None
-
-
-class FakeQuoteManager:
-    def __init__(self) -> None:
-        self.callbacks: Dict[str, Any] = {}
-
-    def __getattr__(self, name: str) -> Any:
-        def _noop(*args: Any, **kwargs: Any) -> None:
-            self.callbacks[name] = args[0] if args else None
-
-        return _noop
 
 
 def make_account(account_id: str = "1234567") -> Any:
     """
-    用真的 `shioaji.account.Account`，不是字串
+    用真的 `shioaji.Account`，不是字串
 
-    委託的 `account` 欄位有 pydantic 驗證，塞字串會被擋下——而這正是
-    「假物件太寬鬆，測過的東西到實盤不算數」的典型例子。
+    塞字串的話假物件照樣收，真的委託物件不收——「假物件太寬鬆，
+    測過的東西到實盤不算數」的典型例子。shioaji 1.7 的帳號型別也不再收
+    `"S"` 字串，要傳 `AccountType` 成員。
     """
 
-    return sj_account.StockAccount(
-        account_type="S",
+    return sj.Account(
+        account_type=sj.AccountType.Stock,
         person_id="A123456789",
         broker_id="9A95",
         account_id=account_id,
@@ -94,30 +85,49 @@ class FakeApi:
         self.Contracts = type(
             "Contracts", (), {"Stocks": FakeStocks(), "Futures": None}
         )()
-        self.quote: FakeQuoteManager = FakeQuoteManager()
+        # shioaji 1.7 的行情回呼直接掛在 api 上（`api.quote.*` 已棄用）
+        self.quote_callbacks: Dict[str, Any] = {}
         self.placed: List[Any] = []
         self.cancelled: List[Any] = []
         self.updated: List[tuple] = []
         self.status_refreshes: int = 0
         self.order_callback: Any = None
+        # 每次下單類呼叫帶的 timeout；**假物件要求必填**，漏傳就會 TypeError
+        self.timeouts: List[int] = []
 
     def set_order_callback(self, func: Any) -> None:
         self.order_callback = func
 
-    def place_order(self, contract: Any, order: Any) -> FakeTrade:
+    def set_on_tick_stk_v1_callback(self, func: Any) -> None:
+        self.quote_callbacks["tick_stk"] = func
+
+    def set_on_bidask_stk_v1_callback(self, func: Any) -> None:
+        self.quote_callbacks["bidask_stk"] = func
+
+    def set_on_tick_fop_v1_callback(self, func: Any) -> None:
+        self.quote_callbacks["tick_fop"] = func
+
+    def set_on_bidask_fop_v1_callback(self, func: Any) -> None:
+        self.quote_callbacks["bidask_fop"] = func
+
+    def place_order(self, contract: Any, order: Any, timeout: int) -> FakeTrade:
         self.placed.append((contract, order))
+        self.timeouts.append(timeout)
         return FakeTrade()
 
-    def cancel_order(self, trade: Any) -> FakeTrade:
+    def cancel_order(self, trade: Any, timeout: int) -> FakeTrade:
         self.cancelled.append(trade)
+        self.timeouts.append(timeout)
         return FakeTrade(status="Cancelled")
 
-    def update_order(self, trade: Any, price: float) -> FakeTrade:
+    def update_order(self, trade: Any, price: float, timeout: int) -> FakeTrade:
         self.updated.append((trade, price))
+        self.timeouts.append(timeout)
         return FakeTrade()
 
-    def update_status(self, account: Any = None) -> None:
+    def update_status(self, account: Any = None, timeout: int = 0) -> None:
         self.status_refreshes += 1
+        self.timeouts.append(timeout)
 
     def list_trades(self) -> List[FakeTrade]:
         return [FakeTrade(status="Filled", deal_quantity=2)]
@@ -305,6 +315,23 @@ def test_unresolvable_symbol_raises_before_sending(broker: ShioajiBroker) -> Non
 
 
 # === 撤單與改價 ===
+def test_order_calls_pass_an_explicit_timeout(
+    broker: ShioajiBroker, api: FakeApi
+) -> None:
+    """
+    送單、撤單、查狀態都要明寫 timeout
+
+    shioaji 1.7 把預設從 5 秒改成 30 秒；靠預設值的話，尾盤那 4 分鐘裡
+    一張卡住的單能吃掉的時間會隨套件版本悄悄變長。
+    """
+
+    ticket: OrderTicket = broker.place_order(make_ticket())
+    broker.refresh_order_status()
+    broker.cancel_order(ticket)
+
+    assert api.timeouts == [ShioajiBroker.ORDER_TIMEOUT_MS] * 3
+
+
 def test_cancel_uses_the_stored_trade(broker: ShioajiBroker, api: FakeApi) -> None:
     """
     撤單要傳回**原本那個 `Trade`**

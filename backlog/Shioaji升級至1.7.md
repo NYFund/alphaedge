@@ -20,19 +20,19 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| S1 | 1.3.3 → 1.7.5 差異盤點 | 本文件〈差異盤點〉章節 | 差異表涵蓋 `core/` 每個用到的 shioaji 符號 | ⬜ | 相依 [改用uv管理套件.md](改用uv管理套件.md) S3 |
-| S2 | 依賴 1.3.3 行為的結論逐條重驗 | 本文件〈重驗清單〉章節 | 清單每一條都有 1.7.5 下的結論與佐證（原始碼位置或實測輸出） | ⬜ | 相依 S1 |
-| S3 | 升級鎖定版本並修正程式 | `pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant.py`、相關測試 | `uv run pytest -m "not slow"` 全綠 | ⬜ | 相依 S2；`tests/test_order_state_parity.py` 預期會先紅 |
-| S4 | 離線驗證：測試全套與行情重放 | 無（驗證步驟） | `uv run pytest` 含 `slow` 全綠；1.3.3 時期錄的行情檔可重放，或不能重放的原因已記錄 | ⬜ | 相依 S3 |
+| S1 | 1.3.3 → 1.7.5 差異盤點 | 本文件〈差異盤點〉章節 | 差異表涵蓋 `core/` 每個用到的 shioaji 符號 | ✅ | 2026-09-21：23 項差異；試升後 24 failed、15 errors，集中在 4 個測試檔。**影響比預估大**，但都收得進 `core/broker/tw/`、`core/utils/` 與測試 |
+| S2 | 依賴 1.3.3 行為的結論逐條重驗 | 本文件〈重驗清單〉章節 | 清單每一條都有 1.7.5 下的結論與佐證（原始碼位置或實測輸出） | 🔄 | 2026-09-21：12 列中 10 列已有結論（含登入實測）；剩 `custom_field` 伺服器限制、行情 runtime 型別待 S5 |
+| S3 | 升級鎖定版本並修正程式 | `pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant.py`、相關測試 | `uv run pytest -m "not slow"` 全綠 | ✅ | 2026-09-21：`uv.lock` 升至 1.7.5；`uv run pytest` 2008 passed、ruff 全綠、回歸雙線通過 |
+| S4 | 離線驗證：測試全套與行情重放 | 無（驗證步驟） | `uv run pytest` 含 `slow` 全綠；1.3.3 時期錄的行情檔可重放，或不能重放的原因已記錄 | ✅ | 2026-09-21：含 `slow` 全綠；1.3.3 時期錄製的 `quotes_20260921_1130.jsonl` 56 筆全部重放成功 |
 | S5 | 模擬環境實連驗證 | 本文件實測紀錄 | 驗收標準第 3 條 | ⬜ | 相依 S4；**必須在交易日盤中**跑 |
-| S6 | tick 爬取路徑驗證 | `core/pipeline/tw/crawlers/*`（如需修正） | `scripts/manual/manual_tick_crawler.py` 抓得到一檔股票與一檔期貨的 tick，欄位與舊版一致 | ⬜ | 相依 S3；可與 S5 同一天做 |
+| S6 | tick 爬取路徑驗證 | `core/pipeline/tw/crawlers/*`（如需修正） | `scripts/manual/manual_tick_crawler.py` 抓得到一檔股票與一檔期貨的 tick，欄位與舊版一致 | ✅ | 2026-09-21：2330 單日 4,824 筆、TX 202610 單日 45,604 筆（日盤＋夜盤），欄位與升版前中繼檔相同 |
 | S7 | 回寫實盤文件並解除借券阻塞 | `backlog/實盤下單架構規劃.md`、`backlog/index.md` | 實盤文件不再有「鎖定版 1.3.3」的過時敘述；Phase6-1 的借券前提更新 | ⬜ | 相依 S2、S5 |
 
 ---
 
 ## 步驟詳述
 
-### S1. 1.3.3 → 1.7.5 差異盤點 ⬜
+### S1. 1.3.3 → 1.7.5 差異盤點 ✅
 
 - **目的**：升版前先知道哪些東西會變，而不是升完看測試哪裡紅。測試只覆蓋得到有寫測試的路徑，回呼、行情推播這類要實連才會跑到的地方，紅燈不會出現。
 - **做法**：
@@ -43,9 +43,47 @@
   - 已知的一項：`OrderState` 在 1.7 起改由原生模組提供、不再是 Python Enum（`tests/test_order_state_parity.py` 與 CI 註解已記錄），會影響 `core/utils/callback.py` 的 `order_cb` 比較前提。
 - **產出**：本文件新增〈差異盤點〉章節（符號、1.3.3 行為、1.7.5 行為、影響位置、處置）。
 - **驗證方式**：「符號 → 使用位置」表中每個符號都在差異表出現，註明「無變動」或具體變動。
-- **相依**：[改用uv管理套件.md](改用uv管理套件.md) S3（以 uv 建立對照環境並用 `uv lock --upgrade-package` 升版）。
+- **相依**：改用 uv 管理套件（2026-09-21 已完成並移出 backlog；以 uv 建立對照環境並用 `uv lock --upgrade-package` 升版）。
 
-### S2. 依賴 1.3.3 行為的結論逐條重驗 ⬜
+> **✅ 完成紀錄（2026-09-21）**
+>
+> **盤點方式**：以 `uv venv` 建立 1.3.3 與 1.7.5 兩套對照環境，用 introspection 比對 Enum 成員與值、方法簽章、model 欄位；1.7.5 核心是編譯後的原生模組（`_core.abi3.so`），原始碼無法直接比對，改讀它附帶的型別檔 `_core.pyi`（2,952 行）。另外參考官方 release notes 與 Shioaji plugin 的 `STREAMING.md`。「符號 → 使用位置」表由另一個 agent 逐檔讀完 `core/`、`scripts/manual/`、`tests/live/` 後整理而成。最後開一個獨立 worktree 把鎖定版本實際升到 1.7.5，跑完整測試，作為最直接的佐證。
+>
+> **試升結果**：`import` 全部成功（舊的子模組路徑有相容層），整個專案可以載入；`uv run pytest` 為 **24 failed、15 errors**，全部集中在 `tests/test_order_state_parity.py`、`tests/live/test_shioaji_order_mapper.py`、`tests/live/test_quote_replay.py`、`tests/live/test_shioaji_broker.py` 四個檔案。`uv lock --upgrade-package shioaji` 只動到 shioaji 本身，並移除 11 個它不再需要的相依（`pysolace`、`pynacl`、`sentry-sdk`、`msgpack` 等），其他套件版本不變。
+>
+> **整體結論**：1.5.0 起以 Rust 重寫（release notes：「refactor: rust version shioaji」），1.7.0 重構合約 API。這次升版影響的範圍**比立項時預估的大**：除了已知的 `OrderState`，還有 `login()` 參數、Enum 行為、`Trade` 結構、合約容器、行情重放、帳務欄位等。不過 `BaseBroker` 介面不需要改，所有修正都能收在 `core/broker/tw/`、`core/utils/` 與測試裡，仍在本文件的範圍內。
+
+#### 差異盤點
+
+依影響程度排列。「實測」＝在 1.7.5 環境實際執行；「型別檔」＝讀 `_core.pyi`；「待 S5」＝要登入或盤中才能確認。
+
+| # | 符號 | 1.3.3 | 1.7.5 | 影響位置 | 處置 |
+|---|------|-------|-------|----------|------|
+| 1 | `Shioaji.login()` 參數 | 有 `fetch_contract`、`contracts_timeout`、`contracts_cb` | **三者都移除**，多了 `force_refresh`；傳 `contracts_timeout=` 會拋 `TypeError`（實測） | `core/broker/tw/shioaji_session.py:181-186`、`core/utils/account.py:29-33` | S3 必修：拿掉參數。原本用 `contracts_timeout` 等合約下載，新版合約由 shioaji 自行管理（1.7.0），等待方式在 S5 決定 |
+| 2 | 套件結構 | `shioaji.constant`、`.order`、`.contracts`、`.data`、`.position`、`.account`、`.stream_data_type` 是真的模組 | 全部類別都在頂層 `sj.X`；舊子模組只剩相容層，每次取用都發 `DeprecationWarning` | 12 個檔案的 `import shioaji.constant as sj_constant`、`from shioaji.order import ...` 等（見符號表） | S3：改用頂層 `sj.X`，不依賴已棄用的相容層 |
+| 3 | Enum 型別 | Python `str` Enum：可 iterate、有 `.name`、依值呼叫回傳同一個成員物件 | 原生類別：**不能 iterate**；多數成員**沒有 `.name`**（`OrderState`、`QuoteType`、`SecurityType`、`OptionRight` 例外）；`Action("Buy") is Action.Buy` 為 **False**。成員仍是 `str`，`==` 字串值成立（實測） | `core/broker/tw/shioaji_order_mapper.py:390,394`（依值呼叫、iterate）；`tests/live/test_shioaji_order_mapper.py` 以 `is` 比對與讀 `.name`（:218,270,353,357,366,387,421）；`tests/test_order_state_parity.py` 整份 | S3：mapper 的成員檢查改為讀類別屬性；測試 `is` 改 `==`；parity 測試改以成員屬性逐一比對值，保證「值對不上會紅」不變 |
+| 4 | `OrderState` | str Enum | 原生類別，仍是 `str`、有 `.name`，`==` 原值成立（實測） | `core/utils/callback.py:27`、`core/broker/tw/shioaji_execution_handler.py:122,124` | **比較前提仍然成立**，不需修程式；只改 parity 測試的判定方式（它目前以「不是 Python Enum」直接判紅） |
+| 5 | Enum 值變動 | — | `QuoteType.BidAsk` 值 `'bidask'` → **`'bid_ask'`**；`SecurityType.Future` 改名 **`Futures`**（並新增 `Warrant`）；`Exchange` 新增 `TIM`；`ChangeType` 新增 `Dowm`（原文拼字）；`constant.Status` 改由 `sj.OrderStatus` 提供 | `core/utils/constant.py:217-220` 的 `QuoteType` 鏡像；parity 測試 | S3：專案鏡像的 `QuoteType.BIDASK` 值改為 `bid_ask`（要查錄製檔、紀錄庫有沒有存舊值）；`Status` 改指 `sj.OrderStatus` |
+| 6 | `StockOrderCond` | `Cash`／`MarginTrading`／`ShortSelling` | 新增 **`SBLShort`**、**`SBLShortPriceExempt`**、`Netting`、`Emerging`（1.7.2：「SBL short order condition」） | `core/broker/tw/shioaji_order_mapper.py:373-397`、`core/utils/constant.py:238-241`、parity 測試的 ratchet 清單（:116-122） | S3：依 ratchet 原本的設計，把 `SBLShort` 從「shioaji 缺少」清單移除；mapper 借券改為照常轉換（試升時 `test_sbl_raises_and_does_not_fall_back` 已 DID NOT RAISE） |
+| 7 | 帳號類別 | `StockAccount`、`FutureAccount` 兩個類別；`account_type="S"` 字串可建構 | 兩者都對應同一個 `sj.Account`；`account_type` 必須是 `sj.AccountType`，傳字串會 `TypeError`（實測；試升時 15 個 errors 都是這個） | `tests/live/test_shioaji_broker.py:80-87` 的 fake 帳號 | S3：測試改用 `sj.Account(account_type=sj.AccountType....)`；程式本身未以 `isinstance` 區分兩種帳號 |
+| 8 | 委託 model（`StockOrder`／`FuturesOrder`） | pydantic：`custom_field` 限 6 字元、pattern `^[ -~]*$`；`account=None` 會被拒 | 原生類別：**不再驗證 `custom_field`**（7 字元、中文都能建構，實測）；`account=None` 接受；欄位名稱不變 | `core/broker/tw/shioaji_order_mapper.py:40-41,246-248,333-357` | 專案自己的 `custom_field` 檢查**成為唯一的本地防線**，必須保留；更新引用 pydantic 行為的註解 |
+| 9 | `Trade` 結構 | `order: Order`、`contract: Contract`、`status: OrderStatus`（model） | `order: OrderResult`、`contract: ContractIdentifier`、`status: OrderStatusInfo`；`OrderStatusInfo` 的欄位名稱與舊的 `OrderStatus` model 相同（`status`、`deal_quantity`、`deals`、`msg`、`order_datetime`…）；`OrderResult` 仍有 `seqno`、`ordno`、`custom_field`（型別檔） | `core/broker/tw/shioaji_broker.py:383-396`、`core/utils/account.py:125-142` | 欄位名稱沿用，預期不需改；`trade.contract.code` 在 `ContractIdentifier` 下是否可用待 S5 |
+| 10 | `Deal` | `seq`、`price`、`quantity`、`ts` | 新增 tz-aware 的 `datetime`（Asia/Taipei，由 `ts` 計算）（型別檔） | `core/utils/account.py:125-142` | 不影響現有讀取；記入〈另案處理〉 |
+| 11 | 下單回呼 `msg` | `dict` | dict-like 的 `OrderEventDict`（有 `__getitem__`、`get`、`keys`），**不是 `dict`**；keys 與 1.3.3 相同（型別檔） | `core/broker/tw/shioaji_execution_handler.py:147-189` | S3：確認 parser 沒有 `isinstance(msg, dict)` 之類的判斷；實際推播內容待 S5 |
+| 12 | 行情回呼簽章 | `(exchange, data)` | 建議 `(data)` 單參數；雙參數仍會自動偵測並相容，但發 `DeprecationWarning`（`STREAMING.md`） | `core/broker/tw/shioaji_quote_stream.py:82-86` | S3：改單參數 |
+| 13 | `api.quote.*` | 行情 API 的正式入口 | 已棄用的代理，改用 `api.subscribe`／`api.unsubscribe`／`api.set_on_*_callback`（`shioaji/__init__.py`） | `core/broker/tw/shioaji_quote_stream.py:82-86,135-156` | S3：改呼叫 api 本身的方法 |
+| 14 | `stream_data_type` 模組 | 有 `TickSTKv1` 等 dataclass 與 `__annotations__` | 只剩相容層：`vars()` 裡沒有類別，也沒有型別標註；行情物件是**不能建構**的原生類別（實測） | `core/broker/tw/quote_replay.py:26-33,86-97`、`scripts/manual/manual_shioaji_quote_record.py:73-77` | S3 必修：試升時 `test_quote_replay.py` 6 條全紅（datetime 沒被還原，停在字串）。型別表改由 repo 自己維護，依 1.3.3 錄製檔的格式（`Decimal`／`datetime`／`List[Decimal]`）寫死，不再從套件讀 |
+| 15 | 行情物件欄位型別 | 價格 `Decimal`；`datetime` 為 naive（實測 2026-09-21） | 型別檔寫價格為 `str`、`pct_chg` 為 `Decimal`，官方文件寫「Decimal-like」，兩者矛盾；新增 `date`、`time` 欄位 | `core/broker/tw/shioaji_quote_stream.py:246-263,294-296` | **待 S5**：盤中錄一段新版行情，確認價格與 `datetime` 在 runtime 的實際型別，再決定轉換層要不要改 |
+| 16 | 合約容器 | `MultiContract.__getitem__` 查不到回 `None`；有 `keys()`、`_code2contract` | `ContractCategory`／`ContractGroup`：`__getitem__` 回傳型別**不是 Optional**（可能拋例外）；有 `get()`；**沒有 `keys()`**，也沒有 `_code2contract`；登入前存取 `api.Contracts` 會拋 `AuthError`（實測） | `core/broker/tw/shioaji_contract_resolver.py:10-35,65,93,129-134,170-173,216-238`、`core/utils/instrument.py:38`、`core/backtest/datafeed/tw/market_calendar.py:124`、`core/pipeline/tw/crawlers/*_tick_crawler.py`、`scripts/manual/manual_shioaji_login.py:80` | S3：查詢一律改用 `.get(code)`，列分類改為 iterate 或文件化的 API；**查不到時的實際行為待 S5** |
+| 17 | 帳務欄位 | `Settlement` 有 `t_money`、`t1_money`、`t2_money`；`SettlementV1` 有 `date`、`amount`、`T` | 型別檔：`Settlement` 只有 `t_money`、`t_day`；`SettlementV1` 只有 `date`、`amount`；`StockPosition`、`Margin`、`AccountBalance` 欄位不變 | `core/broker/tw/shioaji_account_query.py:73-77,232`、`core/utils/account.py:56,69` | **待 S5**：實際呼叫 `list_settlements`／`settlements` 確認欄位；若真的少了，T+1／T+2 交割款要改用 `settlements()` 的逐日列 |
+| 18 | 回傳物件的 `__dict__`／`model_dump()` | pydantic，兩者皆可 | `MappingMixin`：`__dict__` 已棄用（每次回傳新的 dict 並發警告），改用 `.dict()`；沒有 `model_dump()` | `core/utils/account.py:56,69,84,94`、`core/broker/tw/shioaji_account_query.py:319-325` | S3：改用 `.dict()` |
+| 19 | 預設逾時 | `place_order`、`update_status` 等為 5 秒 | 30 秒 | `core/broker/tw/shioaji_broker.py:205,269,297,316`（皆用預設值） | S3：明確傳入 `timeout`，不讓阻塞上限隨版本改變；值沿用 5 秒 |
+| 20 | `Shioaji()` 建構參數 | `simulation`、`proxies`、`currency`、`vpn` | `simulation`、`proxy`、`vpn` | 專案只用 `simulation` | 無影響 |
+| 21 | `activate_ca()` | 有 `store` 參數 | 移除 `store` | 專案未傳 `store` | 無影響 |
+| 22 | `Ticks` | pydantic | `MappingMixin`（有 `keys()`、`__getitem__`），欄位名稱相同 | `core/pipeline/tw/crawlers/stock_tick_crawler.py:60-62`（`{**ticks}` 展開） | 理論上可用，**待 S6** 實際抓一天確認 |
+| 23 | `sj.Shioaji` 作為型別 | Python class | 原生 class，PEP 604 的 `\|` 與 `isinstance` 都可用（實測） | `core/backtest/datafeed/tw/market_calendar.py:78,102` | 無影響 |
+
+### S2. 依賴 1.3.3 行為的結論逐條重驗 🔄
 
 - **目的**：實盤文件中有一批設計決定建立在 1.3.3 的行為上，行為變了，決定可能跟著失效，而且多半是安靜地失效。
 - **做法**：以 1.7.5 逐條重驗下表（來源皆為 [實盤下單架構規劃.md](實盤下單架構規劃.md)），能離線查的讀原始碼，要連線的併入 S5：
@@ -70,7 +108,25 @@
 - **驗證方式**：每一列都填了 1.7.5 結論與佐證；要實連的列標明「待 S5」。
 - **相依**：S1。
 
-### S3. 升級鎖定版本並修正程式 ⬜
+> **🔄 進度（2026-09-21）**：能離線確認的列都已填完；登入即可確認的列已於 2026-09-21 以正式環境唯讀登入實測（不啟用憑證、不下單，與 ETL 相同的登入方式）；只剩需要**盤中或下單**的列待 S5。
+>
+> | 項目 | 1.3.3 的結論 | 1.7.5 結論 | 佐證 |
+> |------|--------------|------------|------|
+> | `OrderState` 型別 | `str` Enum，`order_cb` 以 `==` 比對字串值 | **仍成立**：不再是 Python Enum，但成員是 `str`，`==` 原值為 True，也保留 `.name` | 1.7.5 環境實測 |
+> | `StockOrderCond` 成員 | 沒有 `SBLShort`／`SBLShortPriceExempt` | **不成立**：兩者都有了，另外新增 `Netting`、`Emerging` | 實測；release notes 1.7.2 |
+> | 其他下單參數 Enum 值 | 與專案 Enum 字串值一致 | **仍成立**：`Action`、`StockPriceType`、`FuturesPriceType`、`OrderType`、`StockOrderLot`、`FuturesOCType` 的值全部沒變；但 Enum 不能 iterate、多數沒有 `.name`、依值呼叫的 `is` 不成立 | 實測，差異盤點 #3 |
+> | `MultiContract.__getitem__` | 查不到回 `None`、不拋例外 | **不成立**：`Stocks["9999"]` 拋 `KeyError`；`Stocks.get("9999")` 回 `None`。程式已全面改用 `.get()` | 2026-09-21 實連 |
+> | 合約查詢鍵 | slot 以 `symbol` 命名、`_code2contract` 以 `code` 索引 | **不成立**：合約物件改為 `StockInfo`／`FuturesInfo`，**沒有 `symbol`**，也沒有 `_code2contract`；期貨分類以屬性取（`Futures.TXF`），月份比對 `delivery_month`。連續月別名 `TXFR1` 與 `TXFJ6` 同為 `202610`，必須排除；不存在的分類（`getattr(Futures, "NOPE")`）回的是空群組而不是 `None` | 2026-09-21 實連 |
+> | `api.Contracts.Stocks[...]` | 一層涵蓋上市與上櫃 | **仍成立**：`Stocks.get("6488")` 取到 OTC 合約 | 2026-09-21 實連 |
+> | 合約檔下載阻塞 | `_block()` 最多等 30 秒，決定 `contracts_timeout` | **不成立**：`login()` 已沒有 `contracts_timeout`；1.7.0 起合約 lazy loading，第一次查詢才載入需要的部分，不需要另外等待 | 實測（`TypeError`）；官方 `MIGRATION.md` |
+> | `login(receive_window=)` | 伺服器把關秒級時鐘偏差 | 參數仍在、預設仍為 30000，登入成功；偏差過大時的伺服器行為待 S5 | 型別檔；2026-09-21 實連 |
+> | `Contract.update_date` | `'2026/09/21'` 斜線格式字串 | **不成立**：改為 `datetime.date`（`date(2026, 9, 21)`）。session 原本就接受 `date`，另補測試釘住 | 2026-09-21 實連 |
+> | `Contract` 的 10 個欄位 | 全部存在 | **部分成立**：股票的 `reference`／`limit_up`／`limit_down`／`update_date`／`day_trade`／`margin_trading_balance`／`short_selling_balance`／`unit` 都在（`unit` 為 `float`）；期貨沒有 `unit`，`multiplier` 為 `float`（200.0），`underlying_code` 在 | 2026-09-21 實連 |
+> | `custom_field` 限制 | 最多 6 字元、pattern `^[ -~]*$` | **本地已不驗證**：7 字元與中文都能建構；伺服器端是否仍限制，**待 S5** | 實測 |
+> | 行情推播型別 | `stream_data_type` 的 `TickSTKv1` 等 | 類別仍在（頂層 `sj.TickSTKv1`），但 `stream_data_type` 只剩相容層、沒有型別標註，重放器讀不到型別（已改為 repo 內自己維護型別表）；價格與 `datetime` 的 runtime 型別**待 S5**（轉換層以 `float()` 與 `_localize()` 處理，兩種型別都能接） | 實測（`test_quote_replay.py` 6 條紅，修正後全綠） |
+> | `Settlement` 欄位 | `t_money`／`t1_money`／`t2_money` | **仍成立**：三者都在（型別檔漏列）；`SettlementV1` 的 `T` 也在 | 2026-09-21 實連 |
+
+### S3. 升級鎖定版本並修正程式 ✅
 
 - **目的**：套用升版，並修掉 S1、S2 找出的不相容處。
 - **做法**：
@@ -82,7 +138,24 @@
 - **驗證方式**：`uv run pytest -m "not slow" -rs` 全綠；`uv run ruff check .` 全綠。
 - **相依**：S2。
 
-### S4. 離線驗證：測試全套與行情重放 ⬜
+> **✅ 完成紀錄（2026-09-21）**
+> - `pyproject.toml` 改為 `shioaji>=1.7`（附下限不可放寬的理由），`uv lock --upgrade-package shioaji` 只動到 shioaji，並移除 11 個它不再需要的相依。
+> - 依差異盤點修正：
+>   - `login()` 拿掉 `contracts_timeout`（`core/broker/tw/shioaji_session.py`、`core/utils/account.py`），並新增測試：傳給 `login()` 的參數必須都在**安裝中 shioaji** 的簽章內。
+>   - 所有 `shioaji.constant`／`.order`／`.contracts`／`.data`／`.position`／`.stream_data_type` 的 import 改為頂層 `sj.X`，測試全程沒有 shioaji 的 `DeprecationWarning`。
+>   - `ShioajiOrderMapper`：錯誤訊息改以類別屬性列出成員（新增 `list_broker_enum_values()`），比較改用 `==`；`custom_field` 的本地檢查成為唯一防線，註解同步改寫。
+>   - 借券：`StockOrderCond.SBLShort` 在 1.7.2 起支援，mapper 照常轉換；「券商 Enum 缺成員時必須拋出、不可退回」的保證改用缺成員的替身 Enum 驗證，不再依賴安裝版本。
+>   - `core/utils/constant.py`：`QuoteType.BidAsk` 值改為 `bid_ask`；`StockOrderCond` docstring 改寫。
+>   - 行情：回呼改為單參數（交易所從行情物件的 `exchange` 取，入列格式不變）；訂閱與回呼直接掛在 api 上，不再經過已棄用的 `api.quote`。
+>   - `quote_replay.py`：型別表改為 repo 內自己維護的 `RECORDED_FIELD_TYPES`（取自 1.3.3 標註，即錄製檔格式），錄製腳本共用同一份。順帶修掉一個既有 bug：`List[Decimal]` 在 Python 3.12 取 `__name__` 只得到 `List`，委買賣價格從未被還原成 `Decimal`。
+>   - 合約：`ShioajiContractResolver` 改用 `Stocks.get()`、屬性取分類、迭代比對 `delivery_month` 並排除連續月別名，股期對照表的分類改讀合約的 `root`；`FuturesTickCrawler`、`ShioajiQuoteStream._split_code()`、`MarketCalendar`、`StockUtils`、`StockTickCrawler` 與兩支手動腳本同步改寫。
+>   - `ShioajiBroker`：送單、撤單、改價、查狀態一律傳 `ORDER_TIMEOUT_MS = 5000`（1.7 預設改成 30 秒），並新增測試。
+>   - `core/utils/account.py`：`__dict__` 改為 `.dict()`。
+>   - 測試：parity 測試改為從類別屬性讀成員、直接驗「成員是 `str` 且 `==` 原值成立」（讀不到任何成員時判紅，避免什麼都沒比就通過），ratchet 清單移除 `SBLShort`；broker、quote stream、合約解析、session 的假物件改成 1.7 的形狀（不再提供 `api.quote`、`keys()`、`symbol`）。反向驗證：把 `QUOTE_TYPE_BIDASK` 改回 `bidask`，parity 測試會紅。
+> - 驗證：`uv run pytest` **2008 passed**；`ruff check`／`ruff format --check`／三支檢查腳本全綠；回歸雙線通過。
+> - **偏離原規格**：原規格寫「`core/utils/callback.py` 要改 `OrderState` 的比較方式」。實測比較前提仍然成立（成員是 `str`、`==` 原值為 True），`callback.py` 只改了註解。
+
+### S4. 離線驗證：測試全套與行情重放 ✅
 
 - **目的**：在不連線的前提下盡量把問題擋在實連之前。
 - **做法**：
@@ -91,6 +164,10 @@
 - **產出**：無（驗證步驟）；結果寫在本步驟章節末。
 - **驗證方式**：同上兩項。
 - **相依**：S3。
+
+> **✅ 完成紀錄（2026-09-21）**
+> - `uv run pytest -rs`（含 `slow`）2008 passed；`./scripts/run_regression.sh` 回歸雙線都實際執行且通過。
+> - 1.3.3 時期的錄製檔：`data/records/quotes_20260921_1130.jsonl` 的 56 筆 `tick_stk` 全部重放成功，`close` 還原為 `Decimal`、`datetime` 還原為 `datetime`，轉出的報價正常（首筆 2454、4930.0、`2026-09-21T11:30:39+08:00`）。`quotes_20260921_1109.jsonl` 是第一版錄製腳本錄成空白的那份，重放器照設計略過並警告，與升版無關。
 
 ### S5. 模擬環境實連驗證 ⬜
 
@@ -103,13 +180,18 @@
 - **驗證方式**：驗收標準第 3 條。
 - **相依**：S4；Phase0-1 的帳號權限（期貨部分）。
 
-### S6. tick 爬取路徑驗證 ⬜
+### S6. tick 爬取路徑驗證 ✅
 
 - **目的**：`core/pipeline/tw/crawlers/stock_tick_crawler.py`、`futures_tick_crawler.py` 與兩個 updater 用 shioaji 抓歷史 tick，是實盤以外另一條依賴 shioaji 的路徑，容易在升版時被忽略。
 - **做法**：`uv run python -m scripts.manual.manual_tick_crawler` 抓一檔股票與一檔期貨的單日 tick，比對欄位名稱與型別是否與升版前的中繼檔一致；`shioaji.data.Ticks` 若有變動，修正爬蟲與清洗器。
 - **產出**：如需修正，為 `core/pipeline/tw/crawlers/*` 與對應 cleaner。
 - **驗證方式**：抓得到資料，欄位與舊版一致或差異已處理；`uv run pytest tests/test_futures_tick.py` 全綠。
 - **相依**：S3。
+
+> **✅ 完成紀錄（2026-09-21）**：以正式環境唯讀登入（與 ETL 相同；不啟用憑證、不下單、不寫 `data/`），用專案的爬蟲抓 2026-09-18 的資料。
+> - 股票 2330：4,824 筆；原始欄位 `ts`（int64、奈秒）／`close`／`volume`／`bid_price`／`bid_volume`／`ask_price`／`ask_volume`／`tick_type`，經 `format_tick_data()` 後的欄位與既有中繼檔 `data/downloads/tw_stock/tick/*.csv` 完全相同。
+> - 期貨 TX 202610：45,604 筆（日盤 30,416、夜盤 15,188，夜盤自 09-17 15:00 起），`FuturesTickCleaner.clean()` 後的欄位與既有中繼檔 `TX202612_20260828.csv` 完全相同。
+> - `shioaji.data.Ticks` 仍可用 `{**ticks}` 展開，爬蟲與清洗器不需修改（`FuturesTickCrawler` 的合約查詢已在 S3 改寫）。
 
 ### S7. 回寫實盤文件並解除借券阻塞 ⬜
 
@@ -126,8 +208,6 @@
 
 ## 另案處理
 
-升版途中發現、但依範圍界線不在本文件處理的項目記在這裡：新版的新能力（Contract V2 lazy lookup、即時 KBar 等），以及舊程式在新版下仍能運作、但寫法可以改善的地方。會讓程式失效的不相容一律在 S3 當場修，不記在這裡。
-
-本文件與 [改用uv管理套件.md](改用uv管理套件.md) 都完成後，兩份文件的這個章節合併整理成一份新的 backlog 文件，再回頭更新 [架構重構與冗餘收斂.md](架構重構與冗餘收斂.md)（重點是 Phase1-3 的 `market_calendar.py` 與 Phase7-6「未裝 shioaji 的環境」驗收）。
-
-（尚無）
+升版途中發現、但依範圍界線不在本文件處理的項目（新版的新能力、仍能運作但可改善的寫法），
+已於 2026-09-21 統一移到 [專案優化與改善清單.md](專案優化與改善清單.md) 的 Phase7。
+之後再發現的同類項目直接寫進那份文件，不在這裡累積。會讓程式失效的不相容一律在 S3 當場修。

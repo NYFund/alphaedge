@@ -2,7 +2,7 @@ import argparse
 import sys
 from typing import Any, List, Optional, Tuple
 
-import shioaji.constant as sj_constant
+import shioaji as sj
 from loguru import logger
 
 from core.broker.tw.shioaji_session import ShioajiSession
@@ -110,11 +110,11 @@ def place_stock_order(api: Any, contract: Any, price: float) -> Any:
     """股票：ROD 限價買進 1 張"""
 
     order: Any = api.Order(
-        action=sj_constant.Action.Buy,
+        action=sj.Action.Buy,
         price=price,
         quantity=1,
-        price_type=sj_constant.StockPriceType.LMT,
-        order_type=sj_constant.OrderType.ROD,
+        price_type=sj.StockPriceType.LMT,
+        order_type=sj.OrderType.ROD,
         account=api.stock_account,
     )
     return api.place_order(contract, order, timeout=ORDER_TIMEOUT_MS)
@@ -135,12 +135,12 @@ def place_futures_order(api: Any, contract: Any, price: float) -> Any:
     """
 
     order: Any = api.Order(
-        action=sj_constant.Action.Buy,
+        action=sj.Action.Buy,
         price=price,
         quantity=1,
-        price_type=sj_constant.FuturesPriceType.LMT,
-        order_type=sj_constant.OrderType.ROD,
-        octype=sj_constant.FuturesOCType.Auto,
+        price_type=sj.FuturesPriceType.LMT,
+        order_type=sj.OrderType.ROD,
+        octype=sj.FuturesOCType.Auto,
         account=api.futopt_account,
     )
     return api.place_order(contract, order, timeout=ORDER_TIMEOUT_MS)
@@ -173,7 +173,7 @@ def main() -> int:
         logger.info(f"股票帳號：{'有' if has_stock else '**無**'}")
         logger.info(f"期貨帳號：{'有' if has_futopt else '**無**'}")
 
-        stock_contract: Any = api.Contracts.Stocks[STOCK_SYMBOL]
+        stock_contract: Any = api.Contracts.Stocks.get(STOCK_SYMBOL)
         futures_contract: Optional[Any] = (
             near_month_futures(api) if has_futopt else None
         )

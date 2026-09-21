@@ -76,8 +76,15 @@ def report_futures_categories(api: Any) -> None:
     """列出期貨分類代碼，核對 `SHIOAJI_FUTURES_CATEGORY` 是否仍然正確"""
 
     try:
+        # shioaji 1.7 的合約容器是原生物件，`dir()` 列不出分類；
+        # 改為迭代各群組，讀第一檔合約的 `root`（分類代碼）
         categories: List[str] = sorted(
-            category for category in dir(api.Contracts.Futures) if category.isupper()
+            {
+                str(getattr(contract, "root", ""))
+                for group in api.Contracts.Futures
+                for contract in list(group)[:1]
+                if getattr(contract, "root", "")
+            }
         )
     except Exception as exc:
         logger.opt(exception=True).error(f"列出期貨分類失敗：{exc}")
