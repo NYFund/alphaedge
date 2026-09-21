@@ -128,6 +128,32 @@ def test_force_cover_map_skips_ex_dates_too_close_to_start() -> None:
     assert data_feed.build_force_cover_map() == {}
 
 
+def test_suspension_covers_ex_date_early_in_the_backtest() -> None:
+    """
+    除權息落在回測第 3 個交易日時，頭兩天也要停券
+
+    交易日清單以前從 `start_date` 才開始抓，回補日（除權息前 4 個營業日）落在
+    起點之前就推不出來，整段停券被略過：頭幾天可以開融券空單並持有跨過除權息，
+    而回補日早於起點，也永遠不會被強制回補。
+    """
+
+    data_feed: TwStockDataFeed = make_data_feed(
+        [{"date": "2024-01-09", "stock_id": STOCK_ID}]
+    )
+    # 回測從 1/5 開始：1/9 是第 3 個交易日，回補日 1/3 在起點之前
+    data_feed.start_date = datetime.date(2024, 1, 5)
+
+    assert data_feed.get_short_suspended_symbols(datetime.date(2024, 1, 5)) == {
+        STOCK_ID
+    }
+    assert data_feed.get_short_suspended_symbols(datetime.date(2024, 1, 8)) == {
+        STOCK_ID
+    }
+    assert data_feed.get_short_suspended_symbols(datetime.date(2024, 1, 9)) == set()
+    # 回補日在起點之前，回測開始時沒有部位，不需要強制回補
+    assert data_feed.build_force_cover_map() == {}
+
+
 def test_force_cover_map_is_built_once() -> None:
     """整場回測只推導一次；dividend 與 price 表在回測期間不會變動"""
 
