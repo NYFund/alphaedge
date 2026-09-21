@@ -164,7 +164,7 @@ def test_broker_info_uses_its_own_key_and_column_order(env) -> None:
 
 # === 重跑與去重 ===
 def test_rerun_does_not_duplicate(env) -> None:
-    """已存在的主鍵一律跳過；重跑列數不變"""
+    """同鍵覆蓋而不是新增；重跑列數不變"""
 
     conn, finmind_dir = env
 
@@ -202,6 +202,34 @@ def test_only_new_keys_are_appended(env) -> None:
     stock_info_loader.load_stock_info(conn, finmind_dir)
 
     assert row_count(conn, STOCK_INFO_TABLE_NAME) == 3
+
+
+def test_existing_rows_are_refreshed_with_the_latest_snapshot(env) -> None:
+    """
+    已存在的標的以最新快照覆蓋：興櫃轉上市櫃後 `type` 要跟著更新
+
+    以前只補新增，新股第一次入庫的 `emerging` 永遠不會變，以 `type IN ('twse',
+    'tpex')` 取清單的財報權益變動表就永遠排除它，而且不會有任何 warning。
+    快照裡已經沒有的標的不刪：下市的仍要查得到。
+    """
+
+    conn, finmind_dir = env
+    csv_path: Path = (
+        finmind_dir / FinMindDataType.STOCK_INFO.value.lower() / "taiwan_stock_info.csv"
+    )
+    pd.DataFrame([dict(row, type="emerging") for row in STOCK_INFO_ROWS]).to_csv(
+        csv_path, index=False
+    )
+    stock_info_loader.load_stock_info(conn, finmind_dir)
+
+    pd.DataFrame(STOCK_INFO_ROWS[:1]).to_csv(csv_path, index=False)
+    stock_info_loader.load_stock_info(conn, finmind_dir)
+
+    types = dict(
+        conn.execute(f"SELECT stock_id, type FROM {STOCK_INFO_TABLE_NAME}").fetchall()
+    )
+    assert types[STOCK_INFO_ROWS[0]["stock_id"]] == STOCK_INFO_ROWS[0]["type"]
+    assert types[STOCK_INFO_ROWS[1]["stock_id"]] == "emerging"
 
 
 def test_duplicates_within_the_csv_are_removed(env) -> None:
@@ -285,14 +313,15 @@ def test_saved_message_reports_row_count(env, captured_logs: List[str]) -> None:
     )
 
 
-def test_rerun_logs_all_data_already_exists(env, captured_logs: List[str]) -> None:
-    """全部重複時的訊息也要保留，否則看不出「跳過」與「沒跑到」的差別"""
+def test_rerun_logs_refreshed_rows(env, captured_logs: List[str]) -> None:
+    """重跑時分開報新增與刷新的列數，看得出「有跑到、只是沒有新標的」"""
 
     conn, finmind_dir = env
     stock_info_loader.load_stock_info(conn, finmind_dir)
     captured_logs.clear()
     stock_info_loader.load_stock_info(conn, finmind_dir)
 
-    assert "Skipped taiwan_stock_info.csv (all data already exists)" in "\n".join(
-        captured_logs
+    assert (
+        "Saved taiwan_stock_info.csv into database (0 new rows, 2 refreshed)"
+        in "\n".join(captured_logs)
     )

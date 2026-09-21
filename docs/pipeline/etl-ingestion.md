@@ -40,6 +40,7 @@ updater 負責串起流程與決定要處理哪些日期。
 | `FinancialStatementUpdater`（前三張報表） | 每種報表一次 | 年 × 季的差集 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinancialStatementUpdater`（equity_change） | **每 100 檔** ＋ 收到中止訊號時 | **差集**（表內已有 ＋ `SeasonProgressStore`） | `INSERT OR IGNORE` | `DataLoadError`（整段跑完才拋） |
 | `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
+| `FinMindUpdater`（台股總覽、含權證、證券商資訊） | 每張表一次 | 無（現況快照，每次整份重抓） | `INSERT OR REPLACE`（同鍵以最新快照覆蓋；快照裡已沒有的舊列保留） | `DataLoadError` |
 | `StockTickUpdater` | 全部跑完 | 固定起日 ＋ `tick_metadata.json` | **無**（`keepDuplicates=ALL`） | `DataLoadError` |
 | `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesStockUniverseUpdater` | 一次（單次請求） | 當日快照是否已入庫 | `INSERT OR IGNORE` | `DataLoadError` |
