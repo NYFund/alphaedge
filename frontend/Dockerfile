@@ -20,7 +20,7 @@ COPY frontend /app/frontend
 
 # **前端完全不 import `core`**：所有績效指標改讀 reporter 落地的
 # `<策略>_metrics_summary.csv`，公式只存在於 `core/` 一處。舊版為了 Sharpe／
-# Sortino 而 COPY 的那條最小鏈（`performance_metrics.py` 與三個 `__init__.py`）
+# Sortino 而 COPY 的那幾個 `core` 檔案（`performance_metrics.py` 與三個 `__init__.py`）
 # 因此整段移除，映像的相依面只剩 `frontend/` 自己。
 # `tests/test_frontend_metrics.py` 有一條測試盯住前端不再 import `core`。
 

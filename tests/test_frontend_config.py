@@ -106,7 +106,7 @@ def test_frontend_requirements_cover_every_third_party_import() -> None:
     """
     `frontend/requirements.txt` 必須涵蓋 `frontend/` 實際 import 的每個第三方套件
 
-    前端映像**不安裝本專案**（只 COPY `frontend/` 與 performance_metrics 那條最小鏈），
+    前端映像**不安裝本專案**（只 COPY `frontend/`，前端也不 import `core`），
     所以 `pyproject.toml` 的相依完全不生效，那一份 requirements 是唯一來源。
     漏一個的症狀是**映像裝得起來、一開頁就 ModuleNotFoundError**——
     前端映像曾因此漏裝 plotly。

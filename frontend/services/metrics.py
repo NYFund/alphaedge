@@ -14,7 +14,7 @@ Information Ratio 一律讀 reporter 落地的 `<策略>_metrics_summary.csv`，
 哪個對——MDD 曾經就有前端與 MDD 圖兩份實作。
 
 ⚠️ **前端因此完全不 import `core`**：`frontend/Dockerfile` 不再需要 COPY
-`performance_metrics.py` 那條最小鏈，映像的相依面只剩 `frontend/` 自己。
+任何 `core` 檔案，映像的相依面只剩 `frontend/` 自己。
 `tests/test_frontend_metrics.py` 有一條測試盯住這件事。
 
 本模組不含任何 Streamlit 呼叫，這樣才測得到——`frontend/app.py` 在 import 時
