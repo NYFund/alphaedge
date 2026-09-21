@@ -4,7 +4,7 @@ from typing import List, Optional
 
 import pandas as pd
 import shioaji as sj
-from shioaji.data import Ticks
+from shioaji import Ticks
 
 from core.api.tw.stock_price_api import StockPriceAPI
 
@@ -121,9 +121,11 @@ class MarketCalendar:
         """Shioaji 路徑：該日是否有 tick"""
 
         tick: Ticks = api.ticks(
-            contract=api.Contracts.Stocks[MarketCalendar.MARKET_CALENDAR_TEST_STOCK_ID],
+            contract=api.Contracts.Stocks.get(
+                MarketCalendar.MARKET_CALENDAR_TEST_STOCK_ID
+            ),
             date=date.strftime("%Y-%m-%d"),
-            query_type=sj.constant.TicksQueryType.LastCount,
+            query_type=sj.TicksQueryType.LastCount,
             last_cnt=1,
         )
         return tick is not None and len(tick.close) > 0

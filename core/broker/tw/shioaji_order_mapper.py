@@ -1,8 +1,8 @@
+import inspect
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple
 
-import shioaji.constant as sj_constant
-import shioaji.order as sj_order
+import shioaji as sj
 
 from core.models import FuturesOrder, StockOrder
 from core.utils import (
@@ -37,7 +37,9 @@ from core.utils.instrument import StockUtils
 class ShioajiOrderMapper:
     """領域訂單與 Shioaji 訂單之間的轉換器"""
 
-    # `custom_field` 的限制由 shioaji 的 pydantic 模型定義：最多 6 個可列印 ASCII 字元
+    # `custom_field` 的券商限制：最多 6 個可列印 ASCII 字元。
+    # shioaji 1.7 起建構委託物件時已不再檢查（7 個字元、中文都建得出來），
+    # 本地這道 `validate_custom_field()` 是送出前唯一的防線
     CUSTOM_FIELD_MAX_LENGTH: int = 6
 
     # 盤中零股的數量上限（股）；達到 1000 股就該用整股下單
@@ -146,7 +148,7 @@ class ShioajiOrderMapper:
         order: StockOrder,
         custom_field: Optional[str] = None,
         contract: Optional[Any] = None,
-    ) -> sj_order.StockOrder:
+    ) -> sj.StockOrder:
         """
         - Description:
             把 `StockOrder` 轉成 Shioaji 的股票委託
@@ -158,7 +160,7 @@ class ShioajiOrderMapper:
             - contract: Optional[Any]
                 對應的 Shioaji 合約；提供時會用它的漲跌停價檢查委託價
         - Return:
-            - sj_order.StockOrder
+            - sj.StockOrder
                 Shioaji 委託物件
         - Raise:
             - ValueError
@@ -177,26 +179,24 @@ class ShioajiOrderMapper:
             self._validate_price_limits(price, contract)
 
         fields: Dict[str, Any] = {
-            "action": self._to_broker_enum(order.action, sj_constant.Action),
+            "action": self._to_broker_enum(order.action, sj.Action),
             "price": price,
             "quantity": order.volume,
-            "price_type": self._to_broker_enum(price_type, sj_constant.StockPriceType),
-            "order_type": self._to_broker_enum(order.order_type, sj_constant.OrderType),
-            "order_lot": self._to_broker_enum(
-                order.order_lot, sj_constant.StockOrderLot
-            ),
-            "order_cond": self._to_broker_enum(order_cond, sj_constant.StockOrderCond),
+            "price_type": self._to_broker_enum(price_type, sj.StockPriceType),
+            "order_type": self._to_broker_enum(order.order_type, sj.OrderType),
+            "order_lot": self._to_broker_enum(order.order_lot, sj.StockOrderLot),
+            "order_cond": self._to_broker_enum(order_cond, sj.StockOrderCond),
             "daytrade_short": daytrade_short,
             "custom_field": self.validate_custom_field(custom_field),
         }
-        return sj_order.StockOrder(**self._with_account(fields, self.stock_account))
+        return sj.StockOrder(**self._with_account(fields, self.stock_account))
 
     def to_shioaji_futures_order(
         self,
         order: FuturesOrder,
         octype: FuturesOCType,
         custom_field: Optional[str] = None,
-    ) -> sj_order.FuturesOrder:
+    ) -> sj.FuturesOrder:
         """
         - Description:
             把 `FuturesOrder` 轉成 Shioaji 的期貨委託
@@ -208,7 +208,7 @@ class ShioajiOrderMapper:
             - custom_field: Optional[str]
                 隨委託往返券商的識別碼
         - Return:
-            - sj_order.FuturesOrder
+            - sj.FuturesOrder
                 Shioaji 委託物件
         - Raise:
             - ValueError
@@ -225,17 +225,15 @@ class ShioajiOrderMapper:
             raise ValueError(f"期貨委託口數必須為正整數，收到 {order.volume}")
 
         fields: Dict[str, Any] = {
-            "action": self._to_broker_enum(order.action, sj_constant.Action),
+            "action": self._to_broker_enum(order.action, sj.Action),
             "price": self._resolve_price(price_type, order),
             "quantity": order.volume,
-            "price_type": self._to_broker_enum(
-                price_type, sj_constant.FuturesPriceType
-            ),
-            "order_type": self._to_broker_enum(order.order_type, sj_constant.OrderType),
-            "octype": self._to_broker_enum(octype, sj_constant.FuturesOCType),
+            "price_type": self._to_broker_enum(price_type, sj.FuturesPriceType),
+            "order_type": self._to_broker_enum(order.order_type, sj.OrderType),
+            "octype": self._to_broker_enum(octype, sj.FuturesOCType),
             "custom_field": self.validate_custom_field(custom_field),
         }
-        return sj_order.FuturesOrder(**self._with_account(fields, self.futopt_account))
+        return sj.FuturesOrder(**self._with_account(fields, self.futopt_account))
 
     # === 檢查 ===
     @staticmethod
@@ -243,9 +241,8 @@ class ShioajiOrderMapper:
         """
         帳號為 None 時**整個欄位不帶**
 
-        shioaji 的 `account` 欄位不接受 None（pydantic 會拒絕），只接受不給或給物件。
-        明確傳 None 的話，錯誤訊息是「Input should be a valid dictionary or instance
-        of Account」——看不出真正的原因是「還沒登入」。
+        不給帳號時 shioaji 會用登入後的預設帳號；明確傳 None 的語意在不同版本不一致
+        （舊版直接拒絕、且錯誤訊息看不出原因是「還沒登入」），故一律不帶。
         """
 
         if account is None:
@@ -330,9 +327,8 @@ class ShioajiOrderMapper:
         - Description:
             檢查隨委託往返的識別碼
 
-            **在這裡擋，不要交給 shioaji 的驗證**：它的 `ValidationError` 訊息是
-            「String should match pattern '^[ -~]*$'」，看不出這個欄位是什麼、
-            也看不出該填什麼。
+            **在這裡擋，不要交給 shioaji**：它建構委託物件時已不檢查這個欄位，
+            不合規的值要送到券商才會被拒，而尾盤段沒有重送的時間。
         - Parameters:
             - value: Optional[str]
                 識別碼；None 時視為空字串
@@ -357,7 +353,31 @@ class ShioajiOrderMapper:
         return value
 
     @staticmethod
-    def _to_broker_enum(member: Enum, broker_enum: Type[Enum]) -> Enum:
+    def list_broker_enum_values(broker_enum: Any) -> List[str]:
+        """
+        - Description:
+            列出 Shioaji Enum 類別的所有成員值
+
+            shioaji 的 Enum 是原生類別，**不能 iterate**，成員只能從類別屬性讀出；
+            `value`／`name` 是實例屬性的描述器，不是成員，要排除
+        - Parameters:
+            - broker_enum: Any
+                Shioaji 的 Enum 類別（例如 `sj.StockOrderCond`）
+        - Return:
+            - List[str]
+                成員值，依成員名排序
+        """
+
+        return [
+            str(getattr(broker_enum, name).value)
+            for name in sorted(dir(broker_enum))
+            if not name.startswith("_")
+            and name not in ("value", "name")
+            and not inspect.isroutine(getattr(broker_enum, name))
+        ]
+
+    @staticmethod
+    def _to_broker_enum(member: Enum, broker_enum: Any) -> Any:
         """
         - Description:
             把本專案的 Enum 換成 Shioaji 的對應成員
@@ -366,20 +386,22 @@ class ShioajiOrderMapper:
             `Action` 是 `BUY`／`SELL`（另有回測用的 `OPEN`／`CLOSE`），
             Shioaji 是 `Buy`／`Sell`——依名稱查會對每一張單都拋出。
             而送上線路的本來就是值，值對了才會成交。
+            Shioaji 依值建構出來的成員與類別屬性**不是同一個物件**（`is` 不成立），
+            比較一律用 `==`。
 
             成員名與值是否同步，由 `tests/test_order_state_parity.py` 另外盯住。
 
             **查不到一律拋出，絕不退回別的值**。最具體的例子是借券：
-            鎖定版 shioaji 的 `StockOrderCond` 沒有 `SBLShort`，
+            shioaji 1.7.2 之前的 `StockOrderCond` 沒有 `SBLShort`，
             若在這裡退回 `ShortSelling`，送出去的會是一張用融券券源與成本成交的單，
             而回測那邊算的是議定費率——兩邊的成本從此對不上，且不會有任何錯誤訊息。
         - Parameters:
             - member: Enum
                 本專案的 Enum 成員
-            - broker_enum: Type[Enum]
+            - broker_enum: Any
                 Shioaji 對應的 Enum 類別
         - Return:
-            - Enum
+            - Any
                 Shioaji 的 Enum 成員
         - Raise:
             - ValueError
@@ -391,7 +413,7 @@ class ShioajiOrderMapper:
         except ValueError:
             raise ValueError(
                 f"shioaji 的 {broker_enum.__name__} 沒有 {member.name}（值 {member.value!r}）；"
-                f"目前支援 {[m.value for m in broker_enum]}。"
+                f"目前支援 {ShioajiOrderMapper.list_broker_enum_values(broker_enum)}。"
                 "這通常代表要先升級 shioaji（例如借券的 SBLShort），"
                 "**不可退回其他值**——那會送出一張條件不同的單"
             ) from None

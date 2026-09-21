@@ -2,7 +2,7 @@ import datetime
 import queue
 from typing import Any, Callable, List, Optional, Sequence, Set
 
-import shioaji.constant as sj_constant
+import shioaji as sj
 from loguru import logger
 
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
@@ -77,25 +77,31 @@ class ShioajiQuoteStream:
 
         股票與期貨各有自己的回呼（`*_stk_v1`／`*_fop_v1`），四個都要掛：
         少掛一個不會報錯，只會讓那一類行情安靜地收不到。
+
+        直接掛在 api 上：shioaji 1.7 起 `api.quote.*` 只是已棄用的轉接層。
         """
 
-        quote: Any = self.api.quote
-        quote.set_on_tick_stk_v1_callback(self._make_callback("tick_stk"))
-        quote.set_on_bidask_stk_v1_callback(self._make_callback("bidask_stk"))
-        quote.set_on_tick_fop_v1_callback(self._make_callback("tick_fop"))
-        quote.set_on_bidask_fop_v1_callback(self._make_callback("bidask_fop"))
+        self.api.set_on_tick_stk_v1_callback(self._make_callback("tick_stk"))
+        self.api.set_on_bidask_stk_v1_callback(self._make_callback("bidask_stk"))
+        self.api.set_on_tick_fop_v1_callback(self._make_callback("tick_fop"))
+        self.api.set_on_bidask_fop_v1_callback(self._make_callback("bidask_fop"))
         logger.info("行情回呼已註冊（tick／bidask × 股票／期貨）")
 
-    def _make_callback(self, kind: str) -> Callable[[Any, Any], None]:
+    def _make_callback(self, kind: str) -> Callable[[Any], None]:
         """
         產生一個只做入列的回呼
 
         **整個函式包 try**：回呼跑在券商的執行緒上，例外往上拋會讓那條執行緒死掉，
         之後所有行情靜默消失——而策略還在跑，只是再也收不到報價。
+
+        shioaji 1.7 的回呼只收行情物件一個參數（舊的 `(exchange, message)` 雙參數
+        仍相容但已棄用），交易所改從物件自身的 `exchange` 欄位取，入列格式維持
+        `(kind, exchange, message)` 不變。
         """
 
-        def callback(exchange: Any, message: Any) -> None:
+        def callback(message: Any) -> None:
             try:
+                exchange: Any = getattr(message, "exchange", None)
                 self.quote_queue.put((kind, exchange, message))
             except Exception as exc:
                 logger.opt(exception=True).error(f"行情入列失敗（{kind}）：{exc}")
@@ -126,16 +132,16 @@ class ShioajiQuoteStream:
                 f"{self.MAX_SUBSCRIPTIONS}；請收斂標的池或改用多個連線"
             )
 
-        quote_types: List[Any] = [sj_constant.QuoteType.Tick]
+        quote_types: List[Any] = [sj.QuoteType.Tick]
         if with_bidask:
-            quote_types.append(sj_constant.QuoteType.BidAsk)
+            quote_types.append(sj.QuoteType.BidAsk)
 
         for contract in contracts:
             for quote_type in quote_types:
-                self.api.quote.subscribe(
+                self.api.subscribe(
                     contract,
                     quote_type=quote_type,
-                    version=sj_constant.QuoteVersion.v1,
+                    version=sj.QuoteVersion.v1,
                 )
         self.subscribed |= codes
         logger.info(f"已訂閱 {len(codes)} 檔（累計 {len(self.subscribed)} 檔）")
@@ -143,16 +149,16 @@ class ShioajiQuoteStream:
     def unsubscribe(self, contracts: Sequence[Any], with_bidask: bool = True) -> None:
         """取消訂閱"""
 
-        quote_types: List[Any] = [sj_constant.QuoteType.Tick]
+        quote_types: List[Any] = [sj.QuoteType.Tick]
         if with_bidask:
-            quote_types.append(sj_constant.QuoteType.BidAsk)
+            quote_types.append(sj.QuoteType.BidAsk)
 
         for contract in contracts:
             for quote_type in quote_types:
-                self.api.quote.unsubscribe(
+                self.api.unsubscribe(
                     contract,
                     quote_type=quote_type,
-                    version=sj_constant.QuoteVersion.v1,
+                    version=sj.QuoteVersion.v1,
                 )
             self.subscribed.discard(str(getattr(contract, "code", "")))
 
@@ -233,8 +239,9 @@ class ShioajiQuoteStream:
             2. `intraday_odd`——盤中零股的 `volume` 單位是**股**不是張。
                混進來的話成交量差 1000 倍，門檻型訊號會整組失效。
 
-            **價格是 `Decimal`**（實測 2026-09-21）：一律轉 float 再進模型，
-            與回測的型別對齊；混用會在某些路徑靜默降精度。
+            **價格一律轉 float 再進模型**，與回測的型別對齊；混用會在某些路徑
+            靜默降精度。來源型別隨版本不同：shioaji 1.3.3 實測是 `Decimal`，
+            1.7 的型別檔寫的是 `str`，`float()` 兩者都能轉。
         - Parameters:
             - message: Any
                 Shioaji 的 `TickSTKv1`
@@ -283,7 +290,7 @@ class ShioajiQuoteStream:
 
     @classmethod
     def _as_float(cls, message: Any, field: str) -> float:
-        """必要的價格欄位轉 float；來源是 `Decimal`"""
+        """必要的價格欄位轉 float；來源可能是 `Decimal` 或數字字串"""
 
         return float(cls._require(message, field))
 
@@ -448,15 +455,21 @@ class ShioajiQuoteStream:
     @staticmethod
     def _split_code(code: str, contract: Optional[Any]) -> tuple:
         """
-        把合約代號拆成商品與到期月份
+        把合約代號拆成商品（分類代碼，Ex: TXF）與到期月份
 
-        優先用合約自己的 `symbol`（格式是 `{分類}{YYYYMM}`）；快照的 `code`
-        是另一組代碼（`TXFA6`），**跨年會重複**，拆不出可靠的月份。
+        快照的 `code` 是 `TXFA6` 這種月份字母碼，**跨年會重複**，拆不出可靠的月份；
+        一律改讀合約本身的欄位。shioaji 1.7 的合約沒有 `symbol`（舊版格式是
+        `{分類}{YYYYMM}`），分類改讀 `root`，月份讀 `delivery_month`。
         """
 
-        symbol: str = str(getattr(contract, "symbol", "") or code)
+        symbol: str = str(getattr(contract, "symbol", "") or "")
         if len(symbol) > 6 and symbol[-6:].isdigit():
             return (symbol[:-6], symbol[-6:])
 
+        product: str = str(
+            getattr(contract, "root", None)
+            or getattr(contract, "category", None)
+            or code
+        )
         delivery: Any = getattr(contract, "delivery_month", None)
-        return (symbol, str(delivery) if delivery else "")
+        return (product, str(delivery) if delivery else "")

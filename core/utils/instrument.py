@@ -35,9 +35,9 @@ class StockUtils:
         """Shioaji: get close price for stock on date"""
 
         tick: sj.Shioaji.ticks = api.ticks(
-            contract=api.Contracts.Stocks[stock_id],
+            contract=api.Contracts.Stocks.get(stock_id),
             date=date.strftime("%Y-%m-%d"),
-            query_type=sj.constant.TicksQueryType.LastCount,
+            query_type=sj.TicksQueryType.LastCount,
             last_cnt=1,
         )
 

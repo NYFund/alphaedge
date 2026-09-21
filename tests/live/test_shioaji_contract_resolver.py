@@ -8,57 +8,66 @@ from core.utils import SHIOAJI_FUTURES_CATEGORY
 """
 合約解析：查不到一律拋 `LookupError`，絕不回 `None`
 
-**假物件刻意複製 Shioaji 的真實語意**：`MultiContract.__getitem__` 的實作是
-`getattr(self, key, self._code2contract.get(key, None))`——查不到回 `None`
-而且從不拋例外。假物件若改成拋 KeyError，這份測試就驗不到真正會發生的那條路徑，
-而那正是舊 `OrderUtils` 把 `None` 傳給 `api.Order` 的成因。
+**假物件只提供 shioaji 1.7 合約容器明確定義的操作**：`get(code)`（查不到回 `None`）、
+以屬性取分類、迭代。舊版的 `keys()`、`_code2contract` 與合約的 `symbol` 在 1.7
+都不存在，假物件若仍提供它們，解析器誤用時這份測試也驗不出來。
 """
 
 
 class FakeContract:
-    """最小合約：只帶解析會用到的欄位"""
+    """最小合約：只帶解析會用到的欄位（1.7 的 `FuturesInfo` 以 `root` 表示分類）"""
 
     def __init__(
-        self, symbol: str, code: str = "", underlying_code: Optional[str] = None
+        self,
+        code: str,
+        delivery_month: str = "",
+        root: Optional[str] = None,
+        underlying_code: Optional[str] = None,
     ) -> None:
-        self.symbol: str = symbol
-        self.code: str = code or symbol
+        self.code: str = code
+        self.delivery_month: str = delivery_month
+        self.root: Optional[str] = root
         self.underlying_code: Optional[str] = underlying_code
 
 
 class FakeGroup:
-    """對應 Shioaji 的 `MultiContract`：以 symbol 當屬性、另有 code 索引"""
+    """對應 1.7 的 `ContractGroup`：可迭代，以 code 查詢"""
 
     def __init__(self, contracts: List[FakeContract]) -> None:
-        self._by_symbol: Dict[str, FakeContract] = {c.symbol: c for c in contracts}
-        self._by_code: Dict[str, FakeContract] = {c.code: c for c in contracts}
-
-    def __getitem__(self, key: str) -> Optional[FakeContract]:
-        """**查不到回 None**，與 Shioaji 相同"""
-
-        return self._by_symbol.get(key, self._by_code.get(key, None))
+        self._contracts: List[FakeContract] = contracts
 
     def __iter__(self) -> Iterator[FakeContract]:
-        return iter(self._by_symbol.values())
+        return iter(self._contracts)
 
-    def keys(self) -> Iterator[str]:
-        return iter(self._by_symbol)
+    def get(self, code: str) -> Optional[FakeContract]:
+        return next((c for c in self._contracts if c.code == code), None)
 
 
-class FakeProductContracts:
-    """對應 `ProductContracts`：slot 是分類／交易所，另有合併後的 code 索引"""
+class FakeCategory:
+    """
+    對應 1.7 的 `ContractCategory`
 
-    def __init__(
-        self, groups: Dict[str, FakeGroup], code_index: Optional[Dict[str, Any]] = None
-    ) -> None:
+    分類以屬性存取、迭代得到的是群組；`get()` 跨群組以 code 查，查不到回 None
+    """
+
+    def __init__(self, groups: Dict[str, FakeGroup]) -> None:
         self._groups: Dict[str, FakeGroup] = groups
-        self._code_index: Dict[str, Any] = code_index or {}
 
-    def __getitem__(self, key: str) -> Any:
-        return self._groups.get(key, self._code_index.get(key, None))
+    def __getattr__(self, name: str) -> FakeGroup:
+        groups: Dict[str, FakeGroup] = self.__dict__.get("_groups", {})
+        if name not in groups:
+            raise AttributeError(name)
+        return groups[name]
 
-    def keys(self) -> Iterator[str]:
-        return iter(list(self._groups) + ["_code2contract"])
+    def __iter__(self) -> Iterator[FakeGroup]:
+        return iter(self._groups.values())
+
+    def get(self, code: str) -> Optional[FakeContract]:
+        for group in self._groups.values():
+            found: Optional[FakeContract] = group.get(code)
+            if found is not None:
+                return found
+        return None
 
 
 class FakeApi:
@@ -68,28 +77,43 @@ class FakeApi:
 
 @pytest.fixture
 def api() -> FakeApi:
-    """一檔上市、一檔上櫃、大台兩個月份、兩檔股期"""
+    """一檔上市、一檔上櫃、大台兩個月份與連續月別名、兩檔股期"""
 
-    tsmc: FakeContract = FakeContract(symbol="TSE2330", code="2330")
-    otc: FakeContract = FakeContract(symbol="OTC6488", code="6488")
-    stocks: FakeProductContracts = FakeProductContracts(
-        groups={"TSE": FakeGroup([tsmc]), "OTC": FakeGroup([otc])},
-        code_index={"2330": tsmc, "6488": otc},
+    stocks: FakeCategory = FakeCategory(
+        {
+            "TSE": FakeGroup([FakeContract(code="2330")]),
+            "OTC": FakeGroup([FakeContract(code="6488")]),
+        }
     )
-
-    futures: FakeProductContracts = FakeProductContracts(
-        groups={
+    futures: FakeCategory = FakeCategory(
+        {
             "TXF": FakeGroup(
                 [
-                    FakeContract(symbol="TXF202601", code="TXFA6"),
-                    FakeContract(symbol="TXF202602", code="TXFB6"),
+                    FakeContract(code="TXFA6", delivery_month="202601", root="TXF"),
+                    FakeContract(code="TXFB6", delivery_month="202602", root="TXF"),
+                    # 連續月別名：與 202601 同月份，解析時要排除
+                    FakeContract(code="TXFR1", delivery_month="202601", root="TXF"),
                 ]
             ),
             "CDF": FakeGroup(
-                [FakeContract(symbol="CDF202601", code="CDFA6", underlying_code="2330")]
+                [
+                    FakeContract(
+                        code="CDFA6",
+                        delivery_month="202601",
+                        root="CDF",
+                        underlying_code="2330",
+                    )
+                ]
             ),
             "DHF": FakeGroup(
-                [FakeContract(symbol="DHF202601", code="DHFA6", underlying_code="2317")]
+                [
+                    FakeContract(
+                        code="DHFA6",
+                        delivery_month="202601",
+                        root="DHF",
+                        underlying_code="2317",
+                    )
+                ]
             ),
         }
     )
@@ -108,12 +132,12 @@ def test_resolve_stock_covers_listed_and_otc(
     """
     上市與上櫃一次查完
 
-    `api.Contracts.Stocks` 這一層已把各交易所合併成一份 code 索引，
+    `api.Contracts.Stocks` 這一層已把各交易所合併，以 code 查一次即可，
     不必自己依序試 TSE、OTC——依序試的寫法會在新增交易所（興櫃）時漏掉。
     """
 
-    assert resolver.resolve_stock("2330").symbol == "TSE2330"
-    assert resolver.resolve_stock("6488").symbol == "OTC6488"
+    assert resolver.resolve_stock("2330").code == "2330"
+    assert resolver.resolve_stock("6488").code == "6488"
 
 
 def test_missing_stock_raises_instead_of_returning_none(
@@ -158,11 +182,11 @@ def test_batch_resolution_returns_a_symbol_keyed_map(
 
 
 # === 指數期貨 ===
-def test_resolve_index_futures_uses_symbol_not_code(
+def test_resolve_index_futures_matches_delivery_month_not_code(
     resolver: ShioajiContractResolver,
 ) -> None:
     """
-    以 `{分類}{YYYYMM}` 查，不用 `code`
+    以 `delivery_month` 比對到期月份，不用 `code`
 
     期貨的 `code`（`TXFA6`＝月份字母 ＋ 年末碼）**跨年會重複**，
     拿它當鍵會在隔年查到錯的合約，而且是一個合法的合約物件，不會報錯。
@@ -170,8 +194,22 @@ def test_resolve_index_futures_uses_symbol_not_code(
 
     contract: Any = resolver.resolve_index_futures("TX", "202601")
 
-    assert contract.symbol == "TXF202601"
+    assert contract.code == "TXFA6"
     assert SHIOAJI_FUTURES_CATEGORY["TX"] == "TXF"
+
+
+def test_continuous_alias_is_not_resolved_as_the_month(
+    resolver: ShioajiContractResolver,
+) -> None:
+    """
+    連續月別名（`TXFR1`）不可當成該月份的合約
+
+    它與當月合約的 `delivery_month` 相同；不排除的話同一月份對到兩張，
+    取到哪張由迭代順序決定。
+    """
+
+    assert resolver.resolve_index_futures("TX", "202602").code == "TXFB6"
+    assert resolver.resolve_index_futures("TX", "202601").code == "TXFA6"
 
 
 def test_unregistered_product_lists_the_known_ones(
@@ -192,7 +230,7 @@ def test_unregistered_product_lists_the_known_ones(
 def test_missing_expiry_raises(resolver: ShioajiContractResolver) -> None:
     """該月份不存在（已到期或尚未掛牌）也要拋出"""
 
-    with pytest.raises(LookupError, match="TXF209912"):
+    with pytest.raises(LookupError, match="TXF 209912"):
         resolver.resolve_index_futures("TX", "209912")
 
 
@@ -221,7 +259,7 @@ def test_stock_futures_index_is_cached(
     """
 
     first: Dict[str, str] = resolver.build_stock_futures_index()
-    api.Contracts.Futures = FakeProductContracts(groups={})  # 掃不到任何東西
+    api.Contracts.Futures = FakeCategory({})  # 掃不到任何東西
     second: Dict[str, str] = resolver.build_stock_futures_index()
 
     assert second is first
@@ -233,26 +271,15 @@ def test_force_rebuild_ignores_the_cache(
     """合約檔換日更新後要能重建"""
 
     resolver.build_stock_futures_index()
-    api.Contracts.Futures = FakeProductContracts(groups={})
+    api.Contracts.Futures = FakeCategory({})
 
     assert resolver.build_stock_futures_index(force=True) == {}
-
-
-def test_index_skips_internal_slots(resolver: ShioajiContractResolver) -> None:
-    """
-    掃描要略過底線開頭的內部 slot
-
-    `keys()` 會吐出 `_code2contract` 這類內部欄位，拿它當分類去查會取到
-    一個 dict 而不是合約群組。
-    """
-
-    assert resolver.build_stock_futures_index() == {"2330": "CDF", "2317": "DHF"}
 
 
 def test_resolve_stock_futures(resolver: ShioajiContractResolver) -> None:
     """以標的代號 ＋ 月份取得股期合約"""
 
-    assert resolver.resolve_stock_futures("2330", "202601").symbol == "CDF202601"
+    assert resolver.resolve_stock_futures("2330", "202601").code == "CDFA6"
 
 
 def test_stock_without_futures_raises(resolver: ShioajiContractResolver) -> None:
@@ -270,13 +297,13 @@ def test_duplicate_underlying_keeps_the_first_and_warns(api: FakeApi) -> None:
     不該由掃描順序決定下的是哪一種契約——兩者的乘數差 20 倍。
     """
 
-    api.Contracts.Futures = FakeProductContracts(
-        groups={
+    api.Contracts.Futures = FakeCategory(
+        {
             "CDF": FakeGroup(
-                [FakeContract(symbol="CDF202601", underlying_code="2330")]
+                [FakeContract(code="CDFA6", root="CDF", underlying_code="2330")]
             ),
             "CDS": FakeGroup(
-                [FakeContract(symbol="CDS202601", underlying_code="2330")]
+                [FakeContract(code="CDSA6", root="CDS", underlying_code="2330")]
             ),
         }
     )

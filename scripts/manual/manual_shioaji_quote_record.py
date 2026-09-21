@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from loguru import logger
-from shioaji import stream_data_type
 
 from core.broker.rate_limiter import RateLimiter
+from core.broker.tw.quote_replay import RECORDED_FIELD_TYPES
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.broker.tw.shioaji_session import ShioajiSession
 from core.config.settings import now_live
@@ -64,16 +64,13 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# 欄位名取自**安裝的套件本身**（`shioaji.stream_data_type` 的型別標註），
-# 不是外部文件：版本升級時這份清單會跟著動，而外部文件不會。
+# 欄位名取自 `RECORDED_FIELD_TYPES`，與重放端共用同一份，錄得下來的就還原得回去。
 #
-# 執行期真正拿到的是 `shioaji.backend.solace.*` 的 C 擴充物件——它
-# **沒有 `__dict__`、`dict()`、`model_dump()`，連 `dir()` 都是空的**，
-# 只能照名字 `getattr`。第一次錄製就是栽在這裡：447 筆全錄成 `{}`
+# 執行期真正拿到的是原生擴充物件：shioaji 1.3.3 的 C 擴充物件**沒有 `__dict__`、
+# `dict()`、`model_dump()`，連 `dir()` 都是空的**，只能照名字 `getattr`。
+# 第一次錄製就是栽在這裡：447 筆全錄成 `{}`
 _STUB_FIELDS: Dict[str, Tuple[str, ...]] = {
-    name: tuple(getattr(cls, "__annotations__", {}) or ())
-    for name, cls in vars(stream_data_type).items()
-    if isinstance(cls, type)
+    name: tuple(fields) for name, fields in RECORDED_FIELD_TYPES.items()
 }
 
 
@@ -82,7 +79,7 @@ def to_plain(message: Any) -> Any:
     把回呼訊息轉成可序列化的結構
 
     **依序試四種取法而不是只試一種**：pydantic 的 `model_dump()`／`dict()`、
-    一般物件的 `__dict__`，最後才是照套件標註的欄位名逐一 `getattr`。
+    一般物件的 `__dict__`，最後才是照 `RECORDED_FIELD_TYPES` 的欄位名逐一 `getattr`。
     硬寫一種，升版換了實作就整份錄製變成空的——而錄製本來就是為了升版時能比對。
     """
 
@@ -166,7 +163,7 @@ def main() -> int:
 
         contracts: List[Any] = []
         for symbol in symbols:
-            contract: Any = session.api.Contracts.Stocks[symbol]
+            contract: Any = session.api.Contracts.Stocks.get(symbol)
             if contract is None:
                 logger.warning(f"查不到合約 {symbol}，略過")
                 continue

@@ -5,7 +5,7 @@ from typing import Optional
 import pandas as pd
 import shioaji as sj
 from loguru import logger
-from shioaji.data import Ticks
+from shioaji import Ticks
 
 from core.config import TICK_DOWNLOADS_PATH
 from core.pipeline.shared.base_crawler import BaseDataCrawler
@@ -58,7 +58,7 @@ class StockTickCrawler(BaseDataCrawler):
 
         try:
             ticks: Ticks = api.ticks(
-                contract=api.Contracts.Stocks[code], date=date.isoformat()
+                contract=api.Contracts.Stocks.get(code), date=date.isoformat()
             )
             tick_df: pd.DataFrame = pd.DataFrame({**ticks})
 

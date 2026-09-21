@@ -4,16 +4,13 @@ from typing import List, Optional, Union
 import numpy as np
 import pandas as pd
 import shioaji as sj
-from shioaji.order import Trade
-from shioaji.position import FutureProfitLoss, StockProfitLoss
+from shioaji import FutureProfitLoss, StockProfitLoss, Trade
 
 from .constant import Action, Status
 
 
 class ShioajiAccount:
     """Shioaji API Account Tool"""
-
-    CONTRACTS_TIMEOUT_MS: int = 30000  # API 合約載入逾時（毫秒）
 
     # API login
     @staticmethod
@@ -26,11 +23,7 @@ class ShioajiAccount:
 
         try:
             print("API logging in...")
-            api.login(
-                api_key=api_key,
-                secret_key=api_secret_key,
-                contracts_timeout=ShioajiAccount.CONTRACTS_TIMEOUT_MS,
-            )
+            api.login(api_key=api_key, secret_key=api_secret_key)
             print("API logging in successfully!")
             return api
         except Exception as e:
@@ -53,7 +46,7 @@ class ShioajiAccount:
 
         balance: float = api.account_balance().acc_balance
         settlements: pd.DataFrame = pd.DataFrame(
-            [s.__dict__ for s in api.settlements(api.stock_account)]
+            [s.dict() for s in api.settlements(api.stock_account)]
         )
         total_capital: float = balance + settlements.loc[1:2, "amount"].sum()
         return total_capital
@@ -66,7 +59,7 @@ class ShioajiAccount:
             api
         )  # 帳戶可用的總資金
         settlements: pd.DataFrame = pd.DataFrame(
-            [s.__dict__ for s in api.settlements(api.stock_account)]
+            [s.dict() for s in api.settlements(api.stock_account)]
         )
         capital_quota: float = (
             capital + settlements.loc[2, "amount"]
@@ -81,7 +74,7 @@ class ShioajiAccount:
         """計算已實現損益"""
 
         pnl_df: pd.DataFrame = pd.DataFrame(
-            s.__dict__ for s in api.list_profit_loss(api.stock_account)
+            s.dict() for s in api.list_profit_loss(api.stock_account)
         )
         realized_pnl: int = round(pnl_df["pnl"].sum()) if len(pnl_df) > 0 else 0
         return realized_pnl
@@ -91,7 +84,7 @@ class ShioajiAccount:
         """計算未實現損益"""
 
         positions_df: pd.DataFrame = pd.DataFrame(
-            s.__dict__ for s in api.list_positions(api.stock_account)
+            s.dict() for s in api.list_positions(api.stock_account)
         )
         unrealized_pnl: int = (
             round(positions_df["pnl"].sum()) if len(positions_df) > 0 else 0

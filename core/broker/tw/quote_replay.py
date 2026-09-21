@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
-from shioaji import stream_data_type
 
 from core.models import BaseQuote
 
@@ -19,17 +18,101 @@ from core.models import BaseQuote
 **型別要照著還原**：JSON 沒有 `Decimal` 與 `datetime`，錄製時它們被序列化成字串。
 直接把字串餵進轉換層，`float('4930')` 雖然會過，但 `datetime` 那一欄會當場炸——
 而更糟的情況是某天有人加了 `.get()` 預設值，於是重放靜靜地產出錯的報價。
-型別來源是**安裝的套件本身**（`stream_data_type` 的標註），不是寫死的清單。
+型別表寫死在本模組（`RECORDED_FIELD_TYPES`），描述的是**錄製檔的格式**，不是某一版
+shioaji 的型別：舊版從 `shioaji.stream_data_type` 的標註動態讀，但 1.7 起那個模組
+只剩轉接層、讀不到任何標註，重放的 `datetime` 就停在字串，轉換層當場炸。
+錄製檔一旦寫下就不會變，型別表也不該跟著安裝的套件浮動。
 """
 
-# 欄位 → 型別名。跟著安裝的 shioaji 走，升版時自動對齊
-_FIELD_TYPES: Dict[str, Dict[str, str]] = {
-    name: {
-        field: getattr(annotation, "__name__", str(annotation))
-        for field, annotation in (getattr(cls, "__annotations__", {}) or {}).items()
-    }
-    for name, cls in vars(stream_data_type).items()
-    if isinstance(cls, type)
+_TICK_STK_FIELDS: Dict[str, str] = {
+    "code": "str",
+    "datetime": "datetime",
+    "open": "Decimal",
+    "avg_price": "Decimal",
+    "close": "Decimal",
+    "high": "Decimal",
+    "low": "Decimal",
+    "amount": "Decimal",
+    "total_amount": "Decimal",
+    "volume": "int",
+    "total_volume": "int",
+    "tick_type": "int",
+    "chg_type": "int",
+    "price_chg": "Decimal",
+    "pct_chg": "Decimal",
+    "bid_side_total_vol": "int",
+    "ask_side_total_vol": "int",
+    "bid_side_total_cnt": "int",
+    "ask_side_total_cnt": "int",
+    "closing_oddlot_shares": "int",
+    "fixed_trade_vol": "int",
+    "suspend": "bool",
+    "simtrade": "bool",
+    "intraday_odd": "bool",
+}
+
+_BIDASK_STK_FIELDS: Dict[str, str] = {
+    "code": "str",
+    "datetime": "datetime",
+    "bid_price": "List[Decimal]",
+    "bid_volume": "List[int]",
+    "diff_bid_vol": "List[int]",
+    "ask_price": "List[Decimal]",
+    "ask_volume": "List[int]",
+    "diff_ask_vol": "List[int]",
+    "suspend": "bool",
+    "simtrade": "bool",
+    "intraday_odd": "bool",
+}
+
+_TICK_FOP_FIELDS: Dict[str, str] = {
+    "code": "str",
+    "datetime": "datetime",
+    "open": "Decimal",
+    "underlying_price": "Decimal",
+    "bid_side_total_vol": "int",
+    "ask_side_total_vol": "int",
+    "avg_price": "Decimal",
+    "close": "Decimal",
+    "high": "Decimal",
+    "low": "Decimal",
+    "amount": "Decimal",
+    "total_amount": "Decimal",
+    "volume": "int",
+    "total_volume": "int",
+    "tick_type": "int",
+    "chg_type": "int",
+    "price_chg": "Decimal",
+    "pct_chg": "Decimal",
+    "simtrade": "bool",
+}
+
+_BIDASK_FOP_FIELDS: Dict[str, str] = {
+    "code": "str",
+    "datetime": "datetime",
+    "bid_total_vol": "int",
+    "ask_total_vol": "int",
+    "bid_price": "List[Decimal]",
+    "bid_volume": "List[int]",
+    "diff_bid_vol": "List[int]",
+    "ask_price": "List[Decimal]",
+    "ask_volume": "List[int]",
+    "diff_ask_vol": "List[int]",
+    "first_derived_bid_price": "Decimal",
+    "first_derived_ask_price": "Decimal",
+    "first_derived_bid_vol": "int",
+    "first_derived_ask_vol": "int",
+    "underlying_price": "Decimal",
+    "simtrade": "bool",
+}
+
+# 訊息類別 → 欄位 → 型別名。欄位與型別取自 shioaji 1.3.3 的 `stream_data_type` 標註
+# （既有錄製檔的格式），錄製腳本也以此決定要錄哪些欄位
+RECORDED_FIELD_TYPES: Dict[str, Dict[str, str]] = {
+    "TickSTKv1": _TICK_STK_FIELDS,
+    "BidAskSTKv1": _BIDASK_STK_FIELDS,
+    "TickFOPv1": _TICK_FOP_FIELDS,
+    "BidAskFOPv1": _BIDASK_FOP_FIELDS,
 }
 
 # 錄製時的 `kind` → 對應的訊息類別
@@ -46,8 +129,8 @@ class RecordedMessage:
     - Description:
         錄製下來的一筆行情，形狀與券商推播的物件一致
 
-        **以 `__getattr__` 提供欄位而不是先塞進 `__dict__`**：真品是 C 擴充物件，
-        沒有 `__dict__`、`dict()`、`model_dump()`，連 `dir()` 都是空的。
+        **以 `__getattr__` 提供欄位而不是先塞進 `__dict__`**：真品是原生擴充物件，
+        沒有 `__dict__`、`dict()`、`model_dump()`，只能照欄位名取值。
         重放物件若長得比真品「好用」，轉換層就可能在重放時走到一條真實環境
         走不到的路。
     """
@@ -66,7 +149,7 @@ class RecordedMessage:
         # 底線開頭：`__getattr__` 只在一般查找失敗時才被呼叫，
         # 這兩個屬性要走正常查找，否則會無限遞迴
         object.__setattr__(self, "_payload", payload)
-        object.__setattr__(self, "_types", _FIELD_TYPES.get(type_name, {}))
+        object.__setattr__(self, "_types", RECORDED_FIELD_TYPES.get(type_name, {}))
 
     def __getattr__(self, name: str) -> Any:
         payload: Dict[str, Any] = object.__getattribute__(self, "_payload")

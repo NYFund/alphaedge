@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 import shioaji as sj
@@ -20,9 +20,9 @@ from core.utils.log_manager import LogManager
    `MXF`；電子期貨是 `TE` vs `EXF`。對照表 `SHIOAJI_FUTURES_CATEGORY` 是
    2026-09-02 實際登入列出契約逐一核對的，**不是從命名規則推的**。
 
-2. **要指定到「哪一個到期月」**：股票的 `api.Contracts.Stocks["2330"]` 一個代號
-   就定位得了；期貨必須給 `symbol`（`{分類}{YYYYMM}`，例如 `TXF202609`），
-   否則不知道要哪一個契約。
+2. **要指定到「哪一個到期月」**：股票的 `api.Contracts.Stocks.get("2330")` 一個代號
+   就定位得了；期貨要在分類裡比對 `delivery_month`（`YYYYMM`）找出那一個契約。
+   契約的 `code`（`TXFI6`）跨年會重複，不能拿來定位月份。
 
 3. **日盤與夜盤在同一天的資料裡**：Shioaji 回的 ticks 涵蓋整個交易日
    （含前一日 15:00 開始的夜盤），時段的切分要靠時間戳，見
@@ -51,6 +51,28 @@ class FuturesTickCrawler(BaseDataCrawler):
     def crawl(self) -> None:
         """Crawl Tick Data"""
         pass
+
+    @staticmethod
+    def _find_contract(api: sj.Shioaji, category: str, expiry: str) -> Optional[Any]:
+        """
+        在分類裡找到期月份相符的契約；查不到回 None
+
+        連續月別名（`TXFR1`／`TXFR2`）與當月契約同月份，要排除，
+        否則抓到的是別名而不是實際月份的那一檔。
+        """
+
+        group: Optional[Any] = getattr(api.Contracts.Futures, category, None)
+        if group is None:
+            return None
+        return next(
+            (
+                contract
+                for contract in group
+                if str(getattr(contract, "delivery_month", "")) == expiry
+                and not str(getattr(contract, "code", "")).endswith(("R1", "R2"))
+            ),
+            None,
+        )
 
     @staticmethod
     def to_shioaji_symbol(product: str, expiry: str) -> Optional[str]:
@@ -121,10 +143,7 @@ class FuturesTickCrawler(BaseDataCrawler):
 
         category: str = SHIOAJI_FUTURES_CATEGORY[product]
 
-        try:
-            contract = api.Contracts.Futures[category][symbol]
-        except (KeyError, TypeError):
-            contract = None
+        contract: Optional[Any] = self._find_contract(api, category, expiry)
 
         if contract is None:
             # 契約已到期或尚未掛牌時 Shioaji 查不到它，那是正常狀態

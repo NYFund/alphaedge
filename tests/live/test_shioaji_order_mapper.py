@@ -1,7 +1,7 @@
 from typing import Any, Optional
 
 import pytest
-import shioaji.constant as sj_constant
+import shioaji as sj
 
 from core.broker.tw.shioaji_order_mapper import ShioajiOrderMapper
 from core.models import FuturesOrder, StockOrder
@@ -142,12 +142,12 @@ def test_short_without_method_raises() -> None:
         )
 
 
-def test_sbl_raises_and_does_not_fall_back(mapper: ShioajiOrderMapper) -> None:
+def test_sbl_is_sent_as_sbl_not_short_selling(mapper: ShioajiOrderMapper) -> None:
     """
-    借券在鎖定版 shioaji 送不出去時要拋出，**不可退回融券**
+    借券要以 `SBLShort` 送出，**不可變成融券**
 
-    退回 `ShortSelling` 會送出一張用融券券源與成本成交的單，而回測算的是議定費率——
-    兩邊的成本從此對不上，且不會有任何錯誤訊息。
+    shioaji 1.7.2 起支援借券委託條件。融券與借券的券源與成本都不同，
+    回測算的是議定費率，送成融券的話兩邊成本從此對不上，且不會有任何錯誤訊息。
     """
 
     order: StockOrder = make_stock_order(
@@ -156,12 +156,45 @@ def test_sbl_raises_and_does_not_fall_back(mapper: ShioajiOrderMapper) -> None:
         short_method=ShortMethod.SBL,
     )
 
+    converted: Any = mapper.to_shioaji_stock_order(order)
+
+    assert converted.order_cond == sj.StockOrderCond.SBLShort
+    assert converted.daytrade_short is False
+
+
+class BrokerCondWithoutSBL:
+    """
+    缺少 `SBLShort` 的券商 Enum 替身（shioaji 1.7.2 之前就是這樣）
+
+    與 shioaji 1.7 的 Enum 同形狀：成員是類別屬性、依值呼叫，查不到拋 `ValueError`
+    """
+
+    Cash = sj.StockOrderCond.Cash
+    ShortSelling = sj.StockOrderCond.ShortSelling
+
+    def __new__(cls, value: str) -> Any:
+        if value in (cls.Cash, cls.ShortSelling):
+            return value
+        raise ValueError(f"Invalid StockOrderCond: {value}")
+
+
+def test_missing_broker_member_raises_and_does_not_fall_back() -> None:
+    """
+    券商 Enum 缺少對應成員時要拋出，**不可退回其他值**
+
+    借券在舊版 shioaji 就是這樣送不出去；退回 `ShortSelling` 會送出一張用融券券源
+    與成本成交的單。錯誤訊息要列出目前支援的值，並指出升級 shioaji 這條路。
+    """
+
     with pytest.raises(ValueError) as error:
-        mapper.to_shioaji_stock_order(order)
+        ShioajiOrderMapper._to_broker_enum(
+            StockOrderCond.SBLShort, BrokerCondWithoutSBL
+        )
 
     message: str = str(error.value)
     assert "SBLShort" in message
     assert "升級 shioaji" in message
+    assert "['Cash', 'ShortSelling']" in message
 
 
 # === 價格 ===
@@ -215,7 +248,7 @@ def test_market_order_sends_zero_price(mapper: ShioajiOrderMapper) -> None:
     )
 
     assert converted.price == 0.0
-    assert converted.price_type is sj_constant.StockPriceType.MKT
+    assert converted.price_type == sj.StockPriceType.MKT
 
 
 def test_missing_price_type_raises(mapper: ShioajiOrderMapper) -> None:
@@ -267,7 +300,7 @@ def test_common_lot_quantity_is_in_lots(mapper: ShioajiOrderMapper) -> None:
     converted: Any = mapper.to_shioaji_stock_order(make_stock_order(volume=3))
 
     assert converted.quantity == 3
-    assert converted.order_lot is sj_constant.StockOrderLot.Common
+    assert converted.order_lot == sj.StockOrderLot.Common
 
 
 def test_intraday_odd_rejects_lot_sized_quantity(mapper: ShioajiOrderMapper) -> None:
@@ -350,11 +383,11 @@ def test_action_converts_by_value_not_by_name(mapper: ShioajiOrderMapper) -> Non
     Shioaji 是 `Buy`／`Sell`。依名稱查會對每一張單都拋出，而送上線路的本來就是值。
     """
 
-    assert Action.BUY.name != sj_constant.Action.Buy.name
-    assert Action.BUY.value == sj_constant.Action.Buy.value
+    assert Action.BUY.name == "BUY"
+    assert Action.BUY.value == sj.Action.Buy.value == "Buy"
 
     converted: Any = mapper.to_shioaji_stock_order(make_stock_order(action=Action.BUY))
-    assert converted.action is sj_constant.Action.Buy
+    assert converted.action == sj.Action.Buy
 
 
 def test_order_type_is_carried_over(mapper: ShioajiOrderMapper) -> None:
@@ -363,7 +396,7 @@ def test_order_type_is_carried_over(mapper: ShioajiOrderMapper) -> None:
     order: StockOrder = make_stock_order()
     order.order_type = OrderType.IOC
 
-    assert mapper.to_shioaji_stock_order(order).order_type is sj_constant.OrderType.IOC
+    assert mapper.to_shioaji_stock_order(order).order_type == sj.OrderType.IOC
 
 
 # === 期貨 ===
@@ -382,9 +415,9 @@ def test_futures_order_conversion() -> None:
 
     converted: Any = mapper.to_shioaji_futures_order(order, octype=FuturesOCType.Cover)
 
-    assert converted.action is sj_constant.Action.Sell
+    assert converted.action == sj.Action.Sell
     assert converted.quantity == 2
-    assert converted.octype is sj_constant.FuturesOCType.Cover
+    assert converted.octype == sj.FuturesOCType.Cover
 
 
 def test_futures_auto_octype_is_rejected() -> None:
@@ -418,7 +451,7 @@ def test_futures_range_market_price_type() -> None:
 
     converted: Any = mapper.to_shioaji_futures_order(order, octype=FuturesOCType.New)
 
-    assert converted.price_type is sj_constant.FuturesPriceType.MKP
+    assert converted.price_type == sj.FuturesPriceType.MKP
     assert converted.price == 0.0
 
 

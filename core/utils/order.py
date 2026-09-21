@@ -1,6 +1,5 @@
 import shioaji as sj
-from shioaji.contracts import Contract
-from shioaji.order import Order
+from shioaji import Contract, Order
 
 
 class OrderUtils:
