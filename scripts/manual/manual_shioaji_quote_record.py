@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
 from loguru import logger
+from shioaji import stream_data_type
 
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
@@ -63,26 +64,48 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 欄位名取自**安裝的套件本身**（`shioaji.stream_data_type` 的型別標註），
+# 不是外部文件：版本升級時這份清單會跟著動，而外部文件不會。
+#
+# 執行期真正拿到的是 `shioaji.backend.solace.*` 的 C 擴充物件——它
+# **沒有 `__dict__`、`dict()`、`model_dump()`，連 `dir()` 都是空的**，
+# 只能照名字 `getattr`。第一次錄製就是栽在這裡：447 筆全錄成 `{}`
+_STUB_FIELDS: Dict[str, Tuple[str, ...]] = {
+    name: tuple(getattr(cls, "__annotations__", {}) or ())
+    for name, cls in vars(stream_data_type).items()
+    if isinstance(cls, type)
+}
+
+
 def to_plain(message: Any) -> Any:
     """
     把回呼訊息轉成可序列化的結構
 
-    Shioaji v1 的訊息是 pydantic 模型，**依序試幾種取法而不是只試一種**：
-    版本之間 `dict()` 與 `model_dump()` 換過，硬寫一種會在升版時整份錄製變成
-    一堆字串，而錄製本來就是為了升版時能比對。
+    **依序試四種取法而不是只試一種**：pydantic 的 `model_dump()`／`dict()`、
+    一般物件的 `__dict__`，最後才是照套件標註的欄位名逐一 `getattr`。
+    硬寫一種，升版換了實作就整份錄製變成空的——而錄製本來就是為了升版時能比對。
     """
 
     for attribute in ("model_dump", "dict"):
         method: Any = getattr(message, attribute, None)
         if callable(method):
             try:
-                return method()
+                extracted: Any = method()
+                if extracted:
+                    return extracted
             except Exception:
                 continue
 
-    if hasattr(message, "__dict__"):
+    if getattr(message, "__dict__", None):
         return dict(vars(message))
-    return str(message)
+
+    fields: Tuple[str, ...] = _STUB_FIELDS.get(type(message).__name__, ())
+    if fields:
+        return {name: getattr(message, name, None) for name in fields}
+
+    # 連欄位名都對不上時**保留 repr**：空 dict 會讓人以為「這類訊息沒有內容」，
+    # 而真正的問題是取法不對——那正是第一次錄製浪費掉的原因
+    return {"__unparsed_repr__": repr(message), "__type__": type(message).__name__}
 
 
 def describe_fields(samples: List[Dict[str, Any]]) -> List[str]:
