@@ -365,6 +365,37 @@ def test_no_retry_when_the_window_has_no_trading_day() -> None:
     assert len(attempts) == 1
 
 
+def test_today_without_chips_is_not_treated_as_blocked() -> None:
+    """
+    當天的籌碼還沒公布不算被擋：不重試、不記成缺口
+
+    同一個 job 裡行情已入庫、籌碼尚未公布時，今天以前會被判成「該有資料卻沒拿到」，
+    白等兩次重試（30、60 秒）後拋 `DataLoadError`。昨天以前才是該有資料的日子。
+    """
+
+    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+
+    today: datetime.date = datetime.date(2026, 9, 21)
+    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    updater.today = lambda: today
+
+    class StubPriceAPI:
+        dao = type("DAO", (), {"table_exists": staticmethod(lambda: True)})()
+
+        def get_trading_days(self, start, end):
+            return [
+                day
+                for day in (today - datetime.timedelta(days=3), today)
+                if start <= day <= end
+            ]
+
+    updater.price_api = StubPriceAPI()
+
+    assert updater.has_trading_days(today, today) is False
+    # 區間含昨天以前的交易日時照舊判定為該有資料
+    assert updater.has_trading_days(today - datetime.timedelta(days=5), today) is True
+
+
 def test_institutional_start_date_is_clamped_to_source_earliest() -> None:
     """
     **三大法人的歷史只回溯到 2023-09-04**（2026-09-05 實測）

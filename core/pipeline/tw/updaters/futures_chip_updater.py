@@ -414,15 +414,29 @@ class FuturesChipUpdater(BaseDataUpdater):
         該區間內是否有交易日（依 `futures_price_daily`）
 
         **這是「被擋」與「真的沒資料」的唯一判準**。行情表本身還沒建立時
-        一律回 True（寧可多重試幾次，也不要把被擋當成沒資料）。
+        一律回 True（寧可多重試幾次，也不要把被擋當成沒資料）；區間只到今天時
+        一律回 False（今天的籌碼可能還沒公布）。
 
         舊版以 `except Exception: return True` 表達「表不存在」，連 `database is locked`
         也一起吞；改為只判斷表存不存在，其他錯誤往外拋。
         """
 
+        # **今天不算**：同一個 job 裡行情已入庫、籌碼還沒公布時，今天會被判成
+        # 「該有資料卻沒拿到」，白等兩次重試後拋 `DataLoadError`——而盤中與
+        # 收盤後不久拿不到籌碼是正常狀態。昨天以前才是該有資料的日子
+        end: datetime.date = min(end_date, self.today() - datetime.timedelta(days=1))
+        if start_date > end:
+            return False
+
         if not self.price_api.dao.table_exists():
             return True
-        return bool(self.price_api.get_trading_days(start_date, end_date))
+        return bool(self.price_api.get_trading_days(start_date, end))
+
+    @staticmethod
+    def today() -> datetime.date:
+        """今天的日期；抽成方法讓測試能固定「今天」"""
+
+        return datetime.date.today()
 
     @staticmethod
     def split_months(
