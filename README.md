@@ -195,28 +195,30 @@ AlphaEdge/
 
 #### 方式 1：本機 Python（推薦）
 
-**步驟 1：建立虛擬環境並安裝**
+**步驟 1：安裝 uv 並建立環境**
+
+相依由 [uv](https://docs.astral.sh/uv/) 管理：`pyproject.toml` 宣告相依，`uv.lock` 鎖定每個套件的精確版本，
+本機、CI、Docker 都從同一份 lock 安裝。
 
 macOS / Linux：
 
 ```bash
-python3 -m venv .venv                       # 建立虛擬環境
-source .venv/bin/activate                   # 啟用虛擬環境
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt   # 安裝相依套件與專案本身
+brew install uv          # 或 curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync                  # 建立 .venv 並安裝相依與專案本身（Python 版本依 .python-version）
+source .venv/bin/activate
 ```
 
-Windows（PowerShell 或 CMD）：
+Windows（PowerShell）：
 
 ```powershell
-python -m venv .venv
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+uv sync
 .venv\Scripts\activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
 ```
 
-`requirements.txt` 最後一行是 `-e .`，所以同一個指令會一併把專案裝好，之後在任何目錄都能
-import `core`／`tasks`／`tests`。之後每開一個新的終端機都要先啟用虛擬環境；要離開時執行 `deactivate`。
+專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`tasks`／`tests`。
+之後每開一個新的終端機都要先啟用虛擬環境（要離開時執行 `deactivate`）；
+不想啟用時，也可以在指令前加 `uv run`，例如 `uv run python run.py ...`。
 
 **步驟 2：執行回測**
 
@@ -233,7 +235,7 @@ python run.py --strategy MomentumStrategy1
 前端套件不在基本安裝裡，第一次要先補裝：
 
 ```bash
-python -m pip install -e ".[frontend]"   # 只需裝一次
+uv sync --extra frontend   # 只需裝一次
 streamlit run frontend/app.py
 ```
 
@@ -308,13 +310,17 @@ cp .env.example .env
 
 ### 4. 開發工具（要修改程式碼時）
 
-在方式 1 的虛擬環境裡加裝 dev 相依：
+在方式 1 的環境裡加裝 dev 相依：
 
 ```bash
-python -m pip install -e ".[dev]"   # pytest、pytest-timeout、pytest-cov、ruff
+uv sync --extra dev   # pytest、pytest-timeout、pytest-cov、ruff
 ```
 
-其他選用相依：`[tick]` DolphinDB tick 儲存、`[lab]` `strategy_lab` 報告輸出；回測與 ETL 主流程不需要它們。
+其他選用相依：`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、`lab` `strategy_lab` 報告輸出；
+回測與 ETL 主流程不需要它們。
+
+**`uv sync` 會把環境同步成「剛好」指定的內容**：沒列在指令上的 extra 會被移除。
+要同時保留多組時一起列出，例如 `uv sync --extra dev --extra frontend`，或用 `uv sync --all-extras`。
 
 **Lint、格式與測試**
 
@@ -329,7 +335,7 @@ pytest                  # 全部（需 data/db/tw_stock.db）
 **commit 前自動檢查**：每次 commit 前自動跑 ruff、分層相依檢查與文件路徑檢查（測試與 API 死介面檢查留給 CI）。
 
 ```bash
-pip install pre-commit
+uv tool install pre-commit
 pre-commit install       # 只需執行一次，安裝 git hook
 pre-commit run --all-files
 ```
@@ -431,6 +437,8 @@ AlphaEdge/
 │   ├── clean_pycache.sh／.ps1 # 清除 __pycache__ 與 .pyc（macOS／Linux、Windows）
 │   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
 ├── docker-compose.yml         # compose：core + frontend + 共用 results volume
+├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
+├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）
 ├── run.py
 ├── README.md                  # 中文（權威版本）
 └── README_en.md               # 英譯

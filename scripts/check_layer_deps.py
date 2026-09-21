@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Set, Tuple
        Stock／Futures／Tw 字樣，
        `if market ==` 只允許出現在 `factory.py`
     4. 跨軸目錄污染：每層目錄只承載一條軸（市場 `tw/`／`us/` 或商品類別 `stock/`／`futures/`）
-    5. `sys.path` 注入：專案已可 `pip install -e .`，逐處列出以便複查
+    5. `sys.path` 注入：專案已以 editable 方式安裝，逐處列出以便複查
     6. 資料庫驅動外洩：`core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
 - 使用場景:
     python scripts/check_layer_deps.py            # 只印報告，違規時以非零狀態碼結束

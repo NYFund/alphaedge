@@ -27,7 +27,7 @@ try:
     from docx.oxml.ns import qn
     from docx.shared import Cm, Pt, RGBColor
 except ImportError as e:
-    raise SystemExit("請先安裝 python-docx：pip install python-docx\n" + str(e)) from e
+    raise SystemExit("請先安裝 python-docx：uv sync --extra lab\n" + str(e)) from e
 
 import pandas as pd
 

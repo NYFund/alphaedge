@@ -1,7 +1,7 @@
 # 在本機就維持與 CI 相同的格式與 lint 標準，不必等 push 後才發現。
 #
 # 啟用方式（只需做一次）：
-#     pip install pre-commit
+#     uv tool install pre-commit
 #     pre-commit install
 #
 # 手動全專案執行：

@@ -37,7 +37,7 @@ def get_env_path(env_key: str, default: Path) -> Path:
 # - PROJECT_ROOT（專案根）：執行期產物一律掛在它底下的 data/ results/ logs/
 #
 # 錨點原本只有 BASE_DIR_PATH，導致產物只能往套件內長——`core/` 是
-# `pip install -e .` 安裝的套件，卻累積了 6.4 GB 程式寫入的檔案，
+# 以 editable 方式安裝的套件，卻累積了 6.4 GB 程式寫入的檔案，
 # 逼得 pyproject／ruff／coverage 各維護一份排除清單，`.gitignore`
 # 更只能全 repo 封鎖副檔名。
 #

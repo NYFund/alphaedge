@@ -9,12 +9,13 @@
 # - `security-updates`（GitHub 預設開啟，不需在此宣告）：有 CVE 時開 PR。
 # - 下面的 `updates`：定期把相依往前推，避免累積到一次要跳好幾個大版本。
 #
-# **`requirements.txt` 是完整 freeze**（含傳遞相依），所以 Dependabot 看得到
+# **`uv.lock` 鎖住整棵相依樹**（含傳遞相依），所以 Dependabot 看得到
 # `aiohttp`／`urllib3` 這種專案自己沒有 import 的套件。這是刻意的：
 # 鎖住整棵相依樹才能重現環境，代價就是警報數量看起來比實際的直接相依多。
+# Dependabot 開的 PR 會同時改 `pyproject.toml` 與 `uv.lock`，CI 以 `--locked` 驗證兩者一致。
 version: 2
 updates:
-  - package-ecosystem: pip
+  - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly

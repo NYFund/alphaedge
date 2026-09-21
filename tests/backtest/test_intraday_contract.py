@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from core.backtest.backtester import IntradayScaleMismatchError
+from core.backtest.backtester import Backtester, IntradayScaleMismatchError
 from core.backtest.factory import build_backtester
 from core.strategies.base import BaseStrategy
 from core.strategies.strategy_loader import StrategyLoader
@@ -18,6 +18,19 @@ from core.utils import Scale
 看得到一檔，訊號完全不同，**而且兩邊都跑得完、都不報錯**。那是最難查的一種錯，
 故在建立引擎時就讓它現形。
 """
+
+
+@pytest.fixture(autouse=True)
+def skip_dataset_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    建立引擎時不載入回測資料
+
+    守門在 `Backtester.__init__` 一開始就判定，與資料無關；載入資料卻要開
+    `tw_stock.db` 查交易日，沒有資料庫的環境（CI）會因此失敗，
+    量到的變成「這台機器有沒有資料庫」而不是守門有沒有放行。
+    """
+
+    monkeypatch.setattr(Backtester, "load_datasets", lambda self: None)
 
 
 def make_strategy(is_intraday: bool, scale: str) -> BaseStrategy:

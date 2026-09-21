@@ -56,7 +56,7 @@ python run.py --strategy MomentumFuturesStrategy            # 台指期動能（
 | `<StrategyName>_everyday_profit.png` | 每日損益 |
 | `<StrategyName>_everyday_equity_change.png` | 每日權益變化 |
 
-日誌落在 `logs/backtest/`。用前端瀏覽（需 `pip install -e ".[frontend]"`）：
+日誌落在 `logs/backtest/`。用前端瀏覽（需 `uv sync --extra frontend`）：
 
 ```bash
 streamlit run frontend/app.py

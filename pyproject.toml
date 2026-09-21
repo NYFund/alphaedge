@@ -8,14 +8,14 @@ version = "0.1.0"
 description = "台股量化研究平台：資料 ETL、回測引擎與策略開發"
 requires-python = ">=3.12"
 
-# 只列「程式碼實際 import 的套件」，不照抄 requirements.txt。
+# 只列「程式碼實際 import 的套件」，傳遞相依交給 uv 解析。
 # 清單由 AST 掃描 core/、tasks/、frontend/、tests/、strategy_lab/ 的 import 產出，
-# 版本下限取當前實測可用的版本；鎖定的精確版本見 requirements.txt。
+# 版本下限取當前實測可用的版本；鎖定的精確版本見 uv.lock（改了這裡要重新 `uv lock`）。
 dependencies = [
     "FinMind>=1.9",
     # FinMind 1.9.8 **自己 import 了 tqdm 卻沒有宣告它**（`Requires:` 內沒有），
-    # 故必須由本專案代為列出——CI 以 `pip install -e ".[dev]"` 安裝，
-    # 少了它整個 `tests/` 會在 collect 階段就 ImportError（2026-09-01 CI 全紅的成因）。
+    # 故必須由本專案代為列出——uv 只照宣告解析，少了它 lock 裡就沒有 tqdm，
+    # 整個 `tests/` 會在 collect 階段就 ImportError（2026-09-01 CI 全紅的成因）。
     # 本專案自己的程式碼沒有 import tqdm，這是**代宣告的傳遞相依**，不是漏列。
     "tqdm>=4.67",
     # 以下兩個是**執行期才用得到、import 掃描抓不到**的相依，漏列時要等那條路徑跑起來才炸：
@@ -33,7 +33,10 @@ dependencies = [
     "python-dateutil>=2.9",
     "python-dotenv>=1.2",
     "requests>=2.33",
-    "shioaji>=1.3",
+    # 暫時釘死在 1.3.3：換套件管理工具時版本必須全數不變，否則測試紅了分不出
+    # 是工具換了還是套件換了。1.3 → 1.7 跨兩個系列、`OrderState` 型別已改變，
+    # 升版另外處理，屆時改回下限寫法
+    "shioaji==1.3.3",
     "yfinance>=1.3",
 ]
 
@@ -47,8 +50,8 @@ dev = [
     # 而那種紅燈與程式碼品質無關，只會訓練大家忽略 CI
     "ruff==0.16.3",
 ]
-# 以下三組刻意不放進主 dependencies：它們在目前的開發環境**並未安裝**，
-# 而專案的回測與 ETL 主流程照樣可運作，硬列進去只會讓 `pip install -e .` 變重
+# 以下三組刻意不放進主 dependencies：專案的回測與 ETL 主流程不需要它們，
+# 硬列進去只會讓每個環境（含 Docker 映像）都變重。需要時以 `uv sync --extra <名稱>` 加裝
 frontend = ["streamlit>=1.49"]  # frontend/ 的 Streamlit 介面（1.49 起才有 width="stretch"）
 tick = ["dolphindb>=3.0"]  # Tick 級資料的 DolphinDB 儲存（loader 內為惰性 import）
 lab = ["python-docx>=1.2"]  # strategy_lab/ 的報告輸出

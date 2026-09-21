@@ -46,7 +46,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | Phase0-1 | `docker-compose.yml` 新增 `postgres` service | `docker-compose.yml` | 本機可連線到 PostgreSQL | ⬜ | 含 volume、healthcheck、port；現有 `core` 服務以唯讀掛載 `./data` 讀 SQLite |
 | Phase0-2 | 新增環境變數 `DATABASE_URL` / `DB_BACKEND` | `.env.example`、`core/config/settings.py`、`tests/test_config_consistency.py` | `DATABASE_URL` 可由 `.env` 載入 | ⬜ | `.env.example` 與程式讀取的環境變數由該測試雙向核對，須同批改 |
-| Phase0-3 | 新增 Python 依賴（`sqlalchemy`、`psycopg`） | `pyproject.toml` / `requirements.txt` | 安裝後可建立 engine | ⬜ | `psycopg[binary]` 與 `psycopg2-binary` 二擇一；driver 屬執行期才載入的相依，須加註解 |
+| Phase0-3 | 新增 Python 依賴（`sqlalchemy`、`psycopg`） | `pyproject.toml` / `uv.lock` | 安裝後可建立 engine | ⬜ | `psycopg[binary]` 與 `psycopg2-binary` 二擇一；driver 屬執行期才載入的相依，須加註解 |
 | Phase1-1 | 在 DAO 連線入口加入 engine | `core/dao/connection.py`、`scripts/check_layer_deps.py` | 提供 `get_engine()`／`db_dialect()`，`connect_sqlite()` 保留為 fallback | ⬜ | **關鍵步驟**；入口已存在（`connect_sqlite()`、`DBConnection`／`DBError` 別名），`core.dao` 已登記在分層檢查，不需另建 `core/db/` |
 | Phase1-2 | 連線來源改由 `DATABASE_URL` 決定（含 SQLite fallback） | `core/dao/connection.py`、`core/dao/base.py`（`BaseDAO.__init__`）、21 個 `connect_sqlite()` 呼叫點 | 不改業務邏輯前提下 API 可讀到資料 | ⬜ | 相依 Phase1-1；呼叫點分布：`core/api/tw/` 11、`core/pipeline/` 7、回測 DataFeed 2、`scripts/manual/` 1 |
 | Phase2-1 | 改造 `core/dao/` 的 SQLite 專屬語法 | `core/dao/base.py`、`core/dao/tw/futures_chip_dao.py`、`futures_margin_dao.py`、`stock_info_dao.py`、`stock_price_dao.py` | 改用 Inspector／`ON CONFLICT` 後 SQLite 下測試全過 | ⬜ | 相依 Phase1-1；`sqlite_master` 1、`INSERT OR` 4、`SAVEPOINT` 1、`GLOB` 1、`rowcount` 2 處，全在 DAO 內 |
@@ -113,9 +113,9 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 
 - **目的**：具備建立 SQLAlchemy engine 的能力。
 - **做法**：新增 `sqlalchemy` 與 `psycopg[binary]`（或 `psycopg2-binary`，二擇一）。
-  `pyproject.toml` 的 `dependencies` 只列「程式碼實際 import 的套件」、`requirements.txt` 鎖精確版本；
+  `pyproject.toml` 的 `dependencies` 只列「程式碼實際 import 的套件」，以 `uv add` 新增（同時更新 `uv.lock`）；
   driver 由 SQLAlchemy 依連線字串載入、程式碼不會 import，**須比照 `kaleido`／`html5lib` 加註解說明是執行期相依**，否則下次依 import 掃描清理時會被刪掉。
-- **產出**：`pyproject.toml` / `requirements.txt`。
+- **產出**：`pyproject.toml` / `uv.lock`。
 - **驗證方式**：安裝後可用 `DATABASE_URL` 建立 engine 並執行 `SELECT 1`。
 - **相依**：無。
 

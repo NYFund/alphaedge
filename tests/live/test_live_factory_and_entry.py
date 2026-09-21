@@ -10,6 +10,7 @@ import pytest
 
 import run as run_module
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import (
     TW_FUTURES_SEGMENTS,
     TW_STOCK_SEGMENTS,
@@ -71,6 +72,23 @@ class UnsupportedStrategy(LiveStockStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.market = Market.US
+
+
+@pytest.fixture(autouse=True)
+def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    實盤資料源的歷史資料庫一律換成空的 in-memory 連線
+
+    factory 建資料源時用的是預設的 `tw_stock.db`／`tw_futures.db` 路徑，
+    本檔驗的是組裝邏輯，不需要任何歷史資料；不換的話，沒有資料庫的環境（CI）
+    會在 `connect_sqlite` 當場失敗，而有資料庫的本機照樣綠，紅綠只取決於機器。
+    """
+
+    def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
+        return sqlite3.connect(":memory:")
+
+    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
+    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
 
 
 @pytest.fixture
