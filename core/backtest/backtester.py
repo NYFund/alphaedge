@@ -456,7 +456,13 @@ class Backtester:
             self.data_feed.close()
 
     def run_tick_backtest(self, date: datetime.date) -> None:
-        """Tick 級別的回測架構"""
+        """
+        Tick 級別的回測架構
+
+        **已知前視**：整天的 tick 一次交給 `fill_model.on_bar_open()`，成交驗證用的是
+        全日高低點，盤中較早的委託會通過稍後才出現的價位。TICK 回測的結果只能
+        當量級參考，要精確得先改成逐筆餵入。
+        """
 
         quotes: List[BaseQuote] = self.data_feed.get_quotes(date, Scale.TICK)
 
