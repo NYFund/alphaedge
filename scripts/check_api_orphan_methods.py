@@ -1,6 +1,5 @@
 import argparse
 import ast
-import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -83,25 +82,37 @@ def collect_public_methods() -> Dict[str, List[Tuple[str, str]]]:
 def collect_call_sites(names: Set[str]) -> Dict[str, Set[str]]:
     """
     - Description:
-        掃全 repo 找 `.<方法名>(` 的出現處
+        掃全 repo 找「取用該方法」的地方
 
-        用正規表達式而不是 AST 的理由：呼叫端多半是
-        `self.price.get_close_map(...)` 這種鏈式屬性存取，AST 也只能比對
-        `attr` 名稱，兩者判別力相同，而正規表達式不必處理語法錯誤的檔案。
+        **看的是屬性取值（`ast.Attribute`），不是只有帶括號的呼叫**：
+
+        ```python
+        calculate = (
+            self.margin_config.api.calculate_stock_futures_maintenance_margin
+            if maintenance
+            else self.margin_config.api.calculate_stock_futures_margin
+        )
+        return calculate(product, date, price, ...)
+        ```
+
+        方法被繫結成變數再呼叫，`obj.method(...)` 的形狀從未出現。只認
+        `.name(` 的話這種呼叫端完全看不到，該方法會被報成無主介面——
+        而那是**誤報**，誤報過的閘門會教人忽略這一關。
+
+        用 AST 而不是正規表達式：`.name` 這個字串也會出現在註解與 docstring 裡，
+        比對文字會讓「只在註解被提到」算成有人用，那是反方向的漏。
+
+        **`core/api/` 自己也算呼叫端**：`get_stock_net_chip()` 呼叫
+        `get_stock_chip()`，後者就有人在用。定義本身是 `ast.FunctionDef`
+        而不是 `ast.Attribute`，不會被誤計。
     - Parameters:
         - names: Set[str]
             要找的方法名集合
-        **`core/api/` 自己也算呼叫端**：`get_stock_net_chip()` 呼叫
-        `get_stock_chip()`，後者就有人在用。`def name(` 沒有前導的點，
-        故定義本身不會被誤計為呼叫。
     - Return:
         - Dict[str, Set[str]]
             `{方法名: {出現的相對路徑, ...}}`
     """
 
-    pattern: re.Pattern = re.compile(
-        r"\.(" + "|".join(map(re.escape, names)) + r")\s*\("
-    )
     call_sites: Dict[str, Set[str]] = {name: set() for name in names}
 
     targets: List[Path] = []
@@ -113,8 +124,17 @@ def collect_call_sites(names: Set[str]) -> Dict[str, Set[str]]:
         if not path.exists():
             continue
         rel: str = str(path.relative_to(_PROJECT_ROOT))
-        for match in pattern.finditer(path.read_text(encoding="utf-8")):
-            call_sites[match.group(1)].add(rel)
+        try:
+            tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            # 語法壞掉的檔案跳過並說出來：靜靜略過等於把它的呼叫點一起丟掉，
+            # 那會讓被它獨佔使用的方法變成假的無主介面
+            print(f"  （略過語法無法解析的檔案：{rel}）", file=sys.stderr)
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in call_sites:
+                call_sites[node.attr].add(rel)
 
     return call_sites
 
