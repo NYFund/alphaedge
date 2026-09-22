@@ -19,7 +19,7 @@
 ### 常用指令
 
 ```bash
-uv sync --extra dev                 # 相依 + 專案本身 + pytest / pytest-cov / ruff
+uv sync                             # 相依 + 專案本身 + pytest / pytest-cov / ruff（dev group 預設即裝）
 
 ruff check .                        # lint
 ruff format .                       # 格式化
@@ -34,7 +34,7 @@ pytest                              # 全部（需 data/db/tw_stock.db）
 
 `dolphindb`（tick）、`streamlit`（frontend）、`python-docx`（lab）**刻意不放進主
 `dependencies`**：回測與 ETL 主流程不需要它們。
-需要時以 `uv sync --extra tick` 等方式個別安裝（要保留 `dev` 時一起列出：`uv sync --extra dev --extra tick`）。
+需要時以 `uv sync --extra tick` 等方式個別安裝；開發工具是預設會裝的 `dev` dependency group，加裝 extra 時不會被移除。
 
 ---
 

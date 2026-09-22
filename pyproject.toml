@@ -40,7 +40,11 @@ dependencies = [
     "yfinance>=1.3",
 ]
 
-[project.optional-dependencies]
+# 開發工具放 dependency group 而不是 extra：`uv sync` 預設就會裝 `dev` 這一組，
+# 加裝其他 extra（`uv sync --extra frontend`）時也不會被移除——extra 的話，沒列在
+# 指令上的會被 `uv sync` 拿掉，漏寫 `--extra dev` 就少了 pytest 與 ruff。
+# 正式映像以 `--no-dev` 排除（見 `core/Dockerfile`）；dev 工具也不會出現在套件 metadata
+[dependency-groups]
 dev = [
     "pytest>=9.0",
     "pytest-timeout>=2.4",
@@ -50,6 +54,8 @@ dev = [
     # 而那種紅燈與程式碼品質無關，只會訓練大家忽略 CI
     "ruff==0.16.3",
 ]
+
+[project.optional-dependencies]
 # 以下三組刻意不放進主 dependencies：專案的回測與 ETL 主流程不需要它們，
 # 硬列進去只會讓每個環境（含 Docker 映像）都變重。需要時以 `uv sync --extra <名稱>` 加裝
 frontend = ["streamlit>=1.49"]  # frontend/ 的 Streamlit 介面（1.49 起才有 width="stretch"）

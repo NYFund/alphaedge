@@ -310,17 +310,17 @@ cp .env.example .env
 
 ### 4. 開發工具（要修改程式碼時）
 
-在方式 1 的環境裡加裝 dev 相依：
+開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `dev` dependency group，**`uv sync` 預設就會裝**：
 
 ```bash
-uv sync --extra dev   # pytest、pytest-timeout、pytest-cov、ruff
+uv sync               # 相依 + 專案本身 + 開發工具
 ```
 
 其他選用相依：`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、`lab` `strategy_lab` 報告輸出；
 回測與 ETL 主流程不需要它們。
 
-**`uv sync` 會把環境同步成「剛好」指定的內容**：沒列在指令上的 extra 會被移除。
-要同時保留多組時一起列出，例如 `uv sync --extra dev --extra frontend`，或用 `uv sync --all-extras`。
+**`uv sync` 會把環境同步成「剛好」指定的內容**：沒列在指令上的 extra 會被移除（開發工具不受影響）。
+要同時保留多組 extra 時一起列出，例如 `uv sync --extra frontend --extra lab`，或用 `uv sync --all-extras`。
 
 **Lint、格式與測試**
 
