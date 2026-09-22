@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from core.managers.futures.position_manager import FuturesMarginConfig
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import (
     BaseAccount,
     BaseOrder,

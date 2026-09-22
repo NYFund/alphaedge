@@ -13,11 +13,9 @@ from core.backtest.models.instrument_spec import (
     TwFuturesSpec,
     TwStockSpec,
 )
-from core.managers.futures.position_manager import (
-    FuturesMarginConfig,
-    FuturesPositionManager,
-)
+from core.managers.futures.position_manager import FuturesPositionManager
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import (
     BaseAccount,

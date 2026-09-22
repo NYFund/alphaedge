@@ -3,9 +3,10 @@ from typing import Dict, Optional, Union
 
 from loguru import logger
 
-from core.backtest.models.cost_model import CostConfig, StockCostModel
+from core.backtest.models.cost_model import StockCostModel
 from core.managers.base.position_manager import BasePositionManager
 from core.models import StockAccount, StockOrder, StockPosition, StockTradeRecord
+from core.models.cost_config import CostConfig
 from core.utils import Action, PositionType, ShortMethod, TimeUtils
 from core.utils.instrument import StockUtils
 

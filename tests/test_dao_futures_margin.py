@@ -221,7 +221,7 @@ def test_loader_failed_insert_leaves_no_partial_rows(
 def test_margin_config_from_api_requires_an_api() -> None:
     """`from_api()` 不再暗開一條沒人關的連線：未傳 API 直接 TypeError"""
 
-    from core.managers.futures.position_manager import FuturesMarginConfig
+    from core.market.tw.futures_margin_config import FuturesMarginConfig
 
     with pytest.raises(TypeError):
         FuturesMarginConfig.from_api()  # type: ignore[call-arg]

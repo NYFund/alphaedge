@@ -4,13 +4,13 @@ from typing import Dict, List, Optional
 
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
-from core.backtest.models.cost_model import FuturesCostConfig
 from core.backtest.models.fill_model import FuturesFillConfig
 from core.datafeed.base import BaseDataFeed
-from core.managers.futures.position_manager import FuturesMarginConfig
 from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
+from core.models.cost_config import FuturesCostConfig
 from core.portfolio.construction import (
     FuturesPortfolioConstructor,
     normalize_quote_date,

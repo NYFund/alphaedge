@@ -11,8 +11,8 @@ from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection, connect_sqlite
 from core.datafeed.base import BaseDataFeed
-from core.managers.futures.position_manager import FuturesMarginConfig
 from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesQuote
 from core.strategies.base import BaseStrategy

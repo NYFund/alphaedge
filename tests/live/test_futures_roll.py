@@ -12,8 +12,8 @@ from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.factory import build_live_trader, to_live_roll_config
 from core.live.risk.trading_mode import TradingMode
 from core.live.trader import LiveTrader, StrategyContext
-from core.managers.futures.position_manager import FuturesMarginConfig
 from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import ExecutionReport, FuturesOrder, FuturesQuote
 from core.utils import (

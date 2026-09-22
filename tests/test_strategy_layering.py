@@ -3,7 +3,7 @@ from typing import List
 
 import pytest
 
-from core.managers.futures.position_manager import FuturesMarginConfig
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import (
     BaseOrder,
     BaseQuote,

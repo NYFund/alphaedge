@@ -20,11 +20,9 @@ from core.backtest.models.settlement_model import (
 )
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
-from core.managers.futures.position_manager import (
-    FuturesMarginConfig,
-    FuturesPositionManager,
-)
+from core.managers.futures.position_manager import FuturesPositionManager
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesAccount, StockAccount
 from core.strategies.base import BaseStrategy

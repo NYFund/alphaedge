@@ -10,10 +10,8 @@ from core.backtest.models.cost_model import (
 )
 from core.backtest.models.fill_model import FuturesFillConfig, TwFuturesFillModel
 from core.backtest.models.instrument_spec import TwFuturesSpec
-from core.managers.futures.position_manager import (
-    FuturesMarginConfig,
-    FuturesPositionManager,
-)
+from core.managers.futures.position_manager import FuturesPositionManager
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesTradeRecord
 from core.utils import Action, FuturesCost, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER, FUTURES_TICK_SIZE

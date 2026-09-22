@@ -4,7 +4,7 @@ from typing import List, Optional
 import pandas as pd
 import pytest
 
-from core.managers.futures.position_manager import FuturesMarginConfig
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesQuote
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy

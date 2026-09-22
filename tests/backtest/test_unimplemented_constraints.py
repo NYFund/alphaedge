@@ -4,7 +4,8 @@ from typing import Iterator, List
 import pytest
 from loguru import logger
 
-from core.backtest.models.cost_model import CostConfig, ShortConstraint, StockCostModel
+from core.backtest.models.cost_model import StockCostModel
+from core.models.cost_config import CostConfig, ShortConstraint
 
 """尚未實作的 ShortConstraint 欄位防呆
 
