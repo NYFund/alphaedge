@@ -1,6 +1,4 @@
 import datetime
-import random
-import time
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -12,6 +10,7 @@ from core.dao.connection import DBConnection
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
+from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.tw.cleaners.monthly_revenue_report_cleaner import (
     MonthlyRevenueReportCleaner,
 )
@@ -97,35 +96,36 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         file_cnt: int = 0
         stats: UpdateStats = UpdateStats()
 
-        for year, month in year_months:
-            logger.info(f"* {year}/{month}")
-            result: CrawlResult = self.crawler.crawl(year, month)
-            stats.record(result)
+        with GracefulStop(label="mrr") as stop:
+            for year, month in year_months:
+                logger.info(f"* {year}/{month}")
+                result: CrawlResult = self.crawler.crawl(year, month)
+                stats.record(result)
 
-            # Step 2: Clean
-            if not result.is_ok:
-                continue
+                # Step 2: Clean
+                if not result.is_ok:
+                    continue
 
-            cleaned_df: pd.DataFrame = self.cleaner.clean_monthly_revenue(
-                result.tables, year, month
-            )
-
-            if cleaned_df is None or cleaned_df.empty:
-                logger.warning(
-                    f"Cleaned monthly revenue report dataframe empty on {year}/{month}"
+                cleaned_df: pd.DataFrame = self.cleaner.clean_monthly_revenue(
+                    result.tables, year, month
                 )
-                continue
 
-            file_cnt += 1
-            if file_cnt == self.BATCH_SLEEP_EVERY_N_FILES:
-                logger.info("Sleep 30 seconds...")
-                file_cnt = 0
-                time.sleep(self.BATCH_SLEEP_DURATION_SECONDS)
-            else:
-                delay: int = random.randint(
-                    self.BATCH_RANDOM_DELAY_MIN, self.BATCH_RANDOM_DELAY_MAX
-                )
-                time.sleep(delay)
+                if cleaned_df is None or cleaned_df.empty:
+                    logger.warning(
+                        f"Cleaned monthly revenue report dataframe empty on {year}/{month}"
+                    )
+                    continue
+
+                file_cnt += 1
+
+                if stop.requested:
+                    logger.warning(
+                        f"[mrr] 收到中止要求，停在 {year}/{month}；"
+                        f"已清洗的檔案照常入庫，未爬的年月下次執行會接續"
+                    )
+                    break
+
+                file_cnt = self.throttle(file_cnt, stop)
 
         # `requested` 這裡的單位是「年月」而不是「天」
         stats.report("mrr（單位：年月）")

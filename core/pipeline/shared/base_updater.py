@@ -1,12 +1,17 @@
 import datetime
+import random
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
+from core.pipeline.shared.date_planner import DateProgressStore
+from core.pipeline.shared.graceful_stop import GracefulStop
+from core.utils.log_manager import LogManager
 
 """
 所有 updater 的共同基底，以及**每批一行的結果統計**
@@ -111,8 +116,62 @@ class UpdateStats:
 class BaseDataUpdater(ABC):
     """Base Class of Data Updater"""
 
+    # 節流：每處理 N 個單位休息一次，其餘時候隨機短暫延遲。
+    # 放在基底是因為每一支長跑 updater 都需要同一組數字；各自寫一份的話，
+    # 調整節流要記得改好幾個檔案，而漏改的那支會在站方限流時先被擋下來
+    BATCH_SLEEP_EVERY_N_FILES: int = 100
+    BATCH_SLEEP_DURATION_SECONDS: int = 120
+    BATCH_RANDOM_DELAY_MIN: int = 1
+    BATCH_RANDOM_DELAY_MAX: int = 5
+
     def __init__(self) -> None:
         pass
+
+    def throttle(self, file_cnt: int, stop: Optional[GracefulStop] = None) -> int:
+        """
+        - Description:
+            對站方的請求節流，並回傳更新後的計數
+
+            達到 `BATCH_SLEEP_EVERY_N_FILES` 就長睡一次並把計數歸零，
+            其餘時候隨機短睡，避免固定間隔的請求樣態。
+
+            **傳入 `stop` 時用的是可中斷的 sleep**：`time.sleep()` 被訊號打斷會
+            自動續睡（PEP 475），於是「每 100 天睡 2 分鐘」那一段按下 Ctrl+C
+            得等滿 2 分鐘才有反應。數小時～數十小時的回補按了沒反應，
+            實際上就是逼人用 `kill -9`，而那會讓手上未入庫的那批直接消失。
+        - Parameters:
+            - file_cnt: int
+                自上次長睡以來已處理的單位數
+            - stop: Optional[GracefulStop]
+                中止旗標；None 表示退化成不可中斷的 `time.sleep()`
+        - Return:
+            - int
+                更新後的計數；剛長睡過為 0
+        """
+
+        if file_cnt >= self.BATCH_SLEEP_EVERY_N_FILES:
+            # 訊息帶出實際秒數：原本三支寫死「Sleep 2 minutes」，而月營收那支的
+            # 間隔其實是 30 秒，log 與行為對不上
+            logger.info(f"Sleep {self.BATCH_SLEEP_DURATION_SECONDS} seconds...")
+            self.sleep(self.BATCH_SLEEP_DURATION_SECONDS, stop)
+            return 0
+
+        delay: int = random.randint(
+            self.BATCH_RANDOM_DELAY_MIN, self.BATCH_RANDOM_DELAY_MAX
+        )
+        self.sleep(delay, stop)
+        return file_cnt
+
+    @staticmethod
+    def sleep(seconds: float, stop: Optional[GracefulStop] = None) -> None:
+        """節流用的 sleep；有 `stop` 時可被中止打斷，否則退化成 `time.sleep()`"""
+
+        if stop is not None:
+            stop.sleep(seconds)
+            return
+
+        # 沒有旗標可問時只能照睡；這條路徑保留給尚未接上 GracefulStop 的呼叫端
+        time.sleep(seconds)
 
     @staticmethod
     def clean_one(
@@ -250,3 +309,225 @@ class BaseDataUpdater(ABC):
     def update(self, *args, **kwargs) -> None:
         """Update the Database"""
         pass
+
+
+class DailyTwoMarketUpdater(BaseDataUpdater):
+    """
+    - Description:
+        「逐日爬上市＋上櫃、清洗、分批入庫」這條流程的骨架
+
+        `price`／`chip`／`margin` 三支走的是同一條路：規劃日期 → 逐日雙市場爬 →
+        清洗 → 記進度 → 每 N 天入庫一次 → 節流 → 收尾報表。原本三支各抄一份
+        100 行的迴圈，`chip` 與 `margin` 正規化後 diff 只有 21 行差異，
+        連 `load_batch()` 的註解都一字不差。
+
+        **抄一份的代價不是行數而是漂移**：`price` 的「原始列數門檻」是後來才加的，
+        另外兩支沒有；哪天在 `chip` 修了一個判斷，`margin` 不會跟著修，
+        而兩邊的症狀都是「資料靜靜少一天」，不會有任何錯誤。
+
+        子類要填的東西：`SOURCE`（同時決定進度檔名、log 訊息與 crawler／cleaner
+        的方法名）、`SOURCE_LABEL`、`LOG_FILE_NAME`，以及 `plan_dates()` 這個 hook。
+
+        **爬取與清洗一律以 `SOURCE` 組方法名取用**（`crawl_twse_{SOURCE}`、
+        `clean_twse_{SOURCE}`），子類不必各自繫結。
+    """
+
+    # 資料來源代號；同時是進度檔名與 crawler／cleaner 的方法名後綴
+    SOURCE: str = ""
+    # log 訊息中的顯示名稱
+    SOURCE_LABEL: str = ""
+    # 落地的 log 檔名
+    LOG_FILE_NAME: str = ""
+
+    # 每爬幾天就入庫一次。整段爬完才入庫的話，中斷等於前功盡棄——
+    # 2013 起的回補有 3,300 個交易日、數小時，中途失敗要全部重來。
+    # 分批之後最多只損失最後一批（未入庫的部分），重跑會自動接續。
+    LOAD_BATCH_SIZE: int = 100
+
+    def setup(self) -> None:
+        """Set Up the Config of Updater"""
+
+        LogManager.setup_logger(self.LOG_FILE_NAME)
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
+
+    def load_batch(self, batch_dates: List[str]) -> None:
+        """
+        - Description:
+            入庫本批爬取的日期
+
+            **只載入本批的檔案**：loader 預設會掃整個 downloads 目錄，若每批都全掃，
+            13 年的回補會變成「數十批 × 數千檔」的重複讀取。
+        - Parameters:
+            - batch_dates: List[str]
+                本批的日期字串（`YYYYMMDD`），對應 downloads 內的檔名後綴
+        """
+
+        logger.info(
+            f"* Loading batch: {len(batch_dates)} 天（{batch_dates[0]} ~ {batch_dates[-1]}）"
+        )
+        self.loader.add_to_db(remove_files=False, only_dates=set(batch_dates))
+
+    @abstractmethod
+    def plan_dates(
+        self,
+        progress: DateProgressStore,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> List[datetime.date]:
+        """
+        - Description:
+            規劃本次要爬哪些日期
+
+            **刻意留成抽象方法而不給預設**：三支的日曆來源不同（`chip`／`margin`
+            以 `price` 表為日曆，`price` 自己就是日曆來源故只能以平日為母集合，
+            另外從 `chip`／`margin` 把補行交易日補回來）。給一個「常見」的預設值，
+            等於讓漏填的新來源靜靜用錯日曆——症狀是整天漏抓，且不會報錯。
+        - Parameters:
+            - progress: DateProgressStore
+                本來源的進度檔（已確認無資料／上次沒跑完的日期）
+            - start_date / end_date: datetime.date
+                回補區間（含頭含尾）
+        - Return:
+            - List[datetime.date]
+                本次待爬日期，已排序
+        """
+
+    def crawl_day(self, date: datetime.date) -> Tuple[CrawlResult, CrawlResult]:
+        """爬取單日的上市與上櫃資料"""
+
+        twse: CrawlResult = getattr(self.crawler, f"crawl_twse_{self.SOURCE}")(date)
+        tpex: CrawlResult = getattr(self.crawler, f"crawl_tpex_{self.SOURCE}")(date)
+        return twse, tpex
+
+    def clean_day(
+        self, date: datetime.date, twse: CrawlResult, tpex: CrawlResult
+    ) -> bool:
+        """
+        - Description:
+            清洗單日兩個市場的資料
+
+            **任一市場沒問到（含一邊查無資料）時兩邊都不清洗**：這天反正不入庫，
+            清洗只會在 downloads 留下半份 CSV。呼叫端已先判斷過整天的狀態，
+            故本方法只在「兩邊都問到」時被呼叫。
+        - Parameters:
+            - date: datetime.date
+                該日
+            - twse / tpex: CrawlResult
+                兩個市場的爬取結果
+        - Return:
+            - bool
+                兩邊都清洗成功為 True
+        """
+
+        cleaned: bool = True
+        for result, label in ((twse, "TWSE"), (tpex, "TPEX")):
+            if not result.is_ok:
+                continue
+            clean: Callable[..., Optional[pd.DataFrame]] = getattr(
+                self.cleaner, f"clean_{label.lower()}_{self.SOURCE}"
+            )
+            cleaned &= self.clean_one(clean, result.data, date, label)
+        return cleaned
+
+    def report_latest_date(self) -> None:
+        """收尾印出表內最新日期；沒有任何資料時降級為 warning"""
+
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
+        if table_latest_date:
+            logger.info(
+                f"Stock {self.SOURCE} data updated. "
+                f"Latest available date: {table_latest_date}"
+            )
+        else:
+            logger.warning(f"No new stock {self.SOURCE} data was updated")
+
+    def update(
+        self,
+        start_date: datetime.date,
+        end_date: Optional[datetime.date] = None,
+    ) -> None:
+        """
+        - Description:
+            逐日爬取兩個市場、清洗、分批入庫
+
+            **候選日期是差集而不是 `MAX(date)+1`**：後者讓中間缺的日子永遠不會
+            再被嘗試。日曆來源由 `plan_dates()` 決定。
+
+            **只有兩個市場都問到的日子才入庫**：只入庫一邊的話，重試成功之前
+            回測讀到的是半個市場，且不會有任何錯誤。清洗失敗同樣擋下——
+            另一邊的 CSV 可能已經寫出。
+
+            **中止訊號收在安全點**：按下 Ctrl+C 後先把手上這批入庫、進度存檔、
+            印完統計行才離開，未入庫的那批不會憑空消失；要立刻中止再按一次。
+        - Parameters:
+            - start_date: datetime.date
+                回補起日
+            - end_date: Optional[datetime.date]
+                回補迄日；None 取當日（**預設值不可寫在 def 行**，那是在 import
+                時求值的，長時間執行的行程會一直用啟動那天的日期）
+        """
+
+        logger.info(f"* Start Updating TWSE & TPEX {self.SOURCE_LABEL} Data...")
+
+        end_date: datetime.date = end_date or datetime.date.today()
+
+        progress: DateProgressStore = DateProgressStore(self.SOURCE)
+        dates: List[datetime.date] = self.plan_dates(progress, start_date, end_date)
+        logger.info(f"本次待更新日期：{len(dates)} 天（{start_date} ~ {end_date}）")
+
+        file_cnt: int = 0
+        batch_dates: List[str] = []
+        stats: UpdateStats = UpdateStats()
+        cleaner_failures: List[datetime.date] = []
+
+        with GracefulStop(label=self.SOURCE) as stop:
+            for date in dates:
+                logger.info(date.strftime("%Y/%m/%d"))
+                twse, tpex = self.crawl_day(date)
+                day_status: CrawlStatus = self.record_market_day(stats, twse, tpex)
+
+                cleaned: bool = True
+                if day_status is not CrawlStatus.FAILED:
+                    cleaned = self.clean_day(date, twse, tpex)
+
+                if not cleaned:
+                    cleaner_failures.append(date)
+                    day_status = CrawlStatus.FAILED
+                    stats.count_clean_failure()
+
+                progress.record(date, day_status)
+
+                file_cnt += 1
+                if day_status is CrawlStatus.FAILED:
+                    self.report_partial_day(self.SOURCE, date, twse, tpex)
+                else:
+                    batch_dates.append(date.strftime("%Y%m%d"))
+
+                if len(batch_dates) >= self.LOAD_BATCH_SIZE:
+                    self.load_batch(batch_dates)
+                    batch_dates = []
+                    # 與入庫同步落盤：中斷時已確認過的休市日不必再問一次
+                    progress.save()
+
+                if stop.requested:
+                    logger.warning(
+                        f"[{self.SOURCE}] 收到中止要求，停在 {date}；"
+                        f"手上這批先入庫再離開，未爬的日期下次執行會接續"
+                    )
+                    break
+
+                file_cnt = self.throttle(file_cnt, stop)
+
+        # 收尾：載入最後一批未達批量的日期
+        if batch_dates:
+            self.load_batch(batch_dates)
+
+        progress.save()
+        stats.report(self.SOURCE)
+        self.report_cleaner_failures(cleaner_failures)
+        self.report_latest_date()

@@ -1,6 +1,4 @@
 import datetime
-import random
-import time
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -19,6 +17,7 @@ from core.dao.connection import DBConnection
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.tw.cleaners.futures_price_cleaner import FuturesPriceCleaner
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
 from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
@@ -632,69 +631,68 @@ class FuturesPriceUpdater(BaseDataUpdater):
         batch_dates: List[str] = []
         consecutive_empty: int = 0
 
-        for date in dates:
-            crawled: Set[FuturesSession] = self.crawl_and_clean_date(product, date)
+        with GracefulStop(label=f"futures_price:{product}") as stop:
+            for date in dates:
+                crawled: Set[FuturesSession] = self.crawl_and_clean_date(product, date)
 
-            # 空產出可能是「非交易日」，也可能是「站方正在擋」——兩者在 crawler
-            # 眼中相同，故一律等待後再試一次，只有第二次仍為空才算真的沒有資料。
-            # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子
-            if not self.is_day_complete(crawled):
-                backoff_seconds: int = self.EMPTY_RETRY_DELAY_SECONDS * min(
-                    consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR
-                )
-                logger.info(
-                    f"{date} {product} 未取得日盤（本次時段："
-                    f"{sorted(session.value for session in crawled) or '無'}），"
-                    f"{backoff_seconds} 秒後重試一次"
-                )
-                time.sleep(backoff_seconds)
-                crawled = self.crawl_and_clean_date(product, date)
+                # 空產出可能是「非交易日」，也可能是「站方正在擋」——兩者在 crawler
+                # 眼中相同，故一律等待後再試一次，只有第二次仍為空才算真的沒有資料。
+                # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子
+                if not self.is_day_complete(crawled):
+                    backoff_seconds: int = self.EMPTY_RETRY_DELAY_SECONDS * min(
+                        consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR
+                    )
+                    logger.info(
+                        f"{date} {product} 未取得日盤（本次時段："
+                        f"{sorted(session.value for session in crawled) or '無'}），"
+                        f"{backoff_seconds} 秒後重試一次"
+                    )
+                    self.sleep(backoff_seconds, stop)
+                    crawled = self.crawl_and_clean_date(product, date)
+                    if self.is_day_complete(crawled):
+                        logger.warning(
+                            f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
+                            f"不是非交易日"
+                        )
+
                 if self.is_day_complete(crawled):
+                    batch_dates.append(TimeUtils.format_date(date))
+                    consecutive_empty = 0
+                else:
+                    # **只有夜盤時整天不入庫**：入庫會讓 `MAX(date)` 推進過這一天，
+                    # 缺的日盤永遠不會再被請求（續跑起點是 `MAX(date)+1`）
+                    if crawled:
+                        logger.warning(
+                            f"{date} {product} 只取得 "
+                            f"{sorted(session.value for session in crawled)}、缺日盤，"
+                            f"整天不入庫，下次執行會重試"
+                        )
+                    consecutive_empty += 1
+                    if consecutive_empty >= self.EMPTY_PRODUCT_ABORT_THRESHOLD:
+                        # 先把已爬到的入庫再中止，不浪費前面的成果
+                        if batch_dates:
+                            self.load_batch(batch_dates)
+                        raise ValueError(
+                            f"{product} 自 {actual_start} 起連續 "
+                            f"{consecutive_empty} 個候選日皆無資料，已中止。"
+                            f"可能原因：① 代碼拼錯；② 該商品在此期間尚未上市"
+                            f"（請調整 start_date）；③ 來源異常。"
+                        )
+
+                file_cnt += 1
+
+                if len(batch_dates) >= self.LOAD_BATCH_SIZE:
+                    self.load_batch(batch_dates)
+                    batch_dates = []
+
+                if stop.requested:
                     logger.warning(
-                        f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
-                        f"不是非交易日"
+                        f"[{product}] 收到中止要求，停在 {date}；"
+                        f"手上這批先入庫再離開，未爬的日期下次執行會接續"
                     )
+                    break
 
-            if self.is_day_complete(crawled):
-                batch_dates.append(TimeUtils.format_date(date))
-                consecutive_empty = 0
-            else:
-                # **只有夜盤時整天不入庫**：入庫會讓 `MAX(date)` 推進過這一天，
-                # 缺的日盤永遠不會再被請求（續跑起點是 `MAX(date)+1`）
-                if crawled:
-                    logger.warning(
-                        f"{date} {product} 只取得 "
-                        f"{sorted(session.value for session in crawled)}、缺日盤，"
-                        f"整天不入庫，下次執行會重試"
-                    )
-                consecutive_empty += 1
-                if consecutive_empty >= self.EMPTY_PRODUCT_ABORT_THRESHOLD:
-                    # 先把已爬到的入庫再中止，不浪費前面的成果
-                    if batch_dates:
-                        self.load_batch(batch_dates)
-                    raise ValueError(
-                        f"{product} 自 {actual_start} 起連續 "
-                        f"{consecutive_empty} 個候選日皆無資料，已中止。"
-                        f"可能原因：① 代碼拼錯；② 該商品在此期間尚未上市"
-                        f"（請調整 start_date）；③ 來源異常。"
-                    )
-
-            file_cnt += 1
-
-            if len(batch_dates) >= self.LOAD_BATCH_SIZE:
-                self.load_batch(batch_dates)
-                batch_dates = []
-
-            if file_cnt >= self.BATCH_SLEEP_EVERY_N_FILES:
-                logger.info("Sleep 2 minutes...")
-                file_cnt = 0
-                time.sleep(self.BATCH_SLEEP_DURATION_SECONDS)
-            else:
-                time.sleep(
-                    random.randint(
-                        self.BATCH_RANDOM_DELAY_MIN, self.BATCH_RANDOM_DELAY_MAX
-                    )
-                )
+                file_cnt = self.throttle(file_cnt, stop)
 
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:
