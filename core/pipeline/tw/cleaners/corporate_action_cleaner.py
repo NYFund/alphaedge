@@ -10,6 +10,7 @@ from core.config import CORPORATE_ACTION_DOWNLOADS_PATH
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
 from core.pipeline.utils.exceptions import ColumnLayoutError
 from core.utils import TimeUtils
+from core.utils.constant import FileEncoding
 
 """
 非除權息公司行動清洗器
@@ -192,7 +193,7 @@ class CorporateActionCleaner(BaseDataCleaner):
         """把清洗結果落地為 CSV（loader 掃這個目錄入庫）"""
 
         path: Path = self.corporate_action_dir / file_name
-        df.to_csv(path, index=False, encoding="utf-8-sig")
+        df.to_csv(path, index=False, encoding=FileEncoding.UTF8_SIG.value)
         logger.info(f"[corporate_action] 已存檔 {path}（{len(df)} 筆）")
 
     @staticmethod

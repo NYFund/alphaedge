@@ -9,6 +9,7 @@ from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import FinMindDataType
 from core.pipeline.utils.exceptions import DataLoadError
+from core.utils.constant import FileEncoding
 
 """
 券商分點統計表的入庫：DataFrame 直入與 CSV 目錄批次兩條路徑
@@ -159,7 +160,9 @@ def load_from_files(conn: DBConnection, finmind_dir: Path) -> None:
                     f"Loading broker trading daily report from "
                     f"broker_id={broker_id}, stock_id={stock_id}..."
                 )
-                df: pd.DataFrame = pd.read_csv(csv_path, encoding="utf-8-sig")
+                df: pd.DataFrame = pd.read_csv(
+                    csv_path, encoding=FileEncoding.UTF8_SIG.value
+                )
 
                 if df.empty:
                     logger.debug(f"Skipped {broker_id}/{stock_id}.csv (file is empty)")

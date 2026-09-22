@@ -78,9 +78,11 @@ def test_crawler_and_cleaner(stock_id: str, date: datetime.date):
     """
     測試爬取和清洗功能，會保存 CSV 檔案到 TICK_DOWNLOADS_PATH
 
-    Args:
-        stock_id: 股票代號，例如 "2330"
-        date: 日期，例如 datetime.date(2024, 1, 15)
+    - Parameters:
+        - stock_id: str
+            股票代號，例如 "2330"
+        - date: datetime.date
+            日期，例如 datetime.date(2024, 1, 15)
     """
     print(f"\n{'=' * 60}")
     print("測試爬取和清洗功能（會保存 CSV 檔案）")
@@ -144,13 +146,15 @@ def test_crawler_and_cleaner(stock_id: str, date: datetime.date):
     return cleaned_df
 
 
-def test_multiple_dates(stock_id: str, dates: list[datetime.date]):
+def test_multiple_dates(stock_id: str, dates: List[datetime.date]) -> None:
     """
     測試爬取多個日期的資料並合併
 
-    Args:
-        stock_id: 股票代號，例如 "2330"
-        dates: 日期列表，例如 [datetime.date(2024, 1, 15), datetime.date(2024, 1, 16)]
+    - Parameters:
+        - stock_id: str
+            股票代號，例如 "2330"
+        - dates: List[datetime.date]
+            日期列表，例如 [datetime.date(2024, 1, 15), datetime.date(2024, 1, 16)]
     """
     print(f"\n{'=' * 60}")
     print("測試爬取多個日期的資料")

@@ -291,11 +291,12 @@ def get_update_time_config(
     """
     根據不同的資料類型返回對應的時間區間設定
 
-    Args:
-        data_type: 資料類型，如果為 None 則返回通用設定
-
-    Returns:
-        包含時間區間設定的字典
+    - Parameters:
+        - data_type: Union[DataType, str, None]
+            資料類型，如果為 None 則返回通用設定
+    - Return:
+        - Dict[str, datetime.date | int]
+            包含時間區間設定的字典
 
     Note:
         預設結束日（end_date/end_year/end_month/end_season）皆更新到最新日（當日），

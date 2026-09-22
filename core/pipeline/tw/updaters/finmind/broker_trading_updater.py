@@ -56,9 +56,11 @@ class BrokerTradingUpdater:
         1. Loop 所有券商 ID 和股票 ID，批量更新所有組合
         2. 對每個 (券商, 股票) 組合，使用 metadata 判斷需要更新的日期範圍
 
-        Args:
-            start_date: 起始日期
-            end_date: 結束日期
+        - Parameters:
+            - start_date: Union[datetime.date, str]
+                起始日期
+            - end_date: Union[datetime.date, str]
+                結束日期
         """
         logger.info(
             f"* Start Updating Broker Trading Daily Report: {start_date} to {end_date}"
@@ -380,15 +382,20 @@ class BrokerTradingUpdater:
         """
         核心方法：更新券商分點統計表資料（給定股票、券商與日期區間，不包含時間判斷邏輯）
 
-        Args:
-            stock_id: 股票代碼
-            securities_trader_id: 券商代碼
-            start_date: 起始日期
-            end_date: 結束日期
-            do_commit: 是否在寫入後立即 commit；批次更新時由呼叫端傳 False 並定期 commit
-
-        Returns:
-            UpdateStatus: 更新狀態
+        - Parameters:
+            - stock_id: str
+                股票代碼
+            - securities_trader_id: str
+                券商代碼
+            - start_date: Union[datetime.date, str]
+                起始日期
+            - end_date: Union[datetime.date, str]
+                結束日期
+            - do_commit: bool
+                是否在寫入後立即 commit；批次更新時由呼叫端傳 False 並定期 commit
+        - Return:
+            - UpdateStatus
+                更新狀態
                 - UpdateStatus.SUCCESS: 成功更新（含 API 有回傳但本批皆為重複、saved_count==0 之情況）
                 - UpdateStatus.NO_DATA: 沒有資料（API 返回空結果）
                 - UpdateStatus.ERROR: 發生錯誤
