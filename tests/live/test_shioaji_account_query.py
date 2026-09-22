@@ -190,7 +190,10 @@ def test_stock_account_equity_includes_pending_and_positions(
     limiter: RateLimiter,
 ) -> None:
     """
-    總權益 ＝ 可用餘額 ＋ 未交割款 ＋ 持倉市值 ＋ 未實現損益
+    總權益 ＝ 可用餘額 ＋ 未交割款 ＋ 持倉成本 ＋ 未實現損益
+
+    **持倉成本要乘每張股數**：券商的 `quantity` 是張、`price` 是每股均價；
+    2 張 × 980 元是 1,960,000 元而不是 1,960 元（舊版就是這樣少算了 1000 倍）。
 
     **額度檢查的分母是總權益，不是可用餘額**：拿可用餘額當分母的話，
     只要隔日還有部位在場上，餘額就已經被部位佔掉，檢查必然誤判成額度超標
@@ -205,7 +208,7 @@ def test_stock_account_equity_includes_pending_and_positions(
     snapshot: BrokerAccountSnapshot = make_query(api, limiter).get_stock_account()
 
     assert snapshot.available_balance == 200_000.0
-    assert snapshot.total_equity == 200_000.0 + 80_000.0 + 1960.0 + 4000.0
+    assert snapshot.total_equity == 200_000.0 + 80_000.0 + 1_960_000.0 + 4000.0
     assert snapshot.total_equity > snapshot.available_balance
     assert snapshot.ts is not None
 

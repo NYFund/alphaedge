@@ -43,6 +43,36 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     LogManager.setup_backtest_logger = staticmethod(_noop)
 
 
+# 需要明確以 `-m` 點名才執行的 marker；外層是 marker，內層是 `-m` 字串裡必須出現的名稱
+_EXPLICIT_ONLY_MARKERS: Dict[str, str] = {
+    "shioaji_sim": "shioaji_sim",
+    "shioaji_sim_order": "shioaji_sim_order",
+}
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: List[pytest.Item]
+) -> None:
+    """
+    連券商的實連測試預設跳過，只有 `-m` 明確點名才執行
+
+    它們要真實金鑰與網路，部分還要盤中；平常的 `pytest` 與 CI 跑到它們只會失敗。
+    會送委託的 `shioaji_sim_order` 還要**單獨點名**：只寫 `-m shioaji_sim`
+    不該順便送出委託。
+    """
+
+    expression: str = config.getoption("markexpr") or ""
+    for item in items:
+        for marker, required in _EXPLICIT_ONLY_MARKERS.items():
+            if marker in item.keywords and required not in expression:
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason=f"實連測試；以 -m {required} 明確選取才執行"
+                    )
+                )
+                break
+
+
 # -----------------------------------------------------------------------
 # === 資料表 fixture：建表一律走 DAO，不在測試裡抄 schema ===
 # -----------------------------------------------------------------------

@@ -13,9 +13,8 @@ from core.utils import Action, LiveOrderStatus, Status, StockPriceType
 """
 `ShioajiBroker`：只做委派與限流套用，不寫業務邏輯
 
-本檔以假 session／假 API 驗組裝與委派是否正確。**真正的介面契約測試
-（`test_broker_contract.py`）要到能連上模擬環境時，以 `-m shioaji_sim` 在
-這個實作上再跑一次**——只靠假券商測過的東西到了實盤不算數，
+本檔以假 session／假 API 驗組裝與委派是否正確。**同一組介面承諾另由
+`test_shioaji_sim.py` 在模擬環境對這個實作實連驗證**——只靠假券商測過的東西到了實盤不算數，
 因為假券商永遠照腳本走，真券商會在你沒想到的地方回一個 None。
 """
 

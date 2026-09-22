@@ -175,6 +175,8 @@ quote-style = "double"  # CLAUDE.md §2.10
 # 由 pytest.ini 併入（該檔已刪除）
 markers = [
     "slow: 需要資料庫或耗時較久的測試（例如 LONG 回歸比對）",
+    "shioaji_sim: 連 Shioaji 模擬環境的實連測試；要真實金鑰，只有以 -m 明確選到才執行",
+    "shioaji_sim_order: 會在 Shioaji 模擬環境送出委託的實連測試；要 -m 明確寫出才執行",
 ]
 
 [tool.coverage.run]

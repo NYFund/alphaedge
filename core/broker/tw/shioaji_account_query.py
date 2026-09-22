@@ -11,7 +11,7 @@ from core.models import (
     FuturesPositionSnapshot,
     StockPositionSnapshot,
 )
-from core.utils import Action, PositionType, StockOrderCond
+from core.utils import Action, PositionType, StockOrderCond, Units
 
 """
 帳務查詢：把券商的餘額、交割款、部位與保證金轉成正規化快照
@@ -59,8 +59,13 @@ class ShioajiAccountQuery:
             股票帳戶快照
 
             `available_balance` 取帳戶餘額（今天就能動用的錢）；
-            `total_equity` 另加**未交割款**與**持倉市值**——它是資金額度檢查的分母，
-            拿可用餘額當分母的話，只要隔日還有部位在場上就必然誤判成額度超標。
+            `total_equity` 另加**未交割款**與**持倉市值**（成本 ＋ 未實現損益）——
+            它是資金額度檢查的分母，拿可用餘額當分母的話，只要隔日還有部位在場上
+            就必然誤判成額度超標。
+
+            **成本要乘每張股數**：`list_positions()` 的 `quantity` 單位是張、
+            `price` 是每股均價（2026-09-22 模擬環境實測），直接相乘會少 1000 倍，
+            總權益被低估到幾乎只剩未實現損益。
         - Return:
             - BrokerAccountSnapshot
                 正規化後的帳務快照
@@ -76,20 +81,20 @@ class ShioajiAccountQuery:
 
         available: float = float(getattr(balance, "acc_balance", 0.0) or 0.0)
         pending: float = self.sum_pending_settlements(settlements)
-        market_value: float = sum(
-            position.volume * position.avg_price for position in positions
+        position_cost: float = sum(
+            position.volume * Units.LOT * position.avg_price for position in positions
         )
         unrealized: float = sum(position.unrealized_pnl for position in positions)
 
         return BrokerAccountSnapshot(
             ts=self._now(),
             available_balance=available,
-            total_equity=available + pending + market_value + unrealized,
+            total_equity=available + pending + position_cost + unrealized,
             unrealized_pnl=unrealized,
             raw={
                 "acc_balance": available,
                 "pending_settlement": pending,
-                "position_market_value": market_value,
+                "position_cost": position_cost,
             },
         )
 

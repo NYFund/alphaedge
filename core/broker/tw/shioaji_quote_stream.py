@@ -435,16 +435,21 @@ class ShioajiQuoteStream:
         """
         快照時戳 → 台北時區的 aware datetime
 
-        Shioaji 的 `Snapshot.ts` 是 **epoch 奈秒**。當成秒來解會得到 1970 年，
-        而那個日期會一路寫進部位與報表。
+        Shioaji 的 `Snapshot.ts` 是**奈秒**，而且**不是真正的 epoch**：它是把台北的
+        牆上時間當成 UTC 編出來的數字（2026-09-22 模擬環境實測：台北 11:33 取的快照，
+        當 UTC 解讀正好是 11:33）。所以先以 UTC 解出牆上時間，再**換上**台北時區，
+        不做時區換算——換算的話整條時間軸會往後偏 8 小時，盤中取的報價落到晚上。
+        當成秒來解則會得到 1970 年。委託回報的 `exchange_ts` 才是真正的 epoch 秒，
+        兩者不可共用同一個轉換。
         """
 
         raw: Any = getattr(snapshot, "ts", None)
         if raw:
             try:
-                return datetime.datetime.fromtimestamp(
-                    float(raw) / 1e9, tz=get_live_timezone()
+                wall_clock: datetime.datetime = datetime.datetime.fromtimestamp(
+                    float(raw) / 1e9, tz=datetime.UTC
                 )
+                return wall_clock.replace(tzinfo=get_live_timezone())
             except (TypeError, ValueError, OSError):
                 logger.warning(f"無法解析快照時戳：{raw!r}")
 
