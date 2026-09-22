@@ -6,6 +6,7 @@ import shioaji as sj
 from loguru import logger
 
 from core.backtest.backtester import Backtester
+from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
 from core.backtest.factory import build_backtester
 from core.backtest.models.cost_model import (
     CostConfig,
@@ -57,7 +58,14 @@ from core.managers.futures.position_manager import (
 from core.managers.stock.position_manager import StockPositionManager
 from core.models import BaseOrder, FuturesAccount, FuturesOrder, StockAccount
 from core.strategies.base import BaseStrategy
-from core.utils import Action, ExecutionTiming, InstrumentType, Market, PositionType
+from core.utils import (
+    Action,
+    ExecutionTiming,
+    FuturesRollRule,
+    InstrumentType,
+    Market,
+    PositionType,
+)
 
 """
 實盤 factory：組裝與分派只寫在這裡
@@ -412,8 +420,15 @@ def _build_context(
             margin_config=margin_config,
         )
         manager = futures_manager
+        roll_config: FuturesRollConfig = to_live_roll_config(
+            getattr(strategy, "roll_config", None) or FuturesRollConfig()
+        )
+        strategy.roll_config = roll_config
         feed = TwFuturesLiveDataFeed(
-            broker, now_provider=now_provider, margin_config=margin_config
+            broker,
+            now_provider=now_provider,
+            margin_config=margin_config,
+            roll_config=roll_config,
         )
         opening_requirement = _make_opening_requirement(futures_manager, now_provider)
         spec = TwFuturesSpec()
@@ -438,6 +453,59 @@ def _build_context(
         calculate_opening_requirement=opening_requirement,
     )
     return (context, schedule)
+
+
+def to_live_roll_config(config: FuturesRollConfig) -> FuturesRollConfig:
+    """
+    - Description:
+        把策略的換月設定換成實盤做得到的版本（**不改動原物件**）
+
+        **實盤最晚要在最後交易日的前一個交易日換月**（2026-09-22 使用者裁示）：
+        回測的 `LAST_TRADING_DAY` 是撐過最後交易日、隔天才以結算價平掉舊月；
+        實盤做不到——台指期最後交易日 13:30 就收盤（期貨尾盤段 13:30 起），
+        過了那天交易所已現金結算，券商端部位消失、本地歸屬帳卻還在。
+        故 `LAST_TRADING_DAY` 與「提前 0 日」都轉成「提前 1 個交易日」。
+        與回測差一天（最後一天的曝險在次月），parity 在換月日會有可解釋的差異。
+
+        策略挑合約（`select_near_month()`）與轉倉共用這份轉換後的設定，
+        兩者才不會出現「訊號在近月、部位已換到次月」。
+    - Parameters:
+        - config: FuturesRollConfig
+            策略宣告的換月設定
+    - Return:
+        - FuturesRollConfig
+            實盤用的換月設定
+    - Raise:
+        - ValueError
+            `OPEN_INTEREST` 規則：它要當日的未沖銷量，實盤盤中取不到
+    """
+
+    if config.rule is FuturesRollRule.OPEN_INTEREST:
+        raise ValueError(
+            "實盤不支援 OPEN_INTEREST 換月規則：它比較的是當日未沖銷量，"
+            "盤中取不到；請改用 DAYS_BEFORE_EXPIRY"
+        )
+
+    days: int = (
+        1
+        if config.rule is FuturesRollRule.LAST_TRADING_DAY
+        else max(config.days_before_expiry, 1)
+    )
+    if config.rule is FuturesRollRule.LAST_TRADING_DAY or days != (
+        config.days_before_expiry
+    ):
+        logger.warning(
+            f"換月規則 {config.rule.value}（提前 {config.days_before_expiry} 日）"
+            "在實盤改為最後交易日前 1 個交易日換月：最後交易日當天的尾盤段"
+            "舊月已收盤，撐到那天就只能被交易所結算"
+        )
+
+    return FuturesRollConfig(
+        rule=FuturesRollRule.DAYS_BEFORE_EXPIRY,
+        days_before_expiry=days,
+        enabled=config.enabled,
+        calendar=config.calendar,
+    )
 
 
 def _make_opening_requirement(

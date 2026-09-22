@@ -165,6 +165,40 @@ class ShioajiContractResolver:
             )
         return contract
 
+    def list_index_futures_expiries(self, product: str) -> List[str]:
+        """
+        - Description:
+            指數期貨目前掛牌的到期月（`YYYYMM`，由近到遠）
+
+            換月判定要知道「還有哪些月份可以換過去」。排除連續月別名
+            （`TXFR1`／`TXFR2`，它們與真實月份同 `delivery_month`）；
+            週契約不在這個分類裡。商品未登錄時回空清單，由呼叫端決定不換月。
+        - Parameters:
+            - product: str
+                TAIFEX 商品代碼（Ex: TX）
+        - Return:
+            - List[str]
+                到期月清單
+        """
+
+        category: Optional[str] = SHIOAJI_FUTURES_CATEGORY.get(product)
+        group: Optional[Any] = (
+            getattr(self.api.Contracts.Futures, category, None) if category else None
+        )
+        if group is None:
+            return []
+
+        return sorted(
+            {
+                str(contract.delivery_month)
+                for contract in group
+                if getattr(contract, "delivery_month", None)
+                and not str(getattr(contract, "code", "")).endswith(
+                    CONTINUOUS_ALIAS_SUFFIXES
+                )
+            }
+        )
+
     def to_futures_symbol(self, code: str) -> str:
         """
         - Description:
