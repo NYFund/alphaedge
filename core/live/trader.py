@@ -14,6 +14,12 @@ from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
 from core.live.after_close import AfterCloseRunner
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
+from core.live.attribution.resync import (
+    ResyncPlan,
+    ResyncRefusedError,
+    apply_resync,
+    plan_resync,
+)
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
@@ -360,6 +366,73 @@ class LiveTrader:
         self._check_daily_loss()
 
         self.last_reconcile = self.reconciler.check(positions)
+
+    def resync_from_broker(self, confirm: bool) -> ResyncPlan:
+        """
+        - Description:
+            以券商部位重建歸屬帳（人工觸發的獨立作業，不跑任何段落）
+
+            **預設只列計畫**：`confirm` 為 False 時算完就結束，歸屬帳一筆都不動；
+            人看過計畫、確認要以券商為準，才帶 `confirm` 再跑一次。
+            寫入後立刻重建帳戶並對帳，結果留在 `last_reconcile`，
+            不一致時照常降級——重建沒有對齊就不該讓下一個段落開新倉。
+
+            **不恢復交易模式**：先前對帳不一致留下的降級，仍要人確認重建結果後
+            以 `--resume-trading` 解除。重建與恢復分成兩步，才有機會看一眼結果。
+
+            **有未終結的委託就拒絕**：那些委託隨時可能成交，券商部位還在變，
+            這時算出來的差額下一秒就不對了。先跑完盤後作業再重建。
+        - Parameters:
+            - confirm: bool
+                是否寫入
+        - Return:
+            - ResyncPlan
+                重建計畫
+        - Raise:
+            - ResyncRefusedError
+                歸屬帳已損壞（同一標的有兩個持有者），或仍有未終結的委託
+        """
+
+        error: Optional[BaseException] = None
+        try:
+            self.broker.connect()
+
+            # 與 `prepare()` 同一個順序：先標崩潰再讀模式。**模式一定要讀回來**——
+            # 本次結束時會把帳戶層模式寫進 `live_run`，沒讀的話寫進去的是預設的
+            # NORMAL，等於用一次重建把先前的降級擦掉
+            self.mark_previous_crash()
+            self.mode_state.load()
+
+            today: datetime.date = self._now().date()
+            unfinished: List[Dict[str, Any]] = self.dao.get_unfinished_orders(today)
+            if unfinished:
+                raise ResyncRefusedError(
+                    f"今天還有 {len(unfinished)} 張未終結的委託，券商部位仍可能變動；"
+                    "請先跑完盤後作業（--phase after_close）再重建"
+                )
+
+            positions: List[Any] = self.broker.get_positions()
+            plan: ResyncPlan = plan_resync(positions, self.dao.get_open_lots())
+            for line in plan.describe():
+                logger.warning(f"[Resync] {line}")
+
+            if plan.is_refused:
+                raise ResyncRefusedError("；".join(plan.describe()))
+            if not confirm or not plan.actions:
+                return plan
+
+            apply_resync(self.ledger, plan, self.run_id, self._now)
+            self.account_sync.rebuild_from_broker(positions)
+            self.last_reconcile = self.reconciler.check(positions)
+            return plan
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            self.broker.close()
+            for context in self.contexts:
+                context.data_feed.close()
+            self.record_finish(error)
 
     def mark_previous_crash(self) -> List[str]:
         """

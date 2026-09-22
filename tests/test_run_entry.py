@@ -150,28 +150,112 @@ def test_failure_paths_never_exit_zero(args: List[str]) -> None:
     assert run_entry(*args).returncode != 0
 
 
-def test_resync_from_broker_is_refused_not_ignored(
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"resync_from_broker": True}, "--phase"),
+        ({"phase": None, "confirm_resync": True}, "--confirm-resync"),
+        (
+            {"phase": None, "resync_from_broker": True, "resume_trading": []},
+            "--resume-trading",
+        ),
+    ],
+    ids=["resync-with-phase", "confirm-without-resync", "resync-with-resume"],
+)
+def test_resync_flag_combinations_are_refused_before_building(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+    overrides: dict,
+    message: str,
 ) -> None:
     """
-    `--resync-from-broker` 還沒接上重建流程，帶上就要明確拒絕
+    重建是獨立作業：不跑段落、不恢復交易模式，錯的組合在組裝引擎之前就拒絕
 
-    以前旗標有解析、卻沒有任何程式讀它：人工確認要重建後帶上旗標，
-    程式照一般流程跑、什麼都沒重建，對帳照樣不一致，看起來卻像旗標生效了。
-    **在建立任何連線之前就拒絕**，所以這裡讓組裝引擎直接失敗，確認根本沒走到那一步。
+    與 `--phase` 併用，人會以為重建完接著跑了段落；與 `--resume-trading` 併用，
+    重建結果還沒人看過，降級就已經解除了。
     """
 
     import run as run_module
 
     def must_not_build(*args: object, **kwargs: object) -> None:
-        raise AssertionError("帶 --resync-from-broker 時不可以組裝實盤引擎")
+        raise AssertionError("旗標組合錯誤時不可以組裝實盤引擎")
 
     monkeypatch.setattr("core.live.factory.build_live_trader", must_not_build)
     args: argparse.Namespace = make_live_args()
-    args.resync_from_broker = True
+    for name, value in overrides.items():
+        setattr(args, name, value)
 
     # 策略要找得到：找不到策略也回用法錯誤，會讓這條在沒擋旗標時照樣通過
     assert run_module.run_live(args, {"Alpha": object}) == EXIT_USAGE_ERROR
+    assert message in capsys.readouterr().err
+
+
+class ResyncTrader:
+    """只回應重建的替身引擎"""
+
+    def __init__(self, plan: object = None, error: Exception = None) -> None:
+        self.plan: object = plan
+        self.error: Exception = error
+        self.confirm: object = None
+        self.last_reconcile: object = None
+
+    def resync_from_broker(self, confirm: bool) -> object:
+        self.confirm = confirm
+        if self.error is not None:
+            raise self.error
+        return self.plan
+
+
+def run_resync(
+    monkeypatch: pytest.MonkeyPatch, trader: ResyncTrader, confirm: bool
+) -> int:
+    import run as run_module
+
+    monkeypatch.setattr(
+        "core.live.factory.build_live_trader", lambda *args, **kwargs: trader
+    )
+    args: argparse.Namespace = make_live_args()
+    args.phase = None
+    args.resync_from_broker = True
+    args.confirm_resync = confirm
+    return run_module.run_live(args, {"Alpha": object})
+
+
+def test_resync_plan_only_exits_non_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    只列計畫回 7，**不是 0**
+
+    只列計畫代表歸屬帳仍與券商不一致，排程若把它當成已處理，下一個段落照樣帶著
+    錯的部位啟動。
+    """
+
+    import run as run_module
+    from core.live.attribution.resync import RESYNC_CLOSE, ResyncAction, ResyncPlan
+
+    plan: ResyncPlan = ResyncPlan(
+        actions=[ResyncAction(RESYNC_CLOSE, "Alpha", "2330", "LONG", 2, "L1")]
+    )
+    trader: ResyncTrader = ResyncTrader(plan=plan)
+
+    assert run_resync(monkeypatch, trader, confirm=False) == (
+        run_module.EXIT_RESYNC_PLAN_ONLY
+    )
+    assert trader.confirm is False
+
+
+def test_refused_resync_exits_with_reconcile_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """歸屬帳已損壞而拒絕重建：與對帳不一致同一件事，都要人工處理"""
+
+    import run as run_module
+    from core.live.attribution.resync import ResyncRefusedError
+
+    trader: ResyncTrader = ResyncTrader(error=ResyncRefusedError("2330 兩個持有者"))
+
+    assert run_resync(monkeypatch, trader, confirm=True) == (
+        run_module.EXIT_RECONCILE_MISMATCH
+    )
 
 
 # === 實盤啟動檢查對應的退出碼 ===
@@ -186,6 +270,7 @@ def make_live_args() -> argparse.Namespace:
         strategy="Alpha",
         dry_run=False,
         resync_from_broker=False,
+        confirm_resync=False,
         resume_trading=None,
     )
 
