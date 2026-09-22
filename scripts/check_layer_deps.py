@@ -50,6 +50,9 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.api", 3, "資料層", False),
     ("core.adapters", 3, "資料層", False),
     ("core.pipeline", 3, "資料層（ETL）", False),
+    # 市場結構（交易日曆、結算日、換月規則）：ETL、回測、實盤、策略都要用同一份。
+    # 與 `core.api` 同層——日曆的建構子收 API 物件，放更低會變成反向相依
+    ("core.market", 3, "市場結構", False),
     # 純公式檔，**只相依 `math` 與 `typing`**（見 `analysis/__init__.py` 的說明）：
     # 它比 `core.utils` 還低，任何人都可以 import 它而不會拉進任何相依。
     # 報表與（日後的）策略都要呼叫同一份公式，故必須擺在所有呼叫端之下
@@ -122,20 +125,8 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
 _KNOWN_REVERSE: Dict[Tuple[str, str], str] = {
     (
         "core.utils.instrument",
-        "core.backtest.datafeed.tw.market_calendar",
-    ): "共用層 import 引擎層；StockUtils 歸屬未定",
-    (
-        "core.pipeline.tw.cleaners.futures_tick_cleaner",
-        "core.backtest.datafeed.tw.futures_calendar",
-    ): "ETL import 引擎層的期貨日曆",
-    (
-        "core.pipeline.tw.updaters.futures_continuous_updater",
-        "core.backtest.datafeed.tw.futures_calendar",
-    ): "ETL import 引擎層的期貨日曆",
-    (
-        "core.pipeline.tw.updaters.futures_continuous_updater",
-        "core.backtest.datafeed.tw.futures_roll",
-    ): "ETL import 引擎層的換月規則",
+        "core.market.tw.market_calendar",
+    ): "共用層 import 市場結構；StockUtils 歸屬未定",
 }
 
 # 非 core 的頂層套件：core/ 內任何一處 import 到它們都是反向相依
@@ -158,6 +149,7 @@ _MARKET_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/adapters",
     "core/dao",
     "core/backtest/datafeed",
+    "core/market",
     "core/pipeline",
 )
 # 引擎本體：市場語意一律由注入物件承載，檔案內不得出現 Stock／Futures／Tw 字樣。

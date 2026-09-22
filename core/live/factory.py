@@ -6,7 +6,6 @@ import shioaji as sj
 from loguru import logger
 
 from core.backtest.backtester import Backtester
-from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
 from core.backtest.factory import build_backtester
 from core.backtest.models.cost_model import (
     CostConfig,
@@ -57,6 +56,7 @@ from core.managers.futures.position_manager import (
     FuturesPositionManager,
 )
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import (
     BaseOrder,
     FuturesAccount,

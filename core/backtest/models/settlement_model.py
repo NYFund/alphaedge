@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger
 
-from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.backtest.models.cost_model import StockCostModel
 from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.instrument_spec import (
@@ -19,6 +18,7 @@ from core.managers.futures.position_manager import (
     FuturesPositionManager,
 )
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import (
     BaseAccount,
     BaseOrder,

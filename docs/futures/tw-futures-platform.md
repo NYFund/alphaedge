@@ -227,7 +227,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 
 - **換月放在結算模型**：契約會到期，部位不轉倉就會憑空消失，那是市場結構強加的；但「什麼時候轉」是政策，
   由 `FuturesRollConfig.rule` 決定——撐到最後交易日／提前 N 個交易日／未沖銷量交叉。
-- **規則只有一份實作**（`core/backtest/datafeed/tw/futures_roll.py` 的 `FuturesRollPlanner`）：
+- **規則只有一份實作**（`core/market/tw/futures_roll.py` 的 `FuturesRollPlanner`）：
   建連續合約、策略挑合約（`select_near_month()`）、結算模型轉倉都走它。兩處不一致會出現「訊號在次月、部位還在近月」。
 - **轉倉 ＝ 平舊倉 ＋ 以相同口數與方向開新倉**，展期價差**如實入帳**。
 - 週契約不由本規則轉倉；新契約當日無報價時不轉倉；新倉開不進去（保證金調高）只記 warning 不還原。

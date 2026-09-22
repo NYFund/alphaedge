@@ -1,6 +1,5 @@
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
-from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.backtest.models.cost_model import (
     CostConfig,
@@ -26,6 +25,7 @@ from core.managers.futures.position_manager import (
     FuturesPositionManager,
 )
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesAccount, StockAccount
 from core.strategies.base import BaseStrategy
 from core.strategies.futures import BaseFuturesStrategy
