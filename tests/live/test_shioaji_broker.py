@@ -97,6 +97,7 @@ class FakeApi:
         self.cancelled: List[Any] = []
         self.updated: List[tuple] = []
         self.status_refreshes: int = 0
+        self.refreshed_accounts: List[Any] = []
         self.on_broker: List[FakeTrade] = []  # 券商端當日的委託
         self.order_callback: Any = None
         # 每次下單類呼叫帶的 timeout；**假物件要求必填**，漏傳就會 TypeError
@@ -141,6 +142,7 @@ class FakeApi:
 
     def update_status(self, account: Any = None, timeout: int = 0) -> None:
         self.status_refreshes += 1
+        self.refreshed_accounts.append(account)
         self.timeouts.append(timeout)
 
     def list_trades(self) -> List[FakeTrade]:
@@ -346,7 +348,8 @@ def test_order_calls_pass_an_explicit_timeout(
     broker.refresh_order_status()
     broker.cancel_order(ticket)
 
-    assert api.timeouts == [ShioajiBroker.ORDER_TIMEOUT_MS] * 3
+    # 送單 1 次、兩個帳號各刷 1 次、撤單 1 次
+    assert api.timeouts == [ShioajiBroker.ORDER_TIMEOUT_MS] * 4
 
 
 def test_cancel_uses_the_stored_trade(broker: ShioajiBroker, api: FakeApi) -> None:
@@ -438,10 +441,37 @@ def test_refresh_order_status_uses_order_budget(
 
     tickets: List[OrderTicket] = broker.refresh_order_status()
 
-    assert api.status_refreshes == 1
+    assert api.status_refreshes == 2
     assert len(tickets) == 1
     assert tickets[0].status is LiveOrderStatus.FILLED
     assert tickets[0].filled_volume == 2
+
+
+def test_refresh_order_status_refreshes_both_accounts(
+    broker: ShioajiBroker, api: FakeApi
+) -> None:
+    """
+    股票與期貨帳號都要刷
+
+    `update_status()` 只更新傳入那個帳號的委託：只刷股票帳號時，期貨委託撤單之後
+    仍停在 PendingSubmit，收尾與恢復流程永遠看不到它終結。
+    """
+
+    broker.refresh_order_status()
+
+    assert api.refreshed_accounts == [api.stock_account, api.futopt_account]
+
+
+def test_refresh_order_status_skips_a_missing_account(
+    broker: ShioajiBroker, api: FakeApi
+) -> None:
+    """期貨權限還沒開通（帳號為 None）時只刷股票帳號，不可傳 None 進去"""
+
+    api.futopt_account = None
+
+    broker.refresh_order_status()
+
+    assert api.refreshed_accounts == [api.stock_account]
 
 
 # === 行情 ===
