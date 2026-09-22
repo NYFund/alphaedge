@@ -7,6 +7,7 @@ import pytest
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
+from core.backtest.report.plotting import EquityChartRenderer
 from core.backtest.report.reporter import StockBacktestReporter
 from core.dao.base import BaseDAO
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
@@ -244,7 +245,7 @@ def test_reporter_no_longer_double_adjusts() -> None:
     reporter 不可再對還原價套一次分割調整
 
     **重複調整實測會讓 0050 的分割日由 1.82% 變成 303%**。這條釘住
-    `_get_adjusted_price()` 已退化為原樣回傳——它保留只是為了讓兩處呼叫端
+    `get_adjusted_price()` 已退化為原樣回傳——它保留只是為了讓兩處呼叫端
     不必各自改。
     """
 
@@ -256,7 +257,7 @@ def test_reporter_no_longer_double_adjusts() -> None:
         index=[datetime.date(2025, 6, 10), datetime.date(2025, 6, 18)],
     )
 
-    assert reporter._get_adjusted_price(raw, "0050").equals(raw)
+    assert reporter.get_adjusted_price(raw, "0050").equals(raw)
 
 
 def test_transitional_split_table_is_gone() -> None:
@@ -389,6 +390,8 @@ def test_set_figure_config_does_not_open_browser_by_default() -> None:
     reporter: StockBacktestReporter = StockBacktestReporter.__new__(
         StockBacktestReporter
     )
+    # 繞過 `__init__` 就沒有渲染器；繪圖已搬到 `EquityChartRenderer`，此處自行補上
+    reporter.renderer = EquityChartRenderer(reporter)
     reporter.show = False
     reporter.set_figure_config(_Figure(), title="t")
     assert opened == []
