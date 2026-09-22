@@ -47,7 +47,7 @@
   `CrawlResult`／`CrawlStatus`（分流「查無資料」與「失敗」）、`UpdateStats` 統計行、`GracefulStop`、`RequestUtils`。
 - `tasks/update_db.py` 以 `DataType`（`core/pipeline/utils/constant.py`）列舉 target，新增美股 target 只需擴充列舉與分派。
 - **回測已是單一引擎 ＋ 可插拔 model**：新增（美股, 股票）組合依 [多市場回測引擎架構〈四、新增一個（市場, 商品）組合要做什麼〉](../docs/backtest/multi-market-engine.md)
-  的六個步驟，既有檔案只改 `factory.py` 一個分支。`Market.US` 已定義於 `core/utils/constant.py`。
+  的六個步驟，既有檔案只改 `factory.py` 一個分支。`Market.US` 已定義於 `core/utils/constant/`。
 - `yfinance` 已是主相依（`OvernightLeadEventStrategy` 與 `strategy_lab` 的 `tsmc_overnight_signal` 用它抓美股日線），
   Phase1-1 的第一個 provider 可沿用，不增加相依。
 
@@ -357,7 +357,7 @@ core/
 
 - **優先級**：P3（長期架構規劃）
 - **進度**：1 / 9 項 ✅（Phase3-3，2026-09-02）；其餘 8 項 ⬜，**Phase1-1 可直接開工**
-- **相關程式**：`core/pipeline/shared/`、`core/api/base.py`、`core/backtest/factory.py`、`core/backtest/models/`、`core/backtest/datafeed/`、`core/strategies/stock/`、`core/utils/constant.py`、`tasks/update_db.py`
+- **相關程式**：`core/pipeline/shared/`、`core/api/base.py`、`core/backtest/factory.py`、`core/backtest/models/`、`core/backtest/datafeed/`、`core/strategies/stock/`、`core/utils/constant/`、`tasks/update_db.py`
 - **相關文件**：
   - [多市場回測引擎架構](../docs/backtest/multi-market-engine.md)（新增（市場, 商品）組合的步驟；§5.1 事件驅動迴圈的長期方向）
   - [命名軸線](../docs/dev/naming-axes.md)（`us/` 可以放哪些目錄、不能放哪些目錄）

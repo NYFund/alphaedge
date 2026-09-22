@@ -50,7 +50,7 @@
 
 ### 2.3 統一預設參數（本框架採用值）
 
-以下為框架的單一預設組合，全部放在 `core/utils/constant.py`，策略可覆寫。
+以下為框架的單一預設組合，全部放在 `core/utils/constant/`，策略可覆寫。
 
 | 參數 | 常數名 | 預設值 | 依據／備註 |
 |------|--------|--------|------------|
@@ -122,7 +122,7 @@ StockUtils (純數學工具：手續費、稅、股數換算)
 TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償)
 ```
 
-### 3.2 型別（`core/utils/constant.py`）
+### 3.2 型別（`core/utils/constant/`）
 
 | 型別 | 成員 | 用途 |
 |------|------|------|
@@ -463,7 +463,7 @@ snapshot_daily_equity(date, quotes)
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/managers/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
 | `core/backtest/report/reporter.py` | 時間軸用 `exit_date`、放空欄位、多空統計、事件報表 |
-| `core/utils/constant.py`／`instrument.py` | enum、費率、檔位表、`round_to_tick` |
+| `core/utils/constant/`／`instrument.py` | enum、費率、檔位表、`round_to_tick` |
 | `core/models/stock/*` | 放空欄位、`entry/exit` 實體欄位、方向感知查詢 |
 | `tests/backtest/` | 單元／整合測試、SHORT 快照回歸、LONG 逐筆回歸 |
 

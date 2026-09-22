@@ -97,7 +97,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 | 金融期貨 | TF | 1000 元/點 |
 | 小型金融期貨 | ZFF | 250 元/點 |
 
-- **代碼與乘數的權威來源是 `core/utils/constant.py`**（`FuturesProduct` ＋ `FUTURES_MULTIPLIER`），本表僅供閱讀。
+- **代碼與乘數的權威來源是 `core/utils/constant/`**（`FuturesProduct` ＋ `FUTURES_MULTIPLIER`），本表僅供閱讀。
 - **收錄門檻是「乘數已查證」**：`FUTURES_TARGET_PRODUCTS` 內的每一檔都必須在 `FUTURES_MULTIPLIER` 登錄（有測試）。
   乘數錯了不會報錯，只會讓 PnL 靜默偏掉——同樣漲 100 點，TX 賺 20,000、TMF 只賺 1,000。
 - **XIF 非金電不納入**：其乘數曾由 100 元／點改為 10 元／點，需先以帶生效日的方式表達。
