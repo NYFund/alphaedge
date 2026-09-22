@@ -59,6 +59,13 @@ class LogManager:
 
     # 每個日誌桶收哪些套件發出的記錄（比對 `record["name"]` 的前綴）。
     # pipeline 桶不列前綴，代表「其餘全收」——新增的模組不會憑空消失。
+    #
+    # **`core.market` 刻意不列在任何桶裡**。市場結構（交易日曆、換月規則）由 ETL、
+    # 回測、實盤共用，而桶是一個分割：把它列進 backtest 桶之後，ETL 那一趟
+    # 只會開 pipeline sink，日曆的 warning 會變成「被認領、卻沒有 sink 收」而整批消失
+    # ——實測過濾器確認（`build_bucket_filter()` 的 `accept_rest` 排除已認領前綴）。
+    # 期貨日曆最重的使用者正是 ETL（tick 清洗與連續合約更新），
+    # 不認領它，它就落進總括桶，哪一趟跑都收得到。
     BUCKET_PREFIXES: Dict[str, Tuple[str, ...]] = {
         "api": ("core.api",),
         "backtest": (
