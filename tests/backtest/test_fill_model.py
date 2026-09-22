@@ -549,3 +549,59 @@ def test_touching_the_limit_without_locking_is_allowed() -> None:
 
     assert fill_model.validate(make_order(price=110.0), touched) is True
     assert event_counts["rejected_limit_up_locked"] == 0
+
+
+# === 單獨建模型（不由引擎注入計數器）===
+def test_standalone_fill_model_counts_volume_cap_rejections() -> None:
+    """
+    `event_counts=None` 時的自備計數器要涵蓋全部 key
+
+    那條路徑的註解寫著「供單獨測試」，但 fallback 只塞了一個
+    `rejected_fill_price`——一走到成交量上限就 `KeyError`，
+    也就是說這條為測試保留的路徑本身是壞的。
+    """
+
+    fill_model: TwStockFillModel = TwStockFillModel(
+        config=FillConfig(max_volume_share=0.001, volume_cap_policy=VolumeCapPolicy.REJECT)
+    )
+
+    # 委託 10 張、當日量 10,000 張 × 0.1% ＝ 上限 10 張…改用更小的量觸發拒單
+    assert fill_model.get_filled_volume(make_order(volume=50), make_quote()) is None
+    assert fill_model.event_counts["rejected_volume_cap"] == 1
+
+
+def test_standalone_futures_fill_model_counts_volume_cap_rejections() -> None:
+    """期貨側同樣的路徑；它在三處直接索引 key，缺一個就整條崩"""
+
+    from core.backtest.models.fill_model import FuturesFillConfig, TwFuturesFillModel
+    from core.models import FuturesOrder, FuturesQuote
+
+    fill_model: TwFuturesFillModel = TwFuturesFillModel(
+        config=FuturesFillConfig(
+            max_volume_share=0.001, volume_cap_policy=VolumeCapPolicy.REJECT
+        )
+    )
+    order: FuturesOrder = FuturesOrder(
+        product="TX",
+        expiry="202610",
+        date=DATE,
+        action=Action.BUY,
+        position_type=PositionType.LONG,
+        price=20000.0,
+        volume=50,
+    )
+    quote: FuturesQuote = FuturesQuote(
+        product="TX",
+        expiry="202610",
+        scale=Scale.DAY,
+        date=DATE,
+        cur_price=20000.0,
+        volume=10_000,
+        open=20000.0,
+        high=20100.0,
+        low=19900.0,
+        close=20000.0,
+    )
+
+    assert fill_model.get_filled_volume(order, quote) is None
+    assert fill_model.event_counts["rejected_volume_cap"] == 1

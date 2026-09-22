@@ -6,6 +6,7 @@ import pandas as pd
 from loguru import logger
 
 from core.backtest.models.cost_model import BaseCostModel
+from core.backtest.models.event_counts import new_event_counts
 from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.instrument_spec import InstrumentSpec
 from core.backtest.models.settlement_model import BaseSettlementModel
@@ -32,45 +33,6 @@ from core.utils import (
 from core.utils.log_manager import LogManager
 
 """Backtesting engine that simulates trading based on strategy signals"""
-
-
-def new_event_counts() -> Dict[str, int]:
-    """
-    建立事件計數器
-
-    放空策略的尾部風險不能被平均掉，需單獨計數。既有 key 與報表相容，不可更名
-    （新增可以，重新命名會讓歷史 `*_event_report.csv` 對不上）。
-    由 factory 建立後同時交給引擎、FillModel 與 SettlementModel，三者共用同一個 dict。
-    """
-
-    return {
-        "rejected_direction": 0,  # 方向不合法被剔除的訂單
-        "rejected_fill_price": 0,  # 成交價不合理被拒的訂單
-        "fill_price_clamped": 0,  # 滑價把成交價推出當日區間、被夾回的開倉單
-        "close_price_out_of_range": 0,  # 平倉成交價超出當日區間（不拒單，只計數）
-        "forced_cover_day_trade": 0,  # 當沖日終強制回補
-        "forced_cover_margin_call": 0,  # 維持率追繳強制回補
-        "forced_cover_insufficient_margin": 0,  # 當沖轉留倉時餘額不足而強制回補
-        "forced_cover_max_holding": 0,  # 超過最長持有天數強制回補
-        "forced_cover_suspended": 0,  # 停券日強制回補
-        "forced_cover_no_quote": 0,  # 連續無報價（停牌／下市）強制出場
-        "limit_up_cover_failed": 0,  # 漲停鎖死無法回補
-        "rejected_max_holdings": 0,  # 超過最大持倉檔數被引擎剔除的開倉單
-        "rejected_no_quote": 0,  # 當日查不到報價（停牌、非股票池）被拒的開倉單
-        "rejected_insufficient_balance": 0,  # 餘額不足以支應做多開倉（部位價值 ＋ 開倉成本）
-        "rejected_no_borrow": 0,  # 融券餘額不足被拒的放空開倉單
-        "rejected_short_suspended": 0,  # 停券期間被拒的融券放空開倉單
-        "rejected_limit_up_locked": 0,  # 全日鎖漲停、買不到，被拒的買進開倉單
-        "rejected_limit_down_locked": 0,  # 全日鎖跌停、賣不掉，被拒的放空開倉單
-        "rejected_volume_cap": 0,  # 超過當日成交量上限被拒的訂單
-        "truncated_by_volume": 0,  # 超過當日成交量上限被縮量的訂單
-        "dividend_compensation_paid": 0,  # 除息日補償出借方股利的空單
-        "dividend_compensation_unknown": 0,  # 因權息並存無法拆分股利而跳過補償的空單
-        "dividend_received": 0,  # 除息日收到現金股利的做多部位
-        "share_adjustment_applied": 0,  # 配股、分割、減資造成股數調整的部位
-        "share_adjustment_unknown": 0,  # 權息並存拆不出配股率而未調整股數的部位
-        "forced_exit_no_quote": 0,  # 連續無報價（停牌／下市）強制出場的做多部位
-    }
 
 
 class IntradayScaleMismatchError(RuntimeError):

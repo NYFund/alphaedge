@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
+from core.backtest.models.event_counts import new_event_counts
 from core.backtest.models.instrument_spec import (
     InstrumentSpec,
     TwFuturesSpec,
@@ -103,10 +104,14 @@ class BaseFillModel(ABC):
     成交價可信度是市場規則而非引擎邏輯，故與 InstrumentSpec 一樣下沉為可插拔 model。
     對應 Lean 的 FillModel。
 
-    **子類別必須在 `__init__` 備妥兩個屬性**，基底的夾價與區間警告直接使用：
+    **子類別必須在 `__init__` 備妥三個屬性**，基底的夾價、區間警告與逐 bar 掛點直接使用：
     - `event_counts: Dict[str, int]`：與引擎共用同一個 dict，計數才會進報表
     - `intraday_range: Dict[str, Tuple[float, float]]`：Tick 級別的當日累計高低點
+    - `prev_close: Dict[str, float]`：次一根 bar 的漲跌停基準
     """
+
+    # 數量單位：股票論張、期貨論口。只影響 log 訊息，成交量上限的政策兩邊相同
+    VOLUME_UNIT: str = "張"
 
     @abstractmethod
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
@@ -124,7 +129,6 @@ class BaseFillModel(ABC):
         """
         pass
 
-    @abstractmethod
     def on_bar_open(self, quotes: List[BaseQuote]) -> None:
         """
         一根 bar 開始：重置並累計盤中已發生的高低點
@@ -134,12 +138,95 @@ class BaseFillModel(ABC):
         會通過稍後才出現的價位。目前沒有 TICK 策略；要做逐筆回測前，得先改成
         逐筆餵入並逐筆更新區間。
         """
-        pass
 
-    @abstractmethod
+        self.intraday_range = {}
+        self.update_intraday_range(quotes)
+
+    def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
+        """
+        更新 Tick 級別的當日累計高低點
+
+        只納入傳進來的報價；防不防前視取決於呼叫端怎麼餵。目前 `on_bar_open()`
+        一次餵整天，得到的是全日區間（限制見上方的 `on_bar_open()`）。
+        """
+
+        for quote in quotes:
+            price: float = quote.cur_price or quote.close
+            if not price:
+                continue
+
+            low, high = self.intraday_range.get(quote.symbol, (price, price))
+            self.intraday_range[quote.symbol] = (min(low, price), max(high, price))
+
     def on_bar_close(self, quotes: List[BaseQuote]) -> None:
-        """一根 bar 收盤：記錄收盤價，作為次一根 bar 的漲跌停基準"""
-        pass
+        """
+        一根 bar 收盤：記錄收盤價，作為次一根 bar 的漲跌停基準
+
+        **記的是收盤價、不是結算價**：期貨的盯市價一律走 `SettlementModel`，
+        這裡只負責次日的漲跌停基準。
+        """
+
+        for quote in quotes:
+            close: float = quote.close or quote.cur_price
+            if close:
+                self.prev_close[quote.symbol] = close
+
+    def get_filled_volume(self, order: BaseOrder, quote: BaseQuote) -> Optional[int]:
+        """
+        - Description:
+            套用成交量上限：單筆訂單數量不得超過當日成交量的指定比例
+
+            **`quote.volume` 的語意依級別不同**：DAY 為當日總量、TICK 為單筆成交量。
+            TICK 級別下以單筆量當分母沒有意義，故本檢查只在 DAY 級別生效
+            （TICK 的累計量檢查尚未實作，見 `core/backtest/README.md`
+            〈成交假設〉的已知限制）。
+
+            股票與期貨是同一套政策（縮量或拒單），只有單位不同——
+            單位字由子類的 `VOLUME_UNIT` 提供，不為了一個字各寫一份。
+        - Parameters:
+            - order: BaseOrder
+                待檢查的訂單
+            - quote: BaseQuote
+                同一標的的當根 bar 報價
+        - Return:
+            - Optional[int]
+                可成交數量；整筆拒單時為 None
+        """
+
+        share: Optional[float] = self.config.max_volume_share
+
+        if not share or quote.scale != Scale.DAY or not quote.volume:
+            return order.volume
+
+        cap: int = int(quote.volume * share)
+
+        if order.volume <= cap:
+            return order.volume
+
+        unit: str = self.VOLUME_UNIT
+
+        if self.config.volume_cap_policy == VolumeCapPolicy.REJECT:
+            logger.warning(
+                f"[Fill] {order.symbol} 委託 {order.volume} {unit} > 當日成交量上限 "
+                f"{cap} {unit}（{share:.1%} × {quote.volume}），拒單"
+            )
+            self.event_counts["rejected_volume_cap"] += 1
+            return None
+
+        if cap <= 0:
+            logger.warning(
+                f"[Fill] {order.symbol} 當日成交量上限不足一{unit}（{share:.1%} × "
+                f"{quote.volume}），拒單"
+            )
+            self.event_counts["rejected_volume_cap"] += 1
+            return None
+
+        logger.warning(
+            f"[Fill] {order.symbol} 委託 {order.volume} {unit}縮量至 {cap} {unit}"
+            f"（當日成交量 {quote.volume} {unit}的 {share:.1%}）"
+        )
+        self.event_counts["truncated_by_volume"] += 1
+        return cap
 
     def apply_price_limit_basis(self, basis: Dict[str, float]) -> None:
         """一根 bar 開始：以交易所公告的基準價覆寫漲跌停基準；預設不處理"""
@@ -320,9 +407,12 @@ class TwStockFillModel(BaseFillModel):
         # 當日可借券餘額（張）：{stock_id: 融券今日餘額}，由 DataFeed 於每根 bar 開始時提供
         self.short_balance: Dict[str, int] = {}
 
-        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）
+        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）。
+        # **自備的那份要有全部 key**：舊版只塞一個 `rejected_fill_price`，
+        # 單獨建模型時只要走到成交量上限、券源或停券就 `KeyError`——
+        # 那條「供單獨測試」的路徑本身是壞的
         self.event_counts: Dict[str, int] = (
-            event_counts if event_counts is not None else {"rejected_fill_price": 0}
+            event_counts if event_counts is not None else new_event_counts()
         )
 
         # Tick 級別的當日累計高低點（TickQuote 沒有 OHLC，成交價驗證需自行維護）
@@ -455,36 +545,6 @@ class TwStockFillModel(BaseFillModel):
             return True
 
         return bool(quote.volume) and bool(quote.close or quote.cur_price)
-
-    def on_bar_open(self, quotes: List[BaseQuote]) -> None:
-        """一根 bar 開始：Tick 級別的累計高低點以該根 bar 為範圍，故先重置再累計"""
-
-        self.intraday_range = {}
-        self.update_intraday_range(quotes)
-
-    def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
-        """
-        更新 Tick 級別的當日累計高低點
-
-        只納入傳進來的報價；防不防前視取決於呼叫端怎麼餵。目前 `on_bar_open()`
-        一次餵整天，得到的是全日區間（限制見基底的 `on_bar_open()`）。
-        """
-
-        for quote in quotes:
-            price: float = quote.cur_price or quote.close
-            if not price:
-                continue
-
-            low, high = self.intraday_range.get(quote.symbol, (price, price))
-            self.intraday_range[quote.symbol] = (min(low, price), max(high, price))
-
-    def on_bar_close(self, quotes: List[BaseQuote]) -> None:
-        """收盤後記錄當日收盤價，作為次一交易日的漲跌停基準"""
-
-        for quote in quotes:
-            close: float = quote.close or quote.cur_price
-            if close:
-                self.prev_close[quote.symbol] = close
 
     def apply_short_balance(self, balance: Dict[str, int]) -> None:
         """
@@ -661,58 +721,6 @@ class TwStockFillModel(BaseFillModel):
         )
         return self.instrument.apply_slippage(order.price, order.action, bps)
 
-    def get_filled_volume(self, order: BaseOrder, quote: BaseQuote) -> Optional[int]:
-        """
-        - Description:
-            套用成交量上限：單筆訂單張數不得超過當日成交量的指定比例
-
-            **`quote.volume` 的語意依級別不同**：DAY 為當日總量、TICK 為單筆成交量。
-            TICK 級別下以單筆量當分母沒有意義，故本檢查只在 DAY 級別生效
-            （TICK 的累計量檢查尚未實作，見 `core/backtest/README.md`
-            〈成交假設〉的已知限制）。
-        - Parameters:
-            - order: BaseOrder
-                待檢查的訂單
-            - quote: BaseQuote
-                同一標的的當根 bar 報價
-        - Return:
-            - Optional[int]
-                可成交張數；整張拒單時為 None
-        """
-
-        share: Optional[float] = self.config.max_volume_share
-
-        if not share or quote.scale != Scale.DAY or not quote.volume:
-            return order.volume
-
-        cap: int = int(quote.volume * share)
-
-        if order.volume <= cap:
-            return order.volume
-
-        if self.config.volume_cap_policy == VolumeCapPolicy.REJECT:
-            logger.warning(
-                f"[Fill] {order.symbol} 委託 {order.volume} 張 > 當日成交量上限 "
-                f"{cap} 張（{share:.1%} × {quote.volume}），拒單"
-            )
-            self.event_counts["rejected_volume_cap"] += 1
-            return None
-
-        if cap <= 0:
-            logger.warning(
-                f"[Fill] {order.symbol} 當日成交量上限不足一張（{share:.1%} × "
-                f"{quote.volume}），拒單"
-            )
-            self.event_counts["rejected_volume_cap"] += 1
-            return None
-
-        logger.warning(
-            f"[Fill] {order.symbol} 委託 {order.volume} 張縮量至 {cap} 張"
-            f"（當日成交量 {quote.volume} 張的 {share:.1%}）"
-        )
-        self.event_counts["truncated_by_volume"] += 1
-        return cap
-
     def apply_price_limit_basis(self, basis: Dict[str, float]) -> None:
         """
         - Description:
@@ -749,6 +757,9 @@ class TwFuturesFillModel(BaseFillModel):
     會互相覆蓋。DataFeed 一律只取策略宣告的那一個時段，見 `TwFuturesDataFeed`。
     """
 
+    # 期貨論口，股票論張；只影響 log 訊息
+    VOLUME_UNIT: str = "口"
+
     def __init__(
         self,
         instrument: Optional[InstrumentSpec] = None,
@@ -760,9 +771,12 @@ class TwFuturesFillModel(BaseFillModel):
         # 成交假設（滑價、成交量上限）；預設全關
         self.config: FillConfig = config or FuturesFillConfig()
 
-        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）
+        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）。
+        # **自備的那份要有全部 key**：舊版只塞一個 `rejected_fill_price`，
+        # 單獨建模型時只要走到成交量上限、券源或停券就 `KeyError`——
+        # 那條「供單獨測試」的路徑本身是壞的
         self.event_counts: Dict[str, int] = (
-            event_counts if event_counts is not None else {"rejected_fill_price": 0}
+            event_counts if event_counts is not None else new_event_counts()
         )
 
         # Tick 級別的當日累計高低點（期貨 Tick 回測尚未實作，目前不會被填入）
@@ -798,36 +812,6 @@ class TwFuturesFillModel(BaseFillModel):
             )
 
         return True
-
-    def on_bar_open(self, quotes: List[BaseQuote]) -> None:
-        """一根 bar 開始：Tick 級別的累計高低點以該根 bar 為範圍，故先重置再累計"""
-
-        self.intraday_range = {}
-        self.update_intraday_range(quotes)
-
-    def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
-        """
-        更新 Tick 級別的當日累計高低點
-
-        只納入傳進來的報價；防不防前視取決於呼叫端怎麼餵。目前 `on_bar_open()`
-        一次餵整天，得到的是全日區間（限制見基底的 `on_bar_open()`）。
-        """
-
-        for quote in quotes:
-            price: float = quote.cur_price or quote.close
-            if not price:
-                continue
-
-            low, high = self.intraday_range.get(quote.symbol, (price, price))
-            self.intraday_range[quote.symbol] = (min(low, price), max(high, price))
-
-    def on_bar_close(self, quotes: List[BaseQuote]) -> None:
-        """收盤後記錄當日收盤價；**不是結算價**，盯市價一律走 SettlementModel"""
-
-        for quote in quotes:
-            close: float = quote.close or quote.cur_price
-            if close:
-                self.prev_close[quote.symbol] = close
 
     def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
         """
@@ -940,53 +924,3 @@ class TwFuturesFillModel(BaseFillModel):
             return TwFuturesSpec.DEFAULT_TICK_SIZE
 
         return getter(product)
-
-    def get_filled_volume(self, order: BaseOrder, quote: BaseQuote) -> Optional[int]:
-        """
-        - Description:
-            套用成交量上限：單筆訂單口數不得超過當日成交量的指定比例
-
-            與台股同一套政策（縮量或拒單），只有單位不同（口 vs 張）；
-            同樣只在 DAY 級別生效——Tick 的 `quote.volume` 是單筆量，當分母沒有意義。
-        - Parameters:
-            - order: BaseOrder
-                待檢查的訂單
-            - quote: BaseQuote
-                同一契約的當根 bar 報價
-        - Return:
-            - Optional[int]
-                可成交口數；整張拒單時為 None
-        """
-
-        share: Optional[float] = self.config.max_volume_share
-
-        if not share or quote.scale != Scale.DAY or not quote.volume:
-            return order.volume
-
-        cap: int = int(quote.volume * share)
-
-        if order.volume <= cap:
-            return order.volume
-
-        if self.config.volume_cap_policy == VolumeCapPolicy.REJECT:
-            logger.warning(
-                f"[Fill] {order.symbol} 委託 {order.volume} 口 > 當日成交量上限 "
-                f"{cap} 口（{share:.1%} × {quote.volume}），拒單"
-            )
-            self.event_counts["rejected_volume_cap"] += 1
-            return None
-
-        if cap <= 0:
-            logger.warning(
-                f"[Fill] {order.symbol} 當日成交量上限不足一口（{share:.1%} × "
-                f"{quote.volume}），拒單"
-            )
-            self.event_counts["rejected_volume_cap"] += 1
-            return None
-
-        logger.warning(
-            f"[Fill] {order.symbol} 委託 {order.volume} 口縮量至 {cap} 口"
-            f"（當日成交量 {quote.volume} 口的 {share:.1%}）"
-        )
-        self.event_counts["truncated_by_volume"] += 1
-        return cap
