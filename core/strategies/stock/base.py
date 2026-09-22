@@ -41,7 +41,7 @@ class BaseStockStrategy(BaseStrategy):
 
         台股信用交易專屬；方向白名單與執行順序屬市場與商品皆無關，已上移至 BaseStrategy
         （`enable_intraday` 與 `bar_execution_order` 的對應表見 `BaseStrategy.__init__`
-        的〈Direction Setting〉區塊，推導由 `Backtester.get_execution_order()` 執行）。
+        的〈Direction Setting〉區塊，推導規則見 `order_preprocess.get_execution_order()`）。
 
         `enable_intraday` 在台股另有一項市場專屬效果：SHORT ＋ 當沖時
         `factory.build_cost_config()` 會強制 `ShortMethod.DAY_TRADE`（證交稅減半）。

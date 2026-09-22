@@ -55,7 +55,7 @@ class BaseStrategy(ABC):
         self.init_capital: float = 0  # Initial capital
         # 同時可持有的最大檔數；**預設 None ＝ 不限制**。
         #
-        # 舊版預設 0，而 `Backtester.check_max_holdings()` 只把 None 當成不限制
+        # 舊版預設 0，而 `order_preprocess.check_max_holdings()` 只把 None 當成不限制
         # ——於是**忘記設定的新策略，每一張開倉單都被引擎剔除**，回測跑完是
         # 零筆交易、零錯誤訊息。寧可預設不限制（策略自己的 sizer 仍會把關），
         # 也不要用一個看起來像「還沒設定」的值去無聲地擋掉所有交易。
@@ -71,7 +71,7 @@ class BaseStrategy(ABC):
 
         方向（LONG／SHORT）與商品類別（股票／期貨）是兩條獨立的軸，故本區塊與商品無關。
 
-        執行順序的推導（`Backtester.get_execution_order()`，完整對照表在該處）：
+        執行順序的推導（`order_preprocess.get_execution_order()`，完整對照表在該處）：
 
         | position_type | enable_intraday | 推導出的預設 bar_execution_order |
         |---------------|-----------------|----------------------------------|

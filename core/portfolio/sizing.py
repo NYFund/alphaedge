@@ -46,7 +46,7 @@ class BasePositionSizer(ABC):
                 最大持倉檔數；`None` 表示不限制。
 
                 **引擎側另有一道同名檢查，兩者刻意不合併**：這裡回答「資金要切成
-                幾份」，張數不足 1 張的候選不佔名額；`Backtester.check_max_holdings()`
+                幾份」，張數不足 1 張的候選不佔名額；`order_preprocess.check_max_holdings()`
                 回答「這張單送出去會不會讓帳戶超過上限」，看的是逐單執行當下的
                 即時持倉數（未成交的單不增加持倉）。兩者不等價，少任何一道都會漏掉
                 對方擋得住的情況
