@@ -10,7 +10,7 @@ from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale
+from core.utils import Action, ExecutionTiming, LiveHook, PositionType, Scale
 
 
 class MomentumStrategy1(BaseStockStrategy):
@@ -35,6 +35,17 @@ class MomentumStrategy1(BaseStockStrategy):
 
     **TICK 級別不支援**：訊號建立在「前一交易日收盤」上，TICK 路徑沒有對應的
     取價方式；`setup_apis()` 會直接 `NotImplementedError`。
+
+    〈實盤執行〉
+    - 開倉與平倉兩個鉤子都在**尾盤段**（`AT_CLOSE`）呼叫：兩者都依收盤資料判斷，
+      尾盤段的快照最接近收盤。
+    - **狀態可由「歷史資料 ＋ 當前帳戶部位」重建**：「昨收」每次由價格表查
+      （交易日清單只是回測的加速，實盤日期超出清單時退回查資料庫），
+      平倉只看帳上部位與開倉日，沒有任何逐日累積的內部狀態。
+    - 標的池：未宣告 `symbols`，由實盤資料源補上「前一交易日有行情的全部股票」，
+      與回測每天的標的池相同。
+    - 已知差異：13:25 的快照成交量不含收盤集合競價的量，「當日成交量 ≥ 5000 張」
+      在實盤比回測稍難達到；價格同樣是快照價而非收盤價。
     """
 
     DEFAULT_MAX_HOLDINGS: int = 10
@@ -64,6 +75,13 @@ class MomentumStrategy1(BaseStockStrategy):
 
         # 回測區間的交易日清單；`setup_apis()` 建一次（見 `build_trading_days()`）
         self.trading_days: List[datetime.date] = []
+
+        # 實盤：兩個鉤子都在尾盤段呼叫（見 class docstring〈實盤執行〉）
+        self.live_ready = True
+        self.live_schedule = {
+            LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
+        }
 
     def setup_account(self, account: StockAccount) -> None:
         """設置虛擬帳戶資訊"""
@@ -136,7 +154,10 @@ class MomentumStrategy1(BaseStockStrategy):
                 前一個交易日
         """
 
-        if self.trading_days:
+        # **只在清單涵蓋的範圍內查清單**：清單依回測區間預建，實盤查的是今天，
+        # 早已超出區間；超出時平移會落到清單最後一天（一年多前），
+        # 策略就拿那天的收盤當「昨收」算漲幅，而且不會有任何錯誤
+        if self.trading_days and date <= self.trading_days[-1]:
             previous: Optional[datetime.date] = MarketCalendar.shift_trading_days(
                 self.trading_days, date, offset=-1
             )

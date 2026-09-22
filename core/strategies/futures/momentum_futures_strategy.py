@@ -5,7 +5,7 @@ from core.backtest.datafeed.base import BaseDataFeed
 from core.models import FuturesAccount, FuturesQuote
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
-from core.utils import Action, PositionType, Scale
+from core.utils import Action, ExecutionTiming, LiveHook, PositionType, Scale
 
 
 class MomentumFuturesStrategy(BaseFuturesStrategy):
@@ -25,6 +25,15 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
 
     **這支策略的用途是驗證期貨的介面能跑通，不是可用的交易邏輯**——
     門檻是隨手取的，沒有經過任何參數研究，不可當成可交易的策略。
+
+    〈實盤執行〉
+    - 開倉與平倉兩個鉤子都在**尾盤段**（`AT_CLOSE`，期貨 13:30～13:44）呼叫。
+    - **狀態可由「歷史資料 ＋ 當前帳戶部位」重建**：昨收每次由期貨價格表查，
+      是否已有部位與持有天數只看帳上部位，沒有逐日累積的內部狀態。
+    - 標的池：未宣告 `symbols`，由實盤資料源補上 `products` 目前掛牌的各月份契約；
+      挑哪個月份由 `select_near_month()` 依實盤版的換月規則決定
+      （`LAST_TRADING_DAY` 在實盤改為最後交易日前 1 個交易日換月）。
+    - 已知差異：換月比回測早一天；價格是快照價而非收盤價。
     """
 
     DEFAULT_PRODUCTS: List[str] = ["TX"]
@@ -49,6 +58,13 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
 
         self.start_date: datetime.date = self.DEFAULT_BACKTEST_START_DATE
         self.end_date: datetime.date = self.DEFAULT_BACKTEST_END_DATE
+
+        # 實盤：兩個鉤子都在尾盤段呼叫（見 class docstring〈實盤執行〉）
+        self.live_ready = True
+        self.live_schedule = {
+            LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
+        }
 
     def setup_account(self, account: FuturesAccount) -> None:
         """設置虛擬帳戶資訊"""

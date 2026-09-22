@@ -247,6 +247,9 @@ def build_live_trader(
         schedules.append(schedule)
         strategy.setup_account(context.account)
         context.data_feed.setup(strategy)
+        # 資料源可能替沒宣告標的池的策略補上預設標的（見各市場資料源的
+        # `fill_default_*()`），要在 setup 之後才讀；建 context 當下讀到的是空的
+        context.symbols = list(getattr(strategy, "symbols", []) or [])
 
     order_builders: Dict[str, FilledOrderBuilder] = {
         context.name: context.build_filled_order
