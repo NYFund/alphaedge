@@ -222,7 +222,7 @@ class FuturesBacktestReporter(StockBacktestReporter):
 
         return f"{self.NEAR_MONTH_SERIES_LABEL}（換月接點有展期價差造成的假跳空）"
 
-    def _get_adjusted_price(self, price_series: pd.Series, stock_id: str) -> pd.Series:
+    def get_adjusted_price(self, price_series: pd.Series, stock_id: str) -> pd.Series:
         """期貨沒有股票分割，對標價格原樣回傳（覆寫台股的分割調整）"""
 
         return price_series
