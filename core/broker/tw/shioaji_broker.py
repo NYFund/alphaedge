@@ -22,7 +22,16 @@ from core.models import (
     StockOrder,
     StockQuote,
 )
-from core.utils import FuturesOCType, InstrumentType, LiveOrderStatus, Status
+from core.utils import (
+    Action,
+    FuturesOCType,
+    InstrumentType,
+    LiveOrderStatus,
+    PositionType,
+    ShortMethod,
+    Status,
+    StockOrderLot,
+)
 
 """
 ShioajiBroker：把 session、合約解析、委託轉換、回報正規化、帳務查詢與行情這幾個
@@ -34,6 +43,11 @@ ShioajiBroker：把 session、合約解析、委託轉換、回報正規化、�
 一個例外是 `Trade` 物件的保管：Shioaji 的撤單與改價都要傳回**原本那個 `Trade`**，
 不是委託編號。那是券商 SDK 的形狀，只有這一層知道，所以由它存。
 """
+
+
+# 合約 `day_trade` 欄位的值（2026-09-22 模擬環境實測值域：Yes／OnlyBuy／No）
+DAY_TRADE_BOTH_WAYS: str = "Yes"  # 先買後賣、先賣後買都可以
+DAY_TRADE_BUY_FIRST_ONLY: str = "OnlyBuy"  # 只能先買後賣
 
 
 class ShioajiBroker(BaseBroker):
@@ -213,6 +227,16 @@ class ShioajiBroker(BaseBroker):
         api: Any = self._require_ready()
         contract, broker_order = self._build_order(ticket)
 
+        rejection: Optional[str] = self._check_stock_eligibility(ticket.order, contract)
+        if rejection is not None:
+            # **在本地就拒，不送出、不佔下單額度**：券商也會退，但退單訊息看起來
+            # 像別的問題，而那一趟來回在尾盤段要花掉寶貴的秒數
+            logger.warning(f"委託 {ticket.client_order_id} 送出前被拒：{rejection}")
+            ticket.status = LiveOrderStatus.REJECTED
+            ticket.reject_reason = rejection
+            ticket.updated_at = self._now()
+            return ticket
+
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
         trade: Any = api.place_order(
             contract, broker_order, timeout=self.ORDER_TIMEOUT_MS
@@ -222,6 +246,90 @@ class ShioajiBroker(BaseBroker):
         self._remember_trade(ticket, trade)
         ticket.updated_at = self._now()
         return ticket
+
+    def _check_stock_eligibility(self, order: Any, contract: Any) -> Optional[str]:
+        """
+        - Description:
+            台股委託送出前的券商端資格檢查；通過時回 None
+
+            - **先賣後買的當沖**：合約的 `day_trade` 要是 `Yes`。`OnlyBuy` 只允許
+              先買後賣，`No` 兩者都不行（2026-09-22 實測值域：`Yes`／`OnlyBuy`／`No`）。
+            - **先買後賣的當沖**：`Yes` 或 `OnlyBuy`。
+            - **融券賣出**：先查券源，不足就不送——對應回測的 `rejected_no_borrow`。
+              查不到券源時**一律不送**：不知道借不借得到就送出，等於把判斷交給券商退單。
+            - 借券（`SBLShort`）的額度由券商議借，這裡不檢查。
+
+            欄位值認不得（例如 `None`）時照「不允許」處理，不猜。
+        - Parameters:
+            - order: Any
+                本專案的訂單
+            - contract: Any
+                已解析的 Shioaji 合約
+        - Return:
+            - Optional[str]
+                拒絕原因；通過時為 None
+        """
+
+        if not isinstance(order, StockOrder):
+            return None
+
+        # 盤中零股在實盤還不能送：金額換算、成本模型、部位管理、歸屬帳與對帳全部以
+        # 「張」為單位，一張 500 股的零股單會在下游各處被當成 500 張。
+        # 回測也不支援零股，要開放得整條路徑一起改單位
+        if order.order_lot is StockOrderLot.IntradayOdd:
+            return f"{order.symbol} 盤中零股尚未支援（部位與金額皆以張計）"
+
+        raw: Any = getattr(contract, "day_trade", None)
+        day_trade: str = str(getattr(raw, "value", raw) or "")
+        symbol: str = order.symbol
+
+        if (
+            order.position_type is PositionType.SHORT
+            and order.short_method is ShortMethod.DAY_TRADE
+            and order.action is Action.SELL
+            and day_trade != DAY_TRADE_BOTH_WAYS
+        ):
+            return f"{symbol} 不可先賣後買當沖（合約 day_trade={day_trade or '未知'}）"
+
+        if (
+            order.is_day_trade
+            and order.position_type is PositionType.LONG
+            and order.action is Action.BUY
+            and day_trade not in (DAY_TRADE_BOTH_WAYS, DAY_TRADE_BUY_FIRST_ONLY)
+        ):
+            return f"{symbol} 不可當沖（合約 day_trade={day_trade or '未知'}）"
+
+        if (
+            order.position_type is PositionType.SHORT
+            and order.short_method is ShortMethod.MARGIN
+            and order.action is Action.SELL
+        ):
+            available: Optional[int] = self._query_short_source(contract)
+            if available is None:
+                return f"{symbol} 查不到券源，不送融券賣出"
+            if available < order.volume:
+                return f"{symbol} 券源不足：可借 {available} 張，需要 {order.volume} 張"
+
+        return None
+
+    def _query_short_source(self, contract: Any) -> Optional[int]:
+        """查單一標的的可融券數（張）；查詢失敗或回傳裡沒有這檔時回 None"""
+
+        api: Any = self._require_ready()
+        self.rate_limiter.acquire(RateLimitCategory.MARKET_DATA)
+        try:
+            rows: Any = api.short_stock_sources(
+                [contract], timeout=self.ORDER_TIMEOUT_MS
+            )
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"券源查詢失敗：{exc}")
+            return None
+
+        code: str = str(getattr(contract, "code", ""))
+        for row in rows or []:
+            if str(getattr(row, "code", "")) == code:
+                return int(getattr(row, "short_stock_source", 0) or 0)
+        return None
 
     def _build_order(self, ticket: OrderTicket) -> tuple:
         """依商品類別解析合約並轉換委託；轉換規則全在 mapper 裡"""
