@@ -48,15 +48,6 @@ def short_strategy(make_strategy, **overrides):
 
 
 # === 方向驅動 ===
-def test_resolve_actions() -> None:
-    """開平倉動作依訂單方向推導"""
-
-    assert Backtester.resolve_open_action(PositionType.LONG) == Action.BUY
-    assert Backtester.resolve_open_action(PositionType.SHORT) == Action.SELL
-    assert Backtester.resolve_close_action(PositionType.LONG) == Action.SELL
-    assert Backtester.resolve_close_action(PositionType.SHORT) == Action.BUY
-
-
 def test_execution_order_derivation(make_strategy, make_backtester) -> None:
     """當沖放空預設先開後平，其餘維持先平後開；策略顯式指定時以策略為準"""
 
@@ -209,20 +200,6 @@ def test_fill_model_wired_into_engine(
     assert backtester.fill_model.event_counts is backtester.event_counts
 
 
-def test_fill_model_state_shared_with_engine(
-    make_strategy, make_backtester, make_quote
-) -> None:
-    """引擎的 prev_close／intraday_range 為 FillModel 狀態的視圖，兩邊寫入互通"""
-
-    backtester: Backtester = make_backtester(short_strategy(make_strategy))
-
-    backtester.prev_close["2330"] = 100.0
-    assert backtester.fill_model.prev_close["2330"] == 100.0
-
-    backtester.fill_model.on_bar_close([make_quote(cur_price=105.0, close=105.0)])
-    assert backtester.prev_close["2330"] == 105.0
-
-
 # === 同日開平倉 ===
 def test_same_day_short_cover(
     make_strategy, make_backtester, make_order, make_quote
@@ -368,7 +345,7 @@ def test_limit_up_cannot_cover(make_strategy, make_backtester, make_quote) -> No
         },
     )
     backtester: Backtester = make_backtester(strategy)
-    backtester.prev_close["2330"] = 100.0  # 漲停價 110
+    backtester.fill_model.prev_close["2330"] = 100.0  # 漲停價 110
 
     backtester.execute_bar(
         DAY_1,

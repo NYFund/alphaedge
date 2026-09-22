@@ -24,7 +24,6 @@ from core.models import (
 )
 from core.strategies.base import BaseStrategy
 from core.utils import (
-    Action,
     BarExecutionOrder,
     PositionType,
     Scale,
@@ -151,18 +150,6 @@ class Backtester:
             "要用回測估量級請明確改為 Scale.DAY，或把 is_intraday 關掉。"
         )
 
-    @property
-    def intraday_range(self) -> Dict[str, Tuple[float, float]]:
-        """Tick 級別的當日累計高低點；狀態由 FillModel 持有"""
-
-        return self.fill_model.intraday_range
-
-    @property
-    def prev_close(self) -> Dict[str, float]:
-        """前一交易日收盤價；狀態由 FillModel 持有"""
-
-        return self.fill_model.prev_close
-
     def setup(self) -> None:
         """Set Up the Config of Backtester"""
 
@@ -200,51 +187,13 @@ class Backtester:
         )
 
     def get_execution_order(self) -> BarExecutionOrder:
-        """
-        - Description:
-            決定單根 K 棒內的執行順序；策略顯式指定時一律以策略為準
-
-            推導表（僅在 `strategy.bar_execution_order` 為 None 時適用）：
-
-            | position_type | enable_intraday | 預設順序          |
-            |---------------|-----------------|-------------------|
-            | LONG          | 任意            | `CLOSE_THEN_OPEN` |
-            | SHORT         | True            | `OPEN_THEN_CLOSE` |
-            | SHORT         | False           | `CLOSE_THEN_OPEN` |
-
-            SHORT ＋ 當沖採先開後平：現股當沖沖賣必須先賣才可能同日回補；
-            留倉放空等同日頻再平衡，維持先平後開。
-
-            **推導出的是預設建議，不是政策**：策略只要填了 `bar_execution_order`，
-            這張表就完全不參與判斷。
-
-            **LONG 為何不自動切換**：`enable_intraday` 的預設值是 True，
-            既有做多策略沒有一支是刻意宣告當沖的（`MomentumStrategy1` 持倉至少隔日
-            才平倉，卻同樣吃到 True）。若讓 LONG ＋ `enable_intraday` 自動採
-            `OPEN_THEN_CLOSE`，等於在無人宣告的情況下改掉每一支做多策略的成交順序
-            與回測結果。做多當沖請在策略 `__init__` 顯式宣告 `OPEN_THEN_CLOSE`。
-        - Return:
-            - order: BarExecutionOrder
-                本次回測單根 bar 的開平倉先後
-        """
+        """單根 bar 的開平倉先後；推導表與理由見 `order_preprocess.get_execution_order()`"""
 
         return order_preprocess.get_execution_order(
             self.strategy.bar_execution_order,
             self.strategy.position_type,
             self.strategy.enable_intraday,
         )
-
-    @staticmethod
-    def resolve_open_action(position_type: PositionType) -> Action:
-        """開倉動作：LONG 為買進、SHORT 為賣出（依訂單方向，不看策略）"""
-
-        return order_preprocess.resolve_open_action(position_type)
-
-    @staticmethod
-    def resolve_close_action(position_type: PositionType) -> Action:
-        """平倉動作：LONG 為賣出、SHORT 為買進回補"""
-
-        return order_preprocess.resolve_close_action(position_type)
 
     # === Order Validation ===
     def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
@@ -275,34 +224,7 @@ class Backtester:
 
     @staticmethod
     def sort_orders(orders: List[BaseOrder]) -> List[BaseOrder]:
-        """
-        - Description:
-            同一根 bar 內委託的決定性排序：依 `(date, symbol)` 做**穩定**排序
-
-            為什麼引擎要自己排：`check_max_holdings` 的截斷與 `PositionManager`
-            的餘額不足檢查，都會讓「先處理誰」直接改變成交結果。而委託的到達順序
-            完全繼承自報價順序，報價又來自 `SELECT * FROM price WHERE date = ?`
-            ——這句沒有 `ORDER BY`，實際列順序取決於 SQLite 當下選到哪個索引。
-            今天恰好走 `PRIMARY KEY (date, stock_id, 證券名稱)` 而等同依代號排序，
-            但那是查詢計畫的副產物：多加一個索引、換一次 schema 就可能翻掉，
-            且翻掉時不會報錯，只會讓回測結果無聲改變。引擎自己排序之後，
-            結果不再依賴任何上游容器的迭代順序。
-
-            **穩定排序**：同一標的的多筆委託維持策略給定的先後，
-            分批建倉與部分平倉的意圖不會被打散。
-
-            **已知限制**：Tick 級別的 `order.date` 只到「日」（`StockQuote.date`
-            對 tick 也是 `datetime.date`），因此同一 bar 內的 tick 委託無法依成交
-            時間排序，會被壓成依代號排序。要恢復真正的時間序，得讓 `check_*_signal`
-            回傳帶時間戳的委託事件——屬事件驅動迴圈的範圍，
-            現行的逐 bar 迴圈尚未支援。
-        - Parameters:
-            - orders: List[BaseOrder]
-                同一根 bar 內、同一個階段（開倉或平倉）的委託
-        - Return:
-            - List[BaseOrder]
-                依穩定排序鍵重排後的委託
-        """
+        """同一根 bar 內委託的決定性排序；為什麼要自己排見 `order_preprocess.sort_orders()`"""
 
         return order_preprocess.sort_orders(orders)
 
@@ -349,18 +271,6 @@ class Backtester:
             return filled_order
 
         return self.fill_model.clamp_filled_price(filled_order, quote)
-
-    def get_price_range(
-        self, quote: BaseQuote
-    ) -> Tuple[Optional[float], Optional[float]]:
-        """取得該報價可成交的價格區間；規則由 FillModel 實作"""
-
-        return self.fill_model.get_price_range(quote)
-
-    def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
-        """累計 Tick 級別的當日高低點；狀態由 FillModel 持有"""
-
-        self.fill_model.update_intraday_range(quotes)
 
     def update_prev_close(self, quotes: List[BaseQuote]) -> None:
         """收盤後記錄當日收盤價；狀態由 FillModel 持有"""
@@ -560,31 +470,7 @@ class Backtester:
         return open_positions
 
     def check_max_holdings(self, order: BaseOrder) -> bool:
-        """
-        - Description:
-            引擎側的持倉檔數硬上限
-
-            `max_holdings` 原本只是「策略願意遵守才生效」的建議值——引擎讀進來
-            卻從未使用，實際上限落在每支策略自己算張數的那段程式裡。
-            一支新策略只要不呼叫 sizer 就能無限開倉，且不會有任何警告。
-
-            本檢查讓它成為真正的風控。既有策略本來就自我約束，此處不應觸發；
-            **若 LONG 回歸因此破線，代表現有策略確實有超額開倉，屬實錯**。
-
-            **與 `EqualWeightSizer.size()` 的同名檢查刻意不合併**：那邊是訊號階段
-            「資金要切成幾份」，張數不足 1 張的候選不佔名額；這邊是逐單階段的硬上限，
-            看即時持倉數——未成交的單不增加持倉，後面的單因此仍可能被放行。
-            兩者不等價，少任何一道都會漏掉對方擋得住的情況。
-
-            已持有標的的加碼單不佔新名額，判定在共用的
-            `order_preprocess.check_max_holdings()`，與實盤同一份。
-        - Parameters:
-            - order: BaseOrder
-                待執行的開倉單
-        - Return:
-            - bool
-                True 表示可以開倉
-        """
+        """持倉檔數硬上限；與 sizer 為何不合併見 `order_preprocess.check_max_holdings()`"""
 
         held_symbols: Set[str] = {
             position.symbol
