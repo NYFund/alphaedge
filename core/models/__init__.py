@@ -10,6 +10,7 @@ from .base import (
     LiveDataUnavailableError,
     OrderStatusEvent,
     OrderTicket,
+    RealizedTradeSnapshot,
 )
 from .futures import (
     FuturesAccount,

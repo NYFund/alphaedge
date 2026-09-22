@@ -11,7 +11,7 @@ from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.execution import order_preprocess
 from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
-from core.live.after_close import AfterCloseRunner
+from core.live.after_close import AfterCloseRunner, TradeCostEstimator
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.attribution.resync import (
@@ -181,6 +181,7 @@ class LiveTrader:
         parity_checker: Optional[ParityChecker] = None,
         simulation: bool = False,
         margin_query: Optional[MarginAccountQuery] = None,
+        cost_estimator: Optional[TradeCostEstimator] = None,
     ) -> None:
         """
         - Description:
@@ -218,6 +219,8 @@ class LiveTrader:
                 是否連模擬環境；決定保證金查不到資料時放行還是擋單
             - margin_query: Optional[MarginAccountQuery]
                 券商的保證金帳務查詢；由組裝層依市場注入
+            - cost_estimator: Optional[TradeCostEstimator]
+                盤後校正成本用的估算器（依市場重算一筆已平倉交易的費用與稅）
             - resume_trading: bool
                 人工恢復交易模式（**只能由命令列旗標傳入**）
             - notifier: Optional[Any]
@@ -279,6 +282,7 @@ class LiveTrader:
             notifier=notifier,
             now_provider=now_provider,
             parity_checker=parity_checker,
+            cost_estimator=cost_estimator,
         )
 
         # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。

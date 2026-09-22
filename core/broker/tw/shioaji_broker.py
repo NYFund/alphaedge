@@ -610,6 +610,12 @@ class ShioajiBroker(BaseBroker):
         return mapping.get(text, LiveOrderStatus.FAILED)
 
     # === 期貨專用 ===
+    def get_realized_trades(self, run_date: datetime.date) -> List[Any]:
+        """當日已平倉的交易（股票與期貨）；盤後校正成本估算用"""
+
+        self._require_ready()
+        return list(self.account_query.get_realized_trades(run_date))
+
     def get_futures_account(self) -> BrokerAccountSnapshot:
         """取得期貨保證金帳務快照"""
 
