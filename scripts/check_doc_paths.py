@@ -1,5 +1,6 @@
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -11,10 +12,16 @@ from typing import Dict, List, Set, Tuple
 那才是漂移；指不到又找不到同名檔的多半是規劃中的未來檔案（`backlog/` 常見），
 不是錯誤。
 
+另一類是**檔案被刪除**。搬家看得到（有同名檔可比對），刪除看不到——
+沒有同名檔就落進「多半是規劃中的未來檔案」那一堆。實測曾有兩份 README 指向
+一支已刪除的策略檔而無人察覺，故另以 git 歷史判斷：指不到、全 repo 無同名檔、
+**但歷史上存在過**，那就是刪除造成的懸空引用。
+
 - Features:
     1. 抓行內程式碼（`` `core/xxx/yyy.py` ``）與 Markdown 連結中的帶目錄路徑
     2. 指得到就跳過；指不到但全 repo 有同名檔即回報，並列出實際位置
-    3. 只寫檔名不寫目錄的簡稱（`` `factory.py` ``）不算——那是行文，不是連結
+    3. 指不到、無同名檔、但 git 歷史存在過 → 回報為「指向已刪除的檔案」
+    4. 只寫檔名不寫目錄的簡稱（`` `factory.py` ``）不算——那是行文，不是連結
 - 使用場景:
     python scripts/check_doc_paths.py           # 有漂移時以非零狀態碼結束
     python scripts/check_doc_paths.py --list-unknown  # 另列指不到且無同名檔者
@@ -68,6 +75,59 @@ _PLANNED: Set[Tuple[str, str]] = {
 # 已知待修但暫時擋住的檔案。**解除封鎖後要連同條目一起刪掉**——
 # 留著不刪，這份檢查就會對那個檔案永久失明。
 _PENDING: Dict[str, str] = {}
+
+# 刪除檢查不掃的目錄：`backlog/` 大量引用規劃中與已淘汰的檔案，
+# 且完成紀錄本來就會提到「刪掉了什麼」——把那些當成漂移會讓閘門被噪音鎖死
+_DELETION_EXEMPT_DIRS: Tuple[str, ...] = ("backlog/",)
+
+# 刻意敘述「這個檔案已被刪除」的句子：路徑是主詞，改掉句子就不成立
+# （例如「這個主題的成品策略已於 2026-09-17 刪除（`core/…/x.py`）」）
+_DELETION_NARRATIVE: Set[Tuple[str, str]] = {
+    (
+        "strategy_lab/strategies/tsmc_overnight_signal/README.md",
+        "core/strategies/stock/overnight_lead_event_strategy.py",
+    ),
+}
+
+
+def _deleted_paths() -> Set[str]:
+    """
+    - Description:
+        git 歷史中曾存在、現在已不存在的檔案路徑
+
+        判斷「刪除」只能問版本歷史：工作目錄裡沒有任何痕跡可比對。
+        **拿不到歷史時回空集合而不是拋出**——這是一道輔助檢查，
+        不該讓整支腳本在沒有 git 的環境（例如只解壓原始碼的映像）當掉。
+    - Return:
+        - Set[str]
+            曾被刪除且目前仍不存在的相對路徑
+    """
+
+    try:
+        result: subprocess.CompletedProcess = subprocess.run(
+            [
+                "git",
+                "log",
+                "--all",
+                "--diff-filter=D",
+                "--name-only",
+                "--pretty=format:",
+            ],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return set()
+
+    return {
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip()
+        and line.strip().endswith(_EXTENSIONS)
+        and not (_PROJECT_ROOT / line.strip()).exists()
+    }
 
 
 def _iter_markdown_files() -> List[Path]:
@@ -222,10 +282,12 @@ def main() -> int:
     args = parser.parse_args()
 
     real_paths: List[str] = _collect_real_paths()
+    deleted: Set[str] = _deleted_paths()
 
     drifted: List[Tuple[str, str, List[str]]] = []
     unknown: List[Tuple[str, str]] = []
     pending: List[Tuple[str, str, List[str]]] = []
+    removed: List[Tuple[str, str]] = []
 
     for doc in _iter_markdown_files():
         rel_doc: str = str(doc.relative_to(_PROJECT_ROOT))
@@ -251,7 +313,14 @@ def main() -> int:
                 elsewhere = _moved_to(reference, real_paths)
 
             if not elsewhere:
-                unknown.append((rel_doc, reference))
+                if (
+                    reference in deleted
+                    and not rel_doc.startswith(_DELETION_EXEMPT_DIRS)
+                    and (rel_doc, reference) not in _DELETION_NARRATIVE
+                ):
+                    removed.append((rel_doc, reference))
+                else:
+                    unknown.append((rel_doc, reference))
             elif rel_doc in _PENDING:
                 pending.append((rel_doc, reference, elsewhere))
             else:
@@ -273,6 +342,17 @@ def main() -> int:
             print(f"  擋住的理由（{rel_doc}）：{reason}")
         print()
 
+    if removed:
+        print(f"指向已刪除檔案的引用（{len(removed)} 處）：")
+        for rel_doc, reference in removed:
+            print(f"  {rel_doc}")
+            print(f"      寫的是 {reference}（git 歷史有、現在沒有）")
+        print(
+            "\n改指向現存的檔案，或改寫成不點名檔案。"
+            "刻意要敘述『這個檔案已被刪除』時，登記到 `_DELETION_NARRATIVE`。"
+        )
+        return 1
+
     if drifted:
         print(f"搬過家卻沒更新的引用（{len(drifted)} 處）：")
         for rel_doc, reference, elsewhere in drifted:
@@ -282,6 +362,7 @@ def main() -> int:
         return 1
 
     print("搬過家卻沒更新的引用：0 處")
+    print("指向已刪除檔案的引用：0 處")
 
     broken_links: List[str] = check_markdown_links()
     if broken_links:
