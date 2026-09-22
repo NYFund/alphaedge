@@ -113,7 +113,10 @@ class ShioajiBroker(BaseBroker):
             futopt_account=getattr(api, "futopt_account", None),
         )
         self.account_query = ShioajiAccountQuery(
-            api, self.rate_limiter, now_provider=self._now
+            api,
+            self.rate_limiter,
+            now_provider=self._now,
+            futures_symbol=self.resolver.to_futures_symbol,
         )
         self.quote_stream = ShioajiQuoteStream(
             api, self.rate_limiter, self.quote_queue, now_provider=self._now
@@ -122,6 +125,7 @@ class ShioajiBroker(BaseBroker):
             self.execution_queue,
             record_path=self._record_path,
             on_first_report_ts=self.session.check_report_clock_skew,
+            futures_symbol=self.resolver.to_futures_symbol,
         )
         self.execution_handler.register(api)
         self.quote_stream.register_callbacks()
@@ -246,7 +250,11 @@ class ShioajiBroker(BaseBroker):
 
         if isinstance(order, FuturesOrder):
             contract = self.resolver.resolve_index_futures(order.product, order.expiry)
-            octype: FuturesOCType = getattr(ticket, "octype", None) or FuturesOCType.New
+            # 明寫在委託上的優先（換月等要指定的情況）；否則依方向與買賣別推導。
+            # 以前一律送 `New`，平倉單因此會開出反向新倉
+            octype: FuturesOCType = getattr(
+                ticket, "octype", None
+            ) or self.mapper.derive_octype(order)
             return (
                 contract,
                 self.mapper.to_shioaji_futures_order(

@@ -191,6 +191,33 @@ class ShioajiOrderMapper:
         }
         return sj.StockOrder(**self._with_account(fields, self.stock_account))
 
+    @staticmethod
+    def derive_octype(order: FuturesOrder) -> FuturesOCType:
+        """
+        - Description:
+            由訂單的持倉方向與買賣別推導開平倉別
+
+            多單買進、空單賣出是開倉（`New`）；多單賣出、空單買進是平倉（`Cover`）。
+            **平倉單送成 `New` 不是小事**：它會開一口反向新倉而不是平掉原部位，
+            帳上同時掛著多空兩邊、保證金照收兩份。
+
+            **不推導 `DayTrade`**：當沖的保證金減收要先以期貨商公告核對規則，
+            在那之前當日開當日平也送 `Cover`——結果正確，只是少了減收。
+        - Parameters:
+            - order: FuturesOrder
+                本專案的期貨訂單
+        - Return:
+            - FuturesOCType
+                `New` 或 `Cover`
+        """
+
+        opening_action: Action = (
+            Action.BUY if order.position_type is PositionType.LONG else Action.SELL
+        )
+        return (
+            FuturesOCType.New if order.action is opening_action else FuturesOCType.Cover
+        )
+
     def to_shioaji_futures_order(
         self,
         order: FuturesOrder,
