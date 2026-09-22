@@ -1,23 +1,72 @@
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from abc import ABC
+from pathlib import Path
+from typing import Any, Dict, Optional, Type
 
 import pandas as pd
 
-from core.dao.connection import DBConnection
+from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH
+from core.dao.base import BaseDAO
+from core.dao.connection import DBConnection, connect_sqlite
+from core.utils.log_manager import LogManager
 
 """Abstract base class for data access APIs. Provides a common interface for querying data from the database"""
 
 
-class BaseDataAPI(ABC):
-    """Base Class of Data API"""
+# `noqa: B024`：骨架收回基底之後已經沒有抽象方法，但仍保留 ABC——
+# 它標示的是「這個類別不該被直接實例化」，而不是「有方法待實作」
+class BaseDataAPI(ABC):  # noqa: B024
+    """
+    Base Class of Data API
 
-    def __init__(self) -> None:
-        pass
+    **建構骨架由基底負責**：開連線、建 DAO、設 log 三件事在每支 API 都是同一段，
+    只差 DAO 類別、資料庫與 log 檔名——子類宣告下面三個常數即可，不必各寫一次。
 
-    @abstractmethod
+    **「開」與「關」要由同一層負責**：`close()` 早就在讀 `self.owns_conn`
+    （共用連線不關、自建的才關），但「開」那一半以前每支自己寫，於是這個約定
+    只有一半寫在基底裡。少寫一次 `self.owns_conn` 的 API，連線就再也關不掉。
+
+    需要多個 DAO 或額外快取的子類覆寫 `setup()`，**先呼叫 `super().setup()`**
+    再補自己的；需要額外建構參數的覆寫 `__init__()`，同樣先設好自己的屬性
+    再呼叫 `super().__init__(conn)`——基底的 `__init__()` 最後才呼叫 `setup()`。
+    """
+
+    # 子類宣告：自建連線時要連哪個資料庫、單一 DAO 的類別、log 檔名。
+    # `DAO_CLASS` 留 None 代表「不只一個 DAO」或「DAO 延遲建立」，由子類自理
+    DEFAULT_DB_PATH: Optional[Path] = None
+    DAO_CLASS: Optional[Type[BaseDAO]] = None
+    LOG_FILE_NAME: str = ""
+
+    def __init__(self, conn: Optional[DBConnection] = None) -> None:
+        """
+        - Description:
+            建立 API；連線由呼叫端傳入或自行建立
+        - Parameters:
+            - conn: Optional[DBConnection]
+                共用連線（通常來自 DataFeed）；未指定時自行建立並負責關閉
+        """
+
+        # 由 DataFeed 傳入共用連線；未指定時自行建立
+        self.conn: Optional[DBConnection] = conn
+        self.owns_conn: bool = conn is None
+
+        self.setup()
+
     def setup(self) -> None:
-        """Set Up the Config of Data API"""
-        pass
+        """開連線、建 DAO、設定 log；子類要加東西時先呼叫 `super().setup()`"""
+
+        if self.owns_conn and self.DEFAULT_DB_PATH is not None:
+            self.conn = connect_sqlite(self.DEFAULT_DB_PATH)
+
+        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
+        if self.DAO_CLASS is not None:
+            self.dao = self.DAO_CLASS(conn=self.conn)
+
+        if self.LOG_FILE_NAME:
+            LogManager.setup_logger(
+                self.LOG_FILE_NAME,
+                log_dir=API_LOGS_DIR_PATH,
+                level=API_LOG_FILE_LEVEL,
+            )
 
     @staticmethod
     def build_column_map(df: pd.DataFrame, column: str) -> Dict[str, Any]:

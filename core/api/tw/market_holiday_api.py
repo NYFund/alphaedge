@@ -1,11 +1,11 @@
 import datetime
-from typing import Optional, Set
+from pathlib import Path
+from typing import Optional, Set, Type
 
 from core.api.base import BaseDataAPI
-from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import DBConnection, connect_sqlite
+from core.config import TW_STOCK_DB_PATH
+from core.dao.base import BaseDAO
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
-from core.utils.log_manager import LogManager
 
 """
 Market Holiday API: query the official TWSE holiday schedule in tw_stock.db
@@ -26,25 +26,11 @@ Market Holiday API: query the official TWSE holiday schedule in tw_stock.db
 class MarketHolidayAPI(BaseDataAPI):
     """Market Holiday API"""
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
-        self.dao: Optional[MarketHolidayDAO] = None
+    DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
+    DAO_CLASS: Type[BaseDAO] = MarketHolidayDAO
+    LOG_FILE_NAME: str = "market_holiday_api.log"
 
-        self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Data API"""
-
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
-        self.dao = MarketHolidayDAO(conn=self.conn)
-        LogManager.setup_logger(
-            "market_holiday_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+    # 建構、連線與 log 由 `BaseDataAPI` 負責；本類只寫查詢
 
     def get_covered_years(self) -> Set[int]:
         """已入庫（官方已公告）的年度；表不存在時為空集合"""

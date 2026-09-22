@@ -1,16 +1,17 @@
 import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Type
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
-from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
+from core.config import TW_STOCK_DB_PATH
 from core.config.schema import PriceColumn
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.base import BaseDAO
+from core.dao.connection import DBConnection
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.utils.constant import Units
-from core.utils.log_manager import LogManager
 
 """Stock Price API: query price table through StockPriceDAO"""
 
@@ -18,34 +19,19 @@ from core.utils.log_manager import LogManager
 class StockPriceAPI(BaseDataAPI):
     """Stock Price API"""
 
+    DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
+    DAO_CLASS: Type[BaseDAO] = StockPriceDAO
+    LOG_FILE_NAME: str = "stock_price_api.log"
+
     def __init__(
         self,
         conn: Optional[DBConnection] = None,
         dividend_api: Optional[StockDividendAPI] = None,
     ) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
-
         # 還原價專用；只有 get_adjusted_* 系列會用到，故延遲建立
         self.dividend_api: Optional[StockDividendAPI] = dividend_api
 
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.dao: Optional[StockPriceDAO] = None
-
-        self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Data API"""
-
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
-        self.dao = StockPriceDAO(conn=self.conn)
-        LogManager.setup_logger(
-            "stock_price_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+        super().__init__(conn)
 
     def get_dividend_api(self) -> StockDividendAPI:
         """取得除權息 API（延遲建立，與本 API 共用同一條連線）"""

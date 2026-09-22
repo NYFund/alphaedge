@@ -1,12 +1,12 @@
-from typing import Optional
+from pathlib import Path
+from typing import Type
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
-from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import DBConnection, connect_sqlite
+from core.config import TW_STOCK_DB_PATH
+from core.dao.base import BaseDAO
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
-from core.utils.log_manager import LogManager
 
 """Monthly Revenue Report Data API: query monthly revenue table through MonthlyRevenueDAO"""
 
@@ -14,27 +14,11 @@ from core.utils.log_manager import LogManager
 class MonthlyRevenueReportAPI(BaseDataAPI):
     """Monthly Revenue Report Data API"""
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
+    DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
+    DAO_CLASS: Type[BaseDAO] = MonthlyRevenueDAO
+    LOG_FILE_NAME: str = "monthly_revenue_report_api.log"
 
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.dao: Optional[MonthlyRevenueDAO] = None
-
-        self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Data API"""
-
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
-        self.dao = MonthlyRevenueDAO(conn=self.conn)
-        LogManager.setup_logger(
-            "monthly_revenue_report_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+    # 建構、連線與 log 由 `BaseDataAPI` 負責；本類只寫查詢
 
     def get(
         self,

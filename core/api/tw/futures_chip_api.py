@@ -1,20 +1,17 @@
 import datetime
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
 from core.config import (
-    API_LOG_FILE_LEVEL,
-    API_LOGS_DIR_PATH,
     FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
     FUTURES_LARGE_TRADER_TABLE_NAME,
     FUTURES_PUT_CALL_RATIO_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
-from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
-from core.utils.log_manager import LogManager
 
 """
 Futures Chip API: 三大法人、大額交易人與選擇權 PCR
@@ -42,26 +39,15 @@ Futures Chip API: 三大法人、大額交易人與選擇權 PCR
 class FuturesChipAPI(BaseDataAPI):
     """Futures Chip API（三張籌碼表）"""
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
-
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.daos: Dict[str, FuturesChipDAO] = {}
-
-        self.setup()
+    DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
+    LOG_FILE_NAME: str = "futures_chip_api.log"
 
     def setup(self) -> None:
-        """Set Up the Config of Data API"""
+        """建連線與主 DAO 由基底負責；此處只補本 API 多出來的 DAO"""
 
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
-        LogManager.setup_logger(
-            "futures_chip_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+        super().setup()
+        # 依商品延遲建立，故在此只備空 dict
+        self.daos: Dict[str, FuturesChipDAO] = {}
 
     def get_dao(self, table: str) -> FuturesChipDAO:
         """
