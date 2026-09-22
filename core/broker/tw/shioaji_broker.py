@@ -334,10 +334,15 @@ class ShioajiBroker(BaseBroker):
 
         api: Any = self._require_ready()
 
-        self.rate_limiter.acquire(RateLimitCategory.ORDER)
-        api.update_status(
-            getattr(api, "stock_account", None), timeout=self.ORDER_TIMEOUT_MS
-        )
+        # **股票與期貨帳號要分開刷**：`update_status()` 只更新傳入那個帳號的委託，
+        # 只刷股票帳號時，期貨委託撤單之後仍停在 PendingSubmit（模擬環境實測），
+        # 收尾與恢復流程就永遠看不到它終結
+        for account_name in ("stock_account", "futopt_account"):
+            account: Any = getattr(api, account_name, None)
+            if account is None:
+                continue
+            self.rate_limiter.acquire(RateLimitCategory.ORDER)
+            api.update_status(account, timeout=self.ORDER_TIMEOUT_MS)
 
         tickets: List[OrderTicket] = []
         for trade in api.list_trades() or []:

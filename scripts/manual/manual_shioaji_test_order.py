@@ -1,6 +1,6 @@
 import argparse
 import sys
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import shioaji as sj
 from loguru import logger
@@ -60,6 +60,15 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="送出後立刻撤單（跌停買單本來就不會成交，撤掉更乾淨）",
     )
+    parser.add_argument(
+        "--custom-field",
+        type=str,
+        default=None,
+        help=(
+            "兩筆委託都帶這個 custom_field，並檢查券商有沒有原樣帶回來"
+            "（OMS 送的是 6 個 base36 字元，例如 01000A）"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -102,25 +111,36 @@ def describe(trade: Any) -> str:
         f"status={getattr(status, 'status', '-')} "
         f"seqno={getattr(status, 'id', '-')} "
         f"price={getattr(order, 'price', '-')} "
-        f"qty={getattr(order, 'quantity', '-')}"
+        f"qty={getattr(order, 'quantity', '-')} "
+        f"custom_field={getattr(order, 'custom_field', '-')!r}"
     )
 
 
-def place_stock_order(api: Any, contract: Any, price: float) -> Any:
-    """股票：ROD 限價買進 1 張"""
+def place_stock_order(
+    api: Any, contract: Any, price: float, custom_field: Optional[str]
+) -> Any:
+    """
+    股票：ROD 限價買進 1 張
 
-    order: Any = api.Order(
+    用 `sj.StockOrder` 而不是 `api.Order()`：後者在 1.7 已棄用，
+    正式路徑的 `ShioajiOrderMapper` 也是用前者，測試單要走同一個類別。
+    """
+
+    order: Any = sj.StockOrder(
         action=sj.Action.Buy,
         price=price,
         quantity=1,
         price_type=sj.StockPriceType.LMT,
         order_type=sj.OrderType.ROD,
+        custom_field=custom_field,
         account=api.stock_account,
     )
     return api.place_order(contract, order, timeout=ORDER_TIMEOUT_MS)
 
 
-def place_futures_order(api: Any, contract: Any, price: float) -> Any:
+def place_futures_order(
+    api: Any, contract: Any, price: float, custom_field: Optional[str]
+) -> Any:
     """
     期貨：ROD 限價買進 1 口
 
@@ -134,16 +154,70 @@ def place_futures_order(api: Any, contract: Any, price: float) -> Any:
        寫成 `FuturesOrderType` 會在送單前就 `AttributeError`。
     """
 
-    order: Any = api.Order(
+    order: Any = sj.FuturesOrder(
         action=sj.Action.Buy,
         price=price,
         quantity=1,
         price_type=sj.FuturesPriceType.LMT,
         order_type=sj.OrderType.ROD,
         octype=sj.FuturesOCType.Auto,
+        custom_field=custom_field,
         account=api.futopt_account,
     )
     return api.place_order(contract, order, timeout=ORDER_TIMEOUT_MS)
+
+
+def report_custom_field_echo(
+    api: Any, trades: List[Tuple[str, Any]], expected: str
+) -> None:
+    """
+    檢查 `custom_field` 有沒有被券商原樣帶回來
+
+    重啟接管與撤單都靠它把券商端的委託對回本地的那一張；帶不回來的話，
+    `OrderManager.recover()` 會把自己送出的單當成無主委託。
+    **要從 `list_trades()` 重新取**：送單時拿到的 `Trade` 是本地建構的，
+    欄位是自己填的，看不出券商有沒有保留。
+    """
+
+    by_seqno: Dict[str, Any] = {
+        str(getattr(trade.order, "seqno", "")): trade for trade in api.list_trades()
+    }
+    for label, trade in trades:
+        seqno: str = str(getattr(trade.order, "seqno", ""))
+        echoed: Any = getattr(
+            getattr(by_seqno.get(seqno), "order", None), "custom_field", None
+        )
+        verdict: str = "一致" if echoed == expected else "**不一致**"
+        logger.info(
+            f"{label} seqno={seqno}：送出 {expected!r}，"
+            f"list_trades() 帶回 {echoed!r}（{verdict}）"
+        )
+
+
+def report_refreshed_status(api: Any, trades: List[Tuple[str, Any]]) -> None:
+    """
+    撤單後分帳號刷新，印出 `list_trades()` 重新取得的狀態
+
+    **不看送單時拿到的 `Trade`**：1.7 的 `Trade` 是原生物件，`update_status()`
+    之後它不一定會就地更新，印它會誤以為撤單沒有生效。
+    **先只刷股票帳號、再刷期貨帳號**：`ShioajiBroker.refresh_order_status()` 目前
+    只傳股票帳號，這樣排才分得出期貨委託的狀態要不要另外刷。
+    """
+
+    seqnos: Dict[str, str] = {
+        str(getattr(trade.order, "seqno", "")): label for label, trade in trades
+    }
+    for account_name in ("stock_account", "futopt_account"):
+        account: Any = getattr(api, account_name, None)
+        if account is None:
+            continue
+        api.update_status(account, timeout=ORDER_TIMEOUT_MS)
+        for trade in api.list_trades():
+            seqno: str = str(getattr(trade.order, "seqno", ""))
+            if seqno in seqnos:
+                logger.info(
+                    f"刷新 {account_name} 後，{seqnos[seqno]}委託：{describe(trade)}"
+                )
 
 
 def main() -> int:
@@ -202,18 +276,33 @@ def main() -> int:
         # **一律以跌停價買進**：在漲跌停範圍內且不會成交
         trades: List[Tuple[str, Any]] = []
         if stock_price is not None:
-            trades.append(("股票", place_stock_order(api, stock_contract, stock_price)))
+            trades.append(
+                (
+                    "股票",
+                    place_stock_order(
+                        api, stock_contract, stock_price, args.custom_field
+                    ),
+                )
+            )
 
         if futures_contract is not None:
             futures_price: Optional[float] = limit_down_price(futures_contract)
             if futures_price is not None:
                 trades.append(
-                    ("期貨", place_futures_order(api, futures_contract, futures_price))
+                    (
+                        "期貨",
+                        place_futures_order(
+                            api, futures_contract, futures_price, args.custom_field
+                        ),
+                    )
                 )
 
         api.update_status(timeout=ORDER_TIMEOUT_MS)
         for label, trade in trades:
             logger.info(f"{label}委託：{describe(trade)}")
+
+        if args.custom_field:
+            report_custom_field_echo(api, trades, args.custom_field)
 
         if args.cancel:
             for label, trade in trades:
@@ -222,9 +311,7 @@ def main() -> int:
                     logger.info(f"{label}委託已送出撤單")
                 except Exception as exc:
                     logger.warning(f"{label}撤單失敗（跌停買單本來就不會成交）：{exc}")
-            api.update_status(timeout=ORDER_TIMEOUT_MS)
-            for label, trade in trades:
-                logger.info(f"{label}撤單後：{describe(trade)}")
+            report_refreshed_status(api, trades)
 
         if not has_futopt:
             logger.warning(

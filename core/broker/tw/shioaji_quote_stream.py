@@ -240,8 +240,8 @@ class ShioajiQuoteStream:
                混進來的話成交量差 1000 倍，門檻型訊號會整組失效。
 
             **價格一律轉 float 再進模型**，與回測的型別對齊；混用會在某些路徑
-            靜默降精度。來源型別隨版本不同：shioaji 1.3.3 實測是 `Decimal`，
-            1.7 的型別檔寫的是 `str`，`float()` 兩者都能轉。
+            靜默降精度。來源實測是 `Decimal`（shioaji 1.3.3 與 1.7.5 皆然），
+            但 1.7 的型別檔寫的是 `str`；`float()` 兩者都能轉，型別檔改了也不受影響。
         - Parameters:
             - message: Any
                 Shioaji 的 `TickSTKv1`

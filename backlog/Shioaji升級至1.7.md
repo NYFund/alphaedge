@@ -21,12 +21,12 @@
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
 | S1 | 1.3.3 → 1.7.5 差異盤點 | 本文件〈差異盤點〉章節 | 差異表涵蓋 `core/` 每個用到的 shioaji 符號 | ✅ | 2026-09-21：23 項差異；試升後 24 failed、15 errors，集中在 4 個測試檔。**影響比預估大**，但都收得進 `core/broker/tw/`、`core/utils/` 與測試 |
-| S2 | 依賴 1.3.3 行為的結論逐條重驗 | 本文件〈重驗清單〉章節 | 清單每一條都有 1.7.5 下的結論與佐證（原始碼位置或實測輸出） | 🔄 | 2026-09-21：12 列中 10 列已有結論（含登入實測）；剩 `custom_field` 伺服器限制、行情 runtime 型別待 S5 |
+| S2 | 依賴 1.3.3 行為的結論逐條重驗 | 本文件〈重驗清單〉章節 | 清單每一條都有 1.7.5 下的結論與佐證（原始碼位置或實測輸出） | ✅ | 2026-09-22：12 列全部有結論；最後兩列（`custom_field`、行情 runtime 型別）由 S5 盤中實測補齊 |
 | S3 | 升級鎖定版本並修正程式 | `pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant.py`、相關測試 | `uv run pytest -m "not slow"` 全綠 | ✅ | 2026-09-21：`uv.lock` 升至 1.7.5；`uv run pytest` 2008 passed、ruff 全綠、回歸雙線通過 |
 | S4 | 離線驗證：測試全套與行情重放 | 無（驗證步驟） | `uv run pytest` 含 `slow` 全綠；1.3.3 時期錄的行情檔可重放，或不能重放的原因已記錄 | ✅ | 2026-09-21：含 `slow` 全綠；1.3.3 時期錄製的 `quotes_20260921_1130.jsonl` 56 筆全部重放成功 |
-| S5 | 模擬環境實連驗證 | 本文件實測紀錄 | 驗收標準第 3 條 | ⬜ | 相依 S4；**必須在交易日盤中**跑 |
+| S5 | 模擬環境實連驗證 | 本文件實測紀錄 | 驗收標準第 3 條 | ✅ | 2026-09-22 盤中：登入、股票＋期貨委託與撤單、`custom_field` 往返、行情錄製與重放全部通過；另抓出 `refresh_order_status()` 只刷股票帳號的 bug 並修正 |
 | S6 | tick 爬取路徑驗證 | `core/pipeline/tw/crawlers/*`（如需修正） | `scripts/manual/manual_tick_crawler.py` 抓得到一檔股票與一檔期貨的 tick，欄位與舊版一致 | ✅ | 2026-09-21：2330 單日 4,824 筆、TX 202610 單日 45,604 筆（日盤＋夜盤），欄位與升版前中繼檔相同 |
-| S7 | 回寫實盤文件並解除借券阻塞 | `backlog/實盤下單架構規劃.md`、`backlog/index.md` | 實盤文件不再有「鎖定版 1.3.3」的過時敘述；Phase6-1 的借券前提更新 | ⬜ | 相依 S2、S5 |
+| S7 | 回寫實盤文件並解除借券阻塞 | `backlog/實盤下單架構規劃.md`、`backlog/index.md` | 實盤文件不再有「鎖定版 1.3.3」的過時敘述；Phase6-1 的借券前提更新 | ✅ | 2026-09-22：實盤文件 10 處 1.3.3 敘述都已附上 1.7.5 結論或註明為歷史紀錄；借券阻塞解除 |
 
 ---
 
@@ -83,7 +83,7 @@
 | 22 | `Ticks` | pydantic | `MappingMixin`（有 `keys()`、`__getitem__`），欄位名稱相同 | `core/pipeline/tw/crawlers/stock_tick_crawler.py:60-62`（`{**ticks}` 展開） | 理論上可用，**待 S6** 實際抓一天確認 |
 | 23 | `sj.Shioaji` 作為型別 | Python class | 原生 class，PEP 604 的 `\|` 與 `isinstance` 都可用（實測） | `core/backtest/datafeed/tw/market_calendar.py:78,102` | 無影響 |
 
-### S2. 依賴 1.3.3 行為的結論逐條重驗 🔄
+### S2. 依賴 1.3.3 行為的結論逐條重驗 ✅
 
 - **目的**：實盤文件中有一批設計決定建立在 1.3.3 的行為上，行為變了，決定可能跟著失效，而且多半是安靜地失效。
 - **做法**：以 1.7.5 逐條重驗下表（來源皆為 [實盤下單架構規劃.md](實盤下單架構規劃.md)），能離線查的讀原始碼，要連線的併入 S5：
@@ -108,7 +108,7 @@
 - **驗證方式**：每一列都填了 1.7.5 結論與佐證；要實連的列標明「待 S5」。
 - **相依**：S1。
 
-> **🔄 進度（2026-09-21）**：能離線確認的列都已填完；登入即可確認的列已於 2026-09-21 以正式環境唯讀登入實測（不啟用憑證、不下單，與 ETL 相同的登入方式）；只剩需要**盤中或下單**的列待 S5。
+> **✅ 完成紀錄（2026-09-22）**：能離線確認的列於 2026-09-21 填完；登入即可確認的列於 2026-09-21 以正式環境唯讀登入實測（不啟用憑證、不下單，與 ETL 相同的登入方式）；需要盤中或下單的兩列於 2026-09-22 由 S5 在模擬環境實測補齊。
 >
 > | 項目 | 1.3.3 的結論 | 1.7.5 結論 | 佐證 |
 > |------|--------------|------------|------|
@@ -122,8 +122,8 @@
 > | `login(receive_window=)` | 伺服器把關秒級時鐘偏差 | 參數仍在、預設仍為 30000，登入成功；偏差過大時的伺服器行為待 S5 | 型別檔；2026-09-21 實連 |
 > | `Contract.update_date` | `'2026/09/21'` 斜線格式字串 | **不成立**：改為 `datetime.date`（`date(2026, 9, 21)`）。session 原本就接受 `date`，另補測試釘住 | 2026-09-21 實連 |
 > | `Contract` 的 10 個欄位 | 全部存在 | **部分成立**：股票的 `reference`／`limit_up`／`limit_down`／`update_date`／`day_trade`／`margin_trading_balance`／`short_selling_balance`／`unit` 都在（`unit` 為 `float`）；期貨沒有 `unit`，`multiplier` 為 `float`（200.0），`underlying_code` 在 | 2026-09-21 實連 |
-> | `custom_field` 限制 | 最多 6 字元、pattern `^[ -~]*$` | **本地已不驗證**：7 字元與中文都能建構；伺服器端是否仍限制，**待 S5** | 實測 |
-> | 行情推播型別 | `stream_data_type` 的 `TickSTKv1` 等 | 類別仍在（頂層 `sj.TickSTKv1`），但 `stream_data_type` 只剩相容層、沒有型別標註，重放器讀不到型別（已改為 repo 內自己維護型別表）；價格與 `datetime` 的 runtime 型別**待 S5**（轉換層以 `float()` 與 `_localize()` 處理，兩種型別都能接） | 實測（`test_quote_replay.py` 6 條紅，修正後全綠） |
+> | `custom_field` 限制 | 最多 6 字元、pattern `^[ -~]*$` | **本地已不驗證**：7 字元與中文都能建構，專案的 `validate_custom_field()` 是唯一防線（OMS 只送 6 個 base36 字元）。**往返成立**：股票與期貨委託帶 `01000A`／`01000B`，`list_trades()` 都原樣帶回；股票的 `order_cb` 委託回報也帶著，**期貨的委託回報沒有 `custom_field` 這個 key**——OMS 先以 seqno 比對、再退回 `custom_field`，盤中不受影響。超過 6 字元時伺服器的行為未測（本地已擋，不會送出） | 2026-09-22 模擬環境實測 |
+> | 行情推播型別 | `stream_data_type` 的 `TickSTKv1` 等 | 類別仍在（頂層 `sj.TickSTKv1`），但 `stream_data_type` 只剩相容層、沒有型別標註，重放器讀不到型別（已改為 repo 內自己維護型別表）。**runtime 型別與 1.3.3 相同**：價格與金額是 `Decimal`、`datetime` 是 naive `datetime`、委買賣價是 `List[Decimal]`；型別檔寫的 `str` 與實際不符，以實測為準。錄製檔格式不變，`RECORDED_FIELD_TYPES` 不需修改 | 實測（`test_quote_replay.py` 6 條紅，修正後全綠）；2026-09-22 盤中錄製 |
 > | `Settlement` 欄位 | `t_money`／`t1_money`／`t2_money` | **仍成立**：三者都在（型別檔漏列）；`SettlementV1` 的 `T` 也在 | 2026-09-21 實連 |
 
 ### S3. 升級鎖定版本並修正程式 ✅
@@ -169,7 +169,7 @@
 > - `uv run pytest -rs`（含 `slow`）2008 passed；`./scripts/run_regression.sh` 回歸雙線都實際執行且通過。
 > - 1.3.3 時期的錄製檔：`data/records/quotes_20260921_1130.jsonl` 的 56 筆 `tick_stk` 全部重放成功，`close` 還原為 `Decimal`、`datetime` 還原為 `datetime`，轉出的報價正常（首筆 2454、4930.0、`2026-09-21T11:30:39+08:00`）。`quotes_20260921_1109.jsonl` 是第一版錄製腳本錄成空白的那份，重放器照設計略過並警告，與升版無關。
 
-### S5. 模擬環境實連驗證 ⬜
+### S5. 模擬環境實連驗證 ✅
 
 - **目的**：回呼、推播、委託回報這些路徑只有實連才會跑到，也是 S2 中要連線才能重驗的那幾列。
 - **做法**（交易日盤中，模擬環境）：
@@ -179,6 +179,18 @@
 - **產出**：本步驟章節末的實測紀錄（日期、shioaji 版本、各腳本輸出重點）。
 - **驗證方式**：驗收標準第 3 條。
 - **相依**：S4；Phase0-1 的帳號權限（期貨部分）。
+
+> **✅ 完成紀錄（2026-09-22，台北 10:53～11:16 盤中，shioaji 1.7.5，模擬環境）**
+> 1. **登入**（`manual_shioaji_login`）：成功，3 個帳號（股票、期貨帳號皆有）。2330 合約：`reference` 2480.0、`limit_up` 2725.0、`limit_down` 2235.0（皆 `float`）、`update_date` 為 `date(2026, 9, 22)`、`day_trade` 為 `DayTrade.Yes`、融資券餘額為 `int`、`unit` 1000.0；股票沒有 `multiplier`／`underlying_code`，與 S2 結論一致。期貨分類 373 類。
+> 2. **委託與撤單**（`manual_shioaji_test_order --confirm --cancel --custom-field …`）：2330 跌停價 2235 買 1 張、TXFJ6 跌停價 43248 買 1 口，各跑 3 輪（第 1 輪未帶 `--cancel`，兩筆模擬單掛到收盤失效）。
+>    - `order_cb` 收到 `OrderState.StockOrder`／`FuturesOrder`，`op_type='New'`、`op_code='00'`；委託回報結構（`operation`／`order`／`status`／`contract`）與 `ShioajiExecutionHandler.parse_order_event()` 讀的欄位一致。
+>    - **撤單回報**：`op_type='Cancel'`、`op_code='00'`、`status.cancel_quantity=1`、`order_quantity=0`，符合 OMS 以 `op_type` 開頭為 cancel 轉 CANCELLED 的判定。
+>    - `custom_field` 往返：見 S2 表。
+>    - 期貨委託送出後，`place_order()` 回傳時的狀態是 `PendingSubmit`（股票是 `Submitted`），撤單照樣成功。
+>    - **抓到的 bug**：`update_status()` 只更新傳入帳號的委託。撤單後只刷股票帳號時，期貨委託仍是 `PendingSubmit`；刷了期貨帳號才變 `Cancelled`。`ShioajiBroker.refresh_order_status()` 原本只傳股票帳號，期貨委託在收尾與恢復流程永遠看不到終結。已修正為兩個帳號分別刷新（各佔一次下單類額度，期貨帳號為 None 時略過），並新增兩條測試；換回舊程式會紅。
+>    - 送單時拿到的 `Trade` 在 1.7 不會被 `update_status()` 就地更新，要從 `list_trades()` 重新取；`refresh_order_status()` 本來就是這樣做，不受影響。
+>    - 腳本同步修正：`api.Order()`（1.7 已棄用、每次發 `DeprecationWarning`）改為 `sj.StockOrder`／`sj.FuturesOrder`，與正式路徑的 `ShioajiOrderMapper` 相同；新增 `--custom-field` 往返檢查與撤單後分帳號刷新的檢查。
+> 3. **行情錄製與重放**（`manual_shioaji_quote_record --seconds 60`）：2330／2317／2454 共 343 筆（委買賣 315、逐筆 28），存於 `data/records/quotes_20260922_1054.jsonl`。以 `quote_replay.replay_quotes()` 重放：28 筆逐筆全部轉成報價，兩次重放逐筆相同，首筆 2317 252.0、`2026-09-22T10:54:54.886762+08:00`。
 
 ### S6. tick 爬取路徑驗證 ✅
 
@@ -193,7 +205,7 @@
 > - 期貨 TX 202610：45,604 筆（日盤 30,416、夜盤 15,188，夜盤自 09-17 15:00 起），`FuturesTickCleaner.clean()` 後的欄位與既有中繼檔 `TX202612_20260828.csv` 完全相同。
 > - `shioaji.data.Ticks` 仍可用 `{**ticks}` 展開，爬蟲與清洗器不需修改（`FuturesTickCrawler` 的合約查詢已在 S3 改寫）。
 
-### S7. 回寫實盤文件並解除借券阻塞 ⬜
+### S7. 回寫實盤文件並解除借券阻塞 ✅
 
 - **目的**：讓實盤文件反映新版事實，避免之後有人照著 1.3.3 的結論寫程式。
 - **做法**：
@@ -203,6 +215,14 @@
 - **產出**：`backlog/實盤下單架構規劃.md`、`backlog/index.md`。
 - **驗證方式**：`grep -n "1\.3\.3" backlog/實盤下單架構規劃.md` 的每一處都已加上新版結論，或只留作歷史脈絡並註明。
 - **相依**：S2、S5。
+
+> **✅ 完成紀錄（2026-09-22）**
+> - `實盤下單架構規劃.md` 中 `grep -n "1\.3\.3"` 的 10 處：過去的完成紀錄保留原文當歷史，在其後補「1.7.5 重驗」段落；會被當成現行規則照做的敘述（決策表 `order_cond` 列、Phase2-4 的 ⚠️、Phase6-1 的借券前提、Phase0-1 做法第 4 點的版本）直接改寫。
+>   - 仍成立：`FuturesOrderType` 不存在、`receive_window`、`Stocks` 一層涵蓋上市櫃、下單參數 Enum 值。
+>   - 不成立並已改寫：`SBLShort`（1.7.2 起支援，借券阻塞解除）、`MultiContract.__getitem__` 回 None、`symbol`／`_code2contract` 查詢鍵、`_block()` 與 `contracts_timeout`、`update_date` 格式。
+> - Phase0-1 補上 1.7.5 重驗：期貨帳號已取得，股票與期貨模擬委託與撤單都已實測。
+> - `backlog/index.md` 實盤與優化清單兩列的相依同步更新。
+> - 程式碼註解：`ShioajiQuoteStream.to_tick_quote()` 改寫行情價格型別的說明（1.7.5 實測仍是 `Decimal`）。
 
 ---
 
