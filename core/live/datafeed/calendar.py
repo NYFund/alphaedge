@@ -4,6 +4,8 @@ from typing import Any, List, Optional, Sequence
 
 from loguru import logger
 
+from core.api.tw.market_holiday_api import MarketHolidayAPI
+
 """
 交易日判定：盤前沒有今天的資料，既有的兩種判斷都用不上
 
@@ -18,10 +20,13 @@ from loguru import logger
 2. **來源之間衝突就拒絕啟動**，不投票也不取多數。衝突代表其中一個來源的語意
    與我們以為的不同，那時繼續跑只是在賭。
 
-⚠️ **目前缺主來源。** 規劃要的是 TWSE／TAIFEX 公告的官方休市日曆（爬一次落地成表），
-本階段沒有做，於是平日只剩券商合約檔這一個來源。**這是已知限制**：
-合約檔更新是副作用不是契約，休市日也可能因為系統作業而更新。
-模擬環境的連續演練要至少跨一個休市日，實際驗證一次這條路徑。
+**主來源是官方開休市日曆**（`OfficialHolidayCalendarSource`，TWSE 公告落地成
+`market_holiday` 表，`python -m tasks.update_db --target market_holiday`）。它只替
+已入庫的年度作答；年度未入庫時回 `None`，交由其他來源——平日就只剩券商合約檔。
+
+⚠️ **官方日曆與券商合約檔可能衝突**：休市日若券商因系統作業更新了合約檔，
+合約檔會說「開市」、官方日曆說「休市」，依第 2 條規則拒絕啟動。這是刻意的：
+不偏袒任何一方，衝突時由人判斷。
 """
 
 
@@ -65,6 +70,34 @@ class WeekendCalendarSource(TradingCalendarSource):
         return False if date.weekday() >= 5 else None
 
 
+class OfficialHolidayCalendarSource(TradingCalendarSource):
+    """
+    以 TWSE 公告的市場開休市日期判定（主來源）
+
+    唯一事前就答得出「明天休不休市」的來源。**只替已入庫的年度作答**：年度未入庫時
+    回 `None`，不把「表上查不到」當成「不是假日」——明年的公告通常 12 月才出來，
+    那之前問明年的日期只能說不知道。
+    """
+
+    name: str = "official_holiday"
+
+    def __init__(self, holiday_api: MarketHolidayAPI) -> None:
+        """
+        - Description:
+            建立來源
+        - Parameters:
+            - holiday_api: MarketHolidayAPI
+                開休市日期 API（連 `tw_stock.db`，唯讀即可）
+        """
+
+        self._api: MarketHolidayAPI = holiday_api
+
+    def is_trading_day(self, date: datetime.date) -> Optional[bool]:
+        """已涵蓋年度內：休市（含週末）回 False、其餘回 True；年度未入庫回 None"""
+
+        return self._api.is_trading_day(date)
+
+
 class BrokerContractCalendarSource(TradingCalendarSource):
     """
     以券商合約檔的更新日期判定
@@ -72,9 +105,8 @@ class BrokerContractCalendarSource(TradingCalendarSource):
     合約檔每個交易日更新一次，所以「更新日 ＝ 今天」是有開市的**佐證**。
 
     ⚠️ **這是副作用不是契約**：休市日也可能因為券商的系統作業而更新，
-    而且它只答得出「今天」——問明天或上週都回 `None`。規劃原本把它定位成
-    交叉驗證，是因為拿它當主來源就是這個風險。目前沒有官方日曆表，
-    只能暫時讓它擔任主來源，**已列為已知限制**。
+    而且它只答得出「今天」——問明天或上週都回 `None`。故它只當交叉驗證；
+    主來源是 `OfficialHolidayCalendarSource`，官方日曆的年度未入庫時才由它單獨作答。
     """
 
     name: str = "broker_contract"
@@ -157,7 +189,8 @@ def resolve_trading_day(
             f"沒有任何來源判定得出 {date} 是否為交易日（已詢問 "
             f"{[name for name, _ in answers]}）。**不預設為開市**——"
             "休市日照常跑完整套流程會送單被退、對帳全是差異，然後推播一整天的告警。"
-            "請補上官方休市日曆，或確認券商合約檔取得正常"
+            "請執行 `python -m tasks.update_db --target market_holiday` 補上官方"
+            "開休市日曆，或確認券商合約檔取得正常"
         )
 
     values: set = {value for _, value in definite}

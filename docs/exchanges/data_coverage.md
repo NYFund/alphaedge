@@ -20,6 +20,7 @@
 | 台期貨保證金 | TAIFEX 公告附件（CSV） | `FuturesMarginAPI` | SQLite `tw_futures.db` `futures_margin_history`（指數類每口金額）、`stock_futures_margin_rate_history`（股票類比例） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
 | 台期貨籌碼 | TAIFEX 三大法人／大額交易人／選擇權 PCR | `FuturesChipAPI` | SQLite `tw_futures.db` `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | 三大法人：2023-09-04（來源只保留約三年）；其餘以庫內最早一筆為準 | `get_available()` 只回傳查詢日之前已公布者（避免前視） |
 | 股票期貨標的池 | TAIFEX 標的證券一覽表（GET） | `FuturesStockUniverseAPI` | SQLite `tw_futures.db` `futures_stock_universe` | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseUpdater.get_active_products()` |
+| 市場開休市日期 | TWSE `holidaySchedule`（JSON，一年一次請求） | `MarketHolidayAPI` | SQLite `market_holiday` | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
 | Tick 逐筆 | Shioaji + DolphinDB | `StockTickAPI` | DolphinDB `tickDB` | 預設更新起日 `2024-05-10`（`TICK_UPDATE_START_DATE`）；Shioaji 可查區間約自 **2020-03-02** | 需 DDB 環境 |
 
 ## API 與資料表對照
@@ -38,6 +39,7 @@
 | `FuturesMarginAPI` | `core/api/tw/futures_margin_api.py` | SQLite | `futures_margin_history`、`stock_futures_margin_rate_history` |
 | `FuturesChipAPI` | `core/api/tw/futures_chip_api.py` | SQLite | `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` |
 | `FuturesStockUniverseAPI` | `core/api/tw/futures_stock_universe_api.py` | SQLite | `futures_stock_universe` |
+| `MarketHolidayAPI` | `core/api/tw/market_holiday_api.py` | SQLite | `market_holiday` |
 
 起始日期常數皆定義於 `core/config/settings.py`。
 
@@ -72,6 +74,7 @@ python -m tasks.update_db --target <targets...>
 | `futures_continuous` | 無區間；由 `futures_price_daily` 整段重建 |
 | `futures_margin` | 快照更新（現行一覽表），沒調整時不新增列 |
 | `futures_chip` | 各表最新日 +1（盤後公布，盤中跑到「無資料」屬正常） |
+| `market_holiday` | 無區間；固定抓去年／今年／明年，每年整年替換；尚未公告的年度跳過 |
 | `futures_tick` | 2015-01-01；需 `[tick]` 相依與 Shioaji 金鑰，DolphinDB 寫入路徑未實測 |
 
 完整參數與範例見 [指令教學](../commands/command-usage.zh-TW.md)。

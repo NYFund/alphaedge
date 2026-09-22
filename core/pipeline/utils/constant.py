@@ -25,6 +25,8 @@ class DataType(str, Enum):
     FUTURES_STOCK_PRICE = "FUTURES_STOCK_PRICE"
     # 期貨逐筆成交（Shioaji → DolphinDB）；需要 `[tick]` 選用相依與 Shioaji 金鑰
     FUTURES_TICK = "FUTURES_TICK"
+    # 市場開休市日期（TWSE 公告，一年一次請求）；實盤盤前判定交易日的主來源
+    MARKET_HOLIDAY = "MARKET_HOLIDAY"
 
 
 class ListingBoard(str, Enum):

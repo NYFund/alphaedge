@@ -37,6 +37,7 @@
 | `futures_continuous`      | 台期貨連續合約（由 `futures_price_daily` 建出，不連網路） |
 | `futures_margin`          | 台期貨保證金（變動序列，寫入 `tw_futures.db`） |
 | `futures_chip`            | 台期貨籌碼（三大法人、大額交易人、選擇權 PCR） |
+| `market_holiday`          | 市場開休市日期（TWSE 公告；每次重抓去年／今年／明年，寫入 `tw_stock.db`）。實盤盤前判定交易日的主來源 |
 | `futures_tick`            | 台期貨逐筆成交（Shioaji → DolphinDB；需 `[tick]` 相依與金鑰）。**不含在 `all`／`no_tick` 內**：沒有續跑紀錄、重跑會重複寫入，只在明確點名時才跑 |
 | `all`                     | 全部資料（含 tick；不含 `futures_tick` 與 `futures_stock_price`） |
 | `no_tick`                 | 全部資料（不含 `tick` **與** `futures_tick`，預設）。兩者都需要 Shioaji 金鑰與 `[tick]` 選用相依，不排除的話，沒有金鑰的機器每晚都會以結束碼 1 收場 |
@@ -97,6 +98,11 @@ python -m tasks.update_db --target futures_price
 # 快照愈稀疏，推出來的日期誤差愈大。
 # 下游要取商品清單一律用 FuturesStockUniverseUpdater.get_active_products()，不要另外手寫清單。
 python -m tasks.update_db --target futures_stock_universe
+
+# 市場開休市日期（寫入 tw_stock.db 的 market_holiday 表）
+# 一年一次請求，每次重抓去年、今年、明年並整年替換。明年的公告通常 12 月才出來，
+# 那之前明年會被記為「尚未公告」跳過，屬正常；實盤查到未入庫年度的日期會拒絕啟動。
+python -m tasks.update_db --target market_holiday
 
 # 全部資料（含 tick）
 python -m tasks.update_db --target all
