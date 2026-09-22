@@ -268,13 +268,15 @@ def test_adapter_attaches_adjusted_close_only_when_enabled(
 ) -> None:
     """adapter 的 `adjusted` 參數決定是否掛還原價；OHLC 一律維持原始價"""
 
-    from core.adapters import StockQuoteAdapter
+    from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 
     date: datetime.date = datetime.date(2024, 6, 13)
 
-    raw_quotes = StockQuoteAdapter.convert_to_day_quotes(price_api, date)
-    adjusted_quotes = StockQuoteAdapter.convert_to_day_quotes(
-        price_api, date, adjusted=True
+    # 查詢由呼叫端負責（adapter 已是純轉換層）
+    price_df = price_api.get(date)
+    raw_quotes = StockQuoteAdapter.from_day_rows(price_df, date)
+    adjusted_quotes = StockQuoteAdapter.from_day_rows(
+        price_df, date, price_api.get_adjusted_close_map(date)
     )
 
     raw = next(q for q in raw_quotes if q.stock_id == STOCK_ID)

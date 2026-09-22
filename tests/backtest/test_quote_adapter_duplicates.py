@@ -3,7 +3,7 @@ from typing import List
 
 from loguru import logger
 
-from core.adapters import StockQuoteAdapter
+from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.models import StockQuote
 from core.utils import Scale
 
