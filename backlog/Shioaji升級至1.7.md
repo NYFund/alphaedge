@@ -22,7 +22,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | S1 | 1.3.3 → 1.7.5 差異盤點 | 本文件〈差異盤點〉章節 | 差異表涵蓋 `core/` 每個用到的 shioaji 符號 | ✅ | 2026-09-21：23 項差異；試升後 24 failed、15 errors，集中在 4 個測試檔。**影響比預估大**，但都收得進 `core/broker/tw/`、`core/utils/` 與測試 |
 | S2 | 依賴 1.3.3 行為的結論逐條重驗 | 本文件〈重驗清單〉章節 | 清單每一條都有 1.7.5 下的結論與佐證（原始碼位置或實測輸出） | ✅ | 2026-09-22：12 列全部有結論；最後兩列（`custom_field`、行情 runtime 型別）由 S5 盤中實測補齊 |
-| S3 | 升級鎖定版本並修正程式 | `pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant.py`、相關測試 | `uv run pytest -m "not slow"` 全綠 | ✅ | 2026-09-21：`uv.lock` 升至 1.7.5；`uv run pytest` 2008 passed、ruff 全綠、回歸雙線通過 |
+| S3 | 升級鎖定版本並修正程式 | `pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant/`、相關測試 | `uv run pytest -m "not slow"` 全綠 | ✅ | 2026-09-21：`uv.lock` 升至 1.7.5；`uv run pytest` 2008 passed、ruff 全綠、回歸雙線通過 |
 | S4 | 離線驗證：測試全套與行情重放 | 無（驗證步驟） | `uv run pytest` 含 `slow` 全綠；1.3.3 時期錄的行情檔可重放，或不能重放的原因已記錄 | ✅ | 2026-09-21：含 `slow` 全綠；1.3.3 時期錄製的 `quotes_20260921_1130.jsonl` 56 筆全部重放成功 |
 | S5 | 模擬環境實連驗證 | 本文件實測紀錄 | 驗收標準第 3 條 | ✅ | 2026-09-22 盤中：登入、股票＋期貨委託與撤單、`custom_field` 往返、行情錄製與重放全部通過；另抓出 `refresh_order_status()` 只刷股票帳號的 bug 並修正 |
 | S6 | tick 爬取路徑驗證 | `core/pipeline/tw/crawlers/*`（如需修正） | `scripts/manual/manual_tick_crawler.py` 抓得到一檔股票與一檔期貨的 tick，欄位與舊版一致 | ✅ | 2026-09-21：2330 單日 4,824 筆、TX 202610 單日 45,604 筆（日盤＋夜盤），欄位與升版前中繼檔相同 |
@@ -63,8 +63,8 @@
 | 2 | 套件結構 | `shioaji.constant`、`.order`、`.contracts`、`.data`、`.position`、`.account`、`.stream_data_type` 是真的模組 | 全部類別都在頂層 `sj.X`；舊子模組只剩相容層，每次取用都發 `DeprecationWarning` | 12 個檔案的 `import shioaji.constant as sj_constant`、`from shioaji.order import ...` 等（見符號表） | S3：改用頂層 `sj.X`，不依賴已棄用的相容層 |
 | 3 | Enum 型別 | Python `str` Enum：可 iterate、有 `.name`、依值呼叫回傳同一個成員物件 | 原生類別：**不能 iterate**；多數成員**沒有 `.name`**（`OrderState`、`QuoteType`、`SecurityType`、`OptionRight` 例外）；`Action("Buy") is Action.Buy` 為 **False**。成員仍是 `str`，`==` 字串值成立（實測） | `core/broker/tw/shioaji_order_mapper.py:390,394`（依值呼叫、iterate）；`tests/live/test_shioaji_order_mapper.py` 以 `is` 比對與讀 `.name`（:218,270,353,357,366,387,421）；`tests/test_order_state_parity.py` 整份 | S3：mapper 的成員檢查改為讀類別屬性；測試 `is` 改 `==`；parity 測試改以成員屬性逐一比對值，保證「值對不上會紅」不變 |
 | 4 | `OrderState` | str Enum | 原生類別，仍是 `str`、有 `.name`，`==` 原值成立（實測） | `core/utils/callback.py:27`、`core/broker/tw/shioaji_execution_handler.py:122,124` | **比較前提仍然成立**，不需修程式；只改 parity 測試的判定方式（它目前以「不是 Python Enum」直接判紅） |
-| 5 | Enum 值變動 | — | `QuoteType.BidAsk` 值 `'bidask'` → **`'bid_ask'`**；`SecurityType.Future` 改名 **`Futures`**（並新增 `Warrant`）；`Exchange` 新增 `TIM`；`ChangeType` 新增 `Dowm`（原文拼字）；`constant.Status` 改由 `sj.OrderStatus` 提供 | `core/utils/constant.py:217-220` 的 `QuoteType` 鏡像；parity 測試 | S3：專案鏡像的 `QuoteType.BIDASK` 值改為 `bid_ask`（要查錄製檔、紀錄庫有沒有存舊值）；`Status` 改指 `sj.OrderStatus` |
-| 6 | `StockOrderCond` | `Cash`／`MarginTrading`／`ShortSelling` | 新增 **`SBLShort`**、**`SBLShortPriceExempt`**、`Netting`、`Emerging`（1.7.2：「SBL short order condition」） | `core/broker/tw/shioaji_order_mapper.py:373-397`、`core/utils/constant.py:238-241`、parity 測試的 ratchet 清單（:116-122） | S3：依 ratchet 原本的設計，把 `SBLShort` 從「shioaji 缺少」清單移除；mapper 借券改為照常轉換（試升時 `test_sbl_raises_and_does_not_fall_back` 已 DID NOT RAISE） |
+| 5 | Enum 值變動 | — | `QuoteType.BidAsk` 值 `'bidask'` → **`'bid_ask'`**；`SecurityType.Future` 改名 **`Futures`**（並新增 `Warrant`）；`Exchange` 新增 `TIM`；`ChangeType` 新增 `Dowm`（原文拼字）；`constant.Status` 改由 `sj.OrderStatus` 提供 | `core/utils/constant/:217-220` 的 `QuoteType` 鏡像；parity 測試 | S3：專案鏡像的 `QuoteType.BIDASK` 值改為 `bid_ask`（要查錄製檔、紀錄庫有沒有存舊值）；`Status` 改指 `sj.OrderStatus` |
+| 6 | `StockOrderCond` | `Cash`／`MarginTrading`／`ShortSelling` | 新增 **`SBLShort`**、**`SBLShortPriceExempt`**、`Netting`、`Emerging`（1.7.2：「SBL short order condition」） | `core/broker/tw/shioaji_order_mapper.py:373-397`、`core/utils/constant/:238-241`、parity 測試的 ratchet 清單（:116-122） | S3：依 ratchet 原本的設計，把 `SBLShort` 從「shioaji 缺少」清單移除；mapper 借券改為照常轉換（試升時 `test_sbl_raises_and_does_not_fall_back` 已 DID NOT RAISE） |
 | 7 | 帳號類別 | `StockAccount`、`FutureAccount` 兩個類別；`account_type="S"` 字串可建構 | 兩者都對應同一個 `sj.Account`；`account_type` 必須是 `sj.AccountType`，傳字串會 `TypeError`（實測；試升時 15 個 errors 都是這個） | `tests/live/test_shioaji_broker.py:80-87` 的 fake 帳號 | S3：測試改用 `sj.Account(account_type=sj.AccountType....)`；程式本身未以 `isinstance` 區分兩種帳號 |
 | 8 | 委託 model（`StockOrder`／`FuturesOrder`） | pydantic：`custom_field` 限 6 字元、pattern `^[ -~]*$`；`account=None` 會被拒 | 原生類別：**不再驗證 `custom_field`**（7 字元、中文都能建構，實測）；`account=None` 接受；欄位名稱不變 | `core/broker/tw/shioaji_order_mapper.py:40-41,246-248,333-357` | 專案自己的 `custom_field` 檢查**成為唯一的本地防線**，必須保留；更新引用 pydantic 行為的註解 |
 | 9 | `Trade` 結構 | `order: Order`、`contract: Contract`、`status: OrderStatus`（model） | `order: OrderResult`、`contract: ContractIdentifier`、`status: OrderStatusInfo`；`OrderStatusInfo` 的欄位名稱與舊的 `OrderStatus` model 相同（`status`、`deal_quantity`、`deals`、`msg`、`order_datetime`…）；`OrderResult` 仍有 `seqno`、`ordno`、`custom_field`（型別檔） | `core/broker/tw/shioaji_broker.py:383-396`、`core/utils/account.py:125-142` | 欄位名稱沿用，預期不需改；`trade.contract.code` 在 `ContractIdentifier` 下是否可用待 S5 |
@@ -131,10 +131,10 @@
 - **目的**：套用升版，並修掉 S1、S2 找出的不相容處。
 - **做法**：
   - `pyproject.toml` 的 `shioaji==1.3.3` 改回下限寫法 `shioaji>=1.7`，執行 `uv lock --upgrade-package shioaji`，確認 `uv.lock` 的 diff 只動到 shioaji 與它強制要求的傳遞相依。
-  - 依差異表修正 `core/broker/tw/*`、`core/utils/callback.py`（`order_cb` 在 `OrderState` 不再是 Enum 下的比較方式）、`core/utils/constant.py`（下單參數 Enum 補上新版有的值，例如 `SBLShort`）。
+  - 依差異表修正 `core/broker/tw/*`、`core/utils/callback.py`（`order_cb` 在 `OrderState` 不再是 Enum 下的比較方式）、`core/utils/constant/`（下單參數 Enum 補上新版有的值，例如 `SBLShort`）。
   - `tests/test_order_state_parity.py` 依新版型別改寫比對方式：它的用途是讓「值對不上」的安靜失效變成紅燈，改寫後這個保證必須還在。
   - 修正時查新版寫法可使用 Shioaji plugin；寫法的根據仍要回到原始碼或實測，不以 plugin 的敘述當作唯一依據。
-- **產出**：`pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant.py`、`tests/test_order_state_parity.py` 及其他因此調整的測試。
+- **產出**：`pyproject.toml`、`uv.lock`、`core/broker/tw/*`、`core/utils/callback.py`、`core/utils/constant/`、`tests/test_order_state_parity.py` 及其他因此調整的測試。
 - **驗證方式**：`uv run pytest -m "not slow" -rs` 全綠；`uv run ruff check .` 全綠。
 - **相依**：S2。
 
@@ -145,7 +145,7 @@
 >   - 所有 `shioaji.constant`／`.order`／`.contracts`／`.data`／`.position`／`.stream_data_type` 的 import 改為頂層 `sj.X`，測試全程沒有 shioaji 的 `DeprecationWarning`。
 >   - `ShioajiOrderMapper`：錯誤訊息改以類別屬性列出成員（新增 `list_broker_enum_values()`），比較改用 `==`；`custom_field` 的本地檢查成為唯一防線，註解同步改寫。
 >   - 借券：`StockOrderCond.SBLShort` 在 1.7.2 起支援，mapper 照常轉換；「券商 Enum 缺成員時必須拋出、不可退回」的保證改用缺成員的替身 Enum 驗證，不再依賴安裝版本。
->   - `core/utils/constant.py`：`QuoteType.BidAsk` 值改為 `bid_ask`；`StockOrderCond` docstring 改寫。
+>   - `core/utils/constant/`：`QuoteType.BidAsk` 值改為 `bid_ask`；`StockOrderCond` docstring 改寫。
 >   - 行情：回呼改為單參數（交易所從行情物件的 `exchange` 取，入列格式不變）；訂閱與回呼直接掛在 api 上，不再經過已棄用的 `api.quote`。
 >   - `quote_replay.py`：型別表改為 repo 內自己維護的 `RECORDED_FIELD_TYPES`（取自 1.3.3 標註，即錄製檔格式），錄製腳本共用同一份。順帶修掉一個既有 bug：`List[Decimal]` 在 Python 3.12 取 `__name__` 只得到 `List`，委買賣價格從未被還原成 `Decimal`。
 >   - 合約：`ShioajiContractResolver` 改用 `Stocks.get()`、屬性取分類、迭代比對 `delivery_month` 並排除連續月別名，股期對照表的分類改讀合約的 `root`；`FuturesTickCrawler`、`ShioajiQuoteStream._split_code()`、`MarketCalendar`、`StockUtils`、`StockTickCrawler` 與兩支手動腳本同步改寫。

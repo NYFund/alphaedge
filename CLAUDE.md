@@ -147,7 +147,7 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 
 ### 2.7 常數與 Enum
 
-1. 字串常數先定義模組層級 `UPPER_SNAKE_CASE`，再由 `class XxxEnum(str, Enum)` 引用（見 `core/utils/constant.py`），不要直接在 Enum 內寫字面值。
+1. 字串常數先定義模組層級 `UPPER_SNAKE_CASE`，再由 `class XxxEnum(str, Enum)` 引用（見 `core/utils/constant/`），不要直接在 Enum 內寫字面值。
 2. 分類常數上方加中文分組註解：`# 定義下單類型常量`。
 
 ### 2.8 區塊分隔註解

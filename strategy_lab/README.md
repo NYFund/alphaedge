@@ -297,7 +297,7 @@ common_ids = StockUtils.filter_common_stocks(stock_ids=["2330", "0050", "9962", 
 
 ### Units / Commission — 單位與成本常數
 
-來自 `core/utils/constant.py`：
+來自 `core/utils/constant/`：
 
 ```python
 from core.utils import Units, Commission

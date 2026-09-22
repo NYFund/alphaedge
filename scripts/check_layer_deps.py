@@ -271,10 +271,45 @@ def package_key(module: str) -> str:
     return best or top_package(module)
 
 
+def _type_checking_only_lines(tree: ast.AST) -> Set[int]:
+    """
+    `if TYPE_CHECKING:` 區塊內每一行 import 的行號
+
+    這種 import **執行期不會執行**，因此不可能造成真的循環 import——
+    它只是讓型別檢查器看得到型別。循環偵測要排除它們，否則
+    「A 執行期 import B、B 只為了型別標註 import A」會被報成循環，
+    而那個程式其實跑得好好的。分層規則仍然計入它們：相依關係在設計上存在。
+    """
+
+    lines: Set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test: ast.expr = node.test
+        name: str = (
+            test.id
+            if isinstance(test, ast.Name)
+            else test.attr
+            if isinstance(test, ast.Attribute)
+            else ""
+        )
+        if name != "TYPE_CHECKING":
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, (ast.Import, ast.ImportFrom)):
+                lines.add(inner.lineno)
+    return lines
+
+
 def build_graph(
     files: List[Path],
-) -> Tuple[Dict[str, Set[str]], Dict[str, Path], Dict[str, List[Tuple[str, int]]]]:
-    """建立檔案層級 import 圖；回傳 (adjacency, module→path, module→[(target, lineno)])"""
+) -> Tuple[
+    Dict[str, Set[str]],
+    Dict[str, Path],
+    Dict[str, List[Tuple[str, int]]],
+    Dict[str, Set[str]],
+]:
+    """建立檔案層級 import 圖；回傳 (adjacency, module→path, module→[(target, lineno)], 執行期 adjacency)"""
 
     paths: Dict[str, Path] = {module_name_of(p): p for p in files}
     # 讓 `pkg.__init__` 也能被辨識為套件
@@ -284,6 +319,7 @@ def build_graph(
             known.add(f"{module_name_of(p)}.__init__")
 
     graph: Dict[str, Set[str]] = defaultdict(set)
+    runtime_graph: Dict[str, Set[str]] = defaultdict(set)
     detail: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
     for module, path in paths.items():
         try:
@@ -291,6 +327,7 @@ def build_graph(
         except SyntaxError as exc:
             print(f"[SKIP] {path}: {exc}")
             continue
+        type_only: Set[int] = _type_checking_only_lines(tree)
         for node in ast.walk(tree):
             if not isinstance(node, (ast.Import, ast.ImportFrom)):
                 continue
@@ -299,8 +336,10 @@ def build_graph(
                 if target is None or target == module:
                     continue
                 graph[module].add(target)
+                if node.lineno not in type_only:
+                    runtime_graph[module].add(target)
                 detail[module].append((target, node.lineno))
-    return graph, paths, detail
+    return graph, paths, detail, runtime_graph
 
 
 def strongly_connected(graph: Dict[str, Set[str]]) -> List[List[str]]:
@@ -574,7 +613,7 @@ def main() -> int:
     args: argparse.Namespace = parser.parse_args()
 
     files: List[Path] = collect_files()
-    graph, paths, detail = build_graph(files)
+    graph, paths, detail, runtime_graph = build_graph(files)
 
     reverse: List[str] = []  # 低層 import 高層
     known_reverse: List[str] = []  # 已登錄的反向相依
@@ -619,7 +658,8 @@ def main() -> int:
                     f"{paths[src].relative_to(_PROJECT_ROOT)}:{lineno}: {src} -> {dst}"
                 )
 
-    cycles: List[List[str]] = strongly_connected(graph)
+    # 循環只看執行期的 import：`TYPE_CHECKING` 區塊不會執行，循環不成立
+    cycles: List[List[str]] = strongly_connected(runtime_graph)
     leakage: List[str] = check_market_leakage()
     axis: List[str] = check_axis_dirs()
     facades: List[str] = check_strategy_facades(graph)

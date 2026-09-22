@@ -21,8 +21,8 @@
 
 | 軸 | 名稱 | 值 | 語意 | 定義位置 |
 |:--:|------|------|------|----------|
-| A | `Market` | `TW`／`US` | 地區／交易市場。交易日曆、開盤時間、幣別屬於此軸 | `core/utils/constant.py` |
-| B | `InstrumentType` | `STOCK`／`FUTURE`／`OPTION` | 商品類別。契約乘數、報價單位、結算規則屬於此軸 | `core/utils/constant.py` |
+| A | `Market` | `TW`／`US` | 地區／交易市場。交易日曆、開盤時間、幣別屬於此軸 | `core/utils/constant/` |
+| B | `InstrumentType` | `STOCK`／`FUTURE`／`OPTION` | 商品類別。契約乘數、報價單位、結算規則屬於此軸 | `core/utils/constant/` |
 | C | `ListingBoard` | `sii`／`otc`／`rotc`／`pub`／`all` | 掛牌板別（上市／上櫃／興櫃／公開發行）。僅台股適用，值即公開資訊觀測站的 `TYPEK` 參數 | `core/pipeline/utils/constant.py` |
 | D | `IssuerOrigin` | `DOMESTIC = "0"`／`FOREIGN = "1"` | 發行人國別（國內／國外企業，即 F 股／KY 股）。值即月營收頁 URL 末碼 | `core/pipeline/utils/constant.py` |
 

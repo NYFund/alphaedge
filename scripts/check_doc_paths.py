@@ -59,6 +59,11 @@ _HISTORICAL_DOCS: Set[str] = set()
 # 敘述搬家這件事本身的句子：舊路徑是主詞，改掉會讓句子不成立
 # （例如「`core/config.py` 已拆為套件」）
 _NARRATIVE: Set[Tuple[str, str]] = {
+    # `core/utils/order.py`（舊的 `OrderUtils`）已刪除；同名的
+    # `core/utils/constant/order.py` 是常數拆分後的新檔，兩者無關
+    ("backlog/架構重構與冗餘收斂.md", "core/utils/order.py"),
+    ("backlog/實盤下單架構規劃.md", "core/utils/order.py"),
+    ("backlog/Shioaji升級至1.7.md", "core/utils/order.py"),
     ("backlog/PostgreSQL遷移計畫.md", "core/config.py"),
     ("backlog/index.md", "core/config.py"),
     ("backlog/架構重構與冗餘收斂.md", "core/config.py"),
