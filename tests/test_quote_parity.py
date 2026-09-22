@@ -236,8 +236,8 @@ def test_missing_snapshot_fields_become_zero_not_none(
     快照缺欄位時價格欄退回 0.0，不是 None
 
     `StockQuote` 的價格欄型別是 `float`，塞 None 會讓下游任何算術直接 TypeError。
-    退回 0 的代價是「0 元」看起來像真實報價——那是 Phase3-2 的報價健檢要擋的事，
-    本檔只釘住現行口徑。
+    退回 0 的代價是「0 元」看起來像真實報價——擋掉它是報價驗證層的職責，
+    本檔只釘住現行口徑，不預先假設那一層會怎麼改。
     """
 
     quote: StockQuote = live_quote(stream, close=None, open=None, total_volume=None)
