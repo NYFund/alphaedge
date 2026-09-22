@@ -1,4 +1,5 @@
 import inspect
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pytest
@@ -7,8 +8,15 @@ import shioaji as sj
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
 from core.broker.tw.shioaji_broker import ShioajiBroker
-from core.models import OrderTicket, StockOrder
-from core.utils import Action, LiveOrderStatus, Status, StockPriceType
+from core.models import FuturesOrder, OrderTicket, StockOrder
+from core.utils import (
+    Action,
+    FuturesPriceType,
+    LiveOrderStatus,
+    PositionType,
+    Status,
+    StockPriceType,
+)
 
 """
 `ShioajiBroker`：只做委派與限流套用，不寫業務邏輯
@@ -349,6 +357,41 @@ def test_order_calls_pass_an_explicit_timeout(
 
     # 送單 1 次、兩個帳號各刷 1 次、撤單 1 次
     assert api.timeouts == [ShioajiBroker.ORDER_TIMEOUT_MS] * 4
+
+
+@pytest.mark.parametrize(
+    ("action", "expected"),
+    [(Action.BUY, sj.FuturesOCType.New), (Action.SELL, sj.FuturesOCType.Cover)],
+)
+def test_futures_order_derives_octype(
+    broker: ShioajiBroker, api: FakeApi, action: Action, expected: Any
+) -> None:
+    """
+    期貨委託的開平倉別依方向與買賣別推導，平倉送 `Cover`
+
+    以前閘道一律送 `New`：多單的賣出平倉單會開出一口空單，而不是平掉多單。
+    """
+
+    contract: Any = SimpleNamespace(code="TXFJ6", root="TXF", delivery_month="202610")
+    api.Contracts.Futures = SimpleNamespace(TXF=[contract])
+    ticket: OrderTicket = OrderTicket(
+        client_order_id="run1-0002",
+        custom_field="010002",
+        strategy_name="FuturesStrategy",
+        order=FuturesOrder(
+            product="TX",
+            expiry="202610",
+            action=action,
+            position_type=PositionType.LONG,
+            volume=1,
+            price=48000.0,
+            price_type=FuturesPriceType.LMT,
+        ),
+    )
+
+    broker.place_order(ticket)
+
+    assert api.placed[-1][1].octype == expected
 
 
 def test_cancel_uses_the_stored_trade(broker: ShioajiBroker, api: FakeApi) -> None:

@@ -25,6 +25,30 @@ from core.utils import SHIOAJI_FUTURES_CATEGORY
 # 期貨連續月別名的代碼結尾；它們與真實月份合約同月份，解析時要排除
 CONTINUOUS_ALIAS_SUFFIXES: Tuple[str, ...] = ("R1", "R2")
 
+# Shioaji 分類代碼 → 專案商品代碼（`SHIOAJI_FUTURES_CATEGORY` 的反向）
+_CATEGORY_TO_PRODUCT: Dict[str, str] = {
+    category: product for product, category in SHIOAJI_FUTURES_CATEGORY.items()
+}
+
+
+def to_futures_product(category: str) -> str:
+    """
+    - Description:
+        Shioaji 的期貨分類代碼 → 專案的商品代碼（Ex: `TXF` → `TX`、`MXF` → `MTX`）
+
+        專案的期貨代號是 `{商品}{YYYYMM}`（`FuturesOrder.symbol`），券商端全用分類代碼；
+        不換的話，同一口台指期在訂單是 `TX202610`、在行情與部位是 `TXF202610`，
+        策略、歸屬帳與對帳各自以為是不同的契約。未登錄的分類（例如股票期貨）原樣回傳。
+    - Parameters:
+        - category: str
+            Shioaji 分類代碼
+    - Return:
+        - str
+            專案商品代碼
+    """
+
+    return _CATEGORY_TO_PRODUCT.get(category, category)
+
 
 class ShioajiContractResolver:
     """
@@ -46,6 +70,8 @@ class ShioajiContractResolver:
 
         self.api: Any = api
         self._stock_futures_index: Optional[Dict[str, str]] = None
+        # 期貨月份字母碼 → 專案代號；合約屬性在一個交易日內不變，查一次就夠
+        self._futures_symbols: Dict[str, str] = {}
 
     # === 股票 ===
     def resolve_stock(self, stock_id: str) -> Any:
@@ -138,6 +164,39 @@ class ShioajiContractResolver:
                 "（已到期、尚未掛牌都會走到這裡）"
             )
         return contract
+
+    def to_futures_symbol(self, code: str) -> str:
+        """
+        - Description:
+            券商的期貨代碼（月份字母碼，Ex: `TXFJ6`）→ 專案代號（`TX202610`）
+
+            期貨的成交回報、委託回報與部位查詢都以月份字母碼表示契約
+            （2026-09-22 模擬環境實測），而字母碼**跨年重複**，不能拿來推月份；
+            一律查合約的 `root` 與 `delivery_month`。查不到時原樣回傳並記 warning：
+            那筆回報仍要入列，代號對不上會由對帳抓出來。
+        - Parameters:
+            - code: str
+                券商的期貨代碼
+        - Return:
+            - str
+                `{商品}{YYYYMM}`；查不到合約時為原代碼
+        """
+
+        if not code or code in self._futures_symbols:
+            return self._futures_symbols.get(code, code)
+
+        contract: Optional[Any] = self.api.Contracts.Futures.get(code)
+        category: Optional[str] = (
+            self._category_of(contract) if contract is not None else None
+        )
+        delivery: str = str(getattr(contract, "delivery_month", "") or "")
+        if not category or not delivery:
+            logger.warning(f"期貨代碼 {code} 查無合約或月份，維持原代碼")
+            return code
+
+        symbol: str = f"{to_futures_product(str(category))}{delivery}"
+        self._futures_symbols[code] = symbol
+        return symbol
 
     # === 股票期貨 ===
     def build_stock_futures_index(self, force: bool = False) -> Dict[str, str]:

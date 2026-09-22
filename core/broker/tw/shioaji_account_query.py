@@ -35,6 +35,7 @@ class ShioajiAccountQuery:
         api: Any,
         rate_limiter: RateLimiter,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        futures_symbol: Optional[Callable[[str], str]] = None,
     ) -> None:
         """
         - Description:
@@ -46,9 +47,12 @@ class ShioajiAccountQuery:
                 **與下單共用的同一個實例**：額度是帳戶級的
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間（台北時區 aware），供快照時戳使用
+            - futures_symbol: Optional[Callable[[str], str]]
+                期貨月份字母碼（`TXFJ6`）→ 專案代號（`TX202610`）；None 時不轉換
         """
 
         self.api: Any = api
+        self._futures_symbol: Optional[Callable[[str], str]] = futures_symbol
         self.rate_limiter: RateLimiter = rate_limiter
         self._now: Callable[[], datetime.datetime] = now_provider
 
@@ -178,11 +182,16 @@ class ShioajiAccountQuery:
 
         snapshots: List[FuturesPositionSnapshot] = []
         for position in raw_positions:
+            # 部位的代碼是月份字母碼（`TXFJ6`），換成與 `FuturesOrder.symbol` 相同的
+            # `{商品}{YYYYMM}`，對帳才比對得到本地歸屬帳
             code: str = str(getattr(position, "code", ""))
-            product, expiry = self.split_contract_code(code)
+            symbol: str = (
+                self._futures_symbol(code) if self._futures_symbol is not None else code
+            )
+            product, expiry = self.split_contract_code(symbol)
             snapshots.append(
                 FuturesPositionSnapshot(
-                    symbol=code,
+                    symbol=symbol,
                     direction=self.to_position_type(
                         getattr(position, "direction", None)
                     ),
@@ -297,7 +306,7 @@ class ShioajiAccountQuery:
         - Description:
             把期貨合約代號拆成商品與到期月份
 
-            代號格式是 `{分類}{YYYYMM}`（Ex: `TXF202601`）。拆不開時回
+            代號格式是 `{商品}{YYYYMM}`（Ex: `TX202601`）。拆不開時回
             `(code, "")`，不拋出——拆不開只是少了換月判斷的依據，
             而部位本身仍然要進對帳。
         - Parameters:

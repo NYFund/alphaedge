@@ -6,6 +6,7 @@ import shioaji as sj
 from loguru import logger
 
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
+from core.broker.tw.shioaji_contract_resolver import to_futures_product
 from core.config.settings import get_live_timezone
 from core.models import FuturesQuote, StockQuote
 from core.utils import FUTURES_MULTIPLIER, FuturesSession, Scale
@@ -460,7 +461,10 @@ class ShioajiQuoteStream:
     @staticmethod
     def _split_code(code: str, contract: Optional[Any]) -> tuple:
         """
-        把合約代號拆成商品（分類代碼，Ex: TXF）與到期月份
+        把合約代號拆成商品（專案商品代碼，Ex: TX）與到期月份
+
+        商品要換成專案代碼（`TXF` → `TX`），與 `FuturesOrder.symbol` 同一套，
+        否則策略拿到的報價是 `TXF202610`、送出的單是 `TX202610`，對不起來。
 
         快照的 `code` 是 `TXFA6` 這種月份字母碼，**跨年會重複**，拆不出可靠的月份；
         一律改讀合約本身的欄位。shioaji 1.7 的合約沒有 `symbol`（舊版格式是
@@ -471,10 +475,10 @@ class ShioajiQuoteStream:
         if len(symbol) > 6 and symbol[-6:].isdigit():
             return (symbol[:-6], symbol[-6:])
 
-        product: str = str(
+        category: str = str(
             getattr(contract, "root", None)
             or getattr(contract, "category", None)
             or code
         )
         delivery: Any = getattr(contract, "delivery_month", None)
-        return (product, str(delivery) if delivery else "")
+        return (to_futures_product(category), str(delivery) if delivery else "")

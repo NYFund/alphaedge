@@ -364,7 +364,9 @@ def fill_and_check(broker: ShioajiBroker, ticket: OrderTicket) -> ExecutionRepor
     print(f"\n成交回報原始內容（{type(order).__name__}）：{fill.raw}")
 
     assert fill.broker_trade_id
-    assert fill.symbol
+    # 期貨回報的代碼是月份字母碼（`TXFJ6`），閘道要換成與訂單相同的 `TX202610`；
+    # 對不上的話帳戶同步拆不出月份、平倉單也對不到部位
+    assert fill.symbol == order.symbol
     assert fill.action is order.action
     assert fill.price > 0
     assert sum(item.volume for item in fills) == order.volume

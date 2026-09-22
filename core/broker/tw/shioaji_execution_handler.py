@@ -43,6 +43,7 @@ class ShioajiExecutionHandler:
         execution_queue: queue.Queue,
         record_path: Optional[Path] = None,
         on_first_report_ts: Optional[Callable[[datetime.datetime], None]] = None,
+        futures_symbol: Optional[Callable[[str], str]] = None,
     ) -> None:
         """
         - Description:
@@ -56,6 +57,8 @@ class ShioajiExecutionHandler:
             - on_first_report_ts: Optional[Callable[[datetime.datetime], None]]
                 收到第一筆帶時戳的回報時呼叫，用來做精確的時鐘偏差檢查
                 （登入時只拿得到合約檔的日期，沒有秒）
+            - futures_symbol: Optional[Callable[[str], str]]
+                期貨月份字母碼（`TXFJ6`）→ 專案代號（`TX202610`）；None 時不轉換
         """
 
         self.execution_queue: queue.Queue = execution_queue
@@ -64,6 +67,7 @@ class ShioajiExecutionHandler:
             on_first_report_ts
         )
         self._clock_checked: bool = False
+        self._futures_symbol: Optional[Callable[[str], str]] = futures_symbol
 
     # === 註冊 ===
     def register(self, api: Any) -> None:
@@ -119,10 +123,20 @@ class ShioajiExecutionHandler:
 
         # `stat` 是 `str` Enum，比的是字串值；本專案那份由
         # `tests/test_order_state_parity.py` 盯住不會與 Shioaji 漂開
+        event: Optional[Union[ExecutionReport, OrderStatusEvent]] = None
         if stat in (OrderState.StockDeal, OrderState.FuturesDeal):
-            return self.parse_deal(msg)
-        if stat in (OrderState.StockOrder, OrderState.FuturesOrder):
-            return self.parse_order_event(msg)
+            event = self.parse_deal(msg)
+        elif stat in (OrderState.StockOrder, OrderState.FuturesOrder):
+            event = self.parse_order_event(msg)
+
+        if event is not None:
+            # 期貨回報的代碼是月份字母碼，要換成與 `FuturesOrder.symbol` 相同的
+            # `{商品}{YYYYMM}`：歸屬帳、帳戶同步與對帳都以它對應部位
+            if stat in (OrderState.FuturesDeal, OrderState.FuturesOrder) and (
+                self._futures_symbol is not None
+            ):
+                event.symbol = self._futures_symbol(event.symbol)
+            return event
 
         logger.warning(f"未知的回報種類：{stat!r}")
         return None
