@@ -1,6 +1,7 @@
 import datetime
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+import pandas as pd
 from loguru import logger
 
 from core.api.tw.financial_statement_api import FinancialStatementAPI
@@ -101,6 +102,47 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             self.calendar_sources = self.build_default_calendar_sources()
 
         strategy.setup_apis(self)
+        self.fill_default_universe(strategy)
+
+    def fill_default_universe(self, strategy: BaseStrategy) -> None:
+        """
+        - Description:
+            策略沒宣告 `symbols` 時，以「`price` 表最新交易日有行情的全部股票」為標的池
+
+            **與回測每天的標的池相同**：回測餵給策略的是當天價格表上的每一檔，
+            實盤若只抓策略宣告的幾檔，全市場掃描型的策略（例如漲幅選股）
+            在實盤永遠拿不到報價、永遠不出訊號，而且不會有任何錯誤。
+            以前一交易日為準（今天的資料要收盤後才進來）。
+        - Parameters:
+            - strategy: BaseStrategy
+                本次要跑的策略
+        """
+
+        if getattr(strategy, "symbols", None):
+            return
+
+        name: str = type(strategy).__name__
+        try:
+            latest: Optional[datetime.date] = self.get_latest_data_date()
+            frame: pd.DataFrame = (
+                self.price.get(latest) if latest is not None else pd.DataFrame()
+            )
+        except Exception as exc:
+            # 取不到預設標的池只影響「這支策略沒有標的」，不該讓整個資料源啟動失敗；
+            # 資料過期或缺表會由新鮮度檢查以明確的錯誤擋下
+            logger.warning(
+                f"{name} 未宣告標的池，且查不到價格表（{exc}），本次沒有任何標的"
+            )
+            return
+
+        if frame.empty:
+            logger.warning(f"{name} 未宣告標的池，且價格表沒有資料，本次沒有任何標的")
+            return
+
+        strategy.symbols = sorted(frame["stock_id"].astype(str).unique())
+        logger.info(
+            f"{name} 未宣告標的池，以 {latest} 有行情的 {len(strategy.symbols)} 檔股票為標的"
+        )
 
     def build_default_calendar_sources(self) -> List[TradingCalendarSource]:
         """

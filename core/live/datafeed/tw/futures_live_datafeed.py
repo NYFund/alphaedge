@@ -131,6 +131,40 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             ]
 
         strategy.setup_apis(self)
+        self.fill_default_contracts(strategy)
+
+    def fill_default_contracts(self, strategy: BaseStrategy) -> None:
+        """
+        - Description:
+            策略沒宣告 `symbols` 時，以 `products` 目前掛牌的各月份契約為標的
+
+            策略的 `select_near_month()` 要在「當天所有月份」裡挑當家契約（回測也是
+            這樣餵的），只給近月的話換月判定就沒有東西可挑。月份取自券商合約檔，
+            排除連續月別名。
+        - Parameters:
+            - strategy: BaseStrategy
+                本次要跑的策略
+        """
+
+        if getattr(strategy, "symbols", None):
+            return
+
+        resolver: Any = getattr(self.broker, "resolver", None)
+        products: List[str] = list(getattr(strategy, "products", []) or [])
+        if resolver is None or not products:
+            return
+
+        symbols: List[str] = []
+        for product in products:
+            try:
+                expiries: List[str] = resolver.list_index_futures_expiries(product)
+            except Exception as exc:
+                logger.warning(f"取不到 {product} 的掛牌月份：{exc}")
+                continue
+            symbols.extend(f"{product}{expiry}" for expiry in expiries)
+
+        strategy.symbols = symbols
+        logger.info(f"{type(strategy).__name__} 未宣告標的池，以 {symbols} 為標的")
 
     def inject_margin_api(self) -> None:
         """
@@ -330,7 +364,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
     ) -> List[BaseQuote]:
         """
         - Description:
-            依段落取得即時報價；`symbols` 是**契約代號**（`{分類}{YYYYMM}`）
+            依段落取得即時報價；`symbols` 是**契約代號**（`{商品}{YYYYMM}`）
         - Parameters:
             - timing: ExecutionTiming
                 執行段落
@@ -384,7 +418,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         """
         以契約代號取得合約
 
-        代號格式是 `{分類}{YYYYMM}`；拆不開時略過該契約並記 warning，
+        代號格式是 `{商品}{YYYYMM}`（與 `FuturesOrder.symbol` 相同，Ex: `TX202610`）；
+        拆不開時略過該契約並記 warning，
         不中斷整段——一個代號打錯不該讓其他契約也收不到報價。
         """
 
