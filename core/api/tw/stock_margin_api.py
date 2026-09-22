@@ -1,17 +1,15 @@
 import datetime
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional, Type
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
 from core.config import (
-    API_LOG_FILE_LEVEL,
-    API_LOGS_DIR_PATH,
     TW_STOCK_DB_PATH,
 )
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.base import BaseDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
-from core.utils.log_manager import LogManager
 
 """Stock margin trading API: query margin table through StockMarginDAO（融資融券餘額，單位：張）"""
 
@@ -19,27 +17,11 @@ from core.utils.log_manager import LogManager
 class StockMarginAPI(BaseDataAPI):
     """Stock margin trading API"""
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
+    DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
+    DAO_CLASS: Type[BaseDAO] = StockMarginDAO
+    LOG_FILE_NAME: str = "stock_margin_api.log"
 
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.dao: Optional[StockMarginDAO] = None
-
-        self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Data API"""
-
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
-        self.dao = StockMarginDAO(conn=self.conn)
-        LogManager.setup_logger(
-            "stock_margin_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+    # 建構、連線與 log 由 `BaseDataAPI` 負責；本類只寫查詢
 
     def get(self, date: datetime.date) -> pd.DataFrame:
         """取得所有股票指定日期的信用交易資料"""

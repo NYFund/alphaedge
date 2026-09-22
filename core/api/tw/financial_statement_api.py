@@ -1,12 +1,11 @@
-from typing import Dict, Optional, Set
+from pathlib import Path
+from typing import Dict, Set
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
-from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import DBConnection, connect_sqlite
+from core.config import TW_STOCK_DB_PATH
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
-from core.utils.log_manager import LogManager
 
 """
 Financial Statement Data API: query financial statement tables through FinancialStatementDAO
@@ -22,26 +21,15 @@ class FinancialStatementAPI(BaseDataAPI):
     # 允許查詢的資料表（與 DAO 的白名單同一份）
     ALLOWED_TABLES: Set[str] = set(FinancialStatementDAO.ALLOWED_TABLES)
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
-
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.daos: Dict[str, FinancialStatementDAO] = {}
-
-        self.setup()
+    DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
+    LOG_FILE_NAME: str = "financial_statement_api.log"
 
     def setup(self) -> None:
-        """Set Up the Config of Data API"""
+        """建連線與主 DAO 由基底負責；此處只補本 API 多出來的 DAO"""
 
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_STOCK_DB_PATH)
-        LogManager.setup_logger(
-            "financial_statement_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+        super().setup()
+        # 依報表類型延遲建立，故在此只備空 dict
+        self.daos: Dict[str, FinancialStatementDAO] = {}
 
     @classmethod
     def check_table_name(cls, table_name: str) -> str:

@@ -1,14 +1,14 @@
 import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
-from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_FUTURES_DB_PATH
-from core.dao.connection import DBConnection, connect_sqlite
+from core.config import TW_FUTURES_DB_PATH
+from core.dao.base import BaseDAO
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
-from core.utils.log_manager import LogManager
 
 """
 Futures Stock Universe API: 股票期貨標的池的讀取層
@@ -39,29 +39,15 @@ class FuturesStockUniverseAPI(BaseDataAPI):
     # 標準型契約單位（股）；`futures_stock_universe.contract_size` 的預設值
     STANDARD_CONTRACT_SIZE: int = 2000
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
-
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.dao: Optional[FuturesStockUniverseDAO] = None
-        self.price_dao: Optional[FuturesPriceDAO] = None
-
-        self.setup()
+    DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
+    DAO_CLASS: Type[BaseDAO] = FuturesStockUniverseDAO
+    LOG_FILE_NAME: str = "futures_stock_universe_api.log"
 
     def setup(self) -> None:
-        """Set Up the Config of Data API"""
+        """建連線與主 DAO 由基底負責；此處只補本 API 多出來的 DAO"""
 
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
-        self.dao = FuturesStockUniverseDAO(conn=self.conn)
-        self.price_dao = FuturesPriceDAO(conn=self.conn)
-        LogManager.setup_logger(
-            "futures_stock_universe_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+        super().setup()
+        self.price_dao: FuturesPriceDAO = FuturesPriceDAO(conn=self.conn)
 
     # === 快照查詢 ===
     def get_snapshot_date(self, date: Optional[datetime.date] = None) -> Optional[str]:

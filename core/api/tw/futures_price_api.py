@@ -1,15 +1,15 @@
 import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Type
 
 import pandas as pd
 
 from core.api.base import BaseDataAPI
-from core.config import API_LOG_FILE_LEVEL, API_LOGS_DIR_PATH, TW_FUTURES_DB_PATH
+from core.config import TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.base import BaseDAO
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.utils.constant import FuturesSession
-from core.utils.log_manager import LogManager
 
 """
 Futures Price API: query futures_price_daily table through FuturesPriceDAO
@@ -33,27 +33,11 @@ loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才�
 class FuturesPriceAPI(BaseDataAPI):
     """Futures Price API"""
 
-    def __init__(self, conn: Optional[DBConnection] = None) -> None:
-        # 由 DataFeed 傳入共用連線；未指定時自行建立
-        self.conn: Optional[DBConnection] = conn
-        self.owns_conn: bool = conn is None
+    DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
+    DAO_CLASS: Type[BaseDAO] = FuturesPriceDAO
+    LOG_FILE_NAME: str = "futures_price_api.log"
 
-        # SQL 一律在 DAO；連線所有權仍由本 API 持有（DAO 不擁有），`close()` 沿用基底行為
-        self.dao: Optional[FuturesPriceDAO] = None
-
-        self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Data API"""
-
-        if self.owns_conn:
-            self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
-        self.dao = FuturesPriceDAO(conn=self.conn)
-        LogManager.setup_logger(
-            "futures_price_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+    # 建構、連線與 log 由 `BaseDataAPI` 負責；本類只寫查詢
 
     @staticmethod
     def to_session_value(session: Optional[FuturesSession]) -> Optional[str]:
