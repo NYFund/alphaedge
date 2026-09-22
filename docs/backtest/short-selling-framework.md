@@ -460,7 +460,7 @@ snapshot_daily_equity(date, quotes)
 | `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
 | `core/backtest/models/cost_model.py` | `CostConfig`／`ShortConstraint`／`StockCostModel` |
 | `core/backtest/models/fill_model.py` | 成交價驗證、券源檢核、當日累計高低點 |
-| `core/backtest/models/settlement_model.py` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
+| `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/managers/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
 | `core/backtest/report/reporter.py` | 時間軸用 `exit_date`、放空欄位、多空統計、事件報表 |
 | `core/utils/constant.py`／`instrument.py` | enum、費率、檔位表、`round_to_tick` |

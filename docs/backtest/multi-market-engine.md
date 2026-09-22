@@ -125,7 +125,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | 行為 model | `core/backtest/models/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
 | | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／期貨實作 |
 | | `core/backtest/models/cost_model.py` | `BaseCostModel` ＋ `CostConfig`／`ShortConstraint`／`StockCostModel`／期貨實作 |
-| | `core/backtest/models/settlement_model.py` | `BaseSettlementModel` ＋ `TwStockSettlementModel`／`TwFuturesSettlementModel` |
+| | `core/backtest/models/settlement_model/` | `BaseSettlementModel` ＋ `TwStockSettlementModel`／`TwFuturesSettlementModel` |
 | 資料源 | `core/datafeed/base.py`（契約）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py`／`tw/market_calendar.py`／`tw/futures_calendar.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
 | 資料模型 | `core/models/base/` | `BaseQuote`／`BaseOrder`／`BasePosition`／`BaseTradeRecord`／`BaseAccount`，識別欄位一律 `symbol` |
 | 策略 | `core/strategies/base.py` | `BaseStrategy`，`market` ＋ `instrument_type` 兩欄位為 factory 的分派鍵 |
