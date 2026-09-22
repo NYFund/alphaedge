@@ -13,6 +13,7 @@ from core.config.schema import FuturesPriceColumn
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.models import FuturesQuote
 from core.utils import FuturesSession, Scale
+from tests.conftest import build_futures_quote
 
 """
 日盤／夜盤整併測試
@@ -44,20 +45,16 @@ def make_quote(
 ) -> FuturesQuote:
     """組一筆 TX 報價"""
 
-    return FuturesQuote(
-        product="TX",
+    return build_futures_quote(
         expiry=expiry,
-        scale=Scale.DAY,
         date=date,
-        cur_price=close,
-        volume=volume,
+        close=close,
         open=open_,
         high=high,
         low=low,
-        close=close,
+        volume=volume,
         session=session,
         settlement_price=settlement,
-        multiplier=200,
     )
 
 

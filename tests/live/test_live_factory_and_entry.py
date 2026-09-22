@@ -95,13 +95,6 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
 
 
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
-
-
 def build(
     strategies: List[BaseStrategy], dao: LiveTradeDAO, **kwargs: Any
 ) -> LiveTrader:

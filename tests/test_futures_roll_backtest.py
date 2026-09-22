@@ -14,8 +14,9 @@ from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
-from core.utils import Action, FuturesRollRule, PositionType, Scale
+from core.utils import Action, FuturesRollRule, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
+from tests.conftest import build_futures_quote
 
 """
 回測層的換月測試
@@ -54,16 +55,9 @@ def make_quote(
 ) -> FuturesQuote:
     """組一筆 TX 報價"""
 
-    return FuturesQuote(
-        product="TX",
+    return build_futures_quote(
         expiry=expiry,
-        scale=Scale.DAY,
         date=date,
-        cur_price=close,
-        volume=1000,
-        open=close,
-        high=close,
-        low=close,
         close=close,
         settlement_price=close,
         open_interest=open_interest,

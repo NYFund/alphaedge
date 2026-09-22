@@ -54,13 +54,6 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
-
-
-@pytest.fixture
 def ledger(dao: LiveTradeDAO) -> PositionAttributionLedger:
     return PositionAttributionLedger(dao, now_provider=lambda: NOW)
 

@@ -9,8 +9,9 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.models import StockOrder, StockQuote
 from core.models.cost_config import ShortConstraint
-from core.utils import Action, PositionType, Scale, ShortMethod
+from core.utils import Action, PositionType, ShortMethod
 from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy
+from tests.conftest import build_stock_quote
 
 """
 產生 SHORT 路徑的回歸 baseline：多市場抽象重構動程式碼前的第一步
@@ -95,16 +96,13 @@ def make_quote(
 ) -> StockQuote:
     """建立日 K 報價；未指定的 OHLC 一律沿用 cur_price"""
 
-    return StockQuote(
+    return build_stock_quote(
         stock_id=STOCK_ID,
-        scale=Scale.DAY,
         date=date,
         cur_price=cur_price,
-        volume=1000,
-        open=cur_price,
-        high=high if high is not None else cur_price,
-        low=low if low is not None else cur_price,
-        close=close if close is not None else cur_price,
+        high=high,
+        low=low,
+        close=close,
     )
 
 

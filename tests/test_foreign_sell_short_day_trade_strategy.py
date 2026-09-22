@@ -17,10 +17,10 @@ from core.utils import (
     BarExecutionOrder,
     Commission,
     PositionType,
-    Scale,
     ShortMethod,
     Units,
 )
+from tests.conftest import build_stock_quote
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
@@ -120,16 +120,14 @@ def make_quote(
 ) -> StockQuote:
     """建立 T 日報價；未指定時開盤 108、收盤 104（開高走低的當沖情境）"""
 
-    return StockQuote(
+    return build_stock_quote(
         stock_id=stock_id,
-        scale=Scale.DAY,
         date=date,
         cur_price=close,
-        volume=volume,
         open=open,
         high=max(open, close),
         low=min(open, close),
-        close=close,
+        volume=volume,
     )
 
 

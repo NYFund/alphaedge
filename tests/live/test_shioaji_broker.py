@@ -196,7 +196,19 @@ def broker(api: FakeApi, limiter: RateLimiter) -> ShioajiBroker:
     return instance
 
 
-def make_ticket(volume: int = 2, price: float = 1000.0) -> OrderTicket:
+def make_broker_ticket(volume: int = 2, price: float = 1000.0) -> OrderTicket:
+    """
+    券商層專用的委託單
+
+    **刻意不用 `tests/live/conftest.py` 的 `make_ticket` fixture**：本檔驗的是
+    送單欄位怎麼對應到券商 API，需要固定的 `client_order_id` 與 `custom_field`
+    才能逐字比對；那支 fixture 的 `client_order_id` 是遞增的，且不填 `custom_field`。
+
+    名稱不叫 `make_ticket`，是因為同名的模組層級函式會遮蔽同名 fixture：
+    本檔任何測試只要在簽名裡寫上 `make_ticket`，拿到的就是 fixture 那一份，
+    而旁邊的測試仍在用這一份——兩種資料混在同一個檔案裡且不會報錯。
+    """
+
     return OrderTicket(
         client_order_id="run1-0001",
         custom_field="010001",
@@ -288,7 +300,7 @@ def test_quote_and_execution_use_separate_queues(broker: ShioajiBroker) -> None:
 def test_place_order_fills_in_broker_ids(broker: ShioajiBroker) -> None:
     """送出後要回填券商編號與狀態"""
 
-    ticket: OrderTicket = broker.place_order(make_ticket())
+    ticket: OrderTicket = broker.place_order(make_broker_ticket())
 
     assert ticket.broker_seqno == "000001"
     assert ticket.broker_order_id == "AB123"
@@ -307,7 +319,7 @@ def test_place_order_consumes_order_budget(
         sleep=lambda seconds: None,
     )
     broker.rate_limiter = small
-    broker.place_order(make_ticket())
+    broker.place_order(make_broker_ticket())
 
     assert small.try_acquire(RateLimitCategory.ORDER) is True
 
@@ -319,7 +331,7 @@ def test_conversion_failure_does_not_consume_budget(broker: ShioajiBroker) -> No
     尾盤段只有 13:25~13:29，額度是有限的。
     """
 
-    ticket: OrderTicket = make_ticket()
+    ticket: OrderTicket = make_broker_ticket()
     ticket.order.price_type = None  # 前處理漏填
 
     with pytest.raises(ValueError):
@@ -331,7 +343,7 @@ def test_conversion_failure_does_not_consume_budget(broker: ShioajiBroker) -> No
 def test_unresolvable_symbol_raises_before_sending(broker: ShioajiBroker) -> None:
     """代號查不到要在送出前拋出，不可把 None 合約傳下去"""
 
-    ticket: OrderTicket = make_ticket()
+    ticket: OrderTicket = make_broker_ticket()
     ticket.order = StockOrder(
         stock_id="9999", volume=1, price=10.0, price_type=StockPriceType.LMT
     )
@@ -351,7 +363,7 @@ def test_order_calls_pass_an_explicit_timeout(
     一張卡住的單能吃掉的時間會隨套件版本悄悄變長。
     """
 
-    ticket: OrderTicket = broker.place_order(make_ticket())
+    ticket: OrderTicket = broker.place_order(make_broker_ticket())
     broker.refresh_order_status()
     broker.cancel_order(ticket)
 
@@ -402,7 +414,7 @@ def test_cancel_uses_the_stored_trade(broker: ShioajiBroker, api: FakeApi) -> No
     只有這一層知道，所以由它保管。
     """
 
-    ticket: OrderTicket = broker.place_order(make_ticket())
+    ticket: OrderTicket = broker.place_order(make_broker_ticket())
     broker.cancel_order(ticket)
 
     assert len(api.cancelled) == 1
@@ -419,7 +431,7 @@ def test_cancel_and_update_do_not_touch_status_or_filled_volume(
     OMS 看到狀態相同就不寫 DB，同一筆成交的回報再進來又會重複累加。
     """
 
-    ticket: OrderTicket = broker.place_order(make_ticket())
+    ticket: OrderTicket = broker.place_order(make_broker_ticket())
     ticket.status = LiveOrderStatus.PARTIALLY_FILLED
     ticket.filled_volume = 1
 
@@ -435,7 +447,7 @@ def test_cancel_of_terminal_order_is_a_no_op(
 ) -> None:
     """已終結的委託不送撤單請求：那會拿到一個看起來很像真問題的券商錯誤"""
 
-    ticket: OrderTicket = make_ticket()
+    ticket: OrderTicket = make_broker_ticket()
     ticket.status = LiveOrderStatus.FILLED
     broker.cancel_order(ticket)
 
@@ -450,13 +462,13 @@ def test_cancel_without_a_trade_raises(broker: ShioajiBroker) -> None:
     """
 
     with pytest.raises(LookupError, match="refresh_order_status"):
-        broker.cancel_order(make_ticket())
+        broker.cancel_order(make_broker_ticket())
 
 
 def test_update_price_aligns_to_tick(broker: ShioajiBroker, api: FakeApi) -> None:
     """改價也要對齊檔位，而且方向一樣保守（買單往下）"""
 
-    ticket: OrderTicket = broker.place_order(make_ticket())
+    ticket: OrderTicket = broker.place_order(make_broker_ticket())
     broker.update_order_price(ticket, price=1003.2)
 
     assert api.updated[0][1] == pytest.approx(1000.0)
@@ -556,7 +568,7 @@ def test_custom_field_is_the_one_oms_generated(
     重啟接管的精確比對永遠比不到，同一天不同 run 的單還會互撞。
     """
 
-    ticket: OrderTicket = make_ticket()
+    ticket: OrderTicket = make_broker_ticket()
     ticket.custom_field = "u80001"
     broker.place_order(ticket)
 
@@ -566,7 +578,7 @@ def test_custom_field_is_the_one_oms_generated(
 def test_order_without_custom_field_is_refused(broker: ShioajiBroker) -> None:
     """沒有壓縮碼的委託不送：另算一份就是兩邊對不上的開始"""
 
-    ticket: OrderTicket = make_ticket()
+    ticket: OrderTicket = make_broker_ticket()
     ticket.custom_field = None
 
     with pytest.raises(ValueError, match="custom_field"):
@@ -583,7 +595,7 @@ def test_refreshed_ticket_keeps_custom_field_out_of_client_id(
     不存在的 id，接管後的單就撤不掉。
     """
 
-    broker.place_order(make_ticket())
+    broker.place_order(make_broker_ticket())
 
     refreshed: List[OrderTicket] = broker.refresh_order_status()
 
@@ -618,7 +630,7 @@ def test_recovered_order_can_be_cancelled_by_a_new_broker(
     first_oms: OrderManager = OrderManager(
         first_broker, dao, "20260919090512", run_index=1, now_provider=lambda: now
     )
-    submitted: OrderTicket = first_oms.submit(make_ticket().order, "Alpha")
+    submitted: OrderTicket = first_oms.submit(make_broker_ticket().order, "Alpha")
     if not seqno_saved:
         dao.conn.execute("UPDATE live_order SET broker_seqno = NULL")
         dao.conn.commit()

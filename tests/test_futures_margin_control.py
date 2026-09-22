@@ -10,8 +10,9 @@ from core.managers.futures.position_manager import FuturesPositionManager
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesPosition, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
-from core.utils import Action, MarginCallPolicy, PositionType, Scale
+from core.utils import Action, MarginCallPolicy, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
+from tests.conftest import build_futures_quote
 
 """
 台期貨槓桿與部位控管測試
@@ -90,16 +91,9 @@ def make_quote(
 ) -> FuturesQuote:
     """組一筆帶結算價的 TX 報價"""
 
-    return FuturesQuote(
-        product="TX",
+    return build_futures_quote(
         expiry=expiry,
-        scale=Scale.DAY,
         date=date,
-        cur_price=close,
-        volume=1000,
-        open=close,
-        high=close,
-        low=close,
         close=close,
         settlement_price=close,
         multiplier=MULTIPLIER,

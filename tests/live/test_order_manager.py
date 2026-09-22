@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Any, Callable, Dict, List, Optional
 
 import pytest
@@ -32,13 +31,6 @@ from .conftest import FakeBroker
 
 TODAY: datetime.date = datetime.date(2026, 9, 19)
 NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 @pytest.fixture

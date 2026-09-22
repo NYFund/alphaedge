@@ -5,7 +5,7 @@ from loguru import logger
 
 from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.models import StockQuote
-from core.utils import Scale
+from tests.conftest import build_stock_quote
 
 """報價轉換的重複代號防護
 
@@ -22,17 +22,7 @@ DAY: datetime.date = datetime.date(2016, 6, 27)
 def make_quote(stock_id: str, cur_price: float) -> StockQuote:
     """建立最小可用的日 K 報價"""
 
-    return StockQuote(
-        stock_id=stock_id,
-        scale=Scale.DAY,
-        date=DAY,
-        cur_price=cur_price,
-        volume=1000,
-        open=cur_price,
-        high=cur_price,
-        low=cur_price,
-        close=cur_price,
-    )
+    return build_stock_quote(stock_id=stock_id, date=DAY, cur_price=cur_price)
 
 
 def capture_warnings(quotes: List[StockQuote]) -> List[str]:

@@ -1,8 +1,5 @@
 import datetime
-import sqlite3
 from typing import Any, Dict, List, Optional
-
-import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
@@ -35,13 +32,6 @@ from .conftest import FakeBroker
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 21, 13, 25)
 TODAY: datetime.date = NOW.date()
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 def make_oms(

@@ -31,15 +31,6 @@ TODAY: datetime.date = datetime.date(2026, 9, 19)
 NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    """已建表的記憶體 DAO"""
-
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
-
-
 def make_order(
     client_order_id: str = "run1-0001",
     strategy_name: str = "MomentumStrategy1",
