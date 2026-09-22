@@ -7,10 +7,10 @@ import pandas as pd
 import pytest
 
 from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
-from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.config import TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
+from core.market.tw.futures_calendar import FuturesCalendar
 from core.models import FuturesQuote
 from core.utils import FuturesSession, Scale
 

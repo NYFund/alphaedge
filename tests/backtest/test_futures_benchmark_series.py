@@ -7,11 +7,11 @@ import pandas as pd
 import pytest
 
 from core.api.tw.futures_continuous_api import FuturesContinuousAPI
-from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
 from core.backtest.report import futures_reporter as futures_reporter_module
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
+from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesAccount
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import FuturesAdjustMethod, FuturesRollRule, FuturesSession, Scale

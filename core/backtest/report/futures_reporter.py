@@ -7,9 +7,9 @@ from loguru import logger
 
 from core.api.tw.futures_continuous_api import FuturesContinuousAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
-from core.backtest.datafeed.tw.futures_roll import FuturesRollPlanner
 from core.backtest.report.reporter import StockBacktestReporter
 from core.config.schema import FuturesPriceColumn
+from core.market.tw.futures_roll import FuturesRollPlanner
 from core.models.futures.record import FuturesTradeRecord
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import FuturesRollRule, FuturesSession

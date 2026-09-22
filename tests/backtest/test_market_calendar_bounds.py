@@ -6,7 +6,7 @@ from typing import List, Optional
 import pandas as pd
 import pytest
 
-from core.backtest.datafeed.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import MarketCalendar
 
 """
 交易日曆的兩條防線

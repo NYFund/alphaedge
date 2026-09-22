@@ -8,7 +8,6 @@ import pandas as pd
 import pytest
 
 from core.api.tw.market_holiday_api import MarketHolidayAPI
-from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
@@ -21,6 +20,7 @@ from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.live.factory import to_live_roll_config
+from core.market.tw.futures_roll import FuturesRollConfig
 from core.pipeline.tw.cleaners.market_holiday_cleaner import MarketHolidayCleaner
 from core.pipeline.tw.loaders.market_holiday_loader import MarketHolidayLoader
 

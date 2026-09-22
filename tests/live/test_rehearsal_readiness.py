@@ -6,7 +6,6 @@ from typing import Any, List
 import pandas as pd
 import pytest
 
-from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
@@ -14,6 +13,7 @@ from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.live.factory import build_live_trader
 from core.live.strategy_guard import inspect_strategy
 from core.live.trader import LiveTrader
+from core.market.tw.market_calendar import MarketCalendar
 from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 

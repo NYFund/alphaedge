@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 from loguru import logger
 
-from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.datafeed.base import BaseDataFeed
+from core.market.tw.market_calendar import MarketCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
