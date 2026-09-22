@@ -146,6 +146,7 @@ graph TB
 | [開發環境設定](docs/setup/dev-setup.md)            | Python 環境、相依套件、格式化工具、環境變數     |
 | [開發部署](docs/deployment/dev-deployment.md)      | 本機更新資料、執行回測、檢視結果的日常流程      |
 | [正式環境部署](docs/deployment/prod-deployment.md) | Docker 映像建置、容器執行與角色切分             |
+| [實盤部署與排程](docs/deployment/live-deployment.md) | 實盤逐段落啟動、容器與 cron 排程、停止與退出碼 |
 | [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
 | [指令教學](docs/commands/command-usage.zh-TW.md)   | `update_db` target 對照與完整執行範例           |
 | [策略開發指南](core/strategies/README.md)          | 本專案策略實作方式                              |

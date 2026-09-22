@@ -24,6 +24,37 @@ services:
       - ./data:/app/data:ro
       - ./logs:/app/logs
 
+  # 實盤：**不常駐**，由主機排程逐段落啟動（見 docs/deployment/live-deployment.md）：
+  #   docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase open
+  # `profiles` 讓 `docker compose up` 不會順手把它帶起來——實盤只能被明確啟動。
+  # 正式環境要另外帶 `--production --confirm-production`，刻意不寫進這裡
+  live:
+    profiles: ["live"]
+    build:
+      context: .
+      dockerfile: core/Dockerfile
+    # 模式寫死在 entrypoint：`run` 後面接的參數會整個取代 `command`，
+    # 放在 command 的話漏寫 `--mode live` 就變成跑回測
+    entrypoint: ["python", "run.py", "--mode", "live"]
+    # 金鑰（API_KEY、SHIOAJI_CA_PASSWORD、通知 token）只從 `.env` 讀，不進映像
+    env_file: .env
+    environment:
+      # 與 core/Dockerfile 相同；排程與容器兩邊都要是台北時間
+      TZ: Asia/Taipei
+      # 覆寫 `.env` 裡的主機路徑：憑證在容器內一律掛在 /ca
+      SHIOAJI_CA_PATH: /ca/${SHIOAJI_CA_FILE:-Sinopac.pfx}
+    # 收到停止訊號後要先撤未成交單、等券商回覆、寫結束紀錄；
+    # 預設 10 秒到了就 SIGKILL，撤單會被打斷在一半
+    stop_grace_period: 90s
+    volumes:
+      # **可寫**：實盤要寫 `data/db/tw_trading.db`（委託、成交、歸屬帳），
+      # 研究庫則是唯讀開啟（`connect_sqlite(read_only=True)`），不會被寫到
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - alphaedge_results:/app/results
+      # CA 憑證唯讀掛入，放在專案目錄以外（不進 git、不進映像）
+      - ${ALPHAEDGE_CA_DIR:-${HOME}/.alphaedge/ca}:/ca:ro
+
   frontend:
     build:
       context: .

@@ -31,6 +31,8 @@ from core.strategies.strategy_loader import StrategyLoader
 # 5  kill switch 生效
 # 6  上次結束時**帳戶層**交易模式非 NORMAL，本次未帶 --resume-trading
 # 7  --resync-from-broker 只列出重建計畫、沒有寫入（未帶 --confirm-resync）
+# 143 收到 SIGTERM（容器停止、排程逾時）：已撤未成交單、寫完結束紀錄才離開
+#     （128 ＋ 訊號編號 15，是 shell 與容器對「被訊號結束」的慣例值）
 #
 # **`7` 不是 0**：只列計畫代表歸屬帳仍與券商不一致，排程不可把它當成已處理。
 # 重建被拒絕（歸屬帳已損壞、或仍有未終結的委託）回 `4`：與對帳不一致同一件事，
@@ -54,6 +56,7 @@ EXIT_RECONCILE_MISMATCH: int = 4
 EXIT_KILL_SWITCH: int = 5
 EXIT_MODE_NOT_NORMAL: int = 6
 EXIT_RESYNC_PLAN_ONLY: int = 7
+EXIT_TERMINATED: int = 143
 
 # 以券商部位重建時寫進 `live_run.phase` 的值；它不是交易段落，存活監控不會等它
 RESYNC_PHASE: str = "resync"
@@ -196,11 +199,8 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
 
     # 延後 import：實盤那一整串相依（shioaji、券商閘道、OMS）只有實盤用得到，
     # 回測不該為了它們付 import 成本，也不該因為它們壞掉而跑不動
-    from core.live.datafeed.base import DataFreshnessError
-    from core.live.datafeed.calendar import TradingCalendarUnavailableError
     from core.live.factory import UnsupportedMarketError, build_live_trader
-    from core.live.risk.trading_mode import TradingMode
-    from core.utils import ExecutionTiming
+    from core.live.termination import LiveTerminated, raise_on_sigterm
 
     usage_error: str = _check_resync_arguments(args)
     if usage_error:
@@ -252,6 +252,41 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         return EXIT_USAGE
 
     environment: str = "模擬" if args.simulation else "**正式**"
+
+    try:
+        # SIGTERM 在區塊內改成拋 `LiveTerminated`，沿引擎的 `finally` 撤單、
+        # 寫結束紀錄；預設處理會直接結束行程，場上的委託沒人撤
+        with raise_on_sigterm():
+            return _run_live_phase(trader, args, names, environment)
+    except LiveTerminated as exc:
+        print(f"{exc}：已撤未成交單並寫入結束紀錄", file=sys.stderr)
+        return EXIT_TERMINATED
+
+
+def _run_live_phase(
+    trader: object, args: argparse.Namespace, names: List[str], environment: str
+) -> int:
+    """
+    - Description:
+        跑一個段落（或重建）並把結果翻譯成退出碼
+    - Parameters:
+        - trader: object
+            組裝好的引擎
+        - args: argparse.Namespace
+            命令列參數
+        - names: List[str]
+            策略名
+        - environment: str
+            環境說明（模擬／正式）
+    - Return:
+        - int
+            退出碼
+    """
+
+    from core.live.datafeed.base import DataFreshnessError
+    from core.live.datafeed.calendar import TradingCalendarUnavailableError
+    from core.live.risk.trading_mode import TradingMode
+    from core.utils import ExecutionTiming
 
     if args.resync_from_broker:
         print(f"以券商部位重建歸屬帳：{environment}環境、策略 {names}")
