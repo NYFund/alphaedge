@@ -15,7 +15,7 @@
 
 | 策略資料夾 | 主題 | 核心訊號 | 標的 | 狀態 |
 |------------|------|----------|------|------|
-| [`tsmc_overnight_signal/`](tsmc_overnight_signal/README.md) | 跨市場隔夜訊號領先 | TSM ADR / ^SOX / TWD=X → Ridge 預測 | 2330.TW | 已產出中／英 Word 報告；正式版見 `core/strategies/stock/overnight_lead_event_strategy.py` |
+| [`tsmc_overnight_signal/`](tsmc_overnight_signal/README.md) | 跨市場隔夜訊號領先 | TSM ADR / ^SOX / TWD=X → Ridge 預測 | 2330.TW | 已產出中／英 Word 報告；結論為否定，搬進 `core/` 的成品策略已於 2026-09-17 移除 |
 
 > 新增研究時，**請同步在此表登記**。
 

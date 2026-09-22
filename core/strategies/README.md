@@ -753,8 +753,8 @@ python run.py --strategy <StrategyName>
 # 執行回測模式，使用名為 "MomentumStrategy1" 的策略（動能 1 日線）
 python run.py --strategy MomentumStrategy1
 
-# 執行實盤模式（目前尚未實作）
-python run.py --mode live --strategy MomentumStrategy1
+# 執行實盤（必須指定段落；目前只在模擬環境演練過）
+python run.py --mode live --strategy MomentumStrategy1 --phase open
 ```
 
 ### 回測結果

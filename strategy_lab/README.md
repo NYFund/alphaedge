@@ -405,6 +405,11 @@ print(monthly_vol.tail())
 .venv/bin/python -m strategy_lab.data_analysis.<your_topic>.run
 ```
 
+> **要產 Word 報告（`reports/generate_docx.py` 那類）得先裝 `lab` extra**：
+> `uv sync --extra lab`。`python-docx` 只在 `[project.optional-dependencies].lab` 裡，
+> 預設的 `uv sync` 不會裝，直接跑會 `ModuleNotFoundError`。
+> 注意 `uv sync` 會把環境同步成「剛好」指定的內容，要同時保留其他 extra 就一起列出。
+
 ### 常見模式：IC（Information Coefficient）分析
 
 判斷「**訊號** 對 **隔日報酬** 是否有預測力」：
@@ -484,8 +489,10 @@ print(realistic_pnl(600.0, 620.0, 5))
    會自動產出 `balance_curve.png / balance_mdd.png / trading_report.csv` 等標準報表。
 
 > 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`core/strategies/README.md`](../core/strategies/README.md)。
-> 範例可參考 `core/strategies/stock/overnight_lead_event_strategy.py`，
-> 它就是把 `strategy_lab/strategies/tsmc_overnight_signal/` 的研究結論搬進 core 框架的成品。
+> 現成的範例是 `core/strategies/stock/` 底下的策略檔。
+>
+> **搬進 `core/` 的成品可能會被刪掉**：`tsmc_overnight_signal` 的成品策略就在 2026-09-17
+> 因結論為否定而移除。研究資料夾要能獨立成立，不要把結論只寫在成品策略的 docstring 裡。
 
 ---
 

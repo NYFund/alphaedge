@@ -121,7 +121,7 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-09-17 and will
 - Futures tick sizes cover only the seven verified index futures (TX / MTX / TMF 1 point, TE / ZEF 0.05, TF / ZFF 0.2); unregistered products fall back to 1 point with a warning, so slippage set in ticks is distorted for them (default slippage is 0, so unaffected).
 - A single backtest cannot hold TW stocks and TW futures at the same time (cross-market portfolios / hedging).
 - The TW stock below-reference-price short restriction and the daily day-trade whitelist are not wired into matching yet, so short and day-trade opportunities are overestimated.
-- The `--mode live` path is not implemented.
+- Live trading (`--mode live`) has only been rehearsed in the **simulation** environment; it has not been run in production. Production requires both `--production` and `--confirm-production`, which deliberately have no environment-variable equivalents.
 
 See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW Futures Platform](docs/futures/tw-futures-platform.md) for details.
 
@@ -131,6 +131,9 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | Module          | Description                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `core/`         | Core trading domain code (strategies, managers, models, adapters, API, data access layer, ETL, backtest engine; outputs land in the top-level `results/`) |
+| `core/live/`    | Live trading: per-phase lifecycle, order management (OMS), position attribution, reconciliation, risk control and after-close work |
+| `core/broker/`  | Broker integration (currently Shioaji): login, contract resolution, order mapping, report normalization and quote subscription |
+| `core/execution/` | Pre-submit processing shared by backtest and live: direction whitelist, max holdings, deterministic ordering |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
 | `tasks/`        | Data maintenance and database update scripts                                                                                    |
 | `tests/`        | Unit/integration tests and the backtest regression lines (`tests/backtest/`)                                                    |
@@ -233,7 +236,7 @@ python run.py --strategy MomentumStrategy1
 ```
 
 - `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
-- Optional: `--show` opens charts in a browser; `--mode live` is not implemented (exits with code 1).
+- Optional: `--show` opens charts in a browser. Live trading is a separate path (`--mode live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
 **Step 3: Open the frontend to view results**
@@ -372,7 +375,7 @@ Replace `<StrategyClassName>` with your strategy class name. More command scenar
 
 ```bash
 python run.py --strategy <StrategyClassName>
-# optional: --show opens charts in a browser; --mode live is not implemented (exits with code 1)
+# optional: --show opens charts in a browser. Live trading uses --mode live, see docs/deployment/live-deployment.md
 ```
 
 ## Project Structure
