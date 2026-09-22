@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Optional
 
-from core.backtest.datafeed.base import BaseDataFeed
+from core.datafeed.base import BaseDataFeed
 from core.models import FuturesAccount, FuturesQuote
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy

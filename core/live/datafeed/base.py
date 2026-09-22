@@ -5,8 +5,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from loguru import logger
 
-from core.backtest.datafeed.base import BaseDataFeed
 from core.config.settings import now_live
+from core.datafeed.base import BaseDataFeed
 from core.live.datafeed.calendar import (
     TradingCalendarSource,
     resolve_trading_day,
@@ -18,7 +18,7 @@ from core.utils import ExecutionTiming
 BaseLiveDataFeed：歷史資料到 T−1，今天的報價由券商提供
 
 **繼承 `BaseDataFeed`**，因為策略的 `setup_apis(feed)` 型別就是它——策略不必改。
-（把 `BaseDataFeed` 移到中立位置不在本次範圍，這條同層邊已在分層規則裡登記。）
+那個契約放在中立的 `core/datafeed/`：回測與實盤共用同一份，誰都不必 import 對方的套件。
 
 兩道啟動檢查，少任何一道都會讓策略拿到錯的輸入而不報錯：
 

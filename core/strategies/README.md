@@ -792,7 +792,7 @@ python run.py --mode live --strategy MomentumStrategy1 --phase open
 import datetime
 from typing import List
 
-from core.backtest.datafeed.base import BaseDataFeed
+from core.datafeed.base import BaseDataFeed
 from core.models import StockAccount, StockOrder, StockQuote
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, Units
@@ -919,7 +919,7 @@ python run.py --strategy SimpleStrategy
 import datetime
 from typing import List
 
-from core.backtest.datafeed.base import BaseDataFeed
+from core.datafeed.base import BaseDataFeed
 from core.models import StockAccount, StockOrder, StockQuote
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, ShortMethod

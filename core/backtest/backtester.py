@@ -5,13 +5,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Type
 import pandas as pd
 from loguru import logger
 
-from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.models.cost_model import BaseCostModel
 from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.instrument_spec import InstrumentSpec
 from core.backtest.models.settlement_model import BaseSettlementModel
 from core.backtest.report.base import BaseBacktestReporter
 from core.config import BACKTEST_RESULT_DIR_PATH
+from core.datafeed.base import BaseDataFeed
 from core.execution import order_preprocess
 from core.managers.base.position_manager import BasePositionManager
 from core.models import (
