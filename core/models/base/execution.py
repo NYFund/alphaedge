@@ -228,6 +228,47 @@ class BrokerPositionSnapshot:
         self.raw: Dict[str, Any] = raw if raw is not None else {}
 
 
+class RealizedTradeSnapshot:
+    """
+    券商端一筆已平倉交易的正規化快照（盤後校正成本用）
+
+    **以「交易」為單位，不是逐筆成交**：券商的已實現損益查詢一筆對應一組開平倉，
+    帶不出是哪兩筆成交（期貨沒有委託序號，股票只帶開倉那張委託的序號）。
+    各欄位在不同市場給得出來的不一樣，給不出來的留 None，不猜：
+
+    | 欄位 | 股票 | 期貨 |
+    |------|------|------|
+    | `pnl` | 淨損益（已扣費用與稅） | 淨損益 |
+    | `fee`／`tax` | 無 | 有 |
+    | `entry_price` | 無（以 `open_seqno` 回查本地成交） | 有 |
+    | `open_seqno` | 開倉委託序號 | 無 |
+    """
+
+    def __init__(
+        self,
+        symbol: str = "",
+        quantity: int = 0,
+        pnl: float = 0.0,
+        cover_price: float = 0.0,
+        entry_price: Optional[float] = None,
+        fee: Optional[float] = None,
+        tax: Optional[float] = None,
+        open_seqno: Optional[str] = None,
+        is_futures: bool = False,
+        raw: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.symbol: str = symbol
+        self.quantity: int = quantity  # 股票為張、期貨為口
+        self.pnl: float = pnl  # 券商算的淨損益
+        self.cover_price: float = cover_price  # 平倉價
+        self.entry_price: Optional[float] = entry_price  # 開倉價；股票給不出
+        self.fee: Optional[float] = fee  # 手續費（整筆交易）；股票給不出
+        self.tax: Optional[float] = tax  # 交易稅（整筆交易）；股票給不出
+        self.open_seqno: Optional[str] = open_seqno  # 開倉委託序號；期貨給不出
+        self.is_futures: bool = is_futures
+        self.raw: Dict[str, Any] = raw if raw is not None else {}
+
+
 class BrokerAccountSnapshot:
     """
     券商端帳務的正規化快照

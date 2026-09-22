@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+import pandas as pd
 from loguru import logger
 
 from core.config.settings import now_live
@@ -15,7 +16,8 @@ from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker, ParityDiff
 from core.live.risk.trading_mode import TradingModeState
-from core.utils import PositionType
+from core.models import RealizedTradeSnapshot
+from core.utils import Action, PositionType, Units
 
 """
 盤後作業：把當天發生的事收攏成可稽核的結果
@@ -28,6 +30,26 @@ from core.utils import PositionType
 `LiveTrader`，因為待辦是在**開盤段**被補平的。寫入端與執行端本來就不對稱，
 硬抽成一個服務會讓兩邊都得繞一層。
 """
+
+
+# 依成本模型重算一筆已平倉交易的費用與稅：`(交易, 開倉成交, 交易日) → 金額`。
+# **市場特性**（股票證交稅只課賣出、期貨兩邊都課），由組裝層依市場注入；
+# 算不出來（缺開倉成交、乘數未知）時回 None
+TradeCostEstimator = Callable[
+    [RealizedTradeSnapshot, List[Dict[str, Any]], datetime.date], Optional[float]
+]
+
+# 券商實際成本與估算值的差距超過這個比例就寫事件
+COST_DRIFT_RATIO: float = 0.2
+
+
+def weighted_fill_price(fills: List[Dict[str, Any]]) -> float:
+    """一張委託各筆成交的量加權均價"""
+
+    volume: int = sum(int(fill["volume"]) for fill in fills)
+    if volume <= 0:
+        return 0.0
+    return sum(float(fill["price"]) * int(fill["volume"]) for fill in fills) / volume
 
 
 class AfterCloseRunner:
@@ -54,6 +76,7 @@ class AfterCloseRunner:
         notifier: Optional[BaseNotifier] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
         parity_checker: Optional[ParityChecker] = None,
+        cost_estimator: Optional[TradeCostEstimator] = None,
     ) -> None:
         """
         - Description:
@@ -96,6 +119,7 @@ class AfterCloseRunner:
         self.run_id: str = run_id
         self.notifier: Optional[BaseNotifier] = notifier
         self.parity_checker: Optional[ParityChecker] = parity_checker
+        self.cost_estimator: Optional[TradeCostEstimator] = cost_estimator
         self._now: Callable[[], datetime.datetime] = now_provider
 
         # 本次對帳結果；`run.py` 由它決定退出碼，故盤後跑完要回填給 `LiveTrader`
@@ -128,8 +152,8 @@ class AfterCloseRunner:
             self.account_sync.rebuild_from_broker(positions)
             self.last_reconcile = self.reconciler.check(positions)
 
-            # 3. 回填券商實際費用（估算值保留，差額是校正成本設定的依據）
-            self.backfill_actual_costs(today)
+            # 3. 以券商的已實現損益校正成本估算（差額是校正成本設定的依據）
+            self.calibrate_costs(today)
 
             # 4. 未成交殘量依政策處理
             remainders: int = self.handle_unfilled_remainders(today)
@@ -218,57 +242,133 @@ class AfterCloseRunner:
         self.order_manager.refresh_from_broker()
         return self.order_manager.expire_unfinished(self._now().date())
 
-    def backfill_actual_costs(self, run_date: datetime.date) -> int:
+    def calibrate_costs(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:
-            以券商的損益明細回填當日成交的實際手續費與稅
+            以券商的已實現損益，逐筆比對實際費用與成本模型的估算，寫成報表
 
-            **估算值不覆蓋**：兩者分欄保存，差額才是校正成本設定的依據；
-            併成一欄之後就再也算不出「估得準不準」。
+            **以「一筆已平倉交易」為單位，不回填逐筆成交**：券商不提供逐筆費用
+            （2026-09-22 模擬環境實測：股票只給淨損益，期貨有費用與稅但沒有委託序號）。
+            - 期貨：實際成本 ＝ 券商的 `fee + tax`。
+            - 股票：實際成本 ＝ 以本地開倉成交價算的毛損益 − 券商淨損益；
+              開倉價以券商給的開倉委託序號回查 `live_fill`。
+            估算值由注入的估算器依同一筆交易的開平倉價重算。任一邊算不出來時
+            該列照樣寫出並註明原因，不略過——略過的話報表看起來全都對得上。
+            差距超過 `COST_DRIFT_RATIO` 時寫 `COST_MODEL_DRIFT` 事件。
 
-            ⚠️ **券商端的查詢方法與欄位尚未以模擬環境核對**（規劃要求實作前核對）。
-            取不到時只記 warning 並略過——盤後少一次回填不影響部位，
-            而在這裡拋例外會讓報表也產不出來。
+            **本身失敗只記 warning 不往外拋**：校正是事後分析，拋出去會讓報表也產不出來。
         - Parameters:
             - run_date: datetime.date
                 交易日
         - Return:
-            - int
-                成功回填的筆數
+            - List[Dict[str, Any]]
+                比對結果（每筆已平倉交易一列）
         """
 
         provider: Optional[Callable[[datetime.date], List[Any]]] = getattr(
-            self.broker, "get_profit_loss_details", None
+            self.broker, "get_realized_trades", None
         )
-        if provider is None:
-            logger.warning(
-                "券商閘道尚未提供損益明細查詢，本次不回填實際費用；"
-                "成本統計會停留在估算值"
-            )
-            return 0
+        if provider is None or self.cost_estimator is None:
+            logger.info("券商閘道或成本估算器未提供，本次不校正成本")
+            return []
 
         try:
-            details: List[Any] = provider(run_date)
+            trades: List[RealizedTradeSnapshot] = list(provider(run_date))
         except Exception as exc:
-            logger.opt(exception=True).warning(f"回填實際費用失敗（略過）：{exc}")
-            return 0
+            logger.opt(exception=True).warning(f"查詢已實現損益失敗（略過校正）：{exc}")
+            return []
 
-        filled: int = 0
-        for detail in details:
-            seqno: str = str(getattr(detail, "seqno", "") or "")
-            trade_id: str = str(getattr(detail, "trade_id", "") or "")
-            if not seqno or not trade_id:
-                continue
-            self.dao.backfill_fill_costs(
-                seqno,
-                trade_id,
-                float(getattr(detail, "fee", 0.0) or 0.0),
-                float(getattr(detail, "tax", 0.0) or 0.0),
+        rows: List[Dict[str, Any]] = [
+            self._calibrate_trade(trade, run_date) for trade in trades
+        ]
+        if rows:
+            self._write_calibration(rows, run_date)
+        logger.info(f"成本校正 {len(rows)} 筆")
+        return rows
+
+    def _calibrate_trade(
+        self, trade: RealizedTradeSnapshot, run_date: datetime.date
+    ) -> Dict[str, Any]:
+        """比對一筆已平倉交易；超過門檻時寫事件"""
+
+        opening: List[Dict[str, Any]] = (
+            self.dao.get_fills_by_seqno(trade.open_seqno) if trade.open_seqno else []
+        )
+        actual: Optional[float] = self._actual_cost(trade, opening)
+        estimated: Optional[float] = self.cost_estimator(trade, opening, run_date)
+
+        note: str = ""
+        if actual is None:
+            note = "開倉成交不在本地紀錄，算不出實際成本"
+        elif estimated is None:
+            note = "成本模型算不出估算值"
+
+        diff: Optional[float] = (
+            actual - estimated if actual is not None and estimated is not None else None
+        )
+        ratio: Optional[float] = (
+            diff / estimated if diff is not None and estimated else None
+        )
+
+        if ratio is not None and abs(ratio) > COST_DRIFT_RATIO:
+            message: str = (
+                f"{trade.symbol} 實際成本 {actual:,.0f}、估算 {estimated:,.0f}，"
+                f"差 {ratio:+.0%}：成本設定可能需要校正"
             )
-            filled += 1
+            logger.warning(message)
+            self.dao.insert_risk_event(
+                {
+                    "run_id": self.run_id,
+                    "severity": "WARNING",
+                    "category": "COST_MODEL_DRIFT",
+                    "symbol": trade.symbol,
+                    "message": message,
+                    "occurred_at": self._now(),
+                }
+            )
 
-        logger.info(f"回填實際費用 {filled} 筆")
-        return filled
+        return {
+            "date": run_date.isoformat(),
+            "symbol": trade.symbol,
+            "quantity": trade.quantity,
+            "broker_pnl": trade.pnl,
+            "actual_cost": actual,
+            "estimated_cost": estimated,
+            "diff": diff,
+            "diff_ratio": ratio,
+            "note": note,
+        }
+
+    @staticmethod
+    def _actual_cost(
+        trade: RealizedTradeSnapshot, opening: List[Dict[str, Any]]
+    ) -> Optional[float]:
+        """券商實際扣的費用與稅；算不出來時為 None"""
+
+        if trade.fee is not None and trade.tax is not None:
+            return float(trade.fee + trade.tax)
+        if not opening:
+            return None
+
+        entry: float = weighted_fill_price(opening)
+        opened_long: bool = str(opening[0]["action"]) == Action.BUY.value
+        per_unit: float = (
+            trade.cover_price - entry if opened_long else entry - trade.cover_price
+        )
+        # 股票已實現交易的數量以張計、價格以股計
+        gross: float = per_unit * trade.quantity * Units.LOT
+        return gross - trade.pnl
+
+    def _write_calibration(
+        self, rows: List[Dict[str, Any]], run_date: datetime.date
+    ) -> Path:
+        """寫到盤後報表目錄的 `account/`（帳戶層，不屬於任何一支策略）"""
+
+        directory: Path = self.reporter.output_root / "account"
+        directory.mkdir(parents=True, exist_ok=True)
+        path: Path = directory / f"{run_date.isoformat()}_cost_calibration.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return path
 
     def handle_unfilled_remainders(self, run_date: datetime.date) -> int:
         """

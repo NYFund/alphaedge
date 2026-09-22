@@ -5,6 +5,7 @@ from .execution import (
     ExecutionReport,
     OrderStatusEvent,
     OrderTicket,
+    RealizedTradeSnapshot,
 )
 from .order import BaseOrder
 from .position import BasePosition

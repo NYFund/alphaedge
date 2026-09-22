@@ -9,6 +9,7 @@ from core.models import (
     BrokerAccountSnapshot,
     FuturesAccountSnapshot,
     FuturesPositionSnapshot,
+    RealizedTradeSnapshot,
     StockPositionSnapshot,
 )
 from core.utils import Action, PositionType, StockOrderCond, Units
@@ -204,6 +205,77 @@ class ShioajiAccountQuery:
                 )
             )
         return snapshots
+
+    # === 已實現損益 ===
+    def get_realized_trades(
+        self, run_date: datetime.date
+    ) -> List[RealizedTradeSnapshot]:
+        """
+        - Description:
+            當日已平倉的交易（股票與期貨），盤後校正成本用
+
+            `list_profit_loss()` 以「一組開平倉」為單位（2026-09-22 模擬環境實測）：
+            股票只給淨損益、平倉價與開倉委託序號，**沒有費用與稅**；期貨給開平倉價、
+            `fee`、`tax`，**沒有委託序號**。`list_profit_loss_detail()` 回空，不用它。
+            期貨代碼是月份字母碼，換成 `{商品}{YYYYMM}` 與本地一致。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[RealizedTradeSnapshot]
+                已平倉交易；某一邊帳號不存在時略過該邊
+        """
+
+        day: str = run_date.isoformat()
+        trades: List[RealizedTradeSnapshot] = []
+
+        if getattr(self.api, "stock_account", None) is not None:
+            self.rate_limiter.acquire(RateLimitCategory.ACCOUNT)
+            for row in (
+                self.api.list_profit_loss(
+                    self.api.stock_account, begin_date=day, end_date=day
+                )
+                or []
+            ):
+                trades.append(
+                    RealizedTradeSnapshot(
+                        symbol=str(getattr(row, "code", "")),
+                        quantity=int(getattr(row, "quantity", 0) or 0),
+                        pnl=float(getattr(row, "pnl", 0.0) or 0.0),
+                        cover_price=float(getattr(row, "price", 0.0) or 0.0),
+                        open_seqno=str(getattr(row, "seqno", "") or "") or None,
+                        raw=self._dump(row),
+                    )
+                )
+
+        if getattr(self.api, "futopt_account", None) is not None:
+            self.rate_limiter.acquire(RateLimitCategory.ACCOUNT)
+            for row in (
+                self.api.list_profit_loss(
+                    self.api.futopt_account, begin_date=day, end_date=day
+                )
+                or []
+            ):
+                code: str = str(getattr(row, "code", ""))
+                trades.append(
+                    RealizedTradeSnapshot(
+                        symbol=(
+                            self._futures_symbol(code)
+                            if self._futures_symbol is not None
+                            else code
+                        ),
+                        quantity=int(getattr(row, "quantity", 0) or 0),
+                        pnl=float(getattr(row, "pnl", 0.0) or 0.0),
+                        cover_price=float(getattr(row, "cover_price", 0.0) or 0.0),
+                        entry_price=float(getattr(row, "entry_price", 0.0) or 0.0),
+                        fee=float(getattr(row, "fee", 0.0) or 0.0),
+                        tax=float(getattr(row, "tax", 0.0) or 0.0),
+                        is_futures=True,
+                        raw=self._dump(row),
+                    )
+                )
+
+        return trades
 
     # === 轉換工具 ===
     @staticmethod

@@ -31,6 +31,7 @@ from core.live.account_sync import (
     FilledOrderBuilder,
     build_stock_order,
 )
+from core.live.after_close import TradeCostEstimator, weighted_fill_price
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
@@ -56,9 +57,16 @@ from core.managers.futures.position_manager import (
     FuturesPositionManager,
 )
 from core.managers.stock.position_manager import StockPositionManager
-from core.models import BaseOrder, FuturesAccount, FuturesOrder, StockAccount
+from core.models import (
+    BaseOrder,
+    FuturesAccount,
+    FuturesOrder,
+    RealizedTradeSnapshot,
+    StockAccount,
+)
 from core.strategies.base import BaseStrategy
 from core.utils import (
+    FUTURES_MULTIPLIER,
     Action,
     ExecutionTiming,
     FuturesRollRule,
@@ -298,6 +306,7 @@ def build_live_trader(
         schedule=_merge_schedules(schedules),
         dry_run=dry_run,
         simulation=simulation,
+        cost_estimator=make_trade_cost_estimator(),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
         margin_query=(
             getattr(resolved_broker, "get_futures_account", None)
@@ -453,6 +462,71 @@ def _build_context(
         calculate_opening_requirement=opening_requirement,
     )
     return (context, schedule)
+
+
+def make_trade_cost_estimator() -> TradeCostEstimator:
+    """
+    - Description:
+        盤後校正成本用的估算器：依成本模型重算一筆已平倉交易的手續費與稅
+
+        成本模型與實盤部位管理用的是同一組預設設定（`CostConfig.default()`、
+        `FuturesCostConfig.default()`），校正比對的才是「實盤記帳用的那套」估得準不準。
+        - 期貨：**只估平倉那一腿**（一次手續費＋平倉價的期交稅），與券商欄位的範圍一致——
+          2026-09-22 模擬環境實測，台指期一口來回的已實現紀錄 `fee=50`、`tax=193`，
+          正好是單邊手續費與單邊期交稅（開平倉價的稅在這個價位都是 193，分不出是哪一腿；
+          平倉回報列的是平倉，故取平倉腿）。照來回估的話每筆都會被誤報 -50%。
+          乘數取 `FUTURES_MULTIPLIER`，不在表內（股票期貨）時回 None。
+        - 股票：手續費開平倉各一次；證交稅只課賣出那一腿——多單課在平倉價、
+          空單課在開倉價；開倉日與交易日同一天時用當沖稅率。缺開倉成交時回 None。
+    - Return:
+        - TradeCostEstimator
+            估算器
+    """
+
+    stock_cost: StockCostModel = StockCostModel(CostConfig.default())
+    futures_cost: TwFuturesCostModel = TwFuturesCostModel(FuturesCostConfig.default())
+
+    def estimate(
+        trade: RealizedTradeSnapshot,
+        opening: List[Dict[str, Any]],
+        run_date: datetime.date,
+    ) -> Optional[float]:
+        quantity: int = trade.quantity
+        if trade.is_futures:
+            product, _ = split_contract_id(trade.symbol)
+            multiplier: Optional[int] = FUTURES_MULTIPLIER.get(product)
+            if multiplier is None or trade.entry_price is None:
+                return None
+            return float(
+                futures_cost.commission(volume=quantity, product=product)
+                + futures_cost.tax(trade.cover_price, quantity, multiplier)
+            )
+
+        if not opening:
+            return None
+        entry: float = weighted_fill_price(opening)
+        opened_on: datetime.date = datetime.date.fromisoformat(
+            str(opening[0]["filled_at"])[:10]
+        )
+        is_day_trade: bool = opened_on == run_date
+        commission: int = stock_cost.commission(
+            entry, quantity
+        ) + stock_cost.commission(trade.cover_price, quantity)
+        if str(opening[0]["action"]) == Action.BUY.value:
+            tax: int = stock_cost.tax(
+                trade.cover_price,
+                quantity,
+                Action.SELL,
+                is_day_trade=is_day_trade,
+                date=run_date,
+            )
+        else:
+            tax = stock_cost.tax(
+                entry, quantity, Action.SELL, is_day_trade=is_day_trade, date=opened_on
+            )
+        return float(commission + tax)
+
+    return estimate
 
 
 def to_live_roll_config(config: FuturesRollConfig) -> FuturesRollConfig:

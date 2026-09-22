@@ -772,6 +772,28 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return self._to_dicts(LIVE_RISK_EVENT_TABLE_NAME, rows)
 
+    def get_fills_by_seqno(self, broker_seqno: str) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            某張委託的全部成交，依成交時間排序（不限日期）
+
+            盤後校正成本時，股票的已實現交易只帶開倉那張委託的序號，
+            開倉價要由它回查；開倉可能在前幾天，故不限日期。
+        - Parameters:
+            - broker_seqno: str
+                券商委託序號
+        - Return:
+            - List[Dict[str, Any]]
+                成交清單；查無時為空
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_FILL_TABLE_NAME} WHERE broker_seqno = ? "
+            "ORDER BY filled_at, broker_trade_id",
+            (broker_seqno,),
+        ).fetchall()
+        return self._to_dicts(LIVE_FILL_TABLE_NAME, rows)
+
     def get_fills_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:
