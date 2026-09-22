@@ -44,14 +44,10 @@ def test_lookback_raises_after_max_days() -> None:
     original = MarketCalendar.check_price_api_has_data
     MarketCalendar.check_price_api_has_data = staticmethod(always_missing)
     try:
-        from core.api.tw.stock_price_api import StockPriceAPI
-
-        class _Typed(StockPriceAPI):
-            def __init__(self) -> None:  # noqa: D401 - 不呼叫父類 __init__，避免連 DB
-                pass
-
+        # **api 只是被原封傳給 `check_price_api_has_data()`**，本身不被檢查型別
+        # （舊版有 `isinstance` 分派，Shioaji 那支走掉之後就不需要真的 API 物件了）
         with pytest.raises(LookupError, match="找不到交易日"):
-            MarketCalendar.get_last_trading_date(_Typed(), datetime.date(2013, 1, 2))
+            MarketCalendar.get_last_trading_date(object(), datetime.date(2013, 1, 2))
     finally:
         MarketCalendar.check_price_api_has_data = original
 
@@ -71,13 +67,7 @@ def test_lookback_returns_the_previous_trading_day() -> None:
     original = MarketCalendar.check_price_api_has_data
     MarketCalendar.check_price_api_has_data = staticmethod(has_data)
     try:
-        from core.api.tw.stock_price_api import StockPriceAPI
-
-        class _Typed(StockPriceAPI):
-            def __init__(self) -> None:
-                pass
-
-        assert MarketCalendar.get_last_trading_date(_Typed(), monday) == friday
+        assert MarketCalendar.get_last_trading_date(object(), monday) == friday
     finally:
         MarketCalendar.check_price_api_has_data = original
 

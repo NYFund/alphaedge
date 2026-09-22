@@ -122,12 +122,10 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
 # 已登錄、尚未修的反向相依。
 # 這是 ratchet：清單內的只列為「已知」，不影響結束碼；新出現的任何一條都會讓檢查失敗。
 # **修掉之後要把對應那條從本清單移除**，不要讓它長期留著
-_KNOWN_REVERSE: Dict[Tuple[str, str], str] = {
-    (
-        "core.utils.instrument",
-        "core.market.tw.market_calendar",
-    ): "共用層 import 市場結構；StockUtils 歸屬未定",
-}
+# 空的是**目標狀態**：反向相依全部清掉了。再出現一條就是新欠的債，
+# 登記進來之前先想清楚能不能用搬家或刪死碼解掉——這三種手段在 2026-09-22
+# 把原本的 4 條清成 0 條，沒有一條是靠登記放行的
+_KNOWN_REVERSE: Dict[Tuple[str, str], str] = {}
 
 # 非 core 的頂層套件：core/ 內任何一處 import 到它們都是反向相依
 _NON_CORE_TOPS: Set[str] = {

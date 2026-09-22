@@ -1,11 +1,5 @@
-import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
 from typing import List, Tuple
-
-import numpy as np
-import shioaji as sj
-
-from core.market.tw.market_calendar import MarketCalendar
 
 from .constant import PRICE_TICK_TABLE, Commission, Units
 
@@ -15,9 +9,8 @@ instrument.py
 Utility functions for asset trading calculations, including support for stocks, futures, and options.
 
 Features:
-- Retrieve close prices and price changes (via Shioaji API)
 - Calculate commission, tax, net profit, and ROI
-- Check if the market was open on a given date
+- 跳動點與漲跌停價的換算
 
 Designed for use in backtesting and trading performance analysis
 """
@@ -25,45 +18,6 @@ Designed for use in backtesting and trading performance analysis
 
 class StockUtils:
     """Stock Related Tools"""
-
-    @staticmethod
-    def get_close_price(
-        api: sj.Shioaji,
-        stock_id: str,
-        date: datetime.date,
-    ) -> float:
-        """Shioaji: get close price for stock on date"""
-
-        tick: sj.Shioaji.ticks = api.ticks(
-            contract=api.Contracts.Stocks.get(stock_id),
-            date=date.strftime("%Y-%m-%d"),
-            query_type=sj.TicksQueryType.LastCount,
-            last_cnt=1,
-        )
-
-        return tick.close[0] if len(tick.close) != 0 else np.nan
-
-    @staticmethod
-    def get_price_chg(
-        api: sj.Shioaji,
-        stock_id: str,
-        date: datetime.date,
-    ) -> float:
-        """Shioaji: get price change rate for stock on date"""
-
-        # 取得前一個交易日的日期
-        last_trading_date: datetime.date = MarketCalendar.get_last_trading_date(
-            api, date
-        )
-
-        # 計算指定交易日股票的漲幅
-        cur_close_price: float = StockUtils.get_close_price(api, stock_id, date)
-        prev_close_price: float = StockUtils.get_close_price(
-            api, stock_id, last_trading_date
-        )
-
-        # if cur_close_price or prev_close_price is np.nan, then function will return np.nan
-        return round((cur_close_price / prev_close_price - 1) * 100, 2)
 
     @staticmethod
     def convert_share_to_lot(shares: int) -> int:
