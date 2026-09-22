@@ -11,6 +11,7 @@ from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.strategy_loader import StrategyLoader
 from core.utils import Action, FuturesSession, InstrumentType, Market, PositionType
+from tests.conftest import build_futures_quote
 
 """
 台期貨策略層的介面測試
@@ -37,17 +38,19 @@ def make_quote(
     product: str = "TX",
     session: FuturesSession = FuturesSession.DAY,
 ) -> FuturesQuote:
-    """組一筆期貨報價"""
+    """組一筆期貨報價；OHLC 與 scale 留原值（本檔的測試只看 cur_price 與 close）"""
 
-    return FuturesQuote(
+    return build_futures_quote(
         product=product,
         expiry=expiry,
         date=DATE,
-        cur_price=close,
         close=close,
-        volume=1000,
-        multiplier=MULTIPLIER,
+        open=0.0,
+        high=0.0,
+        low=0.0,
         session=session,
+        scale=None,
+        multiplier=MULTIPLIER,
     )
 
 

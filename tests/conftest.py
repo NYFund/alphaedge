@@ -7,8 +7,9 @@ import pandas as pd
 import pytest
 
 from core.dao.base import BaseDAO, insert_or_ignore
-from core.models import StockQuote
-from core.utils import Scale
+from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.models import FuturesQuote, StockQuote
+from core.utils import FuturesSession, Scale
 from core.utils.log_manager import LogManager
 
 """
@@ -183,40 +184,112 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
     return make
 
 
+@pytest.fixture
+def dao() -> LiveTradeDAO:
+    """
+    已建表的記憶體 `LiveTradeDAO`
+
+    **不走 `dao_factory`**：那支是給「建表後灌入 `records`」的查詢型 DAO 用的，
+    而實盤測試要的是一個空的紀錄庫，再由各測試自己走 OMS／帳本的寫入路徑填它。
+    用 `dao_factory(LiveTradeDAO)` 也能得到同樣的東西，但會讓讀者以為有灌資料。
+
+    放 root 而不是 `tests/live/conftest.py`，是因為 `tests/test_dao_live_trade.py`
+    在 `tests/live/` 之外也要用同一份——只收斂 `tests/live/` 底下那批會留一個副本，
+    而留下的那一份正是最容易與這份漂移的（它測的就是 `LiveTradeDAO` 本身）。
+    """
+
+    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
+    instance.ensure_tables()
+    return instance
+
+
 # -----------------------------------------------------------------------
-# === 報價 fixture：放 root conftest 供各子目錄共用 ===
+# === 報價 builder：放 root conftest 供各子目錄共用 ===
 # -----------------------------------------------------------------------
 #
 # 原本住在 `tests/backtest/conftest.py`，只有 `tests/backtest/` 看得到。
 # `sizing.py` 搬到 `core/portfolio/` 後，`tests/portfolio/` 也要用同一個 factory；
 # 複製一份到那邊必然與這份漂移，故上移到 root，全專案共用同一份。
+#
+# **兩種用法並存，不是重複**：
+# - `build_*_quote()` 是普通函式，給模組層級的 factory 與 `parametrize` 用——
+#   那些地方拿不到 fixture。各測試檔以它包一層、填入自己的常數（標的、日期、乘數）。
+# - `make_quote` fixture 只是把 builder 交出去，給直接請求 fixture 的測試用。
+#
+# **各檔的 wrapper 一律顯式帶自己的預設值，不共用預設值**：期貨那批的
+# `settlement_price` 有的填收盤價、有的留 None，OHLC 也有全填 0.0 的；
+# 把預設值也一起合併會靜默改掉測試的輸入資料，測試照樣綠但測的不是原本那件事。
+
+
+def build_stock_quote(
+    stock_id: str = "2330",
+    date: Optional[datetime.date] = None,
+    cur_price: float = 100.0,
+    open: Optional[float] = None,
+    high: Optional[float] = None,
+    low: Optional[float] = None,
+    close: Optional[float] = None,
+    volume: int = 1000,
+    scale: Scale = Scale.DAY,
+) -> StockQuote:
+    """建立 StockQuote；未指定的 OHLC 一律沿用 cur_price"""
+
+    return StockQuote(
+        stock_id=stock_id,
+        scale=scale,
+        date=date or datetime.date(2024, 1, 2),
+        cur_price=cur_price,
+        volume=volume,
+        open=open if open is not None else cur_price,
+        high=high if high is not None else cur_price,
+        low=low if low is not None else cur_price,
+        close=close if close is not None else cur_price,
+    )
+
+
+def build_futures_quote(
+    product: str = "TX",
+    expiry: str = "202403",
+    date: Optional[datetime.date] = None,
+    close: float = 18000.0,
+    open: Optional[float] = None,
+    high: Optional[float] = None,
+    low: Optional[float] = None,
+    volume: int = 1000,
+    settlement_price: Optional[float] = None,
+    open_interest: Optional[int] = None,
+    session: FuturesSession = FuturesSession.DAY,
+    scale: Scale = Scale.DAY,
+    multiplier: int = 200,
+) -> FuturesQuote:
+    """
+    建立 FuturesQuote；未指定的 OHLC 一律沿用 close
+
+    `settlement_price` 與 `open_interest` **預設 None 而不是 close／0**：
+    夜盤本來就沒有這兩項，預設成有值會讓「沒有結算價」與「結算價為某值」混為一談。
+    要帶值的測試自己傳。
+    """
+
+    return FuturesQuote(
+        product=product,
+        expiry=expiry,
+        scale=scale,
+        date=date or datetime.date(2024, 3, 11),
+        cur_price=close,
+        volume=volume,
+        open=open if open is not None else close,
+        high=high if high is not None else close,
+        low=low if low is not None else close,
+        close=close,
+        session=session,
+        settlement_price=settlement_price,
+        open_interest=open_interest,
+        multiplier=multiplier,
+    )
 
 
 @pytest.fixture
 def make_quote() -> Callable[..., StockQuote]:
     """建立 StockQuote 的 factory；未指定的 OHLC 一律沿用 cur_price"""
 
-    def _make_quote(
-        stock_id: str = "2330",
-        date: Optional[datetime.date] = None,
-        cur_price: float = 100.0,
-        open: Optional[float] = None,
-        high: Optional[float] = None,
-        low: Optional[float] = None,
-        close: Optional[float] = None,
-        volume: int = 1000,
-        scale: Scale = Scale.DAY,
-    ) -> StockQuote:
-        return StockQuote(
-            stock_id=stock_id,
-            scale=scale,
-            date=date or datetime.date(2024, 1, 2),
-            cur_price=cur_price,
-            volume=volume,
-            open=open if open is not None else cur_price,
-            high=high if high is not None else cur_price,
-            low=low if low is not None else cur_price,
-            close=close if close is not None else cur_price,
-        )
-
-    return _make_quote
+    return build_stock_quote

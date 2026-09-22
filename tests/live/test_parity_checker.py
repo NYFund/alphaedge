@@ -1,9 +1,6 @@
 import datetime
-import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List
-
-import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
@@ -33,13 +30,6 @@ from core.utils import Action, LiveOrderStatus, PositionType
 
 TODAY: datetime.date = datetime.date(2026, 9, 18)
 NOW: datetime.datetime = datetime.datetime(2026, 9, 18, 14, 30)
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 def make_live_order(

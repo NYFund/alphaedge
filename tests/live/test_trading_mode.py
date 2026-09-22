@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 
 import pytest
 
@@ -15,13 +14,6 @@ open／close／after_close 是三個獨立行程。
 """
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 @pytest.fixture

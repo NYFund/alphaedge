@@ -19,6 +19,7 @@ from core.models import (
 )
 from core.models.cost_config import CostConfig, ShortConstraint
 from core.utils import Action, PositionType, Scale, ShortMethod
+from tests.conftest import build_stock_quote
 
 """
 放空的市場約束測試：除權息停券強制回補與股利補償
@@ -481,16 +482,13 @@ def test_conversion_proceeds_when_balance_is_enough() -> None:
 def make_stock_quote() -> StockQuote:
     """當日有量的正常報價"""
 
-    return StockQuote(
+    return build_stock_quote(
         stock_id=STOCK_ID,
-        scale=Scale.DAY,
         date=datetime.date(2024, 1, 4),
         cur_price=100.0,
-        volume=10_000,
-        open=100.0,
         high=105.0,
         low=95.0,
-        close=100.0,
+        volume=10_000,
     )
 
 

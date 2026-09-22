@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from pathlib import Path
 from typing import Dict
 
@@ -27,13 +26,6 @@ from core.utils import StockPriceType
 
 TODAY: datetime.date = datetime.date(2026, 9, 21)
 NOW: datetime.datetime = datetime.datetime(2026, 9, 21, 15, 0)
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 def add_order(

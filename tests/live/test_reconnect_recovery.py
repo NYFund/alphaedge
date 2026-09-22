@@ -1,8 +1,5 @@
 import datetime
-import sqlite3
 from typing import Any, Dict, List
-
-import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.risk.trading_mode import TradingMode, TradingModeState
@@ -20,13 +17,6 @@ from core.live.risk.trading_mode import TradingMode, TradingModeState
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 21, 9, 5)
 LATER: datetime.datetime = datetime.datetime(2026, 9, 21, 13, 40)
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 def add_run(dao: LiveTradeDAO, run_id: str, started_at: datetime.datetime) -> None:

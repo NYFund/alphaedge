@@ -9,6 +9,7 @@ from core.backtest.models.fill_model import (
 from core.backtest.models.instrument_spec import TwStockSpec
 from core.models import StockOrder, StockQuote
 from core.utils import Action, PositionType, Scale, ShortMethod
+from tests.conftest import build_stock_quote
 
 """
 成交假設測試：滑價、成交量上限、券源檢核
@@ -46,16 +47,14 @@ def make_order(
 def make_quote(volume: int = 10_000, scale: Scale = Scale.DAY) -> StockQuote:
     """建立測試用報價（volume 單位為張）"""
 
-    return StockQuote(
+    return build_stock_quote(
         stock_id=STOCK_ID,
-        scale=scale,
         date=DATE,
         cur_price=100.0,
-        volume=volume,
-        open=100.0,
         high=105.0,
         low=95.0,
-        close=100.0,
+        volume=volume,
+        scale=scale,
     )
 
 

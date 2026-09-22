@@ -1,6 +1,5 @@
 import dataclasses
 import datetime
-import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -277,11 +276,6 @@ def test_existing_exposure_is_counted(dao_factory: object = None) -> None:
 
 
 # === 依賴行程狀態 ===
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 @pytest.fixture

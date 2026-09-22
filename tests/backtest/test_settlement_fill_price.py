@@ -35,6 +35,7 @@ from core.models import (
     StockQuote,
 )
 from core.utils import Action, PositionType, Scale, ShortMethod
+from tests.conftest import build_stock_quote
 
 """
 引擎強制出場的成交價測試：滑價與當日區間檢查
@@ -108,16 +109,13 @@ def make_stock_order(price: float = 100.0) -> StockOrder:
 def make_stock_quote(close: float = 100.0, high: float = 100.0) -> StockQuote:
     """當日報價；預設收盤即當日最高，滑價一定會把回補價推出區間"""
 
-    return StockQuote(
+    return build_stock_quote(
         stock_id=STOCK_ID,
-        scale=Scale.DAY,
         date=STOCK_DATE,
         cur_price=close,
-        volume=10_000,
-        open=close,
         high=high,
         low=95.0,
-        close=close,
+        volume=10_000,
     )
 
 

@@ -6,7 +6,8 @@ from core.backtest.models.settlement_model import TwStockSettlementModel
 from core.managers.stock.position_manager import StockPositionManager
 from core.models import StockAccount, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
-from core.utils import PositionType, Scale
+from core.utils import PositionType
+from tests.conftest import build_stock_quote
 
 """
 做多部位的公司行動記帳
@@ -76,17 +77,7 @@ def make_account(position: Optional[StockPosition] = None) -> StockAccount:
 def make_quote(close: float) -> StockQuote:
     """當日報價"""
 
-    return StockQuote(
-        stock_id=STOCK_ID,
-        scale=Scale.DAY,
-        date=EX_DATE,
-        cur_price=close,
-        volume=1000,
-        open=close,
-        high=close,
-        low=close,
-        close=close,
-    )
+    return build_stock_quote(stock_id=STOCK_ID, date=EX_DATE, cur_price=close)
 
 
 # === 現金股利 ===

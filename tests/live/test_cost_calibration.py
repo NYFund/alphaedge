@@ -1,11 +1,9 @@
 import datetime
-import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-import pytest
 
 from core.backtest.models.cost_model import StockCostModel
 from core.broker.rate_limiter import RateLimiter
@@ -204,11 +202,6 @@ def test_estimator_gives_up_without_what_it_needs() -> None:
 
 
 # === 盤後比對 ===
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 def make_runner(

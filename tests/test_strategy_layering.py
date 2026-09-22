@@ -22,7 +22,11 @@ from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
 from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
-from core.utils import Action, FuturesSession, PositionType, Scale
+from core.utils import Action, PositionType
+from tests.conftest import (
+    build_futures_quote,
+    build_stock_quote,
+)
 
 """
 策略分層鉤子的測試：`check_*_signal()` 由基底提供，策略只給訊號
@@ -45,31 +49,19 @@ MULTIPLIER: int = 200
 def make_stock_quote(stock_id: str, price: float) -> StockQuote:
     """組一筆日線報價；OHLC 一律沿用同一個價格"""
 
-    return StockQuote(
-        stock_id=stock_id,
-        scale=Scale.DAY,
-        date=DAY_1,
-        cur_price=price,
-        volume=1000,
-        open=price,
-        high=price,
-        low=price,
-        close=price,
-    )
+    return build_stock_quote(stock_id=stock_id, date=DAY_1, cur_price=price)
 
 
 def make_futures_quote(expiry: str, close: float = 18000.0) -> FuturesQuote:
-    """組一筆期貨日盤報價"""
+    """組一筆期貨日盤報價；OHLC 留 0（本檔的測試只看 cur_price 與 close）"""
 
-    return FuturesQuote(
-        product="TX",
+    return build_futures_quote(
         expiry=expiry,
-        scale=Scale.DAY,
         date=DAY_1,
-        cur_price=close,
-        volume=1000,
         close=close,
-        session=FuturesSession.DAY,
+        open=0.0,
+        high=0.0,
+        low=0.0,
         multiplier=MULTIPLIER,
     )
 

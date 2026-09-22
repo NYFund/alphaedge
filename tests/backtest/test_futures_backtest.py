@@ -34,6 +34,7 @@ from core.models import (
 from core.models.cost_config import FuturesCostConfig
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import Action, FuturesSession, PositionType, Scale
+from tests.conftest import build_futures_quote
 
 """
 台期貨回測 model 組的測試
@@ -131,19 +132,17 @@ def make_quote() -> Callable[..., FuturesQuote]:
         session: FuturesSession = FuturesSession.DAY,
         scale: Scale = Scale.DAY,
     ) -> FuturesQuote:
-        return FuturesQuote(
+        return build_futures_quote(
             product=product,
             expiry=expiry,
-            scale=scale,
             date=date or DAY_1,
-            cur_price=close,
-            volume=volume,
-            open=close,
-            high=high if high is not None else close,
-            low=low if low is not None else close,
             close=close,
-            session=session,
+            high=high,
+            low=low,
+            volume=volume,
             settlement_price=settlement_price,
+            session=session,
+            scale=scale,
             multiplier=MULTIPLIER,
         )
 

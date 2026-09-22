@@ -130,13 +130,6 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
 
 
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
-
-
 def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
     """
     組一個只有期貨策略的引擎

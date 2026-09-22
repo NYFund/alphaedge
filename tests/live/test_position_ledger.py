@@ -1,5 +1,4 @@
 import datetime
-import sqlite3
 from typing import Dict, List, Optional, Tuple
 
 import pytest
@@ -25,13 +24,6 @@ from core.utils import Action, PositionType
 """
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
-
-
-@pytest.fixture
-def dao() -> LiveTradeDAO:
-    instance: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
-    instance.ensure_tables()
-    return instance
 
 
 @pytest.fixture
