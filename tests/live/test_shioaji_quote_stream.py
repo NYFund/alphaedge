@@ -170,6 +170,25 @@ def test_timestamp_is_parsed_as_nanoseconds(limiter: RateLimiter) -> None:
     assert quote.date.tzinfo is not None
 
 
+def test_timestamp_is_taipei_wall_clock_not_epoch(limiter: RateLimiter) -> None:
+    """
+    `Snapshot.ts` 是台北牆上時間當成 UTC 編碼，不是真正的 epoch
+
+    這個值是 2026-09-22 台北 11:33:12 在模擬環境實際取到的快照時戳。
+    當成真 epoch 換到台北時區會得到 19:33，盤中報價落到晚上，
+    而日期不變，只比日期的檢查看不出來。
+    """
+
+    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(
+        FakeSnapshot(ts=1790076792276623000)
+    )
+
+    assert quote.date.replace(tzinfo=None) == datetime.datetime(
+        2026, 9, 22, 11, 33, 12, 276623
+    )
+    assert quote.date.utcoffset() == datetime.timedelta(hours=8)
+
+
 def test_unparsable_timestamp_falls_back_to_now(limiter: RateLimiter) -> None:
     """時戳壞掉時退回目前時間，不可讓整筆報價消失"""
 
