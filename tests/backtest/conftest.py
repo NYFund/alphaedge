@@ -167,10 +167,3 @@ def make_strategy() -> Callable[..., ScriptedStrategy]:
         return strategy
 
     return _make_strategy
-
-
-@pytest.fixture
-def account() -> StockAccount:
-    """初始資金 100 萬的虛擬帳戶"""
-
-    return StockAccount(1000000.0)

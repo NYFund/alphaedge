@@ -1,5 +1,3 @@
-import random
-import time
 from io import StringIO
 from pathlib import Path
 from typing import List, Optional
@@ -9,13 +7,11 @@ from loguru import logger
 
 from core.config import (
     MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH,
-    MONTHLY_REVENUE_REPORT_META_DIR_PATH,
 )
 from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import FetchResult, RequestUtils
 from core.pipeline.tw.utils.url_manager import URLManager
-from core.pipeline.utils import DataType, IssuerOrigin
-from core.pipeline.utils.data_utils import DataUtils
+from core.pipeline.utils import IssuerOrigin
 from core.utils import FileEncoding, TimeUtils
 
 """
@@ -218,56 +214,3 @@ class MonthlyRevenueReportCrawler(BaseDataCrawler):
         return self.crawl_exchange_monthly_revenue(
             "TPEX_MONTHLY_REVENUE_REPORT_URL", "TPEX", year, month
         )
-
-    def get_all_mrr_columns(
-        self,
-        start_year: int,
-        start_month: int,
-        end_year: int,
-        end_month: int,
-    ) -> List[str]:
-        """取得所有月營收財報的 Columns Name"""
-
-        year_list: List[int] = list(range(start_year, end_year + 1))
-        month_list: List[int] = list(range(start_month, end_month + 1))
-        all_columns: List[str] = []
-
-        for year in year_list:
-            for month in month_list:
-                twse_result: CrawlResult = self.crawl_twse_monthly_revenue(
-                    year=year, month=month
-                )
-                tpex_result: CrawlResult = self.crawl_tpex_monthly_revenue(
-                    year=year, month=month
-                )
-
-                if twse_result.is_ok:
-                    for df in twse_result.tables:
-                        if (
-                            isinstance(df.columns, pd.MultiIndex)
-                            and df.columns.nlevels > 1
-                        ):
-                            df.columns = df.columns.droplevel(0)
-                            all_columns.extend(df.columns)
-
-                if tpex_result.is_ok:
-                    for df in tpex_result.tables:
-                        if (
-                            isinstance(df.columns, pd.MultiIndex)
-                            and df.columns.nlevels > 1
-                        ):
-                            df.columns = df.columns.droplevel(0)
-                            all_columns.extend(df.columns)
-            time.sleep(random.uniform(self.CRAWL_DELAY_MIN, self.CRAWL_DELAY_MAX))
-
-        # 去除重複欄位並保留順序
-        unique_columns: List[str] = list(dict.fromkeys(all_columns))
-
-        # Save all columns list as .json in pipeline/downloads/tw_stock/meta/monthly_revenue_report
-        dir_path: Path = MONTHLY_REVENUE_REPORT_META_DIR_PATH
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-        file_path: Path = dir_path / f"{DataType.MRR.lower()}_all_columns.json"
-        DataUtils.save_json(data=unique_columns, file_path=file_path)
-
-        return unique_columns

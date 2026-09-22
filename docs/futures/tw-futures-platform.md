@@ -283,7 +283,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 | **一天不只一個報價**（多個到期月） | `select_near_month()`；換月規則由 `roll_config` 決定，要別的政策就覆寫它 |
 | **口數由保證金決定，不是契約價值** | `calculate_max_lots()`；用契約價值會低估可開口數十倍以上 |
 | **日盤與夜盤是兩筆獨立行情** | `filter_session()`；不過濾會讓訊號被算兩次 |
-| 需要知道離到期還有幾天 | `calendar`、`get_trading_days_to_expiry()`、`check_near_expiry()` |
+| 需要知道離到期還有幾天 | `calendar`、`get_trading_days_to_expiry()` |
 | 沒有券源／借券費／平盤下限制 | `BaseStockStrategy` 的那一整組欄位不存在 |
 
 策略層查不到保證金時**開 0 口**而非拋錯；真正 raise 的是部位管理層（已決定開倉卻算不出保證金）。

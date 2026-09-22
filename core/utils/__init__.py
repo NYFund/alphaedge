@@ -44,6 +44,5 @@ from .constant import (
     StockPriceType,
     Units,
 )
-from .decorators import log_thread
 from .log_manager import LogManager
 from .time import TimeUtils

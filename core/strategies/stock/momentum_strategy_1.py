@@ -29,7 +29,7 @@ class MomentumStrategy1(BaseStockStrategy):
 
     **已持有的標的仍會再次進入開倉候選（＝允許加碼）**：本策略不過濾
     `check_has_position()`，同一檔在連續多天都符合條件時會開出多個部位，
-    實際能開幾個由 `max_holdings` 與 `calculate_position_size()` 決定。
+    實際能開幾個由 `max_holdings` 與部位建構器切出的張數決定。
     這是刻意的語意（動能延續就繼續加），但先前 docstring 沒寫，
     看回測結果的人無從判斷那些重複的開倉是設計還是 bug。
 

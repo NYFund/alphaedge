@@ -46,7 +46,7 @@ class StockOrder(BaseOrder):
             client_order_id=client_order_id,
         )
 
-        # Short Info（策略不需自行填寫，由 Backtester._enrich_orders 依策略設定補值）
+        # Short Info（策略不需自行填寫，由 StockCostModel.enrich_orders 依成本設定補值）
         self.short_method: Optional[ShortMethod] = short_method
         self.is_day_trade: bool = is_day_trade
 

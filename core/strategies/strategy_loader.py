@@ -119,9 +119,3 @@ class StrategyLoader:
                 )
 
             strategies[name] = obj  # 用類別名稱當 key
-
-    @staticmethod
-    def load_stock_strategies() -> Dict[str, Type[BaseStrategy]]:
-        """相容別名：既有呼叫端沿用此名稱，行為等同 load_strategies()"""
-
-        return StrategyLoader.load_strategies()

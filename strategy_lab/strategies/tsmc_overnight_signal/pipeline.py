@@ -24,9 +24,12 @@ import plotly.graph_objects as go
 import yfinance as yf
 
 from core.api.tw.stock_price_api import StockPriceAPI
-from core.strategies.ridge import ridge_fit_predict, tune_alpha
 from core.utils import Units
 from core.utils.instrument import StockUtils
+from strategy_lab.strategies.tsmc_overnight_signal.ridge import (
+    ridge_fit_predict,
+    tune_alpha,
+)
 
 # 此檔位於 strategy_lab/strategies/tsmc_overnight_signal/pipeline.py
 # parents[3] = AlphaEdge 專案根目錄

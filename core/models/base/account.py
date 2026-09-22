@@ -73,20 +73,6 @@ class BaseAccount:
                 return position
         return None
 
-    def get_last_open_position(self, symbol: str) -> Optional[BasePosition]:
-        """根據商品代號取得庫存中該商品最晚開倉的部位（LIFO）"""
-
-        for position in reversed(self.positions):
-            if position.symbol == symbol and not position.is_closed:
-                return position
-        return None
-
-    def remove_positions_by_symbol(self, symbol: str) -> None:
-        """根據商品代號移除庫存中的部位"""
-        self.positions = [
-            position for position in self.positions if position.symbol != symbol
-        ]
-
     def remove_closed_positions(self) -> None:
         """移除已平倉的部位"""
         self.positions = [
