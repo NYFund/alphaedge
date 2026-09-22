@@ -6,6 +6,7 @@ import shioaji as sj
 from loguru import logger
 
 from core.api.tw.futures_price_api import FuturesPriceAPI
+from core.broker.tw.shioaji_session import ShioajiSession, login_read_only_sessions
 from core.config import FUTURES_TARGET_PRODUCTS
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_tick_cleaner import FuturesTickCleaner
@@ -13,7 +14,6 @@ from core.pipeline.tw.crawlers.futures_tick_crawler import FuturesTickCrawler
 from core.pipeline.tw.loaders.futures_tick_loader import FuturesTickLoader
 from core.pipeline.tw.utils.stock_tick_utils import StockTickUtils
 from core.utils import FuturesSession, TimeUtils
-from core.utils.account import ShioajiAccount
 from core.utils.log_manager import LogManager
 
 """
@@ -50,6 +50,8 @@ class FuturesTickUpdater(BaseDataUpdater):
         self.loader: FuturesTickLoader = FuturesTickLoader()
         self.price_api: FuturesPriceAPI = FuturesPriceAPI()
 
+        # Shioaji 連線（多組金鑰輪替）；`api_list` 是給爬蟲用的原生 API 物件
+        self.sessions: List[ShioajiSession] = []
         self.api_list: List[sj.Shioaji] = []
 
         self.setup()
@@ -70,20 +72,22 @@ class FuturesTickUpdater(BaseDataUpdater):
         if self.api_list:
             return len(self.api_list)
 
-        for account in StockTickUtils.setup_shioaji_apis():
-            api: Optional[sj.Shioaji] = ShioajiAccount.API_login(
-                sj.Shioaji(), account.api_key, account.api_secret_key
-            )
-            if api is not None:
-                self.api_list.append(api)
-
+        # 每組金鑰各登入一次正式環境（不啟用憑證，只查資料）；失敗的帳號略過
+        self.sessions = login_read_only_sessions(
+            [
+                (account.api_key, account.api_secret_key)
+                for account in StockTickUtils.setup_shioaji_apis()
+            ]
+        )
+        self.api_list = [session.api for session in self.sessions]
         return len(self.api_list)
 
     def logout(self) -> None:
         """登出所有 Shioaji 連線並關閉資料連線"""
 
-        for api in self.api_list:
-            ShioajiAccount.API_logout(api)
+        for session in self.sessions:
+            session.close()
+        self.sessions = []
         self.api_list = []
 
         self.price_api.close()

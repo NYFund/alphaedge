@@ -216,9 +216,9 @@ class ShioajiAccountQuery:
             - `list_settlements()` 的 `Settlement`：具名的 `t1_money`／`t2_money`。
             - `settlements()` 的 `SettlementV1`：每列一筆，`T` 是第幾天、`amount` 是金額。
 
-            兩種都支援不是為了通用，是因為專案裡兩支 API 都有人用（`core/utils/account.py`
-            用的是後者），舊的 `core/utils/` 工具收斂之前它們會並存。舊寫法 `loc[1:2, "amount"]`
-            靠的是「第 1、2 列剛好是 T+1、T+2」——列數一變就會安靜地算到別的金額。
+            兩種都支援，是因為券商的兩支查詢 API 回傳不同形狀，呼叫端可能拿到任一種。
+            曾經的寫法 `loc[1:2, "amount"]` 靠的是「第 1、2 列剛好是 T+1、T+2」——
+            列數一變就會安靜地算到別的金額。
         - Parameters:
             - settlements: Any
                 券商回傳的交割款資料

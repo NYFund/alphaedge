@@ -147,7 +147,7 @@ def test_missing_stock_raises_instead_of_returning_none(
     查不到要拋出
 
     Shioaji 自己查不到是回 `None`。把 `None` 往下傳給 `api.Order` 的話，
-    錯誤訊息完全指不到「代號打錯了」這個真正的原因——舊 `OrderUtils` 就是這樣。
+    錯誤訊息完全指不到「代號打錯了」這個真正的原因——舊的下單工具就是這樣。
     """
 
     with pytest.raises(LookupError, match="9999"):

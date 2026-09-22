@@ -691,3 +691,71 @@ def test_logout_failure_does_not_leak_the_session_token(
     assert "登出失敗" in text
     assert fake_token not in text
     assert "A123456789" not in text
+
+
+# === 多帳號、唯讀登入（tick 爬蟲）===
+def test_explicit_credentials_override_the_environment(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """tick 爬蟲以多組金鑰輪替：傳入的金鑰優先於環境變數"""
+
+    api: FakeShioaji = FakeShioaji()
+    session: ShioajiSession = make_session(
+        fixed_now, api=api, credentials=("other-key", "other-secret")
+    )
+
+    session.connect()
+
+    assert api.login_kwargs["api_key"] == "other-key"
+    assert api.login_kwargs["secret_key"] == "other-secret"
+
+
+def test_contract_date_check_can_be_skipped_for_read_only_use(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    只抓歷史資料時可以不檢查合約檔日期
+
+    長連假期間合約檔可能超過容許天數沒更新，實盤要擋，tick 回補不該被擋。
+    """
+
+    stale: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026-08-01"))
+    session: ShioajiSession = make_session(
+        fixed_now, api=stale, verify_contract_date=False
+    )
+
+    session.connect()
+
+    assert session.connected
+
+
+def test_read_only_sessions_skip_failed_accounts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    多組帳號逐一登入正式環境、不啟用憑證；登入失敗的那組略過，其餘照常
+
+    不啟用憑證就送不出委託，這組連線只能查資料。
+    """
+
+    created: List[FakeShioaji] = []
+
+    def factory(simulation: bool) -> FakeShioaji:
+        api: FakeShioaji = FakeShioaji(
+            simulation=simulation,
+            login_error=ConnectionError("金鑰失效") if len(created) == 1 else None,
+        )
+        created.append(api)
+        return api
+
+    monkeypatch.setattr(
+        session_module.ShioajiSession, "_default_api_factory", staticmethod(factory)
+    )
+
+    sessions: List[ShioajiSession] = session_module.login_read_only_sessions(
+        [("k1", "s1"), ("k2", "s2"), ("k3", "s3")]
+    )
+
+    assert len(sessions) == 2
+    assert [api.simulation for api in created] == [False, False, False]
+    assert all(api.activate_ca_kwargs == {} for api in created)

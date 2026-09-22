@@ -8,7 +8,7 @@ from core.utils import SHIOAJI_FUTURES_CATEGORY
 合約解析：把領域識別（`stock_id`、`product` ＋ `expiry`）換成 Shioaji 的合約
 
 **查不到一律拋 `LookupError`，絕不回 `None`。** Shioaji 查不到合約時回的是 `None`，
-舊的 `OrderUtils` 就這樣把 `None` 往下傳給下單，錯誤訊息完全指不到「代號打錯了」
+舊的下單工具就這樣把 `None` 往下傳給下單，錯誤訊息完全指不到「代號打錯了」
 這個真正的原因。
 
 只用 shioaji 1.7 合約容器明確提供的操作：`get(code)`、屬性取分類、迭代。

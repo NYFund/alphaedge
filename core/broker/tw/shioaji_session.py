@@ -1,7 +1,7 @@
 import datetime
 import re
 import time
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 import shioaji as sj
 from loguru import logger
@@ -18,7 +18,7 @@ from core.config.settings import (
 """
 ShioajiSession：登入、憑證、模擬旗標、斷線重連與時鐘檢查
 
-取代 `core/utils/account.py` 的 `ShioajiAccount.API_login()`。舊版的三個問題：
+取代舊的登入工具 `ShioajiAccount.API_login()`（已刪除）。舊版的三個問題：
 用 `print` 而不是 logger、登入失敗回傳 `None`（呼叫端幾乎不會檢查）、
 沒有 `simulation` 與 `activate_ca`——也就是它只連得到正式環境，
 而且連不上的時候你要自己發現。
@@ -79,6 +79,8 @@ class ShioajiSession:
         sleep: Callable[[float], None] = time.sleep,
         now_provider: Callable[[], datetime.datetime] = now_live,
         on_degrade: Optional[Callable[[str], None]] = None,
+        credentials: Optional[Tuple[str, str]] = None,
+        verify_contract_date: bool = True,
     ) -> None:
         """
         - Description:
@@ -102,6 +104,12 @@ class ShioajiSession:
             - on_degrade: Optional[Callable[[str], None]]
                 降級回呼。**session 不自己改交易模式**，只送事件給風控——
                 散在各元件各自切換的話，沒有任何一處知道「現在到底能不能送單」
+            - credentials: Optional[Tuple[str, str]]
+                `(api_key, secret_key)`；None 時讀環境變數 `API_KEY`／`API_SECRET_KEY`。
+                tick 爬蟲以多組帳號輪替時逐組傳入
+            - verify_contract_date: bool
+                是否以合約檔更新日粗略檢查本機日期。實盤一律要；只抓歷史資料的
+                ETL 可關掉——長連假期間合約檔可能超過容許天數沒更新，會擋住回補
         """
 
         self.simulation: bool = simulation
@@ -118,6 +126,8 @@ class ShioajiSession:
         self._sleep: Callable[[float], None] = sleep
         self._now: Callable[[], datetime.datetime] = now_provider
         self._on_degrade: Optional[Callable[[str], None]] = on_degrade
+        self._credentials: Optional[Tuple[str, str]] = credentials
+        self._verify_contract_date_enabled: bool = verify_contract_date
 
         self.api: Optional[Any] = None
         self.connected: bool = False
@@ -165,7 +175,8 @@ class ShioajiSession:
                 金鑰未設定、憑證啟用失敗、缺少必要帳號，或時鐘偏差過大
         """
 
-        if not API_KEY or not API_SECRET_KEY:
+        api_key, secret_key = self._credentials or (API_KEY, API_SECRET_KEY)
+        if not api_key or not secret_key:
             raise RuntimeError(
                 "環境變數 API_KEY／API_SECRET_KEY 未設定，無法登入 Shioaji"
             )
@@ -176,8 +187,8 @@ class ShioajiSession:
         self.api = self._api_factory(self.simulation)
         try:
             accounts: List[Any] = self.api.login(
-                api_key=API_KEY,
-                secret_key=API_SECRET_KEY,
+                api_key=api_key,
+                secret_key=secret_key,
                 receive_window=self.RECEIVE_WINDOW_MS,
             )
         except Exception as exc:
@@ -195,7 +206,8 @@ class ShioajiSession:
             self._activate_ca()
 
         self._verify_accounts()
-        self._verify_contract_date()
+        if self._verify_contract_date_enabled:
+            self._verify_contract_date()
         self._register_session_callbacks()
 
         self.connected = True
@@ -455,3 +467,38 @@ class ShioajiSession:
         if self._on_degrade is None:
             return
         self._on_degrade(reason)
+
+
+def login_read_only_sessions(
+    credentials: Sequence[Tuple[str, str]],
+) -> List[ShioajiSession]:
+    """
+    - Description:
+        以多組金鑰各登入一次正式環境（**不啟用憑證、不檢查合約檔日期**），供 tick 爬蟲輪替
+
+        不啟用憑證就送不出委託，這組連線只能查資料。登入失敗的帳號記錄後跳過，
+        其餘照常——與舊版「登入失敗回 None、呼叫端略過」的行為相同，
+        但失敗訊息經 `ShioajiSession` 刮掉憑證後才進 log。
+    - Parameters:
+        - credentials: Sequence[Tuple[str, str]]
+            `[(api_key, secret_key)]`
+    - Return:
+        - List[ShioajiSession]
+            登入成功的 session；呼叫端用完要逐一 `close()`
+    """
+
+    sessions: List[ShioajiSession] = []
+    for index, pair in enumerate(credentials, start=1):
+        session: ShioajiSession = ShioajiSession(
+            simulation=False,
+            activate_ca=False,
+            credentials=pair,
+            verify_contract_date=False,
+        )
+        try:
+            session.connect()
+        except Exception as exc:
+            logger.warning(f"第 {index} 組 Shioaji 帳號登入失敗，略過：{exc}")
+            continue
+        sessions.append(session)
+    return sessions

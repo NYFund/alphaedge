@@ -25,7 +25,7 @@ load_dotenv()
 # 「這次要抓哪些」則是本清單——兩者刻意分開，否則想暫時只跑一檔就得改 Enum。
 #
 # **此處刻意寫字面值而不 import `FuturesProduct`**：`core.config` 是最底層模組，
-# 而 `core.utils` 反過來相依它（`core/utils/account.py` → `core.config`），
+# 而 `core.utils` 反過來相依它（`core/utils/log_manager.py` → `core.config`），
 # import 進來會造成循環。值本身是 TAIFEX 的外部代碼、不會改名，風險低；
 # 拼錯的防呆由 `FuturesPriceCrawler.validate_product()` 在送出請求前比對
 # `FuturesProduct` 擋下，並有 `test_configured_targets_are_all_valid` 釘住本清單。
