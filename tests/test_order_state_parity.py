@@ -24,7 +24,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 """
 專案自訂的下單相關 Enum 必須與 Shioaji 那份一致
 
-`core/utils/callback.py` 的 `order_cb(stat, msg)` 由 Shioaji 回呼，`stat` 是
+`ShioajiExecutionHandler.parse(stat, msg)` 處理 Shioaji 的委託與成交回呼，`stat` 是
 `shioaji.OrderState`；而函式裡拿來比較的是專案自己那份。比較用的是 `==`，
 **值一樣就成立、不一樣就永遠不成立**——不成立時不會拋錯，
 只是實盤成交回報安靜地不發出通知。

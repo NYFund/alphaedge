@@ -8,6 +8,7 @@ import pandas as pd
 import shioaji as sj
 from loguru import logger
 
+from core.broker.tw.shioaji_session import ShioajiSession, login_read_only_sessions
 from core.config import TICK_DOWNLOADS_PATH
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.stock_tick_cleaner import StockTickCleaner
@@ -16,7 +17,7 @@ from core.pipeline.tw.crawlers.stock_tick_crawler import StockTickCrawler
 from core.pipeline.tw.loaders.stock_tick_loader import StockTickLoader
 from core.pipeline.tw.utils.stock_tick_utils import StockTickUtils
 from core.pipeline.utils.exceptions import DataLoadError
-from core.utils import ShioajiAccount, ShioajiAPI, TimeUtils
+from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -44,7 +45,8 @@ class StockTickUpdater(BaseDataUpdater):
         self.loader: StockTickLoader = StockTickLoader()
 
         # Crawler Setting
-        # Shioaji API List
+        # Shioaji 連線（多組金鑰輪替）；`api_list` 是給爬蟲用的原生 API 物件
+        self.sessions: List[ShioajiSession] = []
         self.api_list: List[sj.Shioaji] = []
 
         # 爬取所有上市櫃股票清單
@@ -76,14 +78,14 @@ class StockTickUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        # Setup Shioaji APIs
-        API_LIST: List[ShioajiAPI] = StockTickUtils.setup_shioaji_apis()
-        for sj_api in API_LIST:
-            api_instance: Optional[sj.Shioaji] = ShioajiAccount.API_login(
-                sj.Shioaji(), sj_api.api_key, sj_api.api_secret_key
-            )
-            if api_instance is not None:
-                self.api_list.append(api_instance)
+        # 每組金鑰各登入一次正式環境（不啟用憑證，只查資料）；失敗的帳號略過
+        self.sessions = login_read_only_sessions(
+            [
+                (account.api_key, account.api_secret_key)
+                for account in StockTickUtils.setup_shioaji_apis()
+            ]
+        )
+        self.api_list = [session.api for session in self.sessions]
 
         # Set up number of threads
         self.num_threads: int = len(self.api_list)
@@ -559,20 +561,21 @@ class StockTickUpdater(BaseDataUpdater):
         ]
 
     def cleanup(self) -> None:
-        """清理資源：登出所有 Shioaji API 連接"""
-        from core.utils import ShioajiAccount
+        """清理資源：登出所有 Shioaji 連線"""
 
-        if not self.api_list:
+        if not self.sessions:
             return
 
         logger.info("Cleaning up API connections...")
-        for api in self.api_list:
+        for session in self.sessions:
             try:
-                ShioajiAccount.API_logout(api)
-            except (TimeoutError, Exception) as e:
+                session.close()
+            except Exception as e:
                 # 如果登出失敗（例如連接已關閉或超時），記錄警告但不中斷程序
                 # 這些錯誤通常在程序結束時發生，可以安全忽略
                 logger.debug(f"API logout warning (can be safely ignored): {e}")
+        self.sessions = []
+        self.api_list = []
 
         # 清空 API 列表
         self.api_list.clear()

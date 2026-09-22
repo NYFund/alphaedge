@@ -6,10 +6,11 @@ import pytest
 import shioaji as sj
 from loguru import logger
 
+from core.broker.tw.shioaji_session import ShioajiSession, login_read_only_sessions
 from core.config import API_KEY, API_SECRET_KEY, TICK_DOWNLOADS_PATH
 from core.pipeline.tw.cleaners.stock_tick_cleaner import StockTickCleaner
 from core.pipeline.tw.crawlers.stock_tick_crawler import StockTickCrawler
-from core.utils import ShioajiAccount, TimeUtils
+from core.utils import TimeUtils
 
 """測試 StockTickCrawler：爬取與清洗，不寫入資料庫
 
@@ -20,6 +21,15 @@ from core.utils import ShioajiAccount, TimeUtils
 """
 
 pytestmark = pytest.mark.slow
+
+
+def login() -> Optional[ShioajiSession]:
+    """以 `.env` 的金鑰登入正式環境（不啟用憑證，只查資料）；失敗時回 None"""
+
+    sessions: List[ShioajiSession] = login_read_only_sessions(
+        [(API_KEY, API_SECRET_KEY)]
+    )
+    return sessions[0] if sessions else None
 
 
 def test_crawler_only(stock_id: str, date: datetime.date):
@@ -34,10 +44,8 @@ def test_crawler_only(stock_id: str, date: datetime.date):
     crawler: StockTickCrawler = StockTickCrawler()
 
     # 登入 Shioaji API
-    api: sj.Shioaji = sj.Shioaji()
-    api_instance: Optional[sj.Shioaji] = ShioajiAccount.API_login(
-        api, API_KEY, API_SECRET_KEY
-    )
+    session: Optional[ShioajiSession] = login()
+    api_instance: Optional[sj.Shioaji] = session.api if session else None
 
     if api_instance is None:
         print("❌ API 登入失敗")
@@ -51,7 +59,7 @@ def test_crawler_only(stock_id: str, date: datetime.date):
 
     if df is None or df.empty:
         print("❌ 沒有爬取到資料")
-        ShioajiAccount.API_logout(api_instance)
+        session.close()
         return None
 
     print("✅ 爬取成功！")
@@ -61,7 +69,7 @@ def test_crawler_only(stock_id: str, date: datetime.date):
     print(df.head())
 
     # 登出 API
-    ShioajiAccount.API_logout(api_instance)
+    session.close()
 
     return df
 
@@ -86,10 +94,8 @@ def test_crawler_and_cleaner(stock_id: str, date: datetime.date):
     cleaner: StockTickCleaner = StockTickCleaner()
 
     # 登入 Shioaji API
-    api: sj.Shioaji = sj.Shioaji()
-    api_instance: Optional[sj.Shioaji] = ShioajiAccount.API_login(
-        api, API_KEY, API_SECRET_KEY
-    )
+    session: Optional[ShioajiSession] = login()
+    api_instance: Optional[sj.Shioaji] = session.api if session else None
 
     if api_instance is None:
         print("❌ API 登入失敗")
@@ -103,7 +109,7 @@ def test_crawler_and_cleaner(stock_id: str, date: datetime.date):
 
     if df is None or df.empty:
         print("❌ 沒有爬取到資料")
-        ShioajiAccount.API_logout(api_instance)
+        session.close()
         return None
 
     print(f"✅ 爬取成功！資料筆數: {len(df)}")
@@ -114,7 +120,7 @@ def test_crawler_and_cleaner(stock_id: str, date: datetime.date):
 
     if cleaned_df is None or cleaned_df.empty:
         print("❌ 清洗後的資料為空")
-        ShioajiAccount.API_logout(api_instance)
+        session.close()
         return None
 
     print("✅ 清洗成功！")
@@ -133,7 +139,7 @@ def test_crawler_and_cleaner(stock_id: str, date: datetime.date):
         print(f"\n⚠️  警告: CSV 檔案未找到於 {csv_file}")
 
     # 登出 API
-    ShioajiAccount.API_logout(api_instance)
+    session.close()
 
     return cleaned_df
 
@@ -158,10 +164,8 @@ def test_multiple_dates(stock_id: str, dates: list[datetime.date]):
     cleaner: StockTickCleaner = StockTickCleaner()
 
     # 登入 Shioaji API
-    api: sj.Shioaji = sj.Shioaji()
-    api_instance: Optional[sj.Shioaji] = ShioajiAccount.API_login(
-        api, API_KEY, API_SECRET_KEY
-    )
+    session: Optional[ShioajiSession] = login()
+    api_instance: Optional[sj.Shioaji] = session.api if session else None
 
     if api_instance is None:
         print("❌ API 登入失敗")
@@ -185,7 +189,7 @@ def test_multiple_dates(stock_id: str, dates: list[datetime.date]):
 
     if not df_list:
         print("\n❌ 所有日期都沒有爬取到資料")
-        ShioajiAccount.API_logout(api_instance)
+        session.close()
         return None
 
     # 合併所有日期的資料
@@ -198,7 +202,7 @@ def test_multiple_dates(stock_id: str, dates: list[datetime.date]):
 
     if cleaned_df is None or cleaned_df.empty:
         print("❌ 清洗後的資料為空")
-        ShioajiAccount.API_logout(api_instance)
+        session.close()
         return None
 
     print("✅ 清洗成功！")
@@ -214,7 +218,7 @@ def test_multiple_dates(stock_id: str, dates: list[datetime.date]):
         print(f"\n⚠️  警告: CSV 檔案未找到於 {csv_file}")
 
     # 登出 API
-    ShioajiAccount.API_logout(api_instance)
+    session.close()
 
     return cleaned_df
 
