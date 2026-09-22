@@ -21,7 +21,7 @@ from core.live.attribution.resync import (
     plan_resync,
 )
 from core.live.capital_allocator import CapitalAllocator
-from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
 from core.live.intraday.session_guard import (
     SessionGuard,
@@ -39,13 +39,20 @@ from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.live.strategy_guard import resolve_hook_timing, verify_strategies
 from core.managers.base.position_manager import BasePositionManager
-from core.models import BaseAccount, BaseOrder, BaseQuote, ExecutionReport
+from core.models import (
+    BaseAccount,
+    BaseOrder,
+    BaseQuote,
+    ExecutionReport,
+    OrderTicket,
+)
 from core.strategies.base import BaseStrategy
 from core.utils import (
     BarExecutionOrder,
     DayTradeUncoveredPolicy,
     ExecutionTiming,
     LiveHook,
+    LiveOrderStatus,
 )
 
 """
@@ -144,6 +151,11 @@ class LiveTrader:
     # 日終回補失敗時最多再試幾次心跳。有上限是因為取不到報價、被風控擋下這類原因
     # 重試也不會好；每次失敗都推 CRITICAL，用完就交給人工
     MAX_COVER_ATTEMPTS: int = 3
+
+    # 換月平倉腿等成交的輪詢間隔與次數上限（秒 × 次）。**次數上限獨立於時鐘**：
+    # 段落時限靠時鐘判斷，時鐘卡住時仍要能結束等待（與段落迴圈的保險絲同一種考量）
+    ROLL_POLL_SECONDS: float = 0.5
+    ROLL_MAX_POLLS: int = 120
 
     def __init__(
         self,
@@ -861,6 +873,11 @@ class LiveTrader:
         if timing is ExecutionTiming.AT_OPEN:
             self.apply_pending_actions()
 
+        # **尾盤段先換月、再收新訊號**：策略挑合約與轉倉用同一份換月規則，
+        # 今天該換的部位先換過去，策略看到的持倉才與它要交易的契約一致
+        if timing is ExecutionTiming.AT_CLOSE:
+            self.execute_rolls(window)
+
         candidates: List[Tuple[StrategyContext, BaseOrder]] = []
         for context in self.contexts:
             candidates.extend(self.collect_orders(context, timing))
@@ -873,6 +890,134 @@ class LiveTrader:
             candidates
         )
         self.dispatch(survivors, window)
+
+    # === 換月 ===
+    def execute_rolls(self, window: Optional[SegmentWindow]) -> int:
+        """
+        - Description:
+            執行各策略今天的轉倉；要不要轉、轉去哪由各市場的資料源決定
+
+            **交易模式不允許開新倉時不換月**：開倉腿是新曝險，`REDUCE_ONLY` 下
+            會被風控擋掉，只剩平倉腿等於提早平倉；不如整筆不動、寫事件讓人決定。
+        - Parameters:
+            - window: Optional[SegmentWindow]
+                段落時窗
+        - Return:
+            - int
+                兩腿都送出的轉倉筆數
+        """
+
+        today: datetime.date = self._now().date()
+        completed: int = 0
+        for context in self.contexts:
+            if self.mode_state.effective_mode(context.name) is TradingMode.HALTED:
+                continue
+            try:
+                plans: List[RollPlan] = context.data_feed.plan_rolls(
+                    context.account.positions, today
+                )
+            except Exception as exc:
+                logger.opt(exception=True).error(f"{context.name} 換月判定失敗：{exc}")
+                self._write_roll_event(
+                    context, None, "CRITICAL", "ROLL_FAILED", f"換月判定失敗：{exc}"
+                )
+                continue
+
+            for plan in plans:
+                if not self.mode_state.allows_open(context.name):
+                    self._write_roll_event(
+                        context,
+                        plan,
+                        "WARNING",
+                        "ROLL_SKIPPED",
+                        "交易模式不允許開新倉，本次不換月",
+                    )
+                    continue
+                if self._execute_roll(context, plan, window):
+                    completed += 1
+        return completed
+
+    def _execute_roll(
+        self, context: StrategyContext, plan: RollPlan, window: Optional[SegmentWindow]
+    ) -> bool:
+        """
+        先平後開：平倉腿成交了才送開倉腿
+
+        **平倉腿沒成交就放棄開倉腿**（次日再換）：兩腿都在場上的代價是曝險翻倍，
+        換月失敗的代價只是晚一天。反過來，平倉腿成交而開倉腿送不出去時
+        曝險直接消失——那要馬上有人知道，記 CRITICAL。
+        """
+
+        logger.info(f"[Roll] {context.name}：{plan.reason}")
+
+        if self.dispatch([(context, plan.close_order)], window):
+            self._write_roll_event(
+                context, plan, "WARNING", "ROLL_ABANDONED", "平倉腿未送出，本次不換月"
+            )
+            return False
+
+        ticket: Optional[OrderTicket] = self.order_manager.tickets.get(
+            plan.close_order.client_order_id or ""
+        )
+        if ticket is None or not self._wait_for_fill(ticket, window):
+            self._write_roll_event(
+                context,
+                plan,
+                "WARNING",
+                "ROLL_ABANDONED",
+                "平倉腿未成交，開倉腿放棄，次日再換",
+            )
+            return False
+
+        if self.dispatch([(context, plan.open_order)], window):
+            self._write_roll_event(
+                context,
+                plan,
+                "CRITICAL",
+                "ROLL_OPEN_FAILED",
+                "舊契約已平倉、新契約未送出：這筆曝險已消失，請人工確認是否補開",
+            )
+            return False
+        return True
+
+    def _wait_for_fill(
+        self, ticket: OrderTicket, window: Optional[SegmentWindow]
+    ) -> bool:
+        """持續消化回報直到這張委託全部成交；終結、到時限或次數用完時回 False"""
+
+        for _ in range(self.ROLL_MAX_POLLS):
+            self.drain_once()
+            if ticket.status is LiveOrderStatus.FILLED:
+                return True
+            if ticket.is_terminal or self._past(window, "submit_end"):
+                return False
+            self._sleep(self.ROLL_POLL_SECONDS)
+        return False
+
+    def _write_roll_event(
+        self,
+        context: StrategyContext,
+        plan: Optional[RollPlan],
+        severity: str,
+        category: str,
+        message: str,
+    ) -> None:
+        """換月的事件：寫紀錄並推播"""
+
+        text: str = f"{plan.reason}：{message}" if plan is not None else message
+        logger.warning(f"[Roll] {context.name}：{text}")
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": context.name,
+                "severity": severity,
+                "category": category,
+                "symbol": plan.close_order.symbol if plan is not None else None,
+                "message": text,
+                "occurred_at": self._now(),
+            }
+        )
+        self._notify(severity, "換月", text)
 
     # === 訊號 ===
     def collect_orders(

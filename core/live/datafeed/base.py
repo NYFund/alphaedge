@@ -1,5 +1,6 @@
 import datetime
 from abc import abstractmethod
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from loguru import logger
@@ -10,7 +11,7 @@ from core.live.datafeed.calendar import (
     TradingCalendarSource,
     resolve_trading_day,
 )
-from core.models import BaseQuote
+from core.models import BaseOrder, BaseQuote
 from core.utils import ExecutionTiming
 
 """
@@ -25,6 +26,21 @@ BaseLiveDataFeed：歷史資料到 T−1，今天的報價由券商提供
    策略會拿前天的資料當昨天用，訊號錯了也不會有任何徵兆。
 2. **交易日判定**：休市日不該啟動。判斷不出來就拒絕，**不預設為開市**。
 """
+
+
+@dataclass
+class RollPlan:
+    """
+    一筆轉倉：先平舊契約、再開新契約
+
+    **兩腿有順序相依，不可獨立送出**：平倉腿沒成交就送開倉腿，會同時持有兩個
+    契約、曝險翻倍。由 `LiveTrader` 依序執行，市場語意（哪個契約、何時換）
+    留在各市場的資料源裡決定。
+    """
+
+    close_order: BaseOrder  # 平掉舊契約
+    open_order: BaseOrder  # 以相同方向與數量開新契約
+    reason: str  # 給人看的換月原因（寫進事件與 log）
 
 
 class DataFreshnessError(RuntimeError):
@@ -207,3 +223,21 @@ class BaseLiveDataFeed(BaseDataFeed):
         """
 
         return {}
+
+    def plan_rolls(
+        self, positions: Sequence[Any], today: datetime.date
+    ) -> List[RollPlan]:
+        """
+        - Description:
+            今天要轉倉的部位；不需要轉倉的市場（例如股票）回空清單
+        - Parameters:
+            - positions: Sequence[Any]
+                該策略的部位
+            - today: datetime.date
+                交易日
+        - Return:
+            - List[RollPlan]
+                轉倉計畫
+        """
+
+        return []

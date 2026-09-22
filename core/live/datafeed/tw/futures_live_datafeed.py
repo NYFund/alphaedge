@@ -1,26 +1,32 @@
 import datetime
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
+from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
+from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.config import TW_FUTURES_DB_PATH
 from core.config.settings import now_live
 from core.dao.connection import DBConnection, connect_sqlite
-from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
     TradingCalendarSource,
     WeekendCalendarSource,
 )
 from core.managers.futures.position_manager import FuturesMarginConfig
-from core.models import BaseQuote, PreOpenFuturesQuote
+from core.models import BaseQuote, FuturesOrder, PreOpenFuturesQuote
 from core.strategies.base import BaseStrategy
 from core.utils import (
     FUTURES_MULTIPLIER,
+    Action,
     ExecutionTiming,
+    FuturesPriceType,
     FuturesSession,
+    OrderType,
+    PositionType,
     Scale,
 )
 
@@ -51,6 +57,11 @@ def split_contract_id(symbol: str) -> Tuple[str, str]:
 class TwFuturesLiveDataFeed(BaseLiveDataFeed):
     """台期貨實盤資料源"""
 
+    # 實盤換月日曆的範圍（曆日）：往回取資料庫的實際交易日，往後以平日近似。
+    # 往後 70 天涵蓋「當月 ＋ 次月」的最後交易日，換月判定只看得到這麼遠
+    ROLL_CALENDAR_LOOKBACK_DAYS: int = 400
+    ROLL_CALENDAR_LOOKAHEAD_DAYS: int = 70
+
     def __init__(
         self,
         broker: Any,
@@ -58,6 +69,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         db_path: Any = TW_FUTURES_DB_PATH,
         now_provider: Callable[[], datetime.datetime] = now_live,
         margin_config: Optional[FuturesMarginConfig] = None,
+        roll_config: Optional[FuturesRollConfig] = None,
     ) -> None:
         """
         - Description:
@@ -73,6 +85,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 取得目前時間
             - margin_config: Optional[FuturesMarginConfig]
                 策略與部位管理共用的保證金設定；查表模式下由本資料源注入保證金表
+            - roll_config: Optional[FuturesRollConfig]
+                策略的換月設定（實盤版）；本資料源注入日曆，並依它決定何時轉倉
         """
 
         super().__init__(broker, calendar_sources, now_provider)
@@ -82,6 +96,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         self.futures_price: Optional[FuturesPriceAPI] = None
         self.margin: Optional[FuturesMarginAPI] = None
         self.margin_config: Optional[FuturesMarginConfig] = margin_config
+        self.roll_config: Optional[FuturesRollConfig] = roll_config
 
     def setup(self, strategy: BaseStrategy) -> None:
         """建立歷史資料 API（唯讀）與交易日來源"""
@@ -90,6 +105,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         self.futures_price = FuturesPriceAPI(conn=self.conn)
         self.margin = FuturesMarginAPI(conn=self.conn)
         self.inject_margin_api()
+        self.inject_roll_calendar()
 
         if not self.calendar_sources:
             self.calendar_sources = [
@@ -113,6 +129,139 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             return
         if self.margin_config.api is None:
             self.margin_config.api = self.margin
+
+    def inject_roll_calendar(self) -> None:
+        """
+        - Description:
+            建一份實盤用的期貨日曆，注入換月設定
+
+            換月規則要算「距最後交易日還有幾個交易日」，回測的日曆涵蓋整段回測區間；
+            實盤的資料庫只到前一個交易日，**未來的交易日一律以平日近似**
+            （`ROLL_CALENDAR_LOOKAHEAD_DAYS` 天）。國定假日排除不了，
+            距到期日之間夾著假日時會多算一天，換月可能晚一天——已知限制，
+            要消除得等官方休市日曆。過去的交易日取資料庫，讓已發生的休市照實計入。
+        """
+
+        if self.roll_config is None or self.roll_config.calendar is not None:
+            return
+
+        today: datetime.date = self._now().date()
+        past: List[datetime.date] = self.futures_price.get_trading_days(
+            today - datetime.timedelta(days=self.ROLL_CALENDAR_LOOKBACK_DAYS),
+            today - datetime.timedelta(days=1),
+        )
+        future: List[datetime.date] = [
+            today + datetime.timedelta(days=offset)
+            for offset in range(self.ROLL_CALENDAR_LOOKAHEAD_DAYS)
+            if (today + datetime.timedelta(days=offset)).weekday() < 5
+        ]
+        self.roll_config.calendar = FuturesCalendar(past + future)
+
+    def plan_rolls(
+        self, positions: Sequence[Any], today: datetime.date
+    ) -> List[RollPlan]:
+        """
+        - Description:
+            今天要轉倉的期貨部位：換月規則選出的當家契約比部位的契約遠時，
+            平舊月、以相同方向與口數開新月
+
+            沿用回測 `TwFuturesSettlementModel.roll_positions()` 的兩條規則：
+            **只往遠月換**（當家契約不比部位遠就不動）、**週契約不轉**。
+            兩腿都以範圍市價（`MKP`）＋ `IOC` 送出：換月要的是「換過去」，
+            平倉腿沒有立即成交就由券商取消，開倉腿隨之放棄（次日再換）。
+            價格欄位放快照價，只給風控當參考，券商端不看。
+        - Parameters:
+            - positions: Sequence[Any]
+                該策略的部位
+            - today: datetime.date
+                交易日
+        - Return:
+            - List[RollPlan]
+                轉倉計畫；換月設定停用或沒有需要轉的部位時為空
+        """
+
+        planner: Optional[FuturesRollPlanner] = (
+            self.roll_config.build_planner()
+            if self.roll_config is not None and self.roll_config.enabled
+            else None
+        )
+        resolver: Any = getattr(self.broker, "resolver", None)
+        if planner is None or resolver is None:
+            return []
+
+        plans: List[RollPlan] = []
+        for position in positions:
+            if getattr(position, "is_closed", False) or not getattr(
+                position, "expiry", ""
+            ):
+                continue
+            if not planner.MONTHLY_EXPIRY_PATTERN.match(position.expiry):
+                continue
+
+            active: Optional[str] = planner.resolve_active_expiry(
+                today, resolver.list_index_futures_expiries(position.product)
+            )
+            if active is None or active <= position.expiry:
+                continue
+
+            plan: Optional[RollPlan] = self._build_roll_plan(position, active)
+            if plan is not None:
+                plans.append(plan)
+        return plans
+
+    def _build_roll_plan(self, position: Any, active: str) -> Optional[RollPlan]:
+        """組兩腿；取不到報價時不換（沒有參考價，風控與保證金檢查都做不了）"""
+
+        product: str = position.product
+        try:
+            old_contract: Any = self.broker.resolver.resolve_index_futures(
+                product, position.expiry
+            )
+            new_contract: Any = self.broker.resolver.resolve_index_futures(
+                product, active
+            )
+            quotes: List[BaseQuote] = self.broker.get_futures_snapshots(
+                [old_contract, new_contract]
+            )
+        except Exception as exc:
+            logger.opt(exception=True).warning(
+                f"[Roll] {position.symbol} 應換到 {active}，但取不到合約或報價：{exc}"
+            )
+            return None
+
+        prices: Dict[str, float] = {quote.symbol: quote.cur_price for quote in quotes}
+        old_price: Optional[float] = prices.get(f"{product}{position.expiry}")
+        new_price: Optional[float] = prices.get(f"{product}{active}")
+        if not old_price or not new_price:
+            logger.warning(
+                f"[Roll] {position.symbol} 應換到 {active}，但快照缺價，本次不換"
+            )
+            return None
+
+        position_type: PositionType = position.position_type
+        opening: Action = (
+            Action.BUY if position_type is PositionType.LONG else Action.SELL
+        )
+        closing: Action = Action.SELL if opening is Action.BUY else Action.BUY
+
+        def leg(expiry: str, action: Action, price: float) -> FuturesOrder:
+            return FuturesOrder(
+                product=product,
+                expiry=expiry,
+                date=self._now(),
+                action=action,
+                position_type=position_type,
+                price=price,
+                volume=position.volume,
+                order_type=OrderType.IOC,
+                price_type=FuturesPriceType.MKP,
+            )
+
+        return RollPlan(
+            close_order=leg(position.expiry, closing, old_price),
+            open_order=leg(active, opening, new_price),
+            reason=f"{product}{position.expiry} → {product}{active}（{position.volume} 口）",
+        )
 
     def _broker_contract_update_date(self) -> Optional[datetime.date]:
         """券商合約檔的更新日期；取不到時回 None"""
