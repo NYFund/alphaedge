@@ -36,8 +36,8 @@ class StockTickLoader(BaseDataLoader):
     CONNECT_RETRY_DELAY: float = 1.0
 
     def __init__(self) -> None:
-        super().__init__()
-
+        # **不呼叫 `super().__init__()`**：本 loader 收的是連線或多個 DAO，
+        # 與基底「單一 DAO」的建構骨架不同形，連線與建表一律自理
         # DolphinDB Session
         self.session: Optional[ddb.session] = None
         self.setup()

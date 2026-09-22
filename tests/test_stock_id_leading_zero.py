@@ -111,11 +111,15 @@ def test_chip_loader_keeps_leading_zeros(
 
 @pytest.mark.parametrize("loader_cls", [StockPriceLoader, StockChipLoader])
 def test_loaders_read_stock_id_as_text(loader_cls: type) -> None:
-    """兩支 loader 都必須明示 `stock_id` 為字串，不依賴 pandas 的型別推斷"""
+    """
+    每支 loader 都必須明示 `stock_id` 為字串，不依賴 pandas 的型別推斷
 
-    source: str = Path(loader_cls.__module__.replace(".", "/") + ".py").read_text()
+    **盯的是生效的設定值，不是原始碼字面**：讀檔已收進
+    `BaseDataLoader.load_csv_directory()`，`dtype` 由 `READ_CSV_DTYPE` 提供。
+    比對原始碼會在實作搬家時假紅，比對設定值則連「子類把它覆寫掉」也擋得住。
+    """
 
-    assert 'dtype={"stock_id": str}' in source
+    assert loader_cls.READ_CSV_DTYPE.get("stock_id") is str
 
 
 # (loader 類別, DAO 類別, downloads 目錄屬性名, 資料表名)

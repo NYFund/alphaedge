@@ -55,8 +55,8 @@ class FuturesTickLoader(BaseDataLoader):
     CONNECT_RETRY_DELAY: float = 1.0
 
     def __init__(self) -> None:
-        super().__init__()
-
+        # **不呼叫 `super().__init__()`**：本 loader 收的是連線或多個 DAO，
+        # 與基底「單一 DAO」的建構骨架不同形，連線與建表一律自理
         # 型別標註刻意用 Any：`ddb` 在未安裝 dolphindb 時根本不存在，
         # 而賦值語句的標註會在執行期求值——寫 `Optional[ddb.session]` 會讓
         # 這個類別在沒有該套件的機器上一建立就 NameError

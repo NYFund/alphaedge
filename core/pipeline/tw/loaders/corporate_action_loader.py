@@ -1,11 +1,10 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional, Type
 
 import pandas as pd
 from loguru import logger
 
 from core.config import CORPORATE_ACTION_DOWNLOADS_PATH, TW_STOCK_DB_PATH
-from core.dao.connection import DBConnection
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.shared.source_priority import dedup_by_source_priority
@@ -40,17 +39,9 @@ class CorporateActionLoader(BaseDataLoader):
                 指定時 loader 不擁有它，`disconnect()` 不會關閉；
                 未指定時 loader 自行建立，入庫完成即關閉
         """
-
-        super().__init__()
-
-        self.dao: Optional[CorporateActionDAO] = dao
-        self.owns_dao: bool = dao is None
-
-        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
-        self.conn: Optional[DBConnection] = dao.conn if dao else None
         self.corporate_action_dir: Path = CORPORATE_ACTION_DOWNLOADS_PATH
 
-        self.setup()
+        super().__init__(dao)
 
     def setup(self) -> None:
         """Set Up the Config of Loader"""
@@ -59,30 +50,12 @@ class CorporateActionLoader(BaseDataLoader):
         self.create_missing_tables()
         self.corporate_action_dir.mkdir(parents=True, exist_ok=True)
 
-    def connect(self) -> None:
-        """Connect to the Database"""
+    DAO_CLASS: Type[Any] = CorporateActionDAO
 
-        if self.dao is None:
-            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
-            self.dao = CorporateActionDAO(db_path=TW_STOCK_DB_PATH)
-            self.owns_dao = True
-        self.conn = self.dao.conn
+    def db_path(self) -> Path:
+        """路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫"""
 
-    def disconnect(self) -> None:
-        """Disconnect the Database；共用的 DAO 由建立者關閉"""
-
-        if not self.owns_dao:
-            return
-
-        if self.dao is not None:
-            self.dao.close()
-            self.dao = None
-        self.conn = None
-
-    def create_db(self) -> None:
-        """建立公司行動事件表"""
-
-        self.dao.create_table()
+        return Path(TW_STOCK_DB_PATH)
 
     def create_missing_tables(self) -> None:
         """確保公司行動資料表與 `(stock_id, date)` 索引存在"""

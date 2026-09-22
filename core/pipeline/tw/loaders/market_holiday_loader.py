@@ -1,10 +1,10 @@
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional, Type
 
 import pandas as pd
 from loguru import logger
 
 from core.config import TW_STOCK_DB_PATH
-from core.dao.connection import DBConnection
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
@@ -29,13 +29,7 @@ class MarketHolidayLoader(BaseDataLoader):
                 `disconnect()` 不會關閉；未指定時 loader 自行建立
         """
 
-        super().__init__()
-
-        self.dao: Optional[MarketHolidayDAO] = dao
-        self.owns_dao: bool = dao is None
-        self.conn: Optional[DBConnection] = dao.conn if dao else None
-
-        self.setup()
+        super().__init__(dao)
 
     def setup(self) -> None:
         """Set Up the Config of Loader"""
@@ -43,31 +37,12 @@ class MarketHolidayLoader(BaseDataLoader):
         self.connect()
         self.create_missing_tables()
 
-    def connect(self) -> None:
-        """Connect to the Database"""
+    DAO_CLASS: Type[Any] = MarketHolidayDAO
 
-        if self.dao is None:
-            # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
-            TW_STOCK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.dao = MarketHolidayDAO(db_path=TW_STOCK_DB_PATH)
-            self.owns_dao = True
-        self.conn = self.dao.conn
+    def db_path(self) -> Path:
+        """路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫"""
 
-    def disconnect(self) -> None:
-        """Disconnect the Database；共用的 DAO 由建立者關閉"""
-
-        if not self.owns_dao:
-            return
-
-        if self.dao is not None:
-            self.dao.close()
-            self.dao = None
-        self.conn = None
-
-    def create_db(self) -> None:
-        """Create New Database Table"""
-
-        self.dao.create_table()
+        return Path(TW_STOCK_DB_PATH)
 
     def create_missing_tables(self) -> None:
         """確保開休市日期表存在"""

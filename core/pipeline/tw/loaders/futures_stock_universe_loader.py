@@ -1,11 +1,10 @@
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set, Type
 
 import pandas as pd
 from loguru import logger
 
 from core.config import FUTURES_UNIVERSE_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
-from core.dao.connection import DBConnection
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
@@ -43,18 +42,10 @@ class FuturesStockUniverseLoader(BaseDataLoader):
                 未指定時 loader 自行建立，入庫完成即關閉
         """
 
-        super().__init__()
-
-        self.dao: Optional[FuturesStockUniverseDAO] = dao
-        self.owns_dao: bool = dao is None
-
-        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態（指向 tw_futures.db）
-        self.conn: Optional[DBConnection] = dao.conn if dao else None
-
         # Downloads directory Path
         self.universe_dir: Path = FUTURES_UNIVERSE_DOWNLOADS_PATH
 
-        self.setup()
+        super().__init__(dao)
 
     def setup(self) -> None:
         """Set Up the Config of Loader"""
@@ -66,32 +57,12 @@ class FuturesStockUniverseLoader(BaseDataLoader):
 
         self.universe_dir.mkdir(parents=True, exist_ok=True)
 
-    def connect(self) -> None:
-        """Connect to the Database"""
+    DAO_CLASS: Type[Any] = FuturesStockUniverseDAO
 
-        if self.dao is None:
-            # 期貨與股票分庫，故不是 TW_STOCK_DB_PATH；路徑在呼叫當下從本模組讀取，
-            # 測試才能以 monkeypatch 改寫
-            TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self.dao = FuturesStockUniverseDAO(db_path=TW_FUTURES_DB_PATH)
-            self.owns_dao = True
-        self.conn = self.dao.conn
+    def db_path(self) -> Path:
+        """路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫"""
 
-    def disconnect(self) -> None:
-        """Disconnect the Database；共用的 DAO 由建立者關閉"""
-
-        if not self.owns_dao:
-            return
-
-        if self.dao is not None:
-            self.dao.close()
-            self.dao = None
-        self.conn = None
-
-    def create_db(self) -> None:
-        """創建股票期貨標的池 db"""
-
-        self.dao.create_table()
+        return Path(TW_FUTURES_DB_PATH)
 
     def create_missing_tables(self) -> None:
         """確保股票期貨標的池資料表存在"""

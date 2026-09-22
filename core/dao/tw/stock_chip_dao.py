@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -15,6 +15,9 @@ class StockChipDAO(BaseDAO):
     """`chip` 表的建表、寫入與查詢（數量單位：股）"""
 
     TABLE_NAME: str = CHIP_TABLE_NAME
+
+    # 與建表 DDL 的 PRIMARY KEY 一致；`load_csv_directory()` 以它做檔內去重
+    PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("date", "stock_id", "證券名稱")
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
 
     # === 建表 ===

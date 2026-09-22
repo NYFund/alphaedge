@@ -1,7 +1,7 @@
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 import pandas as pd
 from loguru import logger
@@ -24,39 +24,245 @@ class BaseDataLoader(ABC):
     # （streamlit 會帶進 pyarrow，前端 extra 一裝，三條日頻 loader 全壞）
     NAME_NOISE_PATTERN: str = "[\\s\u3000*＊]"
 
-    def __init__(self) -> None:
-        pass
+    # 子類宣告：自建 DAO 時用哪個類別、入庫摘要要印哪個來源名
+    DAO_CLASS: Optional[Type[Any]] = None
+    SOURCE: str = ""
 
-    @abstractmethod
-    def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Loader"""
-        pass
+    # `read_csv` 的欄位型別。**代號一定要指定成 str**：全數字的代號會被推斷成整數，
+    # `0050` 入庫就變成 `50`——而且兩者都查得到，只是查不到同一檔
+    READ_CSV_DTYPE: Dict[str, str] = {"stock_id": str}
 
-    @abstractmethod
+    def __init__(self, dao: Optional[Any] = None) -> None:
+        """
+        - Description:
+            建立 loader；DAO 由呼叫端傳入或自行建立
+        - Parameters:
+            - dao: Optional[Any]
+                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；
+                未指定時 loader 自行建立，入庫完成即關閉
+        """
+
+        self.dao: Optional[Any] = dao
+        self.owns_dao: bool = dao is None
+
+        # 保留 `conn` 屬性：既有呼叫端與測試仍以它判斷連線狀態
+        self.conn: Optional[Any] = dao.conn if dao else None
+
+        self.setup()
+
+    def db_path(self) -> Optional[Path]:
+        """
+        自建 DAO 時要連哪個資料庫；**必須是方法，不可改成類別常數**
+
+        測試以 `monkeypatch.setattr(loader_module, "TW_STOCK_DB_PATH", ...)`
+        改寫各 loader 模組裡的路徑常數（全庫 49 處）。寫成類別常數的話，
+        值在 import 當下就綁死，monkeypatch 再也改不到，整批測試會改去動正式資料庫。
+        """
+
+        return None
+
+    def downloads_path(self) -> Optional[Path]:
+        """CSV 來源目錄；理由同 `db_path()`，維持呼叫當下才讀"""
+
+        return None
+
+    def setup(self) -> None:
+        """連線、建表、確保來源目錄存在；需要額外設定的子類覆寫後呼叫 `super().setup()`"""
+
+        self.connect()
+        self.create_missing_tables()
+
+        downloads: Optional[Path] = self.downloads_path()
+        if downloads is not None:
+            downloads.mkdir(parents=True, exist_ok=True)
+
     def connect(self) -> None:
         """Connect to the Database"""
-        pass
 
-    @abstractmethod
+        if self.dao is None and self.DAO_CLASS is not None:
+            self.dao = self.DAO_CLASS(db_path=self.db_path())
+            self.owns_dao = True
+        if self.dao is not None:
+            self.conn = self.dao.conn
+
     def disconnect(self) -> None:
-        """Disconnect the Database"""
-        pass
+        """Disconnect the Database；共用的 DAO 由建立者關閉"""
 
-    @abstractmethod
+        if not self.owns_dao:
+            return
+
+        if self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        self.conn = None
+
     def create_db(self, *args, **kwargs) -> None:
         """Create New Database"""
-        pass
+
+        self.dao.create_table()
 
     @abstractmethod
     def create_missing_tables(self) -> None:
-        """Ensure Database Tables Exist"""
+        """Ensure Database Tables Exist；各表的索引不同，一律由子類實作"""
         pass
+
+    def preprocess(self, df: pd.DataFrame) -> pd.DataFrame:
+        """入庫前的逐檔調整；預設不動，有需要的 loader 覆寫"""
+
+        return df
 
     @abstractmethod
     # 有些 loader 回傳新增列數（期貨線），有些不回傳（台股線），故標 `Any`
     def add_to_db(self, *args, **kwargs) -> Any:
         """Add Data into Database"""
         pass
+
+    def load_csv_directory(
+        self,
+        remove_files: bool = False,
+        only_dates: Optional[Set[str]] = None,
+    ) -> None:
+        """
+        - Description:
+            把 downloads 目錄裡的 CSV 逐檔入庫；**有任何檔案失敗就拋 `DataLoadError`**
+
+            舊版逐檔 `except Exception` 之後只記 `logger.error`、迴圈照跑、
+            最後印一行 summary 就結束，行程結束碼是 0。2026-08-16 的 margin 回補
+            有 2 個檔案入庫失敗卻回報成功，缺的 1,553 列是事後逐日比對列數才發現的。
+
+            **去重走 `INSERT OR IGNORE`**：舊版每批都把整張表的主鍵讀進記憶體建 set，
+            記憶體隨資料量成長。改用資料庫自己的主鍵約束後，「重跑」與「真的出錯」
+            仍分得開——重複列靜靜跳過，欄位不符、檔案損毀才會拋出。
+
+            **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾。少了這層，
+            前面已寫入的列會被迴圈結束後的 `commit()` 一起寫進去，資料表多出半份檔案，
+            回報卻說這個檔案失敗。
+
+            **本骨架取自 price loader**：進度日誌、空檔跳過、檔內主鍵去重、
+            `ignored` 不誤報為 `partial_files` 這四項改進原本只落在三份 CSV loader 的
+            其中一份。收進基底是為了讓改一次就三份都有——**不是取三份的交集**，
+            取交集等於把已經修對的東西改回去。
+        - Parameters:
+            - remove_files: bool
+                全部成功後是否刪除 downloads 目錄
+            - only_dates: Optional[Set[str]]
+                只處理這些日期（`YYYYMMDD`）的檔案；None 表示整個目錄
+        - Raise:
+            - DataLoadError
+                有任何檔案入庫失敗
+        """
+
+        if self.dao is None:
+            self.connect()
+
+        self.create_missing_tables()
+
+        downloads: Path = self.downloads_path()
+        csv_files: List[Path] = self.select_csv_files(downloads, only_dates)
+        total_files: int = len(csv_files)
+
+        if total_files == 0:
+            logger.info(f"[{self.SOURCE}] downloads 目錄沒有 CSV，本次不入庫")
+            return
+
+        logger.info(f"[{self.SOURCE}] 找到 {total_files} 個 CSV 待處理")
+
+        succeeded: int = 0
+        skipped_files: int = 0
+        failed_files: List[str] = []
+
+        for idx, file_path in enumerate(csv_files, start=1):
+            try:
+                logger.info(f"處理中 [{idx}/{total_files}] {file_path.name}…")
+
+                df: pd.DataFrame = pd.read_csv(file_path, dtype=self.READ_CSV_DTYPE)
+
+                if df.empty:
+                    logger.warning(f"略過 {file_path.name}（空檔）")
+                    skipped_files += 1
+                    continue
+
+                df = self.preprocess(df)
+
+                # 同一批裡一個代號對到兩個名稱，代表有一檔的前導 0 被吃掉了；
+                # 整檔視為失敗、一列都不寫，下次執行重試
+                self.check_symbol_name_uniqueness(df, file_path.name)
+
+                # 同一檔內的重複列先去掉：`INSERT OR IGNORE` 擋得掉，
+                # 但先去掉才數得準「這檔到底寫進去幾列」。
+                # **沒宣告主鍵的 DAO 就跳過**：猜錯主鍵會把不該去的列去掉，
+                # 那比少一項摘要精確度嚴重得多
+                primary_key: Optional[Tuple[str, ...]] = getattr(
+                    self.dao, "PRIMARY_KEY_COLUMNS", None
+                )
+                if primary_key:
+                    original_count: int = len(df)
+                    df = df.drop_duplicates(subset=list(primary_key), keep="first")
+                    if len(df) < original_count:
+                        logger.debug(
+                            f"{file_path.name} 檔內去重 {original_count - len(df)} 列"
+                        )
+
+                inserted: int
+                ignored: int
+                with self.dao.savepoint():
+                    inserted, ignored = self.dao.insert_or_ignore(df)
+            except Exception as e:
+                logger.error(f"入庫 {file_path.name} 失敗：{e}")
+                failed_files.append(file_path.name)
+                continue
+
+            if inserted == 0:
+                logger.info(f"略過 {file_path.name}（資料都已存在）")
+                skipped_files += 1
+                continue
+
+            if ignored:
+                # **不進 `partial_files`**：`INSERT OR IGNORE` 只知道「主鍵已存在」，
+                # 不知道值有沒有不同。重跑一個部分入庫過的日期本來就會有大量 ignored，
+                # 把它當成「同鍵不同值」示警，只會訓練讀 log 的人忽略那行警告
+                logger.info(
+                    f"已寫入 {file_path.name}（新增 {inserted} 列、"
+                    f"已存在 {ignored} 列）"
+                )
+            else:
+                logger.info(f"已寫入 {file_path.name}（{inserted} 列）")
+            succeeded += 1
+
+        self.dao.commit()
+        self.disconnect()
+
+        self.finish_load(
+            source=self.SOURCE,
+            succeeded=succeeded,
+            failed_files=failed_files,
+            remove_files=remove_files,
+            downloads_path=downloads,
+            skipped_files=skipped_files,
+        )
+
+    @staticmethod
+    def save_csv(df: pd.DataFrame, path: Path) -> Path:
+        """
+        - Description:
+            把 DataFrame 存成 CSV 並回傳路徑
+
+            `utf-8-sig` 不是裝飾性的選擇：少了 BOM，Excel 開中文欄名會是亂碼，
+            而這些中繼檔的第一個讀者常常是人。
+        - Parameters:
+            - df: pd.DataFrame
+                要存檔的資料
+            - path: Path
+                目標路徑（父目錄不存在時自動建立）
+        - Return:
+            - Path
+                實際寫出的路徑
+        """
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(path, index=False, encoding="utf-8-sig")
+        return path
 
     @classmethod
     def check_symbol_name_uniqueness(cls, df: pd.DataFrame, label: str) -> None:
