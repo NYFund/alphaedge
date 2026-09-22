@@ -1,18 +1,20 @@
 import datetime
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
+from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.backtest.datafeed.tw.futures_calendar import FuturesCalendar
 from core.backtest.datafeed.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
-from core.config import TW_FUTURES_DB_PATH
+from core.config import TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.config.settings import now_live
 from core.dao.connection import DBConnection, connect_sqlite
 from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
+    OfficialHolidayCalendarSource,
     TradingCalendarSource,
     WeekendCalendarSource,
 )
@@ -57,7 +59,7 @@ def split_contract_id(symbol: str) -> Tuple[str, str]:
 class TwFuturesLiveDataFeed(BaseLiveDataFeed):
     """台期貨實盤資料源"""
 
-    # 實盤換月日曆的範圍（曆日）：往回取資料庫的實際交易日，往後以平日近似。
+    # 實盤換月日曆的範圍（曆日）：往回取資料庫的實際交易日，往後取平日扣掉官方休市日。
     # 往後 70 天涵蓋「當月 ＋ 次月」的最後交易日，換月判定只看得到這麼遠
     ROLL_CALENDAR_LOOKBACK_DAYS: int = 400
     ROLL_CALENDAR_LOOKAHEAD_DAYS: int = 70
@@ -70,6 +72,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         now_provider: Callable[[], datetime.datetime] = now_live,
         margin_config: Optional[FuturesMarginConfig] = None,
         roll_config: Optional[FuturesRollConfig] = None,
+        stock_db_path: Any = TW_STOCK_DB_PATH,
     ) -> None:
         """
         - Description:
@@ -87,6 +90,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 策略與部位管理共用的保證金設定；查表模式下由本資料源注入保證金表
             - roll_config: Optional[FuturesRollConfig]
                 策略的換月設定（實盤版）；本資料源注入日曆，並依它決定何時轉倉
+            - stock_db_path: Any
+                官方開休市日曆所在的資料庫（`market_holiday` 表在 `tw_stock.db`）
         """
 
         super().__init__(broker, calendar_sources, now_provider)
@@ -97,18 +102,30 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         self.margin: Optional[FuturesMarginAPI] = None
         self.margin_config: Optional[FuturesMarginConfig] = margin_config
         self.roll_config: Optional[FuturesRollConfig] = roll_config
+        # 官方開休市日曆在 `tw_stock.db`，與期貨歷史資料不同庫，另開一條唯讀連線
+        self.stock_db_path: Any = stock_db_path
+        self.stock_conn: Optional[DBConnection] = None
+        self.market_holiday: Optional[MarketHolidayAPI] = None
 
     def setup(self, strategy: BaseStrategy) -> None:
-        """建立歷史資料 API（唯讀）與交易日來源"""
+        """
+        建立歷史資料 API（唯讀）與交易日來源
+
+        期貨沿用 TWSE 公告的開休市日曆當主來源（期貨市場的休市日原則上與證券市場相同）；
+        它在 `tw_stock.db`，另開一條唯讀連線。
+        """
 
         self.conn = connect_sqlite(self.db_path, read_only=True)
+        self.stock_conn = connect_sqlite(self.stock_db_path, read_only=True)
         self.futures_price = FuturesPriceAPI(conn=self.conn)
         self.margin = FuturesMarginAPI(conn=self.conn)
+        self.market_holiday = MarketHolidayAPI(conn=self.stock_conn)
         self.inject_margin_api()
         self.inject_roll_calendar()
 
         if not self.calendar_sources:
             self.calendar_sources = [
+                OfficialHolidayCalendarSource(self.market_holiday),
                 WeekendCalendarSource(),
                 BrokerContractCalendarSource(self._broker_contract_update_date),
             ]
@@ -136,10 +153,13 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             建一份實盤用的期貨日曆，注入換月設定
 
             換月規則要算「距最後交易日還有幾個交易日」，回測的日曆涵蓋整段回測區間；
-            實盤的資料庫只到前一個交易日，**未來的交易日一律以平日近似**
-            （`ROLL_CALENDAR_LOOKAHEAD_DAYS` 天）。國定假日排除不了，
-            距到期日之間夾著假日時會多算一天，換月可能晚一天——已知限制，
-            要消除得等官方休市日曆。過去的交易日取資料庫，讓已發生的休市照實計入。
+            實盤的資料庫只到前一個交易日，**未來的交易日取平日再扣掉官方休市日**
+            （`ROLL_CALENDAR_LOOKAHEAD_DAYS` 天）。過去的交易日取資料庫，
+            讓已發生的休市照實計入。
+
+            官方日曆**只涵蓋已入庫的年度**：落在未入庫年度的日子（例如 12 月公告前的
+            明年一月）仍以平日近似，國定假日排除不了——距到期日之間夾著假日時會多算
+            一天、換月可能晚一天。
         """
 
         if self.roll_config is None or self.roll_config.calendar is not None:
@@ -150,10 +170,18 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             today - datetime.timedelta(days=self.ROLL_CALENDAR_LOOKBACK_DAYS),
             today - datetime.timedelta(days=1),
         )
-        future: List[datetime.date] = [
+        horizon: List[datetime.date] = [
             today + datetime.timedelta(days=offset)
             for offset in range(self.ROLL_CALENDAR_LOOKAHEAD_DAYS)
-            if (today + datetime.timedelta(days=offset)).weekday() < 5
+        ]
+        # 休市日只存在於已入庫的年度，未入庫年度的日子扣不到任何一天，自然退回平日近似
+        closures: Set[datetime.date] = (
+            self.market_holiday.get_closures(horizon[0], horizon[-1])
+            if self.market_holiday is not None
+            else set()
+        )
+        future: List[datetime.date] = [
+            day for day in horizon if day.weekday() < 5 and day not in closures
         ]
         self.roll_config.calendar = FuturesCalendar(past + future)
 
@@ -437,3 +465,6 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         if self.conn is not None:
             self.conn.close()
             self.conn = None
+        if self.stock_conn is not None:
+            self.stock_conn.close()
+            self.stock_conn = None

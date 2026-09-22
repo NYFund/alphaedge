@@ -99,6 +99,9 @@ EQUITY_CHANGE_TABLE_NAME: str = "equity_change"
 STOCK_INFO_TABLE_NAME: str = "taiwan_stock_info"
 STOCK_INFO_WITH_WARRANT_TABLE_NAME: str = "taiwan_stock_info_with_warrant"
 SECURITIES_TRADER_INFO_TABLE_NAME: str = "taiwan_securities_trader_info"
+# 市場開休市日期（TWSE 公告）。**與 `price` 表的交易日是兩件事**：`price` 是事後的
+# 「那天有成交資料」，本表是事前公告的「那天休不休市」——盤前判定交易日只能靠後者
+MARKET_HOLIDAY_TABLE_NAME: str = "market_holiday"
 # 台期貨（皆位於 tw_futures.db）
 # **`futures_contract` 的表名常數已刪除**：規劃時預留給股票期貨乘數，
 # 後來改走 `futures_stock_universe.contract_size`，於是這個常數變成有宣告、無建表、

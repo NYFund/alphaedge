@@ -62,6 +62,13 @@ class StockOrder(BaseOrder):
         # 下單單位。`Common` 的 `volume` 是張，`IntradayOdd` 是股——
         # 單位換算錯了不會報錯，只會下成 1000 倍或 1/1000 的量
         self.order_lot: StockOrderLot = order_lot
+        # **零股在建構當下就檢查**：1000 股以上就是整股，還用零股表示的話，
+        # 下游只要有一處把 `volume` 當成張，就是 1000 倍的委託
+        if order_lot is StockOrderLot.IntradayOdd and not 0 < volume < 1000:
+            raise ValueError(
+                f"盤中零股的數量單位是股，須介於 1～999，收到 {volume}；"
+                "1000 股以上請用 order_lot=Common（單位為張）"
+            )
 
         # **沒有 `order_cond` 欄位**：委託條件（現股／融資／融券／借券）由
         # 送單前的轉換依 `position_type` ＋ `short_method` ＋ `is_day_trade` 推導，

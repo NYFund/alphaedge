@@ -23,6 +23,8 @@ from core.utils import (
     FuturesOCType,
     FuturesPriceType,
     LiveOrderStatus,
+    PositionType,
+    ShortMethod,
     StockPriceType,
     Units,
 )
@@ -58,6 +60,8 @@ SNAPSHOT_SAMPLE_SIZE: int = 250
 SNAPSHOT_MAX_AGE: datetime.timedelta = datetime.timedelta(minutes=30)
 
 STOCK_SYMBOL: str = "2330"
+# 放空測試的標的：要有券源（2026-09-22 模擬帳戶 2317 有 984 張、2330 為 0）
+SHORT_SYMBOL: str = "2317"
 FUTURES_PRODUCT: str = "TX"
 
 
@@ -301,6 +305,44 @@ def test_stock_order_round_trip(broker: ShioajiBroker) -> None:
     )
 
     assert_round_trip(broker, make_ticket(order, "0S0001"))
+
+
+@pytest.mark.shioaji_sim_order
+@pytest.mark.parametrize(
+    ("short_method", "custom_field"),
+    [
+        (ShortMethod.MARGIN, "0S0011"),
+        (ShortMethod.SBL, "0S0012"),
+        (ShortMethod.DAY_TRADE, "0S0013"),
+    ],
+    ids=["margin-short", "sbl-short", "day-trade-short"],
+)
+def test_short_sell_round_trip(
+    broker: ShioajiBroker, short_method: ShortMethod, custom_field: str
+) -> None:
+    """
+    三種放空管道的委託條件券商都收得下：融券（`ShortSelling`）、借券（`SBLShort`）、
+    現股當沖先賣（`Cash` ＋ `daytrade_short`）
+
+    **以漲停價賣出**：在漲跌停範圍內且不會成交，測完即撤單。標的用 2317：
+    2026-09-22 實測模擬帳戶 2330 的券源是 0，融券那條會在送出前就被本地擋下。
+    借券單在升 1.7.5 之前送不出去，這是它第一次實送。
+    """
+
+    contract: Any = broker.resolver.resolve_stock(SHORT_SYMBOL)
+    order: StockOrder = StockOrder(
+        stock_id=SHORT_SYMBOL,
+        action=Action.SELL,
+        position_type=PositionType.SHORT,
+        short_method=short_method,
+        is_day_trade=short_method is ShortMethod.DAY_TRADE,
+        volume=1,
+        price=float(contract.limit_up),
+        date=now_live(),
+        price_type=StockPriceType.LMT,
+    )
+
+    assert_round_trip(broker, make_ticket(order, custom_field))
 
 
 @pytest.mark.shioaji_sim_order

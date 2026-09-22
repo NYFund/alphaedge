@@ -36,6 +36,7 @@ from core.pipeline.tw.updaters.futures_stock_universe_updater import (
     FuturesStockUniverseUpdater,
 )
 from core.pipeline.tw.updaters.futures_tick_updater import FuturesTickUpdater
+from core.pipeline.tw.updaters.market_holiday_updater import MarketHolidayUpdater
 from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
     MonthlyRevenueReportUpdater,
 )
@@ -93,6 +94,7 @@ Target 對照表
   futures_price               台期貨每日行情（寫入 tw_futures.db）
   futures_stock_universe      股票期貨標的池（寫入 tw_futures.db）
   futures_margin              台期貨保證金（變動序列，寫入 tw_futures.db）
+  market_holiday              市場開休市日期（TWSE 公告；去年／今年／明年，實盤交易日判定用）
   futures_continuous          台期貨連續合約（由 futures_price_daily 建出，不連網路）
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
   futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
@@ -147,6 +149,9 @@ Target 對照表
 
   # 更新台期貨保證金（寫入 tw_futures.db；保證金沒調整時不會新增列）
   python -m tasks.update_db --target futures_margin
+
+  # 市場開休市日期（TWSE 公告；每次重抓去年、今年、明年三個年度，整年替換）
+  python -m tasks.update_db --target market_holiday
 
   # 財報
   python -m tasks.update_db --target fs
@@ -622,6 +627,16 @@ def main() -> None:
                 futures_margin_updater.update()
             finally:
                 futures_margin_updater.close()
+
+    if DataType.MARKET_HOLIDAY.name.lower() in targets:
+        with target_guard("market_holiday", failed_targets):
+            # 一年一次請求、固定抓去年／今年／明年，沒有回補區間，故不取 time_config；
+            # 明年的公告 12 月前多半還沒出來，那一年記一行 info 跳過屬正常
+            market_holiday_updater: MarketHolidayUpdater = MarketHolidayUpdater()
+            try:
+                market_holiday_updater.update()
+            finally:
+                market_holiday_updater.close()
 
     if DataType.FS.name.lower() in targets:
         with target_guard("fs", failed_targets):

@@ -4,6 +4,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from loguru import logger
 
 from core.api.tw.financial_statement_api import FinancialStatementAPI
+from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.api.tw.monthly_revenue_report_api import MonthlyRevenueReportAPI
 from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
@@ -15,6 +16,7 @@ from core.dao.connection import DBConnection, connect_sqlite
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
+    OfficialHolidayCalendarSource,
     PriceTableCalendarSource,
     TradingCalendarSource,
     WeekendCalendarSource,
@@ -48,7 +50,8 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             - broker: Any
                 券商閘道
             - calendar_sources: Optional[Sequence[TradingCalendarSource]]
-                交易日來源；None 時建立預設組合（週末 ＋ 券商合約檔 ＋ price 表）
+                交易日來源；None 時建立預設組合
+                （官方開休市日曆 ＋ 週末 ＋ 券商合約檔 ＋ price 表）
             - db_path: Any
                 歷史資料庫路徑
             - now_provider: Callable[[], datetime.datetime]
@@ -65,6 +68,8 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.margin: Optional[StockMarginAPI] = None
         self.mrr: Optional[MonthlyRevenueReportAPI] = None
         self.fs: Optional[FinancialStatementAPI] = None
+        # 官方開休市日曆（交易日判定的主來源）；與歷史資料同庫，共用唯讀連線
+        self.market_holiday: Optional[MarketHolidayAPI] = None
 
     def setup(self, strategy: BaseStrategy) -> None:
         """
@@ -90,6 +95,7 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.margin = StockMarginAPI(conn=self.conn)
         self.mrr = MonthlyRevenueReportAPI(conn=self.conn)
         self.fs = FinancialStatementAPI(conn=self.conn)
+        self.market_holiday = MarketHolidayAPI(conn=self.conn)
 
         if not self.calendar_sources:
             self.calendar_sources = self.build_default_calendar_sources()
@@ -100,11 +106,12 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         """
         預設的交易日來源組合
 
-        **缺的是官方休市日曆**（TWSE 公告），那才該是主來源。目前平日只剩
-        券商合約檔這一個佐證，已列為已知限制。
+        官方開休市日曆是主來源；它的年度未入庫時，平日只剩券商合約檔一個佐證。
+        官方日曆與合約檔衝突時 `resolve_trading_day()` 拒絕啟動，不偏袒任一方。
         """
 
         return [
+            OfficialHolidayCalendarSource(self.market_holiday),
             WeekendCalendarSource(),
             BrokerContractCalendarSource(self._broker_contract_update_date),
             PriceTableCalendarSource(self._price_table_has_data),

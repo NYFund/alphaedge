@@ -79,6 +79,10 @@ class URLManager:
         # 上櫃收盤行情（Ex: date = 2025/08/01）
         "TPEX_CLOSING_QUOTE_URL": "https://www.tpex.org.tw/www/zh-tw/afterTrading/otc?date={date}&type=EW&id=&response=html&order=0&sort=asc",
 
+        # 市場開休市日期（Ex: date = 20260101；只看年份，一次回傳整年）
+        # 列表混有「開始交易日／最後交易日」這類提醒列，那幾天其實有開市，分類在 cleaner
+        "TWSE_HOLIDAY_SCHEDULE_URL": "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule?response=json&date={date}",
+
         # 上市月營收財報（month: m, issuer_origin: {0: 國內發行, 1: 國外發行}）
         "TWSE_MONTHLY_REVENUE_REPORT_URL": "https://mopsov.twse.com.tw/nas/t21/sii/t21sc03_{roc_year}_{month}_{issuer_origin}.html",
 
