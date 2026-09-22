@@ -32,6 +32,7 @@ from core.live.notify.base import notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
+from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
 from core.live.risk.trading_mode import TradingMode, TradingModeState
@@ -106,6 +107,9 @@ class StrategyContext:
     # 把「已成交的一筆」還原成訂單物件餵給 `PositionManager`。
     # 訂單型別同樣是市場特性（期貨要 product／expiry），故一併由外部注入
     build_filled_order: Optional[FilledOrderBuilder] = None
+    # 開一筆倉需要的資金（保證金交易的商品：原始保證金 ＋ 開倉成本）；None 代表
+    # 這個市場送單前不做保證金檢查（現股的資金由額度分配與風控管）
+    calculate_opening_requirement: Optional[Callable[[BaseOrder], float]] = None
 
     @property
     def name(self) -> str:
@@ -163,6 +167,8 @@ class LiveTrader:
         now_provider: Callable[[], datetime.datetime] = now_live,
         sleep: Callable[[float], None] = time.sleep,
         parity_checker: Optional[ParityChecker] = None,
+        simulation: bool = False,
+        margin_query: Optional[MarginAccountQuery] = None,
     ) -> None:
         """
         - Description:
@@ -196,6 +202,10 @@ class LiveTrader:
                 段落時窗；None 時不做時限控制（測試與 dry-run 用）
             - dry_run: bool
                 走完整流程但不真的送出
+            - simulation: bool
+                是否連模擬環境；決定保證金查不到資料時放行還是擋單
+            - margin_query: Optional[MarginAccountQuery]
+                券商的保證金帳務查詢；由組裝層依市場注入
             - resume_trading: bool
                 人工恢復交易模式（**只能由命令列旗標傳入**）
             - notifier: Optional[Any]
@@ -222,6 +232,11 @@ class LiveTrader:
         self.run_id: str = run_id
         self.schedule: SegmentSchedule = schedule or {}
         self.dry_run: bool = dry_run
+        # 是否連模擬環境。**預設 False（正式環境的嚴格行為）**：券商查不到
+        # 期貨保證金時，模擬環境略過帳戶層檢查、正式環境擋單
+        self.simulation: bool = simulation
+        # 券商的保證金帳務查詢；市場特性，由組裝層注入（None 代表沒有需要保證金的商品）
+        self.margin_query: Optional[MarginAccountQuery] = margin_query
         self.resume_trading: bool = resume_trading
         self.notifier: Optional[Any] = notifier
         self.reporter: LiveReporter = (
@@ -1151,11 +1166,19 @@ class LiveTrader:
         """
 
         unsent: List[Tuple[StrategyContext, BaseOrder]] = []
+        # 每批一份保證金預算：同一批的開倉單逐張累計，不各自拿同一份可用保證金比
+        margin_gate: MarginGate = MarginGate(self.margin_query, self.simulation)
         for index, (context, order) in enumerate(candidates):
             if self._past(window, "submit_end"):
                 logger.warning("已過送單時限，其餘委託不再送出")
                 unsent.extend(candidates[index:])
                 break
+
+            blocked: Optional[str] = self._check_margin(margin_gate, context, order)
+            if blocked is not None:
+                self._write_margin_event(context, order, blocked)
+                unsent.append((context, order))
+                continue
 
             amount: float = context.notional(order)
             if not self.allocator.reserve(context.name, amount):
@@ -1187,6 +1210,51 @@ class LiveTrader:
             self.drain_once()
 
         return unsent
+
+    def _check_margin(
+        self, gate: MarginGate, context: StrategyContext, order: BaseOrder
+    ) -> Optional[str]:
+        """
+        需要保證金的開倉單的檢查；不需要檢查時回 None
+
+        **平倉單不檢查**：平倉釋放保證金，擋下它只會讓部位留在場上。
+        算不出需要的保證金（例如保證金表沒有這個商品）時**擋單**：
+        不知道要押多少錢就送出，等於把檢查交給券商退單。
+        """
+
+        if context.calculate_opening_requirement is None:
+            return None
+        if order.action is order_preprocess.resolve_close_action(order.position_type):
+            return None
+
+        try:
+            required: float = context.calculate_opening_requirement(order)
+        except Exception as exc:
+            logger.opt(exception=True).warning(f"{order.symbol} 算不出保證金：{exc}")
+            return f"算不出需要的保證金：{exc}"
+
+        return gate.check(context.name, required, float(context.account.balance))
+
+    def _write_margin_event(
+        self, context: StrategyContext, order: BaseOrder, reason: str
+    ) -> None:
+        """保證金不足而沒有送出的開倉單：寫事件並推播"""
+
+        message: str = f"{order.symbol} 開倉單未送出：{reason}"
+        logger.warning(f"[Margin] {context.name}：{message}")
+        self.dao.insert_risk_event(
+            {
+                "run_id": self.run_id,
+                "strategy_name": context.name,
+                "severity": "WARNING",
+                "category": "MARGIN_INSUFFICIENT",
+                "symbol": order.symbol,
+                "client_order_id": order.client_order_id,
+                "message": message,
+                "occurred_at": self._now(),
+            }
+        )
+        self._notify("WARNING", "保證金不足", message)
 
     # === 回報 ===
     def drain_once(self) -> List[ExecutionReport]:

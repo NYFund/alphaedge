@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -273,6 +273,44 @@ class FuturesPositionManager(BasePositionManager):
 
         return float(per_lot * volume)
 
+    def calculate_opening_requirement(
+        self,
+        order: FuturesOrder,
+        date: Optional[Union[datetime.date, datetime.datetime]] = None,
+    ) -> float:
+        """
+        - Description:
+            開一筆倉需要的資金：原始保證金 ＋ 開倉手續費與稅
+
+            `open_position()` 以它判斷可動用餘額夠不夠；實盤送單前的保證金檢查
+            也呼叫同一個方法——兩邊各算一份的話，回測開得進去的口數，
+            實盤可能在送單前就被擋掉，或反過來。
+        - Parameters:
+            - order: FuturesOrder
+                開倉訂單
+            - date: Optional[Union[datetime.date, datetime.datetime]]
+                查保證金表與乘數用的日期；None 時取訂單日期
+        - Return:
+            - float
+                需要的資金
+        """
+
+        _, margin, commission, tax = self._opening_costs(order, date or order.date)
+        return margin + commission + tax
+
+    def _opening_costs(
+        self, order: FuturesOrder, date: Union[datetime.date, datetime.datetime]
+    ) -> Tuple[int, float, float, float]:
+        """開倉要用的 `(乘數, 原始保證金, 手續費, 稅)`；乘數與保證金各只查一次"""
+
+        multiplier: int = self.get_multiplier(order.product, date)
+        margin: float = self.calculate_margin(
+            order.price, order.volume, multiplier, product=order.product, date=date
+        )
+        commission: float = self.calculate_commission(order.volume, order.product)
+        tax: float = self.calculate_tax(order.price, order.volume, multiplier)
+        return (multiplier, margin, commission, tax)
+
     def calculate_stock_futures_margin(
         self, product: str, date: datetime.date, maintenance: bool = False
     ) -> Optional[float]:
@@ -491,23 +529,14 @@ class FuturesPositionManager(BasePositionManager):
             )
             return None
 
-        multiplier: int = self.get_multiplier(order.product, order.date)
-
-        margin: float = self.calculate_margin(
-            order.price,
-            order.volume,
-            multiplier,
-            product=order.product,
-            date=order.date,
-        )
-        commission: float = self.calculate_commission(order.volume, order.product)
-        tax: float = self.calculate_tax(order.price, order.volume, multiplier)
+        multiplier, margin, commission, tax = self._opening_costs(order, order.date)
         open_cost: float = commission + tax
+        required: float = margin + open_cost
 
-        if self.account.balance < margin + open_cost:
+        if self.account.balance < required:
             logger.warning(
                 f"[Open Position] 可動用餘額不足：{order.contract_id} "
-                f"需要 {margin + open_cost:.0f}，實際 {self.account.balance:.0f}"
+                f"需要 {required:.0f}，實際 {self.account.balance:.0f}"
             )
             return None
 

@@ -3,6 +3,7 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
+from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.config import TW_FUTURES_DB_PATH
 from core.config.settings import now_live
@@ -13,6 +14,7 @@ from core.live.datafeed.calendar import (
     TradingCalendarSource,
     WeekendCalendarSource,
 )
+from core.managers.futures.position_manager import FuturesMarginConfig
 from core.models import BaseQuote, PreOpenFuturesQuote
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -55,6 +57,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         calendar_sources: Optional[Sequence[TradingCalendarSource]] = None,
         db_path: Any = TW_FUTURES_DB_PATH,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        margin_config: Optional[FuturesMarginConfig] = None,
     ) -> None:
         """
         - Description:
@@ -68,6 +71,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 歷史資料庫路徑
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
+            - margin_config: Optional[FuturesMarginConfig]
+                策略與部位管理共用的保證金設定；查表模式下由本資料源注入保證金表
         """
 
         super().__init__(broker, calendar_sources, now_provider)
@@ -75,12 +80,16 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         self.db_path: Any = db_path
         self.conn: Optional[DBConnection] = None
         self.futures_price: Optional[FuturesPriceAPI] = None
+        self.margin: Optional[FuturesMarginAPI] = None
+        self.margin_config: Optional[FuturesMarginConfig] = margin_config
 
     def setup(self, strategy: BaseStrategy) -> None:
         """建立歷史資料 API（唯讀）與交易日來源"""
 
         self.conn = connect_sqlite(self.db_path, read_only=True)
         self.futures_price = FuturesPriceAPI(conn=self.conn)
+        self.margin = FuturesMarginAPI(conn=self.conn)
+        self.inject_margin_api()
 
         if not self.calendar_sources:
             self.calendar_sources = [
@@ -89,6 +98,21 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             ]
 
         strategy.setup_apis(self)
+
+    def inject_margin_api(self) -> None:
+        """
+        - Description:
+            把保證金表注入共用的保證金設定
+
+            與回測的 `TwFuturesDataFeed.inject_margin_api()` 同一件事：不注入的話，
+            查表模式會**靜默退回「契約價值 × 10%」的近似**，送單前的保證金檢查與
+            成交後的開倉判斷都跟回測對不上。明確宣告比率模式（`use_api=False`）時不注入。
+        """
+
+        if self.margin_config is None or not self.margin_config.use_api:
+            return
+        if self.margin_config.api is None:
+            self.margin_config.api = self.margin
 
     def _broker_contract_update_date(self) -> Optional[datetime.date]:
         """券商合約檔的更新日期；取不到時回 None"""
