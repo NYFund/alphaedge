@@ -5,7 +5,7 @@ import pandas as pd
 
 from core.backtest.backtester import new_event_counts
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
-from core.backtest.models.cost_model import CostConfig, ShortConstraint, StockCostModel
+from core.backtest.models.cost_model import StockCostModel
 from core.backtest.models.fill_model import FillConfig, TwStockFillModel
 from core.backtest.models.settlement_model import TwStockSettlementModel
 from core.managers.stock.position_manager import StockPositionManager
@@ -17,6 +17,7 @@ from core.models import (
     StockQuote,
     StockTradeRecord,
 )
+from core.models.cost_config import CostConfig, ShortConstraint
 from core.utils import Action, PositionType, Scale, ShortMethod
 
 """

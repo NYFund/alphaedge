@@ -7,8 +7,8 @@ import pandas as pd
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
-from core.backtest.models.cost_model import ShortConstraint
 from core.models import StockOrder, StockQuote
+from core.models.cost_config import ShortConstraint
 from core.utils import Action, PositionType, Scale, ShortMethod
 from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy
 

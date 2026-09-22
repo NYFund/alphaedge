@@ -51,11 +51,9 @@ from core.live.risk.trading_mode import TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
 from core.managers.base.position_manager import BasePositionManager
-from core.managers.futures.position_manager import (
-    FuturesMarginConfig,
-    FuturesPositionManager,
-)
+from core.managers.futures.position_manager import FuturesPositionManager
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import (
     BaseOrder,

@@ -7,8 +7,8 @@ import pytest
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_cost_config
-from core.backtest.models.cost_model import CostConfig
 from core.models import StockAccount, StockOrder, StockPosition, StockQuote
+from core.models.cost_config import CostConfig
 from core.strategies.stock.foreign_sell_short_day_trade_strategy import (
     ForeignSellShortDayTradeStrategy,
 )

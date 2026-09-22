@@ -7,13 +7,14 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import pytest
 
-from core.backtest.models.cost_model import CostConfig, StockCostModel
+from core.backtest.models.cost_model import StockCostModel
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw.shioaji_account_query import ShioajiAccountQuery
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
 from core.live.factory import make_trade_cost_estimator
 from core.models import RealizedTradeSnapshot
+from core.models.cost_config import CostConfig
 from core.utils import Action
 
 """

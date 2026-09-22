@@ -16,8 +16,8 @@ from core.live.datafeed.calendar import (
     TradingCalendarSource,
     WeekendCalendarSource,
 )
-from core.managers.futures.position_manager import FuturesMarginConfig
 from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import BaseQuote, FuturesOrder, PreOpenFuturesQuote
 from core.strategies.base import BaseStrategy
