@@ -18,7 +18,8 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 `FinMindAPI` 的離線覆蓋
 
 這一檔在 2026-09-05 是**全 repo 唯一覆蓋率 0% 的 `core/api` 檔**——原有的
-`tests/manual_finmind_api.py` 需要真的 `tw_stock.db`，pytest 不會收集它。
+人工腳本（現在在 `scripts/manual/manual_finmind_api.py`）需要真的 `tw_stock.db`，
+pytest 不會收集它。
 本檔以 in-memory SQLite 灌樣本，不連任何實體資料庫。
 
 一併驗連線注入：`__init__(conn=...)` 是其他 `core/api/tw/` 的共通慣例，

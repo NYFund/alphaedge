@@ -172,5 +172,22 @@ python run.py --strategy <StrategyClassName>
 python run.py --strategy <StrategyClassName> --show   # 畫完圖在瀏覽器開起來
 ```
 
-策略名稱找不到時以結束碼 2 結束；`--mode live` 尚未實作，以結束碼 1 結束。
-結果輸出在 `results/<StrategyName>/`。
+策略名稱找不到時以結束碼 2 結束。結果輸出在 `results/<StrategyName>/`。
+
+實盤是另一條路徑（`--mode live`，必須帶 `--phase`），**它從不回傳 1**——`1` 保留給未預期的例外。
+排程要攔的是下列各碼：
+
+| 退出碼 | 意義 |
+|:---:|---|
+| 0 | 正常結束 |
+| 1 | 未預期的例外 |
+| 2 | 用法錯誤：策略名找不到，或 `--production` 沒帶 `--confirm-production` |
+| 3 | 資料未更新到前一個交易日 |
+| 4 | 對帳不一致，或以券商部位重建被拒絕 |
+| 5 | kill switch 生效 |
+| 6 | 上次結束時帳戶層交易模式非 NORMAL，本次未帶 `--resume-trading` |
+| 7 | `--resync-from-broker` 只列出重建計畫、沒有寫入（未帶 `--confirm-resync`） |
+| 143 | 收到 SIGTERM：已撤未成交單、寫完結束紀錄才離開 |
+
+**`6` 要和 `4`、`5` 分開**：排程看到 4／5 是「今天剛出事」，看到 6 是「昨天出的事還沒有人處理」。
+完整的實盤用法見[實盤部署與排程](../deployment/live-deployment.md)。

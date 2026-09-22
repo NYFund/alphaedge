@@ -75,8 +75,6 @@ def parse_arguments() -> argparse.Namespace:
         description="Trading System"
     )
 
-    # `live` 保留在 choices 裡（它是規劃中的模式，`--mode` 這個參數才有意義），
-    # 但 help 必須講明尚未實作——否則 `--help` 看起來像已經支援實盤
     parser.add_argument(
         "--mode",
         choices=["backtest", "live"],

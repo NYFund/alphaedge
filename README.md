@@ -120,7 +120,7 @@ graph TB
 - 期貨跳動點只涵蓋已查證的七檔指數期貨（TX／MTX／TMF 1 點、TE／ZEF 0.05 點、TF／ZFF 0.2 點）；未登錄的商品退回 1 點並記 warning，以跳動點數設定的滑價會失真（預設滑價為 0，不受影響）。
 - 同一次回測無法同時持有台股與台期貨（跨市場組合／避險）。
 - 台股平盤下放空限制與每日可當沖清單尚未接上撮合，會高估放空與當沖機會。
-- `--mode live` 實盤路徑未實作。
+- 實盤（`--mode live`）目前只在**模擬環境**演練過，尚未在正式環境執行；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
 
 細節見[放空回測框架規格](docs/backtest/short-selling-framework.md)與[台期貨平台](docs/futures/tw-futures-platform.md)。
 
@@ -129,6 +129,9 @@ graph TB
 | 模組            | 說明                                                                  |
 | --------------- | --------------------------------------------------------------------- |
 | `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、資料存取層、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
+| `core/live/`    | 實盤交易：逐段落生命週期、委託管理（OMS）、部位歸屬、對帳、風控與盤後作業               |
+| `core/broker/`  | 券商介接（目前為 Shioaji）：登入、合約解析、委託轉換、回報正規化與行情訂閱              |
+| `core/execution/` | 回測與實盤共用的送單前處理：方向白名單、持倉上限、決定性排序                          |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
 | `tasks/`        | 資料維護與資料庫更新腳本                                              |
 | `tests/`        | 單元／整合測試與回測回歸線（`tests/backtest/`）                       |
@@ -228,7 +231,7 @@ python run.py --strategy MomentumStrategy1
 ```
 
 - `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
-- 選用參數：`--show` 在瀏覽器開圖；`--mode live` 尚未實作（以結束碼 1 結束）。
+- 選用參數：`--show` 在瀏覽器開圖。實盤是另一條路徑（`--mode live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
 **步驟 3：開啟前端檢視結果**
@@ -364,7 +367,7 @@ python -m tasks.update_db --target no_tick
 
 ```bash
 python run.py --strategy <StrategyClassName>
-# 選用：--show 在瀏覽器開圖；--mode live 尚未實作（以結束碼 1 結束）
+# 選用：--show 在瀏覽器開圖。實盤走 --mode live，見 docs/deployment/live-deployment.md
 ```
 
 ## 專案結構

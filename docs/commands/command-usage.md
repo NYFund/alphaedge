@@ -180,5 +180,22 @@ python run.py --strategy <StrategyClassName>
 python run.py --strategy <StrategyClassName> --show   # open the charts in a browser
 ```
 
-An unknown strategy name exits with code 2; `--mode live` is not implemented and exits with code 1.
-Results are written to `results/<StrategyName>/`.
+An unknown strategy name exits with code 2. Results are written to `results/<StrategyName>/`.
+
+Live trading is a separate path (`--mode live`, which requires `--phase`) and **never returns 1** —
+`1` is reserved for unexpected exceptions. These are the codes a scheduler should act on:
+
+| Exit code | Meaning |
+|:---:|---|
+| 0 | Normal exit |
+| 1 | Unexpected exception |
+| 2 | Usage error: unknown strategy name, or `--production` without `--confirm-production` |
+| 3 | Data not updated through the previous trading day |
+| 4 | Reconciliation mismatch, or a refused rebuild from broker positions |
+| 5 | Kill switch triggered |
+| 6 | Account-level trading mode was not NORMAL at last exit and `--resume-trading` was not given |
+| 7 | `--resync-from-broker` only printed the rebuild plan (no `--confirm-resync`) |
+| 143 | SIGTERM received: open orders cancelled and the run record written before exit |
+
+**Keep `6` separate from `4` and `5`**: 4/5 mean "something broke today", 6 means
+"yesterday's problem is still unhandled". See [Live Deployment](../deployment/live-deployment.md).
