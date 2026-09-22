@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -57,7 +57,7 @@ class FinancialStatementLoader(BaseDataLoader):
             / f"{FinancialStatementType.EQUITY_CHANGE.lower()}_cleaned_columns.json"
         )
 
-        self.cleaned_cols_paths: dict[str, Path] = {
+        self.cleaned_cols_paths: Dict[str, Path] = {
             FinancialStatementType.BALANCE_SHEET: self.balance_sheet_cleaned_cols_path,
             FinancialStatementType.COMPREHENSIVE_INCOME: self.comprehensive_income_cleaned_cols_path,
             FinancialStatementType.CASH_FLOW: self.cash_flow_cleaned_cols_path,

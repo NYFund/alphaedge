@@ -106,15 +106,18 @@ class FinMindUpdater(BaseDataUpdater):
         """
         通用更新方法
 
-        Args:
-            data_type: 資料類型，可選值：
+        - Parameters:
+            - data_type: Optional[Union[str, FinMindDataType]]
+                資料類型，可選值：
                 - FinMindDataType.STOCK_INFO 或 "stock_info": 更新台股總覽（不含權證）
                 - FinMindDataType.STOCK_INFO_WITH_WARRANT 或 "stock_info_with_warrant": 更新台股總覽（含權證）
                 - FinMindDataType.BROKER_INFO 或 "broker_info": 更新證券商資訊
                 - FinMindDataType.BROKER_TRADING 或 "broker_trading": 更新券商分點統計
                 - "all" 或 None: 更新所有資料
-            start_date: 起始日期（僅用於 BROKER_TRADING）
-            end_date: 結束日期（僅用於 BROKER_TRADING）
+            - start_date: Optional[Union[datetime.date, str]]
+                起始日期（僅用於 BROKER_TRADING）
+            - end_date: Optional[Union[datetime.date, str]]
+                結束日期（僅用於 BROKER_TRADING）
         """
         # 處理 "all" 或 None 的情況
         if data_type is None or (
@@ -198,9 +201,11 @@ class FinMindUpdater(BaseDataUpdater):
         """
         更新所有 FinMind 資料
 
-        Args:
-            start_date: 起始日期（僅用於 broker_trading_daily_report）
-            end_date: 結束日期（僅用於 broker_trading_daily_report）
+        - Parameters:
+            - start_date: Optional[Union[datetime.date, str]]
+                起始日期（僅用於 broker_trading_daily_report）
+            - end_date: Optional[Union[datetime.date, str]]
+                結束日期（僅用於 broker_trading_daily_report）
         """
 
         logger.info("* Start Updating All FinMind Data...")

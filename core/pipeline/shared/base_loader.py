@@ -7,6 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from core.pipeline.utils.exceptions import DataLoadError, SymbolNameConflictError
+from core.utils.constant import FileEncoding
 
 """Abstract base class for all data loaders that write processed data to a storage system"""
 
@@ -261,7 +262,7 @@ class BaseDataLoader(ABC):
         """
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(path, index=False, encoding="utf-8-sig")
+        df.to_csv(path, index=False, encoding=FileEncoding.UTF8_SIG.value)
         return path
 
     @classmethod

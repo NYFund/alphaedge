@@ -23,6 +23,7 @@ from core.config import (
     require_tick_db_path,
 )
 from core.pipeline.shared.base_loader import BaseDataLoader
+from core.utils.constant import FileEncoding
 
 """
 台期貨 Tick Loader（DolphinDB）
@@ -220,7 +221,7 @@ class FuturesTickLoader(BaseDataLoader):
         total: int = 0
 
         for path in targets:
-            df: pd.DataFrame = pd.read_csv(path, encoding="utf-8-sig")
+            df: pd.DataFrame = pd.read_csv(path, encoding=FileEncoding.UTF8_SIG.value)
             df["time"] = pd.to_datetime(df["time"], errors="coerce")
             total += self.add_to_db(df.dropna(subset=["time"]))
 

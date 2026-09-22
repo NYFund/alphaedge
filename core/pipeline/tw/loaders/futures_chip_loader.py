@@ -9,6 +9,7 @@ from core.config import FUTURES_CHIP_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
 from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
+from core.utils.constant import FileEncoding
 
 """
 台期貨籌碼 Loader（三張表）
@@ -161,5 +162,5 @@ class FuturesChipLoader(BaseDataLoader):
             return None
 
         path: Path = self.chip_dir / file_name
-        df.to_csv(path, index=False, encoding="utf-8-sig")
+        df.to_csv(path, index=False, encoding=FileEncoding.UTF8_SIG.value)
         return path

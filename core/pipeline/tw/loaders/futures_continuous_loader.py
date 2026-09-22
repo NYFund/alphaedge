@@ -7,6 +7,7 @@ from loguru import logger
 from core.config import FUTURES_CONTINUOUS_DOWNLOADS_PATH, TW_FUTURES_DB_PATH
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
+from core.utils.constant import FileEncoding
 
 """
 Futures Continuous Loader
@@ -113,5 +114,5 @@ class FuturesContinuousLoader(BaseDataLoader):
             return None
 
         path: Path = self.continuous_dir / file_name
-        df.to_csv(path, index=False, encoding="utf-8-sig")
+        df.to_csv(path, index=False, encoding=FileEncoding.UTF8_SIG.value)
         return path

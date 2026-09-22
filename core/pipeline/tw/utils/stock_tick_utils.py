@@ -92,8 +92,9 @@ class StockTickUtils:
         """
         掃描 tick 下載資料夾，記錄每個已下載檔案的股票代號和最後一筆資料的日期
 
-        Returns:
-            Dict[str, str]: 股票代號 -> 最後一筆資料日期 (YYYY-MM-DD 格式)
+        - Return:
+            - Dict[str, str]
+                股票代號 -> 最後一筆資料日期 (YYYY-MM-DD 格式)
         """
         stock_last_dates: Dict[str, str] = {}
 
@@ -230,8 +231,9 @@ class StockTickUtils:
         """
         讀取 tick_metadata.json 中的股票資訊（線程安全）
 
-        Returns:
-            Dict[str, Dict[str, str]]: 股票代號 -> 股票資訊（包含 last_date）
+        - Return:
+            - Dict[str, Dict[str, str]]
+                股票代號 -> 股票資訊（包含 last_date）
 
         回傳格式範例：
         {
@@ -272,14 +274,14 @@ class StockTickUtils:
         檢查某個股票的某個日期是否已經爬取過（已存在於資料庫中）
         此函數會從 tick_metadata.json 讀取每檔股票在資料庫中的最新日期（線程安全）
 
-        Parameters:
-            stock_id: str
+        - Parameters:
+            - stock_id: str
                 股票代號
-            date: datetime.date
+            - date: datetime.date
                 要檢查的日期
-
-        Returns:
-            bool: True 表示日期已爬取（資料已存在於資料庫），False 表示需要爬取
+        - Return:
+            - bool
+                True 表示日期已爬取（資料已存在於資料庫），False 表示需要爬取
         """
         # 讀取 metadata（線程安全）
         stocks_metadata: Dict[str, Dict[str, str]] = (

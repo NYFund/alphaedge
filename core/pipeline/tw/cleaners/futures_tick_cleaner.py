@@ -9,6 +9,7 @@ from core.config import FUTURES_TICK_DOWNLOADS_PATH
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
 from core.utils import FuturesSession
+from core.utils.constant import FileEncoding
 
 """
 台期貨 Tick 清洗器
@@ -124,5 +125,5 @@ class FuturesTickCleaner(BaseDataCleaner):
             return None
 
         path: Path = self.tick_dir / f"{product}{expiry}_{date.strftime('%Y%m%d')}.csv"
-        df.to_csv(path, index=False, encoding="utf-8-sig")
+        df.to_csv(path, index=False, encoding=FileEncoding.UTF8_SIG.value)
         return path

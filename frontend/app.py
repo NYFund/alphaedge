@@ -295,7 +295,7 @@ def _render_futures_exposure_chart(df: pd.DataFrame) -> None:
     st.plotly_chart(lots_figure, width="stretch")
 
 
-def _get_chart_theme() -> dict[str, str]:
+def _get_chart_theme() -> Dict[str, str]:
     return {
         "paper_bg": "rgba(0,0,0,0)",
         "plot_bg": "rgba(0,0,0,0)",

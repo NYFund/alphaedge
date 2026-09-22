@@ -51,14 +51,15 @@ class FinMindError(PipelineError):
         2. HTTP 402：FinMind API 配額用盡時回傳 402 (Payment Required / 用量超出上限)。
         3. 訊息關鍵字：402、quota、rate limit、exceeded、配額（含 __cause__ 鏈）。
 
-        Args:
-            exc: 要檢查的例外（可為鏈狀 __cause__ 的根）。
-
-        Returns:
-            True 若判定為配額相關錯誤，否則 False。
+        - Parameters:
+            - exc: BaseException
+                要檢查的例外（可為鏈狀 __cause__ 的根）。
+        - Return:
+            - bool
+                True 若判定為配額相關錯誤，否則 False。
         """
         err: Optional[BaseException] = exc
-        seen: set[int] = set()
+        seen: Set[int] = set()
 
         while err is not None and id(err) not in seen:
             seen.add(id(err))

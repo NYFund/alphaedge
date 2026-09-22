@@ -130,13 +130,19 @@ class LogManager:
         """
         Set up a logger with specified configuration.
 
-        Args:
-            log_file: Name of the log file (e.g., "update_tick.log")
-            log_dir: Directory to store log files. Defaults to PIPELINE_LOGS_DIR_PATH.
-            rotation: When to rotate log files (e.g., "10 MB", "1 day")
-            retention: How long to keep log files (e.g., "30 days", "10 files")
-            level: Logging level (e.g., "DEBUG", "INFO", "WARNING", "ERROR")
-            format: Log message format string
+        - Parameters:
+            - log_file: str
+                Name of the log file (e.g., "update_tick.log")
+            - log_dir: Optional[Path]
+                Directory to store log files. Defaults to PIPELINE_LOGS_DIR_PATH.
+            - rotation: str
+                When to rotate log files (e.g., "10 MB", "1 day")
+            - retention: str
+                How long to keep log files (e.g., "30 days", "10 files")
+            - level: str
+                Logging level (e.g., "DEBUG", "INFO", "WARNING", "ERROR")
+            - format: str
+                Log message format string
 
         Example:
             LogManager.setup_logger("update_tick.log")
@@ -187,11 +193,15 @@ class LogManager:
         """
         Set up a logger specifically for backtest results.
 
-        Args:
-            strategy_name: Name of the strategy (used as log file name)
-            rotation: When to rotate log files
-            retention: How long to keep log files
-            level: Logging level
+        - Parameters:
+            - strategy_name: str
+                Name of the strategy (used as log file name)
+            - rotation: str
+                When to rotate log files
+            - retention: str
+                How long to keep log files
+            - level: str
+                Logging level
 
         Example:
             LogManager.setup_backtest_logger("momentum_strategy_1")
@@ -218,9 +228,11 @@ class LogManager:
         """
         Add a console handler for logging to stdout.
 
-        Args:
-            level: Logging level for console output
-            format: Log message format string
+        - Parameters:
+            - level: str
+                Logging level for console output
+            - format: str
+                Log message format string
 
         Example:
             LogManager.add_console_handler(level="DEBUG")

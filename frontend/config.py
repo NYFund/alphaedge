@@ -1,6 +1,7 @@
 import os
 import warnings
 from pathlib import Path
+from typing import Dict, Optional
 
 """
 前端的路徑與檔名設定
@@ -25,7 +26,7 @@ RESULTS_ENV_VAR = "ALPHAEDGE_RESULTS_DIR"
 LEGACY_RESULTS_ENV_VAR = "ALPHAEDGE_BACKTEST_RESULTS"
 
 
-def resolve_results_root(env: dict[str, str] | None = None) -> Path:
+def resolve_results_root(env: Optional[Dict[str, str]] = None) -> Path:
     """
     - Description:
         決定結果根目錄：新環境變數 → 舊環境變數（警告）→ 預設值
