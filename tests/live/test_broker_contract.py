@@ -196,17 +196,29 @@ def test_cancel_is_a_no_op_for_terminal_orders(
     assert ticket.status is LiveOrderStatus.FILLED
 
 
-def test_cancel_moves_open_order_to_cancelled(
+def test_cancel_request_reports_back_instead_of_changing_status(
     fake_broker: FakeBroker, make_ticket: Callable[..., OrderTicket]
 ) -> None:
-    """未成交的委託撤單後轉入 CANCELLED，並且真的送出了請求"""
+    """
+    撤單請求不改本地狀態，結果以一筆撤單回報回來
+
+    送出請求不等於撤單成功：撤單與成交在交易所是競態，請求送出前撮合的量
+    照樣會回報。閘道若在請求當下就把委託改成終態，之後到的成交會被 OMS 的
+    狀態機當成非法轉移丟掉。真券商實測也是如此：撤單結果是一筆
+    `op_type='Cancel'` 的委託回報。
+    """
 
     fake_broker.fill_ratio = 0.0
     ticket: OrderTicket = fake_broker.place_order(make_ticket())
     fake_broker.cancel_order(ticket)
 
-    assert ticket.status is LiveOrderStatus.CANCELLED
+    assert ticket.status is LiveOrderStatus.SUBMITTED
     assert fake_broker.cancel_requests == [ticket.client_order_id]
+
+    events: List[object] = fake_broker.drain_execution_queue()
+    assert [(event.broker_seqno, event.op_type) for event in events] == [
+        (ticket.broker_seqno, "Cancel")
+    ]
 
 
 def test_update_price_on_terminal_order_raises(

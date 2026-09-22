@@ -468,10 +468,60 @@ class LiveTradeDAO(BaseDAO):
         ).fetchone()
         return row[0] if row else self.MODE_NORMAL
 
-    def upsert_order(self, row: Dict[str, Any]) -> None:
-        """寫入或更新一張委託；`client_order_id` 為主鍵"""
+    # 委託列只在第一次寫入時設定的欄位：它們描述「這張單是哪一次 run、何時、
+    # 以什麼識別碼送出的」。之後的行程（盤後、重啟接管）以自己的 run 重寫的話，
+    # 壓縮碼就再也比對不到券商端，送單時間也變成接管的時間
+    ORDER_INSERT_ONLY_COLUMNS: Tuple[str, ...] = (
+        "run_id",
+        "custom_field",
+        "created_at",
+    )
 
-        self._upsert(LIVE_ORDER_TABLE_NAME, row, ("client_order_id",))
+    # 委託狀態類欄位：沒有原始訂單可寫時，只更新這些
+    ORDER_STATE_COLUMNS: Tuple[str, ...] = (
+        "status",
+        "broker_order_id",
+        "broker_seqno",
+        "filled_volume",
+        "avg_fill_price",
+        "reject_reason",
+        "updated_at",
+    )
+
+    def upsert_order(self, row: Dict[str, Any]) -> None:
+        """寫入或更新一張委託；`client_order_id` 為主鍵，建立資訊只在第一次寫入"""
+
+        self._upsert(
+            LIVE_ORDER_TABLE_NAME,
+            row,
+            ("client_order_id",),
+            insert_only=self.ORDER_INSERT_ONLY_COLUMNS,
+        )
+
+    def update_order_state(self, client_order_id: str, row: Dict[str, Any]) -> None:
+        """
+        - Description:
+            只更新一張既有委託的狀態類欄位
+
+            給「手上沒有原始訂單」的呼叫端用（例如由紀錄重建、且還原不出訂單的委託）：
+            走整列寫入的話，標的、數量、價格會被空值蓋掉，而盤後殘量計算靠的正是它們。
+        - Parameters:
+            - client_order_id: str
+                委託識別碼
+            - row: Dict[str, Any]
+                欄位字典；只取 `ORDER_STATE_COLUMNS` 內的欄位
+        """
+
+        columns: List[str] = [
+            column for column in self.ORDER_STATE_COLUMNS if column in row
+        ]
+        if not columns:
+            return
+        assignments: str = ",".join(f'"{column}" = ?' for column in columns)
+        self.conn.execute(
+            f"UPDATE {LIVE_ORDER_TABLE_NAME} SET {assignments} WHERE client_order_id = ?",
+            _to_live_params(*(row[column] for column in columns), client_order_id),
+        )
 
     def append_order_event(self, row: Dict[str, Any]) -> None:
         """
@@ -879,7 +929,11 @@ class LiveTradeDAO(BaseDAO):
         )
 
     def _upsert(
-        self, table: str, row: Dict[str, Any], conflict_columns: Tuple[str, ...]
+        self,
+        table: str,
+        row: Dict[str, Any],
+        conflict_columns: Tuple[str, ...],
+        insert_only: Tuple[str, ...] = (),
     ) -> sqlite3.Cursor:
         """
         - Description:
@@ -899,6 +953,8 @@ class LiveTradeDAO(BaseDAO):
                 欄位字典
             - conflict_columns: Tuple[str, ...]
                 衝突判定的欄位（通常是主鍵）
+            - insert_only: Tuple[str, ...]
+                只在第一次寫入時設定、衝突時不覆寫的欄位
         - Return:
             - sqlite3.Cursor
                 執行結果
@@ -911,7 +967,7 @@ class LiveTradeDAO(BaseDAO):
         assignments: str = ",".join(
             f'"{column}" = excluded."{column}"'
             for column in columns
-            if column not in conflict_columns
+            if column not in conflict_columns and column not in insert_only
         )
 
         return self.conn.execute(

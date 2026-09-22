@@ -36,6 +36,11 @@ _BASE36_DIGITS: str = "0123456789abcdefghijklmnopqrstuvwxyz"
 RUN_CODE_WIDTH: int = 2
 ORDER_CODE_WIDTH: int = 4
 
+# 由 `live_order` 的一列還原出原始訂單；還原不出來時回 None。
+# **訂單型別是市場特性**（股票 `StockOrder`、期貨 `FuturesOrder`），本層不做市場分派，
+# 由組裝層依策略注入
+OrderRebuilder = Callable[[Dict[str, Any]], Optional[BaseOrder]]
+
 # 容量：1,296 次 run × 1,679,616 張委託
 MAX_RUN_INDEX: int = 36**RUN_CODE_WIDTH
 MAX_ORDER_INDEX: int = 36**ORDER_CODE_WIDTH
@@ -122,6 +127,7 @@ class OrderManager:
         dry_run: bool = False,
         on_degrade: Optional[Callable[[str], None]] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        order_rebuilder: Optional[OrderRebuilder] = None,
     ) -> None:
         """
         - Description:
@@ -142,6 +148,8 @@ class OrderManager:
                 降級回呼；OMS **不自己改交易模式**，只送事件給風控
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間（台北時區 aware）
+            - order_rebuilder: Optional[OrderRebuilder]
+                由紀錄還原原始訂單；None 時重建的委託不帶訂單
         """
 
         self.broker: BaseBroker = broker
@@ -156,8 +164,14 @@ class OrderManager:
         self._event_sequence: Dict[str, itertools.count] = {}
         self._dedup: ExecutionEventDeduplicator = ExecutionEventDeduplicator()
 
+        self.order_rebuilder: Optional[OrderRebuilder] = order_rebuilder
+
         # client_order_id → ticket；本行程內的委託索引
         self.tickets: Dict[str, OrderTicket] = {}
+
+        # 已送出撤單請求、還在等券商回覆的委託。撤單請求**不是**撤單結果：
+        # 本地狀態要等撤單回報（或盤後刷新）才轉 CANCELLED，這份集合只用來避免重送
+        self._cancel_requested: Set[str] = set()
 
     # === 識別碼 ===
     def next_client_order_id(self) -> str:
@@ -378,13 +392,35 @@ class OrderManager:
         if ticket is not None and is_new:
             self._update_average_price(ticket, report)
             ticket.filled_volume = filled
-            target: LiveOrderStatus = (
-                LiveOrderStatus.FILLED
-                if ticket.order is not None and filled >= ticket.order.volume
-                else LiveOrderStatus.PARTIALLY_FILLED
-            )
-            self.transition(ticket, target, op_type="fill")
+            if ticket.is_terminal and ticket.status is not LiveOrderStatus.FILLED:
+                self._record_fill_after_terminal(ticket)
+            else:
+                target: LiveOrderStatus = (
+                    LiveOrderStatus.FILLED
+                    if ticket.order is not None and filled >= ticket.order.volume
+                    else LiveOrderStatus.PARTIALLY_FILLED
+                )
+                self.transition(ticket, target, op_type="fill")
         return is_new
+
+    def _record_fill_after_terminal(self, ticket: OrderTicket) -> None:
+        """
+        已終結（撤單、拒單、失敗）的委託又收到成交：**成交照收**，狀態不動
+
+        成交是事實，狀態只是本地的判斷。撤單與成交在交易所是競態——撤單生效前
+        已撮合的量照樣會回報，而且可能比撤單回報晚到；送單時逾時被標成 FAILED 的單
+        也可能其實送到了。以前這裡走狀態機會被判成非法轉移而丟掉，帳戶同步收不到，
+        盤後卻以 `live_order` 的舊成交量算出殘量、寫下隔日補平——對已經平掉的部位
+        再送一次平倉，就是把部位做反。
+        """
+
+        logger.warning(
+            f"委託 {ticket.client_order_id} 已是 {ticket.status.value}，仍收到成交；"
+            f"成交照收，累計成交 {ticket.filled_volume}"
+        )
+        ticket.updated_at = self._now()
+        self._persist(ticket)
+        self._append_event(ticket, ticket.status, ticket.status, "fill_after_terminal")
 
     @staticmethod
     def _update_average_price(ticket: OrderTicket, report: ExecutionReport) -> None:
@@ -422,7 +458,12 @@ class OrderManager:
     ) -> List[OrderTicket]:
         """
         - Description:
-            撤掉尚未終結的委託
+            對尚未終結的委託送出撤單請求
+
+            **送出請求不等於撤單成功，本地狀態不動**：要等券商的撤單回報
+            （`_apply_order_event()`）或盤後刷新才轉 CANCELLED。撤單與成交是競態，
+            請求送出前一刻撮合的量照樣會回報；若在這裡就轉成終態，那些成交會被
+            狀態機丟掉。已送過請求的委託不重送。
 
             **撤單失敗只記錄不拋出**：段落結束時要把能撤的都撤掉，
             其中一張撤不掉（例如剛好成交了）不該讓後面幾張留在場上。
@@ -436,7 +477,7 @@ class OrderManager:
 
         cancelled: List[OrderTicket] = []
         for ticket in list(self.tickets.values()):
-            if ticket.is_terminal:
+            if ticket.is_terminal or ticket.client_order_id in self._cancel_requested:
                 continue
             if (
                 timing is not None
@@ -445,7 +486,10 @@ class OrderManager:
                 continue
             try:
                 self.broker.cancel_order(ticket)
-                self.transition(ticket, LiveOrderStatus.CANCELLED, op_type="cancel")
+                self._cancel_requested.add(ticket.client_order_id)
+                self._append_event(
+                    ticket, ticket.status, ticket.status, "cancel_request"
+                )
                 cancelled.append(ticket)
             except Exception as exc:
                 logger.opt(exception=True).warning(
@@ -459,6 +503,11 @@ class OrderManager:
             向券商刷新一次當日委託狀態，並套回本行程的委託
 
             **盤後才呼叫**：它算在下單類額度裡，拿來輪詢會把送單額度吃光。
+
+            **只套狀態，不覆寫成交量**：成交量只由成交回報累加（一筆一筆寫進
+            `live_fill` 並交給帳戶同步）。以券商的累計量覆寫之後，同一筆成交的回報
+            再進來就會重複累加；券商量比本地多時代表有成交回報沒收到，
+            那要寫事件讓人處理，而不是靜靜改掉數字——帳戶同步並沒有收到那些成交。
         - Return:
             - List[OrderTicket]
                 券商端當日的委託
@@ -475,8 +524,15 @@ class OrderManager:
             latest: Optional[OrderTicket] = by_seqno.get(ticket.broker_seqno or "")
             if latest is None or latest.status is ticket.status:
                 continue
+            if latest.filled_volume > ticket.filled_volume:
+                self._write_risk_event(
+                    "FILL_REPORT_MISSING",
+                    f"委託 {ticket.client_order_id} 券商累計成交 {latest.filled_volume}，"
+                    f"本地只收到 {ticket.filled_volume}；有成交回報沒有收到，"
+                    "帳戶與歸屬帳都少記了這些成交，請以券商成交明細核對",
+                    ticket,
+                )
             try:
-                ticket.filled_volume = latest.filled_volume
                 self.transition(ticket, latest.status, op_type="refresh")
             except OrderStateError as exc:
                 logger.warning(f"刷新狀態與本地矛盾，已跳過本筆：{exc}")
@@ -620,11 +676,18 @@ class OrderManager:
         return None
 
     def _rebuild_ticket(self, row: Dict[str, Any]) -> OrderTicket:
-        """由 DB 紀錄重建 ticket（不含原始訂單物件；恢復只需要識別與狀態）"""
+        """
+        由 DB 紀錄重建 ticket，**連同原始訂單**
+
+        訂單要還原：少了它，全額成交也只會被判成 PARTIALLY_FILLED（不知道委託量）、
+        這張單不佔 `max_holdings` 名額（不知道標的），寫回 DB 時標的與數量還會被
+        空值蓋掉。還原不出來時不帶訂單，`_persist()` 改為只更新狀態欄位。
+        """
 
         return OrderTicket(
             client_order_id=str(row["client_order_id"]),
             strategy_name=str(row["strategy_name"]),
+            order=self._rebuild_order(row),
             status=LiveOrderStatus(str(row["status"])),
             broker_seqno=row.get("broker_seqno"),
             broker_order_id=row.get("broker_order_id"),
@@ -634,7 +697,38 @@ class OrderManager:
             # 沿用當初送出的壓縮碼，不重算：run 序號屬於送單的那一次 run，
             # 以本次 run 重算會得到另一個碼，寫回 DB 後就再也比對不到
             custom_field=row.get("custom_field"),
+            created_at=self._parse_time(row.get("created_at")),
         )
+
+    def _rebuild_order(self, row: Dict[str, Any]) -> Optional[BaseOrder]:
+        """以注入的建構器還原訂單，並補回執行段落（撤單依段落篩選）"""
+
+        if self.order_rebuilder is None:
+            return None
+
+        try:
+            order: Optional[BaseOrder] = self.order_rebuilder(row)
+        except Exception as exc:
+            logger.opt(exception=True).warning(
+                f"委託 {row.get('client_order_id')} 的訂單還原失敗，改為只帶狀態：{exc}"
+            )
+            return None
+
+        if order is not None:
+            order.client_order_id = str(row["client_order_id"])
+            if row.get("timing"):
+                order.timing = ExecutionTiming(str(row["timing"]))
+        return order
+
+    @staticmethod
+    def _parse_time(value: Any) -> Optional[datetime.datetime]:
+        """DB 的 ISO 時間字串 → datetime；空值回 None"""
+
+        if isinstance(value, datetime.datetime):
+            return value
+        if not value:
+            return None
+        return datetime.datetime.fromisoformat(str(value))
 
     # === 內部 ===
     def _find_by_seqno(self, broker_seqno: str) -> Optional[OrderTicket]:
@@ -658,9 +752,31 @@ class OrderManager:
         return str(row["client_order_id"]) if row else ""
 
     def _persist(self, ticket: OrderTicket) -> None:
-        """把委託寫進 `live_order`"""
+        """
+        把委託寫進 `live_order`
+
+        **沒有原始訂單時只更新狀態欄位**：由紀錄重建、又還原不出訂單的委託，
+        整列寫入會把標的、數量、價格蓋成空值，盤後殘量算成 0 而直接略過——
+        未成交出場單的隔日補平就此消失。
+        """
 
         order: Any = ticket.order
+        if order is None:
+            self.dao.update_order_state(
+                ticket.client_order_id,
+                {
+                    "status": ticket.status.value,
+                    "broker_order_id": ticket.broker_order_id,
+                    "broker_seqno": ticket.broker_seqno,
+                    "filled_volume": ticket.filled_volume,
+                    "avg_fill_price": ticket.avg_fill_price,
+                    "reject_reason": ticket.reject_reason,
+                    "updated_at": ticket.updated_at,
+                },
+            )
+            self.dao.conn.commit()
+            return
+
         self.dao.upsert_order(
             {
                 "client_order_id": ticket.client_order_id,

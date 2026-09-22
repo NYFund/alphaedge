@@ -229,17 +229,20 @@ def build_live_trader(
         strategy.setup_account(context.account)
         context.data_feed.setup(strategy)
 
+    order_builders: Dict[str, FilledOrderBuilder] = {
+        context.name: context.build_filled_order
+        for context in contexts
+        if context.build_filled_order is not None
+    }
     account_sync: AccountSynchronizer = AccountSynchronizer(
         managers,
         ledger,
         resolved_dao,
         now_provider,
-        order_builders={
-            context.name: context.build_filled_order
-            for context in contexts
-            if context.build_filled_order is not None
-        },
+        order_builders=order_builders,
     )
+    # OMS 比逐策略元件先建（它是單例），建構器要等策略都組好才齊
+    order_manager.order_rebuilder = make_order_rebuilder(order_builders, now_provider)
     reconciler: Reconciler = Reconciler(
         ledger,
         managers,
@@ -288,6 +291,49 @@ def build_live_trader(
         now_provider=now_provider,
         parity_checker=parity_checker,
     )
+
+
+def make_order_rebuilder(
+    order_builders: Dict[str, FilledOrderBuilder],
+    now_provider: Callable[[], datetime.datetime] = now_live,
+) -> Callable[[Dict[str, Any]], Optional[BaseOrder]]:
+    """
+    - Description:
+        由 `live_order` 的一列還原原始訂單，給 OMS 重建委託用
+
+        **建構器與帳戶同步共用同一份**（依策略注入，股票還原成 `StockOrder`、
+        期貨還原成 `FuturesOrder`）：各寫一份的話，換月時兩邊會拆出不同的契約。
+        標的或數量是空的列（舊版被清空過的紀錄）還原不出來，回 None。
+    - Parameters:
+        - order_builders: Dict[str, FilledOrderBuilder]
+            `{策略名: 還原訂單的建構器}`；未提供的策略退回股票訂單
+        - now_provider: Callable[[], datetime.datetime]
+            紀錄缺送單時間時的替代值
+    - Return:
+        - Callable[[Dict[str, Any]], Optional[BaseOrder]]
+            還原函式
+    """
+
+    def rebuild(row: Dict[str, Any]) -> Optional[BaseOrder]:
+        if not row.get("symbol") or not int(row.get("volume") or 0):
+            return None
+
+        builder: FilledOrderBuilder = order_builders.get(
+            str(row["strategy_name"]), build_stock_order
+        )
+        created_at: Any = row.get("created_at")
+        return builder(
+            str(row["symbol"]),
+            datetime.datetime.fromisoformat(str(created_at))
+            if created_at
+            else now_provider(),
+            Action(str(row["action"])),
+            PositionType(str(row["position_type"])),
+            float(row.get("price") or 0.0),
+            int(row["volume"]),
+        )
+
+    return rebuild
 
 
 def _build_broker(
