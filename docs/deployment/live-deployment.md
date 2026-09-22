@@ -82,7 +82,7 @@ CRON_TZ=Asia/Taipei
 
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
 - **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商；期貨的尾盤段也要監控時加上 `--expect open=08:30 close=13:28 after_close=14:30`。
-- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發，主機時區要設成台北。
+- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組排程，安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`），存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
 ## 5) 停止與退出碼
