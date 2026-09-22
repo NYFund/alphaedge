@@ -166,7 +166,7 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
                     action=Action.SELL
                     if position.position_type == PositionType.LONG
                     else Action.BUY,
-                    # 方向沿用策略宣告，與改寫前的 `build_order()` 同一個來源
+                    # 方向沿用策略宣告，不看部位本身的方向
                     position_type=self.position_type,
                     order_price=quote.close,
                     volume=position.volume,

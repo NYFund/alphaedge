@@ -2,14 +2,17 @@ from typing import Tuple
 
 import numpy as np
 
-from core.strategies.ridge import ridge_fit_predict, tune_alpha
+from strategy_lab.strategies.tsmc_overnight_signal.ridge import (
+    ridge_fit_predict,
+    tune_alpha,
+)
 
 """
-研究端與 `core/` 必須共用同一份 ridge 實作
+Ridge 實作的行為（截距不正則化、alpha 挑選可重現）
 
-`strategy_lab/` 的研究結論是拿來搬進 `core/` 的；兩邊各留一份實作時，
-哪天有人在其中一邊調了正則化項的處理，訊號會開始分岔而沒有任何跡象——
-而「研究說 Sharpe 2.1、生產跑出 1.3」這種問題查起來極貴。
+原本是「研究端與 `core/` 共用同一份實作」的守門測試，但生產端那支策略已刪除，
+實作也隨之搬回研究層，那個一致性已經沒有對象。**保留的是行為測試**：
+正則化項的處理只要被動過，研究結論就會悄悄改變。
 """
 
 
@@ -23,15 +26,6 @@ def make_dataset(seed: int = 42) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     )
     X_pred: np.ndarray = rng.normal(size=(50, 3))
     return X_train, y_train, X_pred
-
-
-def test_research_imports_the_same_ridge() -> None:
-    """研究端指向的是 `core` 裡**同一個函式物件**，不是另一份相同的程式碼"""
-
-    import strategy_lab.strategies.tsmc_overnight_signal.pipeline as research
-
-    assert research.ridge_fit_predict is ridge_fit_predict
-    assert research.tune_alpha is tune_alpha
 
 
 def test_ridge_does_not_regularise_the_intercept() -> None:

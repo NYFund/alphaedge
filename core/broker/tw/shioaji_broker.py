@@ -25,7 +25,6 @@ from core.models import (
 from core.utils import (
     Action,
     FuturesOCType,
-    InstrumentType,
     LiveOrderStatus,
     PositionType,
     ShortMethod,
@@ -632,9 +631,3 @@ class ShioajiBroker(BaseBroker):
 
         self._require_ready()
         return list(self.quote_stream.get_futures_snapshots(contracts))
-
-    @staticmethod
-    def supported_instruments() -> tuple:
-        """本閘道支援的商品類別"""
-
-        return (InstrumentType.STOCK, InstrumentType.FUTURES)

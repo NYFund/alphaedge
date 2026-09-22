@@ -2,7 +2,7 @@ import datetime
 from typing import Any, List, Optional, Tuple
 
 import pandas as pd
-from dateutil.rrule import DAILY, MONTHLY, rrule
+from dateutil.rrule import DAILY, rrule
 
 
 class TimeUtils:
@@ -36,7 +36,7 @@ class TimeUtils:
             raise ValueError(f"無效的年份輸入：{year}")
 
     @staticmethod
-    def convert_roc_to_ad_year(year: int | str) -> str:
+    def convert_roc_to_ad_year(year: int | str) -> int:
         """將民國年轉為西元年"""
 
         try:
@@ -51,30 +51,6 @@ class TimeUtils:
     ) -> List[datetime.date]:
         """產生從 start_date 到 end_date 的每日日期清單"""
         return [dt.date() for dt in rrule(DAILY, dtstart=start_date, until=end_date)]
-
-    @staticmethod
-    def generate_month_range(
-        start_time: int | datetime.date,
-        end_time: int | datetime.date,
-    ) -> List[int | datetime.date]:
-        """
-        產生從 start_date 到 end_date 的每月清單（取每月的起始日）
-        - 若 start/end 為 datetime.date：返回從 start 到 end 的每月日期列表（取每月的起始日）
-        - 若 start/end 為 int：返回從 start 年到 end 年的 12 個月份（1~12）為單位的 flat list
-        """
-
-        if isinstance(start_time, int) and isinstance(end_time, int):
-            if not (1 <= start_time <= 12 and 1 <= end_time <= 12):
-                raise ValueError("月份應在 1 到 12 之間")
-            return list(range(start_time, end_time + 1))
-        elif isinstance(start_time, datetime.date) and isinstance(
-            end_time, datetime.date
-        ):
-            return [
-                dt.date() for dt in rrule(MONTHLY, dtstart=start_time, until=end_time)
-            ]
-        else:
-            raise ValueError("start 和 end 必須是 int 或 datetime.date")
 
     @staticmethod
     def generate_year_range(

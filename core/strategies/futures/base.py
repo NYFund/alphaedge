@@ -17,7 +17,7 @@ from core.portfolio.construction import (
 )
 from core.portfolio.signal import Signal
 from core.strategies.base import BaseStrategy
-from core.utils import Action, FuturesSession, InstrumentType, Market
+from core.utils import FuturesSession, InstrumentType, Market
 
 """
 BaseFuturesStrategy: 台期貨策略基底
@@ -231,24 +231,6 @@ class BaseFuturesStrategy(BaseStrategy):
 
         return normalize_quote_date(date)
 
-    def build_order(
-        self,
-        quote: FuturesQuote,
-        action: Action,
-        volume: int,
-    ) -> FuturesOrder:
-        """依報價組出一張訂單；方向沿用策略的 `position_type`"""
-
-        return FuturesOrder(
-            product=quote.product,
-            expiry=quote.expiry,
-            date=quote.date,
-            action=action,
-            position_type=self.position_type,
-            price=quote.close,
-            volume=volume,
-        )
-
     # === 結算日：期貨獨有，沒有日曆就只能靠報價消失才發現 ===
     def get_trading_days_to_expiry(self, quote: FuturesQuote) -> Optional[int]:
         """
@@ -264,17 +246,6 @@ class BaseFuturesStrategy(BaseStrategy):
         return self.calendar.get_trading_days_to_expiry(
             self.normalize_quote_date(quote.date), quote.expiry
         )
-
-    def check_near_expiry(self, quote: FuturesQuote, days: int = 0) -> bool:
-        """
-        該契約是否已進入最後 `days` 個交易日（`days=0` 即「今天就是最後交易日」）
-
-        **換月規則由 `roll_config` 決定**，本方法只回答「還剩幾天」這個事實，
-        要不要因此換月由策略決定。
-        """
-
-        remaining: Optional[int] = self.get_trading_days_to_expiry(quote)
-        return remaining is not None and remaining <= days
 
     def filter_session(self, quotes: List[FuturesQuote]) -> List[FuturesQuote]:
         """
@@ -333,19 +304,3 @@ class BaseFuturesStrategy(BaseStrategy):
                 )
             )
         return orders
-
-    def calculate_position_size(
-        self, quotes: List[FuturesQuote], action: Action
-    ) -> List[FuturesOrder]:
-        """
-        計算下單**口數**（不是張數也不是股數）
-
-        受保證金約束，見 `calculate_max_lots()`。
-
-        **已不是必要實作**：開倉改由 `make_portfolio_constructor()` 產生的部位
-        建構器負責，平倉改由 `build_close_orders()` 組裝。
-        """
-
-        raise NotImplementedError(
-            f"{type(self).__name__} 未實作 calculate_position_size()"
-        )

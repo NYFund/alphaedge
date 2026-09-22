@@ -1,5 +1,3 @@
-import datetime
-import random
 import time
 from io import StringIO
 from pathlib import Path
@@ -11,14 +9,12 @@ from loguru import logger
 
 from core.config import (
     FINANCIAL_STATEMENT_DOWNLOADS_PATH,
-    FINANCIAL_STATEMENT_META_DIR_PATH,
 )
 from core.pipeline.shared.base_crawler import BaseDataCrawler
 from core.pipeline.shared.request_utils import RequestUtils
 from core.pipeline.tw.utils.mops_payload import Payload
 from core.pipeline.tw.utils.url_manager import URLManager
-from core.pipeline.utils import FinancialStatementType, ListingBoard
-from core.pipeline.utils.data_utils import DataUtils
+from core.pipeline.utils import ListingBoard
 from core.utils import TimeUtils
 
 
@@ -339,70 +335,3 @@ class FinancialStatementCrawler(BaseDataCrawler):
             f"retries: {stock_id} {year}Q{season}"
         )
         return None
-
-    def get_all_report_columns(
-        self,
-        start_year: Optional[int] = None,
-        end_year: Optional[int] = None,
-        seasons: List[int] = [
-            1,
-            2,
-            3,
-            4,
-        ],
-        stock_id: str = "2330",
-        report_type: FinancialStatementType = FinancialStatementType.BALANCE_SHEET,
-    ) -> List[str]:
-        """取得所有財報的 Columns Name"""
-        """
-        目前能爬取的資料區間
-        上市: 民國 102 (2013) 年 ~ present
-        上櫃: 民國 102 (2013) 年 ~ present
-        """
-        _start_year: int = (
-            start_year if start_year is not None else self.DEFAULT_START_YEAR
-        )
-        _end_year: int = (
-            end_year if end_year is not None else datetime.date.today().year
-        )
-
-        year_list: List[int] = list(range(_start_year, _end_year + 1))
-        all_columns: List[str] = []
-
-        for year in year_list:
-            for season in seasons:
-                if report_type == FinancialStatementType.BALANCE_SHEET:
-                    df_list: Optional[List[pd.DataFrame]] = self.crawl_balance_sheet(
-                        year, season
-                    )
-                elif report_type == FinancialStatementType.COMPREHENSIVE_INCOME:
-                    df_list: Optional[List[pd.DataFrame]] = (
-                        self.crawl_comprehensive_income(year, season)
-                    )
-                elif report_type == FinancialStatementType.CASH_FLOW:
-                    df_list: Optional[List[pd.DataFrame]] = self.crawl_cash_flow(
-                        year, season
-                    )
-                elif report_type == FinancialStatementType.EQUITY_CHANGE:
-                    df_list: Optional[List[pd.DataFrame]] = self.crawl_equity_changes(
-                        year, season, stock_id
-                    )
-                else:
-                    df_list: Optional[List[pd.DataFrame]] = None
-
-                if df_list:
-                    for df in df_list:
-                        all_columns.extend(df.columns)
-            time.sleep(random.uniform(self.CRAWL_DELAY_MIN, self.CRAWL_DELAY_MAX))
-
-        # 去除重複欄位並保留順序
-        unique_columns: List[str] = list(dict.fromkeys(all_columns))
-
-        # Save all columns list as .json in pipeline/downloads/tw_stock/meta/financial_statement
-        dir_path: Path = FINANCIAL_STATEMENT_META_DIR_PATH / report_type.lower()
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-        file_path: Path = dir_path / f"{report_type.lower()}_all_columns.json"
-        DataUtils.save_json(data=unique_columns, file_path=file_path)
-
-        return unique_columns

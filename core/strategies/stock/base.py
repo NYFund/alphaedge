@@ -16,7 +16,6 @@ from core.portfolio.signal import Signal
 from core.portfolio.sizing import BasePositionSizer, EqualWeightSizer
 from core.strategies.base import BaseStrategy
 from core.utils import (
-    Action,
     DayTradeUncoveredPolicy,
     InstrumentType,
     MarginCallPolicy,
@@ -163,8 +162,8 @@ class BaseStockStrategy(BaseStrategy):
         決定（`MomentumStrategy1` 平第一筆部位、`ForeignSellShortDayTradeStrategy`
         合併同標的所有空單，後者逐筆送單會被 `close_position()` 的 FIFO 吃掉）。
 
-        `short_method` 與 `is_day_trade` 不在此填，由 `Backtester._enrich_orders()`
-        依策略設定補值。
+        `short_method` 與 `is_day_trade` 不在此填，由 `StockCostModel.enrich_orders()`
+        依成本設定補值。
         """
 
         orders: List[StockOrder] = []
@@ -184,29 +183,3 @@ class BaseStockStrategy(BaseStrategy):
                 )
             )
         return orders
-
-    def calculate_position_size(
-        self, stock_quotes: List[StockQuote], action: Action
-    ) -> List[StockOrder]:
-        """
-        - Description:
-            計算下單股數，依據當前資金、價格、風控規則決定部位大小
-
-            **已不是必要實作**：開倉改由 `make_portfolio_constructor()` 產生的
-            部位建構器負責，平倉改由 `build_close_orders()` 組裝。尚未搬到分層
-            鉤子的策略仍可自行實作並從 `check_*_signal()` 呼叫。
-        - Parameters:
-            - account: StockAccount
-                交易帳戶資訊
-            - stock_quotes: List[StockQuote]
-                目標股票的報價資訊
-            - action: Action
-                動作類型，例如 Action.OPEN 或 Action.CLOSE
-        - Return:
-            - List[StockOrder]
-                建議下單的股數
-        """
-
-        raise NotImplementedError(
-            f"{type(self).__name__} 未實作 calculate_position_size()"
-        )

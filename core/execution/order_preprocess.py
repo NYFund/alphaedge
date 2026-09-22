@@ -163,7 +163,7 @@ def check_max_holdings(
         引擎側的持倉檔數硬上限
 
         `max_holdings` 原本只是「策略願意遵守才生效」的建議值——引擎讀進來
-        卻從未使用，實際上限由每支策略自己在 `calculate_position_size()` 內把關。
+        卻從未使用，實際上限落在每支策略自己算張數的那段程式裡。
         一支新策略只要不呼叫 sizer 就能無限開倉，且不會有任何警告。
 
         **與 `EqualWeightSizer.size()` 的同名檢查刻意不合併**：那邊是訊號階段
