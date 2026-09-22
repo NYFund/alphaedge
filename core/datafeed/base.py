@@ -6,7 +6,27 @@ from core.models import BaseQuote
 from core.strategies.base import BaseStrategy
 from core.utils import Scale
 
-"""BaseDataFeed: 資料載入、報價轉換與交易日判定"""
+"""
+BaseDataFeed: 資料載入、報價轉換與交易日判定
+
+**引擎與資料源之間的共用契約**：回測與實盤都吃這個介面，所以它不屬於
+`core/backtest/`——放在那裡的話，實盤與策略層為了拿一個介面就得 import 回測套件。
+
+〈三種方法的判準〉本檔是基底類別的範本，新增方法前先決定它屬於哪一種：
+
+1. **真抽象（`@abstractmethod`，不給實作）**：沒有任何通用答案、每個市場都不同，
+   而且**少了它引擎就跑不動**。`setup()`（哪些 API 要建）與
+   `is_market_open()`（交易日怎麼判）屬於這類。
+2. **具體實作（基底就寫完）**：邏輯與市場無關，每個子類抄一次只會抄出分歧。
+   有共用骨架要收的流程也放這裡，把可變的部分留給第 3 種。
+3. **有預設的 hook（基底給一個安全的預設）**：多數市場不需要，少數市場才覆寫。
+   `close()` 預設 no-op、`get_price_limit_basis()` 預設回空 dict 都是——
+   **預設值必須是「安全」而不是「常見」**：沒有除權息公告的市場回空 dict 會少調整
+   幾檔的漲跌停基準，回錯的基準則會讓整段區間偏移。
+
+把第 1 種寫成第 3 種，子類會靜靜沿用一個錯的預設；把第 3 種寫成第 1 種，
+每個子類都被迫寫一份 `pass`，而那等於把「這裡本來就沒事要做」這個資訊丟掉。
+"""
 
 
 class BaseDataFeed(ABC):

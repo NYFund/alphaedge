@@ -12,10 +12,10 @@ from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.api.tw.stock_tick_api import StockTickAPI
-from core.backtest.datafeed.base import BaseDataFeed
 from core.backtest.datafeed.tw.market_calendar import MarketCalendar
 from core.config import TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection, connect_sqlite
+from core.datafeed.base import BaseDataFeed
 from core.models import StockQuote
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.strategies.base import BaseStrategy

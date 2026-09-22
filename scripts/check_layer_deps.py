@@ -58,6 +58,9 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # `core.utils`／`core.config`／`core.api`；需要 `FuturesMarginConfig` 時會 import
     # 同層的 `core.managers`，那會列在 F 區（同層互相 import，僅供人工判讀），是刻意的
     ("core.portfolio", 4, "部位建構層", False),
+    # 引擎 ↔ 資料源的共用契約：回測與實盤共用，**不是**回測概念
+    # （與 `core.portfolio`、`core.execution` 同一個理由）
+    ("core.datafeed", 4, "資料源契約", False),
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
     ("core.backtest.report", 4, "引擎層／報表", False),
