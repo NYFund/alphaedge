@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set
 import pandas as pd
 from loguru import logger
 
+from core.config.schema import PriceColumn
 from core.models import StockQuote, TickQuote
 from core.utils import Scale
 from core.utils.instrument import StockUtils
@@ -194,7 +195,7 @@ class StockQuoteAdapter:
                 收盤價存在且大於 0 為 True
         """
 
-        close: Any = stock.收盤價
+        close: Any = getattr(stock, PriceColumn.CLOSE)
         if close is None or pd.isna(close):
             return False
         return float(close) > 0
@@ -261,12 +262,14 @@ class StockQuoteAdapter:
                 stock_id=stock_id,
                 scale=scale,
                 date=date,
-                cur_price=data.收盤價,
-                volume=StockUtils.convert_share_to_lot(data.成交股數),
-                open=data.開盤價,
-                high=data.最高價,
-                low=data.最低價,
-                close=data.收盤價,
+                cur_price=getattr(data, PriceColumn.CLOSE),
+                volume=StockUtils.convert_share_to_lot(
+                    getattr(data, PriceColumn.SHARES)
+                ),
+                open=getattr(data, PriceColumn.OPEN),
+                high=getattr(data, PriceColumn.HIGH),
+                low=getattr(data, PriceColumn.LOW),
+                close=getattr(data, PriceColumn.CLOSE),
                 adj_close=adj_close,
             )
 
