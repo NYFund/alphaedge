@@ -4,7 +4,6 @@ from typing import Any, Callable, List, Optional
 
 import pandas as pd
 
-from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.config.schema import FuturesPriceColumn
 from core.models import FuturesQuote
 from core.utils import FuturesSession, Scale
@@ -69,45 +68,38 @@ class FuturesQuoteAdapter:
         return FUTURES_MULTIPLIER[product]
 
     @staticmethod
-    def convert_to_day_quotes(
-        data_api: FuturesPriceAPI,
+    def from_day_rows(
+        price_df: pd.DataFrame,
         date: datetime.date,
-        product: Optional[str] = None,
-        session: Optional[FuturesSession] = FuturesSession.DAY,
         multiplier_resolver: Optional[Callable[[str], int]] = None,
     ) -> List[FuturesQuote]:
         """
         - Description:
-            將指定日期的行情轉為 `FuturesQuote` 清單（日級回測用）
+            把當日的行情表轉成 `FuturesQuote` 清單（日級回測用）
 
-            **當日所有到期月都會轉出**，不挑近月；`session` 的語意與
-            `FuturesPriceAPI.get()` 相同（預設日盤）。
+            **當日所有到期月都會轉出**，不挑近月。
+            **查詢由呼叫端負責**：商品與時段是查詢條件，隨查詢一起留在 feed，
+            本層是純轉換，不碰 `core.api`。
         - Parameters:
-            - data_api: FuturesPriceAPI
-                行情 API
+            - price_df: pd.DataFrame
+                當日的行情表（已依商品與時段篩選）
             - date: datetime.date
                 要轉換的日期
-            - product: Optional[str]
-                商品代碼；None 表示所有商品
-            - session: Optional[FuturesSession]
-                交易時段；None 表示日夜盤都取
+            - multiplier_resolver: Optional[Callable[[str], int]]
+                商品代碼 → 契約乘數；None 時用內建對照表
         - Return:
             - List[FuturesQuote]
                 轉換後的報價清單；查無資料時為空 list
         """
 
-        price_df: pd.DataFrame = data_api.get(date, product=product, session=session)
         return FuturesQuoteAdapter.generate_futures_quotes(
             price_df, date, Scale.DAY, multiplier_resolver=multiplier_resolver
         )
 
     @staticmethod
-    def convert_to_combined_quotes(
-        data_api: FuturesPriceAPI,
-        date: datetime.date,
-        night_date: Optional[datetime.date],
-        product: Optional[str] = None,
-        multiplier_resolver: Optional[Callable[[str], int]] = None,
+    def combine_sessions(
+        day_quotes: List[FuturesQuote],
+        night_quotes: List[FuturesQuote],
     ) -> List[FuturesQuote]:
         """
         - Description:
@@ -133,36 +125,19 @@ class FuturesQuoteAdapter:
             **2017-05-15 之前沒有夜盤**，此時整併結果等於日盤本身——那是制度
             而非資料缺漏（見 `FuturesCalendar.NIGHT_SESSION_LAUNCH_DATE`）。
         - Parameters:
-            - data_api: FuturesPriceAPI
-                行情 API
-            - date: datetime.date
-                交易日（取其日盤）
-            - night_date: Optional[datetime.date]
-                夜盤所在日期（＝同一個交易日）；None 時只取日盤
-            - product: Optional[str]
-                商品代碼；None 表示所有商品
+            - day_quotes: List[FuturesQuote]
+                當日日盤的報價
+            - night_quotes: List[FuturesQuote]
+                同一個交易日的夜盤報價；**2017-05-15 之前給空 list**
+                （那是制度而非資料缺漏，見 `FuturesCalendar.NIGHT_SESSION_LAUNCH_DATE`）
         - Return:
             - List[FuturesQuote]
-                整併後的報價；當日無日盤資料時為空 list
+                整併後的報價；日盤為空時回空 list
         """
 
-        day_quotes: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-            data_api,
-            date,
-            product=product,
-            session=FuturesSession.DAY,
-            multiplier_resolver=multiplier_resolver,
-        )
-        if night_date is None:
+        if not night_quotes:
             return [FuturesQuoteAdapter.mark_combined(quote) for quote in day_quotes]
 
-        night_quotes: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-            data_api,
-            night_date,
-            product=product,
-            session=FuturesSession.NIGHT,
-            multiplier_resolver=multiplier_resolver,
-        )
         night_by_contract: dict = {quote.contract_id: quote for quote in night_quotes}
 
         return [

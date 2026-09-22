@@ -318,14 +318,14 @@ def test_real_combined_bar_contains_the_night_session() -> None:
 
     api: FuturesPriceAPI = FuturesPriceAPI()
     try:
-        day_quotes: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-            api, DATE, product="TX", session=FuturesSession.DAY
+        day_quotes: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
+            api.get(DATE, product="TX", session=FuturesSession.DAY), DATE
         )
-        night_quotes: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-            api, DATE, product="TX", session=FuturesSession.NIGHT
+        night_quotes: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
+            api.get(DATE, product="TX", session=FuturesSession.NIGHT), DATE
         )
-        combined: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_combined_quotes(
-            api, DATE, DATE, product="TX"
+        combined: List[FuturesQuote] = FuturesQuoteAdapter.combine_sessions(
+            day_quotes, night_quotes
         )
     finally:
         api.close()
@@ -374,14 +374,15 @@ def test_real_night_open_follows_the_previous_day_close() -> None:
         gap_to_same_day_close: List[float] = []
 
         for previous_day, day in zip(trading_days, trading_days[1:]):
-            night: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-                api, day, product="TX", session=FuturesSession.NIGHT
+            night: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
+                api.get(day, product="TX", session=FuturesSession.NIGHT), day
             )
-            today: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-                api, day, product="TX", session=FuturesSession.DAY
+            today: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
+                api.get(day, product="TX", session=FuturesSession.DAY), day
             )
-            yesterday: List[FuturesQuote] = FuturesQuoteAdapter.convert_to_day_quotes(
-                api, previous_day, product="TX", session=FuturesSession.DAY
+            yesterday: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
+                api.get(previous_day, product="TX", session=FuturesSession.DAY),
+                previous_day,
             )
             if not night or not today or not yesterday:
                 continue

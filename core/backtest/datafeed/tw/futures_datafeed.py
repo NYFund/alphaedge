@@ -1,6 +1,7 @@
 import datetime
 from typing import Callable, Dict, List, Optional, Set
 
+import pandas as pd
 from loguru import logger
 
 from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
@@ -269,28 +270,45 @@ class TwFuturesDataFeed(BaseDataFeed):
         # products 為空時以 [None] 跑一輪，代表「不過濾商品」
         for product in self.products or [None]:
             if self.session == FuturesSession.COMBINED:
-                quotes.extend(
-                    FuturesQuoteAdapter.convert_to_combined_quotes(
-                        self.futures_price,
-                        date,
-                        self.get_night_session_date(date),
-                        product=product,
-                        multiplier_resolver=resolver,
+                # **查詢在 feed、整併在 adapter**：日夜盤各查一次，
+                # 夜盤日期為 None（2017-05-15 前無夜盤）時傳空 list
+                day_quotes: List[FuturesQuote] = self.load_session_quotes(
+                    date, product, FuturesSession.DAY, resolver
+                )
+                night_date: Optional[datetime.date] = self.get_night_session_date(date)
+                night_quotes: List[FuturesQuote] = (
+                    []
+                    if night_date is None
+                    else self.load_session_quotes(
+                        night_date, product, FuturesSession.NIGHT, resolver
                     )
+                )
+                quotes.extend(
+                    FuturesQuoteAdapter.combine_sessions(day_quotes, night_quotes)
                 )
                 continue
 
             quotes.extend(
-                FuturesQuoteAdapter.convert_to_day_quotes(
-                    self.futures_price,
-                    date,
-                    product=product,
-                    session=self.session,
-                    multiplier_resolver=resolver,
-                )
+                self.load_session_quotes(date, product, self.session, resolver)
             )
 
         return quotes
+
+    def load_session_quotes(
+        self,
+        date: datetime.date,
+        product: Optional[str],
+        session: Optional[FuturesSession],
+        resolver: Callable[[str], int],
+    ) -> List[FuturesQuote]:
+        """查一個（日期, 商品, 時段）的行情並轉成報價；查詢責任留在資料源這一側"""
+
+        price_df: pd.DataFrame = self.futures_price.get(
+            date, product=product, session=session
+        )
+        return FuturesQuoteAdapter.from_day_rows(
+            price_df, date, multiplier_resolver=resolver
+        )
 
     def resolve_multiplier(self, product: str, date: datetime.date) -> int:
         """

@@ -1,10 +1,10 @@
 import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
-from core.adapters import StockQuoteAdapter
+from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.api.tw.financial_statement_api import FinancialStatementAPI
 from core.api.tw.monthly_revenue_report_api import MonthlyRevenueReportAPI
 from core.api.tw.stock_chip_api import StockChipAPI
@@ -186,9 +186,15 @@ class TwStockDataFeed(BaseDataFeed):
         """
 
         if scale == Scale.TICK:
-            return StockQuoteAdapter.convert_to_tick_quotes(self.tick, date)
+            # 一次取一天的 tick，避免資料量太大 RAM 爆掉
+            ticks: pd.DataFrame = self.tick.get_ordered_ticks(date, date)
+            return StockQuoteAdapter.from_tick_rows(ticks, date)
 
-        return StockQuoteAdapter.convert_to_day_quotes(self.price, date, adjusted)
+        price_df: pd.DataFrame = self.price.get(date)
+        adjusted_close_map: Dict[str, Any] = (
+            self.price.get_adjusted_close_map(date) if adjusted else {}
+        )
+        return StockQuoteAdapter.from_day_rows(price_df, date, adjusted_close_map)
 
     def get_price_limit_basis(self, date: datetime.date) -> Dict[str, float]:
         """

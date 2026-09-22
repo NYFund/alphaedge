@@ -383,7 +383,9 @@ def test_backtest_roll_dates_match_the_continuous_table() -> None:
 
         backtest_rolls: List[str] = []
         for index, date in enumerate(trading_days):
-            quotes = FuturesQuoteAdapter.convert_to_day_quotes(api, date, product="TX")
+            quotes = FuturesQuoteAdapter.from_day_rows(
+                api.get(date, product="TX"), date
+            )
             quotes = [quote for quote in quotes if "W" not in quote.expiry]
             if not quotes:
                 continue

@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Set, Tuple
     4. 跨軸目錄污染：每層目錄只承載一條軸（市場 `tw/`／`us/` 或商品類別 `stock/`／`futures/`）
     5. `sys.path` 注入：專案已以 editable 方式安裝，逐處列出以便複查
     6. 資料庫驅動外洩：`core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
+    7. 純轉換層做 I/O：`core/adapters/` 不得 import `core.api`、`core.dao` 或資料庫驅動
 - 使用場景:
     python scripts/check_layer_deps.py            # 只印報告，違規時以非零狀態碼結束
     python scripts/check_layer_deps.py --edges     # 另外把所有跨套件的 import 邊倒出來
@@ -429,6 +430,12 @@ def check_strategy_facades(graph: Dict[str, Set[str]]) -> List[str]:
 
 
 # 只有 DAO 層可以直接碰資料庫驅動；其餘一律經由 `core.dao`
+# 純轉換層：不得自己查資料。`core/adapters/` 只把來源資料轉成報價模型，
+# 查詢由資料源（feed）負責——adapter 自己查會讓轉換規則綁死在一個 API 上，
+# 換一個來源就得重寫一份，而且測試為了驗一條規則得先有連線
+_PURE_TRANSFORM_DIRS: Tuple[str, ...] = ("core/adapters",)
+_PURE_TRANSFORM_FORBIDDEN: Tuple[str, ...] = ("core.api", "core.dao", "sqlite3")
+
 _DB_DRIVER_MODULES: Set[str] = {"sqlite3"}
 _DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "tasks")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
@@ -471,6 +478,44 @@ def check_db_driver_imports(files: List[Path]) -> List[str]:
                 modules = [node.module]
             for module in modules:
                 if module.split(".")[0] in _DB_DRIVER_MODULES:
+                    hits.append(f"{rel}:{node.lineno}: import {module}")
+    return hits
+
+
+def check_pure_transform_layers(files: List[Path]) -> List[str]:
+    """
+    - Description:
+        純轉換層不得 import 資料層或資料庫驅動
+
+        「adapter 不做 I/O」原本只是慣例，而慣例擋不住下一個人照舊寫法再加一個
+        `convert_to_xxx(data_api, ...)`——那正是這些 entry point 原本的長相。
+        以 AST 判定，說明文字裡提到的字樣不算。
+    - Parameters:
+        - files: List[Path]
+            要掃的檔案
+    - Return:
+        - List[str]
+            `檔案:行號: import 敘述` 清單
+    """
+
+    hits: List[str] = []
+    for path in files:
+        rel: str = path.relative_to(_PROJECT_ROOT).as_posix()
+        if not rel.startswith(tuple(f"{d}/" for d in _PURE_TRANSFORM_DIRS)):
+            continue
+        try:
+            tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            modules: List[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                modules = [node.module]
+            for module in modules:
+                if module.startswith(_PURE_TRANSFORM_FORBIDDEN):
                     hits.append(f"{rel}:{node.lineno}: import {module}")
     return hits
 
@@ -580,6 +625,7 @@ def main() -> int:
     facades: List[str] = check_strategy_facades(graph)
     sys_path_hits: List[str] = check_sys_path(files)
     db_driver_hits: List[str] = check_db_driver_imports(files)
+    pure_transform_hits: List[str] = check_pure_transform_layers(files)
 
     def section(title: str, items: List[str]) -> None:
         print(f"\n=== {title}（{len(items)}）===")
@@ -597,6 +643,7 @@ def main() -> int:
     section("E. 跨軸目錄污染", axis)
     section("E'. 策略套件門面 eager import 具體策略", facades)
     section("E''. DAO 以外 import 資料庫驅動（core／tasks）", db_driver_hits)
+    section("E'''. 純轉換層 import 資料層（core/adapters）", pure_transform_hits)
     section("F. 同層不同套件互相 import（僅列出，需人工判讀）", same_layer)
     section("G. sys.path 注入（僅列出）", sys_path_hits)
     if args.edges:
@@ -610,6 +657,7 @@ def main() -> int:
         + len(axis)
         + len(facades)
         + len(db_driver_hits)
+        + len(pure_transform_hits)
     )
     print(f"\n違規總數：{violations}")
     return 1 if violations else 0

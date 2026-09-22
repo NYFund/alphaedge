@@ -4,8 +4,6 @@ from typing import Any, Dict, List, Optional, Set
 import pandas as pd
 from loguru import logger
 
-from core.api.tw.stock_price_api import StockPriceAPI
-from core.api.tw.stock_tick_api import StockTickAPI
 from core.models import StockQuote, TickQuote
 from core.utils import Scale
 from core.utils.instrument import StockUtils
@@ -20,63 +18,58 @@ class StockQuoteAdapter:
     """
 
     @staticmethod
-    def convert_to_tick_quotes(
-        data_api: StockTickAPI, date: datetime.date
-    ) -> List[StockQuote]:
+    def from_tick_rows(ticks: pd.DataFrame, date: datetime.date) -> List[StockQuote]:
         """
         - Description:
-            將指定日期的 Tick 資料轉換為 StockQuote 物件列表，用於 Tick 級回測
+            把當日的 tick 表轉成 `StockQuote`
+
+            **查詢由呼叫端負責**：本層是純轉換，自己查資料會讓
+            `core.adapters` 相依 `core.api`，也讓測試為了驗一條轉換規則
+            得先有連線或先造假 API。tick 一次只取一天，避免 RAM 爆掉，
+            那個限制留在 feed 那一側。
         - Parameters:
-            - data_api: StockTickAPI
-                StockTickAPI 物件
+            - ticks: pd.DataFrame
+                當日的 tick 表
             - date: datetime.date
                 要轉換的日期
         - Returns:
             - List[StockQuote]
                 轉換後的 StockQuote 物件列表
-        - Notes:
-            一次取一天的 tick 資料，避免資料量太大 RAM 爆掉
         """
-
-        # 一次取一天的 tick 資料，避免資料量太大 RAM 爆掉
-        ticks: pd.DataFrame = data_api.get_ordered_ticks(date, date)
 
         return StockQuoteAdapter.generate_stock_quotes(ticks, date, Scale.TICK)
 
     @staticmethod
-    def convert_to_day_quotes(
-        data_api: StockPriceAPI,
+    def from_day_rows(
+        price_df: pd.DataFrame,
         date: datetime.date,
-        adjusted: bool = False,
+        adjusted_close_map: Optional[Dict[str, Any]] = None,
     ) -> List[StockQuote]:
         """
         - Description:
-            將指定日期的 Stock Price API 日資料轉換為 StockQuote 物件列表，用於日級回測
+            把當日的價格表轉成 `StockQuote`；還原價由呼叫端備好後傳入
         - Parameters:
-            - data_api: StockPriceAPI
-                StockPriceAPI 物件
+            - price_df: pd.DataFrame
+                當日全市場的價格表
             - date: datetime.date
                 要轉換的日期
+            - adjusted_close_map: Optional[Dict[str, Any]]
+                `{stock_id: 還原收盤價}`；不還原時給 None
         - Returns:
             - List[StockQuote]
                 轉換後的 StockQuote 物件列表
                 Ex: [StockQuote(stock_id='0050', scale=Scale.DAY, date=datetime.date(2025, 7, 1), cur_price=48.64, volume=77081298, open=48.38, high=49.15, low=48.38, close=48.64, tick=None), StockQuote(stock_id='0051', scale=Scale.DAY, date=datetime.date(2025, 7, 1), cur_price=48.64, volume=77081298, open=48.38, high=49.15, low=48.38, close=48.64, tick=None), ...]
         """
 
-        price_df: pd.DataFrame = data_api.get(date)
-
         # 還原價只掛在 adj_close，OHLC 一律維持原始成交價；
-        # 未啟用時 adj_close 為 None，StockQuote.signal_close 會退回 close，行為零改變
-        adjusted_close_map: Dict[str, Any] = (
-            data_api.get_adjusted_close_map(date) if adjusted else {}
-        )
+        # 未啟用時 adj_close 為空，StockQuote.signal_close 會退回 close，行為零改變
 
         # Type: Pandas(date='2025-07-01', stock_id='0050', 證券名稱='元大台灣50', 開盤價=48.38, 最高價=49.15, 最低價=48.38, 收盤價=48.64, 漲跌價差=0.28, 成交股數=77081298, 成交金額=3767256390, 成交筆數=50311, 最後揭示買價=48.63, 最後揭示買量=89, 最後揭示賣價=48.64, 最後揭示賣量=104, 本益比=0.0)
         # Ex: [Pandas(date='2025-07-01', stock_id='0050',...), Pandas(date='2025-07-01', stock_id='0051',...), ...]
         price_rows: List[Any] = [row for row in price_df.itertuples(index=False)]
 
         return StockQuoteAdapter.generate_stock_quotes(
-            price_rows, date, Scale.DAY, adjusted_close_map
+            price_rows, date, Scale.DAY, adjusted_close_map or {}
         )
 
     @staticmethod
