@@ -50,7 +50,10 @@ from core.live.risk.trading_mode import TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
 from core.managers.base.position_manager import BasePositionManager
-from core.managers.futures.position_manager import FuturesPositionManager
+from core.managers.futures.position_manager import (
+    FuturesMarginConfig,
+    FuturesPositionManager,
+)
 from core.managers.stock.position_manager import StockPositionManager
 from core.models import BaseOrder, FuturesAccount, FuturesOrder, StockAccount
 from core.strategies.base import BaseStrategy
@@ -286,6 +289,16 @@ def build_live_trader(
         run_id=resolved_run_id,
         schedule=_merge_schedules(schedules),
         dry_run=dry_run,
+        simulation=simulation,
+        # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
+        margin_query=(
+            getattr(resolved_broker, "get_futures_account", None)
+            if any(
+                context.calculate_opening_requirement is not None
+                for context in contexts
+            )
+            else None
+        ),
         resume_trading=resume_trading,
         notifier=notifier,
         now_provider=now_provider,
@@ -380,16 +393,29 @@ def _build_context(
         spec: TwStockSpec = TwStockSpec()
         schedule: SegmentSchedule = TW_STOCK_SEGMENTS
         build_order: FilledOrderBuilder = build_stock_order
+        opening_requirement: Optional[Callable[[BaseOrder], float]] = None
 
     elif market == Market.TW and instrument == InstrumentType.FUTURE:
         futures_account: FuturesAccount = FuturesAccount(
             init_capital=strategy.init_capital
         )
         account = futures_account
-        manager = FuturesPositionManager(
-            futures_account, TwFuturesCostModel(FuturesCostConfig.default())
+        # 保證金設定與回測同一套：策略沒宣告就預設查表，並回寫給策略，
+        # 讓策略層與部位管理層算的每口保證金是同一份（表由資料源注入）
+        margin_config: FuturesMarginConfig = (
+            getattr(strategy, "margin_config", None) or FuturesMarginConfig.default()
         )
-        feed = TwFuturesLiveDataFeed(broker, now_provider=now_provider)
+        strategy.margin_config = margin_config
+        futures_manager: FuturesPositionManager = FuturesPositionManager(
+            futures_account,
+            TwFuturesCostModel(FuturesCostConfig.default()),
+            margin_config=margin_config,
+        )
+        manager = futures_manager
+        feed = TwFuturesLiveDataFeed(
+            broker, now_provider=now_provider, margin_config=margin_config
+        )
+        opening_requirement = _make_opening_requirement(futures_manager, now_provider)
         spec = TwFuturesSpec()
         schedule = TW_FUTURES_SEGMENTS
         build_order = _build_futures_order
@@ -409,8 +435,25 @@ def _build_context(
         symbols=list(getattr(strategy, "symbols", []) or []),
         calculate_notional=_make_notional_calculator(spec),
         build_filled_order=build_order,
+        calculate_opening_requirement=opening_requirement,
     )
     return (context, schedule)
+
+
+def _make_opening_requirement(
+    manager: FuturesPositionManager, now_provider: Callable[[], datetime.datetime]
+) -> Callable[[BaseOrder], float]:
+    """
+    期貨開倉需要的資金，**以今天查保證金表**
+
+    策略產生的訂單日期是訊號所依據的那根 bar（前一交易日），保證金卻要用
+    送單當天生效的那一檔——期交所調整保證金的生效日正是用來決定這件事的。
+    """
+
+    def calculate(order: BaseOrder) -> float:
+        return manager.calculate_opening_requirement(order, now_provider().date())
+
+    return calculate
 
 
 def make_daily_backtest_runner(
