@@ -1,7 +1,8 @@
+import contextlib
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from core.config import (
     LIVE_ACCOUNT_SNAPSHOT_TABLE_NAME,
@@ -516,11 +517,20 @@ class LiveTradeDAO(BaseDAO):
         )
         self.conn.commit()
 
-    def insert_risk_event(self, row: Dict[str, Any]) -> None:
-        """寫入一筆風控事件"""
+    def insert_risk_event(self, row: Dict[str, Any], commit: bool = True) -> None:
+        """
+        - Description:
+            寫入一筆風控事件
+        - Parameters:
+            - row: Dict[str, Any]
+                欄位字典
+            - commit: bool
+                寫完是否立即 commit；要與其他異動包進同一個交易時傳 False
+        """
 
         self._insert(LIVE_RISK_EVENT_TABLE_NAME, row)
-        self.conn.commit()
+        if commit:
+            self.conn.commit()
 
     def upsert_strategy_mode(self, row: Dict[str, Any]) -> None:
         """寫入或更新某支策略的交易模式"""
@@ -825,6 +835,30 @@ class LiveTradeDAO(BaseDAO):
         """寫入一筆實盤與回測的委託 diff"""
 
         self._upsert(LIVE_PARITY_DIFF_TABLE_NAME, row, ("date", "strategy_name", "seq"))
+
+    # === 交易 ===
+    @contextlib.contextmanager
+    def savepoint(self, name: str) -> Iterator[None]:
+        """
+        - Description:
+            把區塊內的寫入包成一個 savepoint：全部成功才 commit，任何例外整批回滾
+
+            區塊內呼叫的寫入方法**不可自己 commit**（例如 `insert_risk_event` 要傳
+            `commit=False`），否則 commit 之前的那些寫入就回滾不掉了。
+        - Parameters:
+            - name: str
+                savepoint 名稱（只能是識別字，不接受外部輸入）
+        """
+
+        self.conn.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except BaseException:
+            self.conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            self.conn.execute(f"RELEASE SAVEPOINT {name}")
+            raise
+        self.conn.execute(f"RELEASE SAVEPOINT {name}")
+        self.conn.commit()
 
     # === 內部 ===
     def _insert(self, table: str, row: Dict[str, Any]) -> sqlite3.Cursor:

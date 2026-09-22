@@ -126,28 +126,57 @@ class PositionAttributionLedger:
             if gap <= 0:
                 continue
 
-            moment: datetime.datetime = self._now()
-            lot_id: str = self._next_lot_id(moment)
-            self.dao.open_lot(
-                {
-                    "lot_id": lot_id,
-                    "strategy_name": UNATTRIBUTED_STRATEGY,
-                    "symbol": position.symbol,
-                    "direction": position.direction.value,
-                    "volume": gap,
-                    "open_date": moment.date(),
-                    "open_price": position.avg_price,
-                    "client_order_id": None,
-                }
-            )
-            created.append(lot_id)
-            logger.warning(
-                f"券商部位 {position.symbol} {position.direction.value} {gap} "
-                f"在歸屬帳中查無來源，已收進 {UNATTRIBUTED_STRATEGY}（只允許平倉）"
+            created.append(
+                self.add_unattributed_lot(
+                    position.symbol, position.direction.value, gap, position.avg_price
+                )
             )
 
         self.dao.conn.commit()
         return created
+
+    def add_unattributed_lot(
+        self, symbol: str, direction: str, volume: int, open_price: float
+    ) -> str:
+        """
+        - Description:
+            新增一筆 `__unattributed__` lot，**不 commit**
+
+            不 commit 是為了讓呼叫端把多筆異動包進同一個交易：以券商部位重建時，
+            收進未歸屬與扣減既有 lot 要嘛全部生效、要嘛全部不生效。
+        - Parameters:
+            - symbol: str
+                商品代號
+            - direction: str
+                多空方向（`PositionType` 的值）
+            - volume: int
+                收進的數量
+            - open_price: float
+                開倉價；券商只給得出均價
+        - Return:
+            - str
+                新建的 `lot_id`
+        """
+
+        moment: datetime.datetime = self._now()
+        lot_id: str = self._next_lot_id(moment)
+        self.dao.open_lot(
+            {
+                "lot_id": lot_id,
+                "strategy_name": UNATTRIBUTED_STRATEGY,
+                "symbol": symbol,
+                "direction": direction,
+                "volume": volume,
+                "open_date": moment.date(),
+                "open_price": open_price,
+                "client_order_id": None,
+            }
+        )
+        logger.warning(
+            f"券商部位 {symbol} {direction} {volume} "
+            f"在歸屬帳中查無來源，已收進 {UNATTRIBUTED_STRATEGY}（只允許平倉）"
+        )
+        return lot_id
 
     # === 平倉 ===
     def close_lots(

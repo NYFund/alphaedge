@@ -449,10 +449,11 @@ def test_exit_codes_are_distinct() -> None:
         run_module.EXIT_RECONCILE_MISMATCH,
         run_module.EXIT_KILL_SWITCH,
         run_module.EXIT_MODE_NOT_NORMAL,
+        run_module.EXIT_RESYNC_PLAN_ONLY,
     ]
 
     assert len(set(codes)) == len(codes)
-    assert codes == [2, 3, 4, 5, 6]
+    assert codes == [2, 3, 4, 5, 6, 7]
 
 
 def test_backtest_path_is_untouched() -> None:

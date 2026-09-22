@@ -30,7 +30,11 @@ from core.strategies.strategy_loader import StrategyLoader
 # 4  對帳不一致
 # 5  kill switch 生效
 # 6  上次結束時**帳戶層**交易模式非 NORMAL，本次未帶 --resume-trading
+# 7  --resync-from-broker 只列出重建計畫、沒有寫入（未帶 --confirm-resync）
 #
+# **`7` 不是 0**：只列計畫代表歸屬帳仍與券商不一致，排程不可把它當成已處理。
+# 重建被拒絕（歸屬帳已損壞、或仍有未終結的委託）回 `4`：與對帳不一致同一件事，
+# 都要人工處理。
 # **`6` 要和 `4`、`5` 分開**：排程看到 4／5 是「今天剛出事」，看到 6 是
 # 「昨天出的事還沒有人處理」，兩者的處理急迫性不同。
 # **策略層降級不走退出碼**：那會讓一支策略的降級擋掉整個排程，
@@ -49,6 +53,10 @@ EXIT_STALE_DATA: int = 3
 EXIT_RECONCILE_MISMATCH: int = 4
 EXIT_KILL_SWITCH: int = 5
 EXIT_MODE_NOT_NORMAL: int = 6
+EXIT_RESYNC_PLAN_ONLY: int = 7
+
+# 以券商部位重建時寫進 `live_run.phase` 的值；它不是交易段落，存活監控不會等它
+RESYNC_PHASE: str = "resync"
 
 # 段落名 → 執行段落。`after_close` 不在表內：盤後作業不送新倉單，
 # `run_live()` 另走 `run_after_close()` 那條流程
@@ -148,7 +156,15 @@ def _add_live_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--resync-from-broker",
         action="store_true",
-        help="以券商部位重建本地部位（尚未實作；帶上會以用法錯誤拒絕）",
+        help=(
+            "以券商部位重建歸屬帳（獨立作業，不跑段落、不可與 --phase 併用）；"
+            "只帶這個旗標時只列出計畫，不寫入"
+        ),
+    )
+    group.add_argument(
+        "--confirm-resync",
+        action="store_true",
+        help="確認寫入重建計畫（與 --resync-from-broker 併用）",
     )
     group.add_argument(
         "--resume-trading",
@@ -186,18 +202,13 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
     from core.live.risk.trading_mode import TradingMode
     from core.utils import ExecutionTiming
 
-    if args.phase is None:
-        print("實盤模式必須指定 --phase", file=sys.stderr)
+    usage_error: str = _check_resync_arguments(args)
+    if usage_error:
+        print(usage_error, file=sys.stderr)
         return EXIT_USAGE
 
-    if args.resync_from_broker:
-        # 重建流程還沒接上：以前帶上旗標和沒帶一樣，會默默走一般流程——
-        # 人工確認要重建之後，實際上什麼都沒重建，對帳照樣不一致、照樣以結束碼 4 退出
-        print(
-            "--resync-from-broker 尚未實作：目前沒有以券商部位重建本地部位的流程，"
-            "請人工處理歸屬帳（live_position_lot）後再啟動",
-            file=sys.stderr,
-        )
+    if args.phase is None and not args.resync_from_broker:
+        print("實盤模式必須指定 --phase", file=sys.stderr)
         return EXIT_USAGE
 
     if not args.simulation and not args.confirm_production:
@@ -234,13 +245,18 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
             simulation=args.simulation,
             dry_run=args.dry_run,
             resume_trading=args.resume_trading is not None,
-            phase=args.phase,
+            phase=RESYNC_PHASE if args.resync_from_broker else args.phase,
         )
     except (UnsupportedMarketError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
 
     environment: str = "模擬" if args.simulation else "**正式**"
+
+    if args.resync_from_broker:
+        print(f"以券商部位重建歸屬帳：{environment}環境、策略 {names}")
+        return _run_resync(trader, args.confirm_resync)
+
     print(f"實盤啟動：{environment}環境、段落 {args.phase}、策略 {names}")
 
     try:
@@ -261,6 +277,78 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         return EXIT_STALE_DATA
 
     return _resolve_live_exit_code(trader, TradingMode)
+
+
+def _check_resync_arguments(args: argparse.Namespace) -> str:
+    """
+    - Description:
+        重建相關旗標的組合檢查；合法時回空字串
+
+        重建是**獨立作業**：不跑段落，也不恢復交易模式。與 `--phase` 併用的話，
+        人會以為重建完接著跑了段落；與 `--resume-trading` 併用的話，
+        重建結果還沒人看過，降級就已經解除了。
+    - Parameters:
+        - args: argparse.Namespace
+            命令列參數
+    - Return:
+        - str
+            錯誤訊息；合法時為空字串
+    """
+
+    if args.confirm_resync and not args.resync_from_broker:
+        return "--confirm-resync 必須與 --resync-from-broker 併用"
+    if not args.resync_from_broker:
+        return ""
+    if args.phase is not None:
+        return "--resync-from-broker 是獨立作業，不可與 --phase 併用"
+    if args.resume_trading is not None:
+        return (
+            "--resync-from-broker 不可與 --resume-trading 併用："
+            "請先確認重建結果，再另外以 --resume-trading 恢復交易"
+        )
+    return ""
+
+
+def _run_resync(trader: object, confirm: bool) -> int:
+    """
+    - Description:
+        執行以券商部位重建歸屬帳，並把結果翻譯成退出碼
+    - Parameters:
+        - trader: object
+            組裝好的引擎
+        - confirm: bool
+            是否寫入
+    - Return:
+        - int
+            退出碼
+    """
+
+    from core.live.attribution.resync import ResyncPlan, ResyncRefusedError
+    from core.live.risk.trading_mode import TradingMode
+
+    try:
+        plan: ResyncPlan = trader.resync_from_broker(confirm)
+    except ResyncRefusedError as exc:
+        print(f"拒絕重建：{exc}", file=sys.stderr)
+        return EXIT_RECONCILE_MISMATCH
+
+    for line in plan.describe():
+        print(line)
+
+    if plan.actions and not confirm:
+        print(
+            "以上為重建計畫，尚未寫入；確認後加上 --confirm-resync 再執行一次",
+            file=sys.stderr,
+        )
+        return EXIT_RESYNC_PLAN_ONLY
+
+    code: int = _resolve_live_exit_code(trader, TradingMode)
+    if code == EXIT_MODE_NOT_NORMAL:
+        print(
+            "帳戶層交易模式仍非 NORMAL：確認重建結果無誤後，以 --resume-trading 恢復",
+            file=sys.stderr,
+        )
+    return code
 
 
 def _resolve_live_exit_code(trader: object, trading_mode: object) -> int:
