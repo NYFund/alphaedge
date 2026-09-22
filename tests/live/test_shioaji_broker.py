@@ -363,7 +363,28 @@ def test_cancel_uses_the_stored_trade(broker: ShioajiBroker, api: FakeApi) -> No
     broker.cancel_order(ticket)
 
     assert len(api.cancelled) == 1
-    assert ticket.status is LiveOrderStatus.CANCELLED
+
+
+def test_cancel_and_update_do_not_touch_status_or_filled_volume(
+    broker: ShioajiBroker,
+) -> None:
+    """
+    撤單與改價不回填狀態與成交量
+
+    撤單請求不等於撤單成功，撤單前撮合的量照樣會以成交回報進來；
+    閘道在這裡把狀態改成 CANCELLED、把成交量覆寫成券商的累計量的話，
+    OMS 看到狀態相同就不寫 DB，同一筆成交的回報再進來又會重複累加。
+    """
+
+    ticket: OrderTicket = broker.place_order(make_ticket())
+    ticket.status = LiveOrderStatus.PARTIALLY_FILLED
+    ticket.filled_volume = 1
+
+    broker.update_order_price(ticket, price=1003.2)
+    broker.cancel_order(ticket)
+
+    assert ticket.status is LiveOrderStatus.PARTIALLY_FILLED
+    assert ticket.filled_volume == 1
 
 
 def test_cancel_of_terminal_order_is_a_no_op(

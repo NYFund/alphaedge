@@ -284,7 +284,9 @@ class ShioajiBroker(BaseBroker):
 
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
         self._apply_trade(
-            ticket, api.cancel_order(trade, timeout=self.ORDER_TIMEOUT_MS)
+            ticket,
+            api.cancel_order(trade, timeout=self.ORDER_TIMEOUT_MS),
+            apply_status=False,
         )
         ticket.updated_at = self._now()
         return ticket
@@ -316,6 +318,7 @@ class ShioajiBroker(BaseBroker):
         self._apply_trade(
             ticket,
             api.update_order(trade, price=aligned, timeout=self.ORDER_TIMEOUT_MS),
+            apply_status=False,
         )
         ticket.updated_at = self._now()
         return ticket
@@ -423,8 +426,25 @@ class ShioajiBroker(BaseBroker):
         )
 
     # === 委託狀態轉換 ===
-    def _apply_trade(self, ticket: OrderTicket, trade: Any) -> None:
-        """把 Shioaji 的 `Trade` 回填到本地委託"""
+    def _apply_trade(
+        self, ticket: OrderTicket, trade: Any, apply_status: bool = True
+    ) -> None:
+        """
+        - Description:
+            把 Shioaji 的 `Trade` 回填到本地委託
+
+            **撤單與改價不回填狀態與成交量**（`apply_status=False`）：委託送出之後，
+            狀態只能由 OMS 經狀態機推進、成交量只能由成交回報累加。這裡直接改的話，
+            OMS 看到狀態已相同就不寫 DB；成交量被覆寫成券商的累計量後，
+            同一筆成交的回報再進來又會重複累加。撤單結果另有撤單回報。
+        - Parameters:
+            - ticket: OrderTicket
+                本地委託
+            - trade: Any
+                Shioaji 的 `Trade`
+            - apply_status: bool
+                是否回填狀態、成交量與原因；只有送單當下（OMS 隨後以狀態機套用）才要
+        """
 
         order: Any = getattr(trade, "order", None)
         status: Any = getattr(trade, "status", None)
@@ -436,7 +456,7 @@ class ShioajiBroker(BaseBroker):
             if custom_field and not ticket.custom_field:
                 ticket.custom_field = custom_field
 
-        if status is not None:
+        if status is not None and apply_status:
             ticket.status = self.to_live_status(getattr(status, "status", None))
             ticket.filled_volume = int(getattr(status, "deal_quantity", 0) or 0)
             ticket.reject_reason = str(getattr(status, "msg", "") or "") or None

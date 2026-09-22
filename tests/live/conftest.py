@@ -1,6 +1,6 @@
 import datetime
 import itertools
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import pytest
 
@@ -10,6 +10,7 @@ from core.models import (
     BrokerAccountSnapshot,
     BrokerPositionSnapshot,
     ExecutionReport,
+    OrderStatusEvent,
     OrderTicket,
     StockOrder,
     StockQuote,
@@ -69,7 +70,7 @@ class FakeBroker(BaseBroker):
         # 觀測用
         self.placed_count: int = 0
         self.cancel_requests: List[str] = []
-        self.pending_reports: List[ExecutionReport] = []
+        self.pending_reports: List[Any] = []  # 成交回報與撤單回報
 
     # === 連線 ===
     def connect(self) -> None:
@@ -154,8 +155,26 @@ class FakeBroker(BaseBroker):
         if ticket.is_terminal:
             return ticket
 
+        # 與真券商相同（2026-09-22 模擬環境實測）：撤單請求**不改本地狀態**，
+        # 券商另推一筆 `op_type='Cancel'` 的委託回報，由 OMS 消化後才轉 CANCELLED。
+        # 以前這裡直接改 ticket 的狀態，於是「撤單請求一送出就轉終態」這個 bug
+        # 在假券商上永遠測不出來
         self.cancel_requests.append(ticket.client_order_id)
-        ticket.status = LiveOrderStatus.CANCELLED
+        event: OrderStatusEvent = OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "",
+            broker_order_id=ticket.broker_order_id,
+            op_type="Cancel",
+            op_code="00",
+            symbol=ticket.order.symbol if ticket.order is not None else "",
+            custom_field=ticket.custom_field or "",
+            exchange_ts=datetime.datetime(2026, 9, 19, 13, 26)
+            + datetime.timedelta(seconds=len(self.cancel_requests)),
+            raw={"source": "FakeBroker"},
+        )
+        if self.defer_reports:
+            self.pending_reports.append(event)
+        else:
+            self.execution_queue.put(event)
         return ticket
 
     def update_order_price(self, ticket: OrderTicket, price: float) -> OrderTicket:
