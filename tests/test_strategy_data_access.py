@@ -162,7 +162,7 @@ def test_momentum_strategy_rejects_tick_scale() -> None:
     TICK 級別要當場擋下，不是等到第一根 bar 才崩
 
     本策略的訊號建立在「前一交易日收盤」上，TICK 路徑只會掛 `self.tick`、
-    `self.price` 維持 None，第一根 bar 就會撞 `ValueError("Invalid API type")`。
+    `self.price` 維持 None，第一根 bar 就會拿著 None 去查價格表而崩。
     """
 
     import pytest

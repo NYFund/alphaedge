@@ -95,9 +95,8 @@ class MomentumStrategy1(BaseStockStrategy):
 
             **TICK 級別當場擋下**：本策略的訊號建立在「前一交易日
             收盤」上，TICK 路徑只會掛 `self.tick`、`self.price` 維持 None，
-            第一根 bar 就會在 `get_previous_trading_date()` 撞
-            `ValueError("Invalid API type")`。docstring 寫的是「日線」，
-            但沒有任何東西擋住把 `scale` 改成 TICK。
+            第一根 bar 就會在 `get_previous_trading_date()` 拿 None 去查價格表而崩。
+            class docstring 寫的是「日線」，但沒有任何東西擋住把 `scale` 改成 TICK。
         - Parameters:
             - feed: BaseDataFeed
                 引擎持有的資料源
