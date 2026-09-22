@@ -129,7 +129,7 @@ sequenceDiagram
 | `core/backtest/models/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊、漲跌停區間 | 無（純規則） |
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交 | `prev_close`、`intraday_range` |
 | `core/backtest/models/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`） |
-| `core/backtest/models/settlement_model.py` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、維持率追繳、停券回補、除息股利補償 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends` 由 `DataFeed` 每根 bar 推入 |
+| `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、維持率追繳、停券回補、除息股利補償 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends` 由 `DataFeed` 每根 bar 推入 |
 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
 | `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日） | `DataFeed`、策略 |
 

@@ -562,7 +562,9 @@ def test_standalone_fill_model_counts_volume_cap_rejections() -> None:
     """
 
     fill_model: TwStockFillModel = TwStockFillModel(
-        config=FillConfig(max_volume_share=0.001, volume_cap_policy=VolumeCapPolicy.REJECT)
+        config=FillConfig(
+            max_volume_share=0.001, volume_cap_policy=VolumeCapPolicy.REJECT
+        )
     )
 
     # 委託 10 張、當日量 10,000 張 × 0.1% ＝ 上限 10 張…改用更小的量觸發拒單
