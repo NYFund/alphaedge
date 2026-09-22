@@ -355,9 +355,11 @@ def test_price_loader_does_not_read_whole_table_into_memory(
 
     以「讀不到既有資料也能正確去重」反向釘住：若還在用記憶體 set，
     這裡把 `read_sql_query` 換掉就會壞。
+
+    **盯的是 `base_loader`**：入庫骨架已收回基底，逐檔讀寫都在那裡。
     """
 
-    import core.pipeline.tw.loaders.stock_price_loader as loader_module
+    import core.pipeline.shared.base_loader as loader_module
 
     loader, downloads = make_price_loader(tmp_path, monkeypatch)
     make_price_rows("2024-01-02", ["2330", "2317"]).to_csv(

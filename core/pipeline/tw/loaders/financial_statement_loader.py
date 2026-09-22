@@ -30,8 +30,8 @@ class FinancialStatementLoader(BaseDataLoader):
                 `disconnect()` 不會關閉；未指定時 loader 自行建立，入庫完成即關閉
         """
 
-        super().__init__()
-
+        # **不呼叫 `super().__init__()`**：本 loader 收的是連線或多個 DAO，
+        # 與基底「單一 DAO」的建構骨架不同形，連線與建表一律自理
         self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
