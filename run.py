@@ -1,6 +1,6 @@
 import argparse
 import sys
-from typing import Dict, List, Type
+from typing import TYPE_CHECKING, Dict, List, Tuple, Type
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
@@ -9,6 +9,12 @@ from core.strategies.base import BaseStrategy
 from core.strategies.strategy_loader import StrategyLoader
 
 """Main entry point of the trading system: run backtest or live trading from project root"""
+
+if TYPE_CHECKING:
+    # **只在型別檢查時 import**：實盤那一整串相依（shioaji、券商閘道、OMS）
+    # 在執行期是延後 import 的，頂層拉進來就會讓回測也付這個成本
+    from core.live.trader import LiveTrader
+    from core.utils import TradingMode
 
 
 # -----------------------------------------------------------------------
@@ -60,6 +66,9 @@ EXIT_TERMINATED: int = 143
 
 # 以券商部位重建時寫進 `live_run.phase` 的值；它不是交易段落，存活監控不會等它
 RESYNC_PHASE: str = "resync"
+
+# `--broker` 的預設值；守門要比對「有沒有被指定」，不能只看真假值
+DEFAULT_BROKER: str = "shioaji"
 
 # 段落名 → 執行段落。`after_close` 不在表內：盤後作業不送新倉單，
 # `run_live()` 另走 `run_after_close()` 那條流程
@@ -127,7 +136,7 @@ def _add_live_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument(
         "--broker",
         choices=["shioaji", "fake"],
-        default="shioaji",
+        default=DEFAULT_BROKER,
         help="券商閘道；fake 只給測試用，正式環境一律拒絕",
     )
     environment = group.add_mutually_exclusive_group()
@@ -384,7 +393,9 @@ def _run_resync(trader: object, confirm: bool) -> int:
     return code
 
 
-def _resolve_live_exit_code(trader: object, trading_mode: object) -> int:
+def _resolve_live_exit_code(
+    trader: "LiveTrader", trading_mode: "Type[TradingMode]"
+) -> int:
     """
     - Description:
         由本次執行的結果決定退出碼
@@ -393,9 +404,9 @@ def _resolve_live_exit_code(trader: object, trading_mode: object) -> int:
         把狀態翻譯成排程看得懂的號碼。三者的處理急迫性不同：
         5 是有人按下了停止鍵、4 是今天剛發現不一致、6 是昨天出的事還沒人處理。
     - Parameters:
-        - trader: object
+        - trader: LiveTrader
             跑完的引擎
-        - trading_mode: object
+        - trading_mode: Type[TradingMode]
             交易模式 Enum
     - Return:
         - int
@@ -416,6 +427,41 @@ def _resolve_live_exit_code(trader: object, trading_mode: object) -> int:
     return 0
 
 
+def _live_only_flags_in_use(args: argparse.Namespace) -> List[str]:
+    """
+    - Description:
+        回測模式下出現的實盤旗標
+
+        **實盤旗標掛在 top-level parser 上**，`_add_live_arguments()` 的
+        `add_argument_group` 只影響 `--help` 的排版，沒有任何解析約束力——
+        `--mode backtest` 帶著它們照樣解析得過，然後被整個忽略。
+
+        代價不對稱：以為自己在連正式環境下單、其實只跑了回測，
+        會讓人以為「今天沒有訊號」；而 `--production` 是全專案防呆最多的旗標
+        （刻意沒有環境變數），它被靜默忽略尤其不能接受。
+    - Parameters:
+        - args: argparse.Namespace
+            命令列參數
+    - Return:
+        - List[str]
+            出現的旗標名稱；沒有時為空
+    """
+
+    # 旗標名 → 是否「有被指定」。`--broker` 與 `--simulation` 有預設值，
+    # 比對的是「與預設不同」而不是真假值
+    checks: Tuple[Tuple[str, bool], ...] = (
+        ("--phase", args.phase is not None),
+        ("--broker", args.broker != DEFAULT_BROKER),
+        ("--production", args.simulation is False),
+        ("--confirm-production", args.confirm_production),
+        ("--dry-run", args.dry_run),
+        ("--resync-from-broker", args.resync_from_broker),
+        ("--confirm-resync", args.confirm_resync),
+        ("--resume-trading", args.resume_trading is not None),
+    )
+    return [flag for flag, in_use in checks if in_use]
+
+
 def main() -> None:
     args: argparse.Namespace = parse_arguments()
     strategy_name: str = args.strategy
@@ -424,6 +470,15 @@ def main() -> None:
 
     if args.mode == "live":
         sys.exit(run_live(args, strategies))
+
+    live_only: List[str] = _live_only_flags_in_use(args)
+    if live_only:
+        print(
+            f"以下旗標只能在 --mode live 使用：{'、'.join(live_only)}。"
+            "回測模式會整個忽略它們，故在此拒絕而不是默默跑一場回測。",
+            file=sys.stderr,
+        )
+        sys.exit(EXIT_USAGE)
 
     if strategy_name not in strategies:
         # 錯誤訊息走 stderr、退出碼非 0：這兩件事缺一不可——訊息印在 stdout

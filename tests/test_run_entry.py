@@ -133,12 +133,54 @@ def test_help_describes_the_production_safety_flags() -> None:
 
 
 @pytest.mark.parametrize(
+    "flags",
+    [
+        ["--production", "--confirm-production"],
+        ["--dry-run"],
+        ["--phase", "open"],
+        ["--broker", "fake"],
+        ["--resync-from-broker"],
+        ["--resume-trading"],
+    ],
+    ids=["production", "dry-run", "phase", "broker", "resync", "resume-trading"],
+)
+def test_backtest_mode_refuses_live_only_flags(flags: List[str]) -> None:
+    """
+    回測模式帶到實盤旗標 → 用法錯誤，**不可以靜靜跑一場普通回測**
+
+    這些旗標掛在 top-level parser 上，`add_argument_group` 只影響 `--help` 排版、
+    不具解析約束力。少了這道守門，`--production` 在回測模式下連一句警告都沒有——
+    而那是全專案防呆最多的旗標（刻意沒有環境變數，就是不想讓它被順手開啟）。
+    真正的代價是反過來那一次：以為自己在連正式環境下單，其實只是跑了回測。
+    """
+
+    result: subprocess.CompletedProcess = run_entry(
+        "--strategy", "MomentumStrategy1", *flags
+    )
+
+    assert result.returncode == EXIT_USAGE_ERROR
+    assert flags[0] in result.stderr
+
+
+def test_backtest_mode_still_accepts_its_own_flags() -> None:
+    """守門不可以誤傷回測自己的旗標；`--no-show` 要照常走進回測"""
+
+    result: subprocess.CompletedProcess = run_entry(
+        "--strategy", "NoSuchStrategy", "--no-show"
+    )
+
+    # 停在「策略名找不到」，代表 `--no-show` 沒有被守門攔下
+    assert "not found" in result.stderr
+
+
+@pytest.mark.parametrize(
     "args",
     [
         ["--strategy", "NoSuchStrategy"],
         ["--mode", "live", "--strategy", "MomentumStrategy1"],
+        ["--strategy", "MomentumStrategy1", "--production", "--confirm-production"],
     ],
-    ids=["unknown-strategy", "live-mode"],
+    ids=["unknown-strategy", "live-mode", "backtest-with-live-flag"],
 )
 def test_failure_paths_never_exit_zero(args: List[str]) -> None:
     """
