@@ -1,6 +1,5 @@
 import dataclasses
 import datetime
-import json
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
@@ -8,6 +7,8 @@ from core.live.attribution.position_ledger import (
     UNATTRIBUTED_STRATEGY,
     PositionAttributionLedger,
 )
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_log import RiskEventLogger
 from core.models import BrokerPositionSnapshot
 
 """
@@ -252,28 +253,25 @@ def _apply_action(
         lot_id = ledger.add_unattributed_lot(
             action.symbol, action.direction, action.volume, action.open_price or 0.0
         )
-        severity: str = "WARNING"
+        severity: NotifyLevel = NotifyLevel.WARN
         message: str = action.describe()
     else:
         if action.kind == RESYNC_CLOSE:
             ledger.dao.close_lot(str(lot_id), moment)
         else:
             ledger.dao.reduce_lot(str(lot_id), action.volume)
-        severity = "CRITICAL"
+        severity = NotifyLevel.CRITICAL
         message = f"{action.describe()}；這段損益本地算不出來，請以券商對帳單補登"
 
     detail: Dict[str, object] = dataclasses.asdict(action)
     detail["lot_id"] = lot_id
-    ledger.dao.insert_risk_event(
-        {
-            "run_id": run_id,
-            "strategy_name": action.strategy_name,
-            "severity": severity,
-            "category": RESYNC_EVENT_CATEGORY,
-            "symbol": action.symbol,
-            "message": message,
-            "detail_json": json.dumps(detail, ensure_ascii=False),
-            "occurred_at": moment,
-        },
+    RiskEventLogger(ledger.dao, run_id, now_provider=lambda: moment).write(
+        category=RESYNC_EVENT_CATEGORY,
+        severity=severity,
+        message=message,
+        strategy_name=action.strategy_name,
+        symbol=action.symbol,
+        detail=detail,
+        # **交易區塊內不可自己 commit**：重建要嘛整批寫進去、要嘛整批不寫
         commit=False,
     )

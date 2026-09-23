@@ -6,7 +6,16 @@ from loguru import logger
 
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.attribution.position_ledger import PositionAttributionLedger
+from core.live.attribution.position_ledger import (
+    ACCOUNT_STRATEGY,
+    BROKER_STRATEGY,
+    SOURCE_ACCOUNT,
+    SOURCE_BROKER,
+    SOURCE_LOCAL,
+    PositionAttributionLedger,
+)
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_log import RiskEventLogger
 from core.managers.base.position_manager import BasePositionManager
 from core.models import BrokerPositionSnapshot, StockPositionSnapshot
 
@@ -110,6 +119,12 @@ class Reconciler:
         self.run_id: str = run_id
         self._on_degrade: Optional[Callable[[str], None]] = on_degrade
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
 
     def check(self, positions: List[BrokerPositionSnapshot]) -> ReconcileResult:
         """
@@ -228,9 +243,9 @@ class Reconciler:
             self.dao.upsert_position_snapshot(
                 {
                     "date": today,
-                    "strategy_name": "__account__",
+                    "strategy_name": ACCOUNT_STRATEGY,
                     "symbol": symbol,
-                    "source": "account",
+                    "source": SOURCE_ACCOUNT,
                     "direction": direction,
                     "volume": volume,
                 }
@@ -245,7 +260,7 @@ class Reconciler:
                         "date": today,
                         "strategy_name": name,
                         "symbol": symbol,
-                        "source": "local",
+                        "source": SOURCE_LOCAL,
                         "direction": direction,
                         "volume": volume,
                     }
@@ -255,9 +270,9 @@ class Reconciler:
             self.dao.upsert_position_snapshot(
                 {
                     "date": today,
-                    "strategy_name": "__broker__",
+                    "strategy_name": BROKER_STRATEGY,
                     "symbol": position.symbol,
-                    "source": "broker",
+                    "source": SOURCE_BROKER,
                     "direction": position.direction.value,
                     "volume": position.volume,
                     "avg_price": position.avg_price,
@@ -270,22 +285,17 @@ class Reconciler:
     def _write_event(self, message: str, result: ReconcileResult) -> None:
         """寫一筆風控事件，明細帶上兩邊的數字"""
 
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": None,
-                "severity": "CRITICAL",
-                "category": "RECONCILE_MISMATCH",
-                "message": message,
-                "detail_json": str(
-                    {
-                        "broker": result.broker_differences,
-                        "internal": result.internal_differences,
-                        "order_cond": result.order_cond_differences,
-                    }
-                ),
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category="RECONCILE_MISMATCH",
+            severity=NotifyLevel.CRITICAL,
+            message=message,
+            detail={
+                "broker": {str(k): v for k, v in result.broker_differences.items()},
+                "internal": {str(k): v for k, v in result.internal_differences.items()},
+                "order_cond": {
+                    str(k): v for k, v in result.order_cond_differences.items()
+                },
+            },
         )
 
     def _degrade(self, reason: str) -> None:

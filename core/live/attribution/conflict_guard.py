@@ -7,6 +7,8 @@ from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.execution.order_preprocess import resolve_close_action
 from core.live.attribution.position_ledger import PositionAttributionLedger
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder
 from core.portfolio.aggregation import resolve_symbol_conflicts
 
@@ -64,6 +66,12 @@ class CrossStrategyConflictGuard:
         self.dao: Optional[LiveTradeDAO] = dao
         self.run_id: str = run_id
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
 
     def filter(
         self,
@@ -141,17 +149,10 @@ class CrossStrategyConflictGuard:
     def _write_event(self, message: str, strategy_name: str, symbol: str) -> None:
         """寫一筆風控事件；類別固定為 parity 認得的那一個"""
 
-        if self.dao is None:
-            return
-
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": strategy_name,
-                "severity": "WARN",
-                "category": CROSS_STRATEGY_BLOCKED,
-                "symbol": symbol,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category=CROSS_STRATEGY_BLOCKED,
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=strategy_name,
+            symbol=symbol,
         )

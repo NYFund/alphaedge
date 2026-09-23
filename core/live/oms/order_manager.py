@@ -8,6 +8,8 @@ from core.broker.base import BaseBroker
 from core.broker.execution_dedup import ExecutionEventDeduplicator
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder, ExecutionReport, OrderStatusEvent, OrderTicket
 from core.utils import ExecutionTiming, LiveOrderStatus
 
@@ -159,6 +161,12 @@ class OrderManager:
         self.dry_run: bool = dry_run
         self._on_degrade: Optional[Callable[[str], None]] = on_degrade
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
 
         self._sequence: itertools.count = itertools.count(1)
         self._event_sequence: Dict[str, itertools.count] = {}
@@ -842,16 +850,12 @@ class OrderManager:
         """寫一筆風控事件"""
 
         logger.error(message)
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": ticket.strategy_name if ticket else None,
-                "severity": "CRITICAL",
-                "category": category,
-                "client_order_id": ticket.client_order_id if ticket else None,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category=category,
+            severity=NotifyLevel.CRITICAL,
+            message=message,
+            strategy_name=ticket.strategy_name if ticket else None,
+            client_order_id=ticket.client_order_id if ticket else None,
         )
 
     def _degrade(self, reason: str) -> None:
