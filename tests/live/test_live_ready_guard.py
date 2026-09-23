@@ -11,11 +11,13 @@ from core.live.strategy_guard import (
     verify_strategies,
 )
 from core.models import (
+    FuturesQuote,
     LiveDataUnavailableError,
     PreOpenFuturesQuote,
     PreOpenStockQuote,
     StockQuote,
 )
+from core.models.base.quote import PreOpenQuoteMixin
 from core.strategies.base import BaseStrategy
 from core.utils import (
     BarExecutionOrder,
@@ -35,6 +37,9 @@ from core.utils import (
   回測與實盤的部位軌跡從當天起就不同。
 - 策略沒宣告 `live_ready` → 作者根本沒確認過它的實盤語意。
 """
+
+
+DATE: datetime.date = datetime.date(2026, 9, 23)
 
 
 class FakeStrategy(BaseStrategy):
@@ -358,5 +363,72 @@ def test_pre_open_futures_quote_keeps_settlement_fields_none() -> None:
     assert quote.open_interest is None
     assert quote.multiplier == 200
 
+    with pytest.raises(LiveDataUnavailableError):
+        _ = quote.close
+
+
+# === 盤前報價的六道防線 ===
+def test_mixin_comes_before_the_concrete_quote_in_the_mro() -> None:
+    """
+    `PreOpenQuoteMixin` 必須排在具體報價類別**之前**
+
+    排在後面的話 MRO 會先找到父類那份 property，**六道防線全部靜默失效**
+    ——物件照樣建得出來、讀 `close` 也照樣回得出值（0.0），
+    而漲幅類訊號會永遠算出 0%，不報錯。
+    """
+
+    for cls, parent in (
+        (PreOpenStockQuote, StockQuote),
+        (PreOpenFuturesQuote, FuturesQuote),
+    ):
+        mro: List[type] = list(cls.__mro__)
+        assert mro.index(PreOpenQuoteMixin) < mro.index(parent), (
+            f"{cls.__name__} 的 mixin 排在 {parent.__name__} 之後，六道防線失效"
+        )
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [PreOpenStockQuote, "futures"],
+)
+def test_every_unavailable_field_raises_on_both_markets(cls) -> None:
+    """
+    六個欄位在**兩個市場**都要擋住
+
+    這三個陷阱各市場複製一份就是複製三份——第三個市場加進來時，
+    漏掉 `signal_close` 那條不會報錯，只會讓盤前訊號默默算得出來。
+    """
+
+    quote = (
+        PreOpenStockQuote(stock_id="2330", date=DATE, reference_price=600.0)
+        if cls is PreOpenStockQuote
+        else PreOpenFuturesQuote(
+            product="TX", expiry="202403", date=DATE, reference_price=18000.0
+        )
+    )
+
+    for field in PreOpenQuoteMixin.UNAVAILABLE_FIELDS:
+        with pytest.raises(LiveDataUnavailableError, match=field):
+            getattr(quote, field)
+
+    # 盤前唯一可用的價格照常讀得到
+    assert quote.reference_price > 0
+
+
+def test_setters_do_not_raise_so_the_object_can_be_built() -> None:
+    """
+    setter 刻意什麼都不做
+
+    父類 `__init__` 會直接 `self.open = open`，沒有 setter 的話物件根本建不出來
+    （`AttributeError`），連拋出「拿不到資料」的機會都沒有。
+    """
+
+    quote: PreOpenStockQuote = PreOpenStockQuote(
+        stock_id="2330", date=DATE, reference_price=600.0
+    )
+
+    quote.close = 999.0  # 不該拋
+
+    # 寫進去的值不會被記住——setter 刻意不存
     with pytest.raises(LiveDataUnavailableError):
         _ = quote.close
