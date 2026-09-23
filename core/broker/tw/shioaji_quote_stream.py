@@ -5,6 +5,7 @@ from typing import Any, Callable, List, Optional, Sequence, Set
 import shioaji as sj
 from loguru import logger
 
+from core.adapters.quote_validation import resolve_close
 from core.broker.rate_limiter import RateLimitCategory, RateLimiter
 from core.broker.tw.shioaji_contract_resolver import to_futures_product
 from core.config.settings import get_live_timezone
@@ -176,7 +177,10 @@ class ShioajiQuoteStream:
                 報價清單；查無資料的標的不會出現在結果裡
         """
 
-        return [self.to_stock_quote(snapshot) for snapshot in self._fetch(contracts)]
+        quotes: List[Optional[StockQuote]] = [
+            self.to_stock_quote(snapshot) for snapshot in self._fetch(contracts)
+        ]
+        return [quote for quote in quotes if quote is not None]
 
     def get_futures_snapshots(self, contracts: Sequence[Any]) -> List[FuturesQuote]:
         """
@@ -190,10 +194,11 @@ class ShioajiQuoteStream:
                 報價清單
         """
 
-        return [
+        futures_quotes: List[Optional[FuturesQuote]] = [
             self.to_futures_quote(snapshot, contract)
             for snapshot, contract in self._fetch_with_contracts(contracts)
         ]
+        return [quote for quote in futures_quotes if quote is not None]
 
     def _fetch(self, contracts: Sequence[Any]) -> List[Any]:
         """分批呼叫 `snapshots()`；每批算一次 `MARKET_DATA` 額度"""
@@ -308,7 +313,7 @@ class ShioajiQuoteStream:
             return moment
         return moment.replace(tzinfo=get_live_timezone())
 
-    def to_stock_quote(self, snapshot: Any) -> StockQuote:
+    def to_stock_quote(self, snapshot: Any) -> Optional[StockQuote]:
         """
         - Description:
             快照 → `StockQuote`（`scale=DAY`）
@@ -324,7 +329,17 @@ class ShioajiQuoteStream:
                 與回測同款的報價物件
         """
 
-        close: float = float(getattr(snapshot, "close", 0.0) or 0.0)
+        close: Optional[float] = resolve_close(getattr(snapshot, "close", None))
+        if close is None:
+            # **回 None 而不是 0 元報價**：停牌或快照缺值時原本會產出一個
+            # `close=0` 的 `StockQuote`，而回測那一側是直接濾掉這檔的
+            # （`has_valid_price()`）。兩邊不一致的症狀是實盤拿 0 元算訊號與成交價，
+            # 且不會有任何錯誤
+            logger.warning(
+                f"[Quote] {getattr(snapshot, 'code', '?')} 快照無有效成交價，略過該檔"
+            )
+            return None
+
         return StockQuote(
             stock_id=str(getattr(snapshot, "code", "")),
             scale=Scale.DAY,
@@ -341,7 +356,7 @@ class ShioajiQuoteStream:
 
     def to_futures_quote(
         self, snapshot: Any, contract: Optional[Any] = None
-    ) -> FuturesQuote:
+    ) -> Optional[FuturesQuote]:
         """
         - Description:
             快照 → `FuturesQuote`
@@ -361,7 +376,11 @@ class ShioajiQuoteStream:
 
         code: str = str(getattr(snapshot, "code", ""))
         product, expiry = self._split_code(code, contract)
-        close: float = float(getattr(snapshot, "close", 0.0) or 0.0)
+        close: Optional[float] = resolve_close(getattr(snapshot, "close", None))
+        if close is None:
+            logger.warning(f"[Quote] {code} 快照無有效成交價，略過該契約")
+            return None
+
         quote_date: datetime.datetime = self._resolve_date(snapshot)
 
         return FuturesQuote(

@@ -3,7 +3,7 @@ from typing import List
 
 from loguru import logger
 
-from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
+from core.adapters.quote_validation import warn_duplicate_symbols
 from core.models import StockQuote
 from tests.conftest import build_stock_quote
 
@@ -33,7 +33,7 @@ def capture_warnings(quotes: List[StockQuote]) -> List[str]:
         lambda m: messages.append(m), level="WARNING", format="{message}"
     )
     try:
-        StockQuoteAdapter.warn_duplicate_symbols(quotes, DAY)
+        warn_duplicate_symbols(quotes, DAY, source="Stock")
     finally:
         logger.remove(sink_id)
     return messages

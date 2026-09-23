@@ -4,6 +4,7 @@ from typing import Any, Callable, List, Optional
 
 import pandas as pd
 
+from core.adapters.quote_validation import warn_duplicate_symbols
 from core.config.schema import FuturesPriceColumn
 from core.models import FuturesQuote
 from core.utils import FuturesSession, Scale
@@ -140,12 +141,18 @@ class FuturesQuoteAdapter:
 
         night_by_contract: dict = {quote.contract_id: quote for quote in night_quotes}
 
-        return [
+        combined: List[FuturesQuote] = [
             FuturesQuoteAdapter.combine_quote(
                 quote, night_by_contract.get(quote.contract_id)
             )
             for quote in day_quotes
         ]
+
+        # 合併後再驗一次：日盤清單本身若有重複契約，合併不會讓它消失，
+        # 而下游建對照表時只會留最後一筆
+        if combined:
+            warn_duplicate_symbols(combined, combined[0].date, source="Futures合併")
+        return combined
 
     @staticmethod
     def mark_combined(quote: FuturesQuote) -> FuturesQuote:
@@ -220,12 +227,19 @@ class FuturesQuoteAdapter:
         if data is None or data.empty:
             return []
 
-        return [
+        quotes: List[FuturesQuote] = [
             FuturesQuoteAdapter.generate_futures_quote(
                 row, date, scale, multiplier_resolver=multiplier_resolver
             )
             for row in data.itertuples(index=False)
         ]
+
+        # **期貨端首次套用重複代號偵測**。引擎對期貨同樣建
+        # `{q.symbol: q for q in quotes}`，而期貨的 symbol 是 `{商品}{到期月}`
+        # ——日盤／夜盤同契約、合併時段失敗、週契約與月契約代號碰撞，
+        # 都會靜默只留最後一筆。只警告不排除，理由見 `warn_duplicate_symbols()`
+        warn_duplicate_symbols(quotes, date, source="Futures")
+        return quotes
 
     @staticmethod
     def generate_futures_quote(
