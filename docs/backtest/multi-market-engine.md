@@ -131,6 +131,44 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | 策略 | `core/strategies/base.py` | `BaseStrategy`，`market` ＋ `instrument_type` 兩欄位為 factory 的分派鍵 |
 | 部位 | `core/managers/base/position_manager.py` | FIFO 拆單主幹 ＋ `settle_daily()` 掛點 |
 
+### 報價轉換：為什麼有兩個轉換器
+
+專案有兩條 raw → `Quote` 的路徑，**這個重複是設計，不是意外**：
+
+| 路徑 | 位置 | 輸入 | 命名 |
+|---|---|---|---|
+| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_rows()`／`combine_sessions()` |
+| 實盤 | `core/broker/tw/shioaji_quote_stream.py` | 券商的 `Snapshot`／逐筆推播 | `from_stock_snapshot()`／`from_futures_snapshot()`／`from_tick_message()` |
+
+ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心。
+合併兩者會讓 `core/adapters/` 相依券商 SDK 的資料形狀，而該層的分層約束
+正是「不做 I/O、不綁任一個來源」（由 `scripts/check_layer_deps.py` 檢查）。
+
+**兩邊共用的只有兩樣**：
+
+1. **輸出契約** `core/models/` 的 `StockQuote`／`FuturesQuote`。策略讀到的物件
+   必須一模一樣，否則同一支策略在兩邊拿到不同結構。
+2. **與來源無關的規則** `core/adapters/quote_validation.py`：價格有效性
+   （`None`／`NaN`／0／負數都不可成交）與重複代號警告。這一層吃值不吃列，
+   所以三條路徑（股票回測、期貨回測、實盤）套得上同一份。
+
+**命名一律 `from_<來源形狀>`**。`to_*` 讀起來像是 `Quote` 自己的方法，
+而它其實是「由某個來源建 Quote」的工廠——名字要說出來源是什麼，
+因為來源的形狀正是兩條路徑唯一的差別。快照與逐筆推播也分開命名：
+前者有當日累計量與 OHLC，後者只有這一筆，共用一個名字遲早有人拿錯那一份。
+
+#### 已知限制
+
+- **`close` 的語意兩邊不同**：回測是當日收盤（定值），實盤是盤中最新成交價
+  （會變）。策略若拿它算「今天漲幅」，實盤得到的是此刻漲幅。這是制度性差異，
+  不是缺陷——盤中本來就還沒收盤。盤前段落另走 `PreOpenQuote`（讀 OHLC 直接拋）。
+- **重複代號只警告不排除**：要留哪一筆屬資料修正的範疇，靜默挑一筆是更糟的選擇。
+- **字串型的價格目前會通過驗證**（`float("600")` 成立）。嚴格說它代表上游型別
+  已經跑掉了，但收緊判準會改變回測結果、須重產回歸基準。
+
+口徑的不變式由 `tests/test_quote_parity.py` 釘住，規則本身由
+`tests/test_quote_validation.py` 覆蓋。
+
 ---
 
 ## 三、各 model 的職責

@@ -479,7 +479,7 @@ def test_tick_quote_carries_a_price() -> None:
         ask_volume = 2
         tick_type = 1
 
-    quote: StockQuote = StockQuoteAdapter.to_tick_quote(_Tick(), DATE)
+    quote: StockQuote = StockQuoteAdapter.from_tick_row(_Tick(), DATE)
 
     assert quote.close == 601.0
     assert quote.cur_price == 601.0

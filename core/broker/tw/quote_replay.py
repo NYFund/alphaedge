@@ -11,7 +11,7 @@ from core.models import BaseQuote
 """
 把錄製的行情重放回來
 
-**重放一定要走真正的轉換路徑**（`ShioajiQuoteStream.to_tick_quote()`），
+**重放一定要走真正的轉換路徑**（`ShioajiQuoteStream.from_tick_message()`），
 否則驗到的只是「JSON 讀得出來」，而不是「這份資料餵進系統會得到什麼」。
 故本模組只負責把 JSON 還原成**與券商推播同形狀的物件**，轉換交給原本那一份。
 
@@ -236,7 +236,7 @@ def replay_quotes(path: Path, stream: Any) -> List[BaseQuote]:
     - Description:
         把錄製檔重放成報價清單
 
-        走的是 `ShioajiQuoteStream.to_tick_quote()`——**與實盤同一份轉換**，
+        走的是 `ShioajiQuoteStream.from_tick_message()`——**與實盤同一份轉換**，
         所以試撮與盤中零股同樣會被濾掉（它們回 `None`）。
     - Parameters:
         - path: Path
@@ -250,7 +250,7 @@ def replay_quotes(path: Path, stream: Any) -> List[BaseQuote]:
 
     quotes: List[BaseQuote] = []
     for message in load_recorded_messages(path):
-        quote: Optional[BaseQuote] = stream.to_tick_quote(message)
+        quote: Optional[BaseQuote] = stream.from_tick_message(message)
         if quote is not None:
             quotes.append(quote)
     return quotes

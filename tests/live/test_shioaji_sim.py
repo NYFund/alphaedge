@@ -212,7 +212,9 @@ def test_tick_subscription_delivers_quotes(broker: ShioajiBroker) -> None:
             except queue.Empty:
                 continue
             if kind == "tick_stk":
-                quote: Optional[BaseQuote] = broker.quote_stream.to_tick_quote(message)
+                quote: Optional[BaseQuote] = broker.quote_stream.from_tick_message(
+                    message
+                )
                 if quote is not None:
                     received.append(quote)
     finally:
