@@ -185,15 +185,16 @@ def test_updater_still_exposes_the_equity_change_constants() -> None:
 
 def test_equity_change_throttle_does_not_shadow_the_shared_one() -> None:
     """
-    權益變動表的節流不可叫 `throttle`
+    權益變動表的節流不可與基底同名
 
-    它的簽名是 `(stop, request_cnt)`，與 `BaseDataUpdater.throttle(file_cnt, stop)`
-    不同。同名的話三張全市場報表呼叫 `self.throttle(file_cnt)` 會把 `file_cnt`
-    綁到 `stop` 參數上——拆分前正是這個狀態，而它之所以沒發作，
+    它的單位是**請求**、簽名是 `(stop, cnt)`，而基底那份的單位是**檔案／日期**、
+    簽名是 `(file_cnt, stop)`。同名的話三張全市場報表呼叫基底那份時會把
+    `file_cnt` 綁到 `stop` 參數上——拆分前正是這個狀態，而它之所以沒發作，
     只是因為當時那三張報表各自寫了一份裸 sleep、沒人呼叫共用的那個。
+    現在兩者的名字都帶單位：`throttle_per_file` 與 `throttle_per_request`。
     """
 
-    assert hasattr(FinancialStatementUpdater, "throttle_equity_change")
-    assert FinancialStatementUpdater.throttle is BaseDataUpdater.throttle, (
-        "`throttle` 被覆寫了，三張全市場報表的節流會綁錯參數"
-    )
+    assert hasattr(FinancialStatementUpdater, "throttle_per_request")
+    assert (
+        FinancialStatementUpdater.throttle_per_file is BaseDataUpdater.throttle_per_file
+    ), "`throttle_per_file` 被覆寫了，三張全市場報表的節流會綁錯參數"

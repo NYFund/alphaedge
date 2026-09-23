@@ -1,6 +1,5 @@
 import datetime
 import random
-import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -15,6 +14,7 @@ from core.config import (
 )
 from core.dao.connection import DBConnection, connect_sqlite
 from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
@@ -332,26 +332,40 @@ class FuturesChipUpdater(BaseDataUpdater):
         inserted: int = 0
         blocked_windows: List[Tuple[datetime.date, datetime.date]] = []
 
-        for window_start, window_end in self.split_months(start_date, end_date):
-            raw: Optional[str] = self.crawl_window(
-                crawl, label, window_start, window_end
-            )
-            if raw is None:
-                if self.has_trading_days(window_start, window_end):
-                    blocked_windows.append((window_start, window_end))
-                self.throttle()
-                continue
+        with GracefulStop(label=f"futures_chip:{label}") as stop:
+            for window_start, window_end in self.split_months(start_date, end_date):
+                raw: Optional[str] = self.crawl_window(
+                    crawl, label, window_start, window_end, stop
+                )
+                if raw is None:
+                    if self.has_trading_days(window_start, window_end):
+                        blocked_windows.append((window_start, window_end))
+                    self.throttle_per_window(stop)
+                    if stop.requested:
+                        break
+                    continue
 
-            df: Optional[pd.DataFrame] = clean(raw)
-            if df is None or df.empty:
-                self.throttle()
-                continue
+                df: Optional[pd.DataFrame] = clean(raw)
+                if df is None or df.empty:
+                    self.throttle_per_window(stop)
+                    if stop.requested:
+                        break
+                    continue
 
-            self.loader.save_csv(df, f"{label}_{window_start.strftime('%Y%m')}.csv")
-            inserted += self.loader.add_to_db(table, df)
-            # 每個月批次寫完就落地：中斷時已入庫的月份不必重抓
-            self.loader.commit()
-            self.throttle()
+                self.loader.save_csv(df, f"{label}_{window_start.strftime('%Y%m')}.csv")
+                inserted += self.loader.add_to_db(table, df)
+                # 每個月批次寫完就落地：中斷時已入庫的月份不必重抓
+                self.loader.commit()
+
+                if stop.requested:
+                    logger.warning(
+                        f"[Futures Chip] {table} 收到中止要求，停在 "
+                        f"{window_start:%Y-%m}；已入庫的月份不會遺失，"
+                        f"未爬的下次執行會接續"
+                    )
+                    break
+
+                self.throttle_per_window(stop)
 
         if blocked_windows:
             logger.error(
@@ -369,6 +383,7 @@ class FuturesChipUpdater(BaseDataUpdater):
         label: str,
         window_start: datetime.date,
         window_end: datetime.date,
+        stop: Optional[GracefulStop] = None,
     ) -> Optional[str]:
         """
         - Description:
@@ -399,7 +414,10 @@ class FuturesChipUpdater(BaseDataUpdater):
                 f"[Futures Chip] {label} {window_start}~{window_end} 該有交易日卻沒拿到 CSV，"
                 f"{wait} 秒後重試（第 {attempt} 次）"
             )
-            time.sleep(wait)
+            # 退避也要可中斷：這裡一次可能睡數十秒，裸 sleep 會讓 Ctrl+C 沒反應
+            self.sleep(wait, stop)
+            if stop is not None and stop.requested:
+                return None
 
             raw = crawl(window_start, window_end)
             if raw is not None:
@@ -461,10 +479,23 @@ class FuturesChipUpdater(BaseDataUpdater):
 
         return windows
 
-    def throttle(self) -> None:
-        """批次之間的間隔；月批次之後請求數已經很少，但仍不要連續打"""
+    def throttle_per_window(self, stop: Optional[GracefulStop] = None) -> None:
+        """
+        - Description:
+            月批次之間的間隔；請求數已經很少，但仍不要連續打
 
-        time.sleep(random.uniform(self.MIN_DELAY_SECONDS, self.MAX_DELAY_SECONDS))
+            **名字帶單位、也不叫 `throttle`**：基底另有一份以「檔案／日期」為
+            單位的 `throttle_per_file(file_cnt, stop)`，簽名不同。同名會把基底
+            那份遮蔽掉，而遮蔽在這裡沒發作只是因為呼叫端剛好都不帶參數。
+
+            **改用可中斷的 sleep**：原本是裸 `time.sleep()`，被訊號打斷會自動
+            續睡（PEP 475），按下 Ctrl+C 要等滿 2~4 秒才有反應。
+        - Parameters:
+            - stop: Optional[GracefulStop]
+                中止旗標；None 時退化成不可打斷的 sleep
+        """
+
+        self.sleep(random.uniform(self.MIN_DELAY_SECONDS, self.MAX_DELAY_SECONDS), stop)
 
     def get_coverage(self) -> Dict[str, Optional[str]]:
         """三張表各自補到哪一天（供人工確認進度）"""

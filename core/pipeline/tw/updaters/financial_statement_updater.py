@@ -319,7 +319,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
                 )
                 continue
 
-            file_cnt = self.throttle(file_cnt + 1)
+            file_cnt = self.throttle_per_file(file_cnt + 1)
 
         # Step 3: Load
         self.loader.add_to_db(
@@ -420,7 +420,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
             if df_list is None or df_list:
                 return True
 
-            self.throttle_equity_change(stop)
+            self.throttle_per_request(stop)
 
         return False
 
