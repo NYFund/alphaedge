@@ -43,6 +43,7 @@ from core.models import (
     BaseAccount,
     BaseOrder,
     BaseQuote,
+    BrokerAccountSnapshot,
     ExecutionReport,
     OrderTicket,
 )
@@ -250,6 +251,10 @@ class LiveTrader:
         # 是否連模擬環境。**預設 False（正式環境的嚴格行為）**：券商查不到
         # 期貨保證金時，模擬環境略過帳戶層檢查、正式環境擋單
         self.simulation: bool = simulation
+        # 最近一次刷新的券商帳務快照；`_account_equity()` 由它取總權益。
+        # **不存進 `CapitalAllocator`**：總權益是券商事實，而 allocator 管的是
+        # 額度與保留，兩件事放一起會讓「這個數字是誰說的」失去單一出處
+        self.account_snapshot: Optional[BrokerAccountSnapshot] = None
         # 券商的保證金帳務查詢；市場特性，由組裝層注入（None 代表沒有需要保證金的商品）
         self.margin_query: Optional[MarginAccountQuery] = margin_query
         self.resume_trading: bool = resume_trading
@@ -1286,10 +1291,12 @@ class LiveTrader:
             ExposureItem(order, context.notional(order))
             for context, order in candidates
         ]
+        # **與額度檢查、單日虧損共用同一個口徑**：這裡原本內嵌抄了一份
+        # 「可用餘額 ＋ 持倉占用」的公式，於是改了一邊另一邊不會跟著改
         allowed: List[ExposureItem] = self.risk_manager.check_batch(
             items,
             "__account__",
-            self.allocator.available_balance + sum(self.allocator.used.values()),
+            self._account_equity(),
         )
         approved: List[BaseOrder] = [item.order for item in allowed]
         return [(context, order) for context, order in candidates if order in approved]
@@ -1789,9 +1796,46 @@ class LiveTrader:
         return True
 
     def _account_equity(self) -> float:
-        """帳戶總權益：可用餘額 ＋ 持倉占用；與批次曝險檢查用的是同一個口徑"""
+        """
+        - Description:
+            帳戶總權益；額度檢查、單日虧損與批次曝險共用這一個口徑
 
-        return self.allocator.available_balance + sum(self.allocator.used.values())
+            **取券商快照的 `total_equity`，不是「可用餘額 ＋ 各策略持倉占用」**。
+            後者少算兩樣東西：未交割款，以及**不屬於任何策略的持倉**
+            （接管來的 `__unattributed__`）。`BrokerAccountQuery.get_stock_account()`
+            的說明早就寫明 `total_equity` 才是額度檢查該用的值——
+            拿可用餘額當基準的話，只要隔日還有部位在場上就必然誤判成額度超標，
+            而 2026-09-23 的演練正是這樣整天啟動不了。
+
+            **模擬環境的退路**：模擬環境的帳務欄位可能整組回 0
+            （期貨保證金已知如此），此時總權益恆為 0、任何正數額度都過不了。
+            偵測到「模擬環境 ＋ 總權益為 0」就改以 Σ 宣告額度為基準。
+            **正式環境不走這條路**：那裡的 0 是真的沒有錢，就該拒絕啟動。
+
+            放寬只寫 `logger.warning`，不落地成風控事件：寫事件要再抄一份
+            `_write_event()`，而全庫已經有六份各自為政的複本正等著被收斂，
+            現在加第七份只會讓那件事更難做。
+        - Return:
+            - float
+                帳戶總權益
+        """
+
+        equity: float = (
+            self.account_snapshot.total_equity
+            if self.account_snapshot is not None
+            else 0.0
+        )
+
+        if equity > 0 or not self.simulation:
+            return equity
+
+        fallback: float = sum(self.allocator.quotas.values())
+        logger.warning(
+            f"模擬環境的帳務欄位回 0（總權益算不出來），改以 Σ 宣告額度 "
+            f"{fallback:,.0f} 為基準繼續。**正式環境不走這條路**，"
+            f"那裡的 0 代表真的沒有資金，會直接拒絕啟動"
+        )
+        return fallback
 
     def _check_daily_loss(self) -> None:
         """
@@ -1845,6 +1889,7 @@ class LiveTrader:
         used: Dict[str, float] = {
             context.name: position_value(context.account) for context in self.contexts
         }
+        self.account_snapshot = snapshot
         self.allocator.refresh(snapshot.available_balance, used)
 
     def _reference_price(self, order: BaseOrder) -> float:

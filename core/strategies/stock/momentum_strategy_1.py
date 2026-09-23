@@ -67,6 +67,10 @@ class MomentumStrategy1(BaseStockStrategy):
         super().__init__()
         self.strategy_name: str = "Momentum-1"
         self.init_capital: float = 1000000.0
+        # 實盤額度低於研究時的本金：演練用的模擬帳戶總權益約 51 萬
+        # （帳上是接管來的舊部位、沒有現金），照 100 萬宣告會在啟動時被額度檢查擋下。
+        # **不能改 `init_capital`**——它同時是回歸基準的初始資金
+        self.live_capital: float = 400000.0
         self.max_holdings: int = self.DEFAULT_MAX_HOLDINGS
         self.scale: Scale = Scale.DAY
 

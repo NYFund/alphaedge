@@ -509,3 +509,69 @@ def test_stock_strategy_still_gets_a_stock_order(
 
     assert isinstance(order, StockOrder)
     assert order.stock_id == "2330"
+
+
+def test_unattributed_lots_are_not_an_internal_inconsistency(
+    reconciler: Reconciler,
+    ledger: PositionAttributionLedger,
+    degradations: List[str],
+) -> None:
+    """
+    接管來的 `__unattributed__` 部位不算「本地兩份紀錄對不上」
+
+    `_check_internal_consistency()` 比的是「各策略 `Account` 的部位合計」與
+    「lot 帳本的淨額」，而 `__unattributed__` **依設計只存在於 lot 帳本**
+    ——它不是策略、沒有 `position_manager`，另一側本來就不會有對應的列。
+
+    把它算進差異的話，只要帳上有接管部位，每一個段落的對帳都會不一致、
+    每天都降級成 `REDUCE_ONLY`，而真正的回報處理 bug 會被淹沒在這些雜訊裡。
+    2026-09-23 的演練就是這樣：盤後段連續兩次結束碼 4，差異筆數恰好等於
+    接管的 6 檔。
+    """
+
+    ledger.add_unattributed_lot("2362", PositionType.LONG.value, 1, 66.6)
+    ledger.add_unattributed_lot("6134", PositionType.SHORT.value, 3, 30.38)
+    ledger.dao.commit()
+
+    # 券商端與帳本一致，把變數隔離成只剩「本地兩份紀錄」這一項
+    result: ReconcileResult = reconciler.check(
+        [
+            BrokerPositionSnapshot(
+                symbol="2362", direction=PositionType.LONG, volume=1
+            ),
+            BrokerPositionSnapshot(
+                symbol="6134", direction=PositionType.SHORT, volume=3
+            ),
+        ]
+    )
+
+    assert result.internal_differences == {}, (
+        "接管部位被誤判成本地紀錄不一致，帳上只要有它就天天降級"
+    )
+    assert result.is_consistent is True
+    assert degradations == []
+
+
+def test_a_real_internal_mismatch_is_still_caught(
+    reconciler: Reconciler,
+    ledger: PositionAttributionLedger,
+    managers: Dict[str, StockPositionManager],
+    degradations: List[str],
+) -> None:
+    """
+    排除 `__unattributed__` 之後，**有歸屬**的策略仍要驗得出不一致
+
+    這條與上一條成對：放寬判準最容易連真正要擋的東西一起放掉。
+    策略 A 的 lot 帳本有 2 張，但它的 `Account` 是空的——那就是回報漏接。
+    """
+
+    ledger.open_lot("A", make_fill(volume=2), PositionType.LONG)
+    ledger.dao.commit()
+
+    result: ReconcileResult = reconciler.check(
+        [BrokerPositionSnapshot(symbol="2330", direction=PositionType.LONG, volume=2)]
+    )
+
+    assert result.internal_differences == {("2330", PositionType.LONG.value): (0, 2)}
+    assert result.is_consistent is False
+    assert degradations, "有歸屬的策略對不上時仍要降級"

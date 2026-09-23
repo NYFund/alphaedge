@@ -127,6 +127,30 @@ class UnsupportedMarketError(ValueError):
     """沒有對應實作的（市場, 商品）組合"""
 
 
+def live_capital(strategy: BaseStrategy) -> float:
+    """
+    - Description:
+        這支策略在實盤的資金額度；未宣告 `live_capital` 時沿用 `init_capital`
+
+        **實盤與回測的資金必須能分開設**：`init_capital` 同時是回測帳戶的初始
+        資金，而回歸基準就是拿策略跑出來的——改它等於改掉每一筆回測結果。
+        實盤帳戶的規模是另一回事（模擬帳戶、正式帳戶、不同時期的本金都不同）。
+
+        **額度與帳戶用同一個值**：帳戶若以 `init_capital` 建、額度卻用
+        `live_capital`，策略會照大的那個算張數，再被額度檢查擋下來——
+        看起來像風控太嚴，其實是兩處口徑不一致。
+    - Parameters:
+        - strategy: BaseStrategy
+            策略實例
+    - Return:
+        - float
+            實盤額度上限
+    """
+
+    declared: Optional[float] = getattr(strategy, "live_capital", None)
+    return float(declared) if declared is not None else float(strategy.init_capital)
+
+
 def build_live_trader(
     strategies: Sequence[BaseStrategy],
     broker: Optional[BaseBroker] = None,
@@ -216,7 +240,7 @@ def build_live_trader(
         resolved_dao, now_provider
     )
     allocator: CapitalAllocator = CapitalAllocator(
-        {name: strategy.init_capital for name, strategy in zip(names, strategies)},
+        {name: live_capital(strategy) for name, strategy in zip(names, strategies)},
         resolved_dao,
         resolved_run_id,
         now_provider=now_provider,
@@ -404,7 +428,7 @@ def _build_context(
     instrument: Optional[InstrumentType] = strategy.instrument_type
 
     if market == Market.TW and instrument == InstrumentType.STOCK:
-        account: StockAccount = StockAccount(init_capital=strategy.init_capital)
+        account: StockAccount = StockAccount(init_capital=live_capital(strategy))
         cost_model: StockCostModel = StockCostModel(CostConfig.default())
         manager: BasePositionManager = StockPositionManager(account, cost_model)
         feed: BaseLiveDataFeed = TwStockLiveDataFeed(broker, now_provider=now_provider)
@@ -415,7 +439,7 @@ def _build_context(
 
     elif market == Market.TW and instrument == InstrumentType.FUTURE:
         futures_account: FuturesAccount = FuturesAccount(
-            init_capital=strategy.init_capital
+            init_capital=live_capital(strategy)
         )
         account = futures_account
         # 保證金設定與回測同一套：策略沒宣告就預設查表，並回寫給策略，
