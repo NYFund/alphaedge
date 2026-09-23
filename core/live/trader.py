@@ -183,6 +183,7 @@ class LiveTrader:
         simulation: bool = False,
         margin_query: Optional[MarginAccountQuery] = None,
         cost_estimator: Optional[TradeCostEstimator] = None,
+        fetch_account: Optional[Callable[[], BrokerAccountSnapshot]] = None,
     ) -> None:
         """
         - Description:
@@ -251,6 +252,12 @@ class LiveTrader:
         # 是否連模擬環境。**預設 False（正式環境的嚴格行為）**：券商查不到
         # 期貨保證金時，模擬環境略過帳戶層檢查、正式環境擋單
         self.simulation: bool = simulation
+        # 取帳務快照的方式；`None` 時退回 `broker.get_account()`。
+        # **由組裝層注入**：股票與期貨是兩個子帳戶，「這一批策略該看哪一筆」
+        # 是商品語意，而本檔不出現任何商品字樣（見模組說明）
+        self.fetch_account: Optional[Callable[[], BrokerAccountSnapshot]] = (
+            fetch_account
+        )
         # 最近一次刷新的券商帳務快照；`_account_equity()` 由它取總權益。
         # **不存進 `CapitalAllocator`**：總權益是券商事實，而 allocator 管的是
         # 額度與保留，兩件事放一起會讓「這個數字是誰說的」失去單一出處
@@ -398,7 +405,16 @@ class LiveTrader:
 
         # 額度總量要在有帳務之後才驗得動（`build_live_trader()` 當下還沒連線），
         # 且要在對帳之前——超配就不該讓這個段落繼續往下走
-        self.allocator.verify_quota(self._account_equity())
+        if self.equity_unavailable():
+            # **略過而不是捏一個數字讓它通過**：這道檢查問的是「帳戶撐不撐得住
+            # 這些額度」，而此刻連帳戶有多少都不知道。以 Σ 宣告額度當基準的話，
+            # 檢查會變成「Σ 額度 ≤ Σ 額度 × 安全係數」，反而必然不成立
+            logger.warning(
+                "模擬環境查不到帳務（欄位整組回 0），**略過額度總量檢查**。"
+                "正式環境不走這條路：那裡的 0 代表真的沒有資金，會拒絕啟動"
+            )
+        else:
+            self.allocator.verify_quota(self._account_equity())
         self._check_daily_loss()
 
         self.last_reconcile = self.reconciler.check(positions)
@@ -1826,16 +1842,29 @@ class LiveTrader:
             else 0.0
         )
 
-        if equity > 0 or not self.simulation:
+        if not self.equity_unavailable():
             return equity
 
-        fallback: float = sum(self.allocator.quotas.values())
-        logger.warning(
-            f"模擬環境的帳務欄位回 0（總權益算不出來），改以 Σ 宣告額度 "
-            f"{fallback:,.0f} 為基準繼續。**正式環境不走這條路**，"
-            f"那裡的 0 代表真的沒有資金，會直接拒絕啟動"
-        )
-        return fallback
+        # 查不到帳務時，曝險與虧損檢查改以宣告額度為基準——它們需要一個尺度，
+        # 而「策略自己說要動用多少」是此刻唯一已知的尺度。
+        # **額度總量檢查不走這條**：見 `equity_unavailable()`
+        return sum(self.allocator.quotas.values())
+
+    def equity_unavailable(self) -> bool:
+        """
+        - Description:
+            模擬環境查不到帳務（欄位整組回 0）
+
+            模擬環境的期貨保證金欄位已知會全部回 0，此時總權益恆為 0。
+            **正式環境永遠回 False**：那裡的 0 是真的沒有錢，該讓檢查照常擋下來。
+        - Return:
+            - bool
+                查不到為 True
+        """
+
+        if not self.simulation:
+            return False
+        return self.account_snapshot is None or self.account_snapshot.total_equity <= 0
 
     def _check_daily_loss(self) -> None:
         """
@@ -1885,12 +1914,31 @@ class LiveTrader:
     def _refresh_capital(self) -> None:
         """刷新帳戶可用餘額與各策略的持倉占用；段落內不再逐單查帳務"""
 
-        snapshot: Any = self.broker.get_account()
+        snapshot: BrokerAccountSnapshot = self._query_account_snapshot()
         used: Dict[str, float] = {
             context.name: position_value(context.account) for context in self.contexts
         }
         self.account_snapshot = snapshot
         self.allocator.refresh(snapshot.available_balance, used)
+
+    def _query_account_snapshot(self) -> BrokerAccountSnapshot:
+        """
+        - Description:
+            取得本次要當作基準的帳務快照
+
+            **查哪個帳戶由組裝層決定、以 `fetch_account` 注入**：股票與期貨是
+            兩個子帳戶，各有各的錢，而「這一批策略該看哪一筆」是商品語意——
+            本檔刻意不出現任何商品字樣（見模組說明）。
+
+            未注入時退回券商的預設帳務查詢，維持既有呼叫端的行為。
+        - Return:
+            - BrokerAccountSnapshot
+                帳務快照
+        """
+
+        if self.fetch_account is not None:
+            return self.fetch_account()
+        return self.broker.get_account()
 
     def _reference_price(self, order: BaseOrder) -> float:
         """

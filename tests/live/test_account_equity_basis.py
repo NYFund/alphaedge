@@ -1,8 +1,6 @@
 from types import SimpleNamespace
 from typing import Dict, List
 
-import pytest
-
 from core.live.factory import live_capital
 from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
@@ -79,14 +77,12 @@ def test_missing_snapshot_is_zero_not_a_crash() -> None:
 
 
 # === 模擬環境的退路 ===
-def test_simulation_falls_back_to_declared_quota_when_equity_is_zero(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test_simulation_falls_back_to_declared_quota_when_equity_is_zero() -> None:
     """
-    模擬環境帳務欄位全為 0 時，改以 Σ 宣告額度為基準
+    模擬環境帳務欄位全為 0 時，曝險與虧損檢查改以 Σ 宣告額度為基準
 
-    模擬環境的期貨保證金欄位已知會整組回 0，此時總權益恆為 0、
-    任何正數額度都過不了，演練根本啟動不了。
+    那兩道檢查需要一個尺度，而「策略自己說要動用多少」是此刻唯一已知的尺度。
+    **額度總量檢查不走這條**，見下一條測試。
     """
 
     trader: LiveTrader = make_trader(
@@ -95,7 +91,32 @@ def test_simulation_falls_back_to_declared_quota_when_equity_is_zero(
         simulation=True,
     )
 
+    assert trader.equity_unavailable() is True
     assert trader._account_equity() == 3_400_000.0
+
+
+def test_quota_check_is_skipped_rather_than_faked() -> None:
+    """
+    **查不到帳務時要略過額度檢查，不是捏一個數字讓它通過**
+
+    以 Σ 宣告額度當基準的話，檢查會變成「Σ 額度 ≤ Σ 額度 × 安全係數」，
+    因為安全係數小於 1 而**必然不成立**——2026-09-23 實測到期貨側正好差
+    那 5%：3,000,000 vs 2,850,000。捏數字不只不誠實，還剛好行不通。
+    """
+
+    import inspect
+
+    from core.live.capital_allocator import CapitalAllocator
+
+    source: str = inspect.getsource(LiveTrader.prepare)
+
+    assert "equity_unavailable()" in source, "額度檢查沒有先問「查不查得到帳務」"
+    assert "verify_quota" in source
+
+    # 釘住那個必然不成立的關係：安全係數 < 1
+    allocator: CapitalAllocator = CapitalAllocator.__new__(CapitalAllocator)
+    allocator.safety_ratio = 0.95
+    assert allocator.safety_ratio < 1.0
 
 
 def test_production_with_zero_equity_stays_zero() -> None:
@@ -210,3 +231,106 @@ def test_backtest_never_reads_live_capital() -> None:
     ]
 
     assert offenders == [], f"回測讀到了實盤專用的額度：{offenders}"
+
+
+# === 依商品分派帳戶 ===
+class _StubBroker:
+    """只回兩個帳務快照的假閘道；記下被問了哪幾次"""
+
+    def __init__(self, stock_equity: float, futures_equity: float) -> None:
+        self.calls: List[str] = []
+        self._stock: BrokerAccountSnapshot = BrokerAccountSnapshot(
+            available_balance=stock_equity, total_equity=stock_equity
+        )
+        self._futures: BrokerAccountSnapshot = BrokerAccountSnapshot(
+            available_balance=futures_equity, total_equity=futures_equity
+        )
+
+    def get_account(self) -> BrokerAccountSnapshot:
+        self.calls.append("stock")
+        return self._stock
+
+    def get_futures_account(self) -> BrokerAccountSnapshot:
+        self.calls.append("futures")
+        return self._futures
+
+
+def _strategy(instrument: object) -> SimpleNamespace:
+    """只帶 `instrument_type` 的假策略"""
+
+    return SimpleNamespace(instrument_type=instrument)
+
+
+def test_stock_only_reads_the_stock_account() -> None:
+    """只有股票策略時查股票帳戶"""
+
+    from core.live.factory import make_account_fetcher
+    from core.utils import InstrumentType
+
+    broker: _StubBroker = _StubBroker(stock_equity=582_608.0, futures_equity=0.0)
+    fetch = make_account_fetcher(broker, [_strategy(InstrumentType.STOCK)])
+
+    assert fetch().total_equity == 582_608.0
+    assert broker.calls == ["stock"]
+
+
+def test_futures_only_reads_the_futures_account() -> None:
+    """
+    只有期貨策略時查期貨保證金帳戶，**不是股票帳戶**
+
+    股票與期貨是兩個子帳戶，各有各的錢。拿股票權益去檢查期貨額度，
+    等於用另一筆錢的規模在管這一筆——2026-09-23 的演練就因此永遠過不了額度檢查。
+    """
+
+    from core.live.factory import make_account_fetcher
+    from core.utils import InstrumentType
+
+    broker: _StubBroker = _StubBroker(stock_equity=582_608.0, futures_equity=0.0)
+    fetch = make_account_fetcher(broker, [_strategy(InstrumentType.FUTURE)])
+
+    assert fetch().total_equity == 0.0, "查到股票帳戶了"
+    assert broker.calls == ["futures"]
+
+
+def test_mixed_instruments_sum_both_accounts() -> None:
+    """兩種商品同時載入時兩個帳戶相加：都是同一個人的錢"""
+
+    from core.live.factory import make_account_fetcher
+    from core.utils import InstrumentType
+
+    broker: _StubBroker = _StubBroker(stock_equity=500_000.0, futures_equity=300_000.0)
+    fetch = make_account_fetcher(
+        broker,
+        [_strategy(InstrumentType.STOCK), _strategy(InstrumentType.FUTURE)],
+    )
+    snapshot: BrokerAccountSnapshot = fetch()
+
+    assert snapshot.total_equity == 800_000.0
+    assert snapshot.available_balance == 800_000.0
+    assert sorted(broker.calls) == ["futures", "stock"]
+
+
+def test_fetcher_requeries_every_time() -> None:
+    """每次呼叫都重查：段落之間帳務會變，快取住等於用開盤時的數字管收盤"""
+
+    from core.live.factory import make_account_fetcher
+    from core.utils import InstrumentType
+
+    broker: _StubBroker = _StubBroker(stock_equity=1.0, futures_equity=0.0)
+    fetch = make_account_fetcher(broker, [_strategy(InstrumentType.STOCK)])
+
+    fetch()
+    fetch()
+
+    assert broker.calls == ["stock", "stock"]
+
+
+def test_trader_without_a_fetcher_falls_back_to_get_account() -> None:
+    """未注入時退回券商的預設帳務查詢，既有呼叫端行為不變"""
+
+    broker: _StubBroker = _StubBroker(stock_equity=123.0, futures_equity=0.0)
+    trader: LiveTrader = LiveTrader.__new__(LiveTrader)
+    trader.broker = broker
+    trader.fetch_account = None
+
+    assert trader._query_account_snapshot().total_equity == 123.0

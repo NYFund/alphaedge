@@ -99,15 +99,16 @@ def report_verdict(
     """
 
     equity: float = snapshot.total_equity
-    used_fallback: bool = False
 
     if equity <= 0 and simulation:
-        equity = sum(quotas.values())
-        used_fallback = True
+        # 與實盤一致：查不到帳務時**略過**額度總量檢查，而不是捏一個數字讓它通過
         logger.warning(
-            "模擬環境的帳務欄位回 0，額度檢查會改以 Σ 宣告額度為基準"
-            "（正式環境不走這條路，會直接拒絕啟動）"
+            "模擬環境查不到帳務（欄位整組回 0），實盤會**略過額度總量檢查**"
+            "（正式環境不走這條路，那裡的 0 代表真的沒有資金，會拒絕啟動）"
         )
+        logger.info(f"  Σ 宣告額度 {sum(quotas.values()):,.0f} 不受此檢查限制")
+        logger.info("✅ 不會被額度檢查擋下（因為那道檢查被略過）")
+        return True
 
     logger.info("--- 額度檢查 ---")
     for name, quota in quotas.items():
@@ -126,8 +127,6 @@ def report_verdict(
     if problem is None:
         margin: float = equity * CAPITAL_SAFETY_RATIO - sum(quotas.values())
         logger.info(f"✅ 會通過，餘裕 {margin:,.0f}")
-        if used_fallback:
-            logger.warning("  但通過的原因是走了模擬環境的退路，不是真的有這些權益")
         return True
 
     logger.error(f"❌ 不會通過：{problem}")
@@ -167,7 +166,21 @@ def main() -> int:
             return 1
 
         query: ShioajiAccountQuery = ShioajiAccountQuery(session.api, RateLimiter())
-        snapshot: BrokerAccountSnapshot = query.get_stock_account()
+        # 與實盤一致：依本次載入的商品類別決定查哪個帳戶
+        if args.strategy == "stock":
+            snapshot: BrokerAccountSnapshot = query.get_stock_account()
+        elif args.strategy == "futures":
+            snapshot = query.get_futures_account()
+        else:
+            stock: BrokerAccountSnapshot = query.get_stock_account()
+            futures: BrokerAccountSnapshot = query.get_futures_account()
+            snapshot = BrokerAccountSnapshot(
+                ts=stock.ts,
+                available_balance=(stock.available_balance + futures.available_balance),
+                total_equity=stock.total_equity + futures.total_equity,
+                unrealized_pnl=stock.unrealized_pnl + futures.unrealized_pnl,
+                raw={"stock": stock.raw, "futures": futures.raw},
+            )
 
         report_snapshot(snapshot)
         compare_with_old_formula(snapshot)
