@@ -1,7 +1,10 @@
 import datetime
 from typing import Optional
 
-from core.models.base.quote import BaseQuote, LiveDataUnavailableError
+from core.models.base.quote import (
+    BaseQuote,
+    PreOpenQuoteMixin,
+)
 from core.utils import FuturesSession, Scale
 
 """FuturesQuote: 台期貨單一契約的報價（識別為 product ＋ expiry 組成的契約代號）"""
@@ -69,7 +72,7 @@ class FuturesQuote(BaseQuote):
         return self.symbol
 
 
-class PreOpenFuturesQuote(FuturesQuote):
+class PreOpenFuturesQuote(PreOpenQuoteMixin, FuturesQuote):
     """
     盤前（開盤段）的期貨報價：**只有參考價，沒有 OHLC**
 
@@ -106,68 +109,3 @@ class PreOpenFuturesQuote(FuturesQuote):
         self.reference_price: float = reference_price
         self.limit_up: Optional[float] = limit_up
         self.limit_down: Optional[float] = limit_down
-
-    @staticmethod
-    def _unavailable(field: str) -> LiveDataUnavailableError:
-        """統一的錯誤訊息，直接告訴作者該改用什麼"""
-
-        return LiveDataUnavailableError(
-            f"開盤段沒有當日 {field}：盤前不存在 OHLC。"
-            "需要基準價請用 `reference_price`，需要漲跌停請用 `limit_up`／`limit_down`"
-        )
-
-    @property
-    def open(self) -> float:
-        """盤前沒有開盤價"""
-
-        raise self._unavailable("open")
-
-    @open.setter
-    def open(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def high(self) -> float:
-        """盤前沒有最高價"""
-
-        raise self._unavailable("high")
-
-    @high.setter
-    def high(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def low(self) -> float:
-        """盤前沒有最低價"""
-
-        raise self._unavailable("low")
-
-    @low.setter
-    def low(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def close(self) -> float:
-        """盤前沒有收盤價"""
-
-        raise self._unavailable("close")
-
-    @close.setter
-    def close(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def adj_close(self) -> Optional[float]:
-        """期貨沒有還原價；盤前更沒有"""
-
-        raise self._unavailable("adj_close")
-
-    @adj_close.setter
-    def adj_close(self, value: Optional[float]) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def signal_close(self) -> float:
-        """盤前沒有訊號用收盤價；理由見 `PreOpenStockQuote.signal_close`"""
-
-        raise self._unavailable("signal_close")

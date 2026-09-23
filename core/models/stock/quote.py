@@ -3,7 +3,10 @@ from typing import Optional
 
 import pandas as pd
 
-from core.models.base.quote import BaseQuote, LiveDataUnavailableError
+from core.models.base.quote import (
+    BaseQuote,
+    PreOpenQuoteMixin,
+)
 from core.utils import Scale
 
 """Quote structures: tick-level and daily-level pricing in backtesting"""
@@ -82,7 +85,7 @@ class StockQuote(BaseQuote):
         return self.symbol
 
 
-class PreOpenStockQuote(StockQuote):
+class PreOpenStockQuote(PreOpenQuoteMixin, StockQuote):
     """
     盤前（開盤段）的個股報價：**只有參考價，沒有 OHLC**
 
@@ -101,6 +104,12 @@ class PreOpenStockQuote(StockQuote):
     3. **`signal_close` 要自己覆寫。** 它在 `adj_close` 非 None 時**完全不讀 `close`**，
        只擋 `close` 的話，盤前只要 `adj_close` 有值，訊號就照樣算得出來。
     """
+
+    UNAVAILABLE_HINT: str = (
+        "需要基準價請用 `reference_price`，需要漲跌停請用 `limit_up`／`limit_down`；"
+        "若策略的實盤語意本來就與回測不同，請在策略上開一個具名的可覆寫方法，"
+        "不要在這裡取值"
+    )
 
     def __init__(
         self,
@@ -126,75 +135,3 @@ class PreOpenStockQuote(StockQuote):
         # 當日漲跌停（交易所公告值）；除權息日的基準與公式推算不同，故一律用公告值
         self.limit_up: Optional[float] = limit_up
         self.limit_down: Optional[float] = limit_down
-
-    @staticmethod
-    def _unavailable(field: str) -> LiveDataUnavailableError:
-        """統一的錯誤訊息，直接告訴作者該改用什麼"""
-
-        return LiveDataUnavailableError(
-            f"開盤段沒有當日 {field}：盤前不存在 OHLC。"
-            "需要基準價請用 `reference_price`，需要漲跌停請用 `limit_up`／`limit_down`；"
-            "若策略的實盤語意本來就與回測不同，請在策略上開一個具名的可覆寫方法，"
-            "不要在這裡取值"
-        )
-
-    @property
-    def open(self) -> float:
-        """盤前沒有開盤價"""
-
-        raise self._unavailable("open")
-
-    @open.setter
-    def open(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def high(self) -> float:
-        """盤前沒有最高價"""
-
-        raise self._unavailable("high")
-
-    @high.setter
-    def high(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def low(self) -> float:
-        """盤前沒有最低價"""
-
-        raise self._unavailable("low")
-
-    @low.setter
-    def low(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def close(self) -> float:
-        """盤前沒有收盤價"""
-
-        raise self._unavailable("close")
-
-    @close.setter
-    def close(self, value: float) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def adj_close(self) -> Optional[float]:
-        """盤前沒有還原收盤價"""
-
-        raise self._unavailable("adj_close")
-
-    @adj_close.setter
-    def adj_close(self, value: Optional[float]) -> None:
-        """僅供父類 `__init__` 賦值用；刻意不存"""
-
-    @property
-    def signal_close(self) -> float:
-        """
-        盤前沒有訊號用收盤價
-
-        **必須自己覆寫**：父類的版本在 `adj_close` 非 None 時完全不讀 `close`，
-        只擋 `close` 會讓這條路徑漏掉。
-        """
-
-        raise self._unavailable("signal_close")
