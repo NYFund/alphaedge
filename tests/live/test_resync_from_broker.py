@@ -209,7 +209,7 @@ def test_apply_writes_every_change_with_a_risk_event(
 
     assert ledger.diff_against_broker(positions) == {}
     assert resync_events(dao) == [
-        (UNATTRIBUTED_STRATEGY, "WARNING", "2317"),
+        (UNATTRIBUTED_STRATEGY, "WARN", "2317"),
         ("Alpha", "CRITICAL", "2330"),
     ]
 

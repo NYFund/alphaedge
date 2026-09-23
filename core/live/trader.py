@@ -13,7 +13,11 @@ from core.execution import order_preprocess
 from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
 from core.live.after_close import AfterCloseRunner, TradeCostEstimator
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
-from core.live.attribution.position_ledger import PositionAttributionLedger
+from core.live.attribution.position_ledger import (
+    ACCOUNT_STRATEGY,
+    SOURCE_LOCAL,
+    PositionAttributionLedger,
+)
 from core.live.attribution.resync import (
     ResyncPlan,
     ResyncRefusedError,
@@ -28,10 +32,11 @@ from core.live.intraday.session_guard import (
     cover_action,
     stops_after_cover,
 )
-from core.live.notify.base import notify_safely
+from core.live.notify.base import NotifyLevel, notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
+from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
@@ -270,6 +275,12 @@ class LiveTrader:
             reporter if reporter is not None else LiveReporter(dao)
         )
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
         self._sleep: Callable[[float], None] = sleep
 
         # 本段落已送出的委託金額，逐策略累計；段落結束時用來釋放未成交的保留
@@ -508,7 +519,7 @@ class LiveTrader:
             "已標記為 CRASHED；本次將以券商為準重建部位並對帳"
         )
         logger.error(message)
-        self._notify("CRITICAL", "偵測到上次崩潰", message)
+        self._notify(NotifyLevel.CRITICAL, "偵測到上次崩潰", message)
         return crashed
 
     # === 盤中逐筆 ===
@@ -641,7 +652,7 @@ class LiveTrader:
 
             if warning is not None:
                 logger.warning(f"{context.name}：{warning}")
-                self._notify("WARNING", "當沖回補政策在實盤被改寫", warning)
+                self._notify(NotifyLevel.WARN, "當沖回補政策在實盤被改寫", warning)
 
             if orders:
                 logger.warning(
@@ -691,16 +702,12 @@ class LiveTrader:
             + ("。已停止重試，請立即人工處理" if exhausted else "。下一次心跳重試")
         )
         logger.error(message)
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "severity": "CRITICAL",
-                "category": "DAY_TRADE_COVER_FAILED",
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category="DAY_TRADE_COVER_FAILED",
+            severity=NotifyLevel.CRITICAL,
+            message=message,
         )
-        self._notify("CRITICAL", "當沖回補失敗", message)
+        self._notify(NotifyLevel.CRITICAL, "當沖回補失敗", message)
 
         if exhausted:
             self.session_guard.mark_covered()
@@ -815,7 +822,7 @@ class LiveTrader:
         """
 
         self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
-        self._notify("CRITICAL", "行情中斷", reason)
+        self._notify(NotifyLevel.CRITICAL, "行情中斷", reason)
 
     def ensure_connected(self) -> bool:
         """
@@ -835,7 +842,7 @@ class LiveTrader:
 
         logger.error("偵測到連線中斷，嘗試重連")
         if not self.broker.reconnect():
-            self._notify("CRITICAL", "重連失敗", "已停止送單，請人工確認")
+            self._notify(NotifyLevel.CRITICAL, "重連失敗", "已停止送單，請人工確認")
             return False
 
         self.recover_after_reconnect()
@@ -944,7 +951,11 @@ class LiveTrader:
             except Exception as exc:
                 logger.opt(exception=True).error(f"{context.name} 換月判定失敗：{exc}")
                 self._write_roll_event(
-                    context, None, "CRITICAL", "ROLL_FAILED", f"換月判定失敗：{exc}"
+                    context,
+                    None,
+                    NotifyLevel.CRITICAL,
+                    "ROLL_FAILED",
+                    f"換月判定失敗：{exc}",
                 )
                 continue
 
@@ -953,7 +964,7 @@ class LiveTrader:
                     self._write_roll_event(
                         context,
                         plan,
-                        "WARNING",
+                        NotifyLevel.WARN,
                         "ROLL_SKIPPED",
                         "交易模式不允許開新倉，本次不換月",
                     )
@@ -977,7 +988,11 @@ class LiveTrader:
 
         if self.dispatch([(context, plan.close_order)], window):
             self._write_roll_event(
-                context, plan, "WARNING", "ROLL_ABANDONED", "平倉腿未送出，本次不換月"
+                context,
+                plan,
+                NotifyLevel.WARN,
+                "ROLL_ABANDONED",
+                "平倉腿未送出，本次不換月",
             )
             return False
 
@@ -988,7 +1003,7 @@ class LiveTrader:
             self._write_roll_event(
                 context,
                 plan,
-                "WARNING",
+                NotifyLevel.WARN,
                 "ROLL_ABANDONED",
                 "平倉腿未成交，開倉腿放棄，次日再換",
             )
@@ -998,7 +1013,7 @@ class LiveTrader:
             self._write_roll_event(
                 context,
                 plan,
-                "CRITICAL",
+                NotifyLevel.CRITICAL,
                 "ROLL_OPEN_FAILED",
                 "舊契約已平倉、新契約未送出：這筆曝險已消失，請人工確認是否補開",
             )
@@ -1023,7 +1038,7 @@ class LiveTrader:
         self,
         context: StrategyContext,
         plan: Optional[RollPlan],
-        severity: str,
+        severity: NotifyLevel,
         category: str,
         message: str,
     ) -> None:
@@ -1031,16 +1046,12 @@ class LiveTrader:
 
         text: str = f"{plan.reason}：{message}" if plan is not None else message
         logger.warning(f"[Roll] {context.name}：{text}")
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": context.name,
-                "severity": severity,
-                "category": category,
-                "symbol": plan.close_order.symbol if plan is not None else None,
-                "message": text,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category=category,
+            severity=severity,
+            message=text,
+            strategy_name=context.name,
+            symbol=plan.close_order.symbol if plan is not None else None,
         )
         self._notify(severity, "換月", text)
 
@@ -1230,17 +1241,13 @@ class LiveTrader:
             f"{context.strategy.max_holdings}，已剔除"
         )
         logger.warning(f"[Max Holdings] {context.name}：{message}")
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": context.name,
-                "severity": "WARNING",
-                "category": "MAX_HOLDINGS",
-                "symbol": order.symbol,
-                "client_order_id": order.client_order_id,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category="MAX_HOLDINGS",
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
         )
 
     # === 跨策略 ===
@@ -1311,7 +1318,7 @@ class LiveTrader:
         # 「可用餘額 ＋ 持倉占用」的公式，於是改了一邊另一邊不會跟著改
         allowed: List[ExposureItem] = self.risk_manager.check_batch(
             items,
-            "__account__",
+            ACCOUNT_STRATEGY,
             self._account_equity(),
         )
         approved: List[BaseOrder] = [item.order for item in allowed]
@@ -1414,19 +1421,17 @@ class LiveTrader:
 
         message: str = f"{order.symbol} 開倉單未送出：{reason}"
         logger.warning(f"[Margin] {context.name}：{message}")
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": context.name,
-                "severity": "WARNING",
-                "category": "MARGIN_INSUFFICIENT",
-                "symbol": order.symbol,
-                "client_order_id": order.client_order_id,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category="MARGIN_INSUFFICIENT",
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
         )
-        self._notify("WARNING", "保證金不足", message)
+        # 這一行的等級原本是 `"WARNING"`，而 `NotifyLevel` 只認得 `WARN`，
+        # 於是保證金不足的推播一直在 `notify_safely()` 裡被吞掉
+        self._notify(NotifyLevel.WARN, "保證金不足", message)
 
     # === 回報 ===
     def drain_once(self) -> List[ExecutionReport]:
@@ -1531,7 +1536,7 @@ class LiveTrader:
                 {
                     "date": today,
                     "strategy_name": context.name,
-                    "source": "local",
+                    "source": SOURCE_LOCAL,
                     "available_balance": context.account.balance,
                     "total_equity": context.account.balance
                     + position_value(context.account),
@@ -1673,7 +1678,7 @@ class LiveTrader:
                     str(action["action_id"]), today + datetime.timedelta(days=1)
                 )
                 self._notify(
-                    "CRITICAL",
+                    NotifyLevel.CRITICAL,
                     "補平單送出失敗",
                     f"{action['symbol']} 殘量 {volume} 仍未平掉",
                 )
@@ -1727,16 +1732,12 @@ class LiveTrader:
             + ("已無部位，不送單" if volume <= 0 else f"改送 {volume}")
         )
         logger.warning(message)
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": context.name,
-                "severity": "WARNING",
-                "category": "PENDING_ACTION_TRUNCATED",
-                "symbol": symbol,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category="PENDING_ACTION_TRUNCATED",
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=symbol,
         )
         if volume <= 0:
             self.dao.resolve_pending_action(
@@ -1772,8 +1773,15 @@ class LiveTrader:
             logger.opt(exception=True).error(f"組補平單失敗：{exc}")
             return None
 
-    def _notify(self, level: str, title: str, body: str) -> None:
-        """推播；失敗一律吞掉，監控不可拖垮被監控的東西"""
+    def _notify(self, level: NotifyLevel, title: str, body: str) -> None:
+        """
+        推播；失敗一律吞掉，監控不可拖垮被監控的東西
+
+        **收 `NotifyLevel` 而不是字串**：等級的唯一來源是
+        `live_risk_event.severity`，而字串一度出現 `WARN` 與 `WARNING`
+        兩種拼法，後者在 `notify_safely()` 裡會拋例外並被吞掉——
+        事件有紀錄、通知卻送不出去。
+        """
 
         notify_safely(self.notifier, level, title, body)
 

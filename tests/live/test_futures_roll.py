@@ -325,7 +325,7 @@ def test_unfilled_close_leg_abandons_the_open_leg(dao: LiveTradeDAO) -> None:
 
     assert trader.execute_rolls(None) == 0
     assert placed_symbols(broker) == ["TX202610"]
-    assert roll_events(dao) == [("ROLL_ABANDONED", "WARNING")]
+    assert roll_events(dao) == [("ROLL_ABANDONED", "WARN")]
 
 
 def test_open_leg_failure_after_close_fill_is_critical(dao: LiveTradeDAO) -> None:
@@ -353,7 +353,7 @@ def test_reduce_only_mode_skips_the_roll(dao: LiveTradeDAO) -> None:
 
     assert trader.execute_rolls(None) == 0
     assert placed_symbols(broker) == []
-    assert roll_events(dao) == [("ROLL_SKIPPED", "WARNING")]
+    assert roll_events(dao) == [("ROLL_SKIPPED", "WARN")]
 
 
 def test_factory_injects_a_live_roll_config_and_calendar(dao: LiveTradeDAO) -> None:

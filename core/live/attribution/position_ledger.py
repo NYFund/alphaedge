@@ -26,6 +26,17 @@ from core.utils import PositionType
 # 未歸屬部位的保留策略名。第一次啟動、lot 表遺失、券商強制平倉都會落到這裡
 UNATTRIBUTED_STRATEGY: str = "__unattributed__"
 
+# 快照的兩個保留「策略名」：它們不是策略，是帳戶層合計與券商端的代稱。
+# **與 `UNATTRIBUTED_STRATEGY` 同一族，故放在一起**——這三個一直是裸字串散在
+# 各處，而同族的東西一部分具名、一部分裸著，改名時必然漏掉沒具名的那些
+ACCOUNT_STRATEGY: str = "__account__"
+BROKER_STRATEGY: str = "__broker__"
+
+# `live_position_snapshot.source` 的三個值：逐策略歸屬帳／帳戶層合計／券商端
+SOURCE_LOCAL: str = "local"
+SOURCE_ACCOUNT: str = "account"
+SOURCE_BROKER: str = "broker"
+
 
 class PositionAttributionLedger:
     """

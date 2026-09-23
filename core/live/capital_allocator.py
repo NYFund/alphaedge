@@ -5,6 +5,8 @@ from loguru import logger
 
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 from core.portfolio.aggregation import allocate_capital, check_quota_against_equity
 
@@ -60,6 +62,12 @@ class CapitalAllocator:
         self.run_id: str = run_id
         self.safety_ratio: float = safety_ratio
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
 
         # 保留中（已送出、尚未終結）與已佔用（持倉）的金額
         self.reserved: Dict[str, float] = {name: 0.0 for name in quotas}
@@ -209,16 +217,9 @@ class CapitalAllocator:
     def _write_event(self, category: str, message: str, strategy_name: str) -> None:
         """寫一筆風控事件；沒有 DAO 時只留 log"""
 
-        if self.dao is None:
-            return
-
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": strategy_name,
-                "severity": "WARN",
-                "category": category,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category=category,
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=strategy_name,
         )

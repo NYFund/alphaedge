@@ -9,6 +9,8 @@ from loguru import logger
 from core.config.paths import LIVE_KILL_SWITCH_PATH
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import BaseOrder
@@ -340,6 +342,12 @@ class PreTradeRiskManager:
         self.run_id: str = run_id
         self.kill_switch_path: Path = kill_switch_path
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
 
         # 逐策略的當日累計委託金額（流量）與送單時刻（頻率）
         self.daily_amount: Dict[str, float] = {}
@@ -573,7 +581,7 @@ class PreTradeRiskManager:
         self.mode_state.degrade(
             TradingMode.REDUCE_ONLY, reason, strategy_name=strategy_name
         )
-        self._write_event("DAILY_LOSS", "CRITICAL", reason, strategy_name)
+        self._write_event("DAILY_LOSS", NotifyLevel.CRITICAL, reason, strategy_name)
         return True
 
     def check_account_daily_loss(self, loss: float, total_equity: float) -> bool:
@@ -596,7 +604,7 @@ class PreTradeRiskManager:
 
         reason: str = f"帳戶當日虧損 {loss:,.0f} 超過上限 {cap:,.0f}"
         self.mode_state.degrade(TradingMode.REDUCE_ONLY, reason)
-        self._write_event("ACCOUNT_DAILY_LOSS", "CRITICAL", reason, None)
+        self._write_event("ACCOUNT_DAILY_LOSS", NotifyLevel.CRITICAL, reason, None)
         return True
 
     def on_degrade_event(
@@ -621,7 +629,7 @@ class PreTradeRiskManager:
         """
 
         self.mode_state.degrade(target, reason, strategy_name=strategy_name)
-        self._write_event("DEGRADE", "CRITICAL", reason, strategy_name)
+        self._write_event("DEGRADE", NotifyLevel.CRITICAL, reason, strategy_name)
 
     # === kill switch ===
     def is_kill_switch_on(self) -> bool:
@@ -656,7 +664,7 @@ class PreTradeRiskManager:
         )
         self._write_event(
             decision.category,
-            "WARN",
+            NotifyLevel.WARN,
             decision.reason,
             strategy_name,
             symbol=order.symbol,
@@ -665,7 +673,7 @@ class PreTradeRiskManager:
     def _write_event(
         self,
         category: str,
-        severity: str,
+        severity: NotifyLevel,
         message: str,
         strategy_name: Optional[str],
         symbol: Optional[str] = None,
@@ -675,14 +683,10 @@ class PreTradeRiskManager:
         if self.dao is None:
             return
 
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": strategy_name,
-                "severity": severity,
-                "category": category,
-                "symbol": symbol,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category=category,
+            severity=severity,
+            message=message,
+            strategy_name=strategy_name,
+            symbol=symbol,
         )

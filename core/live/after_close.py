@@ -10,11 +10,12 @@ from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.execution import order_preprocess
 from core.live.account_sync import AccountSynchronizer
 from core.live.datafeed.base import BaseLiveDataFeed
-from core.live.notify.base import BaseNotifier, notify_safely
+from core.live.notify.base import BaseNotifier, NotifyLevel, notify_safely
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker, ParityDiff
+from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.trading_mode import TradingModeState
 from core.models import RealizedTradeSnapshot
 from core.utils import Action, PositionType, Units
@@ -121,6 +122,12 @@ class AfterCloseRunner:
         self.parity_checker: Optional[ParityChecker] = parity_checker
         self.cost_estimator: Optional[TradeCostEstimator] = cost_estimator
         self._now: Callable[[], datetime.datetime] = now_provider
+        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
+        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
+        # 卻要改動建構子簽名與每一個建這個類別的地方
+        self.events: RiskEventLogger = RiskEventLogger(
+            self.dao, self.run_id, now_provider=self._now
+        )
 
         # 本次對帳結果；`run.py` 由它決定退出碼，故盤後跑完要回填給 `LiveTrader`
         self.last_reconcile: Optional[Any] = None
@@ -205,7 +212,7 @@ class AfterCloseRunner:
             result: Dict[str, List[ParityDiff]] = self.parity_checker.check(run_date)
         except Exception as exc:
             logger.opt(exception=True).error(f"訊號 parity 比對失敗：{exc}")
-            self._notify("CRITICAL", "訊號 parity 比對失敗", str(exc))
+            self._notify(NotifyLevel.CRITICAL, "訊號 parity 比對失敗", str(exc))
             return 0
 
         unexplained: Dict[str, int] = {
@@ -221,7 +228,7 @@ class AfterCloseRunner:
             f"{name} {count} 筆" for name, count in unexplained.items() if count
         )
         self._notify(
-            "CRITICAL",
+            NotifyLevel.CRITICAL,
             "訊號 parity 有未解釋的差異",
             f"{run_date} 共 {total} 筆（{detail}），列為隔日第一優先",
         )
@@ -316,15 +323,11 @@ class AfterCloseRunner:
                 f"差 {ratio:+.0%}：成本設定可能需要校正"
             )
             logger.warning(message)
-            self.dao.insert_risk_event(
-                {
-                    "run_id": self.run_id,
-                    "severity": "WARNING",
-                    "category": "COST_MODEL_DRIFT",
-                    "symbol": trade.symbol,
-                    "message": message,
-                    "occurred_at": self._now(),
-                }
+            self.events.write(
+                category="COST_MODEL_DRIFT",
+                severity=NotifyLevel.WARN,
+                message=message,
+                symbol=trade.symbol,
             )
 
         return {
@@ -439,19 +442,15 @@ class AfterCloseRunner:
                 "created_at": self._now(),
             }
         )
-        self.dao.insert_risk_event(
-            {
-                "run_id": self.run_id,
-                "strategy_name": order_row["strategy_name"],
-                "severity": "CRITICAL",
-                "category": "UNFILLED_EXIT",
-                "symbol": order_row["symbol"],
-                "client_order_id": client_order_id,
-                "message": message,
-                "occurred_at": self._now(),
-            }
+        self.events.write(
+            category="UNFILLED_EXIT",
+            severity=NotifyLevel.CRITICAL,
+            message=message,
+            strategy_name=order_row["strategy_name"],
+            symbol=order_row["symbol"],
+            client_order_id=client_order_id,
         )
-        self._notify("CRITICAL", "平倉單未成交", message)
+        self._notify(NotifyLevel.CRITICAL, "平倉單未成交", message)
 
     @staticmethod
     def _is_exit_row(order_row: Dict[str, Any]) -> bool:
@@ -468,7 +467,7 @@ class AfterCloseRunner:
             order_preprocess.resolve_close_action(position_type).value
         )
 
-    def _notify(self, level: str, title: str, body: str) -> None:
+    def _notify(self, level: NotifyLevel, title: str, body: str) -> None:
         """推播；失敗一律吞掉，監控不可拖垮被監控的東西"""
 
         notify_safely(self.notifier, level, title, body)
