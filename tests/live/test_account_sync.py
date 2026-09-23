@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -575,3 +575,38 @@ def test_a_real_internal_mismatch_is_still_caught(
     assert result.internal_differences == {("2330", PositionType.LONG.value): (0, 2)}
     assert result.is_consistent is False
     assert degradations, "有歸屬的策略對不上時仍要降級"
+
+
+def test_strategy_snapshot_carries_the_avg_price(
+    reconciler: Reconciler,
+    ledger: PositionAttributionLedger,
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    策略層快照要帶均價
+
+    報表的 `Avg Price` 欄原本只有 `__broker__` 那批有值，策略層那幾列**永遠空白**——
+    而那正是要拿來與券商端對照的欄位：兩邊的均價對不上，代表歸屬帳沖銷的順序
+    與券商不一致，而數量仍然是對的，對帳看不出來。
+
+    均價以口數加權，所以這裡是 (1×100 + 3×200) / 4 = 175，不是算術平均 150。
+    """
+
+    ledger.open_lot(
+        "A", make_fill(volume=1, price=100.0, seqno="000001"), PositionType.LONG
+    )
+    ledger.open_lot(
+        "A", make_fill(volume=3, price=200.0, seqno="000002"), PositionType.LONG
+    )
+
+    reconciler.check(
+        [BrokerPositionSnapshot(symbol="2330", direction=PositionType.LONG, volume=4)]
+    )
+
+    row: Optional[Tuple[Any, ...]] = dao.conn.execute(
+        "SELECT avg_price FROM live_position_snapshot "
+        "WHERE strategy_name = 'A' AND source = 'local'"
+    ).fetchone()
+
+    assert row is not None, "策略層快照沒有寫進去"
+    assert row[0] == pytest.approx(175.0)

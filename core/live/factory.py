@@ -2,7 +2,6 @@ import datetime
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-import shioaji as sj
 from loguru import logger
 
 from core.backtest.backtester import Backtester
@@ -16,8 +15,6 @@ from core.backtest.models.cost_model import (
 from core.backtest.models.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimiter
-from core.broker.tw.shioaji_broker import ShioajiBroker
-from core.broker.tw.shioaji_session import ShioajiSession
 from core.config.settings import (
     LIVE_NOTIFY_CHANNEL,
     LIVE_NOTIFY_TARGET,
@@ -464,6 +461,13 @@ def _build_broker(
     if broker_kind != "shioaji":
         raise UnsupportedMarketError(f"不支援的券商：{broker_kind}（目前只有 shioaji）")
 
+    # **延後 import**：只有真的要連券商時才需要 SDK。寫在模組層級的話，
+    # 任何一個 `from core.live.factory import ...` 都會把整包 SDK 拉進來，
+    # 沒裝的環境當場 ImportError——而回測不該為了它付 import 成本，
+    # 也不該因為它壞掉而跑不動
+    from core.broker.tw.shioaji_broker import ShioajiBroker
+    from core.broker.tw.shioaji_session import ShioajiSession
+
     session: ShioajiSession = ShioajiSession(
         simulation=simulation, rate_limiter=rate_limiter
     )
@@ -862,7 +866,7 @@ def _record_run(
             "dry_run": int(dry_run),
             "notify_enabled": int(notify_enabled),
             "git_commit": _git_commit(),
-            "shioaji_version": getattr(sj, "__version__", "unknown"),
+            "shioaji_version": _shioaji_version(),
         }
     )
     dao.conn.commit()
@@ -879,6 +883,28 @@ def _git_commit() -> str:
             .decode()
             .strip()
         )
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
+        # 只擋得住「查不到」：非零結束碼、git 不存在、工作目錄不是 repo。
+        # 其餘例外代表這支函式自己寫錯了，不該被稽核欄位的降級路徑吃掉
         logger.warning("取不到 git commit，稽核欄位記為 unknown")
         return "unknown"
+
+
+def _shioaji_version() -> str:
+    """
+    券商 SDK 版本；讀不到時回 `unknown`
+
+    **import 寫在函式內**：整個模組只為了這一個版本字串而相依券商 SDK，
+    寫在模組層級的話，任何一個 `from core.live.factory import ...`
+    都得把整包 SDK 拉進來，沒裝的環境則當場 ImportError。
+    回測不該為了它付 import 成本，也不該因為它壞掉而跑不動——
+    這條邊界沒有東西釘住就會漂回去，故另有測試掃描模組層級的 import。
+    """
+
+    try:
+        import shioaji
+    except ImportError:
+        logger.warning("讀不到 shioaji 版本，稽核欄位記為 unknown")
+        return "unknown"
+
+    return str(getattr(shioaji, "__version__", "unknown"))

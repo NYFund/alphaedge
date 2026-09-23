@@ -474,3 +474,48 @@ def test_mixing_markets_with_disjoint_windows_is_refused(dao: LiveTradeDAO) -> N
 
     with pytest.raises(ValueError, match="沒有交集"):
         build([LiveStockStrategy(), LiveFuturesStrategy()], dao)
+
+
+# === 回測不相依券商 SDK ===
+NO_SDK_PROBE: str = """
+import builtins
+import sys
+
+_real = builtins.__import__
+
+
+def _blocked(name, *args, **kwargs):
+    if name == "shioaji" or name.startswith("shioaji."):
+        raise ImportError("No module named 'shioaji'")
+    return _real(name, *args, **kwargs)
+
+
+builtins.__import__ = _blocked
+import core.live.factory  # noqa: F401,E402
+
+print("OK")
+"""
+
+
+def test_factory_imports_without_the_broker_sdk() -> None:
+    """
+    **沒裝券商 SDK 也要 import 得了 `core.live.factory`**
+
+    這條邊界是「回測不相依券商 SDK」。它只要沒有東西釘住就會漂回去——
+    而漂回去的方式不只一種：模組層級直接 `import shioaji` 會，
+    模組層級 import 一個**自己**相依 SDK 的類別也會，後者從本檔看不出來。
+
+    在子行程裡驗，才不會被本次測試階段已經載入的模組蓋掉。
+    """
+
+    result: subprocess.CompletedProcess = subprocess.run(
+        [sys.executable, "-c", NO_SDK_PROBE],
+        capture_output=True,
+        text=True,
+        cwd=Path(__file__).resolve().parents[2],
+    )
+
+    assert result.returncode == 0, (
+        f"沒裝 shioaji 就 import 不了 core.live.factory：\n{result.stderr[-2000:]}"
+    )
+    assert "OK" in result.stdout

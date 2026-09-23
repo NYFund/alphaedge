@@ -25,6 +25,7 @@ from core.models import (
     BaseOrder,
     BaseQuote,
     OrderTicket,
+    PendingAction,
     StockAccount,
     StockOrder,
     StockQuote,
@@ -143,15 +144,20 @@ class ScriptedStrategy(BaseStrategy):
     def check_stop_loss_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
         return []
 
-    def build_cover_order(self, action: Dict[str, Any]) -> StockOrder:
-        """由跨日待辦組出補平單；訂單型別是市場特性，交給策略組"""
+    def build_cover_order(self, action: PendingAction) -> StockOrder:
+        """
+        由跨日待辦組出補平單；訂單型別是市場特性，交給策略組
+
+        **收的是 `PendingAction` 不是資料列**：這個參數是策略層的公開契約，
+        傳 dict 等於把紀錄庫的 schema 變成契約，改個欄位名就會無聲地壞掉。
+        """
 
         return StockOrder(
-            stock_id=str(action["symbol"]),
+            stock_id=action.symbol,
             date=TODAY,
             action=Action.SELL,
             position_type=PositionType.LONG,
-            volume=int(action["volume"]),
+            volume=action.volume,
             price=100.0,
             price_type=StockPriceType.LMT,
         )

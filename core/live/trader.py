@@ -1,6 +1,6 @@
 import datetime
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -51,6 +51,7 @@ from core.models import (
     BrokerAccountSnapshot,
     ExecutionReport,
     OrderTicket,
+    PendingAction,
 )
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -1643,7 +1644,7 @@ class LiveTrader:
         """
 
         today: datetime.date = self._now().date()
-        pending: List[Dict[str, Any]] = self.dao.get_pending_actions(today)
+        pending: List[PendingAction] = self._load_pending_actions(today)
         if not pending:
             return 0
 
@@ -1653,12 +1654,10 @@ class LiveTrader:
         submitted: int = 0
 
         for action in pending:
-            context: Optional[StrategyContext] = by_name.get(
-                str(action["strategy_name"])
-            )
+            context: Optional[StrategyContext] = by_name.get(action.strategy_name)
             if context is None:
                 logger.warning(
-                    f"待辦 {action['action_id']} 的策略未在本次啟動的清單中，本日略過"
+                    f"待辦 {action.action_id} 的策略未在本次啟動的清單中，本日略過"
                 )
                 continue
 
@@ -1667,32 +1666,52 @@ class LiveTrader:
                 continue
 
             order: Optional[BaseOrder] = self._build_cover_order(
-                context, {**action, "volume": volume}
+                context, replace(action, volume=volume)
             )
             if order is None:
                 continue
 
             if self.dispatch([(context, order)], None):
-                logger.error(f"補平單未送出，待辦保留：{action['action_id']}")
+                logger.error(f"補平單未送出，待辦保留：{action.action_id}")
                 self.dao.postpone_pending_action(
-                    str(action["action_id"]), today + datetime.timedelta(days=1)
+                    action.action_id, today + datetime.timedelta(days=1)
                 )
                 self._notify(
                     NotifyLevel.CRITICAL,
                     "補平單送出失敗",
-                    f"{action['symbol']} 殘量 {volume} 仍未平掉",
+                    f"{action.symbol} 殘量 {volume} 仍未平掉",
                 )
                 continue
 
             self.dao.resolve_pending_action(
-                str(action["action_id"]), self.dao.ACTION_DONE, self._now()
+                action.action_id, self.dao.ACTION_DONE, self._now()
             )
             submitted += 1
 
         return submitted
 
+    def _load_pending_actions(self, today: datetime.date) -> List[PendingAction]:
+        """
+        讀出到期待辦並轉成領域物件
+
+        **一列轉不出來只丟那一列**：這是開盤段的第一件事，而每一筆待辦都是
+        一個未平掉的隔夜部位。讓例外往上拋的話，一列壞資料會讓**所有**待辦
+        都補不成，而那正是最需要它們動起來的時候。
+        """
+
+        actions: List[PendingAction] = []
+        for row in self.dao.get_pending_actions(today):
+            try:
+                actions.append(PendingAction.from_row(row))
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.error(
+                    f"待辦 {row.get('action_id', '?')} 的欄位無法解讀（{exc}），"
+                    "本筆略過，需人工處理"
+                )
+        return actions
+
     def _pending_volume_to_cover(
-        self, context: StrategyContext, action: Dict[str, Any]
+        self, context: StrategyContext, action: PendingAction
     ) -> Optional[int]:
         """
         - Description:
@@ -1704,17 +1723,17 @@ class LiveTrader:
         - Parameters:
             - context: StrategyContext
                 待辦所屬的策略
-            - action: Dict[str, Any]
+            - action: PendingAction
                 待辦內容
         - Return:
             - Optional[int]
                 要送出的數量；None 表示本筆不送
         """
 
-        action_id: str = str(action["action_id"])
-        symbol: str = str(action["symbol"])
-        wanted: int = int(action["volume"])
-        direction: str = str(action.get("position_type") or "")
+        action_id: str = action.action_id
+        symbol: str = action.symbol
+        wanted: int = action.volume
+        direction: str = action.position_type or ""
         if not direction:
             logger.warning(f"待辦 {action_id} 沒有部位方向，無法比對持有量，需人工處理")
             return None
@@ -1747,7 +1766,7 @@ class LiveTrader:
         return volume
 
     def _build_cover_order(
-        self, context: StrategyContext, action: Dict[str, Any]
+        self, context: StrategyContext, action: PendingAction
     ) -> Optional[BaseOrder]:
         """
         由待辦組出補平單
@@ -1755,6 +1774,10 @@ class LiveTrader:
         **交給策略自己組**：訂單型別、價格類型與商品欄位都是市場特性，
         引擎本體既不知道也不該知道。策略沒有提供組裝方法時記 warning 並略過——
         那代表這支策略還沒準備好處理跨日補平。
+
+        **傳的是 `PendingAction` 而不是資料列**：這個參數會落到策略作者手上，
+        傳 dict 等於把紀錄庫的 schema 變成策略層的公開契約——
+        改一個欄位名就會無聲地弄壞每一支策略。
         """
 
         builder: Optional[Callable[..., BaseOrder]] = getattr(
@@ -1763,7 +1786,7 @@ class LiveTrader:
         if builder is None:
             logger.warning(
                 f"{context.name} 沒有 build_cover_order()，待辦 "
-                f"{action['action_id']} 無法自動補平，需人工處理"
+                f"{action.action_id} 無法自動補平，需人工處理"
             )
             return None
 
