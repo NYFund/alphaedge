@@ -202,6 +202,50 @@ def check_max_holdings(
     return False
 
 
+def exceeds_symbol_exposure(
+    position_value: float, init_capital: float, ratio: Optional[float]
+) -> bool:
+    """
+    - Description:
+        單一標的曝險是否超過本金上限；`ratio` 為 `None` 表示不限制
+
+        `None` ＝ 不限制的語意與 `check_max_holdings()` 的 `max_holdings` 一致。
+
+        〈回測與實盤共用這條公式，但四個面向不同〉
+
+        | | 回測 | 實盤 |
+        |---|---|---|
+        | 設定 | `ShortConstraint.max_short_exposure_ratio` | `RiskConfig.single_symbol_exposure_ratio` |
+        | 預設 | `None`（關閉） | `0.25` |
+        | 適用 | **只有空單** | 多空皆適用 |
+        | 超限行為 | 整筆拒絕開倉 | 批次截斷 |
+
+        **「整筆拒絕 vs 批次截斷」是刻意的**：回測逐單處理，拒一張就是拒一張；
+        實盤一次送一批，整批拒會連平倉單一起擋掉，那比超額更危險。
+
+        **「只管空單 vs 多空皆管」是待裁示的差異，不是刻意的**：
+        回測的多單曝險目前完全不受本條限制，只靠 `EqualWeightSizer` 的資金切分
+        間接約束。統一適用範圍會改變回測結果、須重產 baseline，故未在此處理。
+
+        兩邊的預設值也不同（`None` vs `0.25`），統一同樣會改回測結果。
+        **本函式只保證公式是同一條**，四個面向的差異由呼叫端各自決定。
+    - Parameters:
+        - position_value: float
+            這筆部位的曝險金額
+        - init_capital: float
+            本金（回測是帳戶初始資金，實盤是該策略的額度上限）
+        - ratio: Optional[float]
+            上限比例；`None` 表示不限制
+    - Return:
+        - bool
+            超過上限為 True
+    """
+
+    if ratio is None:
+        return False
+    return position_value > init_capital * ratio
+
+
 def sort_orders(orders: List[BaseOrder]) -> List[BaseOrder]:
     """
     - Description:
