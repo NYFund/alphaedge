@@ -9,7 +9,6 @@ from core.pipeline.shared.base_cleaner import BaseDataCleaner
 from core.pipeline.shared.source_priority import dedup_by_source_priority
 from core.pipeline.utils import ColumnLayoutError
 from core.pipeline.utils.data_utils import DataUtils
-from core.utils import Scale
 
 """
 cleaner 的三個邊界，共通點是**出錯時不會有任何錯誤**
@@ -72,10 +71,8 @@ def test_adapter_skips_rows_without_a_price(close) -> None:
     否則策略會拿 0 元價去算報酬、下單、停損。
     """
 
-    quotes = StockQuoteAdapter.generate_stock_quotes(
-        [_Row("2330", close)],
-        datetime.date(2024, 1, 2),
-        Scale.DAY,
+    quotes = StockQuoteAdapter.from_day_records(
+        [_Row("2330", close)], datetime.date(2024, 1, 2)
     )
 
     assert quotes == []
@@ -84,10 +81,8 @@ def test_adapter_skips_rows_without_a_price(close) -> None:
 def test_adapter_keeps_rows_with_a_price() -> None:
     """有成交價的列照常轉換"""
 
-    quotes = StockQuoteAdapter.generate_stock_quotes(
-        [_Row("2330", 600.0)],
-        datetime.date(2024, 1, 2),
-        Scale.DAY,
+    quotes = StockQuoteAdapter.from_day_records(
+        [_Row("2330", 600.0)], datetime.date(2024, 1, 2)
     )
 
     assert len(quotes) == 1
