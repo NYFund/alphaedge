@@ -48,9 +48,14 @@ class ShortConstraint:
     # 是否由除權息行事曆自動推導融券最後回補日（**預設開啟**：這是融券制度的規則，
     # 不是可選功能；關掉等於回到「留倉放空不受停券影響」的高估假設）
     auto_force_cover_on_ex_dividend: bool = True
-    max_short_exposure_ratio: Optional[float] = (
-        None  # 單一空單曝險上限（佔初始本金比例）
-    )
+    # 單一空單曝險上限（佔初始本金比例）；`None` ＝ 不限制。
+    #
+    # **實盤有一份對應的設定**：`RiskConfig.single_symbol_exposure_ratio`，
+    # 預設 0.25、多空皆適用、超限是批次截斷而非整筆拒絕。
+    # 公式兩邊共用（`order_preprocess.exceeds_symbol_exposure()`），四個面向的
+    # 差異寫在那支函式的 docstring——**改這一邊之前先看那份對照表**，
+    # 否則會讓回測跑得過的部位規模在實盤被截掉（或反過來）而查不出原因。
+    max_short_exposure_ratio: Optional[float] = None
 
     def check_day_tradable(self, stock_id: str, date: datetime.date) -> bool:
         """

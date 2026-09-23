@@ -4,6 +4,7 @@ from typing import Dict, Optional, Union
 from loguru import logger
 
 from core.backtest.models.cost_model import StockCostModel
+from core.execution import order_preprocess
 from core.managers.base.position_manager import BasePositionManager
 from core.models import StockAccount, StockOrder, StockPosition, StockTradeRecord
 from core.models.cost_config import CostConfig
@@ -232,17 +233,20 @@ class StockPositionManager(BasePositionManager):
             )
             return None
 
-        # Check single position short exposure limit
+        # Check single position short exposure limit.
+        # **公式與實盤共用**（`order_preprocess.exceeds_symbol_exposure()`），
+        # 但只在 SHORT 分支取用、超限整筆拒絕——兩邊的差異寫在該函式的 docstring
         max_ratio: Optional[float] = (
             self.cost_model.config.short_constraint.max_short_exposure_ratio
         )
-        if (
-            max_ratio is not None
-            and position_value > self.account.init_capital * max_ratio
+        if order_preprocess.exceeds_symbol_exposure(
+            position_value, self.account.init_capital, max_ratio
         ):
+            # `max_ratio` 必為非 None（否則上面那個判斷不會成立）
+            cap: float = self.account.init_capital * float(max_ratio)
             logger.warning(
-                f"[Open Short] {stock_order.stock_id} 曝險 {position_value} 超過上限 "
-                f"{self.account.init_capital * max_ratio}，拒絕開倉"
+                f"[Open Short] {stock_order.stock_id} 曝險 {position_value} "
+                f"超過上限 {cap}，拒絕開倉"
             )
             return None
 

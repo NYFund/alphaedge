@@ -9,6 +9,7 @@ from loguru import logger
 from core.config.paths import LIVE_KILL_SWITCH_PATH
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.execution.order_preprocess import exceeds_symbol_exposure
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import RiskConfig
@@ -240,7 +241,10 @@ def truncate_batch_by_exposure(
     """
 
     total_cap: float = init_capital * config.total_exposure_ratio
-    symbol_cap: float = init_capital * config.single_symbol_exposure_ratio
+    # 單一標的上限的公式與回測共用；差異（預設值、適用方向、超限行為）
+    # 寫在 `order_preprocess.exceeds_symbol_exposure()` 的 docstring
+    symbol_ratio: float = config.single_symbol_exposure_ratio
+    symbol_cap: float = init_capital * symbol_ratio
 
     allowed: List[ExposureItem] = []
     truncated: List[Tuple[ExposureItem, str]] = []
@@ -261,7 +265,9 @@ def truncate_batch_by_exposure(
                 )
             )
             continue
-        if per_symbol.get(symbol, 0.0) + item.amount > symbol_cap:
+        if exceeds_symbol_exposure(
+            per_symbol.get(symbol, 0.0) + item.amount, init_capital, symbol_ratio
+        ):
             truncated.append(
                 (
                     item,
