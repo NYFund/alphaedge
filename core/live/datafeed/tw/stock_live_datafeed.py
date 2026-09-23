@@ -13,7 +13,7 @@ from core.api.tw.stock_margin_api import StockMarginAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import TW_STOCK_DB_PATH
 from core.config.settings import now_live
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.connection import connect_sqlite
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
@@ -24,7 +24,7 @@ from core.live.datafeed.calendar import (
 )
 from core.models import BaseQuote, PreOpenStockQuote
 from core.strategies.base import BaseStrategy
-from core.utils import ExecutionTiming, Scale
+from core.utils import ExecutionTiming
 
 """
 台股的實盤資料源：歷史資料到 T−1 由 `tw_stock.db` 提供，今天由券商提供
@@ -36,6 +36,12 @@ from core.utils import ExecutionTiming, Scale
 
 class TwStockLiveDataFeed(BaseLiveDataFeed):
     """台股實盤資料源"""
+
+    LATEST_DATE_TABLE: str = "price"
+    HISTORY_API_HINT: str = "self.price 等"
+    # 交易日佐證用的合約：取一檔成交最活絡、不會下市的權值股即可，
+    # 合約檔的更新日期全市場一致，換哪一檔都是同一個日期
+    PROBE_SYMBOL: str = "2330"
 
     def __init__(
         self,
@@ -59,10 +65,8 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
                 取得目前時間
         """
 
-        super().__init__(broker, calendar_sources, now_provider)
+        super().__init__(broker, calendar_sources, now_provider, db_path)
 
-        self.db_path: Any = db_path
-        self.conn: Optional[DBConnection] = None
         self.price: Optional[StockPriceAPI] = None
         self.dividend: Optional[StockDividendAPI] = None
         self.chip: Optional[StockChipAPI] = None
@@ -159,25 +163,10 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             PriceTableCalendarSource(self._price_table_has_data),
         ]
 
-    def _broker_contract_update_date(self) -> Optional[datetime.date]:
-        """券商合約檔的更新日期；取不到時回 None（不猜）"""
+    def _probe_contract(self, resolver: Any) -> Optional[Any]:
+        """交易日佐證取**股票**合約"""
 
-        resolver: Any = getattr(self.broker, "resolver", None)
-        if resolver is None:
-            return None
-        try:
-            contract: Any = resolver.resolve_stock("2330")
-        except Exception as exc:
-            logger.debug(f"取合約檔更新日期失敗：{exc}")
-            return None
-
-        raw: Any = getattr(contract, "update_date", None)
-        if isinstance(raw, datetime.date):
-            return raw
-        try:
-            return datetime.date.fromisoformat(str(raw))
-        except (TypeError, ValueError):
-            return None
+        return resolver.resolve_stock(self.PROBE_SYMBOL)
 
     def _price_table_has_data(self, date: datetime.date) -> bool:
         """`price` 表當日有無資料"""
@@ -185,18 +174,6 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         if self.price is None:
             return False
         return not self.price.get(date).empty
-
-    def get_latest_data_date(self) -> Optional[datetime.date]:
-        """`price` 表的最新交易日"""
-
-        if self.price is None:
-            return None
-
-        rows: List[Any] = self.conn.execute("SELECT MAX(date) FROM price").fetchall()
-        raw: Any = rows[0][0] if rows else None
-        if not raw:
-            return None
-        return datetime.date.fromisoformat(str(raw))
 
     # === 即時報價 ===
     def get_live_quotes(
@@ -264,13 +241,6 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             logger.warning(f"盤前取不到 {symbol} 的合約，本段落略過：{exc}")
             return None
 
-    @staticmethod
-    def _as_optional_float(contract: Any, field: str) -> Optional[float]:
-        """取合約的浮點欄位；缺值回 None（不填 0，0 會被當成一個真實價格）"""
-
-        value: Any = getattr(contract, field, None)
-        return float(value) if value else None
-
     def get_price_limit_basis(self, date: datetime.date) -> Dict[str, float]:
         """
         - Description:
@@ -290,44 +260,3 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         """
 
         return {}
-
-    def get_quotes(
-        self, date: datetime.date, scale: Scale, adjusted: bool = False
-    ) -> List[BaseQuote]:
-        """
-        - Description:
-            歷史報價（T−1 以前）；今天的報價請走 `get_live_quotes()`
-
-            **今天一律拒絕**：`price` 表要到收盤後才有今天的資料，
-            這裡若靜默回空 list，策略會以為今天全市場都沒有報價。
-        - Parameters:
-            - date: datetime.date
-                交易日
-            - scale: Scale
-                報價級別
-            - adjusted: bool
-                是否附上還原價
-        - Return:
-            - List[BaseQuote]
-                該日報價
-        - Raise:
-            - ValueError
-                查詢今天或未來的日期
-        """
-
-        if date >= self._now().date():
-            raise ValueError(
-                f"{date} 不早於今天：歷史報價只到前一個交易日，"
-                "今天的報價請用 get_live_quotes()"
-            )
-
-        raise NotImplementedError(
-            "實盤不從歷史表逐日取報價；策略需要歷史資料時走 API（self.price 等）"
-        )
-
-    def close(self) -> None:
-        """關閉歷史資料連線；可重複呼叫"""
-
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None

@@ -6,13 +6,14 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 from loguru import logger
 
 from core.config.settings import now_live
+from core.dao.connection import DBConnection
 from core.datafeed.base import BaseDataFeed
 from core.live.datafeed.calendar import (
     TradingCalendarSource,
     resolve_trading_day,
 )
 from core.models import BaseOrder, BaseQuote
-from core.utils import ExecutionTiming
+from core.utils import ExecutionTiming, Scale
 
 """
 BaseLiveDataFeed：歷史資料到 T−1，今天的報價由券商提供
@@ -56,16 +57,25 @@ class BaseLiveDataFeed(BaseDataFeed):
         背景 ETL 搶寫入鎖。
     """
 
-    # `price` 表最新日與今天的最大容許間隔（曆日）。
+    # 歷史資料表最新日與今天的最大容許間隔（曆日）。
     # 取 5 是為了容納「週五收盤 → 下週一開盤」再加一天國定假日；
     # 更長的間隔代表資料真的停了，而不是連假
     MAX_DATA_GAP_DAYS: int = 5
+
+    # 存放每日行情的歷史資料表；`get_latest_data_date()` 以它查最新交易日。
+    # 只有表名不同的話，子類宣告這一行就夠了，不必各抄一份查詢
+    LATEST_DATE_TABLE: str = ""
+
+    # 策略要歷史資料時該走哪個 API；寫進 `get_quotes()` 的拒絕訊息，
+    # 讓看到錯誤的人知道替代路徑是什麼，而不只是知道這條路不通
+    HISTORY_API_HINT: str = "API"
 
     def __init__(
         self,
         broker: Any,
         calendar_sources: Optional[Sequence[TradingCalendarSource]] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        db_path: Any = None,
     ) -> None:
         """
         - Description:
@@ -77,6 +87,8 @@ class BaseLiveDataFeed(BaseDataFeed):
                 交易日來源；None 時由子類建立預設組合
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間（台北時區 aware）
+            - db_path: Any
+                歷史資料庫路徑；連線由子類在 `setup()` 內建立
         """
 
         self.broker: Any = broker
@@ -84,6 +96,8 @@ class BaseLiveDataFeed(BaseDataFeed):
             calendar_sources or []
         )
         self._now: Callable[[], datetime.datetime] = now_provider
+        self.db_path: Any = db_path
+        self.conn: Optional[DBConnection] = None
 
     # === 交易日 ===
     def is_market_open(self, date: datetime.date) -> bool:
@@ -102,6 +116,61 @@ class BaseLiveDataFeed(BaseDataFeed):
         """
 
         return resolve_trading_day(date, self.calendar_sources)
+
+    def _broker_contract_update_date(self) -> Optional[datetime.date]:
+        """
+        - Description:
+            券商合約檔的更新日期；取不到時回 None（**不猜**）
+
+            合約檔每個交易日更新一次，「更新日 ＝ 今天」是有開市的佐證。
+            官方日曆的年度尚未入庫時，平日就只剩這一個來源作答，
+            所以它取不到值就等於當天判不出開市與否。
+        - Return:
+            - Optional[datetime.date]
+                合約檔更新日期
+        """
+
+        resolver: Any = getattr(self.broker, "resolver", None)
+        if resolver is None:
+            return None
+
+        try:
+            contract: Optional[Any] = self._probe_contract(resolver)
+        except Exception as exc:
+            # 用 warning 而不是 debug：這是平日交易日判定的唯一佐證，
+            # 它失效時整個判定跟著失效，而 debug 等級在正式部署一定看不到
+            logger.warning(f"取合約檔更新日期失敗：{exc}")
+            return None
+
+        if contract is None:
+            return None
+
+        raw: Any = getattr(contract, "update_date", None)
+        if isinstance(raw, datetime.date):
+            return raw
+        try:
+            return datetime.date.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            return None
+
+    @abstractmethod
+    def _probe_contract(self, resolver: Any) -> Optional[Any]:
+        """
+        - Description:
+            取一張**本市場**的合約，用來讀合約檔的更新日期；取不到時回 None
+
+            **由子類決定探測哪一張，不可共用**：合約檔逐市場更新，拿股票合約
+            去佐證期貨的交易日，在兩個市場開休市不一致的那天會直接判錯——
+            而 `BrokerContractCalendarSource` 只會回 True 或 None，
+            判錯的方向是「誤判為開市」，不會有任何錯誤訊息。
+        - Parameters:
+            - resolver: Any
+                券商的合約解析器
+        - Return:
+            - Optional[Any]
+                合約物件
+        """
+        pass
 
     # === 資料新鮮度 ===
     def verify_data_freshness(self, today: Optional[datetime.date] = None) -> None:
@@ -177,10 +246,36 @@ class BaseLiveDataFeed(BaseDataFeed):
             cursor += datetime.timedelta(days=1)
         return definite
 
-    @abstractmethod
     def get_latest_data_date(self) -> Optional[datetime.date]:
-        """歷史資料表的最新交易日；表為空時回 None"""
-        pass
+        """
+        - Description:
+            歷史資料表的最新交易日；表為空或尚未連線時回 None
+
+            表名由子類的 `LATEST_DATE_TABLE` 指定——與 `MAX_DATA_GAP_DAYS`
+            同一個模式：子類只宣告差異的那一項，查詢本身不必各抄一份。
+        - Return:
+            - Optional[datetime.date]
+                最新交易日
+        """
+
+        if not self.LATEST_DATE_TABLE:
+            raise NotImplementedError(
+                f"{type(self).__name__} 沒有宣告 LATEST_DATE_TABLE，"
+                "查不到歷史資料最新日，新鮮度檢查無法進行"
+            )
+
+        if self.conn is None:
+            return None
+
+        # 表名不能用 `params=(...)` 佔位符（SQLite 的佔位符只吃值），
+        # 而它來自子類的類別常數、不是外部輸入，故直接組進字串
+        rows: List[Any] = self.conn.execute(
+            f"SELECT MAX(date) FROM {self.LATEST_DATE_TABLE}"
+        ).fetchall()
+        raw: Any = rows[0][0] if rows else None
+        if not raw:
+            return None
+        return datetime.date.fromisoformat(str(raw))
 
     # === 即時報價 ===
     @abstractmethod
@@ -223,6 +318,59 @@ class BaseLiveDataFeed(BaseDataFeed):
         """
 
         return {}
+
+    @staticmethod
+    def _as_optional_float(contract: Any, field: str) -> Optional[float]:
+        """取合約的浮點欄位；缺值回 None（不填 0，0 會被當成一個真實價格）"""
+
+        value: Any = getattr(contract, field, None)
+        return float(value) if value else None
+
+    # === 歷史報價與連線 ===
+    def get_quotes(
+        self, date: datetime.date, scale: Scale, adjusted: bool = False
+    ) -> List[BaseQuote]:
+        """
+        - Description:
+            歷史報價（T−1 以前）；今天的報價請走 `get_live_quotes()`
+
+            **今天一律拒絕**：歷史資料表要到收盤後才有今天的資料，
+            這裡若靜默回空 list，策略會以為今天全市場都沒有報價。
+
+            更早的日期也不從歷史表逐日取——實盤的策略是走 API 拿歷史資料的。
+        - Parameters:
+            - date: datetime.date
+                交易日
+            - scale: Scale
+                報價級別
+            - adjusted: bool
+                是否附上還原價
+        - Return:
+            - List[BaseQuote]
+                該日報價
+        - Raise:
+            - ValueError
+                查詢今天或未來的日期
+            - NotImplementedError
+                查詢過去的日期
+        """
+
+        if date >= self._now().date():
+            raise ValueError(
+                f"{date} 不早於今天：歷史報價只到前一個交易日，"
+                "今天的報價請用 get_live_quotes()"
+            )
+
+        raise NotImplementedError(
+            f"實盤不從歷史表逐日取報價；策略需要歷史資料時走 API（{self.HISTORY_API_HINT}）"
+        )
+
+    def close(self) -> None:
+        """關閉歷史資料連線；可重複呼叫（引擎以 `try/finally` 保證它跑到）"""
+
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None
 
     def plan_rolls(
         self, positions: Sequence[Any], today: datetime.date
