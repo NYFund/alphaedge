@@ -125,7 +125,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle(file_cnt, stop)
+                file_cnt = self.throttle_per_file(file_cnt, stop)
 
         # `requested` 這裡的單位是「年月」而不是「天」
         stats.report("mrr（單位：年月）")

@@ -127,10 +127,18 @@ class BaseDataUpdater(ABC):
     def __init__(self) -> None:
         pass
 
-    def throttle(self, file_cnt: int, stop: Optional[GracefulStop] = None) -> int:
+    def throttle_per_file(
+        self, file_cnt: int, stop: Optional[GracefulStop] = None
+    ) -> int:
         """
         - Description:
-            對站方的請求節流，並回傳更新後的計數
+            以**檔案／日期**為單位的節流，回傳更新後的計數
+
+            **名字帶單位是刻意的**：權益變動表那條逐檔迴圈另有一份以「請求」
+            為單位的節流（`throttle_per_request()`），兩者的判準不同
+            （這裡達門檻後計數歸零，那裡取模、計數從不歸零）。
+            都叫 `throttle` 的話子類會把基底這份遮蔽掉，而簽名不同，
+            一旦有人呼叫基底那份就是參數綁錯位置。
 
             達到 `BATCH_SLEEP_EVERY_N_FILES` 就長睡一次並把計數歸零，
             其餘時候隨機短睡，避免固定間隔的請求樣態。
@@ -521,7 +529,7 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle(file_cnt, stop)
+                file_cnt = self.throttle_per_file(file_cnt, stop)
 
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:

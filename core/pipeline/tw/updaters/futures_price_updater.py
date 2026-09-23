@@ -692,7 +692,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle(file_cnt, stop)
+                file_cnt = self.throttle_per_file(file_cnt, stop)
 
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:

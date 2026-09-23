@@ -397,7 +397,7 @@ class EquityChangeMixin:
                     stats.stopped = True
                     break
 
-                self.throttle_equity_change(stop, request_cnt=stats.requested)
+                self.throttle_per_request(stop, request_cnt=stats.requested)
         finally:
             # 收尾：不滿一批的資料一律先入庫。**這個 finally 是「隨時可中斷」的關鍵**——
             # 中止訊號、清洗以外的例外、第二次 Ctrl+C 的 KeyboardInterrupt 都會走到這裡，
@@ -411,12 +411,15 @@ class EquityChangeMixin:
 
         return stats
 
-    def throttle_equity_change(
+    def throttle_per_request(
         self, stop: Optional[GracefulStop] = None, request_cnt: int = 0
     ) -> None:
         """
         - Description:
-            權益變動表逐檔查詢之間的節流
+            以**請求**為單位的節流；權益變動表逐檔查詢之間用它
+
+            與基底的 `throttle_per_file()` 判準不同：這裡取模、計數從不歸零
+            （數的是本季累計送出幾個請求），那裡達門檻後歸零。
 
             **不直接用 `time.sleep()`**：它被訊號打斷會自動續睡（PEP 475），
             於是「每 50 檔睡 15 秒」那一段按下 Ctrl+C 得等滿 15 秒才有反應。

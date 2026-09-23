@@ -10,6 +10,10 @@ from core.pipeline.shared.base_updater import (
 )
 from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.tw.updaters.financial_statement_updater import (
+    FinancialStatementUpdater,
+)
+from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
     MonthlyRevenueReportUpdater,
@@ -64,7 +68,7 @@ def test_long_sleep_returns_immediately_once_stop_is_requested() -> None:
     stop.request(reason="test")
 
     started: float = time.monotonic()
-    file_cnt: int = updater.throttle(updater.BATCH_SLEEP_EVERY_N_FILES, stop)
+    file_cnt: int = updater.throttle_per_file(updater.BATCH_SLEEP_EVERY_N_FILES, stop)
     elapsed: float = time.monotonic() - started
 
     assert elapsed < MAX_STOP_LATENCY_SECONDS, f"長睡耗了 {elapsed:.2f} 秒才回來"
@@ -79,7 +83,7 @@ def test_short_sleep_returns_immediately_once_stop_is_requested() -> None:
     stop.request(reason="test")
 
     started: float = time.monotonic()
-    file_cnt: int = updater.throttle(1, stop)
+    file_cnt: int = updater.throttle_per_file(1, stop)
     elapsed: float = time.monotonic() - started
 
     assert elapsed < MAX_STOP_LATENCY_SECONDS, f"短睡耗了 {elapsed:.2f} 秒才回來"
@@ -99,7 +103,7 @@ def test_throttle_without_stop_still_sleeps() -> None:
         BATCH_SLEEP_DURATION_SECONDS: int = 1
 
     started: float = time.monotonic()
-    _Quick().throttle(1, None)
+    _Quick().throttle_per_file(1, None)
     elapsed: float = time.monotonic() - started
 
     assert elapsed >= 1.0, f"沒傳 stop 時應照睡滿，實際只有 {elapsed:.2f} 秒"
@@ -114,11 +118,13 @@ def test_counter_resets_only_at_the_threshold() -> None:
     updater.BATCH_RANDOM_DELAY_MAX = 0
     updater.BATCH_SLEEP_DURATION_SECONDS = 0
 
-    assert updater.throttle(0) == 0
-    assert updater.throttle(1) == 1
-    assert updater.throttle(2) == 2
-    assert updater.throttle(3) == 0, "達到 BATCH_SLEEP_EVERY_N_FILES 時要歸零"
-    assert updater.throttle(4) == 0, "超過門檻同樣歸零（防止計數溢出後永遠不睡）"
+    assert updater.throttle_per_file(0) == 0
+    assert updater.throttle_per_file(1) == 1
+    assert updater.throttle_per_file(2) == 2
+    assert updater.throttle_per_file(3) == 0, "達到 BATCH_SLEEP_EVERY_N_FILES 時要歸零"
+    assert updater.throttle_per_file(4) == 0, (
+        "超過門檻同樣歸零（防止計數溢出後永遠不睡）"
+    )
 
 
 # === 三支日頻 updater 的骨架 ===
@@ -259,21 +265,65 @@ LONG_RUNNING_UPDATERS: List[type] = [
     StockMarginUpdater,
     FuturesPriceUpdater,
     MonthlyRevenueReportUpdater,
+    # 這兩支一開始漏列，於是它們各自留著一份裸 sleep 沒被發現。
+    # **清單漏一支，那一支就等於沒有守門**，而「哪幾支有守門」看不出來
+    FuturesChipUpdater,
+    FinancialStatementUpdater,
 ]
+
+# **刻意不列**（2026-09-23 的排程實測時間）：
+#   dividend 約 3 分、corporate_action 約 1.7 分、futures_margin 約 3 秒。
+# 它們也有裸 `time.sleep()`，但整段就跑幾分鐘——「按 Ctrl+C 要等幾秒」在那個
+# 量級不構成問題，而本檔的守門是為了「數小時～數十小時的回補按了沒反應」。
+# 哪天它們變長了再列進來；列進來就會因為裸 sleep 而變紅，那正是預期行為。
 
 
 @pytest.mark.parametrize("updater_cls", LONG_RUNNING_UPDATERS)
-def test_long_running_updaters_use_the_shared_throttle(updater_cls: type) -> None:
+def test_long_running_updaters_do_not_shadow_the_shared_throttle(
+    updater_cls: type,
+) -> None:
     """
-    長跑 updater 一律走共用的 `throttle()`，不可自己寫一份裸 sleep
+    沒有人可以覆寫基底的 `throttle_per_file()`
+
+    子類**可以**有自己的節流（單位不同就該分開，例如逐請求、逐月批次），
+    但不可以用同一個名字——簽名不同的同名方法會把基底那份遮蔽掉，
+    而遮蔽不會報錯，只會在某天有人呼叫基底那份時把參數綁到錯的位置上。
+    """
+
+    assert hasattr(updater_cls, "throttle_per_file")
+    assert updater_cls.throttle_per_file is BaseDataUpdater.throttle_per_file, (
+        f"{updater_cls.__name__} 覆寫了 throttle_per_file()"
+    )
+
+
+@pytest.mark.parametrize("updater_cls", LONG_RUNNING_UPDATERS)
+def test_no_updater_keeps_a_bare_sleep(updater_cls: type) -> None:
+    """
+    長跑 updater 的節流一律走可中斷的 sleep，不可自己寫裸 `time.sleep()`
 
     自己寫一份的代價不是行數，而是那一支按 Ctrl+C 沒有反應——
     而「哪幾支有反應」是看不出來的，只有真的去按才知道。
+    `FuturesChipUpdater` 就是這樣留了一份裸 sleep 直到守門清單補齊才被發現。
     """
 
-    assert hasattr(updater_cls, "throttle")
-    assert updater_cls.throttle is BaseDataUpdater.throttle, (
-        f"{updater_cls.__name__} 覆寫了 throttle()"
+    import ast
+    import inspect
+
+    # **以 AST 掃而不是字串比對**：註解與 docstring 裡本來就會提到
+    # `time.sleep()`（說明為什麼不用它），字串比對會把那些說明當成違規
+    tree: ast.Module = ast.parse(inspect.getsource(inspect.getmodule(updater_cls)))
+    offenders: List[str] = [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "sleep"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "time"
+    ]
+
+    assert offenders == [], (
+        f"{updater_cls.__name__} 所在模組仍有裸 time.sleep()：{offenders}"
     )
 
 
