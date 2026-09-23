@@ -149,6 +149,17 @@ class Reconciler:
 
         這條不一致代表本地自己的兩份紀錄就對不上（回報處理有 bug），與券商無關，
         但同樣要擋住新倉——兩份都不可信的時候，再送單只會讓事情更複雜。
+
+        **只比對「本次有載入 `position_manager` 的策略」**，兩側取同一組名單：
+
+        - `__unattributed__` **依設計只存在於 lot 帳本**。它不是策略、沒有
+          `Account`，另一側本來就不會有對應的列。把它算進差異的話，只要帳上有
+          接管部位，每個段落的對帳都會不一致、每天都降級成 `REDUCE_ONLY`，
+          而真正的回報處理 bug 會淹沒在這些雜訊裡。
+        - **本次沒載入的策略同樣被排除**：它的 `Account` 根本沒被建出來，
+          拿空的一側去比必然差，那不是不一致而是沒有資料。代價是那些策略的
+          lot 這一輪不受本檢查保護——`diff_against_broker()` 仍涵蓋它們，
+          因為那一側比的是券商總量。
         """
 
         from_accounts: Dict[Tuple[str, str], int] = {}
@@ -162,7 +173,10 @@ class Reconciler:
                 )
                 from_accounts[key] = from_accounts.get(key, 0) + position.volume
 
-        from_lots: Dict[Tuple[str, str], int] = self.ledger.get_account_positions()
+        from_lots: Dict[Tuple[str, str], int] = {}
+        for name in self.position_managers:
+            for key, volume in self.ledger.get_strategy_positions(name).items():
+                from_lots[key] = from_lots.get(key, 0) + volume
 
         differences: Dict[Tuple[str, str], Tuple[int, int]] = {}
         for key in set(from_accounts) | set(from_lots):

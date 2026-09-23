@@ -126,6 +126,16 @@ class BaseStrategy(ABC):
         self.live_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
         self.live_tag: str = ""  # 策略代號（只寫本地）
 
+        # 實盤專用的資金額度上限；`None` 表示沿用 `init_capital`。
+        #
+        # **存在的理由是 `init_capital` 同時是回測帳戶的初始資金**
+        # （見 `core/backtest/factory.py`），而 LONG 回歸基準就是拿某支策略跑出來的
+        # ——改它等於改掉每一筆回測結果、破壞回歸雙線。實盤帳戶的規模是另一回事：
+        # 模擬帳戶、正式帳戶、不同時期的本金都可能與研究時設的數字不同。
+        #
+        # **回測完全不讀這個屬性**，兩條路徑因此可以各自調整而互不影響。
+        self.live_capital: Optional[float] = None
+
     @abstractmethod
     def setup_account(self, account: BaseAccount) -> None:
         """
