@@ -20,6 +20,7 @@
     - [4. generate_close_signals](#4-generate_close_signals)
     - [5. generate_stop_loss_signals](#5-generate_stop_loss_signals)
     - [6. 部位大小由 portfolio 層決定](#6-部位大小由-portfolio-層決定)
+  - [選配：實盤的跨日補平](#選配實盤的跨日補平)
   - [策略設定參數說明](#策略設定參數說明)
     - [策略基本資訊](#策略基本資訊)
     - [帳戶設定](#帳戶設定)
@@ -487,6 +488,51 @@ def make_portfolio_constructor(self) -> StockPortfolioConstructor:
 > 舊預設會讓忘記設定的新策略**每一張開倉單都被引擎剔除**，回測跑完是零筆交易、
 > 零錯誤訊息。改成 `None` 之後忘記設定不會靜默歸零，但也就沒有引擎替你把關
 > ——**每支策略都應該自己設一個值**。
+
+## 選配：實盤的跨日補平
+
+**只有跑實盤才需要**，回測沒有這個概念（回測的單一送出就成交）。
+
+尾盤段的平倉／停損單若到收盤仍未成交，那些部位就變成**預期外的隔夜部位**。
+系統會寫一筆跨日待辦，次日開盤段的第一件事就是把它補平；補平單要用什麼訂單型別、
+什麼價格類型、哪些商品欄位，是市場特性，引擎本體不知道也不該知道，
+所以交給策略自己組：
+
+```python
+def build_cover_order(self, action: PendingAction) -> StockOrder:
+    """由跨日待辦組出補平單"""
+
+    return StockOrder(
+        stock_id=action.symbol,
+        date=datetime.date.today(),
+        action=Action.SELL,
+        position_type=action.position_type,
+        volume=action.volume,
+        price=...,                       # 取得當前報價後決定
+        price_type=StockPriceType.LMT,
+    )
+```
+
+`PendingAction`（`core/models/base/execution.py`）帶的欄位：
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `action_id` | `str` | 待辦識別碼 |
+| `strategy_name` | `str` | 歸屬策略 |
+| `symbol` | `str` | 商品代號 |
+| `action` | `Action` | 補平的買賣方向 |
+| `position_type` | `Optional[PositionType]` | 被補平的部位方向 |
+| `volume` | `int` | 要補平的數量（**已截到目前實際持有量**） |
+| `due_date` | `datetime.date` | 到期日 |
+| `reason` | `Optional[str]` | 為什麼產生這筆待辦 |
+
+> **`volume` 拿到手就是最終數量，不要再自己調整。** 待辦寫下之後部位可能已經變了
+> （遲到的成交、有人在券商端手動平倉、重建後部位已不在），引擎已經把它截到
+> 歸屬帳目前實際持有的量。照原數量送出的話，多出來的部分不是「多平一點」，
+> 是直接**把部位做反**。
+
+> **沒有實作這個方法不會壞掉**，引擎只會記一行 warning 並把待辦留著等人工處理——
+> 但那代表這支策略還沒準備好上實盤。
 
 ## 策略設定參數說明
 

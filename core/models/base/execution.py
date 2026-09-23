@@ -1,4 +1,5 @@
 import datetime
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 from core.models.base.order import BaseOrder
@@ -14,6 +15,26 @@ from core.utils import Action, LiveOrderStatus, PositionType
 回測沒有這一層：它的訂單一送出就成交，不存在「已送出但還沒成交」的狀態。
 實盤的每一張單都要能回答「現在走到哪了、券商那邊叫什麼編號、成交了多少」。
 """
+
+
+def _as_date(raw: Any) -> datetime.date:
+    """TEXT／`date`／`datetime` 一律收成 `date`"""
+
+    if isinstance(raw, datetime.datetime):
+        return raw.date()
+    if isinstance(raw, datetime.date):
+        return raw
+    return datetime.date.fromisoformat(str(raw))
+
+
+def _as_datetime(raw: Any) -> Optional[datetime.datetime]:
+    """TEXT 收成 `datetime`；空值回 None（不補一個「現在」當預設）"""
+
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, datetime.datetime):
+        return raw
+    return datetime.datetime.fromisoformat(str(raw))
 
 
 class OrderTicket:
@@ -267,6 +288,75 @@ class RealizedTradeSnapshot:
         self.open_seqno: Optional[str] = open_seqno  # 開倉委託序號；期貨給不出
         self.is_futures: bool = is_futures
         self.raw: Dict[str, Any] = raw if raw is not None else {}
+
+
+@dataclass
+class PendingAction:
+    """
+    一筆跨日待辦（平倉單未成交、次日開盤段補平）
+
+    **存在的理由是它要跨出 `core/live/`**：`LiveTrader` 會把它整個交給
+    **策略作者實作**的 `build_cover_order(action)`。原本傳的是資料列 dict，
+    等於把 `live_pending_action` 的 schema 變成策略層的公開契約，
+    而那個 schema 沒有任何型別定義——改一個欄位名就會無聲地弄壞每一支策略，
+    因為取不到的鍵只會安靜地變成 None。
+
+    **`action` 與 `position_type` 收 Enum**：兩者都是 `str` 子類，
+    當字典鍵與字串比較都照舊，但拼錯的值在建立時就過不了。
+
+    `status` 維持 `str`：它的值域由 DAO 的 `ACTION_*` 常數定義，
+    那是紀錄庫的狀態機，不是領域概念。
+    """
+
+    action_id: str
+    strategy_name: str
+    symbol: str
+    action: Action
+    volume: int
+    due_date: datetime.date
+    status: str
+    position_type: Optional[PositionType] = None
+    reason: Optional[str] = None
+    source_client_order_id: Optional[str] = None
+    created_at: Optional[datetime.datetime] = None
+    resolved_at: Optional[datetime.datetime] = None
+
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "PendingAction":
+        """
+        - Description:
+            由紀錄庫的資料列建立
+
+            SQLite 把日期與時間都存成 TEXT，**轉型在這裡做一次**：
+            散在呼叫端的話，有人會忘記轉而直接拿字串去比日期——
+            `"2026-09-24" <= "2026-9-3"` 這種比較不會報錯，只會給錯的答案。
+        - Parameters:
+            - row: Dict[str, Any]
+                `live_pending_action` 的一列
+        - Return:
+            - PendingAction
+                待辦
+        """
+
+        direction: Any = row.get("position_type")
+        return cls(
+            action_id=str(row["action_id"]),
+            strategy_name=str(row["strategy_name"]),
+            symbol=str(row["symbol"]),
+            action=Action(str(row["action"])),
+            volume=int(row["volume"]),
+            due_date=_as_date(row.get("due_date")),
+            status=str(row["status"]),
+            position_type=PositionType(str(direction)) if direction else None,
+            reason=str(row["reason"]) if row.get("reason") else None,
+            source_client_order_id=(
+                str(row["source_client_order_id"])
+                if row.get("source_client_order_id")
+                else None
+            ),
+            created_at=_as_datetime(row.get("created_at")),
+            resolved_at=_as_datetime(row.get("resolved_at")),
+        )
 
 
 class BrokerAccountSnapshot:

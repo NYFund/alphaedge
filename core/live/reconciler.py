@@ -252,6 +252,15 @@ class Reconciler:
             )
 
         for name in self.ledger.get_strategy_names():
+            # 均價由 lot 表算得出來，不補的話報表的 `Avg Price` 欄在策略層那幾列
+            # 永遠空白——而那正是要拿來跟券商端對照的欄位。
+            #
+            # **未實現損益不補**：它要當前市價才算得出來，而這一層沒有報價來源。
+            # 拿券商端該標的的未實現損益按口數分攤更糟：各策略的進場價本來就不同，
+            # 分攤出來的是一個看起來合理、實際上每一列都錯的數字
+            avg_prices: Dict[Tuple[str, str], float] = (
+                self.ledger.get_strategy_avg_prices(name)
+            )
             for (symbol, direction), volume in self.ledger.get_strategy_positions(
                 name
             ).items():
@@ -263,6 +272,7 @@ class Reconciler:
                         "source": SOURCE_LOCAL,
                         "direction": direction,
                         "volume": volume,
+                        "avg_price": avg_prices.get((symbol, direction)),
                     }
                 )
 

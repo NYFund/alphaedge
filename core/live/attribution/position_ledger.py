@@ -269,6 +269,36 @@ class PositionAttributionLedger:
 
         return self._aggregate(self.dao.get_open_lots(strategy_name=strategy_name))
 
+    def get_strategy_avg_prices(
+        self, strategy_name: str
+    ) -> Dict[Tuple[str, str], float]:
+        """
+        - Description:
+            某支策略各部位的加權平均開倉價
+
+            **以口數加權，不是各 lot 取算術平均**：同一個部位常由數筆不同價位、
+            不同數量的 lot 組成，取算術平均會讓一筆 1 口的試單與一筆 50 口的主倉
+            權重相同，算出來的成本可以差很遠。
+
+            數量為 0 的鍵不會出現（`get_open_lots()` 已排除 `volume > 0` 以外的列）。
+        - Parameters:
+            - strategy_name: str
+                策略名
+        - Return:
+            - Dict[Tuple[str, str], float]
+                `{(symbol, direction): 加權均價}`
+        """
+
+        amounts: Dict[Tuple[str, str], float] = {}
+        volumes: Dict[Tuple[str, str], int] = {}
+        for lot in self.dao.get_open_lots(strategy_name=strategy_name):
+            key: Tuple[str, str] = (str(lot["symbol"]), str(lot["direction"]))
+            volume: int = int(lot["volume"])
+            amounts[key] = amounts.get(key, 0.0) + float(lot["open_price"]) * volume
+            volumes[key] = volumes.get(key, 0) + volume
+
+        return {key: amounts[key] / volumes[key] for key in volumes if volumes[key] > 0}
+
     def get_account_positions(self) -> Dict[Tuple[str, str], int]:
         """
         - Description:
