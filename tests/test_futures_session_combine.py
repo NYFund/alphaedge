@@ -1,7 +1,7 @@
 import datetime
 import statistics
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import pytest
@@ -321,28 +321,41 @@ def test_real_combined_bar_contains_the_night_session() -> None:
         night_quotes: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
             api.get(DATE, product="TX", session=FuturesSession.NIGHT), DATE
         )
+        # **合併前先把日盤的數字抄下來**：`combine_quote()` 是**就地修改**日盤
+        # 那一筆再回傳（見其 docstring），合併後 `day_quotes` 裡的物件與 `combined`
+        # 裡的是同一個。合併後才建對照表的話，`quote.volume == day.volume + ...`
+        # 會變成 `X == X + night.volume`，只有夜盤量為 0 時才成立——
+        # 這條測試因此長期是紅的，而它帶 `@pytest.mark.slow`，
+        # 平常的 `-m "not slow"` 看不到。
+        day_before: Dict[str, Tuple[int, float, float, float]] = {
+            quote.contract_id: (quote.volume, quote.high, quote.low, quote.close)
+            for quote in day_quotes
+        }
+        night_before: Dict[str, Tuple[int, float, float, float]] = {
+            quote.contract_id: (quote.volume, quote.high, quote.low, quote.close)
+            for quote in night_quotes
+        }
+
         combined: List[FuturesQuote] = FuturesQuoteAdapter.combine_sessions(
             day_quotes, night_quotes
         )
     finally:
         api.close()
 
-    if not day_quotes or not night_quotes:
+    if not day_before or not night_before:
         pytest.skip("該日期尚無行情資料")
 
-    day_map = {quote.contract_id: quote for quote in day_quotes}
-    night_map = {quote.contract_id: quote for quote in night_quotes}
-
     for quote in combined:
-        night = night_map.get(quote.contract_id)
-        day = day_map[quote.contract_id]
+        day_volume, day_high, day_low, day_close = day_before[quote.contract_id]
+        night = night_before.get(quote.contract_id)
 
         assert quote.session == FuturesSession.COMBINED
-        assert quote.close == day.close
-        if night is not None and night.close:
-            assert quote.volume == day.volume + night.volume
-            assert quote.high >= max(day.high, night.high)
-            assert quote.low <= min(day.low, night.low)
+        assert quote.close == day_close
+        if night is not None and night[3]:
+            night_volume, night_high, night_low, _ = night
+            assert quote.volume == day_volume + night_volume
+            assert quote.high >= max(day_high, night_high)
+            assert quote.low <= min(day_low, night_low)
 
 
 @pytest.mark.slow

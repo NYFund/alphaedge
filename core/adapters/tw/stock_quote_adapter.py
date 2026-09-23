@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set
 import pandas as pd
 from loguru import logger
 
+from core.adapters.quote_validation import has_valid_price, warn_duplicate_symbols
 from core.config.schema import PriceColumn
 from core.models import StockQuote, TickQuote
 from core.utils import Scale
@@ -124,7 +125,7 @@ class StockQuoteAdapter:
             for stock in data:
                 if stock.stock_id not in filtered_stock_ids:
                     continue
-                if not StockQuoteAdapter.has_valid_price(stock):
+                if not has_valid_price(getattr(stock, PriceColumn.CLOSE)):
                     skipped += 1
                     continue
                 tradable.append(stock)
@@ -143,62 +144,8 @@ class StockQuoteAdapter:
                 for stock in tradable
             ]
 
-            StockQuoteAdapter.warn_duplicate_symbols(quotes, date)
+            warn_duplicate_symbols(quotes, date, source="Stock")
             return quotes
-
-    @staticmethod
-    def warn_duplicate_symbols(quotes: List[StockQuote], date: datetime.date) -> None:
-        """
-        - Description:
-            同一根 bar 內出現重複 symbol 時發出警告
-
-            重複代表資料層無法唯一識別商品——例如上市股與上櫃 ETF 共用同一個
-            4 碼代號。引擎後續會以 `{q.symbol: q for q in quotes}` 建對照表，
-            重複的只會留下最後一筆，**成交價與訊號都可能取到另一檔商品**，
-            而且整個過程不會有任何錯誤。
-
-            這裡只警告不排除：要留哪一筆屬資料修正的範疇，靜默挑一筆才是更糟的選擇。
-        - Parameters:
-            - quotes: List[StockQuote]
-                當根 bar 的報價
-            - date: datetime.date
-                當前交易日（僅供訊息辨識）
-        """
-
-        seen: Dict[str, int] = {}
-        for quote in quotes:
-            seen[quote.symbol] = seen.get(quote.symbol, 0) + 1
-
-        duplicates: List[str] = [symbol for symbol, n in seen.items() if n > 1]
-        if duplicates:
-            logger.warning(
-                f"[Quote] {date} 有 {len(duplicates)} 個代號對應多筆報價："
-                f"{sorted(duplicates)[:10]}；建對照表時只會留下最後一筆，"
-                f"請確認該代號是否被不同商品共用"
-            )
-
-    @staticmethod
-    def has_valid_price(stock: Any) -> bool:
-        """
-        - Description:
-            該列是否有可交易的成交價
-
-            **無成交日的 OHLC 是 NULL（或歷史資料裡的 0）**：來源給的是 `--`，
-            舊版 cleaner 填成 0 之後就變成「當天成交價是 0 元」，回測會照著它成交。
-            cleaner 已改為保留 NULL，這裡把兩種形態一起濾掉，
-            讓尚未執行修復腳本的資料庫也不會拿 0 元價去成交。
-        - Parameters:
-            - stock: Any
-                `price` 表的一列
-        - Return:
-            - bool
-                收盤價存在且大於 0 為 True
-        """
-
-        close: Any = getattr(stock, PriceColumn.CLOSE)
-        if close is None or pd.isna(close):
-            return False
-        return float(close) > 0
 
     @staticmethod
     def generate_stock_quote(

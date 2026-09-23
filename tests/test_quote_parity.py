@@ -229,19 +229,26 @@ def test_live_close_is_a_running_price(stream: ShioajiQuoteStream) -> None:
     assert first.close != second.close
 
 
-def test_missing_snapshot_fields_become_zero_not_none(
+def test_snapshot_without_a_price_is_skipped_not_zeroed(
     stream: ShioajiQuoteStream,
 ) -> None:
     """
-    快照缺欄位時價格欄退回 0.0，不是 None
+    快照沒有有效成交價時**整檔略過**，不產出 0 元報價
 
-    `StockQuote` 的價格欄型別是 `float`，塞 None 會讓下游任何算術直接 TypeError。
-    退回 0 的代價是「0 元」看起來像真實報價——擋掉它是報價驗證層的職責，
-    本檔只釘住現行口徑，不預先假設那一層會怎麼改。
+    改動前這裡會回一個 `close=0` 的 `StockQuote`，而回測那一側是直接濾掉
+    這檔的（`has_valid_price()`）。兩邊不一致的症狀是實盤拿 0 元算訊號與
+    成交價，且不會有任何錯誤——這正是兩條路徑共用同一層驗證要防的事。
     """
 
-    quote: StockQuote = live_quote(stream, close=None, open=None, total_volume=None)
+    assert stream.to_stock_quote(make_snapshot(close=None)) is None
+    assert stream.to_stock_quote(make_snapshot(close=0.0)) is None
+    assert stream.to_stock_quote(make_snapshot(close=-1.0)) is None
 
-    assert quote.close == 0.0
-    assert quote.open == 0.0
-    assert quote.volume == 0
+
+def test_valid_snapshot_still_produces_a_quote(stream: ShioajiQuoteStream) -> None:
+    """有有效價時照常產出——略過的判準不可寬到把正常報價也濾掉"""
+
+    quote: Optional[StockQuote] = stream.to_stock_quote(make_snapshot(close=600.0))
+
+    assert quote is not None
+    assert quote.close == 600.0
