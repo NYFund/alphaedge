@@ -58,12 +58,12 @@ class StockQuoteAdapter:
             return []
 
         return [
-            StockQuoteAdapter.to_tick_quote(tick, date)
+            StockQuoteAdapter.from_tick_row(tick, date)
             for tick in ticks.itertuples(index=False)
         ]
 
     @staticmethod
-    def to_tick_quote(row: Any, date: datetime.date) -> StockQuote:
+    def from_tick_row(row: Any, date: datetime.date) -> StockQuote:
         """
         - Description:
             單筆 tick → `StockQuote`
@@ -188,7 +188,7 @@ class StockQuoteAdapter:
             logger.debug(f"{date}: 略過 {skipped} 檔無成交價的個股（無成交日）")
 
         quotes: List[StockQuote] = [
-            StockQuoteAdapter.to_day_quote(row, date, adjusted.get(row.stock_id))
+            StockQuoteAdapter.from_day_row(row, date, adjusted.get(row.stock_id))
             for row in tradable
         ]
 
@@ -196,7 +196,7 @@ class StockQuoteAdapter:
         return quotes
 
     @staticmethod
-    def to_day_quote(
+    def from_day_row(
         row: Any, date: datetime.date, adj_close: Optional[float] = None
     ) -> StockQuote:
         """

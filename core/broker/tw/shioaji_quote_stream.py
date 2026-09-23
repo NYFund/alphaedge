@@ -26,6 +26,21 @@ D0「策略層不分家」就不成立了。
 2. **盤中的 `close` 是暫定值。** 它是「目前最新成交價」，收盤前還會變。
    策略若用它算「今天漲幅」，得到的是此刻的漲幅，不是收盤漲幅——
    這正是 D1 要把日頻策略拆成開盤段與尾盤段的原因。
+
+〈本檔與 `core/adapters/` 的關係〉
+
+**兩邊都在做 raw → `Quote`，而這個重複是設計。** normalization 屬於來源：
+本檔認得券商 SDK 的資料形狀，`core/adapters/` 認得資料庫表的欄位名，
+兩者都不該認得對方。合併的話，`core/adapters/` 會被迫相依券商 SDK，
+而它的分層約束正是「不做 I/O、不綁任一個來源」。
+
+共用的只有**輸出契約**（`core/models/`）與**與來源無關的規則**
+（`core/adapters/quote_validation.py`：價格有效性、重複代號）。
+
+**命名一律 `from_<來源形狀>`**，且**快照與串流分開命名**：
+`from_stock_snapshot()`／`from_futures_snapshot()` 讀的是快照（有當日累計量
+與 OHLC），`from_tick_message()` 讀的是逐筆推播（只有這一筆）。
+兩者的欄位語意不同，共用一個名字遲早會有人拿錯的那一份去填另一邊。
 """
 
 # 一次快照請求帶幾檔。官方對 `snapshots` 的單次上限未在文件明載，
@@ -178,7 +193,7 @@ class ShioajiQuoteStream:
         """
 
         quotes: List[Optional[StockQuote]] = [
-            self.to_stock_quote(snapshot) for snapshot in self._fetch(contracts)
+            self.from_stock_snapshot(snapshot) for snapshot in self._fetch(contracts)
         ]
         return [quote for quote in quotes if quote is not None]
 
@@ -195,7 +210,7 @@ class ShioajiQuoteStream:
         """
 
         futures_quotes: List[Optional[FuturesQuote]] = [
-            self.to_futures_quote(snapshot, contract)
+            self.from_futures_snapshot(snapshot, contract)
             for snapshot, contract in self._fetch_with_contracts(contracts)
         ]
         return [quote for quote in futures_quotes if quote is not None]
@@ -229,12 +244,12 @@ class ShioajiQuoteStream:
         return paired
 
     # === 轉換 ===
-    def to_tick_quote(self, message: Any) -> Optional[StockQuote]:
+    def from_tick_message(self, message: Any) -> Optional[StockQuote]:
         """
         - Description:
             逐筆成交回呼 → `StockQuote`（`scale=TICK`）
 
-            **這是串流路徑，與 `to_stock_quote()`（快照路徑）的欄位語意不同**，
+            **這是串流路徑，與 `from_stock_snapshot()`（快照路徑）的欄位語意不同**，
             故不共用：tick 的 `datetime` 是真正的 `datetime`，而快照的 `ts` 是
             **奈秒整數**。共用一份就得在裡面分支，而分支猜錯不會報錯。
 
@@ -313,7 +328,7 @@ class ShioajiQuoteStream:
             return moment
         return moment.replace(tzinfo=get_live_timezone())
 
-    def to_stock_quote(self, snapshot: Any) -> Optional[StockQuote]:
+    def from_stock_snapshot(self, snapshot: Any) -> Optional[StockQuote]:
         """
         - Description:
             快照 → `StockQuote`（`scale=DAY`）
@@ -354,7 +369,7 @@ class ShioajiQuoteStream:
             close=close,
         )
 
-    def to_futures_quote(
+    def from_futures_snapshot(
         self, snapshot: Any, contract: Optional[Any] = None
     ) -> Optional[FuturesQuote]:
         """

@@ -16,7 +16,7 @@ from core.utils import Scale, Units
 
 同一支策略在回測與實盤讀的是同一個 `StockQuote`，但它是由兩條完全獨立的程式
 組出來的：回測走 `StockQuoteAdapter`（讀 SQLite 的價格表），實盤走
-`ShioajiQuoteStream.to_stock_quote()`（讀券商快照）。兩邊各自演化時，
+`ShioajiQuoteStream.from_stock_snapshot()`（讀券商快照）。兩邊各自演化時，
 **欄位口徑漂移不會有任何錯誤訊息**，只會讓同一支策略在實盤算出不同訊號。
 
 本檔只比對口徑，不比對數值——兩邊的資料來源本來就不同。
@@ -116,7 +116,7 @@ def stream() -> ShioajiQuoteStream:
 def live_quote(stream: ShioajiQuoteStream, **overrides: Any) -> StockQuote:
     """走實盤路徑：券商快照 → StockQuote"""
 
-    return stream.to_stock_quote(make_snapshot(**overrides))
+    return stream.from_stock_snapshot(make_snapshot(**overrides))
 
 
 # === 不變式：兩邊必須一致 ===
@@ -240,15 +240,15 @@ def test_snapshot_without_a_price_is_skipped_not_zeroed(
     成交價，且不會有任何錯誤——這正是兩條路徑共用同一層驗證要防的事。
     """
 
-    assert stream.to_stock_quote(make_snapshot(close=None)) is None
-    assert stream.to_stock_quote(make_snapshot(close=0.0)) is None
-    assert stream.to_stock_quote(make_snapshot(close=-1.0)) is None
+    assert stream.from_stock_snapshot(make_snapshot(close=None)) is None
+    assert stream.from_stock_snapshot(make_snapshot(close=0.0)) is None
+    assert stream.from_stock_snapshot(make_snapshot(close=-1.0)) is None
 
 
 def test_valid_snapshot_still_produces_a_quote(stream: ShioajiQuoteStream) -> None:
     """有有效價時照常產出——略過的判準不可寬到把正常報價也濾掉"""
 
-    quote: Optional[StockQuote] = stream.to_stock_quote(make_snapshot(close=600.0))
+    quote: Optional[StockQuote] = stream.from_stock_snapshot(make_snapshot(close=600.0))
 
     assert quote is not None
     assert quote.close == 600.0

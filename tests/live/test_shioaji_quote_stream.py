@@ -121,7 +121,7 @@ def test_volume_uses_total_volume(limiter: RateLimiter) -> None:
     """
 
     snapshot: FakeSnapshot = FakeSnapshot(volume=3, total_volume=5200)
-    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(snapshot)
+    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(snapshot)
 
     assert quote.volume == 5200
 
@@ -136,7 +136,9 @@ def test_close_and_cur_price_are_the_same_provisional_value(
     那正是日頻策略要拆成開盤段與尾盤段的原因。
     """
 
-    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(FakeSnapshot())
+    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(
+        FakeSnapshot()
+    )
 
     assert quote.close == quote.cur_price == 1000.0
     assert quote.scale is Scale.DAY
@@ -145,7 +147,9 @@ def test_close_and_cur_price_are_the_same_provisional_value(
 def test_quote_fields_match_the_backtest_shape(limiter: RateLimiter) -> None:
     """轉出的報價物件與回測同款：策略讀到的結構不能因為換了資料來源而變"""
 
-    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(FakeSnapshot())
+    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(
+        FakeSnapshot()
+    )
 
     assert isinstance(quote, StockQuote)
     assert (quote.stock_id, quote.open, quote.high, quote.low) == (
@@ -164,7 +168,9 @@ def test_timestamp_is_parsed_as_nanoseconds(limiter: RateLimiter) -> None:
     當成秒來解會得到 1970 年，而那個日期會一路寫進部位與報表。
     """
 
-    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(FakeSnapshot())
+    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(
+        FakeSnapshot()
+    )
 
     assert quote.date.year == 2026
     assert quote.date.tzinfo is not None
@@ -179,7 +185,7 @@ def test_timestamp_is_taipei_wall_clock_not_epoch(limiter: RateLimiter) -> None:
     而日期不變，只比日期的檢查看不出來。
     """
 
-    quote: StockQuote = make_stream(FakeApi(), limiter).to_stock_quote(
+    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(
         FakeSnapshot(ts=1790076792276623000)
     )
 
@@ -198,7 +204,7 @@ def test_unparsable_timestamp_falls_back_to_now(limiter: RateLimiter) -> None:
         queue.Queue(),
         now_provider=lambda: datetime.datetime(2026, 9, 19, 13, 20),
     )
-    quote: StockQuote = stream.to_stock_quote(FakeSnapshot(ts=None))
+    quote: StockQuote = stream.from_stock_snapshot(FakeSnapshot(ts=None))
 
     assert quote.date == datetime.datetime(2026, 9, 19, 13, 20)
 
@@ -212,7 +218,7 @@ def test_futures_quote_keeps_settlement_fields_none(limiter: RateLimiter) -> Non
     而回測那邊夜盤的這兩欄本來就是 None。
     """
 
-    quote: FuturesQuote = make_stream(FakeApi(), limiter).to_futures_quote(
+    quote: FuturesQuote = make_stream(FakeApi(), limiter).from_futures_snapshot(
         FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TXF202601")
     )
 
@@ -227,7 +233,7 @@ def test_futures_expiry_comes_from_symbol_not_code(limiter: RateLimiter) -> None
     `code`（`TXFA6`＝月份字母 ＋ 年末碼）**跨年會重複**，拆不出可靠的月份。
     """
 
-    quote: FuturesQuote = make_stream(FakeApi(), limiter).to_futures_quote(
+    quote: FuturesQuote = make_stream(FakeApi(), limiter).from_futures_snapshot(
         FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TXF202601")
     )
 
@@ -452,7 +458,7 @@ def make_tick_stream() -> ShioajiQuoteStream:
 def test_tick_is_converted_with_the_recorded_values() -> None:
     """轉換結果要對得上實錄的那一筆"""
 
-    quote = make_tick_stream().to_tick_quote(FakeTick())
+    quote = make_tick_stream().from_tick_message(FakeTick())
 
     assert quote is not None
     assert quote.stock_id == "2454"
@@ -468,7 +474,7 @@ def test_prices_are_floats_not_decimals() -> None:
     混用會在某些路徑靜默降精度，而回測那邊一律是 float。
     """
 
-    quote = make_tick_stream().to_tick_quote(FakeTick())
+    quote = make_tick_stream().from_tick_message(FakeTick())
 
     assert isinstance(quote.close, float)
     assert isinstance(quote.cur_price, float)
@@ -481,7 +487,7 @@ def test_volume_takes_the_daily_total_not_this_tick() -> None:
     取錯的話「當日成交量 ≥ N 張」這類門檻永遠不成立——而且不會報錯。
     """
 
-    quote = make_tick_stream().to_tick_quote(FakeTick())
+    quote = make_tick_stream().from_tick_message(FakeTick())
 
     assert quote.volume == 6263
 
@@ -493,7 +499,7 @@ def test_naive_datetime_gets_taipei_timezone() -> None:
     直接拿去跟 aware 的時間比較會 `TypeError`，被當成 UTC 則整條時間軸偏 8 小時。
     """
 
-    quote = make_tick_stream().to_tick_quote(FakeTick())
+    quote = make_tick_stream().from_tick_message(FakeTick())
 
     assert quote.date.tzinfo is not None
     assert quote.date.utcoffset() == datetime.timedelta(hours=8)
@@ -507,7 +513,7 @@ def test_simtrade_is_not_a_quote() -> None:
     這個欄位不在任何規劃文件裡，是實錄才發現的。
     """
 
-    assert make_tick_stream().to_tick_quote(FakeTick(simtrade=True)) is None
+    assert make_tick_stream().from_tick_message(FakeTick(simtrade=True)) is None
 
 
 def test_intraday_odd_is_not_a_quote() -> None:
@@ -517,7 +523,7 @@ def test_intraday_odd_is_not_a_quote() -> None:
     混進來的話成交量差 1000 倍，門檻型訊號會整組失效。
     """
 
-    assert make_tick_stream().to_tick_quote(FakeTick(intraday_odd=True)) is None
+    assert make_tick_stream().from_tick_message(FakeTick(intraday_odd=True)) is None
 
 
 def test_missing_field_fails_loudly() -> None:
@@ -532,4 +538,4 @@ def test_missing_field_fails_loudly() -> None:
     del broken.total_volume
 
     with pytest.raises(AttributeError, match="total_volume"):
-        make_tick_stream().to_tick_quote(broken)
+        make_tick_stream().from_tick_message(broken)

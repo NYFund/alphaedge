@@ -156,7 +156,7 @@ class ShioajiBroker(BaseBroker):
         """
         行情與回報都導向事件迴圈，**行情在這裡就轉成 `StockQuote`**
 
-        轉換放這一層而不是讓迴圈自己做：`to_tick_quote()` 是 Shioaji 的
+        轉換放這一層而不是讓迴圈自己做：`from_tick_message()` 是 Shioaji 的
         anti-corruption layer，把它往上搬會讓引擎認得券商的資料形狀。
 
         試撮與盤中零股由轉換層回 `None`，這裡直接略過——**它們不是報價**。
@@ -169,7 +169,7 @@ class ShioajiBroker(BaseBroker):
                 # 的語意變成兩種東西，逐筆觸發的次數也會憑空變兩倍
                 return
 
-            quote: Optional[StockQuote] = self.quote_stream.to_tick_quote(message)
+            quote: Optional[StockQuote] = self.quote_stream.from_tick_message(message)
             if quote is not None:
                 on_quote(quote)
 
