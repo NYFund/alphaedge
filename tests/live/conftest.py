@@ -10,6 +10,7 @@ from core.models import (
     BrokerAccountSnapshot,
     BrokerPositionSnapshot,
     ExecutionReport,
+    FuturesAccountSnapshot,
     OrderStatusEvent,
     OrderTicket,
     StockOrder,
@@ -56,6 +57,15 @@ class FakeBroker(BaseBroker):
         self.positions: List[BrokerPositionSnapshot] = []
         self.account: BrokerAccountSnapshot = BrokerAccountSnapshot(
             available_balance=1_000_000.0, total_equity=1_000_000.0
+        )
+        # 期貨保證金帳戶與股票是兩個子帳戶，各有各的錢。
+        # **一定要是帶保證金欄位的型別**：送單前的保證金檢查讀 `available_margin`，
+        # 回骨架型別的話它一律看到 0，每一張期貨開倉單都會被擋下來。
+        # 預設與股票同額，要驗分派的測試自行改掉其中一邊
+        self.futures_account: FuturesAccountSnapshot = FuturesAccountSnapshot(
+            available_balance=1_000_000.0,
+            total_equity=1_000_000.0,
+            available_margin=1_000_000.0,
         )
         self.quotes: Dict[str, BaseQuote] = {}
         self.subscribed: Set[str] = set()
@@ -201,6 +211,11 @@ class FakeBroker(BaseBroker):
         self._require_connection()
 
         return self.account
+
+    def get_futures_account(self) -> FuturesAccountSnapshot:
+        self._require_connection()
+
+        return self.futures_account
 
     # === 行情 ===
     def get_snapshots(self, symbols: List[str]) -> List[BaseQuote]:

@@ -1,6 +1,6 @@
 import datetime
 import subprocess
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 import shioaji as sj
 from loguru import logger
@@ -57,6 +57,7 @@ from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import (
     BaseOrder,
+    BrokerAccountSnapshot,
     FuturesAccount,
     FuturesOrder,
     RealizedTradeSnapshot,
@@ -149,6 +150,58 @@ def live_capital(strategy: BaseStrategy) -> float:
 
     declared: Optional[float] = getattr(strategy, "live_capital", None)
     return float(declared) if declared is not None else float(strategy.init_capital)
+
+
+def make_account_fetcher(
+    broker: BaseBroker, strategies: Sequence[BaseStrategy]
+) -> Callable[[], BrokerAccountSnapshot]:
+    """
+    - Description:
+        組出「這一批策略該看哪個帳戶」的帳務查詢
+
+        **股票與期貨是兩個子帳戶，各有各的錢。** 原本一律查股票帳戶，於是期貨
+        策略的額度被拿股票權益去檢查——那是另一筆錢的規模。2026-09-23 的演練
+        實測到這個後果：股票帳戶總權益 582,608，而期貨策略宣告 3,000,000，
+        額度檢查永遠過不了；把額度壓進門檻又會讓可開口數變成 0，
+        等於「通過閘門但整輪零交易」。
+
+        兩種商品同時載入時把兩個帳戶相加：都是同一個人的錢，而額度檢查問的是
+        「整體撐不撐得住」。
+    - Parameters:
+        - broker: BaseBroker
+            已建立的券商閘道
+        - strategies: Sequence[BaseStrategy]
+            本次載入的策略
+    - Return:
+        - Callable[[], BrokerAccountSnapshot]
+            每次呼叫都重查一次的帳務查詢
+    """
+
+    instruments: Set[Optional[InstrumentType]] = {
+        strategy.instrument_type for strategy in strategies
+    }
+    wants_stock: bool = InstrumentType.STOCK in instruments
+    wants_futures: bool = bool(instruments - {InstrumentType.STOCK})
+
+    if wants_stock and not wants_futures:
+        return broker.get_account
+    if wants_futures and not wants_stock:
+        return broker.get_futures_account
+
+    def combined() -> BrokerAccountSnapshot:
+        """兩個子帳戶相加"""
+
+        stock: BrokerAccountSnapshot = broker.get_account()
+        futures: BrokerAccountSnapshot = broker.get_futures_account()
+        return BrokerAccountSnapshot(
+            ts=stock.ts,
+            available_balance=stock.available_balance + futures.available_balance,
+            total_equity=stock.total_equity + futures.total_equity,
+            unrealized_pnl=stock.unrealized_pnl + futures.unrealized_pnl,
+            raw={"stock": stock.raw, "futures": futures.raw},
+        )
+
+    return combined
 
 
 def build_live_trader(
@@ -332,6 +385,8 @@ def build_live_trader(
         dry_run=dry_run,
         simulation=simulation,
         cost_estimator=make_trade_cost_estimator(),
+        # 查哪個帳戶是商品語意，由這裡決定後注入（引擎本體不認得「股票」「期貨」）
+        fetch_account=make_account_fetcher(resolved_broker, strategies),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
         margin_query=(
             getattr(resolved_broker, "get_futures_account", None)

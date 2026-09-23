@@ -164,7 +164,21 @@ class BaseBroker(ABC):
 
     @abstractmethod
     def get_account(self) -> BrokerAccountSnapshot:
-        """取得券商端的帳務快照（餘額、權益、損益）"""
+        """取得**股票**帳戶的帳務快照（餘額、權益、損益）"""
+        pass
+
+    @abstractmethod
+    def get_futures_account(self) -> BrokerAccountSnapshot:
+        """
+        取得**期貨保證金**帳戶的帳務快照
+
+        **與股票分開是因為它們本來就是兩個子帳戶**，各有各的錢。
+        拿股票帳戶的權益去檢查期貨策略的額度，等於用另一筆錢的規模在管這一筆。
+
+        **回的是帶保證金欄位的子型別**（`available_margin`／`initial_margin`／
+        `maintenance_margin`）：送單前的保證金檢查讀 `available_margin`，
+        只回骨架型別的話那道檢查會一律看到 0 而擋掉每一張期貨開倉單。
+        """
         pass
 
     # === 行情 ===
