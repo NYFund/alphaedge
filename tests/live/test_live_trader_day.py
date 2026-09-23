@@ -87,6 +87,11 @@ class FakeFeed(BaseLiveDataFeed):
     def get_latest_data_date(self) -> Optional[datetime.date]:
         return self._latest
 
+    def _probe_contract(self, resolver: Any) -> Optional[Any]:
+        """開市與否由測試直接指定，不經過券商合約檔"""
+
+        return None
+
     def get_live_quotes(
         self, timing: ExecutionTiming, symbols: Sequence[str]
     ) -> List[BaseQuote]:

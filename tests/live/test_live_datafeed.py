@@ -3,6 +3,7 @@ import sqlite3
 from typing import Any, List, Optional, Sequence
 
 import pytest
+from loguru import logger
 
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
 from core.live.datafeed.calendar import (
@@ -13,6 +14,7 @@ from core.live.datafeed.calendar import (
     WeekendCalendarSource,
     resolve_trading_day,
 )
+from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.models import BaseQuote, LiveDataUnavailableError, PreOpenStockQuote
 from core.utils import ExecutionTiming
@@ -144,6 +146,11 @@ class FakeLiveFeed(BaseLiveDataFeed):
 
     def get_latest_data_date(self) -> Optional[datetime.date]:
         return self._latest
+
+    def _probe_contract(self, resolver: Any) -> Optional[Any]:
+        """本檔的日曆來源由測試直接指定，不經過券商合約檔"""
+
+        return None
 
     def get_live_quotes(
         self, timing: ExecutionTiming, symbols: Sequence[str]
@@ -369,3 +376,184 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     assert backtest_apis <= live_apis, (
         f"實盤資料源少建了這些 API：{sorted(backtest_apis - live_apis)}"
     )
+
+
+# === 交易日佐證的探測合約 ===
+class RecordingResolver:
+    """記下被呼叫過哪些方法；`resolve_stock` 一被碰到就爆炸"""
+
+    def __init__(self, expiries: Optional[List[str]] = None) -> None:
+        self.calls: List[str] = []
+        self._expiries: List[str] = (
+            expiries if expiries is not None else ["202610", "202611"]
+        )
+
+    def resolve_stock(self, stock_id: str) -> Any:
+        self.calls.append(f"resolve_stock:{stock_id}")
+        return FakeContract()
+
+    def list_index_futures_expiries(self, product: str) -> List[str]:
+        self.calls.append(f"list_index_futures_expiries:{product}")
+        return self._expiries
+
+    def resolve_index_futures(self, product: str, expiry: str) -> Any:
+        self.calls.append(f"resolve_index_futures:{product}{expiry}")
+        return FakeContract()
+
+
+def make_futures_feed(resolver: Any) -> TwFuturesLiveDataFeed:
+    """只需要 broker 的期貨資料源；不建任何連線"""
+
+    return TwFuturesLiveDataFeed(
+        FakeBrokerForFeed(resolver),
+        calendar_sources=[FixedSource("test", True)],
+        now_provider=lambda: datetime.datetime(2026, 9, 21, 8, 30),
+    )
+
+
+def test_futures_never_probes_with_a_stock_contract() -> None:
+    """
+    **期貨的交易日佐證不可以用股票合約**
+
+    `BrokerContractCalendarSource` 是期貨在平日的唯一佐證（官方日曆的年度
+    未入庫時），而它只回 True 或 None——拿股票合約去問，證券與期貨開休市
+    不一致的那天判定方向是「誤判為開市」，且不會有任何錯誤訊息。
+    """
+
+    resolver: RecordingResolver = RecordingResolver()
+    feed: TwFuturesLiveDataFeed = make_futures_feed(resolver)
+
+    feed._broker_contract_update_date()
+
+    assert not any(call.startswith("resolve_stock") for call in resolver.calls), (
+        f"期貨資料源碰了股票合約：{resolver.calls}"
+    )
+    assert resolver.calls == [
+        "list_index_futures_expiries:TX",
+        "resolve_index_futures:TX202610",
+    ]
+
+
+def test_futures_probe_takes_the_nearest_listed_expiry() -> None:
+    """
+    取**最近的掛牌月**，不寫死月份
+
+    寫死一個月份的話，該月交割後合約就永遠查不到，
+    平日的交易日判定會靜默失去唯一佐證。
+    """
+
+    resolver: RecordingResolver = RecordingResolver(expiries=["202701", "202702"])
+    feed: TwFuturesLiveDataFeed = make_futures_feed(resolver)
+
+    assert feed._broker_contract_update_date() == datetime.date(2026, 9, 21)
+    assert "resolve_index_futures:TX202701" in resolver.calls
+
+
+def test_futures_probe_without_listed_expiries_returns_none_not_a_guess() -> None:
+    """查不到掛牌月份時回 None；**不猜**，交由其他來源作答或拒絕啟動"""
+
+    feed: TwFuturesLiveDataFeed = make_futures_feed(RecordingResolver(expiries=[]))
+
+    assert feed._broker_contract_update_date() is None
+
+
+def test_stock_still_probes_with_a_stock_contract() -> None:
+    """股票版維持用股票合約——兩邊各問自己的市場，這才是重點"""
+
+    resolver: RecordingResolver = RecordingResolver()
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(
+        FakeBrokerForFeed(resolver), calendar_sources=[FixedSource("test", True)]
+    )
+
+    assert feed._broker_contract_update_date() == datetime.date(2026, 9, 21)
+    assert resolver.calls == ["resolve_stock:2330"]
+
+
+def test_probe_failure_is_visible_not_swallowed() -> None:
+    """
+    探測失敗要留下 warning
+
+    這是平日交易日判定的唯一佐證，它失效等於整個判定失效——
+    原本記在 debug 等級，正式部署一定看不到。
+    """
+
+    class BrokenResolver:
+        def list_index_futures_expiries(self, product: str) -> List[str]:
+            raise RuntimeError("連線斷了")
+
+    feed: TwFuturesLiveDataFeed = make_futures_feed(BrokenResolver())
+
+    messages: List[str] = []
+    sink_id: int = logger.add(
+        lambda m: messages.append(str(m)), level="WARNING", format="{message}"
+    )
+    try:
+        assert feed._broker_contract_update_date() is None
+    finally:
+        logger.remove(sink_id)
+
+    assert any("取合約檔更新日期失敗" in message for message in messages)
+
+
+# === DB 生命週期骨架 ===
+def test_each_market_reads_its_own_table() -> None:
+    """
+    最新日查的是各自的表
+
+    表名收進 `LATEST_DATE_TABLE` 之後，查錯表的症狀會是「新鮮度檢查永遠通過」
+    或「永遠失敗」，兩者都不會說出真正的原因。
+    """
+
+    assert TwStockLiveDataFeed.LATEST_DATE_TABLE == "price"
+    assert TwFuturesLiveDataFeed.LATEST_DATE_TABLE == "futures_price_daily"
+
+
+def test_latest_date_reads_the_declared_table() -> None:
+    """骨架真的照 `LATEST_DATE_TABLE` 查，不是各自寫一份查詢"""
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(
+        FakeBrokerForFeed(RecordingResolver())
+    )
+    feed.conn = sqlite3.connect(":memory:")
+    feed.conn.execute("CREATE TABLE price (date TEXT)")
+    feed.conn.execute("INSERT INTO price VALUES ('2026-09-18'), ('2026-09-21')")
+
+    assert feed.get_latest_data_date() == datetime.date(2026, 9, 21)
+
+    feed.close()
+
+
+def test_feed_without_a_declared_table_refuses_instead_of_guessing() -> None:
+    """
+    沒宣告表名就拋出
+
+    靜默回 None 的話，新鮮度檢查會說「歷史資料表是空的」——
+    那個訊息會把人帶去查 ETL，而真正的原因是這個類別少宣告了一行。
+    """
+
+    feed: FakeLiveFeed = FakeLiveFeed(latest=None)
+    feed.LATEST_DATE_TABLE = ""
+
+    with pytest.raises(NotImplementedError, match="LATEST_DATE_TABLE"):
+        BaseLiveDataFeed.get_latest_data_date(feed)
+
+
+def test_futures_close_releases_both_connections() -> None:
+    """
+    期貨要關**兩條**連線
+
+    官方開休市日曆的 `market_holiday` 表在 `tw_stock.db`，與期貨歷史資料不同庫。
+    只關一條的話，每天重跑的行程會一天洩一條連線——而且完全沒有徵兆。
+    """
+
+    feed: TwFuturesLiveDataFeed = make_futures_feed(RecordingResolver())
+    feed.conn = sqlite3.connect(":memory:")
+    feed.stock_conn = sqlite3.connect(":memory:")
+
+    feed.close()
+
+    assert feed.conn is None
+    assert feed.stock_conn is None
+
+    # 可重複呼叫：引擎以 `try/finally` 保證它跑到
+    feed.close()

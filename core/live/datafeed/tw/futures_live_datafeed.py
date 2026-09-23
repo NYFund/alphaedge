@@ -29,7 +29,6 @@ from core.utils import (
     FuturesSession,
     OrderType,
     PositionType,
-    Scale,
 )
 
 """
@@ -58,6 +57,13 @@ def split_contract_id(symbol: str) -> Tuple[str, str]:
 
 class TwFuturesLiveDataFeed(BaseLiveDataFeed):
     """台期貨實盤資料源"""
+
+    LATEST_DATE_TABLE: str = "futures_price_daily"
+    HISTORY_API_HINT: str = "self.futures_price"
+    # 交易日佐證用的商品：台指期是成交最活絡、掛牌從不中斷的指數期貨。
+    # **必須是期貨合約**：期貨與證券的開休市日不保證一致，
+    # 拿股票合約來佐證，兩邊不一致的那天會誤判為開市
+    PROBE_PRODUCT: str = "TX"
 
     # 實盤換月日曆的範圍（曆日）：往回取資料庫的實際交易日，往後取平日扣掉官方休市日。
     # 往後 70 天涵蓋「當月 ＋ 次月」的最後交易日，換月判定只看得到這麼遠
@@ -94,10 +100,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 官方開休市日曆所在的資料庫（`market_holiday` 表在 `tw_stock.db`）
         """
 
-        super().__init__(broker, calendar_sources, now_provider)
+        super().__init__(broker, calendar_sources, now_provider, db_path)
 
-        self.db_path: Any = db_path
-        self.conn: Optional[DBConnection] = None
         self.futures_price: Optional[FuturesPriceAPI] = None
         self.margin: Optional[FuturesMarginAPI] = None
         self.margin_config: Optional[FuturesMarginConfig] = margin_config
@@ -325,39 +329,19 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             reason=f"{product}{position.expiry} → {product}{active}（{position.volume} 口）",
         )
 
-    def _broker_contract_update_date(self) -> Optional[datetime.date]:
-        """券商合約檔的更新日期；取不到時回 None"""
+    def _probe_contract(self, resolver: Any) -> Optional[Any]:
+        """
+        交易日佐證取**期貨**合約：近月台指期
 
-        resolver: Any = getattr(self.broker, "resolver", None)
-        if resolver is None:
-            return None
-        try:
-            contract: Any = resolver.resolve_stock("2330")
-        except Exception as exc:
-            logger.debug(f"取合約檔更新日期失敗：{exc}")
-            return None
+        到期月每個月都在換，寫死一個月份的合約會在該月交割後永遠查不到，
+        於是平日的交易日判定靜默失去唯一佐證。改成先問掛牌月份再取最近的一個；
+        查不到掛牌月份時回 None（不猜）。
+        """
 
-        raw: Any = getattr(contract, "update_date", None)
-        if isinstance(raw, datetime.date):
-            return raw
-        try:
-            return datetime.date.fromisoformat(str(raw))
-        except (TypeError, ValueError):
+        expiries: List[str] = resolver.list_index_futures_expiries(self.PROBE_PRODUCT)
+        if not expiries:
             return None
-
-    def get_latest_data_date(self) -> Optional[datetime.date]:
-        """`futures_price_daily` 的最新交易日"""
-
-        if self.conn is None:
-            return None
-
-        rows: List[Any] = self.conn.execute(
-            "SELECT MAX(date) FROM futures_price_daily"
-        ).fetchall()
-        raw: Any = rows[0][0] if rows else None
-        if not raw:
-            return None
-        return datetime.date.fromisoformat(str(raw))
+        return resolver.resolve_index_futures(self.PROBE_PRODUCT, expiries[0])
 
     def get_live_quotes(
         self, timing: ExecutionTiming, symbols: Sequence[str]
@@ -472,34 +456,17 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         logger.warning(f"取不到 {product} 的契約乘數，PnL 將無法計算")
         return 0
 
-    @staticmethod
-    def _as_optional_float(contract: Any, field: str) -> Optional[float]:
-        """取合約的浮點欄位；缺值回 None"""
-
-        value: Any = getattr(contract, field, None)
-        return float(value) if value else None
-
-    def get_quotes(
-        self, date: datetime.date, scale: Scale, adjusted: bool = False
-    ) -> List[BaseQuote]:
-        """歷史報價請走 API；今天的報價走 `get_live_quotes()`"""
-
-        if date >= self._now().date():
-            raise ValueError(
-                f"{date} 不早於今天：歷史報價只到前一個交易日，"
-                "今天的報價請用 get_live_quotes()"
-            )
-
-        raise NotImplementedError(
-            "實盤不從歷史表逐日取報價；策略需要歷史資料時走 API（self.futures_price）"
-        )
-
     def close(self) -> None:
-        """關閉歷史資料連線；可重複呼叫"""
+        """
+        關閉兩條唯讀連線；可重複呼叫
 
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None
+        期貨比其他市場多一條：官方開休市日曆的 `market_holiday` 表在
+        `tw_stock.db`，與期貨歷史資料不同庫。漏關它會在每天重跑的行程裡
+        一天洩一條連線。
+        """
+
+        super().close()
+
         if self.stock_conn is not None:
             self.stock_conn.close()
             self.stock_conn = None
