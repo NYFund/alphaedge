@@ -11,7 +11,7 @@ AlphaEdge 是一個聚焦台灣市場工作流程的策略研究與交易框架�
 ```mermaid
 graph TB
     subgraph entry ["入口層"]
-        RunPy["run.py"]
+        RunPy["run.py<br/>--mode backtest ｜ live"]
         Tasks["tasks/update_db.py"]
     end
 
@@ -20,17 +20,29 @@ graph TB
         Loader["strategy_loader.py"]
     end
 
-    subgraph portfolio_layer ["部位建構層（回測與實盤共用）"]
-        Portfolio["core/portfolio<br/>signal／sizing／construction<br/>（Signal ＋ Account → Order，只做開倉）"]
+    subgraph shared_layer ["共用契約層（回測與實盤吃同一份）"]
+        Portfolio["core/portfolio<br/>signal／sizing／construction<br/>aggregation（多策略仲裁）"]
+        Execution["core/execution<br/>送單前處理：方向白名單<br/>持倉上限、曝險、決定性排序"]
+        DataFeedBase["core/datafeed<br/>BaseDataFeed 契約"]
+        Market["core/market<br/>交易日曆／換月／保證金設定"]
+        Managers["core/managers<br/>部位與帳務"]
     end
 
-    subgraph engine_layer ["回測引擎層（市場無關）"]
-        Factory["core/backtest/factory.py<br/>（全專案唯一 if market ==）"]
+    subgraph backtest_layer ["回測引擎（市場無關）"]
+        BTFactory["core/backtest/factory.py<br/>（全專案唯一 if market ==）"]
         Backtester["core/backtest/backtester.py"]
         BTModels["core/backtest/models<br/>InstrumentSpec／FillModel<br/>CostModel／SettlementModel"]
-        Feed["core/backtest/datafeed"]
-        Managers["core/managers"]
-        Report["core/backtest/report"]
+        BTFeed["core/backtest/datafeed"]
+        BTReport["core/backtest/report"]
+    end
+
+    subgraph live_layer ["實盤引擎"]
+        LiveFactory["core/live/factory.py"]
+        Trader["core/live/trader.py<br/>（逐段落生命週期）"]
+        LiveParts["core/live<br/>oms／risk／attribution<br/>reconciler／capital_allocator"]
+        LiveFeed["core/live/datafeed"]
+        LiveReport["core/live/report<br/>（含 parity 比對）"]
+        Broker["core/broker<br/>Shioaji 閘道"]
     end
 
     subgraph domain_layer ["領域與共用層"]
@@ -45,38 +57,62 @@ graph TB
         DAO["core/dao<br/>（SQL／連線／交易）"]
         Pipeline["core/pipeline"]
         DB["data/db"]
+        TradingDB["data/db/tw_trading.db<br/>（實盤紀錄庫）"]
         Data["data/downloads"]
     end
 
-    subgraph output_layer ["回測輸出層"]
+    subgraph output_layer ["輸出層"]
         Results["results"]
     end
 
     subgraph frontend_layer ["前端層（Streamlit）"]
         FrontendApp["frontend/app.py"]
-        FrontendService["frontend/services/report_loader.py"]
-        FrontendConfig["frontend/config.py"]
+        FrontendService["frontend/services"]
         FrontendDocker["frontend/Dockerfile"]
     end
 
     RunPy --> Loader
     Loader --> Strategies
+    RunPy --> BTFactory
+    RunPy --> LiveFactory
     Strategies --> Portfolio
+    Portfolio --> Execution
     Portfolio --> Models
-    RunPy --> Factory
-    Factory --> Backtester
-    Factory --> BTModels
-    Factory --> Feed
-    Factory --> Managers
+
+    BTFactory --> Backtester
+    BTFactory --> BTModels
+    BTFactory --> BTFeed
     Backtester --> Strategies
+    Backtester --> Execution
     Backtester --> BTModels
-    Backtester --> Feed
+    Backtester --> BTFeed
     Backtester --> Managers
-    Backtester --> Report
+    Backtester --> BTReport
+
+    LiveFactory --> Trader
+    LiveFactory --> LiveParts
+    LiveFactory --> LiveFeed
+    LiveFactory --> Broker
+    Trader --> Strategies
+    Trader --> Execution
+    Trader --> LiveParts
+    Trader --> LiveFeed
+    Trader --> Managers
+    Trader --> LiveReport
+    LiveParts --> TradingDB
+    Broker --> LiveFeed
+
+    BTFeed --> DataFeedBase
+    LiveFeed --> DataFeedBase
+    BTFeed --> Market
+    LiveFeed --> Market
     Managers --> Models
+    Models --> Utils
     BTModels --> Models
-    Feed --> API
-    Feed --> Adapters
+    Execution --> Models
+
+    BTFeed --> API
+    BTFeed --> Adapters
     API --> DAO
     DAO --> DB
     Adapters --> API
@@ -86,26 +122,32 @@ graph TB
     Pipeline --> Config
     Tasks --> Pipeline
     Pipeline --> Data
-    Report --> Results
+    BTReport --> Results
+    LiveReport --> Results
     Results --> FrontendService
-    FrontendConfig --> FrontendService
     FrontendService --> FrontendApp
     FrontendDocker --> FrontendApp
 ```
 
-`Backtester` 是**唯一的回測引擎，市場無關、沒有子類**。市場差異全部下沉為五個可插拔的 model（`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed`），由 `factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝。新增一個（市場, 商品）組合不需要修改 `backtester.py` 一行。詳見[多市場回測引擎架構](docs/backtest/multi-market-engine.md)與[模組使用關係](docs/backtest/module-map.md)。
+**兩個引擎、一支策略。** `Backtester` 與 `LiveTrader` 是兩條獨立的生命週期，但吃的是**同一支策略類別**——分界線只有 `check_*_signal()` 回傳的訂單清單。策略不必為了上實盤改寫，實盤與回測的訊號差異因此可以逐筆比對（`core/live/report/` 的 parity 檢查）。
+
+**市場差異全部下沉為可插拔的 model。** `Backtester` 市場無關、沒有子類；`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed` 由 `core/backtest/factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝，新增一個（市場, 商品）組合不必改 `backtester.py` 一行。實盤那側由 `core/live/factory.py` 做同一件事。
+
+**共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、送單前處理（`core/execution/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/managers/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
+
+詳見[多市場回測引擎架構](docs/backtest/multi-market-engine.md)與[模組使用關係](docs/backtest/module-map.md)。
 
 ## 回測支援範圍
 
 一次回測跑一個（市場, 商品）組合，由策略基底宣告、`factory.py` 分派；方向（LONG／SHORT）與商品類別是兩條獨立的軸，
 記帳一律看每一張訂單的 `position_type`，策略的 `allowed_directions` 只是方向白名單。
 
-表中的資料區間是 2026-09-17 盤點 `data/db` 的結果，更新資料後會跟著變動。
+表中的資料區間是 2026-09-24 盤點 `data/db` 的結果，更新資料後會跟著變動。
 
 | 市場 × 商品 | 狀態 | 範圍與資料區間 | K 棒級別 | 方向 | 策略基底 |
 | ----------- | ---- | -------------- | -------- | ---- | -------- |
-| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-16（最新交易日 2,393 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-16 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
-| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-16<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
+| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-23（最新交易日 2,395 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-24 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
+| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-24<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
 | 股票期貨／ETF 期貨 | ⚠️ 程式可跑，缺行情 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29、09-02、09-16 共 3 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料，**不足以跑出有意義的回測**（回補待辦見 [暫緩工作彙整](backlog/暫緩工作彙整.md) S4）<br>**程式面已接通**：乘數由 DataFeed 的 `resolve_multiplier()` 逐日查標的池的契約單位；保證金先查金額表（ETF 期貨 NYF 在此，2020-07-22 起），個股期貨改走比例表（`標的股價 × 契約單位 × 適用比例`，標的股價跨庫取自 `tw_stock.db`）<br>**其餘限制**：契約單位只回溯到 2026-08-29 的首份快照，更早的除權息調整查不到 | 僅 `DAY` | 同台指數期貨 | `BaseFuturesStrategy` |
 | 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
 
@@ -120,7 +162,8 @@ graph TB
 - 期貨跳動點只涵蓋已查證的七檔指數期貨（TX／MTX／TMF 1 點、TE／ZEF 0.05 點、TF／ZFF 0.2 點）；未登錄的商品退回 1 點並記 warning，以跳動點數設定的滑價會失真（預設滑價為 0，不受影響）。
 - 同一次回測無法同時持有台股與台期貨（跨市場組合／避險）。
 - 台股平盤下放空限制與每日可當沖清單尚未接上撮合，會高估放空與當沖機會。
-- 實盤（`--mode live`）目前只在**模擬環境**演練過，尚未在正式環境執行；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
+- 實盤（`--mode live`）目前只在**模擬環境**跑多日連續演練，尚未在正式環境執行；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
+- 實盤的單日虧損守門只在**帳戶層**生效（取券商端的已實現＋未實現）；**逐策略那一層目前恆為不觸發**——券商只給得出逐標的的合併損益，拆不回策略。
 
 細節見[放空回測框架規格](docs/backtest/short-selling-framework.md)與[台期貨平台](docs/futures/tw-futures-platform.md)。
 
@@ -131,7 +174,10 @@ graph TB
 | `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、資料存取層、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
 | `core/live/`    | 實盤交易：逐段落生命週期、委託管理（OMS）、部位歸屬、對帳、風控與盤後作業               |
 | `core/broker/`  | 券商介接（目前為 Shioaji）：登入、合約解析、委託轉換、回報正規化與行情訂閱              |
-| `core/execution/` | 回測與實盤共用的送單前處理：方向白名單、持倉上限、決定性排序                          |
+| `core/execution/` | 回測與實盤共用的送單前處理：方向白名單、持倉上限、單一標的曝險、決定性排序              |
+| `core/portfolio/` | 回測與實盤共用的部位建構：訊號、資金切分、開倉組裝與多策略仲裁                          |
+| `core/datafeed/`  | 中立的 `BaseDataFeed` 契約：回測與實盤各自實作，策略的 `setup_apis(feed)` 型別就是它 |
+| `core/market/`    | 市場結構（交易日曆、期貨換月與保證金設定），不屬於任一引擎                              |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
 | `tasks/`        | 資料維護與資料庫更新腳本                                              |
 | `tests/`        | 單元／整合測試與回測回歸線（`tests/backtest/`）                       |
@@ -346,8 +392,9 @@ pre-commit run --all-files
 
 **CI**：每次 push 時 GitHub Actions 會依序跑 `ruff check`、`ruff format --check`、
 分層相依檢查（`scripts/check_layer_deps.py`）、文件路徑檢查（`scripts/check_doc_paths.py`）、
-API 死介面檢查（`scripts/check_api_orphan_methods.py`）、SHORT 回歸線與
-`pytest -m "not slow"`，最後以 `continue-on-error` 產出覆蓋率報告
+`pre-commit run --all-files` 的其餘檢查、API 死介面檢查（`scripts/check_api_orphan_methods.py`）、
+SHORT 回歸線、`pytest -m "not slow"`、覆蓋率報告（`continue-on-error`），
+最後建置 `core` 與 `frontend` 兩個 Docker 映像並各跑一次冒煙
 （見 `.github/workflows/ci.yml`）。**LONG 回歸線需要 `data/db/tw_stock.db`，
 CI 沒有該檔，只能在本機跑。**
 
@@ -386,8 +433,13 @@ AlphaEdge/
 │   │   ├── base.py            # BaseDAO：owns_conn、table_exists、savepoint、寫入方法
 │   │   ├── connection.py      # connect_sqlite() 單一入口（含唯讀模式）
 │   │   └── tw/                # 一張表（或一組緊密相關的表）一個 DAO
-│   ├── adapters/              # 資料介接 / 整合層
-│   │   └── tw/               # StockQuoteAdapter（日線/Tick → StockQuote）、FuturesQuoteAdapter
+│   ├── adapters/              # 純轉換層（零 I/O）：raw → Quote
+│   │   ├── quote_validation.py # 來源無關的報價驗證：價格有效性、重複代號
+│   │   └── tw/               # StockQuoteAdapter（日線與 tick 各一條完整路徑）、FuturesQuoteAdapter
+│   ├── datafeed/              # 中立的 BaseDataFeed 契約（回測與實盤共用，誰都不 import 對方）
+│   ├── market/                # 市場結構：交易日曆、期貨換月、保證金設定
+│   ├── portfolio/             # 部位建構（回測與實盤共用）：signal／sizing／construction／aggregation
+│   ├── execution/             # 送單前處理（回測與實盤共用）：方向白名單、持倉上限、曝險、排序
 │   ├── managers/              # 倉位管理器（base/ ＋ stock/ ＋ futures/）
 │   ├── models/                # 領域模型（base/ ＋ stock/ ＋ futures/）
 │   ├── utils/                 # 共用工具（enum、時間、日誌、Shioaji 帳號）
@@ -405,7 +457,19 @@ AlphaEdge/
 │   │   ├── datafeed/          # 資料載入、報價轉換、交易日曆、期貨換月
 │   │   ├── report/            # 交易報表、多空統計、圖表
 │   │   └── analysis/          # 績效指標（`performance_metrics.py` 為風險調整後報酬的純函式，由 reporter 呼叫並輸出 metrics_summary.csv）
-├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db）＋ downloads/
+│   ├── broker/                # 券商閘道（Shioaji）
+│   │   └── tw/                # 登入／CA、合約解析、委託轉換、回報正規化、帳務、即時行情
+│   └── live/                  # 實盤引擎
+│       ├── trader.py          # 逐段落生命週期（開盤／尾盤／盤中／盤後）
+│       ├── factory.py         # 依（market, instrument_type）組裝實盤元件
+│       ├── oms/               # 委託狀態機、回報佇列、重啟接管
+│       ├── risk/              # 事前風控、交易模式狀態機、風控事件紀錄
+│       ├── attribution/       # 多策略部位歸屬帳與跨策略衝突守門
+│       ├── datafeed/          # 歷史資料到 T−1，今天的報價由券商提供
+│       ├── intraday/          # 盤中事件迴圈與日終強制動作
+│       ├── notify/            # 告警推播（失敗不影響主流程）
+│       └── report/            # 實盤日報與實盤／回測訊號 parity 比對
+├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db、實盤紀錄庫 tw_trading.db）＋ downloads/
 ├── results/                   # 各策略回測輸出（csv／png），不進版控
 ├── logs/                      # api/、pipeline/、backtest/ 三桶，不進版控
 ├── frontend/                  # Streamlit Docker 映像
