@@ -16,9 +16,10 @@ from tests.conftest import build_stock_quote
 """
 產生 SHORT 路徑的回歸 baseline：多市場抽象重構動程式碼前的第一步
 
-LONG 已有 915 筆逐筆 baseline，SHORT 卻只有單元／整合測試，缺少「整條路徑的完整帳」。
-Phase 2 要把放空記帳從 Backtester 搬進 SettlementModel，若某個攤提比例走鐘，
-現有測試不保證抓得到，因此在此建立第二條回歸線。
+LONG 已有逐筆 baseline（`momentum_strategy_1_baseline.csv`），SHORT 卻只有
+單元／整合測試，缺少「整條路徑的完整帳」。放空記帳要從 `Backtester` 搬進
+`SettlementModel`，若某個攤提比例走鐘，現有測試不保證抓得到，
+因此在此建立第二條回歸線。
 
 本檔案完全不連資料庫：報價與訊號都由腳本給定，跑一次僅需秒級。
 """
@@ -146,7 +147,7 @@ def make_short_strategy(**overrides: Any) -> ScriptedStrategy:
 def build_scenarios() -> List[ShortScenario]:
     """
     - Description:
-        建立涵蓋放空記帳各條路徑的六組情境
+        建立涵蓋放空記帳各條路徑的十二組情境（十個編號，其中兩個各跑兩種放空管道）
 
         每組都刻意只動一個變因，任一情境的快照有變即可直接指向出問題的掛點。
     - Return:

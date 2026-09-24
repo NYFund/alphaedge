@@ -50,11 +50,15 @@ class FakeSnapshot:
 
 
 class FakeFuturesSnapshot(FakeSnapshot):
+    """期貨版的快照替身；欄位與股票相同，只有代碼換成月份字母碼"""
+
     def __init__(self) -> None:
         super().__init__(code="TXFJ6")
 
 
 class FakeContract:
+    """對應 `shioaji.contracts.Future`，只帶報價轉換讀得到的欄位"""
+
     def __init__(self, code: str = "TXFJ6") -> None:
         self.code: str = code
         self.symbol: str = "TXF202610"
@@ -64,6 +68,8 @@ class FakeContract:
 
 @pytest.fixture
 def stream() -> ShioajiQuoteStream:
+    """快照轉換不會用到 api，給一個佔位物件即可"""
+
     return ShioajiQuoteStream(object(), RateLimiter(), queue.Queue())
 
 
@@ -217,7 +223,7 @@ def test_pre_open_futures_quote_carries_a_plain_date() -> None:
     """
     期貨盤前報價同樣要帶 `date`
 
-    股票盤前用的是 `self._now().date()`、期貨用的是 `self._now()`——
+    股票盤前取的是 `self._now().date()`，期貨一度直接用 `self._now()`——
     同一個段落的兩個市場給出不同型別，而這種不對稱沒有理由，
     只是兩邊各寫一次時沒有對齊。
     """
@@ -234,7 +240,8 @@ def test_pre_open_futures_quote_carries_a_plain_date() -> None:
         multiplier=200,
     )
 
-    # 這條先釘住建構出來的型別；資料源那一側由下面的呼叫點測試把關
+    # 模型本身不限制 `date` 的型別（這裡刻意餵 `datetime` 也照收），
+    # 這條只確認盤前報價建得出來；不變式由下面資料源那一側的組裝路徑把關
     assert quote.reference_price == 24000.0
 
     feed_quotes: List[Any] = build_pre_open_futures_quotes()

@@ -28,7 +28,7 @@ from core.pipeline.utils import (
 `try/except` 裡、失敗時 `return False`，pytest 只會發出 `PytestReturnNotNoneWarning`
 並判定 **passed**——換句話說那一檔永遠不會紅，拿它當重構的驗收等於沒有驗收。
 
-本檔完全離線（crawler 的 `setup()` 與 API 呼叫皆被替換），釘住三件事：
+本檔完全離線（crawler 的 `setup()` 與 API 呼叫皆被替換），釘住四件事：
 1. 批量更新會逐 (券商 × 股票) 組合送出請求，且資料確實入庫。
 2. metadata 記錄每個組合的 `earliest_date`／`latest_date`。
 3. **中斷後重跑不會重複爬取已存在的組合**——任何效能優化都不得改變這個 resume 語意。

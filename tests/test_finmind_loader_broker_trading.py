@@ -25,6 +25,7 @@ def _make_broker_trading_df(
     dates: List[str],
 ) -> pd.DataFrame:
     """組出符合 loader 需求的 broker trading DataFrame。"""
+
     rows = []
     for d in dates:
         rows.append(

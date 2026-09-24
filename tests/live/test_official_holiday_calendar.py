@@ -79,6 +79,8 @@ def stock_db(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
 
 # === 來源本身 ===
 def test_official_source_answers_only_covered_years() -> None:
+    """已入庫年度答得出開休市，未入庫的年度回 None 交給其他來源，不猜"""
+
     source: OfficialHolidayCalendarSource = OfficialHolidayCalendarSource(
         MarketHolidayAPI(conn=build_stock_db())
     )
@@ -121,6 +123,8 @@ def test_conflict_with_broker_contract_refuses_to_start() -> None:
 def test_stock_feed_uses_official_calendar_as_a_default_source(
     stock_db: sqlite3.Connection,
 ) -> None:
+    """股票資料源的預設日曆來源要有官方日曆，而且排在第一順位"""
+
     feed: TwStockLiveDataFeed = TwStockLiveDataFeed(
         broker=None, now_provider=lambda: datetime.datetime(2026, 9, 22, 8, 30)
     )
@@ -136,6 +140,8 @@ def test_stock_feed_uses_official_calendar_as_a_default_source(
 def test_futures_feed_opens_stock_db_for_the_official_calendar(
     stock_db: sqlite3.Connection,
 ) -> None:
+    """期貨的歷史資料在 `tw_futures.db`，官方日曆要另開 `tw_stock.db` 才讀得到"""
+
     feed: TwFuturesLiveDataFeed = TwFuturesLiveDataFeed(
         broker=None,
         db_path="futures",

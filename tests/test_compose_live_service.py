@@ -56,4 +56,6 @@ def test_live_service_never_defaults_to_production() -> None:
 
 
 def test_ca_certificate_is_mounted_read_only() -> None:
+    """CA 憑證掛在 `/ca` 且唯讀：容器內的程式不該有覆寫或刪掉憑證的可能"""
+
     assert ":/ca:ro" in live_block()

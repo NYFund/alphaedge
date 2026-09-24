@@ -30,6 +30,8 @@ def send_sigterm() -> None:
 
 
 def test_sigterm_raises_inside_the_block() -> None:
+    """區塊內收到 SIGTERM 時轉成 `LiveTerminated` 拋出，而不是直接結束行程"""
+
     with pytest.raises(LiveTerminated):
         with raise_on_sigterm():
             send_sigterm()
@@ -51,6 +53,8 @@ def test_second_sigterm_during_cleanup_is_ignored() -> None:
 
 
 def test_previous_handler_is_restored() -> None:
+    """離開區塊後 SIGTERM 的處理器要還原成進入前那一個"""
+
     before: Any = signal.getsignal(signal.SIGTERM)
 
     with raise_on_sigterm():

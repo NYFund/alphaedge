@@ -184,6 +184,8 @@ def test_two_holders_of_one_symbol_refuse_the_whole_plan(dao: LiveTradeDAO) -> N
 
 
 def test_consistent_positions_produce_an_empty_plan(dao: LiveTradeDAO) -> None:
+    """券商與本地一致時計畫是空的，且不算拒絕——「沒事可做」不是「不敢做」"""
+
     add_lot(dao, "L1", "Alpha", 2)
 
     plan: ResyncPlan = plan_resync([broker_position(2)], dao.get_open_lots())
@@ -292,6 +294,8 @@ def test_confirmed_resync_reconciles_with_the_broker(dao: LiveTradeDAO) -> None:
 
 
 def test_conflict_is_refused_and_records_stay_untouched(dao: LiveTradeDAO) -> None:
+    """即使帶 `confirm=True`，兩個持有者的衝突仍拋出，lot 表與事件表一列都不動"""
+
     add_lot(dao, "L1", "LiveStockStrategy", 2)
     add_lot(dao, "L2", UNATTRIBUTED_STRATEGY, 1)
     broker: FakeBroker = FakeBroker()

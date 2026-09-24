@@ -21,7 +21,7 @@ _RUN_PY: Path = _PROJECT_ROOT / "run.py"
 有沒有拋例外，驗不到 `sys.exit()` 實際交給呼叫端的那個數字，也驗不到
 訊息去了 stdout 還是 stderr。
 
-本檔的每一條都**不會真的跑回測**——三種情況都在建 Backtester 之前就結束，
+本檔的每一條都**不會真的跑回測**——這些情況都在建 Backtester 之前就結束，
 所以不需要 `data/db/*.db`，也不標 `slow`。
 """
 
@@ -29,7 +29,7 @@ _RUN_PY: Path = _PROJECT_ROOT / "run.py"
 # 用法錯誤：與 argparse 自己的用法錯誤同碼（缺必填參數時它就回 2）
 EXIT_USAGE_ERROR: int = 2
 
-# 未實作：`raise NotImplementedError` 的預設退出碼
+# 未攔截的例外：Python 行程的預設退出碼（實盤接上之後已沒有路徑會走到）
 EXIT_UNHANDLED_EXCEPTION: int = 1
 
 

@@ -124,7 +124,8 @@ def test_stock_and_etf_futures_are_allowed() -> None:
 
     它們不在 `FuturesProduct`（只收 15 檔臺股指數期貨）內，但實測
     `CDF`（台積電期）、`NYF`（0050 期貨）走 `commodity_id` 都能正常取得行情，
-    且 Phase6 本來就要爬。拿 Enum 當白名單會把它們一起擋掉。
+    而它們本來就是爬取目標（`FuturesPriceUpdater.update_stock_futures()`）。
+    拿 Enum 當白名單會把它們一起擋掉。
     """
 
     FuturesPriceCrawler.validate_product("CDF")

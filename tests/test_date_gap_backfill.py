@@ -42,7 +42,7 @@ def test_middle_gap_is_planned_again(
     tmp_path: Path, dao_factory: Callable[..., BaseDAO]
 ) -> None:
     """
-    S4 的驗收點：刪掉中間一天，該日必須重新進入候選
+    刪掉中間一天，該日必須重新進入候選
 
     這正是「刪掉 `price` 表任一天，`--target price` 會回補該日」的實驗。
     """

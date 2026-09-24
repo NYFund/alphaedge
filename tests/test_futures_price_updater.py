@@ -22,7 +22,8 @@ from core.utils import FuturesSession
 
 **逐商品續跑**是本檔的重點——各商品上市日不同且會陸續加入設定檔，
 若以全表最新日當起點，新商品的歷史會整段補不到且不會有任何錯誤訊息。
-不連網路（crawler 以 stub 取代）、不碰正式的 tw_futures.db。
+不連網路（crawler 以 stub 取代）。除了兩條全表盤點以唯讀開正式的 tw_futures.db
+（沒有該檔就 skip），其餘測試都在暫存 DB 上跑。
 """
 
 DATE: datetime.date = datetime.date(2026, 8, 27)
@@ -46,7 +47,8 @@ def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FuturesPriceUpda
     futures_price_updater.cleaner.futures_price_dir = (
         futures_price_updater.loader.futures_price_dir
     )
-    # 空產出重試的等待在測試中一律歸零，否則每個空日都要真的睡 60 秒
+    # 空產出重試的等待在測試中一律歸零，否則每個空日都要真的睡 15 秒起跳
+    # （連續空產出時退避倍率最高 ×8，也就是 120 秒）
     futures_price_updater.EMPTY_RETRY_DELAY_SECONDS = 0
     # 現貨交易日曆預設取不到：不讓測試去讀正式的 tw_stock.db，
     # 需要日曆的測試自己換成固定的交易日清單

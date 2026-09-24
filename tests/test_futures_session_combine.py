@@ -86,7 +86,7 @@ def test_combined_bar_takes_night_open_and_day_close() -> None:
 
 def test_cross_session_gap_is_preserved() -> None:
     """
-    **跨盤別跳空被保留在 bar 內**（本步驟的驗收條件）
+    **跨盤別跳空被保留在 bar 內**
 
     整併後的 open 與日盤 open 之間那 183 點，就是隔夜跳空；
     若整併時取日盤 open，這段風險在回測裡會完全看不見。

@@ -9,7 +9,7 @@ import pandas as pd
 from frontend.services.metrics import extract_backtest_date_range
 
 """
-前端與 reporter 用同一份公式
+績效指標的公式只留在 `core`，前端不自己算一份
 
 舊版 `frontend/app.py` 自己寫了一份 Sharpe／Sortino，而且**寫在模組層級的
 Streamlit 呼叫之後**——測試連 import 都做不到，於是那份公式從來沒有被驗證過。
@@ -19,9 +19,9 @@ Streamlit 呼叫之後**——測試連 import 都做不到，於是那份公式
 
 本檔盯住三件事：
 
-1. 前端的 Sharpe／Sortino 與 `core/backtest/analysis/performance_metrics.py` **逐值相同**。
-2. 公式本身對得上**手算**，不是「兩邊都錯得一樣」。
-3. `app.py` 不再定義任何計算函式，且前端 import `core` 的成本沒有變重。
+1. 留在前端的 `extract_backtest_date_range()` 只做資料整理，而且涵蓋進場與出場兩端。
+2. `app.py` 只剩渲染函式，前端**完全不 import `core`**——公式不可能再長出第二份。
+3. 共用的 `performance_metrics` import 起來不貴，不會把 pandas／shioaji 拉進前端映像。
 """
 
 

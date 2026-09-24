@@ -111,6 +111,8 @@ def test_sell_first_day_trade_needs_both_ways(day_trade: Any, allowed: bool) -> 
     [("Yes", True), ("OnlyBuy", True), ("No", False)],
 )
 def test_buy_first_day_trade_accepts_only_buy(day_trade: Any, allowed: bool) -> None:
+    """先買後賣的當沖 `Yes` 與 `OnlyBuy` 都放行，只有 `No` 在本地就擋下"""
+
     broker, api = make_broker(day_trade=day_trade)
 
     result: OrderTicket = broker.place_order(

@@ -317,8 +317,8 @@ def test_pre_open_quote_can_be_constructed() -> None:
     """
     物件要建得出來
 
-    property 沒帶 setter 的話，父類 `__init__` 的 `self.open = open` 會直接
-    `AttributeError`——連拋出「拿不到資料」的機會都沒有。
+    property 沒帶 setter 的話，父類 `__init__` 的賦值會直接 `AttributeError`
+    （理由見 `test_setters_do_not_raise_so_the_object_can_be_built`）。
     """
 
     quote: PreOpenStockQuote = PreOpenStockQuote(

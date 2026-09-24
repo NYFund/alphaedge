@@ -59,7 +59,13 @@ def make_quote(volume: int = 10_000, scale: Scale = Scale.DAY) -> StockQuote:
 
 
 def make_event_counts() -> Dict[str, int]:
-    """與引擎共用的事件計數器（只取本檔會用到的那幾個 key）"""
+    """
+    與引擎共用的事件計數器（只備妥本檔需要預先存在的 key）
+
+    `fill_price_clamped` 與 `close_price_out_of_range` 刻意不放進來：
+    模型是以 `get()` 遞增它們，而 `test_price_inside_range_is_untouched`
+    正是靠「key 不存在」來斷言沒有被計數。
+    """
 
     return {
         "rejected_fill_price": 0,
@@ -564,7 +570,7 @@ def test_standalone_fill_model_counts_volume_cap_rejections() -> None:
         )
     )
 
-    # 委託 10 張、當日量 10,000 張 × 0.1% ＝ 上限 10 張…改用更小的量觸發拒單
+    # 當日量 10,000 張 × 0.1% ＝ 上限 10 張，委託 50 張超量，政策設為整張拒單
     assert fill_model.get_filled_volume(make_order(volume=50), make_quote()) is None
     assert fill_model.event_counts["rejected_volume_cap"] == 1
 

@@ -192,7 +192,7 @@ def test_price_crawler_returns_data_on_success(monkeypatch: pytest.MonkeyPatch) 
 # === updater 統計：連線失敗計入 unreachable 而非 no data ===
 def test_connection_failure_counts_as_unreachable_not_no_data() -> None:
     """
-    S2 的驗收點：連線失敗要讓 `unreachable` +1
+    連線失敗要讓 `unreachable` +1
 
     記成 `no_data` 的話這天會被當成休市，之後再也不會補。
     """

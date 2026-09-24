@@ -98,7 +98,7 @@ def test_night_session_window(moment: datetime.datetime, expected: bool) -> None
 
 def test_accounting_date_does_not_change_across_midnight() -> None:
     """
-    **23:59 → 00:01 帳務日不變**（步驟指定的驗證條件）
+    **23:59 → 00:01 帳務日不變**
 
     兩者是同一段夜盤。取當下日曆日再往後推，會讓 00:01 之後的成交整段記到
     後一天，而那個錯誤只會在對帳時以「昨天的量對不起來」出現。
@@ -285,8 +285,8 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
     """
     回補時點一到，心跳要真的把回補單送出去
 
-    **這是本步驟最重要的一條**：判定寫得再對，沒有人呼叫就等於沒有——
-    現股當沖先賣未回補，券商可能標借或直接違約交割，而程式這邊看起來一切正常。
+    **這是接線測試裡最重要的一條**：判定寫得再對，沒有人呼叫就等於沒有，
+    而未回補留倉的後果見本檔開頭。
     """
 
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
@@ -311,7 +311,7 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
 
 
 def test_heartbeat_does_nothing_before_the_cover_time() -> None:
-    """時點未到不可以動作——提早回補等於放棄當沖的後半段"""
+    """時點未到不可以動作，理由同 `test_guard_waits_until_the_cover_time`"""
 
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 

@@ -23,8 +23,8 @@ from frontend.services.report_loader import (
 
 fixture 是 `tests/fixtures/frontend_report/`——`Foreign-Sell-Short-Day-Trade`
 那份報表的完整副本，**納入版控**。原本直接指向 `results/`，而該目錄被 `.gitignore`
-忽略，於是 `skipif` 在 CI 必定成立：這 14 條防的是四個已經發生過的錯，卻從來沒有
-在 CI 跑過一次，而 skip 在輸出裡只是一個 `s`，看起來是綠的。
+忽略，於是 `skipif` 在 CI 必定成立：這一整組測試防的是四個已經發生過的錯，卻從來
+沒有在 CI 跑過一次，而 skip 在輸出裡只是一個 `s`，看起來是綠的。
 
 **它是一份純 SHORT 的報表**，正好踩中舊版四個錯的每一個：
 

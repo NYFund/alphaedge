@@ -26,12 +26,15 @@ from tests.conftest import build_futures_quote
 共用同一份設定物件**——兩處不一致會出現「訊號在次月、部位還在近月」這種
 不會報錯的錯配。
 
-本檔釘住四件事：
+本檔釘住七件事：
 
 1. 三種規則可切換，且策略與結算模型看到的是同一個規則。
 2. 轉倉 ＝ 平舊倉 ＋ 以**相同口數與方向**開新倉，展期價差如實入帳。
 3. 新契約當日無報價時**不轉倉**（寧可留著走到期出場，也不要開一張沒有報價的單）。
 4. 關掉自動轉倉時，部位不會被偷偷轉走。
+5. 回測的換月接點與 `futures_continuous` 的 `roll_flag` 對得起來。
+6. 換月是單向的：未沖銷量反轉也不可把部位換回更近的月份。
+7. 轉倉兩腿同用盯市價、近月序列不挑週契約，已實現損益只有 cost model 那一條公式。
 """
 
 MULTIPLIER: int = FUTURES_MULTIPLIER["TX"]
@@ -332,7 +335,6 @@ def test_without_calendar_falls_back_to_nearest_month() -> None:
 def test_backtest_roll_dates_match_the_continuous_table() -> None:
     """
     **回測的換月接點必須與 `futures_continuous` 的 `roll_flag` 一致**
-    （本步驟的驗收條件）
 
     連續合約由 pipeline 建、回測由結算模型轉倉，兩者若對不上，
     用連續合約算出來的訊號就會落在部位不存在的契約上。

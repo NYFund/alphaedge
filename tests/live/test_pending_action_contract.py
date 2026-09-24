@@ -146,7 +146,7 @@ def test_avg_price_is_weighted_by_volume() -> None:
     **以口數加權，不是各 lot 取算術平均**
 
     一筆 1 張的試單與一筆 50 張的主倉權重相同的話，算出來的成本可以差很遠：
-    這裡算術平均會是 350.0，而真正的成本是 505.88。
+    這裡算術平均會是 350.0，而真正的成本是 590.20。
     """
 
     ledger: PositionAttributionLedger = PositionAttributionLedger(

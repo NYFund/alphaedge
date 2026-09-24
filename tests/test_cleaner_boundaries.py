@@ -117,7 +117,7 @@ def test_tpex_price_cleaner_rejects_unexpected_layout() -> None:
 
     from core.pipeline.tw.cleaners.stock_price_cleaner import StockPriceCleaner
 
-    # 少一欄（原本應為 15 欄，含 date）
+    # 刻意少兩欄：丟掉三個附加欄、補上 date 之後只剩 13 欄，而檢查點是 15 欄
     df: pd.DataFrame = pd.DataFrame(
         [["2330", "台積電"] + [1.0] * 10],
         columns=["代號", "名稱"] + [f"c{i}" for i in range(10)],

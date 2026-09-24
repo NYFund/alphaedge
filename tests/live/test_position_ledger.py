@@ -19,8 +19,8 @@ from core.utils import Action, PositionType
 兩件事特別要緊：
 - **沖銷順序要與回測的 `PositionManager` 一致**（FIFO）。不一致的話已實現損益
   會對不上，而券商端的合計還是對的——對帳看不出來。
-- **`get_holder()` 對未歸屬部位要回 `__unattributed__`，不可回 None**。
-  回 None 等於放行，策略會對一檔券商端已有部位的標的開新倉。
+- **`get_holder()` 對未歸屬部位要回 `__unattributed__`，不可回 None**（回 None 等於
+  放行，後果見 `test_holder_of_an_unattributed_position_is_not_none`）。
 """
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
@@ -28,6 +28,8 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 @pytest.fixture
 def clock() -> List[datetime.datetime]:
+    """可變的「現在」：測試改 `clock[0]` 就能讓下一筆 lot 落在另一天"""
+
     return [NOW]
 
 
@@ -35,6 +37,8 @@ def clock() -> List[datetime.datetime]:
 def ledger(
     dao: LiveTradeDAO, clock: List[datetime.datetime]
 ) -> PositionAttributionLedger:
+    """接上暫存紀錄庫與可控時鐘的歸屬帳"""
+
     return PositionAttributionLedger(dao, now_provider=lambda: clock[0])
 
 
@@ -44,6 +48,8 @@ def make_fill(
     price: float = 1000.0,
     ts: Optional[datetime.datetime] = None,
 ) -> ExecutionReport:
+    """組一筆買進成交回報（預設 2330、2 張、1000 元）"""
+
     return ExecutionReport(
         broker_seqno="000001",
         broker_trade_id="T001",

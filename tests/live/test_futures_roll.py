@@ -178,6 +178,8 @@ def test_rolls_on_the_trading_day_before_the_last_trading_day() -> None:
 
 
 def test_short_position_rolls_with_buy_then_sell() -> None:
+    """空單的兩腿方向相反：先買進平舊月、再賣出開新月"""
+
     short: Any = long_position()
     short.position_type = PositionType.SHORT
 
@@ -190,6 +192,8 @@ def test_short_position_rolls_with_buy_then_sell() -> None:
 
 
 def test_no_roll_well_before_expiry() -> None:
+    """離換月日還早（10/15）時不產生任何換月計畫"""
+
     today: datetime.date = datetime.date(2026, 10, 15)
 
     assert make_feed(today).plan_rolls([long_position()], today) == []
@@ -311,6 +315,8 @@ def placed_symbols(broker: FakeBroker) -> List[str]:
 
 
 def test_close_leg_fills_then_open_leg_is_sent(dao: LiveTradeDAO) -> None:
+    """平倉腿成交後才送開倉腿：兩張依序送出（舊月 → 新月），不寫任何風險事件"""
+
     trader, broker = build_trader(dao, fill_ratio=1.0)
 
     assert trader.execute_rolls(None) == 1

@@ -84,6 +84,8 @@ def loaded_api() -> MarketHolidayAPI:
 
 # === crawler ===
 def test_crawler_returns_the_raw_year(monkeypatch: pytest.MonkeyPatch) -> None:
+    """crawler 只把整年的 27 列原樣交出（欄位仍是站方的「日期／名稱／說明」），不做分類"""
+
     patch_fetch(monkeypatch, load_payload())
 
     result: CrawlResult = MarketHolidayCrawler().crawl(2026)
@@ -222,6 +224,8 @@ def test_is_trading_day_three_valued_semantics(loaded_api: MarketHolidayAPI) -> 
 
 
 def test_is_closure_and_get_closures(loaded_api: MarketHolidayAPI) -> None:
+    """`is_closure()` 同樣是三值語意；`get_closures()` 只回表上列出的休市日，不含週末"""
+
     assert loaded_api.is_closure(datetime.date(2026, 10, 9)) is True
     assert loaded_api.is_closure(datetime.date(2026, 2, 23)) is False
     assert loaded_api.is_closure(datetime.date(2027, 10, 11)) is None

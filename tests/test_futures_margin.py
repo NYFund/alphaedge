@@ -252,7 +252,7 @@ def test_lookup_takes_the_latest_effective_date_on_or_before(
     「某日生效的保證金」＝ `effective_date <= 該日` 的最大者
 
     不是 `= 該日`——保證金不是每天都變，用等號只有剛好調整那天查得到。
-    這條查詢語意是 S5 的 API 要實作的，先在此釘住。
+    這條查詢語意是保證金查詢 API（`FuturesMarginAPI`）要實作的，先在此釘住。
     """
 
     df: pd.DataFrame = _clean(loader)
@@ -380,7 +380,7 @@ def stock_cleaner(
 
 @pytest.fixture
 def rate_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FuturesMarginLoader:
-    """入庫器 fixture，DB 與 downloads 目錄都改為暫存"""
+    """同 `loader` fixture，供比例表的入庫測試使用"""
 
     monkeypatch.setattr(
         "core.pipeline.tw.loaders.futures_margin_loader.TW_FUTURES_DB_PATH",
@@ -620,7 +620,7 @@ def test_null_tier_survives_the_round_trip(rate_loader: FuturesMarginLoader) -> 
 def test_lookup_takes_the_latest_effective_date_on_or_before_for_rates(
     rate_loader: FuturesMarginLoader,
 ) -> None:
-    """查詢語意與金額表相同：`effective_date <= 該日` 的最大者（供 S5 用）"""
+    """查詢語意與金額表相同：`effective_date <= 該日` 的最大者"""
 
     df: pd.DataFrame = _clean_rates_with(rate_loader)
     rate_loader.add_rates_to_db(df)
@@ -660,7 +660,7 @@ def test_table_columns_match_cleaner_output_for_rates(
 
 
 def _clean_rates_with(rate_loader: FuturesMarginLoader) -> pd.DataFrame:
-    """以 loader 的暫存目錄清洗一份 fixture（避免寫到真實 downloads）"""
+    """同 `_clean()`，但清洗股票類 CSV 並只取比例段"""
 
     cleaner: FuturesMarginCleaner = FuturesMarginCleaner.__new__(FuturesMarginCleaner)
     cleaner.margin_dir = rate_loader.margin_dir

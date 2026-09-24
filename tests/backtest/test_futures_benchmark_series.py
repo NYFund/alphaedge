@@ -111,7 +111,8 @@ def make_continuous_db(tmp_path: Path) -> sqlite3.Connection:
 
 def test_api_returns_only_the_requested_adjust_method(tmp_path: Path) -> None:
     """
-    同一天有三種調整方式，查詢必須逐一指定——**混著拿等於疊三條曲線**
+    同一天有多組調整方式的列（此處是 BACKWARD 與 NONE），查詢必須逐一指定——
+    **混著拿等於把不同口徑的曲線疊在一起**
     """
 
     conn: sqlite3.Connection = make_continuous_db(tmp_path)

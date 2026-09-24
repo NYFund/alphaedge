@@ -126,7 +126,7 @@ def test_cost_model_margin_short() -> None:
 
 
 def test_maintenance_ratio() -> None:
-    """維持率 =（擔保價款 + 保證金）/ 市值，146 元時剛好觸及 130%"""
+    """維持率 =（擔保價款 + 保證金）/ 市值；130 元時為 146.15%，146.5 元才跌破 130% 門檻"""
 
     model: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.MARGIN))
 

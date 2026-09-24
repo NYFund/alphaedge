@@ -126,7 +126,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
     allowed, truncated = truncate_batch_by_exposure(
         [ExposureItem(make_order(), cap / 2)],
         existing_exposure=0.0,
-        # 這一檔已經佔掉一半的額度
+        # 這一檔已經佔掉六成的額度，只剩四成，放不下這張半額度的單
         existing_symbol_exposure={"2330": cap * 0.6},
         init_capital=INIT_CAPITAL,
         config=config,
