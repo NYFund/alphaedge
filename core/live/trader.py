@@ -1901,25 +1901,87 @@ class LiveTrader:
         **放開盤前不放段落結束**：開盤前就發現昨天虧太多，這個段落直接不送新倉單；
         放在結束才判等於本段落已經白送一輪。
 
-        ⚠️ **目前恆為不觸發，缺的是輸入不是接線**：`prepare()` 走到這裡時，帳戶是剛由
-        `AccountSynchronizer._restore_positions()` 以**原始開倉價**重建的，未實現損益
-        因此是 0；而 `OrderManager.recover()` 只接管未終結的委託、不回放已成交的回報，
-        本段落之前的已實現損益也不在這個行程的 `trade_records` 裡。
+        **兩層的損益來源不同，狀態也不同**：
 
-        **刻意留著這段接線而不是拿掉**：判定與降級的路徑本身是對的，缺的只是損益來源。
-        日頻模式下三個段落是三個獨立行程，本地帳每次都從零開始——要真的擋得住昨天的
-        虧損，得等盤中事件迴圈讓帳戶持續收到成交回報，或改由帳戶快照比對日內變動。
+        - **帳戶層：取券商端**（已實現 ＋ 未實現），2026-09-24 裁示採用。
+          資料不足時**略過並記 warning**，不當成「沒有虧損」。
+        - ⚠️ **策略層：目前恆為不觸發，缺的是輸入不是接線。** `prepare()` 走到這裡時，
+          帳戶是剛由 `AccountSynchronizer._restore_positions()` 以**原始開倉價**重建的，
+          未實現損益因此是 0；而 `OrderManager.recover()` 只接管未終結的委託、
+          不回放已成交的回報，本段落之前的已實現損益也不在這個行程的 `trade_records` 裡。
+
+        **策略層刻意留著接線而不是拿掉**：判定與降級的路徑本身是對的，缺的只是損益來源。
+        券商只給得出逐標的的合併損益，拆不回策略——要逐策略判定得以歸屬帳的逐策略
+        均價自行推算，那是另一步。
         """
 
-        total_loss: float = 0.0
         for context in self.contexts:
-            loss: float = self._strategy_loss(context)
-            total_loss += loss
             self.risk_manager.check_daily_loss(
-                context.name, loss, context.account.init_capital
+                context.name, self._strategy_loss(context), context.account.init_capital
             )
 
-        self.risk_manager.check_account_daily_loss(total_loss, self._account_equity())
+        account_loss: Optional[float] = self._account_loss()
+        if account_loss is None:
+            logger.warning(
+                "取不到券商端的當日損益，本段落略過帳戶層虧損檢查"
+                "（**不是判定為沒有虧損**）"
+            )
+            return
+
+        self.risk_manager.check_account_daily_loss(account_loss, self._account_equity())
+
+    def _account_loss(self) -> Optional[float]:
+        """
+        - Description:
+            帳戶當日虧損金額（正數表示虧損）；取不到時回 `None`
+
+            **取券商端而不是各策略本地帳的加總**：日頻模式下三個段落是三個獨立
+            行程，本地帳每次都由原始開倉價重建，未實現恆為 0、當日已實現也不在
+            這個行程裡——加總出來永遠是 0，那道守門等於不存在。
+
+            **取不到一律回 `None`，不可回 0**：0 的語意是「沒有虧損」，
+            而那正是這道檢查原本失效的樣子——看起來有在跑，實際永遠不觸發。
+            回 `None` 讓呼叫端明確略過並留下紀錄。
+
+            **已實現與未實現分兩個來源**：未實現在帳務快照上（由持倉逐檔加總），
+            當日已實現要另外查券商的已平倉交易——快照的 `realized_pnl`
+            目前沒有任何券商實作會填，讀它只會拿到 0。
+        - Return:
+            - Optional[float]
+                虧損金額（正數為虧損）；資料不足時為 None
+        """
+
+        if self.account_snapshot is None:
+            return None
+
+        realized: Optional[float] = self._today_realized_pnl()
+        if realized is None:
+            return None
+
+        return -(realized + self.account_snapshot.unrealized_pnl)
+
+    def _today_realized_pnl(self) -> Optional[float]:
+        """
+        當日已實現損益；閘道不提供查詢時回 `None`
+
+        **不把「查不到」當成 0**：那會讓帳戶層的虧損被低估成只剩未實現的部分，
+        而當日沖銷完的虧損正好一毛都不算。
+        """
+
+        provider: Optional[Callable[..., Any]] = getattr(
+            self.broker, "get_realized_trades", None
+        )
+        if provider is None:
+            return None
+
+        try:
+            trades: List[Any] = list(provider(self._now().date()))
+        except Exception as exc:
+            # 帳務查詢失敗不該讓段落起不來；但也不可當成「今天沒有已實現損益」
+            logger.opt(exception=True).warning(f"取當日已實現損益失敗：{exc}")
+            return None
+
+        return float(sum(trade.pnl for trade in trades))
 
     @staticmethod
     def _strategy_loss(context: StrategyContext) -> float:
