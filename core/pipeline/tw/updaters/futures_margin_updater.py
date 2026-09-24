@@ -195,6 +195,9 @@ class FuturesMarginUpdater(BaseDataUpdater):
             try:
                 step()
             except Exception as error:
+                # **這層盲捕不可收斂**：`step` 是一整條子管線（抓取→清洗→入庫），
+                # 拋得出什麼由那一側決定，列舉等於保證會漏。漏一種就讓
+                # `update_stock_margin()` 完全不跑——正是下面那段註解要防的事。
                 # 兩段互不相干，一段失敗不該讓另一段完全不跑；但跑完要一起拋出。
                 # **`DataLoadError` 也要攔**：兩個 step 自己就是用它表達失敗的
                 # （取得一覽表失敗、清洗結果為空），漏掉它等於這個迴圈白寫——
