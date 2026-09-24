@@ -148,11 +148,13 @@ class StockTickCleaner(BaseDataCleaner):
                                 raise e
 
                 except Exception as e:
-                    # 如果寫入失敗，刪除臨時文件
+                    # 如果寫入失敗，刪除臨時文件。
+                    # **只吞檔案系統的錯**：清不掉暫存檔不該蓋掉真正的失敗原因，
+                    # 但裸 except 連 KeyboardInterrupt 都吞，Ctrl+C 會變成什麼都沒發生
                     try:
                         if temp_file.exists():
                             temp_file.unlink()
-                    except:
+                    except OSError:
                         pass
                     raise e
                 finally:
@@ -160,7 +162,7 @@ class StockTickCleaner(BaseDataCleaner):
                     if temp_fd is not None:
                         try:
                             os.close(temp_fd)
-                        except:
+                        except OSError:
                             pass
 
             return new_df
