@@ -65,12 +65,20 @@ def actual_counts(rules: List[str]) -> Dict[str, int]:
     return counts
 
 
+# **刻意的風格選擇，不是債務**：CLAUDE.md §2.4 要求 `Optional[T]` 而非 `T | None`，
+# 所以 `UP045` 的數量會隨每個新檔案增加，而那正是預期的結果。
+# 把它當 ratchet 是搞錯對象——它的註記只是規模的說明，不是「不可以再變多」。
+STYLE_CHOICES: Tuple[str, ...] = ("UP045",)
+
+
 def test_ignore_annotations_match_reality() -> None:
     """
     ignore 清單的處數註記要與 `--statistics` 一致
 
     **允許往下、不允許往上**：修掉一些之後註記暫時高報，只代表還沒回寫；
     而實際數量超過註記代表**又長出新的**，那是 ratchet 失效，必須當場擋下。
+
+    `STYLE_CHOICES` 裡的規則不受上限約束（理由見該常數）。
     """
 
     declared: Dict[str, int] = declared_counts()
@@ -81,7 +89,7 @@ def test_ignore_annotations_match_reality() -> None:
     drifted: List[Tuple[str, int, int]] = [
         (rule, declared[rule], actual[rule])
         for rule in sorted(declared)
-        if actual[rule] > declared[rule]
+        if rule not in STYLE_CHOICES and actual[rule] > declared[rule]
     ]
 
     assert not drifted, "以下規則的實際處數超過註記（又長出新的）：\n" + "\n".join(
@@ -105,7 +113,7 @@ def test_annotations_are_not_wildly_stale() -> None:
     stale: List[Tuple[str, int, int]] = [
         (rule, declared[rule], actual[rule])
         for rule in sorted(declared)
-        if actual[rule] < declared[rule] * 0.9
+        if rule not in STYLE_CHOICES and actual[rule] < declared[rule] * 0.9
     ]
 
     assert not stale, "以下規則已修掉一批但註記沒回寫：\n" + "\n".join(
