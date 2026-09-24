@@ -9,7 +9,7 @@ import pytest
 品質 ratchet 的註記必須與實況一致
 
 `pyproject.toml` 的 ignore 清單以行尾註解記錄每條規則的**現存處數**，
-`docs/dev/code-quality.md` 要求「每次動到 ignore 清單都要現查一次重新校正」。
+而清單自己就寫著「不可因為『讓 CI 變綠』就當成永久豁免」——數字是那句話的憑據。
 
 **但沒有任何東西在驗它。** 2026-09-24 實查時六條全部過時，而且每一條都往
 「低報」的方向漂——`UP045` 註記 391 處、實際 1,690 處；`BLE001` 註記 70 處、
@@ -125,9 +125,9 @@ def test_removed_rules_stay_removed() -> None:
     """
     歸零後移除的規則不可以悄悄回來
 
-    `E722`（裸 `except:`）於 2026-09-24 歸零並整條移出 ignore 清單。
+    `E722`（裸 `except:`）歸零之後整條移出了 ignore 清單。
     它若再次出現在清單裡，代表有人為了讓 CI 變綠而把它加回來——
-    而 `docs/dev/code-quality.md` 明訂「不可因為『讓 CI 變綠』就當成永久豁免」。
+    而豁免一條規則等於對那類問題永久失明。
     """
 
     content: str = (PROJECT_ROOT / "pyproject.toml").read_text()

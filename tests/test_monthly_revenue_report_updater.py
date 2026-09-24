@@ -20,7 +20,7 @@ from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
 
 1. **候選年月是差集，不是「表內最新 +1」**：中間某個月失敗被跳過之後，只要下個月
    成功入庫，`MAX` 就越過它，那個月從此不會再被請求。財報三表已經是差集，
-   月營收在此之前沒有跟進，而 `docs/pipeline/etl-ingestion.md` 的對照表寫的是差集。
+   月營收在此之前沒有跟進——`FinancialStatementUpdater` 是差集的正確範本。
 2. **一邊查無資料、另一邊有資料要判失敗**：兩個市場的公布時間不同，先公布的
    那一邊若照常入庫，該月就只有半個市場——2026/04 補回時「只有 26 檔」即此成因，
    當時只修了資料、程式沒改。
