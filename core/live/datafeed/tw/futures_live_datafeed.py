@@ -388,7 +388,9 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 PreOpenFuturesQuote(
                     product=product,
                     expiry=expiry,
-                    date=now,
+                    # 與股票盤前一致（那邊取的就是 `self._now().date()`）：
+                    # 同一個段落的兩個市場不該給出不同型別的日期
+                    date=now.date(),
                     reference_price=reference,
                     session=self._resolve_session(now),
                     multiplier=self._resolve_multiplier(product, contract),

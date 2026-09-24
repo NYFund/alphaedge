@@ -166,14 +166,19 @@ def test_timestamp_is_parsed_as_nanoseconds(limiter: RateLimiter) -> None:
     `Snapshot.ts` 是 **epoch 奈秒**
 
     當成秒來解會得到 1970 年，而那個日期會一路寫進部位與報表。
+
+    **斷言對著 `_resolve_date()` 而不是 `quote.date`**：解碼是這支函式的職責，
+    而掛到報價上的那一格只取日期部分（日線報價的 `date` 兩條路徑都是
+    `datetime.date`，見 `test_quote_date_parity.py`）。
+    對著報價驗的話，時區與時分秒根本看不到。
     """
 
-    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(
+    moment: datetime.datetime = make_stream(FakeApi(), limiter)._resolve_date(
         FakeSnapshot()
     )
 
-    assert quote.date.year == 2026
-    assert quote.date.tzinfo is not None
+    assert moment.year == 2026
+    assert moment.tzinfo is not None
 
 
 def test_timestamp_is_taipei_wall_clock_not_epoch(limiter: RateLimiter) -> None:
@@ -185,14 +190,14 @@ def test_timestamp_is_taipei_wall_clock_not_epoch(limiter: RateLimiter) -> None:
     而日期不變，只比日期的檢查看不出來。
     """
 
-    quote: StockQuote = make_stream(FakeApi(), limiter).from_stock_snapshot(
+    moment: datetime.datetime = make_stream(FakeApi(), limiter)._resolve_date(
         FakeSnapshot(ts=1790076792276623000)
     )
 
-    assert quote.date.replace(tzinfo=None) == datetime.datetime(
+    assert moment.replace(tzinfo=None) == datetime.datetime(
         2026, 9, 22, 11, 33, 12, 276623
     )
-    assert quote.date.utcoffset() == datetime.timedelta(hours=8)
+    assert moment.utcoffset() == datetime.timedelta(hours=8)
 
 
 def test_unparsable_timestamp_falls_back_to_now(limiter: RateLimiter) -> None:
@@ -204,9 +209,12 @@ def test_unparsable_timestamp_falls_back_to_now(limiter: RateLimiter) -> None:
         queue.Queue(),
         now_provider=lambda: datetime.datetime(2026, 9, 19, 13, 20),
     )
-    quote: StockQuote = stream.from_stock_snapshot(FakeSnapshot(ts=None))
+    assert stream._resolve_date(FakeSnapshot(ts=None)) == datetime.datetime(
+        2026, 9, 19, 13, 20
+    )
 
-    assert quote.date == datetime.datetime(2026, 9, 19, 13, 20)
+    quote: StockQuote = stream.from_stock_snapshot(FakeSnapshot(ts=None))
+    assert quote is not None and quote.date == datetime.date(2026, 9, 19)
 
 
 # === 期貨 ===

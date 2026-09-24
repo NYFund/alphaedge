@@ -358,7 +358,11 @@ class ShioajiQuoteStream:
         return StockQuote(
             stock_id=str(getattr(snapshot, "code", "")),
             scale=Scale.DAY,
-            date=self._resolve_date(snapshot),
+            # **取日期部分，不掛完整時刻**：回測的日線報價帶的是 `datetime.date`，
+            # 掛 `datetime` 的話同一支策略在實盤拿 `quote.date` 去跟交易日清單
+            # 比較就會拋 `TypeError`，而回測一路綠燈。
+            # 快照的精確時刻沒有遺失：事件封包的 `ts` 記著它，委託另有 `created_at`
+            date=self._resolve_date(snapshot).date(),
             cur_price=close,
             # **當日累計成交量**；`snapshot.volume` 是該筆成交量，取錯會讓
             # 「當日成交量 ≥ N 張」這類門檻永遠不成立
@@ -402,7 +406,7 @@ class ShioajiQuoteStream:
             product=product,
             expiry=expiry,
             scale=Scale.DAY,
-            date=quote_date,
+            date=quote_date.date(),  # 與股票同一條規則：日線報價帶 `date`
             cur_price=close,
             volume=int(getattr(snapshot, "total_volume", 0) or 0),
             open=float(getattr(snapshot, "open", 0.0) or 0.0),
