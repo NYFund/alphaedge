@@ -184,6 +184,9 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
             **兩支來源各自獨立**：一支失敗不影響另一支——它們的生效日與更新頻率
             本來就不同，把它們綁在一起只會讓一邊的站方問題連累另一邊。
+        - Raise:
+            - DataLoadError
+                有來源失敗時，於兩支都跑完後拋出（中途不中斷）
         """
 
         failures: List[str] = []
@@ -195,13 +198,11 @@ class FuturesMarginUpdater(BaseDataUpdater):
             try:
                 step()
             except Exception as error:
-                # **這層盲捕不可收斂**：`step` 是一整條子管線（抓取→清洗→入庫），
-                # 拋得出什麼由那一側決定，列舉等於保證會漏。漏一種就讓
-                # `update_stock_margin()` 完全不跑——正是下面那段註解要防的事。
-                # 兩段互不相干，一段失敗不該讓另一段完全不跑；但跑完要一起拋出。
-                # **`DataLoadError` 也要攔**：兩個 step 自己就是用它表達失敗的
-                # （取得一覽表失敗、清洗結果為空），漏掉它等於這個迴圈白寫——
-                # 最常見的失敗會直接往外炸，`update_stock_margin()` 根本不會跑
+                # **這層盲捕不可收斂成列舉**：`step` 是一整條子管線（抓取→清洗→
+                # 入庫），拋得出什麼由那一側決定，漏掉哪一種就會讓排在後面的
+                # `update_stock_margin()` 完全不跑。兩段互不相干，一段失敗不該連累
+                # 另一段。**`DataLoadError` 尤其要攔**：兩個 step 正是用它表達
+                # 「取得一覽表失敗」「清洗結果為空」這些最常見的失敗
                 logger.error(
                     f"[Futures Margin] {name} 失敗：{type(error).__name__}: {error}"
                 )

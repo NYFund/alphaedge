@@ -31,7 +31,8 @@ ETF 股期給的是每口固定金額，語意與臺股期貨相同，故與指�
 日子；同一組連抓 30 天只會產生 1 列，其餘 29 次被 `INSERT OR IGNORE` 擋掉。
 
 因此「某日生效的保證金」的查法是**取 `effective_date <= 該日` 的最大者**，
-不是 `effective_date = 該日`——後者只有在剛好調整的那天才查得到（見 S5 的 API）。
+不是 `effective_date = 該日`——後者只有在剛好調整的那天才查得到（查詢見
+`FuturesMarginAPI`）。
 
 **比例表的每口保證金要自己算**：`標的股價 × 契約單位 × 比例`，其中契約單位取自
 `futures_stock_universe.contract_size`（2000 股／100 股）、股價取自 `tw_stock.db`
@@ -107,6 +108,8 @@ class FuturesMarginLoader(BaseDataLoader):
         - Parameters:
             - df: pd.DataFrame
                 cleaner 產出的比例 DataFrame
+            - replace: bool
+                True 時同主鍵覆蓋，False 時同主鍵忽略
         - Return:
             - int
                 實際新增的列數

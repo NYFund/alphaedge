@@ -16,7 +16,7 @@ class FuturesQuote(BaseQuote):
 
     **一個 `FuturesQuote` 只代表一個契約**（單一商品的單一到期月的單一時段）。
     同一天同一商品有多個到期月在交易，那是多個 quote，不是一個 quote 的多個欄位——
-    要哪一個由呼叫端決定，見 `core/api/futures_price_api.py` 的說明第 2 點。
+    要哪一個由呼叫端決定（`FuturesPriceAPI`）。
 
     與 `StockQuote` 的兩個語意差異：
     - `volume` 的單位是**口**，不是張；不需要 `Units.LOT` 換算。

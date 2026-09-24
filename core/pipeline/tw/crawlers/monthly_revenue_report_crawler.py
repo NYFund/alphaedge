@@ -27,13 +27,12 @@ cleaner 產出一份「少了外國發行人」的月營收，數字看起來正
 
 
 class MonthlyRevenueReportCrawler(BaseDataCrawler):
-    """TWSE & TPEX Monthly Revenue Report Crawler"""
+    """爬取上市、上櫃的月營收報表（國內與外國發行人分開查詢）"""
 
     CRAWL_DELAY_MIN: float = 1.0
     CRAWL_DELAY_MAX: float = 3.0
 
     def __init__(self) -> None:
-        # Downloads directory Path
         self.mrr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH
 
         # 發行人國別；TWSE／TPEX 的區分由各自的爬取函式決定，故兩邊共用同一份清單
@@ -45,7 +44,6 @@ class MonthlyRevenueReportCrawler(BaseDataCrawler):
     def setup(self) -> None:
         """Set Up the Config of Crawler"""
 
-        # Create the downloads directory
         self.mrr_dir.mkdir(parents=True, exist_ok=True)
 
     def crawl(self, year: int, month: int) -> CrawlResult:
@@ -53,7 +51,8 @@ class MonthlyRevenueReportCrawler(BaseDataCrawler):
         - Description:
             爬取指定年月的上市＋上櫃月營收報表
 
-            兩邊任一為 `FAILED` 即整體 `FAILED`（原因見模組說明）。
+            兩邊任一為 `FAILED` 即整體 `FAILED`：只入庫其中一個市場，
+            會得到一份數字看起來正常、實際短少數百檔的月營收。
         - Parameters:
             - year: int
                 西元年

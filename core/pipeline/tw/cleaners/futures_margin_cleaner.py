@@ -113,7 +113,7 @@ PRODUCT_NAME_TO_CODE: Dict[str, str] = {
 
 # 契約代碼 → 標的指數家族。
 #
-# **只用於乘數比例檢查**（見本檔說明第 3 點）：同一家族的大小台保證金與乘數等比例，
+# **只用於 `check_multiplier_ratio()` 的檢查**：同一家族的大小台保證金與乘數等比例，
 # 跨家族則否。不屬於任何家族的商品會被跳過檢查而非判為錯誤。
 PRODUCT_INDEX_FAMILY: Dict[str, str] = {
     "TX": "TAIEX",
@@ -320,7 +320,8 @@ class FuturesMarginCleaner(BaseDataCleaner):
             product_name: str = row[0]
             product: Optional[str] = PRODUCT_NAME_TO_CODE.get(product_name)
             if product is None:
-                # 選擇權的 A／B／C 值與未登錄乘數的商品，見本檔說明第 4 點
+                # 選擇權的風險保證金 A／B／C 值（語意不是每口金額），
+                # 以及乘數尚未登錄、連 PnL 都算不出來的商品，一律不收
                 skipped.append(product_name)
                 continue
 
@@ -583,9 +584,9 @@ class FuturesMarginCleaner(BaseDataCleaner):
                     "product_id": row[1],
                     "underlying_stock_id": row[2],
                     "product_name": row[3],
-                    # 空級距存 None：處置股票沒有級距但仍有（更高的）比例，
-                    # 見本檔說明第 3 點。**pandas 會把它正規化成 NaN**，
-                    # 入庫時由 sqlite3 轉成真正的 NULL（已驗證）
+                    # 空級距存 None：處置／注意股票沒有級距但仍有（更高的）比例，
+                    # 空欄不是解析錯誤，**不可因此丟掉該檔**。
+                    # pandas 會把 None 正規化成 NaN，入庫時由 sqlite3 轉成 NULL（已驗證）
                     "保證金所屬級距": row[5] or None,
                     "結算保證金適用比例": rates[0],
                     "維持保證金適用比例": rates[1],
@@ -792,7 +793,7 @@ class FuturesMarginCleaner(BaseDataCleaner):
                 continue
 
             # **同一個表頭底下有兩種值**：含小數點的是股票期貨的「適用比例」，
-            # 純整數的是指數／ETF 期貨的「每口金額」。見本檔常數區的說明。
+            # 純整數的是指數／ETF 期貨的「每口金額」，判別方式見 `is_rate_row()`
             if self.is_rate_row(row[3:6]):
                 after_rates: Optional[List[float]] = self.parse_plain_rates(row[3:6])
                 if after_rates is None:

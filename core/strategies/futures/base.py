@@ -70,12 +70,11 @@ class BaseFuturesStrategy(BaseStrategy):
         self.products: List[str] = []  # 要交易的商品代碼（Ex: ["TX"]）
         # 交易時段。**日盤與夜盤是兩筆獨立行情**，混用會讓同一契約一天出現兩筆報價。
         # 設為 `FuturesSession.COMBINED` 則由 DataFeed 整併成單一序列
-        # （前一交易日夜盤 ＋ 當日日盤，跨盤別跳空保留在 bar 內）
+        # （同一交易日的夜盤列 ＋ 日盤列，跨盤別跳空保留在 bar 內）
         self.session: FuturesSession = FuturesSession.DAY
         self.max_lots: int = 0  # 總口數上限（0 表示不開倉）
-        # 期貨限制的是**總口數**不是持倉檔數，故明確解除引擎的檔數上限。
-        # `BaseStrategy` 的預設值已於 2026-09-03 由 0 改為 None，
-        # 此處保留是為了讓「期貨不用檔數上限」這件事在基底裡看得見
+        # 期貨限制的是**總口數**不是持倉檔數。值與 `BaseStrategy` 的預設相同，
+        # 明寫一次是為了讓「期貨不用檔數上限」這件事在基底裡看得見
         self.max_holdings: Optional[int] = None
         # 單次開倉最多動用可動用餘額的比例；保證金交易若不設限，
         # 一次就能把帳戶壓到追繳邊緣
@@ -110,8 +109,8 @@ class BaseFuturesStrategy(BaseStrategy):
 
         **`COMBINED` 不是資料表裡的值**（見 `FuturesSession`），它是報價層的組合
         結果。拿它去查 `FuturesPriceAPI` 只會得到空結果——而空結果在策略裡通常
-        表現為「訊號永遠不成立」，不會有任何錯誤訊息。
-        2026-09-02 實測：示範策略在整併模式下整場零交易，成因就是這個。
+        表現為「訊號永遠不成立」，不會有任何錯誤訊息——實測過的症狀是
+        策略在整併模式下整場零交易。
         """
 
         return (
@@ -201,7 +200,7 @@ class BaseFuturesStrategy(BaseStrategy):
             期貨是「繳多少保證金開幾口」，拿契約價值去除可動用餘額會嚴重低估
             可開口數（TX 一口契約價值 900 萬、保證金只有 70 萬）。
 
-            **本方法保留為可覆寫的鉤子**，供仍走舊路徑的策略與子類客製使用。
+            **本方法是可覆寫的鉤子**，供子類客製口數上限。
         - Parameters:
             - quote: FuturesQuote
                 目標契約的報價
@@ -266,6 +265,7 @@ class BaseFuturesStrategy(BaseStrategy):
     @abstractmethod
     def setup_account(self, account: FuturesAccount) -> None:
         """載入虛擬帳戶資訊"""
+
         pass
 
     @abstractmethod
@@ -275,6 +275,7 @@ class BaseFuturesStrategy(BaseStrategy):
 
         實例一律由 DataFeed 統一持有，策略只做取用，不自行建立。
         """
+
         pass
 
     def build_close_orders(self, signals: List[Signal]) -> List[FuturesOrder]:

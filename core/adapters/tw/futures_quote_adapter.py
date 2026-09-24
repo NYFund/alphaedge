@@ -234,10 +234,10 @@ class FuturesQuoteAdapter:
             for row in data.itertuples(index=False)
         ]
 
-        # **期貨端首次套用重複代號偵測**。引擎對期貨同樣建
-        # `{q.symbol: q for q in quotes}`，而期貨的 symbol 是 `{商品}{到期月}`
-        # ——日盤／夜盤同契約、合併時段失敗、週契約與月契約代號碰撞，
-        # 都會靜默只留最後一筆。只警告不排除，理由見 `warn_duplicate_symbols()`
+        # 引擎對期貨同樣建 `{q.symbol: q for q in quotes}`，而期貨的 symbol 是
+        # `{商品}{到期月}`——日盤／夜盤同契約、合併時段失敗、週契約與月契約
+        # 代號碰撞，都會靜默只留最後一筆。只警告不排除，
+        # 理由見 `warn_duplicate_symbols()`
         warn_duplicate_symbols(quotes, date, source="Futures")
         return quotes
 

@@ -30,6 +30,7 @@ class StockUtils:
             - lots: int
                 張數 (Unit: Lots)
         """
+
         return int(shares / Units.LOT)
 
     @staticmethod
@@ -43,6 +44,7 @@ class StockUtils:
             - shares: int
                 股數 (Unit: Shares)
         """
+
         return int(lots * Units.LOT)
 
     @staticmethod
@@ -50,6 +52,10 @@ class StockUtils:
         """
         - Description:
             計算股票買賣時的手續費
+
+            ⚠️ **記帳的唯一入口是 `StockCostModel`**，不要從 `core/managers/`、
+            `core/backtest/` 或策略層直接呼叫本函式；它只是底層純計算，
+            僅供 `StockCostModel` 與研究腳本使用。
         - Parameters:
             - price: float
                 成交價格
@@ -59,14 +65,11 @@ class StockUtils:
             - commission: int
                 手續費
         - Notes:
-        - ⚠️ **記帳的唯一入口是 `StockCostModel`**，不要從 `core/managers/`、
-          `core/backtest/` 或策略層直接呼叫本函式。本函式保留為底層純計算，
-          僅供 `StockCostModel` 與研究腳本使用（`StockUtils` 各函式的歸屬拆解
-          尚未處理）。
-            For long position, the commission costs:
-            - buy fee (券買手續費 = 成交價 x 成交股數 x 手續費率 x discount)
-            - sell fee (券賣手續費 = 成交價 x 成交股數 x 手續費率 x discount)
+            做多部位的手續費由買賣兩端各收一次：
+            - 券買手續費 = 成交價 x 成交股數 x 手續費率 x discount
+            - 券賣手續費 = 成交價 x 成交股數 x 手續費率 x discount
         """
+
         return max(
             Commission.MinFee,
             int(
@@ -86,6 +89,10 @@ class StockUtils:
         """
         - Description:
             計算股票賣出時的交易稅
+
+            ⚠️ **記帳的唯一入口是 `StockCostModel`**，不要從 `core/managers/`、
+            `core/backtest/` 或策略層直接呼叫本函式；它只是底層純計算，
+            僅供 `StockCostModel` 與研究腳本使用。
         - Parameters:
             - price: float
                 成交價格
@@ -97,10 +104,6 @@ class StockUtils:
             - tax: int
                 交易稅
         - Notes:
-        - ⚠️ **記帳的唯一入口是 `StockCostModel`**，不要從 `core/managers/`、
-          `core/backtest/` 或策略層直接呼叫本函式。本函式保留為底層純計算，
-          僅供 `StockCostModel` 與研究腳本使用（`StockUtils` 各函式的歸屬拆解
-          尚未處理）。
             - 一般賣出證交稅 = 成交價 x 成交股數 x 0.3%
             - 現股當沖賣出證交稅 = 成交價 x 成交股數 x 0.15%（減半優惠）
             - 放空的證交稅課在「賣出（開倉）」這端，與做多相反
@@ -173,10 +176,10 @@ class StockUtils:
             - sell_transaction_cost: int
                 賣出交易成本
         - Notes:
-            For long position, the transaction costs should contains:
-            - buy fee (券買手續費 = 成交價 x 成交股數 x 手續費率 x discount)
-            - sell fee (券賣手續費 = 成交價 x 成交股數 x 手續費率 x discount)
-            - sell tax (券賣證交稅 = 成交價 x 成交股數 x 證交稅率)
+            做多部位的摩擦成本包含：
+            - 券買手續費 = 成交價 x 成交股數 x 手續費率 x discount
+            - 券賣手續費 = 成交價 x 成交股數 x 手續費率 x discount
+            - 券賣證交稅 = 成交價 x 成交股數 x 證交稅率
         """
 
         # 買入 & 賣出的交易成本
@@ -200,7 +203,7 @@ class StockUtils:
             ⚠️ **記帳的唯一入口是 `StockCostModel.realized_pnl()`**：本函式以「傳入張數」
             重算開倉手續費，部分平倉時最低手續費會被重複套用，與 `record.commission`
             的等比例攤提不一致（差異量化見 `tests/backtest/compare_cost_formula.py`）。
-            2026-08-15 起生產路徑已不再呼叫，保留僅供研究腳本比對用。
+            生產路徑不呼叫本函式，保留僅供研究腳本比對用。
         - Parameters:
             - buy_price: float
                 股票買入價格
@@ -273,9 +276,10 @@ class StockUtils:
         - Description:
             過濾出一般股票（排除 ETF、權證等）：保留 4 位數字且不小於 1001 的代號
 
-            **不設上限**：以前卡在 9958，9960（邁達康）、9962（有益）這類真實存在的
-            上櫃普通股被靜默排除在回測股票池與券商分點更新之外。ETF（00 開頭）與
-            權證（6 碼）本來就被「4 位數字、不小於 1001」擋掉，上限擋不到別的東西。
+            **刻意不設上限**：設了上限（例如 9958）會把 9960（邁達康）、9962（有益）
+            這類真實存在的上櫃普通股靜默排除在回測股票池與券商分點更新之外。
+            ETF（00 開頭）與權證（6 碼）已被「4 位數字、不小於 1001」擋掉，
+            上限擋不到別的東西。
         - Parameters:
             - stock_ids: List[str]
                 所有股票代號

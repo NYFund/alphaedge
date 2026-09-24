@@ -145,9 +145,9 @@ class TradingModeState:
                 logger.warning(f"讀回策略 {name} 的交易模式：{mode.value}")
 
         # **恢復一定要排在讀回之後**，而且要跟讀回綁在同一個方法裡：
-        # 兩者拆開的話，每個呼叫端都得記得「先 load 再 resume」，
-        # 而漏掉的那一個不會報錯——`AfterCloseRunner` 就只呼叫了 `load()`，
-        # 於是 `--phase after_close --resume-trading` 靜默無效
+        # 兩者拆開的話，每個呼叫端都得記得「先 load 再 resume」，而漏掉的那一個
+        # 不會報錯——`AfterCloseRunner` 只呼叫 `load()`，拆開就會讓
+        # `--phase after_close --resume-trading` 靜默無效
         if self.resume_trading:
             self.resume()
             for name in list(self.strategy_modes):

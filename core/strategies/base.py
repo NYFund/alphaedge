@@ -22,6 +22,7 @@ class BaseStrategy(ABC):
 
     def __init__(self) -> None:
         """=== Account Setting ==="""
+
         self.account: Optional[BaseAccount] = None  # 虛擬帳戶資訊
 
         """ === Strategy Setting === """
@@ -55,10 +56,10 @@ class BaseStrategy(ABC):
         self.init_capital: float = 0  # Initial capital
         # 同時可持有的最大檔數；**預設 None ＝ 不限制**。
         #
-        # 舊版預設 0，而 `order_preprocess.check_max_holdings()` 只把 None 當成不限制
-        # ——於是**忘記設定的新策略，每一張開倉單都被引擎剔除**，回測跑完是
-        # 零筆交易、零錯誤訊息。寧可預設不限制（策略自己的 sizer 仍會把關），
-        # 也不要用一個看起來像「還沒設定」的值去無聲地擋掉所有交易。
+        # **不可改成預設 0**：`order_preprocess.check_max_holdings()` 只把 None
+        # 當成不限制，預設 0 會讓**忘記設定的新策略每一張開倉單都被引擎剔除**，
+        # 回測跑完是零筆交易、零錯誤訊息。寧可預設不限制（策略自己的 sizer 仍會
+        # 把關），也不要用一個看起來像「還沒設定」的值去無聲地擋掉所有交易。
         self.max_holdings: Optional[int] = None
 
         """
@@ -142,6 +143,7 @@ class BaseStrategy(ABC):
         - Description:
             載入虛擬帳戶資訊
         """
+
         pass
 
     def setup_apis(self, feed: Any) -> None:
@@ -149,12 +151,12 @@ class BaseStrategy(ABC):
         - Description:
             宣告本策略要用的資料源；**預設什麼都不做**
 
-            `BaseDataFeed.setup()` 一律會呼叫它，但它原本只定義在各市場的策略基底上——
-            直接繼承 `BaseStrategy` 的策略（例如測試替身，或日後某個不吃資料庫的策略）
-            會在 `setup()` 當場 `AttributeError`，而那個訊息完全指不到「契約缺了一塊」
-            這個真正的原因。
+            `BaseDataFeed.setup()` 一律會呼叫它，故**契約必須定義在這一層**，
+            不能只長在各市場的策略基底上：否則直接繼承 `BaseStrategy` 的策略
+            （例如測試替身，或不吃資料庫的策略）會在 `setup()` 當場 `AttributeError`，
+            而那個訊息完全指不到「契約缺了一塊」這個真正的原因。
 
-            預設為 no-op 不改變任何既有行為：現有的市場策略基底都已覆寫它。
+            各市場的策略基底都會覆寫它。
         - Parameters:
             - feed: Any
                 引擎持有的資料源

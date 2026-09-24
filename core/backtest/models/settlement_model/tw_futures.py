@@ -33,13 +33,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     """
     台期貨結算模型：**每日以結算價逐日盯市**
 
-    這正是本抽象存在的理由——台股在此掛點做的是「當沖日終強制回補」，
-    期貨做的是「每日結算」，兩者是同一個掛點的兩種實作。
+    台股在此掛點做的是「當沖日終強制回補」，期貨做的是「每日結算」。
 
     **逐日盯市的記帳語意**（與股票最根本的差異）：損益不等到平倉才實現，
     每個交易日以結算價結清當日損益、現金當天就進出帳戶，部位的 `price`
-    隨之重設為結算價。實作在 `FuturesPositionManager.settle_daily()`，
-    **FIFO 主幹一行都不用動**。
+    隨之重設為結算價。實作在 `FuturesPositionManager.settle_daily()`。
 
     ---
 
@@ -112,7 +110,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             - account: BaseAccount
                 交易帳戶
             - event_counts: Dict[str, int]
-                事件計數（本階段未使用）
+                事件計數；轉交給換月、到期出場與追繳三個步驟
         """
 
         quote_map: Dict[str, FuturesQuote] = {quote.symbol: quote for quote in quotes}
@@ -321,10 +319,10 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             **兩腿都吃滑價**：實盤換月是真的送兩張單、吃兩次價差，只算平倉腿
             會讓轉倉成本少一半。滑價沿用策略既有的 `fill_config`，不另開旋鈕。
 
-            **兩腿一定要用同一種價**：舊版舊腿走盯市價
-            （＝結算價），新腿卻用 `close`。結算價與收盤價在期貨是兩個不同的
-            數字，混用會讓帳上多出一筆**不存在的展期價差**——而展期價差正是
-            這裡唯一該記錄的東西，摻進口徑差異就失去意義了。
+            **兩腿一定要用同一種價**（一律走 `get_quote_mark_price()`）：
+            結算價與收盤價在期貨是兩個不同的數字，舊腿用結算價、新腿用 `close`
+            會讓帳上多出一筆**不存在的展期價差**——而展期價差正是這裡唯一該
+            記錄的東西，摻進口徑差異就失去意義了。
         - Parameters:
             - position: FuturesPosition
                 要轉倉的部位
@@ -345,8 +343,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             position, date, exit_price, quote_map.get(position.symbol)
         )
 
-        # **開新月這一腿也要吃滑價**：實盤換月是真的送兩張單、吃兩次價差，
-        # 只算平倉腿會讓轉倉成本少一半，提前 N 日換月的策略因此系統性低估
+        # 開新月這一腿同樣要吃滑價（理由見 docstring）
         entry_order: FuturesOrder = self.apply_fill_price(
             FuturesOrder(
                 product=new_quote.product,

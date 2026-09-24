@@ -93,8 +93,7 @@ class StatementSpec:
     """
     一張「全市場一次查完」的財報的更新規格
 
-    `label` 只用於 log 措辭。三張報表的流程完全相同，差異就只有這裡的五個欄位——
-    改動前它們是三份各 60 行的複本，正規化後 diff 只剩 docstring 與 log 標籤。
+    三張報表的流程完全相同，差異只有這裡的五個欄位；`label` 只用於 log 措辭。
     """
 
     table_name: str  # 目標資料表
@@ -144,8 +143,8 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # **讀（年季規劃、逐檔 resume）與寫（loader）共用同一條連線**：舊版 updater 與
-        # loader 各開一條連線到同一個 DB，updater 那條從不關閉。四張表各有一個 DAO，
+        # **讀（年季規劃、逐檔 resume）與寫（loader）共用同一條連線**：各開一條的話
+        # 同一個 DB 會有兩條連線，而 updater 那條沒有關閉的時機。四張表各有一個 DAO，
         # 故由 updater 持有連線、需要時以 `get_dao()` 就地建 DAO
         self.conn: Optional[DBConnection] = connect_sqlite(TW_STOCK_DB_PATH)
 
@@ -277,9 +276,8 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         - Description:
             更新單一張「全市場一次查完」的財報
 
-            資產負債表、綜合損益表、現金流量表三者的流程完全相同，改動前是三份
-            各 60 行的複本，正規化後 diff 只剩 docstring 與 log 標籤。
-            差異全部收進 `StatementSpec`，這裡只留一份流程。
+            資產負債表、綜合損益表、現金流量表三者的流程完全相同，差異全部收進
+            `StatementSpec`，這裡只留一份流程。
 
             **權益變動表不走這裡**：它是逐檔查，量級差三個數量級，
             另有 `update_equity_changes()`。

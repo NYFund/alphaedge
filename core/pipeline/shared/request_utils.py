@@ -17,12 +17,12 @@ from core.pipeline.utils.exceptions import IPBlockedError
 """
 共用 HTTP 工具：重試、Session 管理，以及**把「取不到」拆成幾種不同的結果**
 
-原本 `requests_get()` 不論被擋、逾時、還是站方回 404，一律回 `None`；
-呼叫端（五支台股 crawler）拿到 `None` 就記一行「is a Holiday!」並回空表，
-於是**連線失敗與休市在 updater 眼裡完全相同**，資料缺一天不會有任何錯誤。
+**不可讓被擋、逾時、404 一律回 `None`**：呼叫端（五支台股 crawler）拿到 `None`
+只會記一行「is a Holiday!」並回空表，於是**連線失敗與休市在 updater 眼裡完全相同**，
+資料缺一天不會有任何錯誤。
 
 `fetch()` 就是為了拆開這四種結果而存在（見 `FetchStatus`）。
-`requests_get()`／`requests_post()` 保留 `Optional[Response]` 的舊介面，
+`requests_get()`／`requests_post()` 維持 `Optional[Response]` 介面，
 給期貨等尚未改寫的呼叫端使用——它們是 `fetch()` 的薄包裝，不再有第二套重試邏輯。
 """
 
@@ -120,9 +120,8 @@ class RequestUtils:
     # 重試要攔的例外。
     #
     # ⚠️ **`requests.exceptions.ConnectionError` 不是內建 `ConnectionError` 的子類**
-    # ——兩者是 `OSError` 底下的**兄弟**。本檔原本只 import 了 `ChunkedEncodingError`
-    # 與 `ReadTimeout`，`except ConnectionError` 抓到的是內建那個，
-    # 於是 requests 拋的連線中斷完全沒被攔到，直接把行程打死。
+    # ——兩者是 `OSError` 底下的**兄弟**。只寫 `except ConnectionError` 抓到的是內建
+    # 那個，requests 拋的連線中斷完全不會被攔到，直接把行程打死。
     #
     # 2026-09-01 實測：台期貨歷史回補跑到第 9 年（2024-10-29）時因
     # `RemoteDisconnected` 整個中止，前面 23,599 列雖已入庫，但中斷點要人工找。

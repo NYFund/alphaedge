@@ -56,6 +56,8 @@ class FuturesTickLoader(BaseDataLoader):
     CONNECT_RETRY_DELAY: float = 1.0
 
     def __init__(self) -> None:
+        """建立期貨 tick loader（連不上 DolphinDB 時 `session` 留 None）"""
+
         # **不呼叫 `super().__init__()`**：本 loader 收的是連線或多個 DAO，
         # 與基底「單一 DAO」的建構骨架不同形，連線與建表一律自理
         # 型別標註刻意用 Any：`ddb` 在未安裝 dolphindb 時根本不存在，
@@ -87,7 +89,7 @@ class FuturesTickLoader(BaseDataLoader):
         import 到本類就整個壞掉。實際寫入時才會再檢查一次。
         """
 
-        # `DDB_PATH` 沒設定時舊版會拼出 `"NonetickDB"` 這種看起來像路徑的字串，
+        # `DDB_PATH` 沒設定時會拼出 `"NonetickDB"` 這種看起來像路徑的字串，
         # 錯誤訊息完全指不到真正的原因；在連線之前就攔下來
         require_tick_db_path()
 

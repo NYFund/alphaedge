@@ -10,12 +10,10 @@ import pandas as pd
 **前端不計算任何績效指標**：Sharpe、Sortino、MDD、波動度、獲利因子、勝敗比與
 Information Ratio 一律讀 reporter 落地的 `<策略>_metrics_summary.csv`，
 公式只存在於 `core/backtest/analysis/performance_metrics.py` 一處。
-同一個指標算在兩個地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道
-哪個對——MDD 曾經就有前端與 MDD 圖兩份實作。
+同一個指標算在兩個地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對。
 
-⚠️ **前端因此完全不 import `core`**：`frontend/Dockerfile` 不再需要 COPY
-任何 `core` 檔案，映像的相依面只剩 `frontend/` 自己。
-`tests/test_frontend_metrics.py` 有一條測試盯住這件事。
+⚠️ **前端因此完全不 import `core`**：映像的相依面只剩 `frontend/` 自己，
+由 `tests/test_frontend_metrics.py` 盯住。
 
 本模組不含任何 Streamlit 呼叫，這樣才測得到——`frontend/app.py` 在 import 時
 就會執行 Streamlit 的版面設定，無法在測試裡 import。

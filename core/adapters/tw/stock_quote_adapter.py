@@ -49,7 +49,7 @@ class StockQuoteAdapter:
                 當日的 tick 表
             - date: datetime.date
                 要轉換的日期
-        - Returns:
+        - Return:
             - List[StockQuote]
                 轉換後的 StockQuote 物件列表
         """
@@ -68,8 +68,8 @@ class StockQuoteAdapter:
         - Description:
             單筆 tick → `StockQuote`
 
-            **`cur_price`／`close`／`volume` 一定要帶**：舊版只掛 `tick=tick_quote`，
-            OHLC 與 `cur_price` 全部留在預設值 0.0，於是任何讀 `quote.close` 的
+            **`cur_price`／`close`／`volume` 一定要帶**：只掛 `tick=tick_quote` 的話，
+            `cur_price` 與 `close` 會留在預設值 0.0，於是任何讀 `quote.close` 的
             地方（部位盯市、報表、策略）都拿到 0 元。
 
             **`open`／`high`／`low` 維持 0**：單一 tick 本來就沒有 OHLC，
@@ -81,7 +81,7 @@ class StockQuoteAdapter:
                 tick 表的一列
             - date: datetime.date
                 要轉換的日期
-        - Returns:
+        - Return:
             - StockQuote
                 轉換後的報價
         """
@@ -129,7 +129,7 @@ class StockQuoteAdapter:
                 要轉換的日期
             - adjusted_close_map: Optional[Dict[str, Any]]
                 `{stock_id: 還原收盤價}`；不還原時給 None
-        - Returns:
+        - Return:
             - List[StockQuote]
                 轉換後的 StockQuote 物件列表
         """
@@ -159,7 +159,7 @@ class StockQuoteAdapter:
                 要轉換的日期
             - adjusted_close_map: Optional[Dict[str, Any]]
                 `{stock_id: 還原收盤價}`
-        - Returns:
+        - Return:
             - List[StockQuote]
                 轉換後的報價清單
         """
@@ -213,7 +213,7 @@ class StockQuoteAdapter:
                 要轉換的日期
             - adj_close: Optional[float]
                 還原收盤價；不還原時為 None
-        - Returns:
+        - Return:
             - StockQuote
                 轉換後的報價
         """

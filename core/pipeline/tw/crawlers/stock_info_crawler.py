@@ -19,9 +19,7 @@ from core.pipeline.utils.exceptions import PipelineError
 
 
 class StockInfoCrawler(BaseDataCrawler):
-    """
-    Crawls basic information of Taiwanese stocks (e.g., ticker, name, industry category), excluding price and financial data
-    """
+    """爬取上市櫃股票的基本資料（證券代號、名稱、產業類別等），不含價格與財報"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -31,7 +29,7 @@ class StockInfoCrawler(BaseDataCrawler):
         pass
 
     def crawl(self, *args, **kwargs) -> None:
-        """Crawl Data"""
+        """本爬蟲沒有統一入口，請改用 `crawl_twse_stock_info()` 等方法"""
         pass
 
     @staticmethod
@@ -40,9 +38,9 @@ class StockInfoCrawler(BaseDataCrawler):
         - Description:
             取得頁面內容；非 HTTP 2xx 一律拋出，不把錯誤頁交給 `pd.read_html()`
 
-            舊寫法直接讀 `response.text`，`requests_get()` 回 `None` 時會撞
-            `AttributeError`，站方回 404 錯誤頁時則會被 `read_html` 解析成
-            一張看起來很正常、實際上完全錯誤的表。
+            **不可直接讀 `response.text`**：請求失敗時會撞 `AttributeError`，
+            而站方的 404 錯誤頁會被 `read_html()` 解析成一張看起來很正常、
+            內容卻完全錯誤的表。
         - Parameters:
             - url: str
                 目標網址
@@ -77,7 +75,7 @@ class StockInfoCrawler(BaseDataCrawler):
         twse_df = twse_df.drop(index=[0, 1])
         twse_df = twse_df.reset_index(drop=True)
 
-        # 找出第一個出現「上市認購(售)權證」的列索引，作為判斷權證區塊起始的位置並裁切權證及權證以下的資料
+        # 權證區塊接在股票之後，以其標題列為界裁掉，只留股票
         warrant_idx: Optional[int] = twse_df[
             twse_df.iloc[:, 0]
             .astype(str)
@@ -113,17 +111,15 @@ class StockInfoCrawler(BaseDataCrawler):
         tpex_df = tpex_df.drop(index=[0, 1])
         tpex_df = tpex_df.reset_index(drop=True)
 
-        # Step 1: 先找出「股票」的起始位置
+        # 以「股票」與「特別股」兩個區塊標題為界，只取兩者之間的列
         stock_idx: Optional[int] = tpex_df[
             tpex_df.iloc[:, 0].astype(str).str.contains("股票", na=False, regex=False)
         ].index.min()
 
-        # Step 2: 找出「特別股」的起始位置
         preferred_idx: Optional[int] = tpex_df[
             tpex_df.iloc[:, 0].astype(str).str.contains("特別股", na=False, regex=False)
         ].index.min()
 
-        # Step 3: 根據 index 切出「股票 ~ 特別股」的資料
         if pd.notna(stock_idx) and pd.notna(preferred_idx):
             tpex_df = tpex_df.loc[stock_idx + 1 : preferred_idx - 1].reset_index(
                 drop=True
@@ -133,7 +129,7 @@ class StockInfoCrawler(BaseDataCrawler):
                 "Unable to locate '股票' or '特別股' section header. Please check the original data format."
             )
 
-        # 拆成兩欄：代號（第一段）、名稱（第二段）
+        # 拆成兩欄：證券代號、證券名稱
         tpex_df[["證券代號", "證券名稱"]] = tpex_df["有價證券代號及名稱"].str.extract(
             r"(\d+)\s+(.+)"
         )
@@ -151,12 +147,10 @@ class StockInfoCrawler(BaseDataCrawler):
     def crawl_stock_list() -> List[str]:
         """爬取上市櫃公司的股票代號"""
 
-        # 取得上市公司代號
         twse_df: pd.DataFrame = StockInfoCrawler.crawl_twse_stock_info()
         twse_stock_list: List[str] = twse_df["證券代號"].to_list()
         logger.info(f"* TWSE stocks: {len(twse_stock_list)}")
 
-        # 取得上櫃公司代號
         tpex_df: pd.DataFrame = StockInfoCrawler.crawl_tpex_stock_info()
         tpex_stock_list: List[str] = tpex_df["證券代號"].to_list()
         logger.info(f"* TPEX stocks: {len(tpex_stock_list)}")

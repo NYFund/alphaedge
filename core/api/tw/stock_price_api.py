@@ -95,9 +95,8 @@ class StockPriceAPI(BaseDataAPI):
         - Description:
             取得單日全市場的收盤價對照表
 
-            策略的共通樣式是「拿一整天的全市場 DataFrame → 逐檔建 mask → 取欄位」，
-            那是 O(n²) 且把資料表欄位名洩漏到策略層。本方法一次查詢建成 dict，
-            策略改為 O(1) 查表，也不需要知道欄位叫什麼。
+            一次查詢建成 dict，策略以 O(1) 查表取價，不必「逐檔建 mask 再取欄位」
+            （O(n²)），也不必知道資料表欄位叫什麼。
 
             取值細節（重複、缺欄位、`NaN`）見 `BaseDataAPI.build_column_map()`。
         - Parameters:
@@ -116,7 +115,7 @@ class StockPriceAPI(BaseDataAPI):
         - Description:
             取得單日全市場的成交量（張）對照表
 
-            股 → 張的換算在 API 內完成，策略不再自行除以 `Units.LOT`。
+            股 → 張的換算（除以 `Units.LOT`）一律在 API 內完成，策略不自行換算。
 
             此處**不使用** `StockUtils.convert_share_to_lot()`：`core/utils/instrument.py`
             相依 `MarketCalendar`，而後者相依本檔案，引用會造成循環 import。

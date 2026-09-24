@@ -83,9 +83,10 @@ class FuturesPriceUpdater(BaseDataUpdater):
     # 拼錯的代碼會安靜地每天都查無資料，看起來就像「這幾年一直都是假日」，
     # 而數千次請求跑完才發現整張表是空的。
     #
-    # **與 equity_change 那個「連續 30 檔無資料就判定未申報」的 bug 不同**：
-    # 那裡「連續無資料」是合法狀態（一段新上市公司），誤判會**靜默跳過**；
-    # 這裡是從區間**開頭**起算、且一律 **raise 中止**，不會安靜地少資料。
+    # **這個判準只在這裡成立，不可搬去逐檔查詢的流程**（例如
+    # `EquityChangeMixin`）：那邊「連續無資料」是合法狀態（一整段新上市公司），
+    # 誤判會**靜默跳過**整季；這裡是從區間**開頭**起算、且一律 **raise 中止**，
+    # 不會安靜地少資料。
     EMPTY_PRODUCT_ABORT_THRESHOLD: int = 20
 
     def __init__(self) -> None:
@@ -141,7 +142,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
             - datetime.date
         """
 
-        # **查詢錯誤往外拋**：舊版吞掉 `sqlite3.Error` 後改用預設起日，「DB 被鎖住、
+        # **查詢錯誤往外拋**：吞掉 `sqlite3.Error` 改用預設起日的話，「DB 被鎖住、
         # 欄名打錯」會讓該商品從預設起日靜默重跑整段回補（數千次請求）
         latest: Optional[str] = self.dao.get_latest_date_by_product(product)
         if not latest:
@@ -165,7 +166,8 @@ class FuturesPriceUpdater(BaseDataUpdater):
 
             `tw_stock.db` 或 `price` 表不存在（只跑期貨的環境）時一律跳過週末並警告；
             其他查詢錯誤往外拋。連線以唯讀開啟、由本 updater 持有並在 `close()` 關閉
-            ——舊版每次呼叫都 `with sqlite3.connect(...)`，而 `with` 只 commit 不關閉。
+            ——**不可改成每次呼叫都 `with sqlite3.connect(...)`**，`with` 只 commit
+            不關閉連線。
         - Parameters:
             - start_date / end_date: datetime.date
                 查詢區間
@@ -432,9 +434,9 @@ class FuturesPriceUpdater(BaseDataUpdater):
         當暖身樣本，暖身完再跑一次就有排序依據。
 
         ⚠️ **退回時不可改取整份標的池**：`top_n` 是請求量的上限，在失敗路徑上
-        把它拿掉，等於呼叫端要 20 檔、實際送出 320 檔的請求量。曾經如此，
-        代價是一次 100 天以上的回補擋住了排在後面的所有 target，而過程中
-        只有一行警告。失敗路徑一律收緊，不放大。
+        把它拿掉，等於呼叫端要 20 檔、實際送出 320 檔的請求量——一次 100 天以上的
+        回補會擋住排在後面的所有 target，而過程中只有一行警告。
+        失敗路徑一律收緊，不放大。
 
         暖身樣本的順序是標的池順序（依商品代碼），**不是流動性順序**。
 

@@ -24,7 +24,7 @@ class StockInfoUpdater:
         try:
             df: Optional[pd.DataFrame] = self.context.crawler.crawl_stock_info()
         except FinMindQuotaExhaustedError as e:
-            # 往外拋讓 target 記為失敗：舊版 `return` 讓「這次沒更新到」以結束碼 0 收場
+            # **配額用盡必須往外拋**：在這裡 `return` 的話，「這次沒更新到」會以結束碼 0 收場
             logger.error(
                 f"⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. {e}"
             )
@@ -40,7 +40,6 @@ class StockInfoUpdater:
             return
 
         # Step 3: Load
-        # 確保 loader 有連接
         self.context.ensure_loader_connected()
         self.context.loader.load_stock_info()
         self.context.loader.commit()
@@ -58,7 +57,7 @@ class StockInfoUpdater:
                 self.context.crawler.crawl_stock_info_with_warrant()
             )
         except FinMindQuotaExhaustedError as e:
-            # 往外拋讓 target 記為失敗：舊版 `return` 讓「這次沒更新到」以結束碼 0 收場
+            # **配額用盡必須往外拋**：在這裡 `return` 的話，「這次沒更新到」會以結束碼 0 收場
             logger.error(
                 f"⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. {e}"
             )
@@ -76,7 +75,6 @@ class StockInfoUpdater:
             return
 
         # Step 3: Load
-        # 確保 loader 有連接
         self.context.ensure_loader_connected()
         self.context.loader.load_stock_info_with_warrant()
         self.context.loader.commit()

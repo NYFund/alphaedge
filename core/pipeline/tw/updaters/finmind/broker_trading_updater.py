@@ -50,24 +50,24 @@ class BrokerTradingUpdater:
         end_date: Union[datetime.date, str],
     ) -> None:
         """
-        批量更新當日券商分點統計表資料
+        - Description:
+            批量更新券商分點統計表：(券商 × 股票) 雙層迴圈
 
-        此方法會：
-        1. Loop 所有券商 ID 和股票 ID，批量更新所有組合
-        2. 對每個 (券商, 股票) 組合，使用 metadata 判斷需要更新的日期範圍
-
+            每個組合各自依 metadata 決定起算日，而不是整張表共用一個日期。
         - Parameters:
             - start_date: Union[datetime.date, str]
                 起始日期
             - end_date: Union[datetime.date, str]
                 結束日期
         """
+
         logger.info(
             f"* Start Updating Broker Trading Daily Report: {start_date} to {end_date}"
         )
 
         def _to_date(value: Union[datetime.date, str]) -> datetime.date:
-            """將 date 或字串轉為 datetime.date；字串須為 YYYY-MM-DD 格式。"""
+            """將 date 或字串轉為 datetime.date；字串須為 YYYY-MM-DD 格式"""
+
             if isinstance(value, datetime.date):
                 return value
             try:
@@ -80,7 +80,6 @@ class BrokerTradingUpdater:
         start_date_obj: datetime.date = _to_date(start_date)
         end_date_obj: datetime.date = _to_date(end_date)
 
-        # 取得股票列表和券商列表
         stock_list: List[str] = self.context.get_stock_list()
         securities_trader_list: List[str] = self.context.get_securities_trader_list()
 
@@ -95,7 +94,6 @@ class BrokerTradingUpdater:
             )
             return
 
-        # 過濾出一般股票（排除 ETF、權證等）
         stock_list: List[str] = StockUtils.filter_common_stocks(stock_list)
         logger.info(
             f"Filtered to {len(stock_list)} common stocks (excluding ETFs, warrants, etc.)"
@@ -113,7 +111,6 @@ class BrokerTradingUpdater:
             )
             return
 
-        # 初始化時更新 metadata（從資料庫讀取）
         logger.info("Initializing broker trading metadata from database...")
         self.metadata.refresh_from_database()
 
@@ -132,7 +129,6 @@ class BrokerTradingUpdater:
         # 帳號等級不足：每個組合都會失敗，遇到第一次就中止整批
         permission_error: Optional[FinMindPermissionError] = None
 
-        # 統計各種狀態
         stats: Dict[str, int] = {
             UpdateStatus.SUCCESS.value: 0,
             UpdateStatus.NO_DATA.value: 0,
@@ -140,16 +136,15 @@ class BrokerTradingUpdater:
             UpdateStatus.ERROR.value: 0,
         }
 
-        # 輔助函數：記錄進度並定期更新 metadata
         def log_progress_and_update_metadata() -> None:
-            """記錄處理進度並在需要時更新 metadata（避免程式意外中斷時遺失進度）"""
+            """記錄處理進度，並定期回寫 metadata，讓中斷後不必整段重跑"""
+
             if processed_count % self.BATCH_LOG_PROGRESS_INTERVAL == 0:
                 logger.info(
                     f"Progress: {processed_count}/{total_combinations} combinations processed | "
                     f"Stats: success={stats[UpdateStatus.SUCCESS.value]}, no_data={stats[UpdateStatus.NO_DATA.value]}, "
                     f"error={stats[UpdateStatus.ERROR.value]}, already_up_to_date={stats[UpdateStatus.ALREADY_UP_TO_DATE.value]}"
                 )
-            # 定期更新 metadata（避免程式意外中斷時遺失進度）
             if processed_count % self.BATCH_UPDATE_METADATA_INTERVAL == 0:
                 logger.debug(
                     f"Periodically updating metadata at {processed_count} combinations..."
@@ -161,19 +156,19 @@ class BrokerTradingUpdater:
 
         for securities_trader_id in securities_trader_list:
             for stock_id in stock_list:
-                # 每個組合開始處理時就增加計數（無論是否跳過都會被計入）
+                # 跳過的組合也要計入，進度才對得上 `total_combinations`
                 processed_count += 1
 
-                # 記錄正在處理的券商和股票（改為 debug 減少 I/O，進度已由 log_progress_and_update_metadata 每 50 筆 log 一次）
+                # 用 debug 而非 info：逐組合寫 log 會拖垮 I/O，
+                # 進度改由 `log_progress_and_update_metadata()` 每 50 筆印一次
                 logger.debug(
                     f"Processing: trader_id={securities_trader_id}, stock_id={stock_id}"
                 )
 
-                # 為每個組合決定起始日期（基於該組合的 metadata，而非整個表）
-                # 從 metadata 取得該組合的最新日期
+                # 起算日逐組合決定：整張表共用一個最新日期的話，
+                # 新上市的股票或新進場的券商會被既有組合的進度帶著跳過
                 metadata: Dict[str, Dict[str, Dict[str, str]]] = self.metadata.load()
 
-                # 檢查該組合是否在 metadata 中
                 has_metadata: bool = (
                     securities_trader_id in metadata
                     and stock_id in metadata[securities_trader_id]
@@ -184,7 +179,6 @@ class BrokerTradingUpdater:
 
                 if has_metadata:
                     try:
-                        # 如果 metadata 中有該組合的資料，從最新日期+1開始
                         latest_date_str: str = metadata[securities_trader_id][stock_id][
                             "latest_date"
                         ]
@@ -200,7 +194,7 @@ class BrokerTradingUpdater:
 
                 update_start_date = max(update_start_date, start_date_obj)
 
-                # 起始日期已超過結束日期：已是最新或日期範圍無效，跳過
+                # 起始日已超過結束日：已是最新，或傳入的區間無效
                 if update_start_date > end_date_obj:
                     if not has_metadata:
                         logger.warning(
@@ -211,18 +205,15 @@ class BrokerTradingUpdater:
                     log_progress_and_update_metadata()
                     continue
 
-                # 檢查是否需要更新（檢查 metadata 中是否已包含所有日期）
                 existing_dates: Set[str] = self.metadata.get_existing_dates(
                     securities_trader_id=securities_trader_id,
                     stock_id=stock_id,
                 )
 
-                # 產生目標日期範圍的所有日期
                 target_dates: List[datetime.date] = TimeUtils.generate_date_range(
                     update_start_date, end_date_obj
                 )
 
-                # 如果日期範圍為空（例如 start_date > end_date），跳過
                 if not target_dates:
                     logger.warning(
                         f"Empty date range for {securities_trader_id}/{stock_id}: "
@@ -236,12 +227,10 @@ class BrokerTradingUpdater:
                     d.strftime("%Y-%m-%d") for d in target_dates
                 }
 
-                # 檢查是否所有日期都已存在
                 missing_dates: Set[str] = target_date_strs - existing_dates
 
                 if not missing_dates:
-                    # 所有日期都已存在，跳過此組合
-                    # 但如果是新組合（不在 metadata 中），這不應該發生，記錄警告
+                    # 新組合不在 metadata 裡卻宣稱日期全有，代表判斷邏輯有問題
                     if not has_metadata:
                         logger.warning(
                             f"Unexpected: combination {securities_trader_id}/{stock_id} not in metadata "
@@ -312,13 +301,11 @@ class BrokerTradingUpdater:
             if quota_exhausted or permission_error is not None:
                 break
 
-        # 將尚未 commit 的寫入一次提交，再更新 metadata
         self.context.loader.commit()
-        # 更新 metadata（無論是否完成）
+        # 即使中途因配額或權限中止，也要回寫 metadata，下次才能接續
         logger.info("Updating broker trading metadata after batch update...")
         self.metadata.refresh_from_database()
 
-        # 如果 quota 用完，記錄狀態
         if quota_exhausted:
             logger.warning(
                 f"⚠️ Batch update paused due to API quota exhaustion. "
@@ -330,7 +317,6 @@ class BrokerTradingUpdater:
                 f"✅ Batch update completed. Processed {processed_count} combinations"
             )
 
-        # 輸出詳細統計
         logger.info(
             f"📊 Update Statistics: "
             f"Success={stats[UpdateStatus.SUCCESS.value]}, "
@@ -339,7 +325,7 @@ class BrokerTradingUpdater:
             f"Errors={stats[UpdateStatus.ERROR.value]}"
         )
 
-        # **有錯誤就必須讓行程非零結束**：舊版只把錯誤數印在統計行裡，
+        # **有錯誤就必須讓行程非零結束**：只把錯誤數印在統計行裡的話，
         # `update_db` 照樣印 `✅ Database Update Completed`。單一組合失敗不中止
         # 整批（其餘組合仍該更新），但跑完之後不能當作沒發生。
         error_count: int = stats[UpdateStatus.ERROR.value]
@@ -356,8 +342,8 @@ class BrokerTradingUpdater:
         elif error_count:
             failures.append(f"{error_count} 個 (券商, 股票) 組合更新失敗，詳見上方 log")
 
-        # **配額等不回來也是「這次沒跑完」**：舊版只記 warning，於是一次只做了
-        # 三成的更新仍以結束碼 0 結束，排程看不出需要重跑
+        # **配額等不回來也是「這次沒跑完」**：只記 warning 的話，只做了三成的
+        # 更新仍以結束碼 0 結束，排程看不出需要重跑
         if quota_exhausted:
             failures.append(
                 f"API 配額未在等待時限內恢復，只處理了 "
@@ -380,8 +366,8 @@ class BrokerTradingUpdater:
         do_commit: bool = True,
     ) -> UpdateStatus:
         """
-        核心方法：更新券商分點統計表資料（給定股票、券商與日期區間，不包含時間判斷邏輯）
-
+        - Description:
+            更新單一 (券商, 股票) 組合的分點統計表；日期區間由呼叫端決定
         - Parameters:
             - stock_id: str
                 股票代碼
@@ -400,6 +386,7 @@ class BrokerTradingUpdater:
                 - UpdateStatus.NO_DATA: 沒有資料（API 返回空結果）
                 - UpdateStatus.ERROR: 發生錯誤
         """
+
         logger.info(
             f"Crawling and saving broker trading daily report: "
             f"trader={securities_trader_id}, stock={stock_id}, "
@@ -436,8 +423,7 @@ class BrokerTradingUpdater:
                 logger.warning("Cleaned broker trading daily report data is empty")
                 return UpdateStatus.NO_DATA
 
-            # Step 3: Load - 將資料保存到資料庫
-            # 使用 loader 的方法來載入資料（do_commit=False 時由批次迴圈定期 commit）
+            # Step 3: Load（`do_commit=False` 時由批次迴圈定期 commit）
             saved_count: int = self.context.loader.load_broker_trading_daily_report(
                 df=cleaned_df, commit=do_commit
             )

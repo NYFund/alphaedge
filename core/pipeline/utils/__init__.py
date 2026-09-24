@@ -19,3 +19,5 @@ from .exceptions import (
     SymbolNameConflictError,
     UnbuildableSeriesError,
 )
+
+"""Pipeline 跨市場共用層：資料類型常數與例外類別的對外入口"""

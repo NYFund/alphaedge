@@ -160,7 +160,6 @@ class FinMindContext:
         )
 
         while True:
-            # 檢查是否超過最大等待時間
             elapsed: float = time.time() - start_wait_time
             if elapsed >= max_wait_seconds:
                 logger.warning(
@@ -168,7 +167,6 @@ class FinMindContext:
                 )
                 return False
 
-            # 嘗試從 API 查詢剩餘 quota
             remaining: Optional[int] = self.get_api_remaining_quota()
 
             if remaining is not None:
@@ -196,7 +194,6 @@ class FinMindContext:
                 f"(Elapsed: {elapsed / self.SECONDS_PER_MINUTE:.1f} minutes)"
             )
 
-            # 等待指定時間
             time.sleep(check_interval_seconds)
 
     def get_stock_list(self) -> List[str]:
@@ -204,8 +201,8 @@ class FinMindContext:
         - Description:
             從資料庫取得所有股票代碼列表（使用 stock_info，不含權證）
 
-            表不存在時回空清單；其他查詢錯誤往外拋（舊版 `except Exception` 回空清單，
-            「DB 被鎖住」會變成「沒有股票，請先更新 stock info」，行程照樣成功結束）。
+            表不存在時回空清單，**其他查詢錯誤一律往外拋**：全部吞成空清單的話，
+            「DB 被鎖住」會被當成「沒有股票，請先更新 stock info」，行程照樣成功結束。
         """
 
         stock_list: List[str] = StockInfoDAO(conn=self.conn).get_stock_ids()
@@ -239,7 +236,6 @@ class BrokerTradingMetadataStore:
         metadata_path: Path,
         conn: Optional[DBConnection] = None,
     ) -> None:
-        # Broker trading metadata 文件路徑（記錄每個 broker_id 和 stock_id 的日期範圍）
         self.metadata_path: Path = metadata_path
         self.conn: Optional[DBConnection] = conn
 
@@ -277,24 +273,20 @@ class BrokerTradingMetadataStore:
 
         metadata: Dict[str, Dict[str, Dict[str, str]]] = self.load()
 
-        # 確保資料庫連接存在
         if self.conn is None:
             logger.error("Database connection is not available")
             return
 
         updated_count: int = 0
         try:
-            # 從資料庫查詢每個 (securities_trader_id, stock_id) 組合的日期範圍
             df: pd.DataFrame = BrokerTradingDAO(
                 conn=self.conn
             ).get_date_ranges_by_trader_stock()
 
             if df.empty:
                 logger.info("No broker trading data found in database")
-                # 如果資料庫沒有資料，清空所有 metadata
                 metadata = {}
             else:
-                # 建立一個集合來記錄資料庫中實際存在的組合
                 existing_combinations: Set[Tuple[str, str]] = set()
 
                 for _, row in df.iterrows():
@@ -306,7 +298,6 @@ class BrokerTradingMetadataStore:
                     existing_combinations.add((securities_trader_id, stock_id))
 
                     try:
-                        # 解析日期
                         earliest_date: datetime.date = datetime.datetime.strptime(
                             earliest_date_str, "%Y-%m-%d"
                         ).date()
@@ -314,11 +305,9 @@ class BrokerTradingMetadataStore:
                             latest_date_str, "%Y-%m-%d"
                         ).date()
 
-                        # 初始化 broker_id 如果不存在
                         if securities_trader_id not in metadata:
                             metadata[securities_trader_id] = {}
 
-                        # 更新 metadata
                         if stock_id not in metadata[securities_trader_id]:
                             # 情況 A：DB 已有此組合但 metadata 遺漏，直接寫入查到的日期範圍
                             metadata[securities_trader_id][stock_id] = {
@@ -352,7 +341,6 @@ class BrokerTradingMetadataStore:
                                     "%Y-%m-%d",
                                 ).date()
 
-                            # 更新最早日期
                             if (
                                 existing_earliest is None
                                 or earliest_date < existing_earliest
@@ -362,7 +350,6 @@ class BrokerTradingMetadataStore:
                                 ] = earliest_date.strftime("%Y-%m-%d")
                                 updated_count += 1
 
-                            # 更新最晚日期
                             if existing_latest is None or latest_date > existing_latest:
                                 metadata[securities_trader_id][stock_id][
                                     "latest_date"
@@ -384,19 +371,15 @@ class BrokerTradingMetadataStore:
 
                     for stock_id in stocks.keys():
                         if (broker_id, stock_id) not in existing_combinations:
-                            # 資料庫中不存在此組合，移除 metadata 中的記錄
                             stocks_to_remove.append(stock_id)
                             removed_count += 1
 
-                    # 移除不存在的 stock_id
                     for stock_id in stocks_to_remove:
                         del metadata[broker_id][stock_id]
 
-                    # 如果該 broker 下沒有任何 stock，標記為待移除
                     if not metadata[broker_id]:
                         brokers_to_remove.append(broker_id)
 
-                # 移除空的 broker
                 for broker_id in brokers_to_remove:
                     del metadata[broker_id]
 
@@ -415,7 +398,6 @@ class BrokerTradingMetadataStore:
                 f"Error updating broker trading metadata from database: {e}",
             )
 
-        # 保存 metadata
         DataUtils.save_json(
             metadata,
             self.metadata_path,
@@ -463,7 +445,6 @@ class BrokerTradingMetadataStore:
                 stock_info["latest_date"], "%Y-%m-%d"
             ).date()
 
-            # 生成日期範圍內的所有日期
             date_range: List[datetime.date] = TimeUtils.generate_date_range(
                 earliest_date, latest_date
             )

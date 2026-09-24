@@ -23,10 +23,9 @@ class StockDividendLoader(BaseDataLoader):
 
     # 同一筆除權息若跨來源重複，保留優先序**最高**的那一筆。
     #
-    # **不可依檔名字典序決定**：舊版直接對 `sorted(dir.iterdir())`
-    # 的結果 `drop_duplicates(keep="last")`，於是「留下哪一筆」取決於檔名的
-    # 字母順序——今天剛好是 `twse_` 勝出，日後多一個來源（例如 `finmind_`）
-    # 或檔名改個前綴，勝出的就換人，而且不會有任何跡象。
+    # **不可依檔名字典序決定**：對 `sorted(dir.iterdir())` 的結果直接
+    # `drop_duplicates(keep="last")` 的話，「留下哪一筆」取決於檔名的字母順序
+    # ——多一個來源或檔名改個前綴，勝出的就換人，而且不會有任何跡象。
     #
     # 排序原則：交易所官方資料優先於第三方回補。清單中沒列到的來源排在最後。
     SOURCE_PRIORITY: List[str] = ["finmind", "tpex", "twse"]

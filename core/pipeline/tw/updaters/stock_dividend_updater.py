@@ -90,7 +90,6 @@ class StockDividendUpdater(BaseDataUpdater):
             logger.info("Dividend data is already up to date")
             return
 
-        # TWSE：以年為單位請求，一年一次
         years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
         stats: UpdateStats = UpdateStats()
         layout_failures: List[str] = []
@@ -143,7 +142,6 @@ class StockDividendUpdater(BaseDataUpdater):
         # **先入庫再拋**：沒改制的年份已經清洗好了，不入庫等於這次白跑
         self.loader.add_to_db(remove_files=False)
 
-        # 更新後重新取得Table最新的日期
         table_latest_date: Optional[str] = self.dao.get_latest_date()
         if table_latest_date:
             logger.info(

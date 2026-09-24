@@ -56,9 +56,9 @@ class BaseAccount:
         """
         取得庫存**商品檔數**（同一檔加碼多次只算一檔）
 
-        `max_holdings` 的語意在 `BaseStrategy` 與各策略 docstring 都寫「檔數」，
-        舊實作卻回傳部位筆數：允許加碼的策略（例如 `MomentumStrategy1`）
-        同一檔加碼兩次就佔掉兩個名額，實際持有檔數比設定少。
+        `max_holdings` 的語意一律是「檔數」。**不可改回部位筆數**：允許加碼的
+        策略（例如 `MomentumStrategy1`）同一檔加碼兩次就會佔掉兩個名額，
+        實際持有檔數比設定少。
         """
 
         return len(
@@ -75,6 +75,7 @@ class BaseAccount:
 
     def remove_closed_positions(self) -> None:
         """移除已平倉的部位"""
+
         self.positions = [
             position for position in self.positions if not position.is_closed
         ]
@@ -107,7 +108,7 @@ class BaseAccount:
             清單，平倉只是把 `is_closed` 設為 True。少了這個條件，一檔賣掉之後
             仍會被當成「還在庫存」——雙向持倉檢查會永久拒絕該標的的反向開倉，
             而 `Backtester` 用它挑出「有部位的報價」時也會一直帶著已平倉的標的。
-            同檔案的 `get_positions()` 本來就有濾，兩者不一致本身就是徵兆。
+            同檔案的 `get_positions()` 也是同一套濾法，兩者不一致本身就是徵兆。
         - Parameters:
             - symbol: str
                 商品代碼
@@ -127,12 +128,14 @@ class BaseAccount:
 
     def update_realized_pnl(self) -> None:
         """更新已實現損益"""
+
         self.realized_pnl = sum(
             record.realized_pnl for record in self.trade_records if record.is_closed
         )
 
     def update_roi(self) -> None:
         """更新已實現 ROI (Return On Investment)"""
+
         self.roi = round(self.realized_pnl / self.init_capital * 100, 2)
 
     def update_transaction_cost(self) -> None:

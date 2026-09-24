@@ -61,7 +61,7 @@ class FuturesChipAPI(BaseDataAPI):
                 該表的 DAO
         - Raise:
             - ValueError
-                表名不是三張籌碼表之一（舊版沒有檢查就組進 SQL）
+                表名不是三張籌碼表之一；白名單擋在組 SQL 之前
         """
 
         if table not in self.daos:
@@ -120,8 +120,8 @@ class FuturesChipAPI(BaseDataAPI):
         前視偏差。回測請走 `get_available()`。
         """
 
-        # 舊版 `except pd.errors.DatabaseError` 一律回空表，連「被鎖住」也吞；
-        # 改為只有表不存在時回空表
+        # 只有「表不存在」才回空表；`database is locked` 這類錯誤一律上拋，
+        # 吞掉會被誤讀成「這天沒有籌碼」
         return self.get_dao(table).get_by_date(date)
 
     # === 具名查詢 ===

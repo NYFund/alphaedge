@@ -17,9 +17,18 @@ from core.pipeline.tw.utils.url_manager import URLManager
 from core.pipeline.utils import ListingBoard
 from core.utils import TimeUtils
 
+"""
+MOPS 季報財務報表爬蟲
+
+1. 資產負債表、綜合損益表、現金流量表是「全市場一次查完」，逐市場（上市／上櫃）各一次請求。
+2. 權益變動表只能逐檔查詢，故請求數 = 股票檔數 × 年季，且需要區分
+   「查無資料」與「站方過載」兩種空結果，見 `crawl_equity_changes()`。
+3. 站方過載時會回 HTTP 200 但內容為錯誤訊息，判斷一律看內文標記而非狀態碼。
+"""
+
 
 class FinancialStatementCrawler(BaseDataCrawler):
-    """Crawler for quarterly financial Statement"""
+    """爬取 MOPS 季報的四張財務報表（資產負債表、綜合損益表、現金流量表、權益變動表）"""
 
     # 起始年份為資料源下界（MOPS 只供得出民國 102 年以後），故寫死；
     # 結束年份不設常數，改由呼叫端取當年——MOPS 一路供到當季，寫死會逐年落後
@@ -46,10 +55,8 @@ class FinancialStatementCrawler(BaseDataCrawler):
     def __init__(self) -> None:
         super().__init__()
 
-        # Financial Statement Directories Set Up
         self.fs_dir: Path = FINANCIAL_STATEMENT_DOWNLOADS_PATH
 
-        # Payload For HTTP Requests
         self.payload: Optional[Payload] = None
         self.listing_boards: List[ListingBoard] = [ListingBoard.SII, ListingBoard.OTC]
 
@@ -58,10 +65,8 @@ class FinancialStatementCrawler(BaseDataCrawler):
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Crawler"""
 
-        # Create Downloads Directory For Financial Reports
         self.fs_dir.mkdir(parents=True, exist_ok=True)
 
-        # Set Up Payload
         self.payload = Payload(
             firstin="1",
             step="1",
@@ -72,14 +77,13 @@ class FinancialStatementCrawler(BaseDataCrawler):
         )
 
     def crawl(self, *args, **kwargs) -> Dict[str, List[pd.DataFrame]]:
-        """Crawl Financial Report (Include 4 reports)"""
+        """一次取得同一年季的四張報表"""
+
         """
-        General usage:
-        **kwargs = {
-            "stock_id": str,
-            "date": datetime.date,
-            "season": int
-        }
+        kwargs：
+        - year: int（必填，西元年）
+        - season: int（必填，季別 1~4）
+        - stock_id: str（權益變動表逐檔查詢用）
         """
 
         stock_id: Optional[str] = kwargs.get("stock_id")
@@ -115,11 +119,11 @@ class FinancialStatementCrawler(BaseDataCrawler):
         year: int,
         season: int,
     ) -> Optional[List[pd.DataFrame]]:
-        """Crawl Balance Sheet (資產負債表)"""
+        """爬取資產負債表（全市場，上市與上櫃各一次請求）"""
+
         """
-        資料區間（但是只有 102 年以後才可以爬）
-        上市: 民國 78 (1989) 年 ~ present
-        上櫃: 民國 82 (1993) 年 ~ present
+        申報起始：上市為民國 78（1989）年、上櫃為民國 82（1993）年，
+        但本端點只供得出民國 102（2013）年以後的年季。
         """
 
         logger.info(f"* Start crawling balance sheet: {year}/Q{season}")
@@ -134,11 +138,11 @@ class FinancialStatementCrawler(BaseDataCrawler):
         year: int,
         season: int,
     ) -> Optional[List[pd.DataFrame]]:
-        """Crawl Statement of Comprehensive Income (綜合損益表)"""
+        """爬取綜合損益表（全市場，上市與上櫃各一次請求）"""
+
         """
-        資料區間（但是只有 102 年以後才可以爬）
-        上市: 民國 77 (1988) 年 ~ present
-        上櫃: 民國 82 (1993) 年 ~ present
+        申報起始：上市為民國 77（1988）年、上櫃為民國 82（1993）年，
+        但本端點只供得出民國 102（2013）年以後的年季。
         """
 
         logger.info(f"* Start crawling comprehensive income: {year}/Q{season}")
@@ -153,11 +157,10 @@ class FinancialStatementCrawler(BaseDataCrawler):
         year: int,
         season: int,
     ) -> Optional[List[pd.DataFrame]]:
-        """Crawl Cash Flow Statement (現金流量表)"""
+        """爬取現金流量表（全市場，上市與上櫃各一次請求）"""
+
         """
-        資料區間
-        上市: 民國 102 (2013) 年 ~ present
-        上櫃: 民國 102 (2013) 年 ~ present
+        資料區間：上市與上櫃皆自民國 102（2013）年起至今。
         """
 
         logger.info(f"* Start crawling cash flow: {year}/Q{season}")
@@ -178,8 +181,8 @@ class FinancialStatementCrawler(BaseDataCrawler):
 
             只回傳問到的那個市場的話，updater 會把半份年季清洗入庫，看起來一切正常
             ——資產負債表 2021Q1 整季缺、綜合損益表 2021Q1 上櫃只剩 3 檔、現金流量表
-            2024Q1 上市只剩 1 檔都是這樣來的。三張報表的逐市場迴圈原本各寫一份，
-            收斂在這裡以免判準再度漂移。
+            2024Q1 上市只剩 1 檔都是這樣來的。三張報表共用本方法，判準只留一份，
+            以免各自演化出不同的失敗處理。
 
             解析不出表格同樣算失敗而不是「沒資料」：兩個市場自 2013 年起都有申報，
             拿不到表格代表拿到了非預期的頁面（尚未公布、站方異常），留待下次重試。
@@ -237,11 +240,10 @@ class FinancialStatementCrawler(BaseDataCrawler):
         season: int,
         stock_id: str,
     ) -> Optional[List[pd.DataFrame]]:
-        """Crawl Statement of Changes in Equity (權益變動表)"""
+        """爬取權益變動表（逐檔查詢）"""
+
         """
-        資料區間
-        上市: 民國 102 (2013) 年 ~ present
-        上櫃: 民國 102 (2013) 年 ~ present
+        資料區間：上市與上櫃皆自民國 102（2013）年起至今。
 
         與其他三張報表不同，本端點是「逐檔查詢」（一次一檔股票），
         故回傳值要能分辨三種結果，讓逐檔回補的呼叫端決定要不要重試：

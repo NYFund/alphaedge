@@ -97,7 +97,6 @@ class StockChipCleaner(BaseDataCleaner):
         if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels > 1:
             df.columns = df.columns.droplevel(0)
 
-        # 先處理 raw df
         df.columns = [DataUtils.standardize_column_name(col) for col in df.columns]
         df.insert(0, "date", date)
         df = df.rename(columns={"證券代號": "stock_id"})
@@ -159,7 +158,7 @@ class StockChipCleaner(BaseDataCleaner):
         if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels > 1:
             df.columns = df.columns.droplevel(0)
 
-        # Remove last row
+        # 最後一列是來源的合計列，不是個股資料
         df = DataUtils.remove_last_n_rows(df, n_rows=1)
 
         # date < 第一次格式改制（2014/12/1）
@@ -226,7 +225,7 @@ class StockChipCleaner(BaseDataCleaner):
 
         # date >= 第二次格式改制（2018/1/15）
         elif date >= self.tpex_second_reform_date:
-            # 因為 df.columns 是 MultiIndex(2層)，所以將其轉為1層
+            # 改制後來源表頭是兩層 MultiIndex，先併成一層才能依位置命名
             df.columns = [
                 f"{col1}{col2}" if col1 != col2 else col1 for col1, col2 in df.columns
             ]

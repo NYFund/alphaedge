@@ -21,11 +21,10 @@ from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
-Shioaji 台股 ticks 資料時間表：
-From: 2020/03/02 ~ Today
+台股 tick 更新
 
-目前資料庫資料時間：
-From 2020/04/01 ~ 2024/05/10
+Shioaji 的 tick 只回溯到 2020/03/02，更早的日期一律取不到資料。
+資料庫目前的涵蓋範圍以 `tick_metadata.json` 為準（見 `StockTickUtils`）。
 """
 
 
@@ -49,18 +48,16 @@ class StockTickUpdater(BaseDataUpdater):
         self.sessions: List[ShioajiSession] = []
         self.api_list: List[sj.Shioaji] = []
 
-        # 爬取所有上市櫃股票清單
         self.all_stock_list: List[str] = StockInfoCrawler.crawl_stock_list()
 
         # 可用的 API 數量 = 可開的 thread 數
         self.num_threads: int = 0
 
-        # 股票清單分組（後續給多線程用）
+        # 股票清單分組，每個 thread 拿一組
         self.split_stock_list: List[List[str]] = []
 
         self.tick_dir: Path = TICK_DOWNLOADS_PATH
 
-        # 全局統計信息
         self.global_stats: Dict[str, Any] = {
             "start_time": 0.0,
             "total_stocks_processed": 0,
@@ -87,13 +84,10 @@ class StockTickUpdater(BaseDataUpdater):
         )
         self.api_list = [session.api for session in self.sessions]
 
-        # Set up number of threads
         self.num_threads: int = len(self.api_list)
 
-        # Generate tick_metadata backup
         StockTickUtils.generate_tick_metadata_backup()
 
-        # 設定 log 檔案儲存路徑
         LogManager.setup_logger("update_tick.log")
 
     def update(
@@ -116,7 +110,6 @@ class StockTickUpdater(BaseDataUpdater):
 
         end_date: datetime.date = end_date or datetime.date.today()
 
-        # 重置全局統計信息
         self.global_stats: Dict[str, Any] = {
             "start_time": time.time(),
             "total_stocks_processed": 0,
@@ -130,8 +123,7 @@ class StockTickUpdater(BaseDataUpdater):
         }
 
         try:
-            # 清理已載入資料庫的 CSV 文件，避免重複載入
-            # 讀取 tick_metadata.json 來判斷哪些 CSV 已經載入過
+            # 先清掉已入庫的 CSV，否則下一次 `add_to_db()` 會把同一批 tick 再載一次
             stocks_metadata: Dict[str, Dict[str, str]] = (
                 StockTickUtils.load_tick_metadata_stocks()
             )
@@ -142,11 +134,10 @@ class StockTickUpdater(BaseDataUpdater):
             for csv_file in all_csv_files:
                 stock_id: str = csv_file.stem
 
-                # 只處理檔名為純數字的 CSV 文件（股票代號）
+                # 檔名即股票代號，非數字者不是 tick 資料檔
                 if not stock_id.isdigit():
                     continue
 
-                # 檢查該股票是否在 metadata 中
                 if stock_id in stocks_metadata:
                     stock_info: Dict[str, str] = stocks_metadata[stock_id]
                     last_date_str: Optional[str] = stock_info.get("last_date")
@@ -164,7 +155,7 @@ class StockTickUpdater(BaseDataUpdater):
                                     datetime.date.fromisoformat(last_date_str)
                                 )
 
-                                # 如果 CSV 的最後日期 <= metadata 的最後日期，說明已載入，可以刪除
+                                # 最後一筆未超過 metadata 記錄的日期，代表整份都已入庫
                                 if csv_last_date <= metadata_last_date:
                                     try:
                                         csv_file.unlink()
@@ -194,7 +185,6 @@ class StockTickUpdater(BaseDataUpdater):
                     f"Found {len(remaining_csv_files)} CSV files to be loaded into database"
                 )
 
-            # 使用傳入的日期區間作為更新範圍
             logger.info(
                 f"Update date range: {start_date.isoformat()} ~ {end_date.isoformat()}"
             )
@@ -204,14 +194,13 @@ class StockTickUpdater(BaseDataUpdater):
                 start_date, end_date
             )
 
-            # 檢查日期範圍是否有效
             if not dates:
                 logger.warning(
                     f"No dates to update. Start date ({start_date}) is after end date ({end_date}). "
                     f"Database is already up to date or end_date needs to be adjusted."
                 )
                 logger.info("Skipping crawl process. Proceeding to database loading...")
-                # 即使沒有新日期，也嘗試載入現有的 CSV 文件
+                # 沒有新日期也要往下走，既有的 CSV 仍需入庫
             else:
                 # Step 1: Crawl + Clean（會使用 tick_metadata.json 來跳過已存在的日期）
                 logger.info("=" * 80)
@@ -239,9 +228,8 @@ class StockTickUpdater(BaseDataUpdater):
                 logger.info("Tick metadata updated successfully")
             except Exception as e:
                 logger.opt(exception=True).error(f"Failed to update tick metadata: {e}")
-                # 不中斷流程，因為 metadata 更新失敗不影響數據本身
+                # metadata 只是跳過已爬日期的索引，更新失敗不影響已入庫的資料，故不中斷
 
-            # 更新後從 tick_metadata.json 取得最新日期並記錄
             latest_date_from_metadata: Optional[datetime.date] = (
                 StockTickUtils.get_table_latest_date()
             )
@@ -249,7 +237,6 @@ class StockTickUpdater(BaseDataUpdater):
                 logger.info(
                     f"* Tick data updated. Latest available date: {latest_date_from_metadata}"
                 )
-                # 如果最新日期小於目標結束日期，記錄警告
                 if latest_date_from_metadata < end_date:
                     logger.warning(
                         f"* Warning: Latest date ({latest_date_from_metadata}) is before target end_date ({end_date}). "
@@ -258,7 +245,6 @@ class StockTickUpdater(BaseDataUpdater):
             else:
                 logger.warning("* No new stock tick data was updated")
 
-            # 輸出完整的統計報告
             self._print_update_summary(self.global_stats, start_date, end_date)
 
             failed_stocks: int = self.global_stats["failed_stocks"]
@@ -286,8 +272,7 @@ class StockTickUpdater(BaseDataUpdater):
     ) -> None:
         """
         - Description:
-            單一 thread 任務：爬 + 清洗
-
+            單一 thread 任務：爬 + 清洗，清洗後直接落地成 CSV
         - Parameters:
             - api: sj.Shioaji
                 Shioaji API
@@ -295,12 +280,11 @@ class StockTickUpdater(BaseDataUpdater):
                 日期 List
             - stock_list: List[str]
                 Stock List
-
-        - Return: List[pd.DataFrame]
-            - 每個 df 是一檔股票日期區間內的所有 tick
+        - Return:
+            - Dict[str, Any]
+                本 thread 的成功／失敗／略過檔數，交由 `update_multithreaded()` 匯總
         """
 
-        # 統計信息
         stats: Dict[str, Any] = {
             "total_stocks": len(stock_list),
             "successful_stocks": 0,
@@ -310,7 +294,6 @@ class StockTickUpdater(BaseDataUpdater):
 
         # Crawl
         for stock_id in stock_list:
-            # 判斷 api 用量（統一檢查，避免重複）
             try:
                 remaining_mb: float = api.usage().remaining_bytes / 1024**2
                 if remaining_mb < self.TICK_API_MIN_REMAINING_MB:
@@ -332,7 +315,6 @@ class StockTickUpdater(BaseDataUpdater):
             failed_dates: List[datetime.date] = []  # 追蹤爬取失敗的日期
 
             for date in dates:
-                # 檢查是否已經存在該日期的資料，如果存在則跳過
                 if StockTickUtils.check_date_crawled(stock_id, date):
                     skipped_dates.append(date)
                     logger.debug(
@@ -340,7 +322,7 @@ class StockTickUpdater(BaseDataUpdater):
                     )
                     continue
 
-                # 統一 API 配額檢查（在每次爬取前檢查，因為配額是動態變化的）
+                # 配額是動態扣的，每爬一天都要重查，不能只在進迴圈前檢查一次
                 try:
                     remaining_mb: float = api.usage().remaining_bytes / 1024**2
                     if remaining_mb < self.TICK_API_MIN_REMAINING_MB:
@@ -348,7 +330,7 @@ class StockTickUpdater(BaseDataUpdater):
                             f"API quota low ({remaining_mb:.2f} MB remaining) for {api}. "
                             f"Stopped crawling {stock_id} at date {date.isoformat()}."
                         )
-                        break  # 跳出日期循環，繼續下一個股票
+                        break
                 except Exception as e:
                     logger.warning(
                         f"Failed to check API quota before crawling {stock_id} on {date}: {e}. "
@@ -378,10 +360,9 @@ class StockTickUpdater(BaseDataUpdater):
                     )
                     continue
 
-            # 改進邏輯：即使部分日期失敗，也保存成功的數據
             if not df_list:
-                # **先看有沒有失敗的日期**：舊版先判斷 `skipped_dates`，於是
-                # 「有幾天連不上、其餘幾天本來就沒資料」的股票會被算成 skipped，
+                # **失敗要先於 skipped 判斷**：反過來的話，「有幾天連不上、
+                # 其餘幾天本來就沒資料」的股票會被算成 skipped，
                 # 失敗在統計表裡完全看不見
                 if failed_dates:
                     logger.warning(
@@ -396,7 +377,7 @@ class StockTickUpdater(BaseDataUpdater):
                     )
                     stats["skipped_stocks"] += 1
                 else:
-                    # 安全地訪問 dates 列表，避免 index out of range
+                    # `dates` 可能是空的，不可直接取 [0]／[-1]
                     date_range_str: str = (
                         f"{dates[0]} to {dates[-1]}" if dates else "no dates available"
                     )
@@ -407,7 +388,6 @@ class StockTickUpdater(BaseDataUpdater):
                     stats["failed_stocks"] += 1
                 continue
 
-            # 記錄詳細的日期統計
             logger.info(
                 f"Stock {stock_id}: Successfully crawled {len(stock_successful_dates)} dates, "
                 f"skipped {len(skipped_dates)} dates, failed {len(failed_dates)} dates"
@@ -423,7 +403,6 @@ class StockTickUpdater(BaseDataUpdater):
                     f"{min(failed_dates).isoformat()} ~ {max(failed_dates).isoformat()}"
                 )
 
-            # 合併所有成功的數據
             try:
                 merged_df: pd.DataFrame = pd.concat(df_list, ignore_index=True)
                 logger.debug(
@@ -461,14 +440,12 @@ class StockTickUpdater(BaseDataUpdater):
                 )
                 stats["failed_stocks"] += 1
 
-        # 記錄線程統計信息
         logger.info(
             f"Thread completed. Stats: {stats['successful_stocks']} successful, "
             f"{stats['failed_stocks']} failed, {stats['skipped_stocks']} skipped "
             f"out of {stats['total_stocks']} stocks"
         )
 
-        # 返回統計信息供匯總
         return stats
 
     def update_multithreaded(self, dates: List[datetime.date]) -> None:
@@ -480,7 +457,6 @@ class StockTickUpdater(BaseDataUpdater):
         )
         start_time: float = time.time()  # 開始計時
 
-        # 將 Stock list 均分給各個 thread 進行爬蟲
         self.split_stock_list: List[List[str]] = self.split_list(
             self.all_stock_list, self.num_threads
         )
@@ -500,7 +476,6 @@ class StockTickUpdater(BaseDataUpdater):
                     )
                 )
 
-            # 等待所有 thread 結束並收集結果
             for i, future in enumerate(futures):
                 try:
                     thread_stats: Optional[Dict[str, Any]] = (
@@ -512,7 +487,6 @@ class StockTickUpdater(BaseDataUpdater):
                     logger.opt(exception=True).error(
                         f"Thread {i + 1} task failed with exception: {e}"
                     )
-                    # 記錄失敗的線程統計
                     thread_results.append(
                         {
                             "successful_stocks": 0,
@@ -525,7 +499,6 @@ class StockTickUpdater(BaseDataUpdater):
                         }
                     )
 
-        # 匯總所有線程的統計信息
         for thread_stat in thread_results:
             self.global_stats["successful_stocks"] += thread_stat.get(
                 "successful_stocks", 0
@@ -571,13 +544,12 @@ class StockTickUpdater(BaseDataUpdater):
             try:
                 session.close()
             except Exception as e:
-                # 如果登出失敗（例如連接已關閉或超時），記錄警告但不中斷程序
-                # 這些錯誤通常在程序結束時發生，可以安全忽略
+                # 登出失敗多半是連線已關閉或逾時，且只發生在收尾階段，
+                # 不影響已取得的資料，故只記 debug 不中斷
                 logger.debug(f"API logout warning (can be safely ignored): {e}")
         self.sessions = []
         self.api_list = []
 
-        # 清空 API 列表
         self.api_list.clear()
         logger.info("All API connections closed")
 

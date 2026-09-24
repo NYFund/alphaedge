@@ -27,8 +27,8 @@ from core.utils.constant import FileEncoding
 **建表以第一次入庫的 DataFrame 推導欄位**，只把主鍵與型別釘死（見 `FuturesChipDAO`）。
 
 **本 loader 不 commit**：寫入包在 savepoint 內，何時落地由 updater 決定
-（每個月批次寫完 commit 一次）。舊版每次 `add_to_db()` 都自己 commit，
-呼叫端無從把幾次寫入綁成一個交易。
+（每個月批次寫完 commit 一次）。若 `add_to_db()` 自己 commit，
+呼叫端就無從把幾次寫入綁成同一個交易。
 """
 
 

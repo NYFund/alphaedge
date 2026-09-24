@@ -103,8 +103,10 @@ class FuturesStockUniverseCrawler(BaseDataCrawler):
         - Description:
             自回應 HTML 取出標的清單表
 
-            `keep_default_na=False` 與 converters 兩者缺一不可，理由見本檔說明
-            第 3、4 點——少了任何一個都是**無聲**的資料損壞。
+            `keep_default_na=False` 與 converters 兩者缺一不可，少任何一個
+            都是**無聲**的資料損壞：`NA`（穩懋 3105 的商品代碼）會被 pandas
+            讀成 NaN 而整檔消失；證券代號 `0050`、`00679B` 被推斷成數字後
+            就對不回現股。
         - Parameters:
             - html: str
                 回應內容

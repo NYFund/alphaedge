@@ -1,11 +1,16 @@
-"""Pipeline 專用例外類別。
+"""
+Pipeline 專用例外類別
 
-依資料來源／層級分組，避免不同類型例外混在一起：
-- PipelineError：Pipeline 通用基底（可選，供未來 Crawler/Loader 等使用）
-- FinMind*：FinMind API 專用
+依 ETL 層級（Crawler／Cleaner／Loader／Updater）與資料來源分組，
+**全部繼承 `PipelineError`**：呼叫端才能一次收下整條 pipeline 拋出的錯誤，
+而不會連帶吞掉其他模組的 Exception。
 
-Usage:
-    from core.pipeline.utils import FinMindQuotaExhaustedError, FinMindError
+這些例外存在的共同理由是「**失敗不可以長得像沒有資料**」：
+靜默回 None 或回空表會讓行程以結束碼 0 結束，缺漏要事後對帳才會被發現。
+
+使用方式：
+
+    from core.pipeline.utils import FinMindError, FinMindQuotaExhaustedError
 
     try:
         df = crawler.crawl_broker_trading_daily_report(...)
@@ -15,49 +20,49 @@ Usage:
     except FinMindError as e:
         # 其他 FinMind 錯誤
         ...
-
-    if FinMindError.is_quota_error(some_exception):
-        # 判斷是否為配額相關（含 HTTP 402、KeyError('data') 等）
-        ...
 """
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 # -----------------------------------------------------------------------------
-# Pipeline 通用（未來可擴充 CrawlerError, LoaderError 等）
+# Pipeline 通用基底
 # -----------------------------------------------------------------------------
 
 
 class PipelineError(Exception):
-    """Pipeline 相關錯誤的共通基底，方便與其他模組的 Exception 區隔。"""
+    """Pipeline 相關錯誤的共通基底，方便與其他模組的 Exception 區隔"""
 
     pass
 
 
 # -----------------------------------------------------------------------------
-# FinMind 例外階層（業界常見：Base -> 具體錯誤類型）
+# FinMind 例外階層（Base -> 具體錯誤類型）
 # -----------------------------------------------------------------------------
 
 
 class FinMindError(PipelineError):
-    """FinMind 相關錯誤的基底類別。"""
+    """FinMind 相關錯誤的基底類別"""
 
     @classmethod
     def is_quota_error(cls, exc: BaseException) -> bool:
-        """判斷例外是否為 FinMind API 配額用盡相關錯誤。
+        """
+        - Description:
+            判斷例外是否為 FinMind API 配額用盡
 
-        辨識條件（依序）：
-        1. KeyError('data')：配額用盡時 FinMind API 常回傳無 "data" 的 JSON，套件內會拋出 KeyError。
-        2. HTTP 402：FinMind API 配額用盡時回傳 402 (Payment Required / 用量超出上限)。
-        3. 訊息關鍵字：402、quota、rate limit、exceeded、配額（含 __cause__ 鏈）。
-
+            **配額用盡沒有單一明確的訊號**，故三種跡象依序比對，
+            並沿著 `__cause__` 鏈一路往下找：
+            1. `KeyError('data')`：配額用盡時回傳的 JSON 沒有 `data` 鍵，
+               FinMind 套件在 `pd.DataFrame(response["data"])` 就先炸了
+            2. HTTP 402（Payment Required／用量超出上限）
+            3. 訊息含 `402`、`quota`、`rate limit`、`exceeded`、`配額`
         - Parameters:
             - exc: BaseException
-                要檢查的例外（可為鏈狀 __cause__ 的根）。
+                要檢查的例外（可為鏈狀 `__cause__` 的根）
         - Return:
             - bool
-                True 若判定為配額相關錯誤，否則 False。
+                判定為配額相關錯誤為 True
         """
+
         err: Optional[BaseException] = exc
         seen: Set[int] = set()
 
@@ -104,12 +109,11 @@ class FinMindError(PipelineError):
 
 
 class FinMindQuotaExhaustedError(FinMindError):
-    """FinMind API 配額用盡。
+    """
+    FinMind API 配額用盡
 
-    可能情境：
-    - HTTP 402（用量超出上限，依 FinMind API 說明）
-    - API 回傳 JSON 無 "data" 鍵（FinMind 套件會拋出 KeyError('data')）
-    - 回應內容含 quota / rate limit / exceeded 等關鍵字
+    判定跡象見 `FinMindError.is_quota_error()`：HTTP 402、回應 JSON 無 `data` 鍵、
+    或訊息含 quota／rate limit／exceeded。
     """
 
     pass
@@ -119,8 +123,8 @@ class FinMindRequestError(FinMindError):
     """
     FinMind API 呼叫失敗（配額用盡以外的原因：連線錯誤、非預期回應）
 
-    **存在的理由是「失敗不可被當成沒有資料」**：crawler 舊版一律回 None，
-    updater 分不出「API 回空表」與「請求根本沒成功」，失敗會被記成 `NO_DATA`，
+    **存在的理由是「失敗不可被當成沒有資料」**：crawler 若一律回 None，
+    updater 就分不出「API 回空表」與「請求根本沒成功」，失敗會被記成 `NO_DATA`，
     行程以結束碼 0 成功結束。
     """
 
@@ -160,11 +164,12 @@ class FinMindPermissionError(FinMindRequestError):
 
 
 class IPBlockedError(PipelineError):
-    """連續多次建立 Session 失敗，本機 IP 多半已被交易所封鎖。
+    """
+    連續多次建立 Session 失敗，本機 IP 多半已被交易所封鎖
 
-    **存在的理由是「被擋」不能長得像「沒資料」**：舊版 `find_best_session()`
-    連續失敗後只印三行提示就回 `None`，呼叫端接著把 `None` 當成休市，
-    於是整段回補會安靜地跳過每一天，事後才發現資料整片缺失。
+    **存在的理由是「被擋」不能長得像「沒資料」**：`find_best_session()` 若在
+    連續失敗後回 `None`，呼叫端會把 `None` 當成休市，整段回補就安靜地跳過每一天，
+    事後才發現資料整片缺失。
 
     這是需要人介入（換 IP、重開數據機）才能解除的狀態，故用例外表達。
     """
@@ -172,6 +177,8 @@ class IPBlockedError(PipelineError):
     def __init__(
         self, url: str, attempts: int, last_error: Optional[str] = None
     ) -> None:
+        """記下被擋的 URL、嘗試次數與最後一次的錯誤訊息"""
+
         self.url: str = url
         self.attempts: int = attempts
         self.last_error: Optional[str] = last_error
@@ -182,7 +189,8 @@ class IPBlockedError(PipelineError):
 
 
 class UnbuildableSeriesError(PipelineError):
-    """有來源資料卻建不出衍生序列（例如連續合約排不出換月表）。
+    """
+    有來源資料卻建不出衍生序列（例如連續合約排不出換月表）
 
     與「來源根本沒資料」刻意分開：後者在回補未完成時是正常狀態，
     前者代表到期月代碼異常或交易日曆有問題，是真的出錯。
@@ -197,7 +205,8 @@ class UnbuildableSeriesError(PipelineError):
 
 
 class ColumnLayoutError(PipelineError):
-    """來源表格的欄位數與預期不符。
+    """
+    來源表格的欄位數與預期不符
 
     針對**依位置命名欄位**的來源（上櫃的多張表都不給欄名）：版面一改，
     位置命名會把每一欄都對到錯的名字——最低價變成成交量、成交金額變成收盤價
@@ -212,6 +221,8 @@ class ColumnLayoutError(PipelineError):
         actual: int,
         columns: Optional[List[Any]] = None,
     ) -> None:
+        """記下來源名稱、預期與實際欄位數，以及實際的欄位清單"""
+
         self.label: str = label
         self.expected: int = expected
         self.actual: int = actual
@@ -223,7 +234,8 @@ class ColumnLayoutError(PipelineError):
 
 
 class AnnouncementParseError(PipelineError):
-    """公告附件解析不了：空白、下載到錯誤頁，或保證金附件的版面改了。
+    """
+    公告附件解析不了：空白、下載到錯誤頁，或保證金附件的版面改了
 
     與「附件正常、只是沒有期貨列」（選擇權、部位限制公告）必須分開：後者寫進
     處理紀錄、以後不再下載；前者若也寫進去，這則公告就永遠不會再被重抓，
@@ -231,13 +243,16 @@ class AnnouncementParseError(PipelineError):
     """
 
     def __init__(self, announcement_date: Any, reason: str) -> None:
+        """記下公告日期與解析失敗的原因"""
+
         self.announcement_date: Any = announcement_date
         self.reason: str = reason
         super().__init__(f"{announcement_date} 公告附件解析失敗：{reason}")
 
 
 class CleanFailureError(PipelineError):
-    """部分來源的清洗失敗（版面改制），整批更新不算成功。
+    """
+    部分來源的清洗失敗（版面改制），整批更新不算成功
 
     版面改制是逐來源、逐期間隔離的——其餘期間仍該清洗入庫，否則一個異常年份
     會讓整段回補作廢。但整批跑完後若有任何清洗失敗，就必須讓行程非零結束：
@@ -246,6 +261,8 @@ class CleanFailureError(PipelineError):
     """
 
     def __init__(self, source: str, failures: List[str]) -> None:
+        """記下來源名稱與失敗的來源／期間清單"""
+
         self.source: str = source
         self.failures: List[str] = failures
         super().__init__(
@@ -259,7 +276,8 @@ class CleanFailureError(PipelineError):
 
 
 class DataLoadError(PipelineError):
-    """部分或全部檔案入庫失敗。
+    """
+    部分或全部檔案入庫失敗
 
     **存在的理由是「不讓失敗變成靜默」**：loader 逐檔入庫時，單一檔案失敗
     （撞主鍵、欄位不符、檔案損毀）不應中止整批——其餘檔案仍該入庫。
@@ -272,6 +290,8 @@ class DataLoadError(PipelineError):
     def __init__(
         self, source: str, failed_files: List[str], succeeded: int = 0
     ) -> None:
+        """記下來源名稱、失敗檔案清單與成功檔數"""
+
         self.source: str = source
         self.failed_files: List[str] = failed_files
         self.succeeded: int = succeeded
@@ -281,7 +301,8 @@ class DataLoadError(PipelineError):
 
 
 class SymbolNameConflictError(PipelineError):
-    """同一批資料裡，一個證券代號對到兩個以上的證券名稱。
+    """
+    同一批資料裡，一個證券代號對到兩個以上的證券名稱
 
     **這是「前導 0 被吃掉」在入庫當下唯一驗得出來的跡象**：`pd.read_csv()`／
     `read_html()` 只要看到某份檔案的代號全是數字就整欄推斷成整數，`006201`
@@ -297,6 +318,8 @@ class SymbolNameConflictError(PipelineError):
     """
 
     def __init__(self, label: str, conflicts: Dict[str, List[str]]) -> None:
+        """記下來源名稱與「證券代號 → 衝突的名稱清單」；訊息只列前 10 筆"""
+
         self.label: str = label
         self.conflicts: Dict[str, List[str]] = conflicts
         detail: str = "；".join(
@@ -314,7 +337,8 @@ class SymbolNameConflictError(PipelineError):
 
 
 class ProductUpdateError(PipelineError):
-    """部分商品更新失敗。
+    """
+    部分商品更新失敗
 
     **存在的理由與 `DataLoadError` 相同**：逐商品更新時，一個商品失敗（例如上市日
     晚於回補起點而觸發空產出保險絲）不應擋住其餘商品；但全部跑完後若有任何失敗，
@@ -324,6 +348,8 @@ class ProductUpdateError(PipelineError):
     """
 
     def __init__(self, failures: Dict[str, str], succeeded: int = 0) -> None:
+        """記下「商品代碼 → 失敗原因」與成功商品數"""
+
         self.failures: Dict[str, str] = failures
         self.succeeded: int = succeeded
         super().__init__(

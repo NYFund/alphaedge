@@ -72,9 +72,6 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.backtest.backtester", 5, "引擎層／引擎本體", False),
     ("core.backtest.factory", 6, "組裝層", False),
     ("core.backtest", 5, "引擎層（套件本身）", False),
-    # 策略「契約」（抽象基底與其套件門面）是引擎、factory、報表都要認得的介面，
-    # 與可插拔 model 同層；具體策略（momentum_strategy_1 等）才是策略層。
-    # 引擎若 import 到任何具體策略，仍會被列為反向相依
     # === 實盤（core/broker、core/execution、core/live）===
     # 券商閘道層：只可 import `core.config`／`core.utils`／`core.models`。
     # **不可 import `core.api`**——券商層不讀歷史資料，它只負責「把委託送出去、
@@ -106,6 +103,9 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 故與 `trader` 同級。放 4 會讓它對 oms／report／reconciler 產生一整排同層邊
     ("core.live.after_close", 5, "實盤／盤後作業", False),
     ("core.live.factory", 6, "組裝層", False),
+    # 策略「契約」（抽象基底與其套件門面）是引擎、factory、報表都要認得的介面，
+    # 與可插拔 model 同層；具體策略（momentum_strategy_1 等）才是策略層。
+    # 引擎若 import 到任何具體策略，仍會被列為反向相依
     ("core.strategies.base", 4, "策略契約", False),
     ("core.strategies.stock.base", 4, "策略契約", False),
     ("core.strategies.futures.base", 4, "策略契約", False),
@@ -122,10 +122,10 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
 
 # 已登錄、尚未修的反向相依。
 # 這是 ratchet：清單內的只列為「已知」，不影響結束碼；新出現的任何一條都會讓檢查失敗。
-# **修掉之後要把對應那條從本清單移除**，不要讓它長期留著
+# **修掉之後要把對應那條從本清單移除**，不要讓它長期留著。
+#
 # 空的是**目標狀態**：反向相依全部清掉了。再出現一條就是新欠的債，
-# 登記進來之前先想清楚能不能用搬家或刪死碼解掉——這三種手段在 2026-09-22
-# 把原本的 4 條清成 0 條，沒有一條是靠登記放行的
+# 登記進來之前先想清楚能不能用搬家、改注入或刪死碼解掉
 _KNOWN_REVERSE: Dict[Tuple[str, str], str] = {}
 
 # 非 core 的頂層套件：core/ 內任何一處 import 到它們都是反向相依
@@ -485,10 +485,10 @@ def check_db_driver_imports(files: List[Path]) -> List[str]:
     - Description:
         `core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 import 資料庫驅動
 
-        「SQL、連線與交易只寫在 DAO」原本只是慣例：DAO 重構前 `core/` 有 44 處
-        `sqlite3.connect`、updater 與 loader 各開一條連線且有些從不關閉。慣例擋不住
-        下一個人順手 `import sqlite3`，故改成檢查。型別標註請用 `core.dao.connection`
-        的 `DBConnection`，捕捉錯誤用 `DBError`。以 AST 判定，說明文字裡的字樣不算。
+        「SQL、連線與交易只寫在 DAO」不能只是慣例：慣例擋不住下一個人順手
+        `import sqlite3`，而散在各層的連線會出現沒人關閉、彼此搶鎖的情況。
+        型別標註請用 `core.dao.connection` 的 `DBConnection`，捕捉錯誤用 `DBError`。
+        以 AST 判定，說明文字裡的字樣不算。
     - Parameters:
         - files: List[Path]
             要掃的檔案
@@ -526,9 +526,9 @@ def check_pure_transform_layers(files: List[Path]) -> List[str]:
     - Description:
         純轉換層不得 import 資料層或資料庫驅動
 
-        「adapter 不做 I/O」原本只是慣例，而慣例擋不住下一個人照舊寫法再加一個
-        `convert_to_xxx(data_api, ...)`——那正是這些 entry point 原本的長相。
-        以 AST 判定，說明文字裡提到的字樣不算。
+        「adapter 不做 I/O」不能只是慣例：慣例擋不住下一個人再加一個
+        `convert_to_xxx(data_api, ...)`，轉換規則一旦綁死在某個 API 上，
+        換來源就得重寫一份。以 AST 判定，說明文字裡提到的字樣不算。
     - Parameters:
         - files: List[Path]
             要掃的檔案
@@ -565,10 +565,8 @@ def check_sys_path(files: List[Path]) -> List[str]:
         列出所有 sys.path 注入（**只認真的呼叫，不認文字**）
 
         以 AST 找 `sys.path.insert(...)`／`sys.path.append(...)` 的呼叫節點。
-        舊版用 `"sys.path.insert" in line` 逐行比對字串，於是**說明這件事的
-        docstring 也會被算成一處**——`sys.path` 注入全數清乾淨後，唯一剩下的那一筆
-        正是解釋「原本靠 sys.path.insert 硬塞」的那行註解。
-        護欄把自己的說明文字算成違規，就沒辦法拿它當「應為 0」的判準。
+        **不可改成逐行比對字串**：那會把說明這件事的註解與 docstring 也算成一處，
+        而護欄把自己的說明文字算成違規，就沒辦法拿它當「應為 0」的判準。
     - Parameters:
         - files: List[Path]
             要掃的檔案
@@ -606,6 +604,8 @@ def check_sys_path(files: List[Path]) -> List[str]:
 
 
 def main() -> int:
+    """跑完全部檢查並印出分區報告；有違規時回非零狀態碼"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="分層相依檢查"
     )

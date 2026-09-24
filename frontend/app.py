@@ -120,9 +120,8 @@ def _render_metrics(
     """
     關鍵指標**一律取自 reporter 落地的 CSV**
 
-    交易概況來自 `direction_summary.csv`；其餘全部來自 `metrics_summary.csv`
-    ——**前端不再自行重算任何一條公式**。同一個指標算在兩個地方，最後一定會
-    出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對。
+    交易概況來自 `direction_summary.csv`，其餘全部來自 `metrics_summary.csv`
+    ——**前端不自行重算任何一條公式**，否則同一個指標會出現兩個值而沒人知道哪個對。
     """
 
     overview = summarise_overview(df, direction_summary)
@@ -149,7 +148,7 @@ def _render_metrics(
     st.markdown("##### 損益與資產")
     r2c1, r2c2, r2c3 = st.columns(3)
     r2c1.metric("總已實現損益", _fmt_number(overview["total_pnl"]))
-    # `ROI` 欄本來就是百分比，**不再乘 100**
+    # `ROI` 欄本來就是百分比，**不可再乘 100**
     r2c2.metric("平均 ROI", _fmt_number(overview["avg_roi"], "%"))
     r2c3.metric("最後權益", _fmt_number(values.get("Final Equity")))
 
@@ -308,10 +307,9 @@ def _render_interactive_charts(df: pd.DataFrame, equity: pd.Series) -> None:
     """
     資產曲線與每日損益一律走 `daily_equity.csv`
 
-    舊版拿「依 `Sell Date` 排序的 `Cumulative Balance`」畫這兩張圖，有兩個問題：
-    `Sell Date` 對 SHORT 是**開倉日**，曲線不是依平倉順序長出來的；而已實現
-    損益的累積餘額只在平倉那天才有節點，持倉期間的逆勢被整段抹平——
-    那正是留倉放空最大的風險來源。
+    **不可改用「依 `Sell Date` 排序的 `Cumulative Balance`」**：`Sell Date` 對
+    SHORT 是開倉日，曲線不會依平倉順序長出來；而已實現損益的累積餘額只在平倉
+    那天才有節點，持倉期間的逆勢被整段抹平——那正是留倉放空最大的風險來源。
     """
 
     chart_theme = _get_chart_theme()

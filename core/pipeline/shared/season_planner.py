@@ -57,6 +57,16 @@ class SeasonProgressStore:
     """
 
     def __init__(self, source: str, path: Optional[Path] = None) -> None:
+        """
+        - Description:
+            建立進度檔並立即載入既有內容
+        - Parameters:
+            - source: str
+                資料來源代號，決定預設檔名與訊息前綴
+            - path: Optional[Path]
+                進度檔路徑；None 取 `no_data/{source}_season_progress.json`
+        """
+
         self.source: str = source
         self.path: Path = path or (
             DOWNLOADS_METADATA_DIR_PATH / "no_data" / f"{source}_season_progress.json"

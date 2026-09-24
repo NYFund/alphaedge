@@ -68,7 +68,7 @@ class FuturesCost(float, Enum):
 
 
 class MarginCost(float, Enum):
-    """融資（做多槓桿）相關成本常數，本階段僅定義不啟用"""
+    """融資（做多槓桿）相關成本常數；目前僅定義，回測尚未啟用融資"""
 
     FinancingRate = 0.0635  # 融資年利率（券商常見 6.15%~6.5%）
     ListedFinancingRatio = 0.6  # 上市股票融資成數

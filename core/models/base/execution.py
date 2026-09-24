@@ -296,10 +296,9 @@ class PendingAction:
     一筆跨日待辦（平倉單未成交、次日開盤段補平）
 
     **存在的理由是它要跨出 `core/live/`**：`LiveTrader` 會把它整個交給
-    **策略作者實作**的 `build_cover_order(action)`。原本傳的是資料列 dict，
-    等於把 `live_pending_action` 的 schema 變成策略層的公開契約，
-    而那個 schema 沒有任何型別定義——改一個欄位名就會無聲地弄壞每一支策略，
-    因為取不到的鍵只會安靜地變成 None。
+    **策略作者實作**的 `build_cover_order(action)`。改傳資料列 dict 就等於把
+    `live_pending_action` 的 schema 變成策略層的公開契約，而 dict 沒有型別定義——
+    改一個欄位名會無聲地弄壞每一支策略，因為取不到的鍵只會安靜地變成 None。
 
     **`action` 與 `position_type` 收 Enum**：兩者都是 `str` 子類，
     當字典鍵與字串比較都照舊，但拼錯的值在建立時就過不了。

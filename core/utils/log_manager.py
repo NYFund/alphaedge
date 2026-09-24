@@ -1,37 +1,28 @@
 """
 Log Manager：以 loguru 統一設定日誌
 
-**loguru 的 sink 預設收下整個行程的每一行**：本專案有 33 個
-`setup_logger()` 呼叫端，少了 `filter=` 的話，`core/api/` 的一次查詢會同時寫進
-`logs/api/`、`logs/pipeline/`、`logs/backtest/` 底下的**每一個**檔案。
-`logs/api/` 每天長約 100 MB，大部分不是 api 自己的日誌，是別人的。
+**loguru 的 sink 預設收下整個行程的每一行**：少了 `filter=` 的話，`core/api/`
+的一次查詢會同時寫進 `logs/api/`、`logs/pipeline/`、`logs/backtest/` 底下的
+**每一個**檔案，`logs/api/` 每天長約 100 MB 且大部分不是 api 自己的日誌。
 
-修法是**依「記錄從哪個套件發出」分桶**：api 桶只收 `core.api.*`、
-backtest 桶只收回測相關套件、pipeline 桶收其餘。這樣不需要改動任何一個
+故**依「記錄從哪個套件發出」分桶**：api 桶只收 `core.api.*`、
+backtest 桶只收回測相關套件、pipeline 桶收其餘。這樣不必改動任何一個
 `logger.info()` 呼叫端——若改用 `logger.bind(module=...)` 過濾，
 沒有 bind 的模組會**整批消失**，那比寫太多更糟。
 
 ⚠️ **同一個桶內的檔案仍會互收**（例如 `update_price.log` 也會收到
-`update_chip.log` 的內容）。要做到逐檔隔離必須讓每個呼叫端 bind 自己的名字，
-屬另一階段的工作；本次先把跨桶的重複拿掉，那是量體的主要來源。
+`update_chip.log` 的內容）。要做到逐檔隔離必須讓每個呼叫端 bind 自己的名字。
 
 ---
 
 **`watch=True`：檔案被刪掉之後要能重建**
 
 loguru 的 file sink 只在達到 `rotation` 條件時才重開檔案。目錄或檔案被外部
-刪掉時，handler 會繼續寫進一個**已 unlink 的 inode**——程序照跑、資料照寫、
-沒有任何錯誤，但日誌從此不可見。
+刪掉時（例如長時間回補途中有人 `rm -rf logs`），handler 會繼續寫進一個
+**已 unlink 的 inode**——程序照跑、資料照寫、`ERROR` 數 0，但日誌從此不可見。
 
-2026-09-03 19:12 實際發生過：驗證「pytest 不再產生 `logs/`」時執行了
-`rm -rf logs`，而當時台期貨行情回補已跑了 1 小時 32 分。`lsof` 顯示該程序的
-fd 仍指向 `logs/pipeline/update_futures_price.log`、已寫入 4.3 MB，
-但那個路徑在檔案系統上已不存在；程序毫無察覺地繼續跑完，`ERROR` 數 0。
-
-`tasks/clean_logs.py` 的 docstring 早就寫明了這個危害，但它只保護自己那條
-路徑——保護不了任何一次手動的 `rm -rf logs`。**把防線放進 sink 本身才涵蓋
-得到所有路徑**：`watch=True` 讓下一筆記錄重新建立檔案（含缺少的父目錄）。
-
+**防線要放進 sink 本身**才涵蓋得到所有路徑（`tasks/clean_logs.py` 只保護它自己
+那條）：`watch=True` 讓下一筆記錄重新建立檔案，含缺少的父目錄。
 已經寫進舊 inode 的內容救不回來，這個參數保證的是「之後不再繼續消失」。
 """
 
@@ -148,8 +139,9 @@ class LogManager:
             LogManager.setup_logger("update_tick.log")
             LogManager.setup_logger("backtest.log", log_dir=BACKTEST_LOGS_DIR_PATH)
         """
-        # 未指定時落在 pipeline 桶：29 個呼叫端裡多數是爬取／清洗／入庫，
-        # 這樣改動面最小。`core/api/` 一律自行帶入 API_LOGS_DIR_PATH（見 config.py）
+
+        # 未指定時落在 pipeline 桶：多數呼叫端是爬取／清洗／入庫。
+        # `core/api/` 一律自行帶入 `API_LOGS_DIR_PATH`
         if log_dir is None:
             log_dir: Path = PIPELINE_LOGS_DIR_PATH
 
@@ -175,9 +167,8 @@ class LogManager:
             enqueue=True,  # Thread-safe logging
             # 沒有 filter 的話，這個 sink 會收下整個行程的每一行
             filter=LogManager.build_bucket_filter(log_dir),
-            # **檔案被外部刪掉時要重建**（2026-09-03 事故，見模組說明）
+            # **檔案被外部刪掉時要重建**，否則會繼續寫進已 unlink 的 inode
             watch=True,
-            # **檔案被外部刪掉時要重建**（2026-09-03 事故，見模組說明）
         )
 
         # Track this log file as configured
@@ -206,6 +197,7 @@ class LogManager:
         Example:
             LogManager.setup_backtest_logger("momentum_strategy_1")
         """
+
         log_file: str = f"{strategy_name}.log"
         LogManager.setup_logger(
             log_file=log_file,
@@ -218,6 +210,7 @@ class LogManager:
     @staticmethod
     def remove_default_handler() -> None:
         """Remove the default loguru handler (console output)"""
+
         logger.remove()
 
     @staticmethod
@@ -237,6 +230,7 @@ class LogManager:
         Example:
             LogManager.add_console_handler(level="DEBUG")
         """
+
         logger.add(
             lambda msg: print(msg, end=""),
             format=format,
@@ -246,4 +240,5 @@ class LogManager:
     @staticmethod
     def get_logger() -> "Logger":
         """Get the loguru logger instance"""
+
         return logger

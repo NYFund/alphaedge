@@ -13,12 +13,12 @@ if TYPE_CHECKING:
 """
 回測圖表的產生與輸出
 
-**與報表產生分開**：`StockBacktestReporter` 原本一個類別裝了四種關注點
-（報表、指標、繪圖、對標序列），繪圖那一群是唯一可以整塊搬走而不動到其他三群的。
+**繪圖與報表產生分屬兩個類別**：`StockBacktestReporter` 負責報表、指標與對標序列，
+本檔只負責把那些資料畫成圖。
 
-**渲染器持有報表物件當資料來源**：畫圖要的權益序列、對標價格與帳戶狀態都在報表端，
-本步驟只搬繪圖程式碼、不動取值邏輯，所以用組合把資料留在原處。
-真要把介面收窄成「只吃畫圖需要的那幾個序列」，得逐張圖確認取值時機，屬另一件事。
+**渲染器以組合持有報表物件當資料來源**：權益序列、對標價格與帳戶狀態的取值時機
+都由報表端決定（例如口徑一律走 `get_equity_series()`）。介面刻意不收窄成
+「只吃畫圖需要的那幾個序列」，避免取值時機散進繪圖端而與報表口徑分歧。
 """
 
 
@@ -41,7 +41,6 @@ class EquityChartRenderer:
         basis: str
         equity, basis = self.reporter.get_equity_series()
 
-        # Plot Balance Curve
         fig: go.Figure = go.Figure()
         fig.add_trace(
             go.Scatter(
@@ -65,9 +64,8 @@ class EquityChartRenderer:
     def plot_balance_and_benchmark_curve(self) -> None:
         """繪製總資金 & benchmark 曲線圖"""
 
-        # === 清理 benchmark_price 數據 ===
-        # 移除缺失值和 0 值（0 值可能是數據錯誤或停牌），並確保索引唯一且排序
-        # 注意：股票收盤價不可能是負數，所以不需要特別檢查負數
+        # 剔除缺失值與 0（資料錯誤或停牌），並讓索引唯一且遞增；
+        # 收盤價不可能為負，故不另外檢查負數
         benchmark_price_clean: pd.Series = self.reporter.benchmark_price.copy()
         benchmark_price_clean = benchmark_price_clean[
             benchmark_price_clean.notna() & (benchmark_price_clean > 0)
@@ -81,7 +79,7 @@ class EquityChartRenderer:
             logger.warning("benchmark_price 數據異常，無法繪製 benchmark 曲線")
             return
 
-        # === 計算調整後價格（處理股票分割） ===
+        # 還原價；除權息、分割與減資都已併入還原係數，此處不再另外調整
         benchmark_price_adjusted: pd.Series = self.reporter.get_adjusted_price(
             benchmark_price_clean, self.reporter.benchmark
         )
@@ -103,27 +101,24 @@ class EquityChartRenderer:
             ]
         )
 
-        # === 策略權益資料（口徑由 get_equity_series 統一決定）===
+        # 權益口徑統一由 `get_equity_series()` 決定
         cumulative_balance: pd.Series
         basis: str
         cumulative_balance, basis = self.reporter.get_equity_series()
 
-        # === 整理 DataFrame 用來繪圖 ===
-        # 使用 benchmark 的所有交易日作為基準日期（確保日期對齊正確）
-        # benchmark 的日期通常是完整的交易日曆，所以用它作為基準更合理
+        # 以 benchmark 的日期為基準對齊：它是完整的交易日曆，策略只在有交易的
+        # 日子有節點，反過來對齊會漏掉沒交易的日子
         all_dates: pd.Index = benchmark_net_worth.index.sort_values()
 
-        # 將策略數據重新索引到 benchmark 的日期上，使用前向填充處理沒有交易的日期
+        # 沒交易的日子沿用前一日權益；首次交易之前沒有前值，補初始資金
         cumulative_balance_aligned: pd.Series = cumulative_balance.reindex(
             all_dates
         ).ffill()
-        # 如果仍有 NaN（例如在第一次交易之前的日期），用初始資金填充
         if cumulative_balance_aligned.isna().any():
             cumulative_balance_aligned = cumulative_balance_aligned.fillna(
                 self.reporter.account.init_capital
             )
 
-        # benchmark_net_worth 已經在 all_dates 上（因為 all_dates 就是從它的 index 來的），直接使用即可
         benchmark_net_worth_aligned: pd.Series = benchmark_net_worth
 
         networth_df: pd.DataFrame = pd.DataFrame(
@@ -134,7 +129,6 @@ class EquityChartRenderer:
             }
         )
 
-        # 計算報酬率 (ROI)
         strategy_roi: float = round(
             (cumulative_balance.iloc[-1] / self.reporter.account.init_capital - 1)
             * 100,
@@ -156,7 +150,6 @@ class EquityChartRenderer:
         if benchmark_note:
             roi_text += f"\nBenchmark series: {benchmark_note}"
 
-        # === 繪製圖表 ===
         fig: go.Figure = go.Figure()
         fig.add_trace(
             go.Scatter(
@@ -190,9 +183,8 @@ class EquityChartRenderer:
     def plot_balance_mdd(self) -> None:
         """繪製總資金 Max Drawdown"""
 
-        # === 清理 benchmark_price 數據 ===
-        # 移除缺失值和 0 值（0 值可能是數據錯誤或停牌），並確保索引唯一且排序
-        # 注意：股票收盤價不可能是負數，所以不需要特別檢查負數
+        # 剔除缺失值與 0（資料錯誤或停牌），並讓索引唯一且遞增；
+        # 收盤價不可能為負，故不另外檢查負數
         benchmark_price_clean: pd.Series = self.reporter.benchmark_price.copy()
         benchmark_price_clean = benchmark_price_clean[
             benchmark_price_clean.notna() & (benchmark_price_clean > 0)
@@ -206,13 +198,13 @@ class EquityChartRenderer:
             logger.warning("benchmark_price 數據異常，無法繪製 benchmark MDD")
             return
 
-        # === 計算調整後價格（處理股票分割） ===
+        # 還原價；除權息、分割與減資都已併入還原係數，此處不再另外調整
         benchmark_price_adjusted: pd.Series = self.reporter.get_adjusted_price(
             benchmark_price_clean, self.reporter.benchmark
         )
 
-        # === 計算 Benchmark 的 MDD (%) ===
-        # 使用調整後價格計算 MDD，這樣可以正確處理股票分割
+        # 以還原價計算 benchmark 的 MDD（%）；用原始價的話除權息跳空會被
+        # 當成真實回撤
         mdd_benchmark: pd.Series = (
             benchmark_price_adjusted / benchmark_price_adjusted.cummax() - 1
         ) * 100
@@ -225,35 +217,31 @@ class EquityChartRenderer:
             ]  # 起點 MDD 為 0%
         )
 
-        # === 策略權益資料（口徑由 get_equity_series 統一決定）===
+        # 權益口徑統一由 `get_equity_series()` 決定
         cumulative_balance: pd.Series
         basis: str
         cumulative_balance, basis = self.reporter.get_equity_series()
 
-        # === 整理 DataFrame 用來繪圖 ===
-        # 使用 benchmark 的所有交易日作為基準日期（確保日期對齊正確）
-        # benchmark 的日期通常是完整的交易日曆，所以用它作為基準更合理
+        # 以 benchmark 的日期為基準對齊：它是完整的交易日曆，策略只在有交易的
+        # 日子有節點，反過來對齊會漏掉沒交易的日子
         all_dates: pd.Index = mdd_benchmark.index.sort_values()
 
-        # 將策略數據重新索引到 benchmark 的日期上，使用前向填充處理沒有交易的日期
+        # 沒交易的日子沿用前一日權益；首次交易之前沒有前值，補初始資金
         cumulative_balance_aligned: pd.Series = cumulative_balance.reindex(
             all_dates
         ).ffill()
-        # 如果仍有 NaN（例如在第一次交易之前的日期），用初始資金填充
         if cumulative_balance_aligned.isna().any():
             cumulative_balance_aligned = cumulative_balance_aligned.fillna(
                 self.reporter.account.init_capital
             )
 
-        # 在對齊後的日期上計算策略的 MDD。
         # **公式與 `metrics_summary.csv` 的 `Max Drawdown (%)` 共用同一個函式**：
-        # 兩處各寫一份必然漂移（MDD 曾經就有 reporter 與前端兩份實作）
+        # 圖與報表各寫一份必然漂移
         mdd_balance: pd.Series = pd.Series(
             compute_drawdown_series(cumulative_balance_aligned.astype(float).tolist()),
             index=cumulative_balance_aligned.index,
         )
 
-        # mdd_benchmark 已經在 all_dates 上（因為 all_dates 就是從它的 index 來的），直接使用即可
         mdd_benchmark_aligned: pd.Series = mdd_benchmark
 
         mdd_df: pd.DataFrame = pd.DataFrame(
@@ -264,7 +252,6 @@ class EquityChartRenderer:
             }
         )
 
-        # === 繪製圖表 ===
         fig: go.Figure = go.Figure()
         fig.add_trace(
             go.Scatter(
@@ -285,7 +272,6 @@ class EquityChartRenderer:
             )
         )
 
-        # 設置圖表配置 (MDD)
         self.set_figure_config(
             fig,
             title=f"MDD ({self.reporter.start_date.strftime('%Y/%m/%d')} ~ {self.reporter.end_date.strftime('%Y/%m/%d')})",
@@ -303,13 +289,11 @@ class EquityChartRenderer:
         本圖只在平倉當天有數值，持倉期間一律為 0。
         """
 
-        # 轉換 Exit Date 為 datetime 格式
         profit_df: pd.DataFrame = self.reporter.trading_report[
             ["Exit Date", "Realized PnL"]
         ].copy()
         profit_df["Exit Date"] = pd.to_datetime(profit_df["Exit Date"])
 
-        # 群組並計算每日總損益
         daily_profit: pd.DataFrame = (
             profit_df.groupby(profit_df["Exit Date"].dt.date)["Realized PnL"]
             .sum()
@@ -317,7 +301,6 @@ class EquityChartRenderer:
             .rename(columns={"Exit Date": "Date", "Realized PnL": "Daily PnL"})
         )
 
-        # 建立 bar chart
         fig: go.Figure = go.Figure()
         fig.add_trace(
             go.Bar(
@@ -328,7 +311,6 @@ class EquityChartRenderer:
             )
         )
 
-        # 設置圖表配置
         self.set_figure_config(
             fig,
             title=f"Everyday Profit ({self.reporter.EQUITY_BASIS_REALIZED_ONLY})",
@@ -394,19 +376,18 @@ class EquityChartRenderer:
         """
         設置繪圖配置
 
-        `show` 不指定時跟隨 reporter 的設定（見 `resolve_show_figures()`）——
-        舊版寫死 `True`，每跑一次回測就在瀏覽器彈出 5 個分頁。
+        `show` 不指定時跟隨 reporter 的設定（`resolve_show_figures()`）；
+        無條件開圖會讓批次回測一次在瀏覽器彈出數十個分頁。
         """
 
-        # Layout setting
         fig.update_layout(
             title=title,
             xaxis_title=xaxis_title,
             yaxis_title=yaxis_title,
             xaxis=dict(
                 showgrid=True,
-                gridcolor="lightgrey",  # 黑色格線
-                gridwidth=0.5,  # 可微調線條粗細
+                gridcolor="lightgrey",
+                gridwidth=0.5,
                 zeroline=False,
             ),
             yaxis=dict(
@@ -416,7 +397,6 @@ class EquityChartRenderer:
             paper_bgcolor="white",
         )
 
-        # Annotation setting
         if fig_text != "":
             fig.add_annotation(
                 xref="paper",
@@ -437,13 +417,13 @@ class EquityChartRenderer:
                 opacity=0.5,
             )
 
-        # Show figure
         if self.reporter.show if show is None else show:
             fig.show(renderer="browser")
 
     def save_figure(self, fig: go.Figure, file_name: str = "") -> None:
         """
-        - Description: 儲存回測報告
+        - Description:
+            儲存回測報告
         - Parameters:
             - fig: go.Figure
                 要儲存的圖表
@@ -454,15 +434,12 @@ class EquityChartRenderer:
         if not file_name:
             raise ValueError("file_name 不能是空字串")
 
-        # 決定輸出路徑
         if self.reporter.output_dir is not None:
             save_path: Path = self.reporter.output_dir / file_name
         else:
             save_path: Path = Path(file_name)
 
-        # 確保資料夾存在
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 輸出圖片
         fig.write_image(str(save_path))
         logger.info(f"* Figure saved to: {save_path}")

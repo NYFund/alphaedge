@@ -24,9 +24,9 @@ from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
-資料區間
-- 上市: 102（2013）年前資料無區分國內外（目前先從 102 年開始爬）
-- 上櫃: 102（2013）年前資料無區分國內外（目前先從 102 年開始爬）
+月營收報表更新
+
+資料區間：上市與上櫃在 102（2013）年前皆未區分國內外營收，故一律自 102 年起爬。
 """
 
 
@@ -66,7 +66,6 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        # 設定 log 檔案儲存路徑
         LogManager.setup_logger("update_monthly_revenue_report.log")
 
     def close(self) -> None:
@@ -133,7 +132,6 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         # Step 3: Load
         self.loader.add_to_db(remove_files=False)
 
-        # 更新後重新取得最新年月
         latest: Optional[Tuple[int, int]] = self.dao.get_latest_year_month()
 
         if latest is not None:
@@ -155,9 +153,8 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
             算出這次要請求的年月：區間內所有年月 − 表內**已收齊**的年月
 
             **不可用「表內最新年月 +1」起跑**：中間某個月失敗被跳過之後，只要
-            下一個月成功入庫，`MAX` 就越過它，那個月從此不會再被請求。財報三表
-            已改成差集，月營收沒有跟進——`docs/pipeline/etl-ingestion.md` 的對照表
-            寫的也是差集，程式與文件在此之前不一致。
+            下一個月成功入庫，`MAX` 就越過它，那個月從此不會再被請求。
+            財報三表（`FinancialStatementUpdater`）同樣走差集，理由相同。
 
             **不可用 years × months 的笛卡兒積**：起點 2025/03、終點 2026/12 時
             `months` 只會是 [3..12]，2026/01 與 2026/02 不會被爬；起點月份大於

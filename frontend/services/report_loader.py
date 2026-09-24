@@ -29,9 +29,9 @@ except ModuleNotFoundError:
 回測報表的讀取與彙總
 
 **前端只讀不算**：指標一律來自 reporter 已落地的 CSV，不在前端另寫一份公式。
-舊版 `app.py` 自行重算，四個地方與 reporter 不同源：
+前端自行重算時，四個地方會與 reporter 不同源：
 
-1. `平均 ROI` 把已是百分比的 `ROI` 欄再乘 100（實測 0.82% 顯示成 82.1%）。
+1. `平均 ROI` 把已是百分比的 `ROI` 欄再乘 100（0.82% 會顯示成 82.1%）。
 2. 資產曲線與日報酬以 `Sell Date` 排序——**SHORT 的 `Sell Date` 是開倉日**，
    曲線因此不是依平倉順序長出來的。
 3. 權益用「已實現損益的累積餘額」而不是報表的盯市 `daily_equity`，
@@ -70,9 +70,9 @@ def list_strategy_dirs(results_root: Path) -> List[Path]:
     列出結果根目錄底下的回測策略資料夾
 
     **只列出有 trading report CSV 的資料夾**，不靠排除清單：結果根目錄底下還有
-    `logs/`、實盤輸出 `live/` 等非回測資料夾，以前只排除 `logs`，`live` 就在
-    下拉選單裡顯示成一支策略，選了之後停在「找不到 trading report CSV」。
-    排除清單每多一種輸出就要記得補一次，判斷「有沒有報表」則不會漏。
+    `logs/`、實盤輸出 `live/` 等非回測資料夾，漏掉哪一個就會在下拉選單裡顯示成
+    一支策略，選了之後停在「找不到 trading report CSV」。排除清單每多一種輸出
+    就要記得補一次，判斷「有沒有報表」則不會漏。
     """
 
     if not results_root.exists() or not results_root.is_dir():
@@ -97,6 +97,8 @@ def _pick_first_match(base_dir: Path, patterns: List[str]) -> Optional[Path]:
 
 
 def load_backtest_report(strategy_dir: Path) -> BacktestReport:
+    """收齊一個策略資料夾內的報表與圖檔路徑；缺哪一份就是 None"""
+
     csv_path = _pick_first_match(strategy_dir, CSV_FILE_CANDIDATES)
     chart_paths = {
         chart_name: _pick_first_match(strategy_dir, patterns)
@@ -123,12 +125,13 @@ def _read_csv(csv_path: Optional[Path]) -> pd.DataFrame:
 
     if csv_path is None or not csv_path.exists():
         return pd.DataFrame()
-    # 產出檔多為 UTF-8-SIG，讀取時優先用 utf-8-sig
+    # reporter 落地的 CSV 帶 BOM，一律以 utf-8-sig 讀
     return pd.read_csv(csv_path, encoding="utf-8-sig")
 
 
 def read_trading_report(csv_path: Path) -> pd.DataFrame:
-    # 產出檔多為 UTF-8-SIG，讀取時優先用 utf-8-sig
+    """讀交易明細；檔案由呼叫端確認存在"""
+
     return pd.read_csv(csv_path, encoding="utf-8-sig")
 
 
@@ -149,11 +152,9 @@ def read_metrics_summary(csv_path: Optional[Path]) -> pd.DataFrame:
     讀整體績效指標（`Metric`／`Value`／`Note` 長表）
 
     **這一份是前端所有風險指標的唯一來源**：Sharpe、Sortino、MDD、波動度、
-    Profit Factor、勝敗比、IR 全部取自它，前端不再自行重算任何一條公式
-    ——同一個指標算在兩個地方，最後一定會出現「報表說 1.2、前端說 0.8」
-    而沒有人知道哪個對。
+    Profit Factor、勝敗比、IR 全部取自它，前端不自行重算任何一條公式。
 
-    改名之前產出的結果資料夾沒有這份檔案，此時回空表，由呼叫端顯示 `N/A`
+    舊版產出的結果資料夾沒有這份檔案，此時回空表，由呼叫端顯示 `N/A`
     並提示重跑回測。
     """
 
@@ -200,9 +201,8 @@ def extract_starting_capital(trading_df: pd.DataFrame) -> Optional[float]:
     - Description:
         由交易明細回推初始資金 ＝ **首列 `Cumulative Balance` − 首列 `Realized PnL`**
 
-        舊版直接取首列 `Cumulative Balance` 當初始資金，那是**第一筆交易結束後**
-        的餘額，已經含了第一筆的損益，於是「起始資金」永遠是錯的
-        （fixture 實測差 11,269）。
+        **不可直接取首列 `Cumulative Balance`**：那是第一筆交易**結束後**的餘額，
+        已經含了第一筆的損益，拿它當起始資金永遠偏掉一筆。
     - Parameters:
         - trading_df: pd.DataFrame
             交易明細
@@ -286,8 +286,8 @@ def summarise_overview(
 
         有多空兩列時依 `Trades` 加權合併（勝率與平均 ROI 是比率，直接相加沒有意義）。
         沒有這份檔案才退回交易明細自行彙總，此時 **`ROI` 欄已經是百分比、
-        不可再乘 100**——舊版前端就是這樣把平均 ROI 放大 100 倍。兩條路徑在同一份報表上必須給
-        出相同的數字，由 `tests/test_frontend_report_loader.py` 盯住。
+        不可再乘 100**，否則平均 ROI 會被放大 100 倍。兩條路徑在同一份報表上
+        必須給出相同的數字，由 `tests/test_frontend_report_loader.py` 盯住。
     - Parameters:
         - trading_df: pd.DataFrame
             交易明細
@@ -360,8 +360,7 @@ def sort_by_exit_date(trading_df: pd.DataFrame) -> pd.DataFrame:
 
         ⚠️ **必須用穩定排序**（`kind="stable"`）：`Cumulative Balance` 是
         reporter 依列序累加出來的，同一天平倉的多筆之間有先後關係。pandas 的
-        預設 `quicksort` 不穩定，會把同日的那幾筆打亂，累積餘額就在那一天內
-        來回跳——實測本 fixture 在第 60 列就開始對不上。
+        預設 `quicksort` 不穩定，會把同日的那幾筆打亂，累積餘額就在那一天內來回跳。
     - Parameters:
         - trading_df: pd.DataFrame
             交易明細

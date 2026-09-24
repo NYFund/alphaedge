@@ -14,9 +14,9 @@ from core.utils.constant import FileEncoding
 """
 券商分點統計表的入庫：DataFrame 直入與 CSV 目錄批次兩條路徑
 
-兩條路徑都交給資料庫的主鍵約束去重（`INSERT OR IGNORE`）。舊版先把「已存在的鍵」
-查回記憶體再比對，再以 `DataFrame.to_sql` 追加——**`to_sql` 寫完會自行 commit**，
-於是批次更新傳的 `commit=False` 從來沒有生效；且以 `pd.read_sql_query` 查詢失敗時
+兩條路徑都交給資料庫的主鍵約束去重（`INSERT OR IGNORE`），**不可改回「先把已存在的鍵
+查回記憶體再比對、再以 `DataFrame.to_sql` 追加」**：`to_sql` 寫完會自行 commit，
+批次更新傳的 `commit=False` 會因此完全失效；且 `pd.read_sql_query` 查詢失敗時
 pandas 會對整條連線 `rollback()`，把尚未 commit 的前幾個組合一起丟掉。
 """
 
@@ -62,8 +62,8 @@ def load_from_dataframe(
             實際新寫入的列數（主鍵已存在的列不計）
     - Raise:
         - DataLoadError
-            寫入失敗。**不再回 0**：舊版失敗後回 0，呼叫端把 0 當成「本批皆為重複」
-            而回報 SUCCESS，於是入庫失敗被算成成功
+            寫入失敗。**失敗時不可改成回 0**：呼叫端會把 0 當成「本批皆為重複」
+            而回報 SUCCESS，入庫失敗就被算成成功
     """
 
     if df is None or df.empty:
@@ -205,9 +205,9 @@ def load_from_files(conn: DBConnection, finmind_dir: Path) -> None:
                     )
 
             except Exception as e:
-                # **失敗不再算成 skipped**：兩者混在一起時，
+                # **失敗與 skipped 分開計數**：混在一起時，
                 # 「今天有 300 檔沒入庫」與「今天有 300 檔本來就沒新資料」
-                # 在 log 裡長得一模一樣。單檔失敗仍不中止整批（其餘券商照跑），
+                # 在 log 裡長得一模一樣。單檔失敗不中止整批（其餘券商照跑），
                 # 但跑完會由 `finish_load()` 拋出。
                 logger.opt(exception=True).error(
                     f"Error loading {broker_id}/{stock_id}.csv: {e}",

@@ -109,13 +109,11 @@ class FuturesStockUniverseCleaner(BaseDataCleaner):
         """
         - Description:
             標的一覽表的清洗
-
         - Parameters:
             - df: pd.DataFrame
                 crawler 取得的原始表格
             - snapshot_date: datetime.date
                 快照日期（＝ 執行日，不是資料日期）
-
         - Return:
             - Optional[pd.DataFrame]
                 清洗後的 DataFrame；欄位數不符或無有效資料時回傳 None
@@ -160,7 +158,8 @@ class FuturesStockUniverseCleaner(BaseDataCleaner):
         df["product_type"] = contract_size.map(STOCK_FUTURES_TYPE_BY_CONTRACT_SIZE)
 
         aligned_df: pd.DataFrame = df.reindex(columns=self.universe_cleaned_cols)
-        # 交易時段的 `-` 代表沒有該時段，須以 NULL 表達，見本檔說明第 4 點
+        # 交易時段的 `-` 代表沒有該時段，須以 NULL 表達：填 0 或空字串會讓
+        # 「沒有夜盤」與「夜盤時段未知」混為一談
         aligned_df[["day_session_time", "night_session_time"]] = aligned_df[
             ["day_session_time", "night_session_time"]
         ].replace(self.NULL_TOKENS, pd.NA)

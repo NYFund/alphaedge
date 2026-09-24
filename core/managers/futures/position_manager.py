@@ -24,14 +24,14 @@ FuturesPositionManager: 期貨部位管理（口數、保證金、逐日盯市�
 1. **開倉只凍結保證金，不買下契約價值**。股票買進是把錢換成股票；期貨開倉只從
    可動用餘額移出保證金，契約價值本身不動用資金。
 2. **逐日盯市**。每個交易日以結算價結清當日損益，現金當天就進出帳戶，
-   部位的 `price` 隨之重設為結算價。`settle_daily()` 是 `BasePositionManager`
-   早就留好的掛點（股票側為 no-op）。
+   部位的 `price` 隨之重設為結算價；掛點是 `BasePositionManager.settle_daily()`
+   （股票側為 no-op）。
 3. **沒有證交稅、沒有股數換算**。PnL = 價格變動 × 乘數 × 口數，方向由多空決定。
 """
 
 
-# **本體已搬到 `core/models/futures/margin_config.py`**：它是純設定、沒有部位行為，
-# 而四個不同層的呼叫端都只要這個 dataclass。此處 re-export 保住既有 import 路徑
+# `FuturesMarginConfig` 是純設定、沒有部位行為，本體放在
+# `core.market.tw.futures_margin_config`；此處 re-export 供既有 import 路徑取用
 __all__ = ["FuturesMarginConfig", "FuturesPositionManager"]
 
 
@@ -78,6 +78,7 @@ class FuturesPositionManager(BasePositionManager):
 
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Futures Position Manager"""
+
         pass
 
     # === 共用計算 ===
@@ -92,10 +93,10 @@ class FuturesPositionManager(BasePositionManager):
             （`FUTURES_MULTIPLIER`），股票期貨的「契約單位」會隨除權息被交易所
             調整，必須查**當時**的快照——故本方法一定要帶日期。
 
-            解析工作本身不在這一層：`TwFuturesDataFeed.resolve_multiplier()`
-            早就做對了（它持有標的池的連線），本層只是把它接上。舊版在此重新查一次
-            `FUTURES_MULTIPLIER`，股期不在常數表內，**第一筆開倉就 KeyError**、
-            整場回測中斷——DataFeed 那半邊接好了，部位管理這半邊沒有。
+            解析工作不在這一層：持有標的池連線的
+            `TwFuturesDataFeed.resolve_multiplier()` 才查得到股期的契約單位，
+            本層只是把它接上。直接查 `FUTURES_MULTIPLIER` 的話，股期不在常數表內，
+            第一筆開倉就會 KeyError。
 
             **查不到一律讓它中斷，不退回近似值**：乘數猜錯不會有任何徵兆，
             只會讓整條 PnL 靜默偏掉，那比中斷難查得多。
@@ -343,7 +344,7 @@ class FuturesPositionManager(BasePositionManager):
         - Description:
             期貨損益：**價格變動 × 乘數 × 口數**，方向由多空決定
 
-            這是本步驟的驗收公式；沒有股數換算、沒有證交稅。
+            沒有股數換算、也沒有證交稅。
         - Parameters:
             - position_type: PositionType
                 部位方向
@@ -358,9 +359,9 @@ class FuturesPositionManager(BasePositionManager):
                 損益（未扣交易成本）
         """
 
-        # **一律走成本模型**：同一條公式原本在這裡與
-        # `FuturesCostModel.realized_pnl()` 各寫一份，兩邊都對只是巧合——
-        # 哪天有人改了乘數或方向的處理，另一邊不會跟著改，也不會有測試失敗
+        # **一律走成本模型**：損益公式只留 `FuturesCostModel.realized_pnl()` 一份。
+        # 本層若自己再算一次，改動乘數或多空方向的處理時另一邊不會跟著改，
+        # 也不會有測試失敗，兩份必然漂移
         return self.cost_model.realized_pnl(
             entry_price=entry_price,
             exit_price=exit_price,
@@ -426,14 +427,12 @@ class FuturesPositionManager(BasePositionManager):
             )
             return None
 
-        # 同一契約不允許同時持有反向部位（判準沿用股票端「同標的不得雙向持倉，反之亦然」，
-        # 股票端已補上對稱檢查）。**期貨端漏了這條**：
-        # 同契約多空並存時，`get_open_lots()` 把兩邊相抵成淨口數（＝曝險為 0），
-        # 但 `margin_used` 卻各佔一份原始保證金——帳上「沒有曝險卻押著兩份保證金」，
+        # 同一契約不允許同時持有反向部位（與股票端「同標的不得雙向持倉」同一判準）。
+        # 多空並存時 `get_open_lots()` 會把兩邊相抵成淨口數（＝曝險為 0），
+        # 但 `margin_used` 仍各佔一份原始保證金——帳上「沒有曝險卻押著兩份保證金」，
         # 而交易所對沖部位只收單邊，可開口數因此被系統性低估。
-        # 擋在開倉端而不是去模擬保證金減收：TAIFEX 的**價差部位保證金**是另一套
-        # 費率表，本專案沒有該資料源，
-        # 硬寫一個比率只是用一個猜測換掉另一個猜測。
+        # **擋在開倉端而不去模擬保證金減收**：TAIFEX 的價差部位保證金是另一套費率表，
+        # 本專案沒有該資料源，硬寫一個比率只是用一個猜測換掉另一個猜測
         opposite_type: PositionType = (
             PositionType.SHORT
             if order.position_type == PositionType.LONG

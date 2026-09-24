@@ -32,9 +32,9 @@ from core.utils import ShioajiAPI
 
 
 class StockTickUtils:
-    """Tick DolphinDB Tools"""
+    """台股 tick 的下載進度工具：掃描中繼檔並維護 `tick_metadata.json`"""
 
-    # 類級別的鎖，用於保護 metadata 文件的讀寫操作
+    # 類別層級的鎖：多執行緒下載時保護 metadata 檔的讀寫
     _metadata_lock: Lock = Lock()
 
     # 無法從 metadata 取得日期時的預設 fallback 日期
@@ -47,7 +47,8 @@ class StockTickUtils:
         time_data: Dict[str, Any] = DataUtils.load_json(TICK_METADATA_PATH)
         if time_data is None:
             return StockTickUtils.TICK_DEFAULT_FALLBACK_DATE
-        # 從所有股票中找出最新的日期
+
+        # 各股票的進度不一定同步，取全部之中最新的那一天
         latest_date: Optional[datetime.date] = None
         for stock_info in time_data.get("stocks", {}).values():
             if "last_date" in stock_info:
@@ -62,11 +63,9 @@ class StockTickUtils:
     def generate_tick_metadata_backup() -> None:
         """建立 tick_metadata 的備份檔案"""
 
-        # 如果檔案不存在，先創建一個預設的 metadata 檔案
+        # 首次執行時 metadata 還不存在，先補一份空的，`copy2` 才有東西可備份
         if not TICK_METADATA_PATH.exists():
-            # 確保目錄存在
             TICK_METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
-            # 創建預設的 metadata 檔案（新格式）
             default_metadata: Dict[str, Dict[str, Any]] = {"stocks": {}}
             DataUtils.save_json(
                 default_metadata, TICK_METADATA_PATH, ensure_ascii=False, indent=4
@@ -80,7 +79,17 @@ class StockTickUtils:
 
     @staticmethod
     def setup_shioaji_apis() -> List[ShioajiAPI]:
-        # Add API from 11 ~ 17 and add API_1 (Mine)
+        """
+        - Description:
+            依設定檔中的金鑰組建立所有 Shioaji API 連線
+
+            逐筆行情有每把金鑰的請求上限，故備多組金鑰輪流下載；
+            金鑰與密鑰以 `zip` 配對，數量不一致時以短的那一邊為準。
+        - Return:
+            - List[ShioajiAPI]
+                依設定順序建立的 API 清單
+        """
+
         api_list: List[ShioajiAPI] = []
         for key, secret in zip(API_KEYS, API_SECRET_KEYS):
             api: ShioajiAPI = ShioajiAPI(key, secret)
@@ -94,18 +103,17 @@ class StockTickUtils:
 
         - Return:
             - Dict[str, str]
-                股票代號 -> 最後一筆資料日期 (YYYY-MM-DD 格式)
+                股票代號 -> 最後一筆資料日期（`YYYY-MM-DD`）
         """
+
         stock_last_dates: Dict[str, str] = {}
 
-        # 確保資料夾存在
         if not TICK_DOWNLOADS_PATH.exists():
             logger.warning(
                 f"Tick downloads folder does not exist: {TICK_DOWNLOADS_PATH}"
             )
             return stock_last_dates
 
-        # 掃描所有 CSV 檔案
         csv_files: List[Path] = list(TICK_DOWNLOADS_PATH.glob("*.csv"))
         logger.info(f"Scanning {len(csv_files)} CSV files in tick downloads folder...")
 
@@ -113,14 +121,14 @@ class StockTickUtils:
             stock_id: str = csv_file.stem  # 取得檔名（不含副檔名）作為股票代號
 
             try:
-                # 讀取 CSV 檔案（只讀取 time 欄位以提升效能）
+                # 只讀 `time` 欄：單檔 tick 動輒數十萬列，整份讀進來純屬浪費
                 df: pd.DataFrame = pd.read_csv(csv_file, usecols=["time"])
 
                 if df.empty:
                     logger.warning(f"File {csv_file.name} is empty. Skipping.")
                     continue
 
-                # 取得最後一筆資料的時間
+                # tick 依時間遞增寫入，最後一列即當檔最新的一筆
                 last_time_str: str = df["time"].iloc[-1]
 
                 # 解析時間字串（格式：YYYY-MM-DD HH:MM:SS.ffffff）
@@ -147,14 +155,14 @@ class StockTickUtils:
     @staticmethod
     def update_tick_metadata_from_csv() -> None:
         """
-        掃描 tick 下載資料夾並更新 tick_metadata.json 中的股票資訊
-        記錄每個已下載檔案的股票代號和最後一筆資料的日期
-        此函數會保留舊的 metadata，只更新有 CSV 檔案的股票資訊
-        在更新前會先備份現有的 tick_metadata.json 到 tick_metadata_backup.json
+        掃描 tick 下載資料夾，把各股票最後一筆資料的日期寫回 `tick_metadata.json`
 
-        此方法使用線程安全的鎖機制來保護 metadata 文件的讀寫操作
+        **只更新有 CSV 檔案的股票，其餘沿用舊值**：下載是分批進行的，
+        以本次掃描的結果整份覆寫會讓沒排到的股票憑空倒退回未下載狀態。
+        寫入前先備份成 `tick_metadata_backup.json`，並以暫存檔 rename 達成原子性；
+        整段以類別層級的鎖保護，多執行緒下載時才不會互相蓋掉。
 
-        產生的 JSON Schema 範例：
+        產生的 JSON 結構：
         {
             "stocks": {
                 "2330": {
@@ -162,23 +170,18 @@ class StockTickUtils:
                 },
                 "2317": {
                     "last_date": "2024-01-20"
-                },
-                "2454": {
-                    "last_date": "2024-01-18"
                 }
             }
         }
 
-        說明：
-        - stocks: 物件，key 為股票代號（字串），value 為該股票的資訊物件
-        - last_date: 字串，格式為 YYYY-MM-DD，表示該股票 CSV 檔案中最後一筆資料的日期
+        - stocks：key 為股票代號（字串），value 為該股票的資訊物件
+        - last_date：該股票 CSV 中最後一筆資料的日期，格式 `YYYY-MM-DD`
         """
-        # 使用線程安全的鎖來保護 metadata 更新操作
+
         with StockTickUtils._metadata_lock:
-            # 確保目錄存在
             TICK_METADATA_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-            # 備份現有的 metadata（如果存在）
+            # 備份失敗只記 warning：備份是保險，不該讓本次更新整個做不成
             backup_path: Path = TICK_METADATA_DIR_PATH / "tick_metadata_backup.json"
             if TICK_METADATA_PATH.exists():
                 try:
@@ -187,32 +190,29 @@ class StockTickUtils:
                 except Exception as e:
                     logger.warning(f"Failed to backup tick_metadata.json: {e}")
 
-            # 讀取現有的 metadata（保留舊資料）
             existing_metadata: Dict[str, Dict[str, str]] = (
                 StockTickUtils.load_tick_metadata_stocks()
             )
 
-            # 掃描資料夾，取得所有 CSV 檔案中的股票資訊
             stock_last_dates: Dict[str, str] = (
                 StockTickUtils.scan_tick_downloads_folder()
             )
 
-            # 保留舊的 metadata，只更新有 CSV 檔案的股票
+            # 舊值打底、本次掃到的才覆蓋：沒排到的股票不可憑空倒退回未下載
             metadata: Dict[str, Any] = {
                 "stocks": existing_metadata.copy() if existing_metadata else {}
             }
             for stock_id, last_date in stock_last_dates.items():
                 metadata["stocks"][stock_id] = {"last_date": last_date}
 
-            # 寫入更新後的 metadata（使用臨時文件確保原子性）
+            # 先寫暫存檔再 rename：寫到一半中斷時，原檔仍是完整的上一版
             temp_path: Path = TICK_METADATA_PATH.with_suffix(".tmp")
             try:
                 DataUtils.save_json(metadata, temp_path, ensure_ascii=False, indent=4)
-                # 原子性操作：將臨時文件移動到目標位置
                 temp_path.replace(TICK_METADATA_PATH)
                 logger.info("Successfully updated tick_metadata.json")
             except Exception as e:
-                # 如果寫入失敗，刪除臨時文件。
+                # 寫入失敗就清掉暫存檔。
                 # **只吞檔案系統的錯**：清不掉暫存檔不該蓋掉真正的失敗原因，
                 # 而裸 except 連 KeyboardInterrupt 都吞得下去
                 try:
@@ -231,30 +231,23 @@ class StockTickUtils:
     @staticmethod
     def load_tick_metadata_stocks() -> Dict[str, Dict[str, str]]:
         """
-        讀取 tick_metadata.json 中的股票資訊（線程安全）
+        讀取 `tick_metadata.json` 中的股票資訊（以鎖保護，可在多執行緒下呼叫）
 
         - Return:
             - Dict[str, Dict[str, str]]
-                股票代號 -> 股票資訊（包含 last_date）
+                股票代號 -> 該股票的資訊（目前只有 `last_date`）；
+                檔案不存在或讀取失敗時回空字典
 
-        回傳格式範例：
-        {
-            "1101": {
-                "last_date": "2024-05-15"
-            },
-            "1102": {
-                "last_date": "2024-05-15"
-            },
-            "2330": {
-                "last_date": "2024-01-15"
-            }
-        }
-
-        說明：
-        - 外層 key: 股票代號（字串）
-        - 內層 value: 包含 last_date 的字典，last_date 格式為 YYYY-MM-DD
-        - 如果檔案不存在或讀取失敗，回傳空字典 {}
+                {
+                    "1101": {
+                        "last_date": "2024-05-15"
+                    },
+                    "2330": {
+                        "last_date": "2024-01-15"
+                    }
+                }
         """
+
         with StockTickUtils._metadata_lock:
             if not TICK_METADATA_PATH.exists():
                 return {}
@@ -273,9 +266,11 @@ class StockTickUtils:
     @staticmethod
     def check_date_crawled(stock_id: str, date: datetime.date) -> bool:
         """
-        檢查某個股票的某個日期是否已經爬取過（已存在於資料庫中）
-        此函數會從 tick_metadata.json 讀取每檔股票在資料庫中的最新日期（線程安全）
+        - Description:
+            檢查某檔股票的某個日期是否已經爬取過（資料已在資料庫中）
 
+            判斷依據是 `tick_metadata.json` 記錄的該股票最新日期：
+            **只要不晚於該日期就視為已爬**，因為 tick 是逐日往後補的。
         - Parameters:
             - stock_id: str
                 股票代號
@@ -285,16 +280,15 @@ class StockTickUtils:
             - bool
                 True 表示日期已爬取（資料已存在於資料庫），False 表示需要爬取
         """
-        # 讀取 metadata（線程安全）
+
         stocks_metadata: Dict[str, Dict[str, str]] = (
             StockTickUtils.load_tick_metadata_stocks()
         )
 
-        # 如果該股票不在 metadata 中，表示沒有下載過，需要爬取
+        # 不在 metadata 中即代表從未下載過
         if stock_id not in stocks_metadata:
             return False
 
-        # 取得該股票的最後一筆資料日期
         stock_info: Dict[str, str] = stocks_metadata[stock_id]
         last_date_str: Optional[str] = stock_info.get("last_date")
 
@@ -303,7 +297,6 @@ class StockTickUtils:
 
         try:
             last_date: datetime.date = datetime.date.fromisoformat(last_date_str)
-            # 如果要爬取的日期小於或等於最後一筆資料日期，則跳過
             return date <= last_date
         except (ValueError, TypeError) as e:
             logger.warning(

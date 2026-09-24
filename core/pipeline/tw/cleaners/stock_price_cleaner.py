@@ -14,8 +14,7 @@ from core.utils import TimeUtils
 
 **無成交日的價格欄保持 NULL，不填 0**：來源給的是 `--`，
 轉數值後是 NaN，填成 0 之後就變成「當天成交價是 0 元」——一個看起來完全正常的
-假價格。`price` 表現存 104,046 列即為此，**資料已用一次性腳本修好**
-（腳本已於 2026-09-13 刪除，git 歷史仍在）；下游由 `StockQuoteAdapter` 濾掉無價的列。
+假價格。下游由 `StockQuoteAdapter` 濾掉無價的列。
 
 上櫃的欄位是**依位置**命名的（來源不給欄名），故命名前一定要先檢查欄位數：
 版面一改，位置命名會把每一欄都對到錯的名字，而且完全不會報錯。
@@ -84,10 +83,17 @@ class StockPriceCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         date: datetime.date,
     ) -> pd.DataFrame:
-        """Clean TWSE Stock Price Data"""
         """
-        TWSE 網站提供資料日期：
-        1. 2004/2/11 ~ present
+        - Description:
+            清洗 TWSE 收盤行情（站方提供 2004/2/11 起的資料）
+        - Parameters:
+            - df: pd.DataFrame
+                crawler 取得的原始表格
+            - date: datetime.date
+                資料日期
+        - Return:
+            - pd.DataFrame
+                清洗後的收盤行情
         """
 
         if isinstance(df.columns, pd.MultiIndex):
@@ -135,10 +141,20 @@ class StockPriceCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         date: datetime.date,
     ) -> pd.DataFrame:
-        """Clean TPEX Stock Price Data"""
         """
-        1. 上櫃資料從 96/7/2 以後才提供
-        2. 從 109/4/30 開始後 csv 檔的 column 不一樣
+        - Description:
+            清洗 TPEX 收盤行情（站方提供民國 96/7/2 起的資料）
+
+            民國 109/4/30 起 csv 的欄位版面改制，兩種版面的欄位數不同，
+            故依 `date` 選用對應的欄位數與欄名。
+        - Parameters:
+            - df: pd.DataFrame
+                crawler 取得的原始表格
+            - date: datetime.date
+                資料日期
+        - Return:
+            - pd.DataFrame
+                清洗後的收盤行情
         """
 
         if isinstance(df.columns, pd.MultiIndex):

@@ -31,12 +31,11 @@ load_dotenv()
 # `FuturesProduct` 擋下，並有 `test_configured_targets_are_all_valid` 釘住本清單。
 #
 # **每加一檔的成本是乘出來的**：這個來源一次只能查一個商品，且日盤與夜盤要分開查，
-# 故請求數 = 商品數 × 2 × 交易日數（以 2013 年起算約 3,300 日 → 每檔約 6,600 次）。
-# 目前 1 檔 ≈ 13,800 次請求（1998-07 起算約 6,900 個交易日）。
+# 故請求數 = 商品數 × 2 × 交易日數：以 2013 年起算約 3,300 日、每檔約 6,600 次；
+# 自 TX 上市的 1998-07 起算約 6,900 個交易日、每檔約 13,800 次。
 #
-# **先跑通單檔再擴充**：TX 於 2026-08-29 驗證無誤，其餘六檔於 2026-09-02
-# 逐一實測可爬可清可入庫後加入，**crawler／updater 一行都沒改**
-# ——商品代碼本來就是查詢參數，這正是當初分層的目的。
+# **新增商品前先單檔實測可爬、可清、可入庫**。crawler／updater 不必改
+# ——商品代碼本來就只是查詢參數。
 #
 # ⚠️ **加入本清單不等於資料已回補**：`--target futures_price` 會逐一補齊，
 # 六檔的歷史回補約需 40 小時。要確認某商品補到哪一天，
@@ -62,12 +61,12 @@ FUTURES_TARGET_PRODUCTS: List[str] = [
 DEFAULT_CHIP_START_DATE: datetime.date = datetime.date(2013, 1, 1)
 DEFAULT_MARGIN_START_DATE: datetime.date = datetime.date(2013, 1, 1)
 DEFAULT_DIVIDEND_START_DATE: datetime.date = datetime.date(2013, 1, 1)
-# 公司行動（減資／面額變更）：與除權息同起點。S1 實測 2013 年起兩個端點的
+# 公司行動（減資／面額變更）：與除權息同起點。實測 2013 年起兩個來源端點的
 # 欄位結構未再改制，更早的年份未驗證
 DEFAULT_CORPORATE_ACTION_START_DATE: datetime.date = DEFAULT_DIVIDEND_START_DATE
 DEFAULT_PRICE_START_DATE: datetime.date = datetime.date(2013, 1, 1)
 
-# 台期貨回補起點（2026-08-29 由使用者決定）。
+# 台期貨回補起點。
 #
 # **來源能給的更早**：TX 臺股期貨可回溯到 1998-07-21（其上市日，逐日實測確認
 # 07/20 無資料、07/21 起有），亦即 TAIFEX 提供完整歷史、沒有截斷。
@@ -82,18 +81,18 @@ DEFAULT_FUTURES_START_DATE: datetime.date = datetime.date(2015, 1, 1)
 #
 # **上市較晚的商品不能沿用 `DEFAULT_FUTURES_START_DATE`**：上市前的每一天都查無
 # 資料，累積到 `FuturesPriceUpdater.EMPTY_PRODUCT_ABORT_THRESHOLD`（20 天）就會
-# 觸發保險絲中止整檔回補——2026-09-01 的回補就是這樣停在 TMF。故 `update_product()`
+# 觸發保險絲中止整檔回補（TMF 實際發生過）。故 `update_product()`
 # 一律以本表把起點往後夾。
 #
 # **沒登錄的商品不夾**（例如股期，共 320 檔且會隨掛牌／下市異動，無法逐一實測）：
-# 那類商品仍靠保險絲擋代碼拼錯，行為與本表加入前相同。
+# 那類商品仍靠保險絲擋代碼拼錯。
 #
 # 量測方式：以月為單位二分搜尋找出第一個有行情的月份後，**再逐個交易日往前回走**，
 # 確認其前連續多日皆空才定案。只做前者會漏掉「月底才上市」的商品——ZEF 會被測成
 # 2021-07-01（實為 06-28）、TMF 會被測成 2024-08-01（實為 07-29），
 # 於是回補少掉開頭數日且不會有任何錯誤訊息。
 # **只登錄實測過的日期**。填得比實際上市日「晚」會讓回補靜默跳過開頭那幾天，
-# 比觸發保險絲更難發現，所以寧可不登錄——不登錄只是回到本表加入前的行為。
+# 比觸發保險絲更難發現，所以寧可不登錄——不登錄只是不夾起點，仍有保險絲擋著。
 # MTX／TE／TF 的上市日尚未實測（僅確認 2015-01-05 就有行情，早於現行回補起點，
 # 故實務上不需要夾），要往前回補到 2015 之前時再補測。
 FUTURES_PRODUCT_LISTING_DATES: Dict[str, datetime.date] = {
@@ -116,7 +115,7 @@ FUTURES_PRODUCT_LISTING_DATES: Dict[str, datetime.date] = {
 # 跳過開頭幾天，比多打請求嚴重。故 `tests/test_futures_price_updater.py` 有一條
 # 測試釘住「表內每個商品的夜盤最早日期 ≥ 本表的值」，回補往前延伸時會變紅。
 #
-# **沒登錄的商品不跳過**（例如股期）：行為與本表加入前完全相同，照樣日夜盤都查。
+# **沒登錄的商品不跳過**（例如股期）：照樣日夜盤都查。
 FUTURES_PRODUCT_NIGHT_SESSION_START_DATES: Dict[str, datetime.date] = {
     "TX": datetime.date(2017, 5, 16),  # 臺股期貨
     "MTX": datetime.date(2017, 5, 16),  # 小型臺指
@@ -151,7 +150,7 @@ def get_int_env(name: str, default: int = 0) -> int:
     """
     讀取整數型環境變數；無法轉型時退回預設值
 
-    原本是 `int(os.getenv("DDB_PORT") or "0")`：環境變數被設成任何非數字字串
+    **不可直接 `int(os.getenv(...))`**：環境變數被設成任何非數字字串
     （含誤植的空白或註解）都會在 **import 期**拋 ValueError，
     而這個模組被全專案 import，等於整個程式無法啟動且錯誤訊息與設定無關。
     """
@@ -262,7 +261,7 @@ def now_live() -> datetime.datetime:
     return datetime.datetime.now(tz=get_live_timezone())
 
 
-# 事件通知管道（Telegram 為第一階段唯一實作的通道）。
+# 事件通知管道（目前僅實作 Telegram）。
 #
 # 缺值時退化為不推播，但**啟動時要 log 警告並寫進 `live_run`**，不可靜默——
 # 「以為有告警其實沒有」比「知道沒有告警」危險：前者會讓人放心把程式丟著跑
@@ -297,7 +296,7 @@ API_LOG_FILE_LEVEL: str = "WARNING"
 #
 # 回測畫完圖要不要在瀏覽器開起來
 #
-# **預設不開**：`reporter` 有五張圖，舊版寫死 `show=True`，於是每跑一次回測
+# **預設不開**：`reporter` 有五張圖，寫死 `show=True` 的話每跑一次回測
 # 就彈出 5 個分頁；批次跑參數掃描時一次開幾十個，在無頭環境（CI、容器、
 # nohup 背景作業）更是直接失敗或卡住。圖本來就會存成 PNG，要看打開檔案即可。
 #

@@ -6,14 +6,12 @@ from typing import Dict, Optional
 """
 前端的路徑與檔名設定
 
-**結果根目錄的預設值必須與後端一致**：`core/config/paths.py` 的
-`RESULTS_DIR_PATH` 早在 2026-08「執行期產物移出 `core/`」時就改成
-`PROJECT_ROOT / "results"`，前端卻還指著已經不存在的 `core/backtest/results`，
-於是本機直接 `streamlit run frontend/app.py` 整頁都是「找不到任何回測結果資料夾」。
+**結果根目錄的預設值必須與後端 `core/config/paths.py` 的 `RESULTS_DIR_PATH` 一致**：
+兩邊對不上時，整頁都是「找不到任何回測結果資料夾」。
 
 **這裡刻意不 `from core.config import RESULTS_DIR_PATH`**：前端映像只 COPY
-`frontend/`（見 `frontend/Dockerfile`），import `core` 會讓映像非帶整個後端不可。
-兩邊各自算出同一個路徑，由 `tests/test_frontend_config.py` 盯住不會漂開。
+`frontend/`，import `core` 會讓映像非帶整個後端不可。兩邊各自算出同一個路徑，
+由 `tests/test_frontend_config.py` 盯住不會漂開。
 """
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -70,7 +68,7 @@ CHART_FILE_CANDIDATES = {
     ],
     "最大回撤": ["*balance_mdd.png", "*mdd.png", "balance_mdd.png", "mdd.png"],
     "每日損益": ["*everyday_profit.png", "everyday_profit.png"],
-    # 盯市口徑的每日權益變化（reporter 早就在畫，前端一直沒讀）
+    # 盯市口徑的每日權益變化
     "每日權益變化": [
         "*everyday_equity_change.png",
         "everyday_equity_change.png",

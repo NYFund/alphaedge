@@ -70,7 +70,7 @@ class SecuritiesTraderInfoDAO(BaseDAO):
         - Description:
             取得所有證券商代號（去重、排序）
 
-            表不存在時回空清單；其他查詢錯誤往外拋——舊版 `except Exception` 回空清單，
+            表不存在時回空清單；其他查詢錯誤往外拋——一律吞成空清單的話，
             「DB 被鎖住」會變成「沒有券商，略過」，整段券商分點回補一筆都沒跑。
         - Return:
             - List[str]

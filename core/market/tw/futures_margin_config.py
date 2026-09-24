@@ -90,8 +90,8 @@ class FuturesMarginConfig:
         - Description:
             以既有的 `FuturesMarginAPI` 建立查表模式的設定
 
-            **`api` 必須由呼叫端傳入**：舊版未指定時自行 `FuturesMarginAPI()`，暗中開了一條
-            沒有人負責關閉的連線。API 的連線應與 DataFeed 共用、由 DataFeed 關閉；
+            **`api` 必須由呼叫端傳入**，本函式不自行 `FuturesMarginAPI()`：那會暗中
+            開一條沒有人負責關閉的連線。API 的連線應與 DataFeed 共用、由 DataFeed 關閉；
             只要預設查表模式、不自己持有 API 的話用 `default()`，由 DataFeed 注入。
         - Parameters:
             - api: FuturesMarginAPI

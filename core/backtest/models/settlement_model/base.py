@@ -23,9 +23,9 @@ class BaseSettlementModel(ABC):
     """
     結算模型：一根 bar 收盤後，市場規則強制對部位做的事
 
-    這是本次重構的關鍵抽象——台股的「當沖日終強制回補」與期貨的「每日結算」
-    在架構上是同一個掛點的兩種實作，看出這點之後就不需要兩個引擎。
-    對應 Lean 的 SettlementModel / MarginCallModel / MarginInterestRateModel。
+    台股的「當沖日終強制回補」與期貨的「每日結算」是同一個掛點的兩種實作，
+    因此兩個市場共用一個引擎。對應 Lean 的 SettlementModel / MarginCallModel /
+    MarginInterestRateModel。
     """
 
     def __init__(self, fill_model: Optional[BaseFillModel] = None) -> None:
@@ -102,6 +102,7 @@ class BaseSettlementModel(ABC):
             - event_counts: Dict[str, int]
                 事件計數（key 需與報表相容）
         """
+
         pass
 
     @abstractmethod
@@ -122,6 +123,7 @@ class BaseSettlementModel(ABC):
             - positions: List[StockPosition]
                 要更新的部位
         """
+
         pass
 
     def apply_force_cover_symbols(self, symbols: Set[str]) -> None:
@@ -179,6 +181,7 @@ class BaseSettlementModel(ABC):
             - float
                 盯市價格
         """
+
         pass
 
     def mark_position(
@@ -188,17 +191,14 @@ class BaseSettlementModel(ABC):
         - Description:
             以盯市價更新部位的未實現損益，並回傳它對當日權益的貢獻
 
-            **預設為現金帳戶口徑**（原本寫在 `Backtester.snapshot_daily_equity()`
-            內的那一段）：買進即把現金換成標的，故做多部位的價值就是市值；
-            放空開倉時只扣了保證金與成本、賣出價款留作擔保品，故其價值是
+            **預設為現金帳戶口徑**：買進即把現金換成標的，故做多部位的價值就是
+            市值；放空開倉時只扣了保證金與成本、賣出價款留作擔保品，故其價值是
             保證金加未實現損益。
 
-            **為什麼要下沉成掛點**：這一段是「資金佔用方式」而非「權益怎麼記」——
+            **開成掛點是因為這一段是「資金佔用方式」而非「權益怎麼記」**：
             期貨是保證金交易，契約價值本身不佔用資金，做多部位的價值同樣只有
             保證金加未結算損益，沿用現金帳戶口徑會把整個契約價值算進權益
-            （TX 一口契約價值 900 萬、保證金只有 70 萬）。
-            `snapshot_daily_equity()` 的其餘部分（逐日記錄、盯市價取得）
-            與商品類別無關，故引擎只在此開一個掛點，見
+            （TX 一口契約價值 900 萬、保證金只有 70 萬），見
             `TwFuturesSettlementModel.mark_position()`。
         - Parameters:
             - position: BasePosition

@@ -164,7 +164,6 @@ class StockMarginCleaner(BaseDataCleaner):
         - Description:
             TWSE／TPEX 共用的清洗流程。兩者只差在原始欄位順序，
             故以 raw_cols 依位置命名後走同一條路徑
-
         - Parameters:
             - df: pd.DataFrame
                 爬蟲取得的原始表格
@@ -174,7 +173,6 @@ class StockMarginCleaner(BaseDataCleaner):
                 原始表格的欄位名稱（依位置）
             - file_prefix: str
                 輸出 CSV 的檔名前綴（twse／tpex）
-
         - Return:
             - Optional[pd.DataFrame]
                 清洗後的 DataFrame；原始表為空或無有效資料時回傳 None

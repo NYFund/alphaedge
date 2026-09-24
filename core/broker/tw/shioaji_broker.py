@@ -184,8 +184,7 @@ class ShioajiBroker(BaseBroker):
         Shioaji 的登入額度是每日 1,000 次，而需要重連 20 次的那一天本來就不該
         繼續交易。退避與每日上限都在 `ShioajiSession.reconnect()` 裡。
 
-        重連成功後**回呼要重新註冊**：換了一個 api 物件，舊的回呼掛在已經死掉的
-        session 上——不重掛的話行情與回報都進不來，而且不會有任何錯誤。
+        重連成功後一律重跑 `_bind_session()`，把元件與回呼掛到新的 api 物件上。
         """
 
         if not self.session.reconnect():
@@ -358,7 +357,7 @@ class ShioajiBroker(BaseBroker):
         if isinstance(order, FuturesOrder):
             contract = self.resolver.resolve_index_futures(order.product, order.expiry)
             # 明寫在委託上的優先（換月等要指定的情況）；否則依方向與買賣別推導。
-            # 以前一律送 `New`，平倉單因此會開出反向新倉
+            # **不可一律送 `New`**：平倉單會因此開出一口反向新倉
             octype: FuturesOCType = getattr(
                 ticket, "octype", None
             ) or self.mapper.derive_octype(order)

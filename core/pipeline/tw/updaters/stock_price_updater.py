@@ -39,8 +39,8 @@ class StockPriceUpdater(DailyTwoMarketUpdater):
     def __init__(self) -> None:
         super().__init__()
 
-        # **讀（日期規劃）與寫（loader）共用同一個 DAO**：舊版 updater 與 loader 各開
-        # 一條連線到同一個 DB，updater 那條從不關閉，兩條連線還會互搶寫入鎖
+        # **讀（日期規劃）與寫（loader）共用同一個 DAO**：各開一條連線到同一個 DB
+        # 會互搶寫入鎖，updater 那條也容易忘了關
         self.dao: StockPriceDAO = StockPriceDAO(db_path=TW_STOCK_DB_PATH)
         self.conn: Optional[DBConnection] = self.dao.conn
 

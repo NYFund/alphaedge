@@ -27,8 +27,8 @@ from core.utils import PositionType
 UNATTRIBUTED_STRATEGY: str = "__unattributed__"
 
 # 快照的兩個保留「策略名」：它們不是策略，是帳戶層合計與券商端的代稱。
-# **與 `UNATTRIBUTED_STRATEGY` 同一族，故放在一起**——這三個一直是裸字串散在
-# 各處，而同族的東西一部分具名、一部分裸著，改名時必然漏掉沒具名的那些
+# **與 `UNATTRIBUTED_STRATEGY` 同一族，故一起具名放在這裡**——同族的東西
+# 一部分具名、一部分是裸字串散在各處，改名時必然漏掉沒具名的那些
 ACCOUNT_STRATEGY: str = "__account__"
 BROKER_STRATEGY: str = "__broker__"
 

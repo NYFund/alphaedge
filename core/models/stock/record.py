@@ -14,7 +14,7 @@ class StockTradeRecord(BaseTradeRecord):
     欄位語意：
     - buy_* / sell_* 以「操作動作」對應：SHORT 的 sell_* 是放空開倉、buy_* 是回補
     - entry_* / exit_* 為方向中立欄位：entry 一律是開倉、exit 一律是平倉
-    - ⚠ 報表與統計的時間軸一律使用 exit_date，不要用 sell_date
+    - ⚠ 報表與統計的時間軸一律使用 exit_date，**不要用 sell_date**
       （SHORT 的 sell_date 是開倉日，用它會把損益畫在開倉那天）
     """
 

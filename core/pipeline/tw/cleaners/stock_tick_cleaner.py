@@ -16,9 +16,9 @@ from core.pipeline.shared.base_cleaner import BaseDataCleaner
 class StockTickCleaner(BaseDataCleaner):
     """Stock Tick Cleaner (Transform)"""
 
-    # 類級別的文件鎖字典，用於保護每個股票的文件寫入操作
+    # 每檔股票一把鎖：多執行緒同時清同一檔時，落地的 CSV 會互相覆蓋
     _file_locks: Dict[str, Lock] = {}
-    _locks_lock: Lock = Lock()  # 保護 _file_locks 字典本身的鎖
+    _locks_lock: Lock = Lock()  # 保護 _file_locks 這個 dict 本身
 
     # Windows 關檔等待與儲存重試
     FILE_CLOSE_WAIT_SECONDS: float = 0.01
@@ -45,19 +45,26 @@ class StockTickCleaner(BaseDataCleaner):
         stock_id: str,
     ) -> Optional[pd.DataFrame]:
         """
-        Clean Stock Tick Data
+        - Description:
+            清洗單一檔股票的逐筆成交，並落地成 `{stock_id}.csv`
 
-        使用臨時文件和文件鎖定機制來確保線程安全：
-        1. 先寫入臨時文件
-        2. 使用文件鎖保護寫入操作
-        3. 成功後再覆蓋目標文件
+            **先寫暫存檔、再原子替換，全程持有該檔股票的鎖**：多執行緒同時清同
+            一檔時，直接寫目標檔會讓兩邊的內容交錯，產生一個半新半舊、
+            但格式完全合法的 CSV。
+        - Parameters:
+            - df: pd.DataFrame
+                Shioaji 回傳的原始 ticks
+            - stock_id: str
+                股票代號
+        - Return:
+            - Optional[pd.DataFrame]
+                清洗後的資料；時間戳全數無效或落地失敗時為 None
         """
 
         try:
-            # 時間格式轉換，加強錯誤處理
             try:
                 df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
-                # 檢查是否有無效的時間值
+                # 時間是 tick 唯一的排序依據，無法解析的列一律丟掉不補值
                 if df["ts"].isna().any():
                     invalid_count: int = df["ts"].isna().sum()
                     logger.warning(
@@ -80,17 +87,14 @@ class StockTickCleaner(BaseDataCleaner):
                 logger.warning(f"Stock {stock_id}: Cleaned dataframe is empty")
                 return None
 
-            # 獲取或創建該股票的文件鎖
             with self._locks_lock:
                 if stock_id not in self._file_locks:
                     self._file_locks[stock_id] = Lock()
                 file_lock: Lock = self._file_locks[stock_id]
 
-            # 使用文件鎖保護寫入操作
             with file_lock:
                 csv_path: Path = self.tick_dir / f"{stock_id}.csv"
 
-                # 使用臨時文件，成功後再覆蓋目標文件
                 temp_fd: int
                 temp_path: str
                 temp_fd, temp_path = tempfile.mkstemp(
@@ -99,41 +103,35 @@ class StockTickCleaner(BaseDataCleaner):
                 temp_file: Path = Path(temp_path)
 
                 try:
-                    # 先關閉臨時文件描述符，讓 pandas 可以正常寫入
+                    # 先關掉 mkstemp 的 fd，pandas 才能自己開檔寫入
                     os.close(temp_fd)
                     temp_fd = None  # type: ignore
 
-                    # 寫入臨時文件
                     new_df.to_csv(temp_file, index=False)
 
-                    # 確保檔案已完全寫入並關閉
-                    # 在 Windows 上，需要確保檔案句柄已釋放
+                    # Windows 不保證 to_csv 回傳時 handle 已釋放，稍等一下再替換
                     if os.name == "nt":  # Windows
-                        # 等待一下確保檔案已完全關閉
                         time.sleep(self.FILE_CLOSE_WAIT_SECONDS)
 
-                    # 在 Windows 上，如果目標檔案存在且被鎖定，先嘗試刪除
                     max_retries: int = self.MAX_SAVE_RETRIES
                     retry_delay: float = self.INITIAL_RETRY_DELAY
 
                     for attempt in range(max_retries):
                         try:
-                            # 在 Windows 上，如果目標檔案存在，先刪除再移動
-                            # 在 Unix 系統上，可以直接使用 replace（原子操作）
+                            # Windows 不允許覆蓋既有檔案，只能先刪再搬（非原子）；
+                            # Unix 直接用 replace() 一步原子替換
                             if os.name == "nt":  # Windows
                                 if csv_path.exists():
                                     csv_path.unlink()
-                                # 使用 shutil.move 移動檔案
                                 shutil.move(str(temp_file), str(csv_path))
                             else:  # Unix/Linux/Mac
-                                # 使用 replace 進行原子性操作
                                 temp_file.replace(csv_path)
 
                             logger.info(
                                 f"Successfully saved {stock_id}.csv to {TICK_DOWNLOADS_PATH} "
                                 f"({len(new_df)} rows)"
                             )
-                            break  # 成功，跳出重試循環
+                            break
 
                         except (PermissionError, OSError) as e:
                             if attempt < max_retries - 1:
@@ -144,11 +142,10 @@ class StockTickCleaner(BaseDataCleaner):
                                 time.sleep(retry_delay)
                                 retry_delay *= self.RETRY_BACKOFF_MULTIPLIER  # 指數退避
                             else:
-                                # 最後一次嘗試失敗
                                 raise e
 
                 except Exception as e:
-                    # 如果寫入失敗，刪除臨時文件。
+                    # 寫入失敗時清掉暫存檔。
                     # **只吞檔案系統的錯**：清不掉暫存檔不該蓋掉真正的失敗原因，
                     # 但裸 except 連 KeyboardInterrupt 都吞，Ctrl+C 會變成什麼都沒發生
                     try:
@@ -158,7 +155,6 @@ class StockTickCleaner(BaseDataCleaner):
                         pass
                     raise e
                 finally:
-                    # 確保臨時文件描述符已關閉
                     if temp_fd is not None:
                         try:
                             os.close(temp_fd)
@@ -180,17 +176,15 @@ class StockTickCleaner(BaseDataCleaner):
     ) -> pd.DataFrame:
         """
         - Description:
-            統一 tick data 的格式
+            統一 tick data 的欄位名稱與順序；`volume` 的單位為張（Lot）
         - Parameters:
             - df: pd.DataFrame
-                tick data
+                Shioaji 回傳的原始 ticks
             - stock_id: str
                 股票代號
-        - Returns:
+        - Return:
             - pd.DataFrame
                 統一後的 tick data
-        - Notes:
-            - Volume: Unit: Lot
         """
 
         df.rename(columns={"ts": "time"}, inplace=True)
@@ -212,21 +206,18 @@ class StockTickCleaner(BaseDataCleaner):
 
     def format_time_to_microsec(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        將 tick dataframe 時間格式格式化至微秒（才能存進 dolphinDB）
+        把 `time` 欄補足到微秒精度（DolphinDB 的 tick 表要求固定精度）
 
-        加強時間格式驗證和錯誤處理
+        補不出來的列一律丟掉：時間是 tick 唯一的排序依據，猜一個值會讓成交順序錯亂。
         """
 
         try:
-            # 檢查 time 欄位是否存在
             if "time" not in df.columns:
                 logger.error("DataFrame missing 'time' column")
                 return df
 
-            # 轉換為 datetime 格式（如果還不是）
             if not pd.api.types.is_datetime64_any_dtype(df["time"]):
                 df["time"] = pd.to_datetime(df["time"], errors="coerce")
-                # 檢查是否有無效的時間值
                 if df["time"].isna().any():
                     invalid_count: int = df["time"].isna().sum()
                     logger.warning(
@@ -237,19 +228,16 @@ class StockTickCleaner(BaseDataCleaner):
                         logger.error("All rows have invalid time format")
                         return df
 
-            # 檢查是否已經精確到微秒
+            # 微秒必須是完整 6 位小數，少一位在 DolphinDB 端就會對不上精度
             time_str: pd.Series = df["time"].astype(str)
-            # 使用更嚴格的檢查：必須包含微秒（6位小數）
             has_microsec: pd.Series = time_str.str.contains(
                 r"\.\d{6}", regex=True, na=False
             )
 
             if not has_microsec.all():
-                # 將 'time' 欄位轉換為 datetime 格式，並補足到微秒
                 df["time"] = pd.to_datetime(df["time"], errors="coerce").dt.strftime(
                     "%Y-%m-%d %H:%M:%S.%f"
                 )
-                # 再次檢查是否有無效值
                 if df["time"].isna().any():
                     logger.warning(
                         "Some time values could not be formatted to microsecond precision"

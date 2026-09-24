@@ -50,6 +50,7 @@ class TimeUtils:
         end_date: datetime.date,
     ) -> List[datetime.date]:
         """產生從 start_date 到 end_date 的每日日期清單"""
+
         return [dt.date() for dt in rrule(DAILY, dtstart=start_date, until=end_date)]
 
     @staticmethod
@@ -58,6 +59,7 @@ class TimeUtils:
         end_year: int,
     ) -> List[int]:
         """產生從 start_year 到 end_year 的所有年份"""
+
         return [year for year in range(start_year, end_year + 1)]
 
     @staticmethod
@@ -66,6 +68,7 @@ class TimeUtils:
         end_season: int,
     ) -> List[int]:
         """產生從 start_season 到 end_season 的所有季度"""
+
         return [season for season in range(start_season, end_season + 1)]
 
     @staticmethod
@@ -145,4 +148,5 @@ class TimeUtils:
     @staticmethod
     def format_date(date: datetime.date, sep: str = "") -> str:
         """Format date as 'YYYY{sep}MM{sep}DD'"""
+
         return date.strftime(f"%Y{sep}%m{sep}%d")

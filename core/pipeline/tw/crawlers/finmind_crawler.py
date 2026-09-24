@@ -17,11 +17,15 @@ from core.utils.log_manager import LogManager
 
 """
 FinMind 資料爬蟲
+
 負責爬取以下資料：
-1. 當日卷商分點統計表 (TaiwanStockTradingDailyReportSecIdAgg) - 資料起始日期：2021/6/30
-2. 台股總覽 (TaiwanStockInfo)
-3. 台股總覽(含權證) (TaiwanStockInfoWithWarrant)
-4. 證券商資訊表 (TaiwanSecuritiesTraderInfo)
+1. 當日券商分點統計表（TaiwanStockTradingDailyReportSecIdAgg）——資料起始日 2021/6/30
+2. 台股總覽（TaiwanStockInfo）
+3. 台股總覽含權證（TaiwanStockInfoWithWarrant）
+4. 證券商資訊表（TaiwanSecuritiesTraderInfo）
+
+所有爬取方法的失敗都會轉成 `FinMindError` 家族往外拋（見 `to_request_error()`），
+只有 API 正常回傳空表才回 None，避免權限或連線問題被誤判成「當日無資料」。
 """
 
 
@@ -38,7 +42,6 @@ class FinMindCrawler(BaseDataCrawler):
 
         LogManager.setup_logger("crawl_finmind.log")
 
-        # 從環境變數取得 FinMind API Token
         api_token: Optional[str] = os.getenv("FINMIND_API_TOKEN")
         if not api_token:
             raise ValueError(
@@ -50,25 +53,28 @@ class FinMindCrawler(BaseDataCrawler):
         logger.info("FinMind API initialized successfully")
 
     def crawl(self, *args, **kwargs) -> None:
+        """本爬蟲沒有單一入口，各資料集請改呼叫對應的 `crawl_*` 方法"""
         pass
 
     def crawl_stock_info(self) -> Optional[pd.DataFrame]:
-        """爬取台股總覽 (TaiwanStockInfo)
-        資料欄位說明：
-            - industry_category: str         # 產業別
-            - stock_id: str                  # 股票代碼
-            - stock_name: str                # 股票名稱
-            - type: str                      # 掛牌板別
-            - date: str                      # 更新日期
+        """
+        - Description:
+            爬取台股總覽（TaiwanStockInfo）
 
-        回傳值：
-            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            欄位語意：
+            - industry_category: str  產業別
+            - stock_id: str  股票代碼
+            - stock_name: str  股票名稱
+            - type: str  掛牌板別
+            - date: str  更新日期
+        - Return:
+            - Optional[pd.DataFrame]
+                總覽表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info("* Start crawling Taiwan Stock Info")
 
         try:
-            # 直接使用 API 專用方法
             df: pd.DataFrame = self.api.taiwan_stock_info()
 
             if df is None or df.empty:
@@ -82,22 +88,24 @@ class FinMindCrawler(BaseDataCrawler):
             raise self.to_request_error(e, "Taiwan Stock Info") from e
 
     def crawl_stock_info_with_warrant(self) -> Optional[pd.DataFrame]:
-        """爬取台股總覽(含權證) (TaiwanStockInfoWithWarrant)
-        資料欄位說明：
-            - industry_category: str         # 產業別
-            - stock_id: str                  # 股票代碼
-            - stock_name: str                # 股票名稱
-            - type: str                      # 掛牌板別
-            - date: str                      # 更新日期
+        """
+        - Description:
+            爬取台股總覽（含權證）（TaiwanStockInfoWithWarrant）
 
-        回傳值：
-            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            欄位語意：
+            - industry_category: str  產業別
+            - stock_id: str  股票代碼
+            - stock_name: str  股票名稱
+            - type: str  掛牌板別
+            - date: str  更新日期
+        - Return:
+            - Optional[pd.DataFrame]
+                總覽表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info("* Start crawling Taiwan Stock Info With Warrant")
 
         try:
-            # 直接使用 API 專用方法
             df: pd.DataFrame = self.api.taiwan_stock_info_with_warrant()
 
             if df is None or df.empty:
@@ -112,22 +120,24 @@ class FinMindCrawler(BaseDataCrawler):
 
     def crawl_broker_info(self) -> Optional[pd.DataFrame]:
         """
-        爬取證券商資訊表 (TaiwanSecuritiesTraderInfo)
-        資料欄位說明：
-            - securities_trader_id: str      # 券商代碼 (FinMind API 原始欄位名稱)
-            - securities_trader: str         # 券商名稱 (FinMind API 原始欄位名稱)
-            - date: str                      # 開業日
-            - address: str                   # 地址
-            - phone: str                     # 電話
+        - Description:
+            爬取證券商資訊表（TaiwanSecuritiesTraderInfo）
 
-        回傳值：
-            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            欄位語意（`securities_trader_id`／`securities_trader` 為 FinMind API
+            原始欄位名稱，不可自行改名）：
+            - securities_trader_id: str  券商代碼
+            - securities_trader: str  券商名稱
+            - date: str  開業日
+            - address: str  地址
+            - phone: str  電話
+        - Return:
+            - Optional[pd.DataFrame]
+                券商資訊表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info("* Start crawling Broker Info")
 
         try:
-            # 直接使用 API 專用方法
             df: pd.DataFrame = self.api.taiwan_securities_trader_info()
 
             if df is None or df.empty:
@@ -148,41 +158,40 @@ class FinMindCrawler(BaseDataCrawler):
         end_date: Optional[Union[datetime.date, str]] = None,
     ) -> Optional[pd.DataFrame]:
         """
-        爬取「當日券商分點統計表」（TaiwanStockTradingDailyReportSecIdAgg）
+        - Description:
+            爬取「當日券商分點統計表」（TaiwanStockTradingDailyReportSecIdAgg）
 
-        參數：
-            - stock_id: Optional[str]                # 股票代碼（可選，不提供則返回所有股票）
-            - securities_trader_id: Optional[str]    # 券商代碼（可選，不提供則返回所有券商）
-            - start_date: Optional[datetime.date | str]    # 起始日期（可以是 datetime.date 或 "YYYY-MM-DD" 格式的字符串）
-            - end_date: Optional[datetime.date | str]      # 結束日期（可以是 datetime.date 或 "YYYY-MM-DD" 格式的字符串）
+            來源資料自 2021/6/30 起才有，查更早的日期一律查無資料。
+            FinMind 端要求四個參數都有值才會回資料，少帶任一個都會拿到空表。
 
-        資料日期範圍：
-            FinMind 資料的起始日期是 2021/6/30 ~ now
-
-        API 調用方式：
-            使用 self.api.taiwan_stock_trading_daily_report_secid_agg() 方法，
-            直接傳遞參數：stock_id, securities_trader_id, start_date, end_date
-            注意：API 需要所有參數都有值才能取得資料
-
-        資料欄位說明：
-            - securities_trader: str         # 券商名稱 (FinMind API 原始欄位名稱)
-            - securities_trader_id: str      # 券商代碼 (FinMind API 原始欄位名稱)
-            - stock_id: str                  # 股票代碼
-            - date: str                      # 日期（YYYY-MM-DD）
-            - buy_volume: int                # 買進總股數
-            - sell_volume: int               # 賣出總股數
-            - buy_price: float               # 買進均價
-            - sell_price: float              # 賣出均價
-
-        回傳值：
-            pd.DataFrame；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            欄位語意（`securities_trader`／`securities_trader_id` 為 FinMind API
+            原始欄位名稱）：
+            - securities_trader: str  券商名稱
+            - securities_trader_id: str  券商代碼
+            - stock_id: str  股票代碼
+            - date: str  日期（YYYY-MM-DD）
+            - buy_volume: int  買進總股數（Unit: 股）
+            - sell_volume: int  賣出總股數（Unit: 股）
+            - buy_price: float  買進均價
+            - sell_price: float  賣出均價
+        - Parameters:
+            - stock_id: Optional[str]
+                股票代碼
+            - securities_trader_id: Optional[str]
+                券商代碼
+            - start_date: Optional[Union[datetime.date, str]]
+                起始日期，可為 datetime.date 或 "YYYY-MM-DD" 字串
+            - end_date: Optional[Union[datetime.date, str]]
+                結束日期，格式同 start_date
+        - Return:
+            - Optional[pd.DataFrame]
+                分點統計表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
         """
 
         logger.info(
             f"* Start crawling Broker Trading Daily Report: {start_date} to {end_date}"
         )
 
-        # 處理 start_date：如果是字符串則直接使用，如果是 datetime.date 則轉換為字符串
         if isinstance(start_date, str):
             start_date_str: str = start_date
         elif isinstance(start_date, datetime.date):
@@ -192,7 +201,6 @@ class FinMindCrawler(BaseDataCrawler):
                 f"start_date must be str or datetime.date, got {type(start_date)}"
             )
 
-        # 處理 end_date：如果是字符串則直接使用，如果是 datetime.date 則轉換為字符串
         if isinstance(end_date, str):
             end_date_str: str = end_date
         elif isinstance(end_date, datetime.date):
@@ -203,7 +211,6 @@ class FinMindCrawler(BaseDataCrawler):
             )
 
         try:
-            # 直接使用 API 方法，傳遞所有參數
             df: pd.DataFrame = self.api.taiwan_stock_trading_daily_report_secid_agg(
                 stock_id=stock_id,
                 securities_trader_id=securities_trader_id,
@@ -231,9 +238,9 @@ class FinMindCrawler(BaseDataCrawler):
         - Description:
             把 FinMind API 呼叫拋出的例外歸類成 pipeline 的 FinMind 例外
 
-            **呼叫失敗一律往外拋，只有 API 正常回傳空表才回 None**：舊版除配額用盡外
-            全部 `return None`，updater 把帳號等級不足、連線失敗都記成「沒有資料」，
-            整批以結束碼 0 成功結束。
+            **呼叫失敗一律往外拋，只有 API 正常回傳空表才回 None**：失敗若吞成
+            `None`，updater 會把帳號等級不足、連線失敗都記成「沒有資料」，
+            整批仍以結束碼 0 成功結束，資料缺漏就此無聲通過。
         - Parameters:
             - error: Exception
                 FinMind 套件拋出的原始例外

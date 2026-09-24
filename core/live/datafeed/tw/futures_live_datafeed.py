@@ -331,11 +331,10 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
 
     def _probe_contract(self, resolver: Any) -> Optional[Any]:
         """
-        交易日佐證取**期貨**合約：近月台指期
+        交易日佐證取**期貨**合約：先問掛牌月份，再取最近的一個
 
-        到期月每個月都在換，寫死一個月份的合約會在該月交割後永遠查不到，
-        於是平日的交易日判定靜默失去唯一佐證。改成先問掛牌月份再取最近的一個；
-        查不到掛牌月份時回 None（不猜）。
+        **不可寫死到期月**：寫死的那個月一交割就永遠查不到合約，
+        平日的交易日判定會靜默失去唯一佐證。查不到掛牌月份時回 None（不猜）。
         """
 
         expiries: List[str] = resolver.list_index_futures_expiries(self.PROBE_PRODUCT)

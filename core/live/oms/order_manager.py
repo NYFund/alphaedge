@@ -54,8 +54,8 @@ def to_base36(value: int, width: int) -> str:
         把非負整數轉成固定寬度的 base36 字串
 
         **超出寬度時取模而不是截斷**：截斷會讓 1296 與 2592 壓成不同的字串卻
-        都不等於原值，取模則是明確的「循環使用」，而循環的前提（同一天不會用滿）
-        寫在 `OrderManager` 的 docstring 裡。
+        都不等於原值，取模則是明確的「循環使用」，而循環要撞號得在同一個交易日內
+        送滿 1,679,616 張委託。
     - Parameters:
         - value: int
             待轉換的數字
@@ -328,9 +328,8 @@ class OrderManager:
                 本次新增的成交（已去重），交給帳戶同步
         """
 
-        # 單筆事件造成的狀態矛盾在迴圈內就地處理：直接呼叫 `transition()` 時
-        # 仍然拋出（那是程式邏輯錯誤），但佇列消化不可因為一筆而停擺
-
+        # 狀態矛盾由 `apply_event()` 就地吞掉：佇列消化不可因為一筆而停擺。
+        # 直接呼叫 `transition()` 的路徑仍然拋出——那是程式邏輯錯誤
         new_fills: List[ExecutionReport] = []
         for event in self.broker.drain_execution_queue():
             fill: Optional[ExecutionReport] = self.apply_event(event)
@@ -417,9 +416,9 @@ class OrderManager:
 
         成交是事實，狀態只是本地的判斷。撤單與成交在交易所是競態——撤單生效前
         已撮合的量照樣會回報，而且可能比撤單回報晚到；送單時逾時被標成 FAILED 的單
-        也可能其實送到了。以前這裡走狀態機會被判成非法轉移而丟掉，帳戶同步收不到，
-        盤後卻以 `live_order` 的舊成交量算出殘量、寫下隔日補平——對已經平掉的部位
-        再送一次平倉，就是把部位做反。
+        也可能其實送到了。**這裡不可走狀態機**：會被判成非法轉移而把成交丟掉，
+        帳戶同步收不到，盤後卻以 `live_order` 的舊成交量算出殘量、寫下隔日補平——
+        對已經平掉的部位再送一次平倉，就是把部位做反。
         """
 
         logger.warning(
@@ -689,7 +688,7 @@ class OrderManager:
 
         訂單要還原：少了它，全額成交也只會被判成 PARTIALLY_FILLED（不知道委託量）、
         這張單不佔 `max_holdings` 名額（不知道標的），寫回 DB 時標的與數量還會被
-        空值蓋掉。還原不出來時不帶訂單，`_persist()` 改為只更新狀態欄位。
+        空值蓋掉。還原不出來時不帶訂單，由 `_persist()` 只更新狀態欄位。
         """
 
         return OrderTicket(

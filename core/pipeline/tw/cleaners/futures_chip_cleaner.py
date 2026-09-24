@@ -23,8 +23,8 @@ from core.pipeline.shared.base_cleaner import BaseDataCleaner
 | 大額交易人 | (date, 商品, 到期月份, 交易人類別) | 約 1,400 |
 | PCR | (date) | 1 |
 
-**日期一律以來源的 `日期` 欄為準**（不是查詢日）：改用區間查詢之後，
-一次回應會涵蓋一整個月，把 `date` 覆寫成查詢起日會讓整批資料的日期全錯——
+**日期一律以來源的 `日期` 欄為準**（不是查詢日）：一次區間查詢的回應會涵蓋
+一整個月，把 `date` 覆寫成查詢起日會讓整批資料的日期全錯——
 而且錯得很整齊，看起來完全正常。
 
 **三個來源格式的坑**：
@@ -112,10 +112,9 @@ class FuturesChipCleaner(BaseDataCleaner):
         """
         濾掉主鍵欄為空的列
 
-        **這不是防禦性程式碼，是必要的**：來源檔尾有三行說明文字，pandas 會把
-        它們解析成資料列，而 `date` 欄被覆寫成查詢日之後，那些列看起來完全合法
-        （有主鍵、有日期），只是其餘欄位全是 NULL。它們最後是被主鍵的 `NOT NULL`
-        擋下的，而 `INSERT OR IGNORE` 不會為此發出任何訊息。
+        **這不是防禦性程式碼，是必要的**：來源檔尾三行說明文字會被 pandas 解析成
+        資料列，而 `INSERT OR IGNORE` 遇到主鍵 `NOT NULL` 時不會發出任何訊息，
+        於是這些垃圾列只會表現成入庫筆數對不上（見本檔說明的第 3 點）。
         """
 
         cleaned: pd.DataFrame = df.copy()
@@ -193,10 +192,13 @@ class FuturesChipCleaner(BaseDataCleaner):
             **代碼欄一定要 strip**：來源是 `"BRF    "`／`"202610  "` 這種補空白的
             固定寬度格式，不處理的話主鍵會多出看不見的字元。
         - Parameters:
-            - raw / date
-                同 `clean_institutional()`
+            - raw: str
+                CSV 原文（可含多天）
+            - date: Optional[datetime.date]
+                **僅為相容保留，不參與計算**——日期一律取自來源的 `日期` 欄
         - Return:
             - Optional[pd.DataFrame]
+                清洗後的資料；無有效列時為 None
         """
 
         df: Optional[pd.DataFrame] = self.read_csv(raw)

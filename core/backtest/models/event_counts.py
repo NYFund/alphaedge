@@ -5,7 +5,7 @@ from typing import Dict, Tuple
 
 **放在 `core/backtest/models/` 而不是引擎**：`FillModel` 與 `SettlementModel`
 在沒有引擎的情況下（單獨測試、或被別的組裝方式使用）也要能自備一份計數器，
-而它們在分層上低於引擎——反過來 import 引擎會變成反向相依。引擎改為 import 本檔。
+而它們在分層上低於引擎——由它們 import 引擎會變成反向相依。
 
 既有 key 與報表欄位相容，**不可更名**（新增可以）：重新命名會讓歷史
 `*_event_report.csv` 對不上。

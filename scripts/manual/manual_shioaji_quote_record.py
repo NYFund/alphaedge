@@ -24,9 +24,9 @@ from core.config.settings import now_live
 合約檔的 `update_date` 是 `YYYY/MM/DD` 不是 ISO，**三次都是實連才發現的**，
 而且三次的共同症狀都是「單元測試一直是綠的」。
 
-tick 訊息 → `StockQuote` 的轉換目前還沒寫。照文件猜再配上 `.get()` 預設值，
-欄位名錯了只會讓報價靜靜變成 0，策略再也不產生訊號而且沒有任何錯誤——
-所以先錄一份真資料，把欄位釘死之後再寫轉換。
+tick 訊息 → `StockQuote` 的轉換（`core/adapters/tw/stock_quote_adapter.py`）
+只能照真實欄位寫：照文件猜再配上 `.get()` 預設值，欄位名錯了只會讓報價靜靜
+變成 0，策略再也不產生訊號而且沒有任何錯誤。錄一份真資料才有辦法把欄位釘死。
 
 執行（一律在專案根目錄以 `-m`，且要在**交易日盤中**）：
 
@@ -45,6 +45,8 @@ DEFAULT_OUTPUT_DIR: Path = Path("data/records")
 
 
 def parse_arguments() -> argparse.Namespace:
+    """命令列參數"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="錄製 Shioaji 盤中行情回呼（模擬環境）"
     )
@@ -67,8 +69,8 @@ def parse_arguments() -> argparse.Namespace:
 # 欄位名取自 `RECORDED_FIELD_TYPES`，與重放端共用同一份，錄得下來的就還原得回去。
 #
 # 執行期真正拿到的是原生擴充物件：shioaji 1.3.3 的 C 擴充物件**沒有 `__dict__`、
-# `dict()`、`model_dump()`，連 `dir()` 都是空的**，只能照名字 `getattr`。
-# 第一次錄製就是栽在這裡：447 筆全錄成 `{}`
+# `dict()`、`model_dump()`，連 `dir()` 都是空的**，只能照名字 `getattr`——
+# 少了這份欄位名，整場錄製會全部錄成 `{}`
 _STUB_FIELDS: Dict[str, Tuple[str, ...]] = {
     name: tuple(fields) for name, fields in RECORDED_FIELD_TYPES.items()
 }
@@ -100,8 +102,8 @@ def to_plain(message: Any) -> Any:
     if fields:
         return {name: getattr(message, name, None) for name in fields}
 
-    # 連欄位名都對不上時**保留 repr**：空 dict 會讓人以為「這類訊息沒有內容」，
-    # 而真正的問題是取法不對——那正是第一次錄製浪費掉的原因
+    # 連欄位名都對不上時**保留 repr**：回空 dict 會讓人以為「這類訊息沒有內容」，
+    # 而真正的問題是取法不對
     return {"__unparsed_repr__": repr(message), "__type__": type(message).__name__}
 
 

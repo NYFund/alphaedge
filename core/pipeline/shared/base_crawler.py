@@ -12,8 +12,8 @@ from core.pipeline.shared.request_utils import FetchResult, FetchStatus
 """
 所有「取某一天資料」的 crawler 的共同基底，以及**三種結果的分流**
 
-原本 `crawl_*()` 只有兩種回傳值：DataFrame 或 `None`，而 `None` 同時代表
-「休市」「站方還沒更新」「連線失敗」「IP 被擋」。updater 對這四種一律
+`crawl_*()` **不可退回「DataFrame 或 `None`」兩種回傳值**：單一個 `None` 同時代表
+「休市」「站方還沒更新」「連線失敗」「IP 被擋」，updater 對這四種一律
 記一行 `is a Holiday!` 就跳過，於是**資料缺一天不會有任何錯誤**，
 回測把那天當休市靜默跳過。
 
@@ -120,6 +120,7 @@ class BaseDataCrawler(ABC):
     NO_DATA_TEXT_MAX_LENGTH: int = 4096
 
     def __init__(self) -> None:
+        """建立 crawler；連線與參數一律由子類的 `setup()` 負責"""
         pass
 
     @abstractmethod

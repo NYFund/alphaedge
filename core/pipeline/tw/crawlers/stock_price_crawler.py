@@ -8,12 +8,11 @@ from core.pipeline.tw.utils.url_manager import URLManager
 from core.utils import TimeUtils
 
 """
-TWSE 網站提供資料日期：
-1. 2004/2/11 ~ present
+股票收盤行情爬蟲（TWSE／TPEX）
 
-TPEX 網站提供資料日期：
-1. 上櫃資料從 96/7/2 以後才提供
-2. 從 109/4/30 開始後 csv 檔的 column 不一樣
+1. TWSE：2004/2/11 起提供。
+2. TPEX：民國 96/7/2 起提供；民國 109/4/30 之後 csv 的欄位與先前不同，
+   兩種版面的分流在 cleaner，本層原樣回傳。
 """
 
 
@@ -30,7 +29,7 @@ class StockPriceCrawler(BaseDataCrawler):
         pass
 
     def crawl(self, date: datetime.date) -> None:
-        """Crawl Price Data"""
+        """爬取單日的上市與上櫃收盤行情"""
 
         self.crawl_twse_price(date)
         self.crawl_tpex_price(date)

@@ -249,6 +249,8 @@ def all_plists(uv_bin: str) -> Dict[str, Dict[str, Any]]:
 
 
 def domain() -> str:
+    """launchctl 的目標網域（目前登入者的 GUI session）"""
+
     return f"gui/{os.getuid()}"
 
 
@@ -308,6 +310,8 @@ def status() -> None:
 
 
 def main() -> None:
+    """安裝、移除或列出演練排程"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="模擬環境演練的 launchd 排程"
     )

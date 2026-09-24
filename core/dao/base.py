@@ -59,9 +59,9 @@ def table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
     - Description:
         檢查資料表是否存在
 
-        **「表還沒建」與「查詢出錯」必須分得開**：舊版期貨 API 用
-        `except sqlite3.OperationalError: return None` 收掉整類錯誤，於是「尚未跑過 ETL」
-        （正常）與「資料庫被鎖住、schema 壞掉、欄名打錯」（不正常）長得一模一樣，
+        **「表還沒建」與「查詢出錯」必須分得開**：若以
+        `except sqlite3.OperationalError: return None` 收掉整類錯誤，「尚未跑過 ETL」
+        （正常）與「資料庫被鎖住、schema 壞掉、欄名打錯」（不正常）就長得一模一樣，
         回測期間只會讓策略拿到 `None`、少開幾筆倉而沒有任何錯誤。
         呼叫端應先用本函式判斷表在不在，其餘錯誤一律往外拋。
     - Parameters:
@@ -363,8 +363,8 @@ class BaseDAO:
         - Description:
             以 savepoint 包住一段寫入：區塊拋出例外時只回滾這一段，並把例外往外拋
 
-            **用途是「單檔失敗整檔不留」**：loader 逐檔寫入、最後才 commit，
-            舊寫法下某個檔案寫到一半出錯，前面已寫入的列仍留在交易裡，
+            **用途是「單檔失敗整檔不留」**：loader 逐檔寫入、最後才 commit。
+            少了 savepoint，某個檔案寫到一半出錯時，已寫入的列仍留在交易裡，
             被最後那次 `commit()` 一起寫進資料庫——資料表裡多了半份檔案，而
             `finish_load()` 回報的卻是「這個檔案失敗」。
 

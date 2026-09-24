@@ -21,7 +21,7 @@ from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.strategies.base import BaseStrategy
 from core.utils import Scale
 
-"""TwStockDataFeed: 台股資料源（五個資料 API ＋ 報價轉換 ＋ 交易日判定）"""
+"""TwStockDataFeed: 台股資料源（資料 API ＋ 報價轉換 ＋ 交易日判定）"""
 
 
 class TwStockDataFeed(BaseDataFeed):
@@ -49,15 +49,13 @@ class TwStockDataFeed(BaseDataFeed):
         # 各開一條沒有任何好處，只會讓連線數隨 API 數量線性成長
         self.conn: Optional[DBConnection] = None
 
-        self.tick: Optional[StockTickAPI] = None  # Ticks data
-        self.chip: Optional[StockChipAPI] = None  # Chips data
-        self.price: Optional[StockPriceAPI] = None  # Price data
-        self.dividend: Optional[StockDividendAPI] = None  # Ex-rights/dividend data
-        self.margin: Optional[StockMarginAPI] = None  # Margin/short balance data
-        self.mrr: Optional[MonthlyRevenueReportAPI] = (
-            None  # Monthly Revenue Report data
-        )
-        self.fs: Optional[FinancialStatementAPI] = None  # Financial Statement data
+        self.tick: Optional[StockTickAPI] = None
+        self.chip: Optional[StockChipAPI] = None
+        self.price: Optional[StockPriceAPI] = None
+        self.dividend: Optional[StockDividendAPI] = None  # 除權息
+        self.margin: Optional[StockMarginAPI] = None  # 融資券餘額
+        self.mrr: Optional[MonthlyRevenueReportAPI] = None  # 月營收
+        self.fs: Optional[FinancialStatementAPI] = None  # 財報
 
         # 回測區間：停券日推導需要往後多看幾個交易日，故必須知道區間
         self.start_date: Optional[datetime.date] = None
@@ -403,7 +401,7 @@ class TwStockDataFeed(BaseDataFeed):
         return self.dividend.get_share_ratio_map(date)
 
     def close(self) -> None:
-        """關閉所有資料連線（回測結束時呼叫；原本全專案的 conn 從不 close）"""
+        """關閉所有資料連線；回測結束時由引擎的 `finally` 呼叫"""
 
         for api in (
             self.chip,

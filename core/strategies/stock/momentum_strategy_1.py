@@ -1,4 +1,3 @@
-# Python standard library
 import datetime
 from typing import Any, Dict, List, Optional
 
@@ -30,8 +29,7 @@ class MomentumStrategy1(BaseStockStrategy):
     **已持有的標的仍會再次進入開倉候選（＝允許加碼）**：本策略不過濾
     `check_has_position()`，同一檔在連續多天都符合條件時會開出多個部位，
     實際能開幾個由 `max_holdings` 與部位建構器切出的張數決定。
-    這是刻意的語意（動能延續就繼續加），但先前 docstring 沒寫，
-    看回測結果的人無從判斷那些重複的開倉是設計還是 bug。
+    這是刻意的語意（動能延續就繼續加），回測結果裡重複的開倉並非 bug。
 
     **TICK 級別不支援**：訊號建立在「前一交易日收盤」上，TICK 路徑沒有對應的
     取價方式；`setup_apis()` 會直接 `NotImplementedError`。
@@ -127,8 +125,8 @@ class MomentumStrategy1(BaseStockStrategy):
         - Description:
             預先取好回測區間的交易日清單
 
-            **每根 bar 都呼叫 `get_last_trading_date()` 是每根 bar 一次
-            `SELECT *`**；換成一次取清單、之後以 `bisect` 平移。
+            **每根 bar 都呼叫 `get_last_trading_date()` 就是每根 bar 一次
+            `SELECT *`**；故一次取好清單，之後以 `bisect` 平移。
 
             起點往前多抓 `CALENDAR_LOOKBACK_DAYS` 天：第一根 bar 要的是
             **回測起始日之前**的那個交易日，只抓區間內是拿不到的。
@@ -192,13 +190,12 @@ class MomentumStrategy1(BaseStockStrategy):
                 continue
             yesterday_close_price: float = yesterday_close_map[stock_quote.stock_id]
 
-            # **`NaN` 一定要在這裡擋掉**：無成交日的收盤價在資料庫是 `NULL`
-            # （無成交價改存 NULL 之後），讀進來是 `NaN`。而下面的 `price_chg < 門檻`
-            # 對 `NaN` 恆為 `False`——**不會 `continue`，反而一路走成買進候選**，
+            # **`NaN` 一定要在這裡擋掉**：無成交日的收盤價在資料庫是 `NULL`，
+            # 讀進來是 `NaN`。而下面的 `price_chg < 門檻` 對 `NaN` 恆為 `False`
+            # ——**不會 `continue`，反而一路走成買進候選**，
             # log 裡只會留下一行「漲幅 nan%」。
             #
-            # 修 `price` 表那 104,046 列時實測到：少了這道防線，LONG 回歸
-            # 多出 10 筆、少掉 3 筆交易（同一天的名額被 NaN 標的擠掉）。
+            # 實測少了這道防線會讓 NaN 標的擠掉同一天的開倉名額，交易筆數整段偏掉。
             if pd.isna(yesterday_close_price) or not yesterday_close_price:
                 logger.warning(
                     f"股票 {stock_quote.stock_id} {yesterday} 無有效收盤價"

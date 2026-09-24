@@ -25,6 +25,16 @@ from core.config import (
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils.exceptions import DataLoadError
 
+"""
+台股 Tick Loader（DolphinDB）
+
+逐筆成交的量級遠大於日線，故不走 SQLite 而寫進 DolphinDB 的 `tickDB`：
+資料庫依日期 VALUE ＋ 依代號 HASH 分割，表以 `keepDuplicates=ALL` 建立——
+同一個時間戳可能有多筆成交，去重會直接丟掉真實的成交筆數。
+
+CSV 由 DolphinDB 端的 `loadTextEx` 直接讀檔匯入，不經 Python 轉手。
+"""
+
 
 class StockTickLoader(BaseDataLoader):
     """Stock Tick Loader"""
@@ -36,6 +46,8 @@ class StockTickLoader(BaseDataLoader):
     CONNECT_RETRY_DELAY: float = 1.0
 
     def __init__(self) -> None:
+        """建立股票 tick loader，連線 DolphinDB 並確保 Tick DB 存在"""
+
         # **不呼叫 `super().__init__()`**：本 loader 收的是連線或多個 DAO，
         # 與基底「單一 DAO」的建構骨架不同形，連線與建表一律自理
         # DolphinDB Session
@@ -55,7 +67,7 @@ class StockTickLoader(BaseDataLoader):
         if self.session.existsDatabase(TICK_DB_PATH):
             logger.info("Database exists!")
 
-            # Set TSDBCacheEngineSize to 5GB (must < 8(maxMemSize) * 0.75 GB)
+            # 設定 TSDB Cache Engine 大小（Unit: GB），須小於 maxMemSize 的 0.75 倍
             script: str = """
             memSize = 2
             setTSDBCacheEngineSize(memSize)
@@ -72,14 +84,16 @@ class StockTickLoader(BaseDataLoader):
         retry_delay: Optional[float] = None,
     ) -> None:
         """
-        Connect to the Database with retry mechanism
-
-        Parameters:
-            max_retries: Maximum number of connection retry attempts
-            retry_delay: Delay in seconds between retry attempts
+        - Description:
+            連線 DolphinDB（含重試）；重試次數用盡仍失敗就往外拋
+        - Parameters:
+            - max_retries: Optional[int]
+                最大重試次數；None 時採用 `CONNECT_MAX_RETRIES`
+            - retry_delay: Optional[float]
+                每次重試之間的等待秒數；None 時採用 `CONNECT_RETRY_DELAY`
         """
 
-        # `DDB_PATH` 沒設定時舊版會拼出 `"NonetickDB"` 這種看起來像路徑的字串，
+        # `DDB_PATH` 沒設定時會拼出 `"NonetickDB"` 這種看起來像路徑的字串，
         # 錯誤訊息完全指不到真正的原因；在連線之前就攔下來
         require_tick_db_path()
 
@@ -200,8 +214,8 @@ class StockTickLoader(BaseDataLoader):
             logger.info("The csv file successfully save into database and table!")
 
         except Exception as e:
-            # **原本記在 `info` 等級**：DolphinDB 寫入失敗與正常訊息在 log 裡
-            # 完全一樣，一整天的 tick 沒進去也不會有人知道
+            # **等級不可降回 `info`**：降級之後 DolphinDB 寫入失敗與正常訊息
+            # 在 log 裡完全一樣，一整天的 tick 沒進去也不會有人知道
             logger.error(f"The csv file fail to save into database and table!\n{e}")
             raise DataLoadError("tick", [csv_path.name], succeeded=0) from e
 
@@ -211,7 +225,7 @@ class StockTickLoader(BaseDataLoader):
         # Ensure Database Table Exists
         self.create_missing_tables()
 
-        # read all csv files in dir_path (.as_posix => replace \\ with / (for windows os))
+        # 路徑一律轉成 posix 形式：Windows 的反斜線在 DolphinDB 腳本裡會被當成跳脫字元
         csv_files: List[str] = [str(csv.as_posix()) for csv in dir_path.glob("*.csv")]
         logger.info(f"* Total csv files: {len(csv_files)}")
 

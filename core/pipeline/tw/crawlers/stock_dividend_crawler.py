@@ -61,13 +61,11 @@ class StockDividendCrawler(BaseDataCrawler):
 
             與其他 TWSE 爬蟲不同，本端點支援日期區間，呼叫端應以「年」為單位切分，
             不要退化成逐日呼叫（一年 250 次請求 vs 1 次）
-
         - Parameters:
             - start_date: datetime.date
                 查詢起日
             - end_date: datetime.date
                 查詢迄日
-
         - Return:
             - CrawlResult
                 區間內無除權息為 `NO_DATA`；連線或版面異常為 `FAILED`
@@ -105,13 +103,11 @@ class StockDividendCrawler(BaseDataCrawler):
             **日期必須用斜線格式**：傳 `20240101` 不會報錯，而是靜默退回「近三日」的
             預設區間。因此這裡會比對回傳的 `date` 欄位是否等於送出的區間，
             不符時直接中止——寧可沒有資料，也不要把三天的資料當成一整年入庫。
-
         - Parameters:
             - start_date: datetime.date
                 查詢起日
             - end_date: datetime.date
                 查詢迄日
-
         - Return:
             - CrawlResult
                 區間內無除權息為 `NO_DATA`；連線、JSON 解析或區間不符為 `FAILED`
