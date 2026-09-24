@@ -99,7 +99,10 @@ class StockDividendLoader(BaseDataLoader):
                 df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
                 dfs.append(df)
                 file_cnt += 1
-            except Exception as e:
+            except (OSError, ValueError) as e:
+                # 只讀檔、不入庫：`OSError` 是讀不到檔，`ValueError` 涵蓋
+                # `pd.errors.ParserError` 與 `EmptyDataError`。
+                # 單檔失敗只記檔名，其餘照常載入
                 logger.warning(f"Error reading {file_path}: {e}")
                 failed_files.append(str(file_path))
 
