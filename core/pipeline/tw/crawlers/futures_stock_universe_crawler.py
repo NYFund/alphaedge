@@ -133,6 +133,10 @@ class FuturesStockUniverseCrawler(BaseDataCrawler):
             logger.warning("[Futures Universe] 頁面無表格（站方改版或回應被攔截）")
             return None
         except Exception as error:
+            # **這層盲捕不可收斂**：上面的 `ValueError` 已經把「沒有表格」分出去了，
+            # 這裡要接的是「其餘任何解析失敗」——解析器缺套件、編碼壞掉、
+            # 回應被攔截成別的格式。列舉得出來的那幾種正是會漏的那幾種，
+            # 而漏掉一種會讓整批回補中止，不是少一天
             logger.warning(
                 f"[Futures Universe] 解析標的清單頁失敗：{type(error).__name__}: {error}"
             )

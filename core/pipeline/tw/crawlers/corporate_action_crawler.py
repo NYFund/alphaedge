@@ -210,7 +210,8 @@ class CorporateActionCrawler(BaseDataCrawler):
 
         try:
             return result.response.json()
-        except Exception as error:
+        except ValueError as error:
+            # 見 `stock_dividend_crawler`：`JSONDecodeError` 是 `ValueError` 的子類
             logger.warning(f"{label}: JSON 解析失敗（{type(error).__name__}: {error}）")
             return None
 

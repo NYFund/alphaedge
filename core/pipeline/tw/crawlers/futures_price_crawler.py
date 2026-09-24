@@ -207,9 +207,10 @@ class FuturesPriceCrawler(BaseDataCrawler):
             logger.info("[Futures Price] 頁面無表格（非交易日或站方未更新）")
             return None
         except Exception as error:
-            # **不可與上面合併成 except Exception**：解析器缺套件、版面改制、
+            # **不可與上面合併，也不可收斂成具名例外**：解析器缺套件、版面改制、
             # 回應被攔截等都會走到這裡，它們是真的壞了，不是「今天沒開盤」。
-            # 既有 crawler 慣例是一律當假日吞掉，那會讓故障被誤讀為長假
+            # 既有 crawler 慣例是一律當假日吞掉，那會讓故障被誤讀為長假。
+            # 收斂成列舉的話，漏掉的那一種會讓整段歷史回補中止而不是少一天
             logger.warning(
                 f"[Futures Price] 解析行情頁失敗：{type(error).__name__}: {error}"
             )

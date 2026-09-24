@@ -133,7 +133,10 @@ class StockDividendCrawler(BaseDataCrawler):
 
         try:
             payload: Dict[str, Any] = result.response.json()
-        except Exception as error:
+        except ValueError as error:
+            # `response.json()` 解析失敗拋 `requests.exceptions.JSONDecodeError`，
+            # 它同時是 `ValueError` 與 `OSError` 的子類（經 `RequestException`）——
+            # 收 `ValueError` 接得住，而且不會連帶把連線類錯誤一起吞掉
             logger.warning(f"{label}: JSON 解析失敗（{type(error).__name__}: {error}）")
             return CrawlResult.failed(f"json_error: {type(error).__name__}")
 
