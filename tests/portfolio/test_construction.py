@@ -29,8 +29,8 @@ from core.utils import Action, FuturesSession, PositionType, Scale
 - `action`／`position_type` 照訊號搬，不由本層推導。
 - 期貨的口數受保證金與剩餘口數雙重約束。
 
-本檔原本以三支策略的 `calculate_position_size()` 當 A／B 基準，該方法已於 S6
-隨策略改寫刪除，改為逐項寫明預期值。
+本檔原本以三支策略的 `calculate_position_size()` 當 A／B 基準，該方法已隨策略
+改寫刪除，改為逐項寫明預期值。
 """
 
 

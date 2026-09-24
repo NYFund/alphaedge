@@ -40,8 +40,9 @@ def test_broken_progress_file_is_treated_as_empty(tmp_path: pathlib.Path) -> Non
     """
     進度檔壞掉視為空，不可中止
 
-    三種壞法各自對應一個具名例外：JSON 語法壞掉（`ValueError`）、
-    日期字串不合法（同樣 `ValueError`）、結構被改成別的形狀（`TypeError`）。
+    四種壞法都要被接住：JSON 語法壞掉（`ValueError`）、日期字串不合法
+    （同樣 `ValueError`）、整段被寫成字串（逐字元解析後仍是 `ValueError`）、
+    元素不是字串（`TypeError`）。
     """
 
     broken_payloads: List[str] = [

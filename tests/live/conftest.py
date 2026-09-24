@@ -25,9 +25,9 @@ from core.utils import Action, LiveOrderStatus, PositionType, Scale
 斷線這四種。模擬環境跑不出這些——它只會照常成交。沒有假券商的話，這些路徑會
 一直到正式環境才第一次被執行。
 
-`FakeBroker` 與 `ShioajiBroker` 跑**同一份契約測試**（`test_broker_contract.py`），
-所以它不是「比較寬鬆的替身」：兩者在介面層面必須表現一致，否則用它測過的東西
-到了實盤不算數。
+它不是「比較寬鬆的替身」：`test_broker_contract.py` 拿介面契約驗 `FakeBroker`，
+`test_shioaji_sim.py` 拿**同一組介面承諾**在模擬環境驗 `ShioajiBroker`，兩邊都通過
+介面才算成立——否則用假券商測過的東西到了實盤不算數。
 """
 
 

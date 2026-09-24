@@ -556,12 +556,7 @@ def test_ambiguous_fuzzy_match_degrades_instead_of_guessing(
     fake_broker: FakeBroker,
     degradations: List[str],
 ) -> None:
-    """
-    模糊比對到多筆時**不猜**
-
-    挑一個看起來最像的，會把兩張單的成交記到同一張上——而帳上的總量還是對的，
-    對帳看不出來。
-    """
+    """模糊比對到多筆時**不猜**，一律標成 `FAILED` 並降級（理由見模組說明）"""
 
     fake_broker.fill_ratio = 0.0
     oms.submit(make_order(), "MomentumStrategy1")

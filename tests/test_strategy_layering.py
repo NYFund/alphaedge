@@ -78,8 +78,8 @@ class LayeredMomentum(BaseStockStrategy):
     """
     只實作 Alpha 鉤子的示範策略
 
-    **刻意直接繼承 `BaseStockStrategy`**：`MomentumStrategy1` 在 S6 之前仍自行
-    覆寫 `check_open_signal()`，繼承它就會走到舊覆寫，驗不到基底路徑。
+    **刻意直接繼承 `BaseStockStrategy`**：改繼承任何一支具體策略的話，只要它哪天
+    自行覆寫 `check_open_signal()`，這裡就會走到那份覆寫而驗不到基底路徑。
 
     **不要為了「本策略不平倉」補一個 `check_close_signal()` 空實作**：那會蓋掉基底
     的實作，平倉路徑就再也驗不到了。不實作的鉤子會在被呼叫時拋 `NotImplementedError`，

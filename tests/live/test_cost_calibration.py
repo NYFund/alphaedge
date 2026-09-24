@@ -73,6 +73,8 @@ class ProfitLossApi:
 
 
 def test_realized_trades_are_normalized_per_market() -> None:
+    """兩個帳戶正規化成同一種快照：股票沒有 fee／tax，期貨的代號換成契約符號"""
+
     api: ProfitLossApi = ProfitLossApi()
     query: ShioajiAccountQuery = ShioajiAccountQuery(
         api, RateLimiter(), futures_symbol=lambda code: "TX202610"
@@ -149,6 +151,8 @@ def test_stock_short_is_taxed_on_the_opening_leg() -> None:
 
 
 def test_day_trade_tax_rate_applies_only_to_same_day_trades() -> None:
+    """只有開平倉同一天才套當沖稅率：隔夜那筆的估計成本一定比較高"""
+
     estimator: Any = make_trade_cost_estimator()
 
     same_day: Optional[float] = estimator(
@@ -271,6 +275,8 @@ def test_stock_actual_cost_is_gross_minus_broker_pnl(
 def test_futures_actual_cost_is_broker_fee_plus_tax(
     dao: LiveTradeDAO, tmp_path: Path
 ) -> None:
+    """期貨的實際成本直接取券商的 `fee` ＋ `tax`（50 ＋ 193），不必從損益反推"""
+
     trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
         symbol="TX202610",
         quantity=1,
@@ -333,6 +339,8 @@ def test_trade_without_local_opening_fill_is_reported_not_dropped(
 def test_missing_broker_query_skips_calibration(
     dao: LiveTradeDAO, tmp_path: Path
 ) -> None:
+    """券商物件沒有已實現損益查詢時跳過校正，回空清單而不是拋錯"""
+
     runner: AfterCloseRunner = make_runner(dao, [], 0.0, tmp_path)
     runner.broker = SimpleNamespace()
 

@@ -21,7 +21,8 @@ from tests.conftest import build_futures_quote
 
 1. **一天不只一個報價**：同一天同一商品有多個到期月，策略必須自己挑契約。
 2. **數量單位是口，且由保證金決定**，不是用契約價值除資金
-   （TX 一口契約價值 900 萬、保證金只有 70 萬，用錯會低估可開口數十倍以上）。
+   （本檔以 TX 18000 點計：一口契約價值 360 萬、保證金只有 70 萬，
+   用錯會低估可開口數五倍以上）。
 3. **日盤與夜盤是兩筆獨立行情**，不過濾會讓訊號被算兩次。
 4. 沒有股票的信用交易設定。
 
@@ -38,7 +39,7 @@ def make_quote(
     product: str = "TX",
     session: FuturesSession = FuturesSession.DAY,
 ) -> FuturesQuote:
-    """組一筆期貨報價；OHLC 與 scale 留原值（本檔的測試只看 cur_price 與 close）"""
+    """組一筆期貨報價；OHLC 一律 0.0、scale 留 None（本檔只看 cur_price 與 close）"""
 
     return build_futures_quote(
         product=product,
@@ -97,8 +98,8 @@ def test_futures_strategy_is_auto_loaded() -> None:
     """
     新增 `core/strategies/futures/` 就會被自動收錄
 
-    `StrategyLoader` 逐一掃描所有商品類別子套件，**不需要 `load_futures_strategies()`**
-    ——backlog 原本規劃的那個方法在命名軸線收斂之後已經不需要了。
+    `StrategyLoader` 逐一掃描所有商品類別子套件，**期貨與股票走同一條載入路徑**
+    ——不需要另外為期貨寫一支 `load_futures_strategies()`。
     """
 
     strategies = StrategyLoader.load_strategies()

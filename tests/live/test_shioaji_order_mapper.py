@@ -31,6 +31,8 @@ from core.utils import (
 
 @pytest.fixture
 def mapper() -> ShioajiOrderMapper:
+    """委託轉換器；它不持有狀態，每條測試各拿一個即可"""
+
     return ShioajiOrderMapper()
 
 
@@ -43,6 +45,8 @@ def make_stock_order(
     price_type: Optional[StockPriceType] = StockPriceType.LMT,
     order_lot: StockOrderLot = StockOrderLot.Common,
 ) -> StockOrder:
+    """建立測試用股票委託（預設是 1000 元、2 張的整股限價買單）"""
+
     return StockOrder(
         stock_id="2330",
         action=action,

@@ -193,7 +193,7 @@ def test_api_log_file_level_is_warning() -> None:
 
 
 def test_every_api_module_uses_the_shared_level() -> None:
-    """12 支 API 都要用同一份常數，不可各自寫死"""
+    """自己掛 api 桶檔案 sink 的 API 模組都要用同一份常數，不可各自寫死"""
 
     api_dir: Path = Path("core/api/tw")
     modules: List[Path] = [
@@ -219,7 +219,7 @@ def test_api_bucket_only_accepts_api_records() -> None:
     """
     `logs/api/` 每天長約 100 MB，大部分不是 api 自己的日誌
 
-    loguru 的 sink 預設收下整個行程的每一行；本專案有 33 個 `setup_logger()`
+    loguru 的 sink 預設收下整個行程的每一行；本專案有二十多個 `setup_logger()`
     呼叫端，少了 `filter=` 的話，一次查詢會同時寫進三個桶底下的每一個檔案。
     """
 

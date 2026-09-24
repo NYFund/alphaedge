@@ -35,6 +35,8 @@ def snapshot(available: float, equity: float) -> Any:
 
 # === 策略層 ===
 def test_strategy_balance_short_blocks() -> None:
+    """單張所需（30 萬）就超過策略可動用餘額（20 萬）：擋在策略層，原因要講明是哪一層"""
+
     gate: MarginGate = MarginGate(lambda: snapshot(1e9, 1e9), simulation=False)
 
     reason: Optional[str] = gate.check("Alpha", 300_000.0, 200_000.0)
@@ -205,6 +207,8 @@ def test_insufficient_margin_order_is_not_sent(dao: LiveTradeDAO) -> None:
 
 
 def test_sufficient_margin_order_is_sent(dao: LiveTradeDAO) -> None:
+    """兩道檢查都過的開倉單照常送出，不留在未送出清單裡"""
+
     trader: LiveTrader = build_futures_trader(dao, simulation=True)
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 100_000.0

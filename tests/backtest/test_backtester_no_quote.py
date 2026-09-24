@@ -31,6 +31,8 @@ def make_backtester(monkeypatch: pytest.MonkeyPatch) -> Callable[..., Backtester
 
 
 def make_open_order(stock_id: str) -> StockOrder:
+    """建立一張開倉買單（100 元、1 張的限價單）"""
+
     return StockOrder(
         stock_id=stock_id,
         date=DAY_1,

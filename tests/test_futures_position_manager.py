@@ -723,9 +723,9 @@ def test_lookup_mode_requires_product_and_date() -> None:
 
 def test_ratio_mode_is_unchanged_without_api() -> None:
     """
-    沒有 api 時行為與 S5 之前完全相同
+    沒有 api 時維持原本的「契約價值 × 比率」行為
 
-    既有的 23 條測試全部走這條路徑，不可被查表模式影響。
+    本檔查表模式以外的測試全部走這條路徑，不可被查表模式影響。
     """
 
     manager: FuturesPositionManager = FuturesPositionManager(

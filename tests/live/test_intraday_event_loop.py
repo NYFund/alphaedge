@@ -97,8 +97,8 @@ def test_quotes_and_executions_share_one_queue_in_arrival_order() -> None:
     """
     兩種事件依**入列順序**處理
 
-    分兩個 queue 的話這個順序就不確定了——同一筆成交是先記進帳戶還是先被下一筆
-    報價觸發新訊號，結果會不一樣，而且不會有任何錯誤。
+    分兩個 queue 的話這個順序就不確定了（理由見模組說明），而結果不一樣也不會有
+    任何錯誤。
     """
 
     clock: FakeClock = FakeClock()

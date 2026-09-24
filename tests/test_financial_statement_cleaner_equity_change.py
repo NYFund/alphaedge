@@ -79,7 +79,7 @@ def build_df_list() -> List[pd.DataFrame]:
 
 @pytest.fixture
 def cleaner(tmp_path: Path) -> FinancialStatementCleaner:
-    """CSV 輸出導向 tmp_path，避免污染 downloads 目錄"""
+    """權益變動表清洗器，輸出目錄改指 tmp_path"""
 
     fs_cleaner: FinancialStatementCleaner = FinancialStatementCleaner()
     fs_cleaner.equity_change_dir = tmp_path

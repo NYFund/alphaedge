@@ -83,7 +83,7 @@ def test_short_regression_open_positions() -> None:
 
 
 def test_short_regression_account_and_events() -> None:
-    """帳戶終值與六個事件計數比對（event_counts 的 key 必須維持不變）"""
+    """帳戶終值與全部事件計數比對（event_counts 的 key 必須維持不變）"""
 
     _, _, summary = run_all_scenarios()
     assert_matches_snapshot(summary, SUMMARY_FILE_NAME)

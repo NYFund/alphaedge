@@ -211,7 +211,7 @@ def test_loader_degrades_without_dolphindb(monkeypatch: pytest.MonkeyPatch) -> N
     期貨 tick 是選用功能（`[tick]` 相依），只跑日線回測的機器與 CI 都沒有它。
     此時應保留中繼檔並記 warning，而不是拋錯中止。
 
-    **`DDB_PATH` 由測試自己設**：它是「設定」而不是「DolphinDB 在不在」，缺值本來就該
+    **`TICK_DB_PATH` 由測試自己設**：它是「設定」而不是「DolphinDB 在不在」，缺值本來就該
     當場拋出（見 `test_require_tick_db_path_raises_when_unset`）。不設的話本測試會在
     `.env` 有值的本機通過、在沒有 `.env` 的 CI 失敗——量到的是機器，不是降級行為。
     """

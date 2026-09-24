@@ -90,7 +90,7 @@ def test_missing_live_order_is_unexplained_by_default() -> None:
 
 def test_cross_strategy_block_is_not_unexplained() -> None:
     """
-    被 D8 同標的守門擋下是**預期的**差異
+    被跨策略同標的守門（`CrossStrategyConflictGuard`）擋下是**預期的**差異
 
     多策略下實盤績效本來就會低於各策略單跑的回測；混進 `UNEXPLAINED`
     會讓真正的未解釋差異被雜訊淹沒。

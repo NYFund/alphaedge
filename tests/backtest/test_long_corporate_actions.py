@@ -112,7 +112,7 @@ def test_long_position_opened_on_ex_date_gets_nothing() -> None:
 
 def test_equity_is_continuous_across_the_ex_dividend_day() -> None:
     """
-    **除息日的權益不再跳空**（本步驟的驗收條件）
+    **除息日的權益不再跳空**
 
     收盤價跌 3 元、帳戶收到 3 元／股，兩者相抵；沒有股利入帳的話，
     權益會在除息當日整段掉下來，而那不是虧損。

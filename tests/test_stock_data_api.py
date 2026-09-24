@@ -196,7 +196,7 @@ def test_get_trust_net_shares_map(chip_api: StockChipAPI) -> None:
 # === API 邊界===
 def test_get_net_chip_no_longer_raises(dao_factory: Callable[..., BaseDAO]) -> None:
     """
-    `get_net_chip()` 一被呼叫就 `TypeError`
+    `get_net_chip()` 不再一被呼叫就 `TypeError`
 
     舊版寫的是 `self.get(start_date, end_date)`，而 `get()` 只收一個 `date`。
     全專案沒有呼叫端，所以壞了也沒人發現，但 API 門面看起來是可用的。

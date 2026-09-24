@@ -26,7 +26,7 @@ from core.utils.constant import FUTURES_MULTIPLIER, FUTURES_TICK_SIZE
 2. **稅基是契約價值**（價格 × 乘數 × 口數），不是成交金額。
 3. **手續費是每口固定金額**，沒有費率、折扣，也沒有最低收費。
 4. **滑價以跳動點表達**，不是基點——同一個基點數在不同價位是不同的檔數。
-5. **大台與小台要能分開設**，用同一個數字會低估小台的成本。
+5. **大台與小台要能分開設**，用同一個數字會高估小台的成本。
 """
 
 INIT_CAPITAL: float = 10_000_000
@@ -342,7 +342,7 @@ def test_tick_table_matches_the_multiplier_table() -> None:
 # === 期貨的 fill_config 型別 ===
 def test_base_fill_config_is_rejected_for_futures() -> None:
     """
-    期貨策略給基底 `FillConfig` 時當場中斷（D6）
+    期貨策略給基底 `FillConfig` 時當場中斷
 
     型別標註擋不住這件事：寫成 `FillConfig(slippage_bps_buy=10)` 照樣跑得完，
     只是 `get_slippage_ticks()` 回 0、整組假設默默換成基點。警告在批次跑參數

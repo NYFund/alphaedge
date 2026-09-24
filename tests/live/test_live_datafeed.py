@@ -355,7 +355,7 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     而那個訊息只會說「物件沒有某個屬性」，完全看不出是實盤資料源漏建了。
     這正是 `MomentumStrategy1` 撞到的——它取 `feed.mrr`，而實盤那邊沒建。
 
-    `tick` 不比對：那是盤中（Scale.TICK）才要的，屬 Phase5。
+    `tick` 不比對：那是盤中（Scale.TICK）才要的，實盤資料源還沒建它。
     """
 
     import inspect

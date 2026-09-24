@@ -46,10 +46,14 @@ class FakeFutures:
 
 
 def futures_contract(code: str, root: str, delivery_month: str) -> Any:
+    """合約替身；只帶代號轉換讀得到的三個欄位"""
+
     return SimpleNamespace(code=code, root=root, delivery_month=delivery_month)
 
 
 def make_resolver() -> ShioajiContractResolver:
+    """以大台、小台與一檔股期建合約解析器"""
+
     futures: FakeFutures = FakeFutures(
         {
             "TXFJ6": futures_contract("TXFJ6", "TXF", "202610"),
@@ -73,6 +77,8 @@ def test_category_maps_to_project_product(category: str, product: str) -> None:
 
 
 def test_month_letter_code_becomes_product_and_delivery_month() -> None:
+    """字母碼查合約檔，分類碼換成專案商品、月份取 `delivery_month`：`TXFJ6` → `TX202610`"""
+
     resolver: ShioajiContractResolver = make_resolver()
 
     assert resolver.to_futures_symbol("TXFJ6") == "TX202610"
@@ -96,6 +102,8 @@ def test_conversion_is_cached() -> None:
 
 
 def make_handler() -> ShioajiExecutionHandler:
+    """已接上期貨代號轉換的回報處理器"""
+
     return ShioajiExecutionHandler(
         queue.Queue(), futures_symbol=make_resolver().to_futures_symbol
     )
@@ -122,6 +130,8 @@ def test_futures_deal_report_uses_the_project_symbol() -> None:
 
 
 def test_futures_order_event_uses_the_project_symbol() -> None:
+    """委託回報的代碼也要換成 `TX202610`；與成交回報走同一套，否則兩邊對不起來"""
+
     event: Any = make_handler().parse(
         OrderState.FuturesOrder,
         {

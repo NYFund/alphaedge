@@ -297,7 +297,7 @@ def test_backward_adjustment_keeps_the_latest_segment_intact(updater) -> None:
 
 def test_adjustments_are_reversible(updater) -> None:
     """
-    **展期價差可被還原檢查**（本步驟的驗收條件）
+    **展期價差可被還原檢查**
 
     BACKWARD：原始價 ＝ 調整價 − adj_factor；RATIO：原始價 ＝ 調整價 ÷ adj_factor。
     """

@@ -43,7 +43,8 @@ from core.utils import (
     uv run pytest tests/live/test_shioaji_sim.py -m shioaji_sim_order
 
 `shioaji_sim_order` 會在模擬環境**送出委託**，故與唯讀的測試分開標記：
-來回測試以跌停價買進 1 單位（不會成交，測完即撤單）；成交測試（名稱含 `fill`）
+來回測試以跌停價買進 1 單位（放空那三條則以漲停價賣出），兩者都在漲跌停範圍內
+且不會成交，測完即撤單；成交測試（名稱含 `fill`）
 以漲停價買進 1 單位、核對成交回報後以跌停價賣出平倉，模擬帳戶最後不留部位。只連模擬環境，沒有連正式環境的選項。
 """
 
@@ -127,6 +128,8 @@ def test_stock_account_is_normalized(broker: ShioajiBroker) -> None:
 
 
 def test_futures_account_is_normalized(broker: ShioajiBroker) -> None:
+    """期貨帳務查詢同樣回傳 `BrokerAccountSnapshot`，不是券商原生型別"""
+
     account: BrokerAccountSnapshot = broker.get_futures_account()
 
     assert isinstance(account, BrokerAccountSnapshot)
@@ -296,6 +299,8 @@ def assert_round_trip(broker: ShioajiBroker, ticket: OrderTicket) -> None:
 
 @pytest.mark.shioaji_sim_order
 def test_stock_order_round_trip(broker: ShioajiBroker) -> None:
+    """股票限價單以跌停價買進 1 張，走完送出 → 委託回報 → 撤單 → 撤單回報一輪"""
+
     contract: Any = broker.resolver.resolve_stock(STOCK_SYMBOL)
     order: StockOrder = StockOrder(
         stock_id=STOCK_SYMBOL,

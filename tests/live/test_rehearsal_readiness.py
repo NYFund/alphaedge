@@ -34,6 +34,8 @@ from .test_live_factory_and_entry import LiveStockStrategy
 
 @pytest.fixture(autouse=True)
 def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """資料源建構時不碰正式的歷史資料庫，一律改連 in-memory SQLite"""
+
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
@@ -46,6 +48,8 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_rehearsal_strategies_pass_the_live_readiness_check(
     strategy_class: Any,
 ) -> None:
+    """演練用的兩支策略都通過實盤前檢查：`inspect_strategy()` 回空清單（沒有任何問題）"""
+
     assert inspect_strategy(strategy_class()) == []
 
 
@@ -91,6 +95,8 @@ def test_stock_feed_fills_the_previous_day_universe() -> None:
 
 
 def test_stock_feed_keeps_a_declared_universe() -> None:
+    """策略自己宣告了標的池就不動它，預設標的池不得覆蓋過去"""
+
     feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
     strategy: Any = SimpleNamespace(symbols=["2454"])
 

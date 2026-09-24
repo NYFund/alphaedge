@@ -125,10 +125,11 @@ def test_single_strategy_is_not_a_special_path(dao: LiveTradeDAO) -> None:
 
 def test_singletons_are_shared_across_strategies(dao: LiveTradeDAO) -> None:
     """
-    券商、委託管理、限流、資金分配、歸屬帳只有一份
+    券商與委託管理跨策略共用一份，資料源與帳戶則每支策略各一份
 
     限流與委託回報都是**帳戶級**的：拆成多份時每個都以為自己還有額度，
-    合起來必然超額，而且誰都不知道是誰用掉的。
+    合起來必然超額，而且誰都不知道是誰用掉的。資金分配同樣只有一個，
+    額度在它底下按策略名各記一筆。
     """
 
     trader: LiveTrader = build([LiveStockStrategy(), AnotherLiveStockStrategy()], dao)
@@ -451,7 +452,7 @@ def test_exit_codes_are_distinct() -> None:
 
 def test_backtest_path_is_untouched() -> None:
     """
-    回測入口不受影響
+    回測入口不受影響：`run.py` 仍有 `run_live()`，段落對照表仍把 `close` 對到 `AT_CLOSE`
 
     `--mode live` 的新旗標全部有預設值，回測那條路徑一個字都不用改。
     """
@@ -467,9 +468,8 @@ def test_mixing_markets_with_disjoint_windows_is_refused(dao: LiveTradeDAO) -> N
     """
     台股與期貨的尾盤時窗不重疊，**同一次執行不可混跑**
 
-    這不是限制而是事實：台股 13:25~13:29、期貨 13:30~13:44。硬湊一個時窗出來
-    等於整段都不送單，而且不會有任何錯誤訊息。正解是分開排程——
-    部署文件列出多行 cron 就是為了這個。
+    理由同 `test_disjoint_windows_are_refused_not_patched`；這條守的是連組裝層
+    都要當場拒絕，而不是等到那個湊出來的時窗整段都不送單才發現。正解是分開排程。
     """
 
     with pytest.raises(ValueError, match="沒有交集"):
