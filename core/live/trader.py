@@ -388,12 +388,9 @@ class LiveTrader:
         # 那些，不先標記就會跳過上次崩潰的那一列，等於把它的降級狀態擦掉
         self.mark_previous_crash()
 
+        # 人工恢復由 `load()` 一併套用（**只能由命令列旗標觸發**，程式不自動呼叫）：
+        # 讀回與恢復的先後有相依，綁在一起才不會有呼叫端漏掉其中一半
         self.mode_state.load()
-        if self.resume_trading:
-            # 人工恢復；**只能由命令列旗標觸發**，程式不自動呼叫
-            self.mode_state.resume()
-            for context in self.contexts:
-                self.mode_state.resume(context.name)
 
         verify_strategies([context.strategy for context in self.contexts])
 

@@ -1,4 +1,5 @@
 import datetime
+import os
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -277,7 +278,7 @@ def build_live_trader(
     )
 
     mode_state: TradingModeState = TradingModeState(
-        resolved_dao, resolved_run_id, now_provider
+        resolved_dao, resolved_run_id, now_provider, resume_trading=resume_trading
     )
     risk_manager: PreTradeRiskManager = PreTradeRiskManager(
         mode_state,
@@ -861,6 +862,9 @@ def _record_run(
         {
             "run_id": run_id,
             "started_at": now_provider(),
+            # 判斷「另一個段落是不是還活著」的依據：排程刻意重疊，
+            # 少了它就會把還在送單的同伴標成崩潰
+            "pid": os.getpid(),
             "phase": phase,
             "simulation": int(simulation),
             "dry_run": int(dry_run),

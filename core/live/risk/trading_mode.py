@@ -87,6 +87,7 @@ class TradingModeState:
         dao: Optional[LiveTradeDAO] = None,
         run_id: str = "",
         now_provider: Callable[[], datetime.datetime] = now_live,
+        resume_trading: bool = False,
     ) -> None:
         """
         - Description:
@@ -98,11 +99,14 @@ class TradingModeState:
                 本次啟動的識別碼
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
+            - resume_trading: bool
+                人工恢復；由 `load()` 在讀回之後套用
         """
 
         self.dao: Optional[LiveTradeDAO] = dao
         self.run_id: str = run_id
         self._now: Callable[[], datetime.datetime] = now_provider
+        self.resume_trading: bool = resume_trading
 
         self.account_mode: TradingMode = TradingMode.NORMAL
         self.strategy_modes: Dict[str, TradingMode] = {}
@@ -129,9 +133,25 @@ class TradingModeState:
 
         if self.account_mode is not TradingMode.NORMAL:
             logger.warning(f"讀回上次的帳戶層交易模式：{self.account_mode.value}")
+            # **繼承來的降級也要當場落地**，不能只留在記憶體裡。
+            # `live_run.account_mode` 是下一個段落判斷「上次結束時是什麼模式」的
+            # 唯一依據，而本段落若沒有再降級，`degrade()` 就不會被呼叫，
+            # 那一格會停在插入時的 NORMAL。於是：本行程崩潰（`finish_run()`
+            # 不會被呼叫）或被另一個段落標記結束時，下一個段落讀到的是 NORMAL
+            # ——halt 被靜默解除，而那正是本方法存在的理由
+            self._persist(self.account_mode, "沿用上次", None)
         for name, mode in self.strategy_modes.items():
             if mode is not TradingMode.NORMAL:
                 logger.warning(f"讀回策略 {name} 的交易模式：{mode.value}")
+
+        # **恢復一定要排在讀回之後**，而且要跟讀回綁在同一個方法裡：
+        # 兩者拆開的話，每個呼叫端都得記得「先 load 再 resume」，
+        # 而漏掉的那一個不會報錯——`AfterCloseRunner` 就只呼叫了 `load()`，
+        # 於是 `--phase after_close --resume-trading` 靜默無效
+        if self.resume_trading:
+            self.resume()
+            for name in list(self.strategy_modes):
+                self.resume(name)
 
     # === 查詢 ===
     def effective_mode(self, strategy_name: Optional[str] = None) -> TradingMode:
