@@ -9,11 +9,12 @@ from core.config import (
     FINANCIAL_STATEMENT_META_DIR_PATH,
     TW_STOCK_DB_PATH,
 )
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.connection import DBConnection, DBError, connect_sqlite
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.data_utils import DataUtils
+from core.pipeline.utils.exceptions import PipelineError
 
 
 class FinancialStatementLoader(BaseDataLoader):
@@ -213,7 +214,15 @@ class FinancialStatementLoader(BaseDataLoader):
                     partial_files.append(str(file_path))
                 logger.info(f"Save {file_path} into database")
                 file_cnt += 1
-            except Exception as e:
+            except (OSError, ValueError, KeyError, DBError, PipelineError) as e:
+                # 讀不到檔（`OSError`）、CSV 解析失敗（`ValueError`，`ParserError`
+                # 與 `EmptyDataError` 都是它的子類）、來源改了欄位名（`KeyError`）、
+                # 入庫失敗（`DBError`，即 `sqlite3.Error`——`core/pipeline/` 不得
+                # 直接 import 驅動，由 `core.dao` 提供具名別名）。
+                # **`PipelineError` 一定要收**：清洗與驗證階段自己拋的那些
+                # （例如 `SymbolNameConflictError`）也屬於單檔失敗，
+                # 漏收會讓它直接逃出去，整批在第一個壞檔就中止。
+                # **單檔失敗不中止整批**，跑完由 `finish_load()` 一次報出
                 logger.warning(f"Error saving {file_path}: {e}")
                 failed_files.append(str(file_path))
 
