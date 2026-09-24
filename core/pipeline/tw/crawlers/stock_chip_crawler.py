@@ -100,7 +100,9 @@ class StockChipCrawler(BaseDataCrawler):
             tpex_df.drop(
                 index=tpex_df.index[0], columns=tpex_df.columns[-1], inplace=True
             )
-        except Exception as error:
+        except (IndexError, KeyError) as error:
+            # 表格是空的時 `index[0]` 拋 `IndexError`，欄位數與預期不符時
+            # `drop(columns=...)` 拋 `KeyError`——兩者都代表版面變了
             logger.warning(
                 f"TPEX chip {date}: 版面與預期不符（{type(error).__name__}: {error}）"
             )

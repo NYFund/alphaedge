@@ -164,7 +164,9 @@ class MonthlyRevenueReportCrawler(BaseDataCrawler):
 
             try:
                 dfs: List[pd.DataFrame] = pd.read_html(StringIO(fetched.text))
-            except Exception as error:
+            except ValueError as error:
+                # `read_html()` 找不到表格時拋 `ValueError`。單月失敗只記一筆，
+                # 其餘月份照跑——一個月的版面異常不該讓整批回補停下
                 logger.warning(
                     f"{label}: 版面解析失敗（{type(error).__name__}: {error}）"
                 )
