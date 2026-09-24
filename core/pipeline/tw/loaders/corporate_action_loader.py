@@ -90,7 +90,10 @@ class CorporateActionLoader(BaseDataLoader):
                 df: pd.DataFrame = pd.read_csv(file_path, dtype={"stock_id": str})
                 dfs.append(df)
                 file_cnt += 1
-            except Exception as error:
+            except (OSError, ValueError) as error:
+                # 讀不到檔（OSError）與 CSV 解析失敗（`pd.errors.ParserError`、
+                # `EmptyDataError` 都是 `ValueError` 的子類）。單檔失敗只記下檔名，
+                # 其餘檔案照常載入——一個壞檔不該讓整批入庫停擺
                 logger.warning(f"Error reading {file_path}: {error}")
                 failed_files.append(str(file_path))
 

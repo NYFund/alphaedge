@@ -84,7 +84,8 @@ class SeasonProgressStore:
             )
             self.no_data = self._parse_section(payload.get("no_data", {}))
             self.incomplete = self._parse_section(payload.get("incomplete", {}))
-        except Exception as error:
+        except (OSError, ValueError, TypeError) as error:
+            # 與日期進度檔同一條規則：讀檔、JSON／年季格式、結構走樣三類視為空
             logger.warning(
                 f"[{self.source}] 讀取年季進度檔失敗（{type(error).__name__}: {error}），"
                 f"視為空；最壞只是多問幾次"

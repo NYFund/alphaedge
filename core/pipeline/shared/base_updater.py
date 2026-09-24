@@ -219,6 +219,10 @@ class BaseDataUpdater(ABC):
         try:
             cleaned: Optional[pd.DataFrame] = clean(raw, date)
         except Exception as error:
+            # **這裡的盲捕是刻意的隔離邊界**：`clean` 是各來源自己實作的清洗函式，
+            # 拋得出什麼完全由那一側決定。收斂成具名例外等於要求每個清洗器
+            # 都只能拋我們列得出來的那幾種——漏一種就會讓單日失敗升級成整批中止，
+            # 而本方法的契約本來就是「拋例外一律計為失敗、下次重試」
             logger.error(
                 f"[{label}] {date} 清洗失敗（{type(error).__name__}: {error}），"
                 f"本日計為失敗、下次執行會重試"

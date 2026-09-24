@@ -89,7 +89,10 @@ class DateProgressStore:
                 datetime.date.fromisoformat(value)
                 for value in payload.get("incomplete", [])
             }
-        except Exception as error:
+        except (OSError, ValueError, TypeError) as error:
+            # 讀檔（OSError）、JSON 壞掉或日期格式不對（ValueError）、
+            # 進度檔結構被改成別的形狀（TypeError）——三者都只該讓進度視為空，
+            # 其餘例外代表這支函式自己寫錯了，不該被「最壞只是多問幾次」蓋掉
             logger.warning(
                 f"[{self.source}] 讀取日期進度檔失敗（{type(error).__name__}: {error}），"
                 f"視為空；最壞只是多問幾次"
