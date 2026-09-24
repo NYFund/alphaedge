@@ -1,8 +1,11 @@
 import contextlib
 import datetime
+import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+
+from loguru import logger
 
 from core.config import (
     LIVE_ACCOUNT_SNAPSHOT_TABLE_NAME,
@@ -40,6 +43,27 @@ from core.dao.connection import connect_live_trading
 依日期篩選一律用 `substr(欄位, 1, 10)` 而不是 SQLite 的 `date()`：後者會先把
 帶時區的時間換算成 UTC，台北早上 08:00 以前的紀錄會被歸到前一天。
 """
+
+
+def _process_alive(pid: int) -> bool:
+    """
+    這個 pid 是否還在執行
+
+    `os.kill(pid, 0)` 不送訊號、只做存在性與權限檢查。`PermissionError`
+    代表行程存在但屬於別的使用者——那仍然是「活著」。
+    """
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        # 判不出來時當成「還活著」：誤放過一筆崩潰紀錄，下一次啟動還會再檢查一次；
+        # 誤標一個還在送單的段落則會當場推 CRITICAL 並觸發一次不必要的重建
+        return True
+    return True
 
 
 def _to_live_params(*values: Any) -> Tuple[Any, ...]:
@@ -135,7 +159,28 @@ class LiveTradeDAO(BaseDAO):
 
         for statement in self._schema_statements():
             self.conn.execute(statement)
+        self._add_missing_columns()
         self.conn.commit()
+
+    # 後加的欄位：`CREATE TABLE IF NOT EXISTS` 對已存在的表什麼都不做，
+    # 既有的資料庫不會長出新欄位。值一律可為 NULL——舊的資料列補不出內容，
+    # 而讀取端必須自己處理「這一列沒有這項資訊」
+    ADDED_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
+        (LIVE_RUN_TABLE_NAME, "pid", "INTEGER"),
+    )
+
+    def _add_missing_columns(self) -> None:
+        """補上後加的欄位；已經有的就跳過"""
+
+        for table, column, column_type in self.ADDED_COLUMNS:
+            existing: List[str] = [
+                info[1] for info in self.conn.execute(f"PRAGMA table_info('{table}')")
+            ]
+            if column in existing:
+                continue
+
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+            logger.info(f"{table} 補上欄位 {column}")
 
     @staticmethod
     def _schema_statements() -> Tuple[str, ...]:
@@ -148,6 +193,7 @@ class LiveTradeDAO(BaseDAO):
             CREATE TABLE IF NOT EXISTS {LIVE_RUN_TABLE_NAME} (
                 run_id              TEXT PRIMARY KEY,
                 started_at          TEXT NOT NULL,
+                pid                 INTEGER,
                 ended_at            TEXT,
                 phase               TEXT NOT NULL,
                 simulation          INTEGER NOT NULL,
@@ -408,41 +454,64 @@ class LiveTradeDAO(BaseDAO):
         self.conn.commit()
 
     def mark_crashed_runs(
-        self, current_run_id: str, ended_at: datetime.datetime
+        self,
+        current_run_id: str,
+        ended_at: datetime.datetime,
+        is_alive: Optional[Callable[[int], bool]] = None,
     ) -> List[str]:
         """
         - Description:
             把還沒結束的舊紀錄標記為非正常結束
 
-            `ended_at IS NULL` 只有兩種可能：正在跑的這一次，或是**上次崩潰了**。
             不標記的話 `get_last_account_mode()` 會跳過那一列（它只讀已結束的），
             於是崩潰前的降級狀態讀不回來——按下重啟鍵就帶著錯誤部位繼續交易。
 
-            **不動 `account_mode`**：那一欄由 `update_account_mode()` 即時維護，
-            這裡覆寫等於把崩潰當下的模式擦掉。
+            **`ended_at IS NULL` 有三種可能，不是兩種**：本次、上次崩潰了，
+            以及**另一個正在執行的段落**。排程本來就重疊（股票尾盤段 13:20 啟動、
+            13:35 收線，期貨尾盤段 13:28 啟動），把還活著的同伴標成崩潰會每天
+            誤推一則 CRITICAL，而天天誤報的告警等於沒有告警。故以 `pid` 判定
+            行程是否還在，活著的跳過。
+
+            **`pid` 為空的一律視為崩潰**：欄位是後加的，既有資料列都是 NULL。
+            當成「還活著」的話，升級前留下的崩潰紀錄會永遠標不起來。
+
+            **不動 `account_mode`**：那一欄由 `update_account_mode()` 即時維護
+            （含 `TradingModeState.load()` 寫下的繼承值），這裡覆寫等於把
+            崩潰當下的模式擦掉。
         - Parameters:
             - current_run_id: str
                 本次啟動的識別碼；它自己不算崩潰
             - ended_at: datetime.datetime
                 標記時間
+            - is_alive: Optional[Callable[[int], bool]]
+                判定 pid 是否仍在執行；None 時以作業系統查詢
         - Return:
             - List[str]
-                被標記的 `run_id`；空 list 表示上次是正常結束
+                被標記的 `run_id`；空 list 表示沒有崩潰的紀錄
         """
 
+        alive: Callable[[int], bool] = is_alive or _process_alive
         rows: List[Tuple[Any, ...]] = self.conn.execute(
-            f"SELECT run_id FROM {LIVE_RUN_TABLE_NAME} "
+            f"SELECT run_id, pid FROM {LIVE_RUN_TABLE_NAME} "
             "WHERE ended_at IS NULL AND run_id != ?",
             _to_live_params(current_run_id),
         ).fetchall()
-        crashed: List[str] = [str(row[0]) for row in rows]
+
+        crashed: List[str] = []
+        for run_id, pid in rows:
+            if pid is not None and alive(int(pid)):
+                logger.debug(f"{run_id} 的行程（pid={pid}）仍在執行，不標記為崩潰")
+                continue
+            crashed.append(str(run_id))
+
         if not crashed:
             return []
 
+        placeholders: str = ", ".join("?" for _ in crashed)
         self.conn.execute(
-            f"UPDATE {LIVE_RUN_TABLE_NAME} "
-            "SET ended_at = ?, end_reason = ? WHERE ended_at IS NULL AND run_id != ?",
-            _to_live_params(ended_at, self.END_REASON_CRASHED, current_run_id),
+            f"UPDATE {LIVE_RUN_TABLE_NAME} SET ended_at = ?, end_reason = ? "
+            f"WHERE run_id IN ({placeholders})",
+            _to_live_params(ended_at, self.END_REASON_CRASHED, *crashed),
         )
         self.conn.commit()
         return crashed
