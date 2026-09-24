@@ -225,7 +225,10 @@ class BaseDataCrawler(ABC):
             df: pd.DataFrame = pd.read_html(StringIO(result.text), **read_html_kwargs)[
                 index
             ]
-        except Exception as error:
+        except (ValueError, IndexError) as error:
+            # `read_html()` 找不到表格時拋 `ValueError`，表格數量少於預期時
+            # 取索引拋 `IndexError`——兩者都是「版面變了」。
+            # 其餘例外（例如參數給錯）代表呼叫端寫錯，要讓它現形
             logger.warning(
                 f"{label}: 版面解析失敗（{type(error).__name__}: {error}）；"
                 f"這**不是**休市，站方沒資料時會回明確訊息"

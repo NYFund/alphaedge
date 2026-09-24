@@ -88,6 +88,11 @@ class FinMindContext:
                     f"Could not retrieve API quota limit from FinMind API. Using default: {self.api_quota_limit}"
                 )
         except Exception as e:
+            # **這裡的盲捕不可收斂**：`api_usage_limit` 是會發 HTTP 請求的 property，
+            # 而 FinMind 的 `request_get()` 內部吞掉所有例外、重試 10 次之後
+            # ①「非 200」直接 `raise Exception(...)`（字面上的基底類別）、
+            # ② 全部重試失敗時回 `None`，接著 `.json()` 拋 `AttributeError`。
+            # 改成 `requests.RequestException` 兩者都攔不到，配額查詢失敗會打死整批 ETL
             logger.warning(
                 f"Error retrieving API quota limit: {e}. Using default: {self.api_quota_limit}"
             )
@@ -130,6 +135,8 @@ class FinMindContext:
             logger.info(f"📊 目前使用次數 / 總次數: {usage} / {limit}")
             return remaining
         except Exception as e:
+            # 同 `refresh_api_quota_limit()`：FinMind 的 `request_get()` 會拋出
+            # 字面上的 `Exception`，收斂成具名例外反而攔不住
             logger.debug(f"Could not query API remaining quota from FinMind API: {e}")
         return None
 
@@ -253,7 +260,10 @@ class BrokerTradingMetadataStore:
                 self.metadata_path
             )
             return metadata if metadata is not None else {}
-        except Exception as e:
+        except OSError as e:
+            # **只剩檔案系統的錯**：`DataUtils.load_json()` 自己已經處理掉
+            # `FileNotFoundError` 與 `JSONDecodeError`（回 `None`，由上一行的
+            # `is not None` 接住），走到這裡的是權限不足、路徑是目錄這類問題
             logger.warning(f"Error reading broker trading metadata: {e}")
             return {}
 
