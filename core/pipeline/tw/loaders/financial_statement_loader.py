@@ -16,6 +16,16 @@ from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import PipelineError
 
+"""
+Financial Statement Loader（四大報表）
+
+資產負債表、綜合損益表、現金流量表、權益變動表各一張表，**欄位由 cleaner 產出的
+`*_cleaned_columns.json` 決定**：四大報表的欄位逐年增修，寫死 schema 會在來源
+新增會計科目時整批入庫失敗。
+
+四張表共用同一條連線，故本 loader 收的是 `DBConnection` 而不是單一 DAO。
+"""
+
 
 class FinancialStatementLoader(BaseDataLoader):
     """Financial Statement Loader"""

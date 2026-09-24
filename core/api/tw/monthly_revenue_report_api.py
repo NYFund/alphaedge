@@ -40,8 +40,8 @@ class MonthlyRevenueReportAPI(BaseDataAPI):
         - Description:
             取得 `start_year/start_month` 到 `end_year/end_month`（兩端皆含）的月營收報表
 
-            參數順序維持既有公開介面（先年後月）。**舊版年、月各自 `BETWEEN`**，
-            跨年區間（例如 2023-11～2024-02）一筆都查不到，現已改為連續年月區間。
+            參數順序為「先年後月」。區間以**連續年月**比對，**不是年、月各自
+            `BETWEEN`**——後者在跨年區間（例如 2023-11～2024-02）一筆都查不到。
         - Parameters:
             - start_year / end_year: int
                 起始與結束年度

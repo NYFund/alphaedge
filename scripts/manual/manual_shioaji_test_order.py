@@ -11,8 +11,8 @@ from core.config.settings import now_live
 """
 永豐 API 測試用的委託：模擬環境各送一筆股票與期貨 ROD 限價單
 
-**這是 Phase0-1 的官方流程要求**，不是功能驗證：券商要看到模擬環境有實際委託
-才會開通正式下單權限。`ShioajiOrderMapper` 的轉換已由單元測試覆蓋，
+**這是券商開通正式下單權限的流程要求**，不是功能驗證：券商要看到模擬環境
+有實際委託才會開通。`ShioajiOrderMapper` 的轉換已由單元測試覆蓋，
 這支腳本要回答的是「券商真的收得到嗎、回什麼狀態」。
 
 **價格一律取合約的 `limit_down`（買進）**，理由有兩個：
@@ -41,12 +41,14 @@ WEEKLY_SUFFIXES: Tuple[str, ...] = ("R1", "R2")
 # 送單、撤單、查狀態都**等券商回覆**，單位毫秒。
 #
 # **不可以用 `timeout=0`**：那是非阻塞，`place_order()` 會在券商確認之前就回傳，
-# 於是狀態一定是 `Inactive`、委託序號一定是空的——看起來像被拒，其實只是
-# 還沒收到回覆。2026-09-21 第一次實跑就是這樣，完全判斷不出委託到底有沒有進去
+# 於是狀態一定是 `Inactive`、委託序號一定是空的——看起來像被拒，其實只是還沒
+# 收到回覆（2026-09-21 實跑確認），完全判斷不出委託到底有沒有進去
 ORDER_TIMEOUT_MS: int = 5000
 
 
 def parse_arguments() -> argparse.Namespace:
+    """命令列參數"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="模擬環境的 API 測試委託（股票 ＋ 期貨各一筆）"
     )

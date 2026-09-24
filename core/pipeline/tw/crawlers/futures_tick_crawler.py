@@ -49,7 +49,7 @@ class FuturesTickCrawler(BaseDataCrawler):
         self.tick_dir.mkdir(parents=True, exist_ok=True)
 
     def crawl(self) -> None:
-        """Crawl Tick Data"""
+        """本爬蟲沒有統一入口，逐契約取資料請用 `crawl_futures_tick()`"""
         pass
 
     @staticmethod

@@ -41,6 +41,7 @@ class FuturesContinuousLoader(BaseDataLoader):
                 共用的 DAO（通常由 updater 傳入）。指定時 loader 不擁有它，
                 `disconnect()` 不會關閉
         """
+
         self.continuous_dir: Path = FUTURES_CONTINUOUS_DOWNLOADS_PATH
 
         super().__init__(dao)

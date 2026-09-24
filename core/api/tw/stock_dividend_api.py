@@ -136,13 +136,14 @@ class StockDividendAPI(BaseDataAPI):
 
             同一天兩個來源都有時以 `dividend` 為準，與 `get_adjust_factors()`
             的取捨一致（交易所對除權息的參考價已含該日全部調整）。
-        - Parameters:
-            - date: datetime.date
-                交易日（除權息交易日／恢復買賣日）
+
             **配股率為 NULL 時回傳 NaN，不當成 0**：上市權息並存的列拆不出配股率，
             cleaner 刻意留 NULL。當成 0 就是「沒有配股」，做多部位持有過除權日時
             價格已除權、張數卻沒放大，帳面憑空虧掉配股那一段。NaN 交給結算層
             記 warning 並計數，與現金股利 NULL 的口徑一致。
+        - Parameters:
+            - date: datetime.date
+                交易日（除權息交易日／恢復買賣日）
         - Return:
             - Dict[str, float]
                 `{stock_id: 股數倍率}`；倍率為 1（無變動）者不列入，
@@ -288,8 +289,8 @@ class StockDividendAPI(BaseDataAPI):
 
         dividend_df: pd.DataFrame = self.dao.get_adjust_factors()
 
-        # `corporate_action` 是 2026-09 才建的表，舊環境可能還沒有——
-        # 查不到時只用除權息，行為與加入本表之前完全相同
+        # `corporate_action` 是選用表，尚未回補的環境可能沒有——
+        # 查不到時只用除權息，減資與分割的假跳空不會被消除
         if not self.corporate_action_dao.table_exists():
             logger.warning(
                 f"[dividend] 找不到 {CORPORATE_ACTION_TABLE_NAME}，還原價僅涵蓋除權息；"

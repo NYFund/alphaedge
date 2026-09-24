@@ -17,9 +17,8 @@ class FuturesStockUniverseDAO(BaseDAO):
         股期標的池快照序列的建表、寫入與查詢
 
         **本表是快照序列**（每次更新新增一份，主鍵 `(snapshot_date, product_id)`），
-        任何「某日的狀態」都要先解出該日適用的快照日。快照日的查詢只有
-        `get_latest_snapshot_date()` 一份實作——舊版 API、updater 與無呼叫端的
-        `get_active_products()` 各寫了一份 `MAX(snapshot_date)`。
+        任何「某日的狀態」都要先解出該日適用的快照日。快照日的查詢只在
+        `get_latest_snapshot_date()` 一處實作，呼叫端不要各自寫 `MAX(snapshot_date)`。
 
         表不存在（尚未跑過標的池 ETL）時查詢回 None／空清單；被鎖住或 schema 壞掉一律往外拋。
     """
@@ -226,7 +225,7 @@ class FuturesStockUniverseDAO(BaseDAO):
         - Description:
             取得股期在指定日期的契約單位（股）
 
-            原本兩份實作的查法不同，收斂後以 `per_product` 區分，兩種語意都是刻意的：
+            兩種查法以 `per_product` 區分，差異都是刻意的：
 
             | `per_product` | 查法 | 使用者 | 為什麼 |
             |---|---|---|---|

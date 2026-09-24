@@ -68,16 +68,7 @@ API_LOG_RETENTION_DAYS: int = 7
 ================================================================================
 參考：Shioaji 台股 ticks 資料時間
 ================================================================================
-  可取得區間  2020/03/02 ~ 今日
-  目前 DB    2020/04/01 ~ 2024/05/10（依實際維護為準）
-
-================================================================================
-參數說明
-================================================================================
-
-  --target  <target> [<target> ...]
-      欲更新的資料類型，可多選。未指定時預設為 no_tick。
-      選項見下方「Target 對照表」。
+  可取得區間  2020/03/02 ~ 今日（DB 內的實際區間依維護狀況而定）
 
 ================================================================================
 Target 對照表
@@ -112,83 +103,14 @@ Target 對照表
   no_tick                     全部資料（不含 tick、futures_tick 與 futures_stock_price，預設）
 
 ================================================================================
-各資料更新指令（單一 target）
+使用範例
 ================================================================================
 
-  # 逐筆成交
-  python -m tasks.update_db --target tick
-
-  # 三大法人籌碼
-  python -m tasks.update_db --target chip
-
-  # 信用交易（融資融券餘額）
-  python -m tasks.update_db --target margin
-
-  # 除權除息計算結果表（上市走證交所、上櫃走櫃買中心，皆為全歷史）
-  python -m tasks.update_db --target dividend
-  python -m tasks.update_db --target corporate_action
-
-  # 收盤價
+  python -m tasks.update_db                                  # 等同 --target no_tick
   python -m tasks.update_db --target price
-
-  # 更新台期貨每日行情（寫入 tw_futures.db，商品見 FUTURES_TARGET_PRODUCTS）
-  python -m tasks.update_db --target futures_price
-
-  # 由各月份契約重建連續合約（三種調整方式；不連網路，整段重建）
-  python -m tasks.update_db --target futures_continuous
-
-  # 更新台期貨籌碼（三個資料集，一天三次請求即涵蓋全市場）
-  python -m tasks.update_db --target futures_chip
-
-  # 更新股票期貨行情（預設流動性前 20 檔；320 檔全爬要好幾個月）
-  # all／no_tick 都不含這個 target，要跑就得像這樣明確點名
-  python -m tasks.update_db --target futures_stock_price
-
-  # 更新股票期貨標的池（寫入 tw_futures.db；每次執行留下一份當日快照）
-  python -m tasks.update_db --target futures_stock_universe
-
-  # 更新台期貨保證金（寫入 tw_futures.db；保證金沒調整時不會新增列）
-  python -m tasks.update_db --target futures_margin
-
-  # 市場開休市日期（TWSE 公告；每次重抓去年、今年、明年三個年度，整年替換）
-  python -m tasks.update_db --target market_holiday
-
-  # 財報
-  python -m tasks.update_db --target fs
-
-  # 月營收報表
-  python -m tasks.update_db --target mrr
-
-  # 全部 FinMind（台股總覽 + 證券商 + 券商分點）
-  python -m tasks.update_db --target finmind
-
-  # FinMind 台股總覽（不含權證）
-  python -m tasks.update_db --target stock_info
-
-  # FinMind 台股總覽（含權證）
-  python -m tasks.update_db --target stock_info_with_warrant
-
-  # FinMind 證券商資訊
-  python -m tasks.update_db --target broker_info
-
-  # FinMind 券商分點統計
-  python -m tasks.update_db --target broker_trading
-
-  # 全部資料（含 tick，但不含 futures_stock_price）
-  python -m tasks.update_db --target all
-
-  # 全部資料（不含 tick、futures_tick 與 futures_stock_price，等同預設）
-  python -m tasks.update_db --target no_tick
-  或
-  python -m tasks.update_db
-
-================================================================================
-組合更新範例（多個 target）
-================================================================================
-
-  python -m tasks.update_db --target chip price
-  python -m tasks.update_db --target chip price tick
-  python -m tasks.update_db --target stock_info broker_trading
+  python -m tasks.update_db --target chip price tick         # 多個 target
+  python -m tasks.update_db --target futures_stock_price     # 只能這樣點名才會跑
+  python -m tasks.update_db --target all --from 2024-01-01   # 覆寫起日
 """
 
 
@@ -238,10 +160,9 @@ def expand_targets(targets: Set[str]) -> Set[str]:
 
     # no_tick = 所有資料類型 − **所有** tick（包含 finmind）
     #
-    # **`futures_tick` 也要排除**：舊版只排除 `DataType.TICK`，
-    # 於是預設的 `python -m tasks.update_db` 會去跑期貨 tick——那需要 Shioaji
-    # 金鑰與 `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
-    # 久了就沒人在看那個紅燈了。
+    # **`futures_tick` 也要排除**：只排除 `DataType.TICK` 的話，預設的
+    # `python -m tasks.update_db` 會去跑期貨 tick——那需要 Shioaji 金鑰與
+    # `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了。
     if "no_tick" in expanded:
         expanded.update(
             dt.name.lower()
@@ -253,6 +174,8 @@ def expand_targets(targets: Set[str]) -> Set[str]:
 
 
 def parse_arguments() -> argparse.Namespace:
+    """解析命令列參數"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="Update stock-related databases"
     )
@@ -289,21 +212,20 @@ def get_update_time_config(
     from_date: Optional[datetime.date] = None,
 ) -> Dict[str, datetime.date | int]:
     """
-    根據不同的資料類型返回對應的時間區間設定
+    - Description:
+        依資料類型回傳對應的時間區間設定
 
+        結束日（end_date／end_year／end_month／end_season）一律取當日，
+        確保每次執行都同步到今天。
     - Parameters:
         - data_type: Union[DataType, str, None]
-            資料類型，如果為 None 則返回通用設定
+            資料類型；None 時回傳通用設定
+        - from_date: Optional[datetime.date]
+            `--from` 的覆寫起日，**只影響以日期為單位的 target**；
+            年／季／月為單位的 target（fs、mrr）不受影響
     - Return:
         - Dict[str, datetime.date | int]
-            包含時間區間設定的字典
-
-    Note:
-        預設結束日（end_date/end_year/end_month/end_season）皆更新到最新日（當日），
-        以確保資料持續同步至今日。
-
-        `from_date` 為 `--from` 的覆寫值，只影響以日期為單位的 target；
-        年／季／月為單位的 target（fs、mrr）不受影響。
+            時間區間設定
     """
 
     config: Dict[str, datetime.date | int] = _build_time_config(data_type)
@@ -316,6 +238,7 @@ def _build_time_config(
     data_type: Union[DataType, str, None] = None,
 ) -> Dict[str, datetime.date | int]:
     """各 target 的預設時間區間（`get_update_time_config()` 的內部實作）"""
+
     if data_type == DataType.TICK:
         return {
             "start_date": TICK_UPDATE_START_DATE,
@@ -434,6 +357,8 @@ def cleanup_api_logs() -> None:
 
 
 def main() -> None:
+    """依 `--target` 逐一更新；任一 target 失敗仍跑完其餘，最後以非零結束碼收尾"""
+
     args: argparse.Namespace = parse_arguments()
     targets: Set[str] = set(args.target)
     from_date: Optional[datetime.date] = args.from_date

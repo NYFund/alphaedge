@@ -24,7 +24,7 @@ FillModel: 這張單成不成交、以什麼價量成交
 3. **成交量上限**（`FillConfig.max_volume_share`）：一張單不可能吃掉當日大半成交量
 4. **券源檢核**（`ShortConstraint.check_borrowable`）：借不到券就放空不了
 
-2~4 三項的預設值皆為「關閉」，行為與導入前完全相同。
+2~4 三項的預設值皆為「關閉」，此時不改動任何訂單的價量。
 """
 
 
@@ -44,8 +44,7 @@ class FillConfig:
     （對照 `CostConfig` 之於 `CostModel`），語意上則與「法規費率」
     （`Commission`）分離——前者是可調的模擬參數，後者是外部給定的規則。
 
-    全部預設為關閉，此時的成交行為與未啟用任何假設時完全相同。
-    使用說明見 `core/backtest/README.md`〈成交假設〉。
+    全部預設為關閉，此時不改動任何訂單的價量。
     """
 
     # 滑價基點（1 bps = 0.01%）；買進加價、賣出減價
@@ -127,6 +126,7 @@ class BaseFillModel(ABC):
             - bool
                 False 時呼叫端應拒單
         """
+
         pass
 
     def on_bar_open(self, quotes: List[BaseQuote]) -> None:
@@ -178,8 +178,7 @@ class BaseFillModel(ABC):
 
             **`quote.volume` 的語意依級別不同**：DAY 為當日總量、TICK 為單筆成交量。
             TICK 級別下以單筆量當分母沒有意義，故本檢查只在 DAY 級別生效
-            （TICK 的累計量檢查尚未實作，見 `core/backtest/README.md`
-            〈成交假設〉的已知限制）。
+            （TICK 的累計量檢查尚未實作）。
 
             股票與期貨是同一套政策（縮量或拒單），只有單位不同——
             單位字由子類的 `VOLUME_UNIT` 提供，不為了一個字各寫一份。
@@ -282,6 +281,7 @@ class BaseFillModel(ABC):
             - float
                 含滑價的成交價；未設定滑價時即原委託價
         """
+
         pass
 
     def get_price_range(
@@ -317,9 +317,8 @@ class BaseFillModel(ABC):
             訊號數反而變少」，那比價格偏一點更難解釋。
 
             **改動的是副本，不是傳入的 order**（與 `fill()` 同一種寫法）：
-            今天夾價只會發生在 `fill()` 產生的副本上，因為 `validate()` 先擋掉了
-            區間外的單——但那是呼叫順序的巧合，不是保證。就地改動會讓策略
-            下一根 bar 看到被引擎改過的價格。
+            雖然目前夾價只會發生在 `fill()` 產生的副本上，那是呼叫順序的巧合
+            而非保證；就地改動會讓策略下一根 bar 看到被引擎改過的價格。
         - Parameters:
             - order: BaseOrder
                 已套用滑價的訂單
@@ -408,9 +407,8 @@ class TwStockFillModel(BaseFillModel):
         self.short_balance: Dict[str, int] = {}
 
         # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）。
-        # **自備的那份要有全部 key**：舊版只塞一個 `rejected_fill_price`，
-        # 單獨建模型時只要走到成交量上限、券源或停券就 `KeyError`——
-        # 那條「供單獨測試」的路徑本身是壞的
+        # **自備的那份要有全部 key**（`new_event_counts()`）：只塞用得到的幾個，
+        # 單獨建模型時走到成交量上限、券源或停券就會 `KeyError`
         self.event_counts: Dict[str, int] = (
             event_counts if event_counts is not None else new_event_counts()
         )
@@ -526,10 +524,9 @@ class TwStockFillModel(BaseFillModel):
         - Description:
             該報價當日是否真的有成交
 
-            **無成交日仍可下單是「無成交價存成 0」的下游殘餘**：來源給 `--`，舊版 cleaner
-            填成 0，於是 `high`／`low` 都是 0，`get_price_range()` 回
-            `(None, None)` 而**跳過**區間檢查——策略因此能在一個根本沒開盤
-            或整天無量的標的上以任意價格成交。
+            **無成交日在資料上是四價皆 0**（來源給 `--`）：`get_price_range()`
+            對 0 回 `(None, None)` 而**跳過**區間檢查，不擋的話策略能在一個
+            根本沒開盤或整天無量的標的上以任意價格成交。
 
             只擋 DAY 級別：TICK 的每一筆本來就是成交，`volume` 為 0 的 tick
             （試撮）由 `intraday_range` 自行處理。
@@ -565,9 +562,8 @@ class TwStockFillModel(BaseFillModel):
         - Description:
             更新今日處於停券期間（融券最後回補日 ~ 除權息交易日）的標的
 
-            引擎原本只在「最後回補日」當天強制回補，**回補日之後到除權息交易日
-            這段期間卻沒有任何擋板**，留倉放空策略可以在停券期間開新的融券空單
-            並持有跨過除權息。
+            **回補日當天的強制回補擋不住新開倉**：少了這份清單，留倉放空策略
+            可以在回補日之後到除權息交易日之間開新的融券空單並持有跨過除權息。
         - Parameters:
             - symbols: Set[str]
                 今日停券的標的，由 DataFeed 依除權息行事曆推導
@@ -581,7 +577,7 @@ class TwStockFillModel(BaseFillModel):
             台股的成交假設：券源檢核 → 滑價 → 成交量上限
 
             三項預設皆為關閉，此時直接回傳**原物件**（不是副本），
-            確保未啟用任何假設時行為與導入前逐筆相同。
+            未啟用任何假設時不改動訂單的價量。
         - Parameters:
             - order: BaseOrder
                 策略產生的訂單
@@ -772,9 +768,8 @@ class TwFuturesFillModel(BaseFillModel):
         self.config: FillConfig = config or FuturesFillConfig()
 
         # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）。
-        # **自備的那份要有全部 key**：舊版只塞一個 `rejected_fill_price`，
-        # 單獨建模型時只要走到成交量上限、券源或停券就 `KeyError`——
-        # 那條「供單獨測試」的路徑本身是壞的
+        # **自備的那份要有全部 key**（`new_event_counts()`）：只塞用得到的幾個，
+        # 單獨建模型時走到成交量上限就會 `KeyError`
         self.event_counts: Dict[str, int] = (
             event_counts if event_counts is not None else new_event_counts()
         )
@@ -818,7 +813,7 @@ class TwFuturesFillModel(BaseFillModel):
         期貨的成交假設：滑價 → 成交量上限
 
         兩項預設皆為關閉，此時直接回傳**原物件**（不是副本），
-        與台股同一種寫法：未啟用任何假設時行為與導入前逐筆相同。
+        與台股同一種寫法：未啟用任何假設時不改動訂單的價量。
         """
 
         price: float = self.get_filled_price(order)

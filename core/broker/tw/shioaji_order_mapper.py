@@ -27,10 +27,9 @@ from core.utils.instrument import StockUtils
 1. **委託條件推導**：`position_type` ＋ `short_method` ＋ `action` → `order_cond`
    ＋ `daytrade_short`。策略不填、也填不了，這樣回測的成本路徑與實盤送出的委託條件
    才保證同源。
-2. **價格對齊檔位**：買單往下、賣單往上，**方向一律保守**——往不利的方向對齊
-   等於自己讓價，而且不會有任何地方記錄這件事。
-3. **數量單位檢查**：整股的 `quantity` 是張、盤中零股是股。錯配不會報錯，
-   只會下成 1000 倍或千分之一的量。
+2. **價格對齊檔位**：買單往下、賣單往上，**方向一律保守**（見 `align_price()`）。
+3. **數量單位檢查**：整股的 `quantity` 是張、盤中零股是股，錯配不會報錯
+   （見 `_validate_stock_quantity()`）。
 """
 
 

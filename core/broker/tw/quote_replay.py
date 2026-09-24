@@ -19,9 +19,9 @@ from core.models import BaseQuote
 直接把字串餵進轉換層，`float('4930')` 雖然會過，但 `datetime` 那一欄會當場炸——
 而更糟的情況是某天有人加了 `.get()` 預設值，於是重放靜靜地產出錯的報價。
 型別表寫死在本模組（`RECORDED_FIELD_TYPES`），描述的是**錄製檔的格式**，不是某一版
-shioaji 的型別：舊版從 `shioaji.stream_data_type` 的標註動態讀，但 1.7 起那個模組
-只剩轉接層、讀不到任何標註，重放的 `datetime` 就停在字串，轉換層當場炸。
-錄製檔一旦寫下就不會變，型別表也不該跟著安裝的套件浮動。
+shioaji 的型別：shioaji 1.7 的 `shioaji.stream_data_type` 只剩轉接層、讀不到任何標註，
+改成動態讀標註會讓重放的 `datetime` 停在字串。錄製檔一旦寫下就不會變，
+型別表也不該跟著安裝的套件浮動。
 """
 
 _TICK_STK_FIELDS: Dict[str, str] = {

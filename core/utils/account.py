@@ -1,8 +1,9 @@
 """
 Shioaji 金鑰容器
 
-只剩 tick 爬蟲的多帳號輪替在用（`StockTickUtils.setup_shioaji_apis()`）。登入、登出、
-帳務與損益查詢已由 `core/broker/tw/` 的 `ShioajiSession`、`ShioajiAccountQuery` 取代。
+僅供 tick 爬蟲的多帳號輪替使用（`StockTickUtils.setup_shioaji_apis()`）。
+登入、登出、帳務與損益查詢**不走這裡**，一律用 `core/broker/tw/` 的
+`ShioajiSession` 與 `ShioajiAccountQuery`。
 """
 
 

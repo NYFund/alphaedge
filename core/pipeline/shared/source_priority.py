@@ -8,7 +8,7 @@ from loguru import logger
 
 同一筆事件（`(date, stock_id)`）可能同時來自多個來源——除權息的 FinMind 回補與
 TPEX 日更、公司行動的交易所端點與行情偵測。**留下哪一筆必須由來源優先序決定，
-不可依檔名字典序**：舊版直接對 `sorted(dir.iterdir())` 的結果 `keep="last"`，
+不可依檔名字典序**：直接對 `sorted(dir.iterdir())` 的結果 `keep="last"` 的話，
 勝出者取決於檔名的字母順序，日後多一個來源或改個檔名前綴，勝出的就換人，
 而且不會有任何跡象。
 
@@ -51,14 +51,15 @@ def dedup_by_source_priority(
     rank_by_source: Dict[str, int] = {
         source: index for index, source in enumerate(source_priority, start=1)
     }
-    # 清單中沒列到的來源排在最前（優先序最低）
+    # 清單中沒列到的來源 rank 記為 0，排序後落在最前面；
+    # 去重取 `keep="last"`，故等同於優先序最低、同鍵時一定被蓋掉
     rank: pd.Series = df["資料來源"].map(rank_by_source).fillna(0)
 
     unknown: Set[str] = set(df.loc[rank == 0, "資料來源"].unique())
     if unknown:
         logger.warning(
             f"[{label}] 出現未列入優先序的來源 {sorted(unknown)}，"
-            f"將被排在最後（優先序最低）；請補進 SOURCE_PRIORITY"
+            f"以最低優先序處理（同鍵時一定被其他來源蓋掉）；請補進 SOURCE_PRIORITY"
         )
 
     ordered: pd.DataFrame = df.assign(_rank=rank).sort_values("_rank", kind="stable")

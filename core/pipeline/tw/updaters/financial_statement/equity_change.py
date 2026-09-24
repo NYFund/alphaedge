@@ -39,7 +39,7 @@ class EquityChangeSeasonStats:
         欄位刻意與 `UpdateStats` 對齊（requested／ok／no_data／unreachable／
         clean_failed），但不共用那個類別：`UpdateStats.record()` 收的是同一天
         多個來源的 `CrawlResult`，而權益變動表是「一檔一次請求」，
-        且 crawler 的回傳值還是舊的三態（`None`／`[]`／非空 list）。
+        crawler 的回傳值是三態（`None`／`[]`／非空 list）。
 
         **這行統計是本步驟唯一的異常偵測手段**：2026-08-22 的 2020Q1 回補少抓了
         323 檔、行程仍以結束碼 0 結束，就是因為收尾沒有一行可對照的數字。
@@ -75,12 +75,11 @@ class EquityChangeSeasonStats:
         - Description:
             輸出統計行；任何一種「沒拿到資料」都提升為 warning
 
-            **`cleaned_empty` 是這行最重要的數字。** 2026-09-03 的 2020Q2 全市場
-            回補打了 2,087 次請求、跑 1.5 小時、入庫 0 列，而當時的統計行是
-            `2087 requested, 244 no data, 0 unreachable`——三個數字全都正常，
-            結束碼 0、沒有任何 ERROR。原因是統計只數「請求」層的結果，
-            不數「清洗後真的產出資料的有幾檔」，於是 1,843 檔清成空表完全不顯示
-            （根因是非 Q1 的期別標籤比對錯誤，見 cleaner 的
+            **`cleaned_empty` 是這行最重要的數字。** 只數「請求」層的結果會讓
+            清成空表的檔數完全不顯示：2026-09-03 的 2020Q2 全市場回補打了 2,087
+            次請求、跑 1.5 小時、入庫 0 列，而請求層的三個數字全部正常
+            （`2087 requested, 244 no data, 0 unreachable`），結束碼 0、沒有任何
+            ERROR，實際上是 1,843 檔清成空表（期別標籤比對不到本期，見 cleaner 的
             `EQUITY_CHANGE_PERIOD_LABELS`）。
         - Parameters:
             - year / season: int
@@ -110,10 +109,9 @@ class EquityChangeMixin:
     EQUITY_CHANGE_LOAD_BATCH_SIZE: int = 100  # 每 100 檔入庫一次
     # 節流參數不與其他三張報表共用：那三張是「全市場一次查完」，整段回補也才幾十次
     # 請求，沒有放寬的必要；權益變動表一個年季就要兩千多次，節流直接決定回補要跑幾天。
-    # 現行值為 2026-08-28 放寬後的設定（原為共用的 1~5 秒／每 10 檔睡 30 秒，約 6 秒/檔）：
-    # 平均約 1.3 秒/檔，一個年季約 0.8 小時、56 個年季約 42 小時。
-    # 放寬的依據是 2020Q1 全市場回補連續近 4 小時 unreachable = 0，代表原設定過於保守；
-    # 但「放寬多少才會被擋」沒有實測過，若 log 尾端開始出現大量 unreachable 就調回來
+    # 現行值平均約 1.3 秒/檔，一個年季約 0.8 小時、56 個年季約 42 小時。
+    # 依據是 2026-08-28 的 2020Q1 全市場回補連續近 4 小時 unreachable = 0；
+    # 但「放寬到多少才會被擋」沒有實測過，若 log 尾端開始出現大量 unreachable 就調嚴
     EQUITY_CHANGE_RANDOM_DELAY_MIN: float = 0.5
     EQUITY_CHANGE_RANDOM_DELAY_MAX: float = 1.5
     EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES: int = 50
@@ -129,8 +127,8 @@ class EquityChangeMixin:
     # 不該炸掉幾十小時的回補），但**連續**的例外不是「某一頁怪」，而是環境或程式
     # 壞了（2026-09-04 實際發生過：`pd.read_html` 因缺 html5lib 而 ImportError）。
     # 那種情況下繼續跑只會用 2 秒/檔的速度把整段回補變成一長串失敗。
-    # 注意這與舊版「連續 N 檔查無資料就早退」不同：那裡拿「沒有資料」這種
-    # 正常結果當統計樣本，這裡數的是例外——例外從來不是合法的業務結果
+    # **數的必須是例外，不是「查無資料」**：後者是合法的業務結果（一整段新上市
+    # 公司就會連續出現），拿它當中止判準會靜默跳過整季，見 `is_season_filed()`
     EQUITY_CHANGE_MAX_CONSECUTIVE_ERRORS: int = 20
 
     def update_equity_changes(
@@ -462,10 +460,10 @@ class EquityChangeMixin:
             爬取單一檔的權益變動表，**把非預期例外隔離在這一檔之內**
 
             crawler 內部只處理得了它預期的失敗（連線失敗、站方過載、解析不出表格）。
-            2026-09-04 的整段回補實際炸在一個它沒預期的例外上——某一檔的頁面讓
-            lxml 解不動，`pd.read_html` 回退到 bs4 flavor 時發現缺 html5lib 而拋
-            `ImportError`，一路炸穿整個回補。缺的套件已補上，但**「一頁的問題不該
-            炸掉幾十小時的回補」是結構問題**，跟那個套件無關。
+            沒預期的那一種會一路炸穿整段回補：2026-09-04 就有某一檔的頁面讓 lxml
+            解不動，`pd.read_html` 回退到 bs4 flavor 時因缺 html5lib 拋 `ImportError`。
+            套件可以補，但「一頁的問題不該炸掉幾十小時的回補」是結構問題，
+            與那個套件無關。
 
             隔離的代價是「環境壞了」會退化成一長串失敗，故加了連續例外的斷路器
             （`EQUITY_CHANGE_MAX_CONSECUTIVE_ERRORS`）：連續而非零星的例外不是
@@ -524,9 +522,9 @@ class EquityChangeMixin:
         - Description:
             清洗單一檔的權益變動表，**把失敗隔離在這一檔之內**
 
-            一頁的版面異常不該中止整段十萬次請求的回補——而在有這道隔離之前，
-            cleaner 拋出的例外會一路炸到 `update()`，連手上那批已爬好的
-            資料都跟著作廢。理由與 `BaseDataUpdater.clean_one()` 相同。
+            一頁的版面異常不該中止整段十萬次請求的回補：沒有這道隔離時，cleaner
+            拋出的例外會一路炸到 `update()`，連手上那批已爬好的資料都跟著作廢。
+            理由與 `BaseDataUpdater.clean_one()` 相同。
         - Parameters:
             - df_list: List[pd.DataFrame]
                 crawler 取回的整頁表格
@@ -672,8 +670,9 @@ class EquityChangeMixin:
         - Description:
             取得要逐檔爬取權益變動表的股票清單（上市櫃普通股，排除 ETF 與興櫃）
 
-            `taiwan_stock_info` 不存在時回空清單；其他查詢錯誤往外拋（舊版一律吞掉
-            回空清單，「DB 被鎖住」會變成「沒有目標股票，略過」，行程照樣成功結束）。
+            `taiwan_stock_info` 不存在時回空清單；**其他查詢錯誤一律往外拋**——
+            吞掉改回空清單的話，「DB 被鎖住」會變成「沒有目標股票，略過」，
+            行程照樣以成功結束。
         """
 
         return StockInfoDAO(conn=self.conn).get_listed_common_stock_ids()

@@ -143,7 +143,7 @@ def build_tw_futures_backtester(
     - Description:
         組裝台期貨的 model 組
 
-        **與台股那一組的四個差異**（都是期貨的記帳語意造成的，不是實作偏好）：
+        **與台股那一組的五個差異**（都是期貨的記帳語意造成的，不是實作偏好）：
 
         1. **`adjusted_price` 一律為 False**：期貨沒有除權息，不存在還原價。
         2. **成本設定由 `FuturesCostConfig` 提供**，且**同一個物件**同時交給
@@ -262,8 +262,8 @@ def build_cost_config(strategy: BaseStockStrategy) -> CostConfig:
     - Description:
         依策略宣告推導成本設定：放空且允許當沖時一律走現股當沖沖賣
 
-        原本是 `Backtester.build_cost_config()`，但「依策略宣告組裝 model」
-        本來就是 factory 的職責；留在引擎會讓引擎知道台股的信用交易語意。
+        **放在 factory 而非引擎**：依策略宣告組裝 model 是 factory 的職責，
+        放進引擎會讓引擎知道台股的信用交易語意。
     - Parameters:
         - strategy: BaseStockStrategy
             要回測的台股策略

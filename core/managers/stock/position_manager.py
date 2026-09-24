@@ -16,9 +16,9 @@ class StockPositionManager(BasePositionManager):
     """
     Stock Position Manager
 
-    多空的記帳差異全部收斂在此：
-    - LONG 沿用既有 StockUtils 公式（確保與改動前的回測結果逐筆相同）
-    - SHORT 一律走 StockCostModel，涵蓋保證金、借券費、融券利息與當沖稅率
+    多空的記帳差異全部收斂在此，兩邊的費用與損益一律走 `StockCostModel`：
+    - LONG：手續費、賣出端證交稅、開倉成本等比例攤提
+    - SHORT：另含保證金、借券費、融券利息、股利補償與當沖稅率
     """
 
     def __init__(
@@ -39,6 +39,7 @@ class StockPositionManager(BasePositionManager):
 
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Stock Position Manager"""
+
         pass
 
     def normalize_date(
@@ -69,16 +70,15 @@ class StockPositionManager(BasePositionManager):
         - Return:
             - position: StockPosition
         """
-        # Calculate position value
+
         position_value: float = self.calculate_position_value(
             price=stock_order.price,
             volume=stock_order.volume,
         )
 
-        # Create position
         position: Optional[StockPosition] = None
 
-        # Open Long & Buy Position
+        # 做多開倉（買進）
         if (
             stock_order.position_type == PositionType.LONG
             and stock_order.action == Action.BUY
@@ -87,10 +87,9 @@ class StockPositionManager(BasePositionManager):
                 f"* Open Long Position: {stock_order.stock_id} ({stock_order.volume} lots)"
             )
 
-            # 同一標的不允許同時持有反向部位（反之亦然）。
-            # **舊版只在放空端檢查**：先做多再放空會被擋，
-            # 先放空再做多卻放行，同一檔於是同時掛著多空兩個部位——
-            # 兩邊各自盯市、各自計算維持率，帳面曝險與實際完全對不上
+            # 同一標的不允許雙向持倉，**多空兩端都要檢查**：只擋單邊的話，
+            # 反序開倉就會讓同一檔同時掛著多空兩個部位，兩邊各自盯市、
+            # 各自計算維持率，帳面曝險與實際完全對不上
             if self.account.check_has_position(
                 stock_order.stock_id, PositionType.SHORT
             ):
@@ -100,7 +99,6 @@ class StockPositionManager(BasePositionManager):
                 )
                 return None
 
-            # Calculate open commission & tax & total open cost
             open_commission: int = self.cost_model.commission(
                 price=stock_order.price,
                 volume=stock_order.volume,
@@ -114,7 +112,7 @@ class StockPositionManager(BasePositionManager):
             )
             open_cost: int = open_commission + open_tax
 
-            # Check if the account has enough balance
+            # 做多要付出整筆部位價值，故以「部位價值 ＋ 開倉成本」檢查餘額
             if self.account.balance >= position_value + open_cost:
                 logger.info(f"* Place Open Order: {stock_order.stock_id}")
 
@@ -136,11 +134,9 @@ class StockPositionManager(BasePositionManager):
                 self.account.balance -= position_value + open_cost
                 self.account.positions.append(position)
             else:
-                # **開不成還是開不成，這裡只讓它被看見**：判斷邏輯一行都沒動。
-                # 舊版直接回 None，引擎的 `if open_position:` 不成立就跳過，
-                # 沒有 log、沒有計數，回測結果只是少一筆交易而已——而開了滑價之後
-                # 成交價高於 sizer 估算的參考價，這條路徑正好會被觸發。
-                # 放空（`open_short_position()`）與期貨都早有警告，只缺做多這條
+                # **餘額不足一定要留下警告與計數**：只回 None 的話引擎會靜默跳過，
+                # 回測結果看起來只是少一筆交易。開了滑價後成交價會高於 sizer
+                # 估算的參考價，這條路徑相當容易被觸發，不記錄就查不出成交數變少的原因
                 logger.warning(
                     f"[Open Long] {stock_order.stock_id} 餘額不足："
                     f"需要 {position_value + open_cost}，"
@@ -149,7 +145,7 @@ class StockPositionManager(BasePositionManager):
                 self.event_counts["rejected_insufficient_balance"] = (
                     self.event_counts.get("rejected_insufficient_balance", 0) + 1
                 )
-        # Open Short & Sell Position
+        # 放空開倉（賣出）
         elif (
             stock_order.position_type == PositionType.SHORT
             and stock_order.action == Action.SELL
@@ -202,7 +198,6 @@ class StockPositionManager(BasePositionManager):
             )
             return None
 
-        # Calculate open commission & tax & borrow fee & margin
         open_commission: int = self.cost_model.commission(
             price=stock_order.price, volume=stock_order.volume
         )
@@ -225,7 +220,7 @@ class StockPositionManager(BasePositionManager):
         )
         open_cost: int = open_commission + open_tax + borrow_fee
 
-        # Check if the account has enough balance for margin and costs
+        # 放空不動用賣出價款，帳戶當下只需付得出「保證金 ＋ 開倉成本」
         if self.account.balance < margin + open_cost:
             logger.warning(
                 f"[Open Short] {stock_order.stock_id} 餘額不足："
@@ -233,9 +228,9 @@ class StockPositionManager(BasePositionManager):
             )
             return None
 
-        # Check single position short exposure limit.
-        # **公式與實盤共用**（`order_preprocess.exceeds_symbol_exposure()`），
-        # 但只在 SHORT 分支取用、超限整筆拒絕——兩邊的差異寫在該函式的 docstring
+        # 單一標的曝險上限。**公式與實盤共用**
+        # （`order_preprocess.exceeds_symbol_exposure()`），但回測只在 SHORT 分支
+        # 取用、超限整筆拒絕，做多不受此限；兩邊口徑的差異寫在該函式的 docstring
         max_ratio: Optional[float] = (
             self.cost_model.config.short_constraint.max_short_exposure_ratio
         )
@@ -315,13 +310,11 @@ class StockPositionManager(BasePositionManager):
     ) -> StockTradeRecord:
         """平掉做多部位（賣出），支援部分平倉的等比例攤提"""
 
-        # Calculate position value
         position_value: float = self.calculate_position_value(
             price=stock_order.price,
             volume=close_volume,
         )
 
-        # Calculate sell commission & tax & total close cost
         sell_commission: int = self.cost_model.commission(
             price=stock_order.price,
             volume=close_volume,
@@ -344,7 +337,8 @@ class StockPositionManager(BasePositionManager):
         # 開倉成本依平倉張數等比例攤提。
         # **不可改為「以平倉張數重算手續費」**：那會讓最低手續費在部分平倉時被重複套用，
         # 使同一筆交易的 record.commission 與 realized_pnl 用到兩個不同的開倉手續費
-        # （舊 StockUtils 路徑的既有瑕疵，見 tests/backtest/compare_cost_formula.py）
+        # （`StockUtils` 那條公式即有此瑕疵，差異量化見
+        # `tests/backtest/compare_cost_formula.py`）
         proportional_buy_commission: int = int(
             position.commission * (close_volume / position.volume)
         )
@@ -352,7 +346,6 @@ class StockPositionManager(BasePositionManager):
             proportional_buy_commission + sell_commission + sell_tax
         )
 
-        # Create stock trade record
         record: StockTradeRecord = StockTradeRecord(
             id=position.id,
             stock_id=position.stock_id,
@@ -385,14 +378,12 @@ class StockPositionManager(BasePositionManager):
             ),
         )
 
-        # Update position
         position.volume -= close_volume
         position.commission -= proportional_buy_commission
         position.transaction_cost -= proportional_buy_commission
         if position.volume == 0:
             position.is_closed = True
 
-        # Update account
         self.account.balance += position_value - (sell_commission + sell_tax)
         self.account.realized_pnl += record.realized_pnl
         self.account.trade_records.append(record)
@@ -480,7 +471,7 @@ class StockPositionManager(BasePositionManager):
         prop_accrued_borrow_fee: int = int(position.accrued_borrow_fee * ratio)
         prop_dividend_compensation: int = int(position.dividend_compensation * ratio)
 
-        # 回補手續費（買進不課證交稅）
+        # 買進回補不課證交稅，只有手續費
         close_commission: int = self.cost_model.commission(
             price=stock_order.price, volume=close_volume
         )
@@ -529,7 +520,7 @@ class StockPositionManager(BasePositionManager):
             margin=prop_margin,
         )
 
-        # Create stock trade record（sell_* 為放空開倉、buy_* 為回補）
+        # sell_* 記的是放空開倉那一腿，buy_* 才是回補
         record: StockTradeRecord = StockTradeRecord(
             id=position.id,
             stock_id=position.stock_id,
@@ -559,7 +550,6 @@ class StockPositionManager(BasePositionManager):
             holding_days=holding_days,
         )
 
-        # Update position
         position.volume -= close_volume
         position.commission -= prop_open_commission
         position.tax -= prop_open_tax
@@ -599,6 +589,7 @@ class StockPositionManager(BasePositionManager):
                 股票張數
         - Return:
             - position_value: float
-                股票部位價值
+                股票部位價值（Unit: 元）
         """
+
         return price * StockUtils.convert_lot_to_share(volume)

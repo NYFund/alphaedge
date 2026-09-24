@@ -425,7 +425,7 @@ class FuturesContinuousUpdater(BaseDataUpdater):
             **方向搞反是靜默的**：把加號寫成減號同樣能產出一條連續的序列、
             同樣能通過還原檢查，只是換月接點的日變動會變成「真實變動 ＋ 兩倍價差」。
             唯一抓得到的檢查是「調整後的換月日變動 ＝ 新契約自己的日變動」，
-            見 `tests/test_futures_continuous.py`（本方向錯誤即由該測試抓出）。
+            見 `tests/test_futures_continuous.py`。
 
             | 方式 | 套用 | 還原 |
             |------|------|------|

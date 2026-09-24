@@ -83,9 +83,8 @@ class ShioajiExecutionHandler:
             Shioaji 的回呼進入點
 
             **整個函式被 try 包住**：回呼跑在 Shioaji 的執行緒上，例外往上拋會讓
-            那條執行緒死掉，之後所有回報靜默消失——而程式看起來還活著，
-            部位也還在場上。寧可丟掉一筆有問題的回報並留下 log，
-            也不要丟掉之後的每一筆。
+            那條執行緒死掉，之後所有回報靜默消失——程式看起來還活著，部位也還在
+            場上。寧可丟掉一筆有問題的回報並留下 log，也不要丟掉之後的每一筆。
         - Parameters:
             - stat: Any
                 `shioaji.OrderState`

@@ -39,7 +39,7 @@ class BaseStockStrategy(BaseStrategy):
         """
         === Short Setting ===
 
-        台股信用交易專屬；方向白名單與執行順序屬市場與商品皆無關，已上移至 BaseStrategy
+        台股信用交易專屬。方向白名單與執行順序與市場、商品皆無關，故放在 `BaseStrategy`
         （`enable_intraday` 與 `bar_execution_order` 的對應表見 `BaseStrategy.__init__`
         的〈Direction Setting〉區塊，推導規則見 `order_preprocess.get_execution_order()`）。
 
@@ -64,7 +64,7 @@ class BaseStockStrategy(BaseStrategy):
         """
         === Position Sizing ===
 
-        等權資金切分原本在五支策略內各寫一遍且已經漂移，收成單一實作。
+        等權資金切分只有這一份實作，策略不要各寫一遍——那必然漂移。
         要換配置演算法（波動度加權等）時，在策略的 __init__ 覆寫本欄位即可。
         """
         self.sizer: BasePositionSizer = EqualWeightSizer()  # 部位大小模型
@@ -86,6 +86,7 @@ class BaseStockStrategy(BaseStrategy):
         - Description:
             載入虛擬帳戶資訊
         """
+
         pass
 
     @abstractmethod
@@ -94,12 +95,12 @@ class BaseStockStrategy(BaseStrategy):
         - Description:
             宣告本策略要用的資料源
 
-            實例一律由 DataFeed 統一持有，策略只做取用，不自行建立
-            。
+            實例一律由 DataFeed 統一持有，策略只做取用，不自行建立。
         - Parameter:
             - feed: BaseDataFeed
                 引擎持有的資料源
         """
+
         pass
 
     def get_signal_close_map(

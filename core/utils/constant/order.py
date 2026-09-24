@@ -73,7 +73,7 @@ STOCK_ORDER_LOT_FIXING = "Fixing"  # 定盤
 STOCK_ORDER_LOT_ODD = "Odd"  # 零股
 
 
-STOCK_ORDER_LOT_INTRADAY_ODD = "IntradayOdd"  # 零股
+STOCK_ORDER_LOT_INTRADAY_ODD = "IntradayOdd"  # 盤中零股
 
 
 # 定義股票委託條件常量（現股／融資／融券／借券）
@@ -128,6 +128,8 @@ LIVE_ORDER_STATUS_FAILED = "FAILED"  # 送出失敗，或刷新後在券商端�
 
 
 class Action(str, Enum):
+    """下單動作；股票用 BUY／SELL，期貨的開平倉另見 `FuturesOCType`"""
+
     BUY = ACTION_BUY
     SELL = ACTION_SELL
     OPEN = ACTION_OPEN
@@ -135,6 +137,8 @@ class Action(str, Enum):
 
 
 class StockPriceType(str, Enum):
+    """股票價格類型（限價／市價）；期貨另見 `FuturesPriceType`"""
+
     LMT = STOCK_PRICE_TYPE_LIMITPRICE
     MKT = STOCK_PRICE_TYPE_MKT
 
@@ -153,18 +157,24 @@ class FuturesPriceType(str, Enum):
 
 
 class OrderType(str, Enum):
+    """委託種類：ROD 當日有效、IOC 立即成交否則取消、FOK 全部成交否則取消"""
+
     ROD = ORDER_TYPE_ROD
     IOC = ORDER_TYPE_IOC
     FOK = ORDER_TYPE_FOK
 
 
 class QuoteType(str, Enum):
+    """行情訂閱的報價模式"""
+
     Tick = QUOTE_TYPE_TICK
     BidAsk = QUOTE_TYPE_BIDASK
     Quote = QUOTE_TYPE_QUOTE
 
 
 class StockOrderLot(str, Enum):
+    """股票下單單位；整股與零股的成交規則與撮合時段皆不同"""
+
     Common = STOCK_ORDER_LOT_COMMON  # 整股
     BlockTrade = STOCK_ORDER_LOT_BLOCKTRADE  # 鉅額
     Fixing = STOCK_ORDER_LOT_FIXING  # 定盤
@@ -224,6 +234,8 @@ class LiveOrderStatus(str, Enum):
 
 
 class OrderState(str, Enum):
+    """券商回報的事件種類（委託回報／成交回報 × 股票／期貨）"""
+
     StockDeal = "SDEAL"
     StockOrder = "SORDER"
     FuturesOrder = "FORDER"
@@ -231,6 +243,8 @@ class OrderState(str, Enum):
 
 
 class Status(str, Enum):
+    """券商回報的委託狀態原值；本地狀態機的狀態另見 `LiveOrderStatus`"""
+
     Cancelled = "Cancelled"
     Filled = "Filled"
     PartFilled = "PartFilled"

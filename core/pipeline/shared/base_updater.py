@@ -16,8 +16,8 @@ from core.utils.log_manager import LogManager
 """
 所有 updater 的共同基底，以及**每批一行的結果統計**
 
-updater 原本跑完只會印「Latest available date: ...」，那句話在「今天什麼都沒抓到」
-時長得跟正常一模一樣。`UpdateStats` 把一批更新拆成四個數字，讓「請求了幾天、
+**只印一行「Latest available date: ...」不夠**：那句話在「今天什麼都沒抓到」時
+長得跟正常一模一樣。`UpdateStats` 把一批更新拆成四個數字，讓「請求了幾天、
 其中幾天真的沒資料、幾天是連不上」變成看得到的東西——連不上的那幾天下次會重試，
 沒資料的那幾天不會，兩者混在一起就是資料靜靜缺一天的成因。
 """
@@ -125,6 +125,7 @@ class BaseDataUpdater(ABC):
     BATCH_RANDOM_DELAY_MAX: int = 5
 
     def __init__(self) -> None:
+        """建立 updater；連線與 log 一律由子類的 `setup()` 負責"""
         pass
 
     def throttle_per_file(
@@ -158,8 +159,8 @@ class BaseDataUpdater(ABC):
         """
 
         if file_cnt >= self.BATCH_SLEEP_EVERY_N_FILES:
-            # 訊息帶出實際秒數：原本三支寫死「Sleep 2 minutes」，而月營收那支的
-            # 間隔其實是 30 秒，log 與行為對不上
+            # 訊息帶出實際秒數：`BATCH_SLEEP_DURATION_SECONDS` 由各子類覆寫，
+            # 寫死字面秒數會讓 log 與實際行為對不上
             logger.info(f"Sleep {self.BATCH_SLEEP_DURATION_SECONDS} seconds...")
             self.sleep(self.BATCH_SLEEP_DURATION_SECONDS, stop)
             return 0
@@ -329,13 +330,11 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
         「逐日爬上市＋上櫃、清洗、分批入庫」這條流程的骨架
 
         `price`／`chip`／`margin` 三支走的是同一條路：規劃日期 → 逐日雙市場爬 →
-        清洗 → 記進度 → 每 N 天入庫一次 → 節流 → 收尾報表。原本三支各抄一份
-        100 行的迴圈，`chip` 與 `margin` 正規化後 diff 只有 21 行差異，
-        連 `load_batch()` 的註解都一字不差。
+        清洗 → 記進度 → 每 N 天入庫一次 → 節流 → 收尾報表。
 
-        **抄一份的代價不是行數而是漂移**：`price` 的「原始列數門檻」是後來才加的，
-        另外兩支沒有；哪天在 `chip` 修了一個判斷，`margin` 不會跟著修，
-        而兩邊的症狀都是「資料靜靜少一天」，不會有任何錯誤。
+        **三支不可各抄一份這個迴圈**：代價不是行數而是漂移——在 `chip` 修了一個
+        判斷，`margin` 不會跟著修，而兩邊的症狀都是「資料靜靜少一天」，
+        不會有任何錯誤。
 
         子類要填的東西：`SOURCE`（同時決定進度檔名、log 訊息與 crawler／cleaner
         的方法名）、`SOURCE_LABEL`、`LOG_FILE_NAME`，以及 `plan_dates()` 這個 hook。

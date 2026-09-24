@@ -11,13 +11,11 @@ from core.live.notify.base import NotifyLevel
 """
 風控事件的**唯一**寫入口
 
-改動前 `core/live/` 有 13 個地方各自呼叫 `dao.insert_risk_event()`，每個類別
-抄一份：`if self.dao is None: return` 的降級守衛、`run_id`／`occurred_at` 的組法、
-以及 severity 的字面值。
-
-**抄一份的代價不是行數，是它們會各自漂移**，而且已經漂了：severity 出現
-`"WARN"` 與 `"WARNING"` 兩種拼法，但 `NotifyLevel` 只認得前者。後者寫進資料庫
-沒問題，推播卻會在 `NotifyLevel(level)` 拋例外、被 `notify_safely()` 吞掉——
+各呼叫端自己呼叫 `dao.insert_risk_event()` 的話，`if self.dao is None: return`
+的降級守衛、`run_id`／`occurred_at` 的組法與 severity 的字面值就會被抄很多份，
+而**抄一份的代價不是行數，是它們會各自漂移**：severity 一旦寫成 `"WARNING"`
+（`NotifyLevel` 只認得 `"WARN"`），寫進資料庫沒問題，推播卻會在
+`NotifyLevel(level)` 拋例外、被 `notify_safely()` 吞掉——
 **事件有紀錄、該收到通知的人收不到，而且沒有人會發現**。
 
 故 `severity` 這裡只收 `NotifyLevel`，不收字串：拼錯在型別層就過不了。

@@ -23,11 +23,13 @@ class BasePositionManager(ABC):
     @abstractmethod
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Position Manager"""
+
         pass
 
     @abstractmethod
     def open_position(self, order: BaseOrder) -> Optional[BasePosition]:
         """開倉；記帳方式由各市場自行實作"""
+
         pass
 
     @abstractmethod
@@ -54,6 +56,7 @@ class BasePositionManager(ABC):
             - Optional[BaseTradeRecord]
                 本次平倉產生的交易紀錄
         """
+
         pass
 
     @abstractmethod
@@ -62,15 +65,16 @@ class BasePositionManager(ABC):
         - Description:
             每日結算的掛點
 
-            股票為 no-op（開倉→持有→平倉才實現損益）；期貨日後實作為
-            「結算損益進 balance、`position.price` 重設為結算價」。
-            這是兩者語意差異的收容處，避免日後動到 FIFO 主幹。
+            股票為 no-op（開倉→持有→平倉才實現損益）；期貨逐日盯市，
+            結算損益當天就進 balance、`position.price` 重設為結算價。
+            兩者的語意差異收在這個掛點，FIFO 主幹不必知道。
         - Parameters:
             - position: BasePosition
                 待結算的部位
             - settle_price: float
                 當日結算價
         """
+
         pass
 
     def accrue_slippage_cost(
@@ -125,7 +129,7 @@ class BasePositionManager(ABC):
 
         close_records: List[BaseTradeRecord] = []
 
-        # 從帳戶抓出所有該商品未平倉且同方向的部位（FIFO）
+        # 依開倉先後取同方向的未平倉部位，最早開倉者先平（FIFO）
         target_position_type: PositionType = self.resolve_target_position_type(order)
         open_positions: List[BasePosition] = [
             p
@@ -135,14 +139,12 @@ class BasePositionManager(ABC):
             and p.position_type == target_position_type
         ]
 
-        # Calculate remaining close volume
         remaining_close_volume: int = order.volume
 
         for position in open_positions:
             if remaining_close_volume <= 0:
                 break
 
-            # 這筆 position 要平倉的數量
             close_volume: int = min(position.volume, remaining_close_volume)
 
             record: Optional[BaseTradeRecord] = self.close_single_position(
@@ -159,13 +161,10 @@ class BasePositionManager(ABC):
                 f"[Close Position] Not enough holdings to close {order.volume} lots of {order.symbol}, "
                 f"only closed {order.volume - remaining_close_volume} lots"
             )
-            # 📌 業界常見做法：
-            # ✔ 不會在 close_position() 內自動開空單（避免混淆職責）
-            # ✔ 僅記錄已平倉的部分，對剩餘張數給出警告或拋出錯誤
-            # ✔ 是否將剩餘張數視為新開空單，由上層策略層決定
-            # 👉 若要嚴格限制，可改為 raise ValueError("Insufficient holdings to close position")
+            # **刻意只警告、不 raise，也不把剩餘量自動轉成反向新倉**：
+            # 平倉與開倉是兩種決策，要不要反手做空屬於策略層的判斷；
+            # 在這裡代為開倉會讓帳上多出策略沒下過的部位
 
-        # Remove closed positions
         self.account.remove_closed_positions()
 
         return close_records

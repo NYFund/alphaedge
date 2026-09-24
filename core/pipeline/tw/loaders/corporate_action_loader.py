@@ -39,6 +39,7 @@ class CorporateActionLoader(BaseDataLoader):
                 指定時 loader 不擁有它，`disconnect()` 不會關閉；
                 未指定時 loader 自行建立，入庫完成即關閉
         """
+
         self.corporate_action_dir: Path = CORPORATE_ACTION_DOWNLOADS_PATH
 
         super().__init__(dao)

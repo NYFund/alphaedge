@@ -38,10 +38,10 @@ class FinancialStatementCleaner(BaseDataCleaner):
     # | Q3 | 民國109年前3季 |
     # | Q4 | 民國109年度 |
     #
-    # 原本寫死成 `f"民國{roc_year}年第{season}季"`，於是 Q2~Q4 一律比對不到而回空表——
-    # 2026-09-03 的 2020Q2 全市場回補因此打了 2,087 次請求、跑 1.5 小時、
-    # 入庫 0 列，且統計行三個數字都正常、結束碼 0。
-    # 每季留一組候選（把「第N季」也列為可接受）是為了措辭調整時不再整季空轉；
+    # **不可寫死成 `f"民國{roc_year}年第{season}季"`**：Q2~Q4 的措辭不是這樣，
+    # 一律比對不到而回空表，且失敗完全沒有跡象——2026-09-03 的 2020Q2 全市場回補
+    # 實測打了 2,087 次請求、跑 1.5 小時、入庫 0 列，統計行三個數字都正常、結束碼 0。
+    # 每季留一組候選（把「第N季」也列為可接受）是為了站方調整措辭時不再整季空轉；
     # 本期與去年同期仍由「民國{roc_year}年」前綴區分，故多列幾個候選不會抓錯期別
     EQUITY_CHANGE_PERIOD_LABELS: Dict[int, Tuple[str, ...]] = {
         1: ("民國{roc_year}年第1季",),
@@ -136,8 +136,9 @@ class FinancialStatementCleaner(BaseDataCleaner):
     def clean_balance_sheet(
         self, df_list: List[pd.DataFrame], year: int, season: int
     ) -> pd.DataFrame:
-        """Clean Balance Sheet (資產負債表)"""
         """
+        Clean Balance Sheet (資產負債表)
+
         資料區間（但是只有 102 年以後才可以爬）
         上市: 民國 78 (1989) 年 ~ present
         上櫃: 民國 82 (1993) 年 ~ present
@@ -211,8 +212,9 @@ class FinancialStatementCleaner(BaseDataCleaner):
     def clean_comprehensive_income(
         self, df_list: List[pd.DataFrame], year: int, season: int
     ) -> pd.DataFrame:
-        """Clean Statement of Comprehensive Income (綜合損益表)"""
         """
+        Clean Statement of Comprehensive Income (綜合損益表)
+
         資料區間（但是只有 102 年以後才可以爬）
         上市: 民國 77 (1988) 年 ~ present
         上櫃: 民國 82 (1993) 年 ~ present
@@ -288,8 +290,9 @@ class FinancialStatementCleaner(BaseDataCleaner):
     def clean_cash_flow(
         self, df_list: List[pd.DataFrame], year: int, season: int
     ) -> pd.DataFrame:
-        """Clean Cash flow Statement (現金流量表)"""
         """
+        Clean Cash flow Statement (現金流量表)
+
         資料區間
         上市: 民國 102 (2013) 年 ~ present
         上櫃: 民國 102 (2013) 年 ~ present
@@ -360,8 +363,9 @@ class FinancialStatementCleaner(BaseDataCleaner):
     def clean_equity_changes(
         self, df_list: List[pd.DataFrame], year: int, season: int, stock_id: str
     ) -> pd.DataFrame:
-        """Clean Statement of Changes in Equity (權益變動表)"""
         """
+        Clean Statement of Changes in Equity (權益變動表)
+
         資料區間
         上市: 民國 102 (2013) 年 ~ present
         上櫃: 民國 102 (2013) 年 ~ present
@@ -539,19 +543,17 @@ class FinancialStatementCleaner(BaseDataCleaner):
         """
         - Description:
             清洗指定的 Report Column Names
-
         - Parameters:
             - raw_cols: List[str]
                 原始欄位名稱清單
             - col_map: Dict[str, List[str]]
-                欄位對應映射表 (舊名對應標準名)
+                欄位對應映射表（舊名對應標準名）
             - front_cols: List[str]
-                優先排序欄位 (例如 year, season 等)
+                優先排序欄位（例如 year、season 等）
             - save_path: Path
                 儲存清洗後欄位的 JSON 路徑
-
-        - Returns:
-            - cleaned_cols: List[str]
+        - Return:
+            - List[str]
                 已清洗、排序、去重後的欄位名稱清單
         """
 

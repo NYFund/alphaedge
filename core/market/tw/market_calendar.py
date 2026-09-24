@@ -8,30 +8,36 @@ from core.api.tw.stock_price_api import StockPriceAPI
 
 
 class MarketCalendar:
-    """Market Calendar"""
+    """台股交易日曆：開盤日判定與營業日平移"""
 
     # 往前找前一個交易日時，最多回推幾個曆日。
     #
-    # **上界不是效能考量，是防卡死**：舊版是 `while` 無界迴圈，
-    # 起始日落在資料庫最早一筆之前時，它會一天一天往回查到 1970 年也不會停，
-    # 而且不會有任何錯誤訊息——回測看起來就是「卡住了」。
+    # **上界不是效能考量，是防卡死**：沒有上界的話，起始日落在資料庫最早一筆
+    # 之前時會一天一天往回查到 1970 年也不會停，而且不會有任何錯誤訊息
+    # ——回測看起來就是「卡住了」。
     #
     # **90 天而不是 30 天**：上界要按「`price` 表可能缺多久」抓，不是按連假長度
-    # （史上最長是 2023 年春節的 12 天）。`report_calendar_gaps()` 這條防線存在，
-    # 正是因為表裡真的會有缺口——上界抓 30 天的話，一段一個月的缺漏會讓整場回測
-    # 以 `LookupError` 中止，而舊的無界迴圈反而找得到。90 天仍在毫秒內結束，
+    # （史上最長是 2023 年春節的 12 天）；表裡真的會有缺口，上界抓 30 天的話，
+    # 一段一個月的缺漏就會讓整場回測以 `LookupError` 中止。90 天仍在毫秒內結束，
     # 又不會把「有資料、只是隔得遠」誤判成「沒有資料」。
     MAX_LOOKBACK_DAYS: int = 90
 
     @staticmethod
     def check_stock_market_open(api: StockPriceAPI, date: datetime.date) -> bool:
         """
-        - Description: 判斷指定日期是否為台股開盤日
+        - Description:
+            判斷指定日期是否為台股開盤日
+
+            **判準是資料而非規則**：`price` 表當日有列就是開盤日，臨時休市、
+            颱風假與補行交易日因此自動涵蓋，那些是公告出來的事實，推不出來。
         - Parameters:
-            - api: 資料 API
-            - date: 要確認是否為開盤日的日期
-        -Return:
+            - api: StockPriceAPI
+                資料 API
+            - date: datetime.date
+                要確認是否為開盤日的日期
+        - Return:
             - bool
+                該日是否為開盤日
         """
 
         df: pd.DataFrame = api.get(date)
@@ -75,9 +81,9 @@ class MarketCalendar:
         - Description:
             取得指定日期的前一個交易日
 
-            **最多往前找 `MAX_LOOKBACK_DAYS` 個曆日**：舊版是無界 `while`，
-            起始日落在資料庫最早一筆之前時會一路查到 1970 年也不會停，
-            而且沒有任何錯誤訊息——回測看起來就是「卡住了」。
+            **最多往前找 `MAX_LOOKBACK_DAYS` 個曆日**：不設上界的話，起始日落在
+            資料庫最早一筆之前時會一路查到 1970 年也不會停，而且沒有任何錯誤訊息
+            ——回測看起來就是「卡住了」。
         - Parameters:
             - api: StockPriceAPI
                 資料 API

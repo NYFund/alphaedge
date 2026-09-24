@@ -107,6 +107,8 @@ class AfterCloseRunner:
                 取得目前時間
             - parity_checker: Optional[ParityChecker]
                 訊號 parity 比對器；None 時跳過比對並記 warning
+            - cost_estimator: Optional[TradeCostEstimator]
+                依成本模型重算費用與稅的估算器；None 時不做成本校正
         """
 
         self.data_feeds: Sequence[BaseLiveDataFeed] = data_feeds

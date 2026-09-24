@@ -82,7 +82,7 @@ class StockPortfolioConstructor(BasePortfolioConstructor):
         sizer: BasePositionSizer,
         max_holdings: Optional[int] = None,
     ) -> None:
-        self.sizer: BasePositionSizer = sizer  # 部位大小模型
+        self.sizer: BasePositionSizer = sizer
         self.max_holdings: Optional[int] = max_holdings  # 最大持倉檔數；None 為不限制
 
     def build(self, signals: List[Signal], account: BaseAccount) -> List[StockOrder]:

@@ -158,12 +158,12 @@ class CorporateActionUpdater(BaseDataUpdater):
         - Description:
             把**人工確認過**的偵測事件以 `detected` 來源寫入
 
-            ETF 的受益權單位分割不在任何結構化端點裡（S1 查遍 `TWTB8U` 與
-            OpenAPI 143 個端點），只能由 `corporate_action_detector` 產出候選、
+            ETF 的受益權單位分割不在任何結構化端點裡（`TWTB8U` 與 OpenAPI 的
+            143 個端點都查過），只能由 `corporate_action_detector` 產出候選、
             人工確認後從這裡進來。0050 的 2025-06-18 一拆四就是這一類。
 
             **倍率由前收盤與參考價相除得出，與端點來源同一個定義**，
-            這樣 S3 的還原係數才不必分辨資料是哪裡來的。
+            下游算還原係數時才不必分辨資料是哪裡來的。
         - Parameters:
             - events: List[Dict[str, object]]
                 每筆需含 `date`／`stock_id`／`證券名稱`／`停止買賣前收盤價`／

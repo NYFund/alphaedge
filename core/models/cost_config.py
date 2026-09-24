@@ -108,7 +108,7 @@ class CostConfig:
     interest_rate: float = float(ShortCost.MarginInterestRate)
     maintenance_ratio: float = float(ShortCost.MaintenanceRatio)
 
-    # 融資（做多槓桿）：本階段僅保留參數不啟用
+    # 融資（做多槓桿）：目前僅保留參數，尚未有任何路徑取用
     financing_rate: float = float(MarginCost.FinancingRate)
 
     days_per_year: int = DAYS_PER_YEAR

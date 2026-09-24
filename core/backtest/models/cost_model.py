@@ -22,8 +22,8 @@ from core.utils.instrument import StockUtils
 - BaseCostModel：各市場共用的介面（對應 Lean 的 FeeModel）
 - ShortConstraint / CostConfig / StockCostModel：台股實作，含信用交易
 
-自 core/utils/ 移入：它是回測領域的核心，
-與 log_manager、decorators 這類通用工具混在一起會讓 core/utils/ 變成雜物櫃。
+**放在回測領域而非 `core/utils/`**：成本口徑是回測的核心假設，
+與 log_manager、decorators 這類通用工具混在一起會讓 `core/utils/` 變成雜物櫃。
 """
 
 
@@ -40,38 +40,46 @@ class BaseCostModel(ABC):
     @abstractmethod
     def commission(self, price: float, volume: int) -> int:
         """手續費"""
+
         pass
 
     @abstractmethod
     def tax(self, price: float, volume: int, **kwargs) -> int:
         """交易稅（台股為證交稅、期貨為期交稅）"""
+
         pass
 
     @abstractmethod
     def realized_pnl(self, **kwargs) -> float:
         """已實現損益"""
+
         pass
 
     @abstractmethod
     def roi(self, **kwargs) -> float:
         """名目報酬率（%）"""
+
         pass
 
     @abstractmethod
     def roi_on_capital(self, **kwargs) -> float:
         """資金效率報酬率（%）"""
+
         pass
 
     def borrow_fee(self, **kwargs) -> int:
         """借券費；無此制度的市場維持 0"""
+
         return 0
 
     def margin_required(self, **kwargs) -> int:
         """開倉所需保證金；無保證金制度的市場維持 0"""
+
         return 0
 
     def short_interest(self, **kwargs) -> int:
         """放空擔保品的利息收入；無此制度的市場維持 0"""
+
         return 0
 
     def enrich_orders(self, orders: List[BaseOrder]) -> List[BaseOrder]:
@@ -135,10 +143,10 @@ class StockCostModel(BaseCostModel):
             取捨：一律 `warning` 而非 `raise`，避免既有已設定這些欄位的策略
             直接壞掉。
 
-            **`check_borrowable` 已於 2026-08-15 移出本清單**：券源檢核已接上
+            **`check_borrowable` 不在本清單**：它已接上
             `TwStockFillModel.check_short_borrowable()`，設為 `True` 會實際生效。
-            但其資料來源 `margin` 表的歷史回補是獨立作業，若該表為空，
-            `FillModel` 會在每次檢核時 warning 提示「查無資料，本次跳過」。
+            但其資料來源 `margin` 表若為空，`FillModel` 會在每次檢核時 warning
+            提示「查無資料，本次跳過」。
         """
 
         constraint: Optional[ShortConstraint] = self.config.short_constraint
@@ -160,11 +168,9 @@ class StockCostModel(BaseCostModel):
         - Description:
             回測區間落在當沖證交稅減半的適用區間之外時提醒稅率假設失效
 
-            **看的是回測區間，不是真實今天**。舊版寫
-            `datetime.date.today() > DAY_TRADE_TAX_EXPIRY`，而落日日期是
-            2027-12-31，所以這條警告在 2028 年之前**永遠不會觸發**；反過來，
-            拿當沖策略回測到 2028 年時稅率假設早已失效，卻沒有任何提示。
-            與 `tax()` 同一個原則：**稅制邊界要看成交日，不看真實今天**。
+            **看的是回測區間，不是真實今天**，與 `tax()` 同一個原則：拿
+            `datetime.date.today()` 比對落日日期，在落日之前永遠不會觸發，
+            而回測到落日之後時稅率假設早已失效卻沒有任何提示。
 
             拿不到區間時**維持靜默**而不是退回看 `today()`——寧可不說，
             也不要說錯。實際課稅仍由 `tax()` 逐筆依成交日判斷
@@ -277,7 +283,7 @@ class StockCostModel(BaseCostModel):
                 是否為現股當沖；None 時取用 config 的設定
             - date: Optional[datetime.date]
                 成交日；決定當沖減半是否已實施（見 `is_day_trade_tax_effective()`）。
-                None 時視為現行制度，維持舊行為
+                None 時視為現行制度
         - Return:
             - tax: int
                 證交稅

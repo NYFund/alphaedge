@@ -26,9 +26,8 @@ class FuturesBacktestReporter(StockBacktestReporter):
     複製一份四百行繪圖程式碼只會讓兩邊各自漂移。真正與商品有關的只有三件事，
     本類別逐一覆寫：**交易明細欄位**、**多空統計欄位**、**對標的標的**。
 
-    > 待美股加入時應把繪圖抽到 `BaseBacktestReporter`，屆時 baseline 本來就要
-    > 重產。在那之前
-    > 動它會讓台股報表跟著改，不划算。
+    > 繪圖要抽到 `BaseBacktestReporter` 得等美股加入時一起做（屆時 baseline
+    > 本來就要重產）；在那之前動它會連帶改到台股報表。
 
     **對標序列優先讀連續合約**（`futures_continuous`，`BACKWARD` 調整、換月規則
     對齊策略的 `roll_config.rule`）：換月價差已經調整掉，接點沒有假跳空，
@@ -223,7 +222,7 @@ class FuturesBacktestReporter(StockBacktestReporter):
         return f"{self.NEAR_MONTH_SERIES_LABEL}（換月接點有展期價差造成的假跳空）"
 
     def get_adjusted_price(self, price_series: pd.Series, stock_id: str) -> pd.Series:
-        """期貨沒有股票分割，對標價格原樣回傳（覆寫台股的分割調整）"""
+        """期貨沒有除權息與分割，對標價格原樣回傳"""
 
         return price_series
 

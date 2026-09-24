@@ -22,8 +22,8 @@ from core.dao.base import BaseDAO
 | `futures_large_trader` | (date, product, expiry, trader_type) | 約 1,400 |
 | `futures_put_call_ratio` | (date) | 1 |
 
-三張表共用同一組查詢，**表名由建構子傳入，一律走白名單**：表名只能拼進 SQL，
-舊版 `FuturesChipAPI` 的 `table=` 參數沒有檢查就直接組進查詢。
+三張表共用同一組查詢，**表名由建構子傳入，一律走白名單**：表名無法用 `?` 佔位、
+只能拼進 SQL，不檢查就等於讓呼叫端的字串直接進查詢。
 """
 
 
@@ -144,8 +144,8 @@ class FuturesChipDAO(BaseDAO):
         - Description:
             表內列數；**只有表還沒建才回 0**
 
-            舊版連查詢錯誤一起吞，而寫入是用「入庫後列數 − 入庫前列數」算新增筆數——
-            後一次查詢失敗就會印出負數列數。
+            查詢錯誤不可一起吞成 0：寫入是用「入庫後列數 − 入庫前列數」算新增筆數，
+            後一次查詢失敗會印出負數列數。
         """
 
         if not self.table_exists():

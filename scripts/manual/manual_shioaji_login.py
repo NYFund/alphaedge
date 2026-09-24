@@ -27,7 +27,7 @@ from core.config.settings import now_live
 `run.py --production --confirm-production` 進入。
 """
 
-# 要核對的合約欄位：規劃文件在多個步驟假設它們存在，這裡是第一次以實際連線確認
+# 要核對的合約欄位：實盤的取價、風控與股期解析都假設它們存在，以實連確認
 CONTRACT_FIELDS_TO_VERIFY: List[str] = [
     "reference",  # 參考價（漲跌停基準，取代公式推算）
     "limit_up",
@@ -58,7 +58,7 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def report_contract_fields(api: Any, stock_id: str) -> None:
-    """逐一印出合約欄位的實際值與型別，供規劃文件回填"""
+    """逐一印出合約欄位的實際值與型別（欄位名對了、型別不對照樣會出事）"""
 
     try:
         contract: Any = api.Contracts.Stocks.TSE[stock_id]
@@ -101,7 +101,7 @@ CONNECT_FAILURE_HINTS: List[str] = [
     "請在交易日盤中重跑一次再判斷。",
     "2. TCP 是否通？`python -c \"import socket; socket.create_connection(('210.59.255.161', 80), 3)\"`；"
     "秒回代表網路沒問題，卡的是 session 協商。",
-    "3. Phase0-1 是否完成？API 使用條款、股票與期貨 API 權限都要先開通。",
+    "3. API 使用條款是否同意、股票與期貨 API 權限是否都已開通。",
     "4. `.env` 的 API_KEY／API_SECRET_KEY 是否為這個帳號的金鑰。",
 ]
 

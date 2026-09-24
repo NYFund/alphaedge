@@ -24,13 +24,13 @@ from core.utils.log_manager import LogManager
 """
 台期貨籌碼 Updater：三大法人、大額交易人、選擇權 PCR
 
-**改用月批次的區間查詢**（2026-09-02）：三個端點都支援日期區間，一次請求可以拿
-一整個月。逐日打的話 2015 年以來是 4,262 次請求，月批次只要 140 次——而這不只是
-快慢的問題：
+**一律以月批次的區間查詢取資料**：三個端點都支援日期區間，一次請求可以拿一整個
+月。逐日打的話 2015 年以來是 4,262 次請求，月批次只要 140 次——而這不只是快慢的
+問題：
 
 > **TAIFEX 擋流量時回的是 HTTP 200 ＋ 一整頁 HTML，與非交易日的回應一模一樣。**
-> 第一次歷史回補就是這樣：逐日打了 4,000 多次之後被擋，2024-08 ~ 2025-10 約
-> 250 個交易日**全部被記成「查無資料」**，事後單獨重查每一天都有資料。
+> 逐日打 4,000 多次之後就會被擋，實測有 2024-08 ~ 2025-10 約 250 個交易日
+> **全部被記成「查無資料」**，事後單獨重查每一天都有資料。
 
 故本 updater 做兩件事來確保「沒抓到」是真的沒有：
 
@@ -45,11 +45,11 @@ from core.utils.log_manager import LogManager
 端點都拿不到，查詢頁甚至會**靜靜回傳最新一天**而不是報錯。故本 updater 會把該
 資料集的起始日**夾到那一天之後**並說明原因，不浪費請求去撈拿不到的東西。
 
-⚠️ **這個下限不要憑印象改。** 2026-09-02 曾實測出「切點 2024-08-17~19」而把夾擠
-寫成兩年，2026-09-05 以「每次最多重試 8 回」重測才發現那是**網路不穩被誤讀成查無
-資料**——TAIFEX 被擋與非交易日的回應都是 HTTP 200 ＋ 一頁 HTML，單次請求分不出
-「站方沒有」與「這次沒問到」。實測結果：2023-08-28~09-01 無資料、2023-09-04 起
-每一週都拿得到，切點落在這兩者之間。
+⚠️ **這個下限不要憑印象改，也不要用單次請求重測。** TAIFEX 被擋與非交易日的回應
+都是 HTTP 200 ＋ 一頁 HTML，單次請求分不出「站方沒有」與「這次沒問到」：2026-09-02
+的單次量測得到「切點 2024-08-17~19」而把夾擠寫成兩年，2026-09-05 以「每次最多重試
+8 回」重測才發現那是**網路不穩被誤讀成查無資料**。重測結果：2023-08-28~09-01 無
+資料、2023-09-04 起每一週都拿得到，切點落在這兩者之間。
 
 ⚠️ **籌碼是盤後公布**：當天盤中跑只會拿到「無資料」，那是正常狀態。
 回測要用的本來就是前一交易日的籌碼（見 `FuturesChipAPI` 的前視偏差說明）。
@@ -206,8 +206,8 @@ class FuturesChipUpdater(BaseDataUpdater):
             )
 
         # **「該有資料卻沒拿到」必須讓行程非零結束**：TAIFEX 擋流量時回的是
-        # HTTP 200 ＋ 一整頁 HTML，與非交易日的回應一模一樣。舊版只記 warning，
-        # 於是被擋的月份會被當成「那幾個月沒有籌碼」而永遠不再補。
+        # HTTP 200 ＋ 一整頁 HTML，與非交易日的回應一模一樣。只記 warning 的話，
+        # 被擋的月份會被當成「那幾個月沒有籌碼」而永遠不再補。
         if blocked:
             raise DataLoadError("futures_chip", blocked)
 
@@ -216,9 +216,9 @@ class FuturesChipUpdater(BaseDataUpdater):
         - Description:
             表內最早與最新日期之間，期貨有交易卻沒有籌碼的月份
 
-            以前被擋的月份只記 error、叫人「稍後重跑」，但照預設 `resume=True`
-            重跑，起點是表內最新 +1，那個月被後面已入庫的月份蓋過去，
-            結束碼 0、缺口仍在。交易日以 `futures_price_daily` 為準
+            **被擋的月份只記 error、叫人「稍後重跑」是不夠的**：預設 `resume=True`
+            的起點是表內最新 +1，那個月已被後面入庫的月份蓋過去，重跑以結束碼 0
+            收工而缺口仍在。交易日以 `futures_price_daily` 為準
             （與 `has_trading_days()` 同一個判準）。
         - Parameters:
             - table: str
@@ -399,6 +399,8 @@ class FuturesChipUpdater(BaseDataUpdater):
                 log 用的資料集名稱
             - window_start / window_end: datetime.date
                 月批次區間
+            - stop: Optional[GracefulStop]
+                中止旗標；退避期間收到訊號就不再重試
         - Return:
             - Optional[str]
                 CSV 原文；重試後仍拿不到時為 None
@@ -435,8 +437,8 @@ class FuturesChipUpdater(BaseDataUpdater):
         一律回 True（寧可多重試幾次，也不要把被擋當成沒資料）；區間只到今天時
         一律回 False（今天的籌碼可能還沒公布）。
 
-        舊版以 `except Exception: return True` 表達「表不存在」，連 `database is locked`
-        也一起吞；改為只判斷表存不存在，其他錯誤往外拋。
+        **「表不存在」以 `table_exists()` 判斷，不可改寫成
+        `except Exception: return True`**：那會連 `database is locked` 一起吞掉。
         """
 
         # **今天不算**：同一個 job 裡行情已入庫、籌碼還沒公布時，今天會被判成
@@ -488,8 +490,8 @@ class FuturesChipUpdater(BaseDataUpdater):
             單位的 `throttle_per_file(file_cnt, stop)`，簽名不同。同名會把基底
             那份遮蔽掉，而遮蔽在這裡沒發作只是因為呼叫端剛好都不帶參數。
 
-            **改用可中斷的 sleep**：原本是裸 `time.sleep()`，被訊號打斷會自動
-            續睡（PEP 475），按下 Ctrl+C 要等滿 2~4 秒才有反應。
+            **睡眠必須可中斷**：裸 `time.sleep()` 被訊號打斷會自動續睡
+            （PEP 475），按下 Ctrl+C 要等滿 2~4 秒才有反應。
         - Parameters:
             - stop: Optional[GracefulStop]
                 中止旗標；None 時退化成不可打斷的 sleep

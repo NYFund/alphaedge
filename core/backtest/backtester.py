@@ -160,10 +160,8 @@ class Backtester:
             )
             self.strategy_result_dir.mkdir(parents=True, exist_ok=True)
 
-            # Set Log File Path
             LogManager.setup_backtest_logger(self.strategy.strategy_name)
 
-        # load backtest dataset
         self.load_datasets()
 
     def load_datasets(self) -> None:
@@ -289,14 +287,12 @@ class Backtester:
         logger.info(f"* Initial Capital: {self.strategy.init_capital}")
         logger.info(f"* Backtest Scale: {self.scale}")
 
-        # load backtest period
         dates: List[datetime.date] = TimeUtils.generate_date_range(
             start_date=self.start_date, end_date=self.end_date
         )
 
-        # `try/finally`：中途拋例外時連線一樣要關。舊版把 `close()`
-        # 放在最後一行，於是任何一天的資料異常都會讓那條 SQLite 連線留下來，
-        # 而回測是常常在中途炸的——這正是連線會累積的路徑
+        # `try/finally`：回測常在中途因單日資料異常拋例外，不用 finally 的話
+        # 那條 SQLite 連線會留著不關，反覆回測就會累積連線
         try:
             for date in dates:
                 logger.info(f"--- {date.strftime('%Y/%m/%d')} ---")
@@ -320,12 +316,10 @@ class Backtester:
             4. ROI: {round(self.account.roi, 2)}%
             """)
 
-            # Generate Backtest Report
             if self.write_artifacts:
                 self.generate_backtest_report()
 
         finally:
-            # 關閉資料連線：不關的話，每次回測都會累積不再使用的連線
             self.data_feed.close()
 
     def run_tick_backtest(self, date: datetime.date) -> None:
@@ -427,7 +421,6 @@ class Backtester:
     def execute_open_signal(self, quotes: List[BaseQuote]) -> List[BasePosition]:
         """若倉位數量未達到限制且有開倉訊號，則執行開倉"""
 
-        # Get open orders
         open_orders: List[BaseOrder] = self.strategy.check_open_signal(quotes)
 
         # 方向驗證 → 補值 → 決定性排序 → 成交價驗證，最後才進倉位管理器
@@ -436,7 +429,6 @@ class Backtester:
         )
         quote_map: Dict[str, BaseQuote] = {q.symbol: q for q in quotes}
 
-        # Execute open orders
         open_positions: List[BasePosition] = []
         for order in open_orders:
             if not self.check_max_holdings(order):
@@ -501,18 +493,16 @@ class Backtester:
                 本階段產生的平倉紀錄
         """
 
-        # Find symbols with existing positions
         positions: List[BaseQuote] = [
             q for q in quotes if self.account.check_has_position(q.symbol)
         ]
 
-        # 回傳型別是 List，`return` 會給出 None——呼叫端若照標註串接就會炸
+        # 無持倉時回傳空 list 而非 None，呼叫端才能直接串接
         if not positions:
             return []
 
         quote_map: Dict[str, BaseQuote] = {q.symbol: q for q in quotes}
 
-        # Get stop loss orders
         stop_loss_orders: List[BaseOrder] = self.strategy.check_stop_loss_signal(
             positions
         )
@@ -523,15 +513,13 @@ class Backtester:
             (self.cur_date, "stop_loss", order) for order in stop_loss_orders
         )
 
-        # Close records
         close_records: List[BaseTradeRecord] = []
 
-        # Execute stop loss orders
         for order in stop_loss_orders:
-            # 平倉同樣套用市場執行假設（滑價、成交量上限）；
-            # 但**不做**價格合理性檢查——那是既有的開倉專屬擋板，
-            # 若在此新增會讓原本必定成交的平倉單可能被拒，改變既有行為。
-            # 超出當日區間時只警告並計入 `close_price_out_of_range`
+            # 平倉同樣套用市場執行假設（滑價、成交量上限），但**刻意不做**
+            # 價格合理性檢查——那是開倉專屬擋板，拒掉平倉單會讓部位被迫留倉，
+            # 失真比成交價偏離區間嚴重得多。超出當日區間時只警告並計入
+            # `close_price_out_of_range`
             filled_order: Optional[BaseOrder] = self.apply_fill_model(
                 order, quote_map.get(order.symbol), is_close=True
             )
@@ -543,12 +531,10 @@ class Backtester:
             )
             close_records.extend(close_positions)
 
-        # After executing stop loss, recheck the remaining positions
         remaining_positions: List[BaseQuote] = [
             q for q in quotes if self.account.check_has_position(q.symbol)
         ]
 
-        # Get close orders
         close_orders: List[BaseOrder] = self.strategy.check_close_signal(
             remaining_positions
         )
@@ -557,7 +543,6 @@ class Backtester:
             (self.cur_date, "close", order) for order in close_orders
         )
 
-        # Execute close orders
         for order in close_orders:
             filled_order: Optional[BaseOrder] = self.apply_fill_model(
                 order, quote_map.get(order.symbol), is_close=True
@@ -602,8 +587,7 @@ class Backtester:
             # 「這個部位替權益貢獻多少」是**資金佔用方式**的問題，屬結算模型：
             # 股票買進是把現金換成標的（部位價值＝市值），期貨開倉只凍結保證金
             # （契約價值本身不佔用資金，部位價值＝保證金＋未結算損益）。
-            # `BaseSettlementModel.mark_position()` 的預設實作即原本寫在此處的
-            # 現金帳戶口徑，台股逐筆不變
+            # `BaseSettlementModel.mark_position()` 的預設實作即現金帳戶口徑
             position_value += self.settlement.mark_position(position, price, units)
 
         equity: float = round(self.account.balance + position_value, 2)
@@ -614,9 +598,8 @@ class Backtester:
     def generate_backtest_report(self) -> None:
         """Generate backtest report"""
 
-        # Generate Backtest Report (Chart)
-        # `price` 共用 DataFeed 已經開好的連線：reporter 自己再開一條，
-        # 一次回測就是兩條連往同一個檔案的 SQLite 連線
+        # `price` 共用 DataFeed 已開好的連線，避免一次回測對同一個 SQLite
+        # 檔案開出兩條連線
         reporter: BaseBacktestReporter = self.reporter_cls(
             self.strategy,
             self.strategy_result_dir,

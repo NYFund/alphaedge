@@ -184,8 +184,7 @@ class StockDividendCleaner(BaseDataCleaner):
     ) -> Optional[pd.DataFrame]:
         """
         - Description:
-            三個來源共用的清洗尾段：型別轉換、衍生欄位、去重與落地 CSV
-
+            TWSE 與 TPEX 共用的清洗尾段：型別轉換、衍生欄位、去重與落地 CSV
         - Parameters:
             - df: pd.DataFrame
                 已完成欄位改名與 date 轉換的 DataFrame
@@ -193,7 +192,6 @@ class StockDividendCleaner(BaseDataCleaner):
                 資料來源標記（twse／tpex），寫入「資料來源」欄供追溯
             - file_name: str
                 輸出 CSV 檔名（不含副檔名）
-
         - Return:
             - Optional[pd.DataFrame]
                 清洗後的 DataFrame；無有效資料時回傳 None
@@ -220,7 +218,7 @@ class StockDividendCleaner(BaseDataCleaner):
             df = df[df["date"].notna()]
 
         # 前收盤價或參考價缺漏／非正值時無法計算還原係數。
-        # 這裡直接剔除並記錄，不可填 0 後靜默產生 inf／0 係數（見 CLAUDE.md 的不可靜默失敗原則）
+        # 這裡直接剔除並記錄：填 0 會產生 inf／0 的還原係數，復權價整段變形卻不報錯
         valid_mask: pd.Series = (df["除權息前收盤價"] > 0) & (df["除權息參考價"] > 0)
         dropped_cnt: int = int((~valid_mask).sum())
         if dropped_cnt:
@@ -264,15 +262,13 @@ class StockDividendCleaner(BaseDataCleaner):
             但該欄語意不一致——純除息時等於除權息參考價、純除權時等於除權息前收盤價，
             **權息並存時兩種寫法都出現過**（2024 年 62 筆權息列中有 57 筆等於參考價）。
             若一律套同一條公式，會把股票股利整包誤算成現金股利，這種值餵進放空的
-            股利補償會直接算錯且不會有任何錯誤訊息，正是 `CLAUDE.md` 要避免的靜默失效。
-            因此上市只處理兩種可驗證的情形，其餘留 NaN 並記錄筆數。
+            股利補償會直接算錯且不會有任何錯誤訊息。因此上市只處理兩種可驗證的
+            情形，其餘留 NaN 並記錄筆數。
 
             **還原係數不受影響**：它只用到前收盤價與參考價，與拆分無關
-
         - Parameters:
             - df: pd.DataFrame
                 已算出還原係數的 DataFrame
-
         - Return:
             - pd.DataFrame
                 補上「現金股利」與「配股率」的 DataFrame

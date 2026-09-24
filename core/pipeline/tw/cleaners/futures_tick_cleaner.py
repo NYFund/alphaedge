@@ -25,8 +25,8 @@ from core.utils.constant import FileEncoding
    不標的話，日盤策略會吃到夜盤的成交而完全不知情——夜盤的量能與價格行為
    與日盤差很多。
 
-⚠️ **非交易時段的成交會被標成 None**：13:45~15:00 之間理論上沒有成交，
-真的出現代表資料或時區有問題，故保留該列但把 `session` 留空，讓它在下游顯眼。
+非交易時段（13:45~15:00）的成交會保留該列但把 `session` 留空，
+讓這種異常在下游顯眼，見 `resolve_session()`。
 """
 
 
@@ -71,8 +71,10 @@ class FuturesTickCleaner(BaseDataCleaner):
         - Parameters:
             - df: pd.DataFrame
                 Shioaji 回傳的原始 ticks
-            - product / expiry: str
-                TAIFEX 的商品代碼與到期月
+            - product: str
+                TAIFEX 的商品代碼
+            - expiry: str
+                到期月（月契約 `202609`、週契約 `202609W1`）
         - Return:
             - Optional[pd.DataFrame]
                 清洗後的資料；無有效列時為 None

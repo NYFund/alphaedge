@@ -8,13 +8,6 @@ from typing import Dict
 """
 
 
-# 定義台期貨商品代碼常量（＝ TAIFEX 每日行情頁的 commodity_id）
-# 2026-08-29 自 TAIFEX 表單實查共 30 檔，本表只收**臺股相關的 15 檔**。
-# 不收的 15 檔：海外指數（SPF／UDF／UNF／SXF／F1F／TJF）、商品（GDF／TGF／BRF）、
-# 匯率（RHF／RTF／XAF／XBF／XEF／XJF）——本專案是台股研究框架，這些商品與
-# tw_stock.db 的籌碼、除權息完全對不上，抓進來也沒有下游能用；日後要用再補。
-# 股票期貨（295 檔）與 ETF 期貨（24 檔）不在此列：兩者會隨掛牌／下市變動，
-# 且乘數會因除權息調整，須走 futures_stock_universe 表而非寫死。
 # 定義台期貨交易時段常量
 # 夜盤自 2017-05-15 開始，之前僅有日盤。
 # **兩個時段是各自獨立的行情**（OHLC 不同、欄位結構也不同），資料層一律分開存，
@@ -50,6 +43,13 @@ FUTURES_ROLL_DAYS_BEFORE_EXPIRY = "DAYS_BEFORE_EXPIRY"  # 到期前 N 個交易�
 FUTURES_ROLL_OPEN_INTEREST = "OPEN_INTEREST"  # 未沖銷契約量交叉時換
 
 
+# 定義台期貨商品代碼常量（＝ TAIFEX 每日行情頁的 commodity_id）
+# TAIFEX 表單共 30 檔，本表只收**臺股相關的 15 檔**。
+# 不收的 15 檔：海外指數（SPF／UDF／UNF／SXF／F1F／TJF）、商品（GDF／TGF／BRF）、
+# 匯率（RHF／RTF／XAF／XBF／XEF／XJF）——本專案是台股研究框架，這些商品與
+# tw_stock.db 的籌碼、除權息完全對不上，抓進來也沒有下游能用；日後要用再補。
+# 股票期貨（約 295 檔）與 ETF 期貨（約 24 檔）不在此列：兩者會隨掛牌／下市變動，
+# 且乘數會因除權息調整，須走 futures_stock_universe 表而非寫死。
 FUTURES_PRODUCT_TX = "TX"  # 臺股期貨（大台）
 
 
@@ -181,7 +181,7 @@ class FuturesProduct(str, Enum):
     """
     台期貨商品代碼（＝ TAIFEX 每日行情頁查詢時要帶的 commodity_id）
 
-    分組即為爬取範圍，見 `FUTURES_TARGET_PRODUCTS`（`core/config.py`）
+    實際爬取範圍見 `core/config/settings.py` 的 `FUTURES_TARGET_PRODUCTS`
     """
 
     # 大盤指數
@@ -195,7 +195,7 @@ class FuturesProduct(str, Enum):
     TF = FUTURES_PRODUCT_TF
     ZFF = FUTURES_PRODUCT_ZFF
 
-    # 其他臺股指數（尚未排入任何 Phase，代碼先登錄）
+    # 其他臺股指數（尚未納入爬取範圍，代碼先登錄）
     XIF = FUTURES_PRODUCT_XIF
     M1F = FUTURES_PRODUCT_M1F
     SOF = FUTURES_PRODUCT_SOF
@@ -221,7 +221,7 @@ class FuturesProduct(str, Enum):
 #   不能用單一數值表達，否則跨越變更日的回測會靜默算錯。要登錄它必須先查到
 #   變更生效日，並比照 `PRICE_LIMIT_RATIO` ／ `_LEGACY` ／ `_WIDENED_DATE`
 #   改成帶生效日的表達方式。
-# - M1F／SOF／GTF／G2F／BTF／E4F／SHF：尚未查證，且未排入任何 Phase。
+# - M1F／SOF／GTF／G2F／BTF／E4F／SHF：尚未查證，且未納入爬取範圍。
 FUTURES_MULTIPLIER: Dict[str, int] = {
     FUTURES_PRODUCT_TX: 200,
     FUTURES_PRODUCT_MTX: 50,
@@ -303,13 +303,15 @@ class FuturesSession(str, Enum):
 
     `DAY` 與 `NIGHT` 的值即為 `futures_price_daily` 的 `session` 欄位內容；
     **`COMBINED` 不是資料表裡的值**，而是日夜盤整併的結果——
-    「前一交易日的夜盤 ＋ 當日日盤」合成的一根 bar，只存在於報價層。
+    「當日的夜盤 ＋ 當日日盤」合成的一根 bar，只存在於報價層
+    （那段夜盤實際發生在前一晚，見下）。
     拿 `COMBINED` 去查資料庫一律查不到東西，那是刻意的。
 
-    **為什麼整併要用「前一交易日的夜盤」**：TAIFEX 的夜盤 15:00 開盤、
-    次日 05:00 收盤，它在制度上屬於**次一交易日**的一部分——星期五晚上的那一段
-    屬於星期一。資料表為了忠實記錄來源，把夜盤存在它開始的那個日曆日，
-    整併時因此要往前取一個交易日，不是取同一天。
+    **整併取的是「同一天的 `night` 列」**：TAIFEX 的夜盤 15:00 開盤、次日 05:00
+    收盤，制度上屬於**次一交易日**——星期五晚上那一段屬於星期一，而行情表記的
+    正是它所屬的交易日（那一列的 `date` 就是星期一），不是它開始的曆日。
+    因此整併時取同一個日期，不要往前推一個交易日
+    （見 `TwFuturesDataFeed.get_night_session_date()`）。
     """
 
     DAY = FUTURES_SESSION_DAY
@@ -322,9 +324,8 @@ class FuturesSession(str, Enum):
         **來源真的有的兩個時段**（日盤與夜盤）
 
         ETL 要「逐時段爬一次」時一律用本方法，**不要直接 `for s in FuturesSession`**
-        ——那會把 `COMBINED` 也算進去，於是去爬一個不存在的時段。
-        2026-09-02 加入 `COMBINED` 時就是這樣讓爬蟲與清洗器一起壞掉的
-        （`KeyError: 'combined'`）。
+        ——那會把 `COMBINED` 也算進去，於是去爬一個不存在的時段，
+        讓爬蟲與清洗器一起壞掉（`KeyError: 'combined'`）。
         """
 
         return (cls.DAY, cls.NIGHT)

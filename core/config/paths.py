@@ -18,6 +18,7 @@ load_dotenv()
 
 def get_static_resolved_path(base_dir: Path, dir_name: str) -> Path:
     """Resolve dir_name under base_dir to an absolute path"""
+
     return (base_dir / dir_name).resolve()
 
 
@@ -36,15 +37,13 @@ def get_env_path(env_key: str, default: Path) -> Path:
 # - BASE_DIR_PATH（core/）：**被讀的東西**，即原始碼
 # - PROJECT_ROOT（專案根）：執行期產物一律掛在它底下的 data/ results/ logs/
 #
-# 錨點原本只有 BASE_DIR_PATH，導致產物只能往套件內長——`core/` 是
-# 以 editable 方式安裝的套件，卻累積了 6.4 GB 程式寫入的檔案，
-# 逼得 pyproject／ruff／coverage 各維護一份排除清單，`.gitignore`
-# 更只能全 repo 封鎖副檔名。
+# 兩個錨點缺一不可：只有 BASE_DIR_PATH 的話產物只能往套件內長，而 `core/` 是
+# 以 editable 方式安裝的套件，會累積數 GB 程式寫入的檔案，逼得
+# pyproject／ruff／coverage 各維護一份排除清單。
 #
 # ⚠️ 層數跟著本檔案的位置走：`core/config/paths.py` → parents[1] 才是 `core/`。
-# 這裡原本是 `.parent`（當時檔案在 `core/config.py`），拆成套件後多了一層目錄，
-# 沒改層數的話 `PROJECT_ROOT` 會變成 `core/`，產物全部退回 `core/data/`——
-# **而且不會有任何錯誤**，只會安靜地在錯的地方建目錄。
+# 本檔搬家卻沒改層數的話，`PROJECT_ROOT` 會變成 `core/`，產物全部退回
+# `core/data/`——**而且不會有任何錯誤**，只會安靜地在錯的地方建目錄。
 BASE_DIR_PATH: Path = Path(__file__).resolve().parents[1]
 PROJECT_ROOT: Path = BASE_DIR_PATH.parent
 
@@ -78,7 +77,7 @@ DATABASE_DIR_PATH: Path = get_static_resolved_path(
 # === Log Directory Path ===
 # -----------------------------------------------------------------------
 #
-# 依**產生者**分三桶，而不是全部平鋪（原本 258 個檔擠在同一層）。
+# 依**產生者**分三桶，而不是全部平鋪——平鋪會讓上百個日誌檔擠在同一層。
 # 分三桶而非兩桶的理由：`core/api/` 的查詢日誌檔數最多且是純雜訊，
 # 與「會回頭讀」的 pipeline 日誌（例如回補的 N requested／N no data／
 # N unreachable 統計行）價值完全不同，隔開才能整桶刪掉 api/ 而不誤傷。
@@ -98,7 +97,7 @@ BACKTEST_LOGS_DIR_PATH: Path = get_static_resolved_path(
 # -----------------------------------------------------------------------
 #
 # 只放「要給人看的產出」（CSV ＋ PNG）。回測日誌不放這裡——產出與日誌混放
-# 正是原本會長出第二棵日誌樹（backtest/results/logs/）的原因
+# 會在 `results/` 底下長出第二棵日誌樹，與 `LOGS_DIR_PATH` 那棵並存
 BACKTEST_RESULT_DIR_PATH: Path = RESULTS_DIR_PATH
 
 
@@ -200,8 +199,8 @@ FUTURES_MARGIN_DOWNLOADS_PATH: Path = get_static_resolved_path(
 # -----------------------------------------------------------------------
 #
 # 欄位對照表由人維護、被 cleaner 讀取，缺檔只會 warning 後**靜默降級清洗**，
-# 因此必須進版控。原本混在 `downloads/tw_stock/meta/` 裡，
-# 產物目錄一納入 `.gitignore` 就會整批掉出版控——這是搬遷時才暴露出來的既有錯置。
+# 因此必須進版控。**不可放進 `downloads/` 底下**：產物目錄整個在 `.gitignore`
+# 內，放進去就會整批掉出版控。
 #
 # 掛 BASE_DIR_PATH（core/）而不是產物根：小、唯讀、隨套件發佈，屬 package data
 CLEANER_SCHEMA_DIR_PATH: Path = get_static_resolved_path(

@@ -12,10 +12,9 @@ from core.strategies.base import BaseStrategy
 """
 StrategyLoader: 自動載入 core/strategies/ 下所有市場的策略類別
 
-**單一模組壞掉不該讓所有策略都跑不了**：舊版是一路
-`import_module()` 到底，任何一支策略有 import 錯誤、或在 module level 做了
-會炸的事，整個 `load_strategies()` 就往外拋——`run.py --strategy` 於是連
-「有哪些策略可用」都列不出來，而錯誤訊息只指向那支壞掉的模組。
+**單一模組壞掉不該讓所有策略都跑不了**：`import_module()` 一路往外拋的話，
+任何一支策略有 import 錯誤、或在 module level 做了會炸的事，`run.py --strategy`
+就連「有哪些策略可用」都列不出來。故逐模組隔離，壞掉的只記 error 並略過。
 
 **但重複的類別名稱要當場拋出**：`strategies` 以類別名為 key，同名會靜靜
 覆蓋——跑的到底是哪一支要看掃描順序，這比壞掉更難查。
@@ -31,8 +30,8 @@ class StrategyLoader:
         - Description:
             掃描 `core/strategies/` 下的所有商品類別子套件並載入其中的策略
 
-            原本寫死只掃 `stock` 子套件；改為逐一掃描所有子套件後，
-            新增一個商品類別（如 `core/strategies/futures/`）不需要修改本檔案。
+            **逐一掃描所有子套件，不寫死商品類別**：新增一個商品類別
+            （如 `core/strategies/futures/`）因此不需要修改本檔案。
         - Return:
             - Dict[str, Type[BaseStrategy]]
                 類別名稱 → 策略類別

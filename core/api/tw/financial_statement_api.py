@@ -78,8 +78,8 @@ class FinancialStatementAPI(BaseDataAPI):
         - Description:
             取得 `start_year Q start_season` 到 `end_year Q end_season`（兩端皆含）的財報
 
-            參數順序維持既有公開介面（先年後季）。**舊版年、季各自 `BETWEEN`**，
-            跨年區間（例如 2023Q4～2024Q1）一筆都查不到，現已改為連續年季區間。
+            參數順序為「先年後季」。區間以**連續年季**比對，**不是年、季各自
+            `BETWEEN`**——後者在跨年區間（例如 2023Q4～2024Q1）一筆都查不到。
         - Parameters:
             - table_name: str
                 財報表名稱

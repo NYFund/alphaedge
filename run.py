@@ -40,6 +40,8 @@ if TYPE_CHECKING:
 # 143 收到 SIGTERM（容器停止、排程逾時）：已撤未成交單、寫完結束紀錄才離開
 #     （128 ＋ 訊號編號 15，是 shell 與容器對「被訊號結束」的慣例值）
 #
+# **每一種失敗都要有自己的號碼**：這支程式一旦接進批次（例如每晚重跑策略），
+# 「策略名打錯」與「回測跑完」若都回 0，在排程端長得一模一樣——那是最典型的假綠燈。
 # **`7` 不是 0**：只列計畫代表歸屬帳仍與券商不一致，排程不可把它當成已處理。
 # 重建被拒絕（歸屬帳已損壞、或仍有未終結的委託）回 `4`：與對帳不一致同一件事，
 # 都要人工處理。
@@ -47,10 +49,6 @@ if TYPE_CHECKING:
 # 「昨天出的事還沒有人處理」，兩者的處理急迫性不同。
 # **策略層降級不走退出碼**：那會讓一支策略的降級擋掉整個排程，
 # 與「一支策略拋例外不可拖垮其他策略」直接矛盾。
-#
-# **舊版兩者都回 0**：找不到策略只 `print` 後 `return`，`--mode live` 是 `pass`。
-# 目前 `run.py` 只有人手動跑所以還沒出事，但一旦接進批次（例如每晚重跑策略），
-# 「策略名打錯」與「回測跑完」在退出碼上長得一模一樣——那是最典型的假綠燈。
 #
 
 
@@ -96,9 +94,8 @@ def parse_arguments() -> argparse.Namespace:
         required=True,
         help="策略類別名稱；實盤可用逗號分隔多支（多策略共用一個帳戶）",
     )
-    # 回測畫完的五張圖要不要在瀏覽器開起來。**預設不開**：
-    # 舊版寫死開啟，每跑一次回測就彈出 5 個分頁，批次掃參數時一次開幾十個，
-    # 在無頭環境（CI、容器、nohup）更是直接失敗。圖本來就會存成 PNG。
+    # 回測畫完的五張圖要不要在瀏覽器開起來。**預設不開**：圖本來就會存成 PNG，
+    # 自動開啟在批次掃參數時一次彈出幾十個分頁，在無頭環境（CI、容器、nohup）更是直接失敗
     show_group = parser.add_mutually_exclusive_group()
     show_group.add_argument(
         "--show",
@@ -219,8 +216,6 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         return EXIT_USAGE
 
     if not args.simulation and not args.confirm_production:
-        # 兩個旗標才開得了正式環境；**刻意沒有對應的環境變數**——
-        # `.env` 的設定會留在機器上，某天排程就會默默連上去下真單
         print(
             "--production 必須同時帶 --confirm-production 才會連到正式環境",
             file=sys.stderr,
@@ -437,8 +432,7 @@ def _live_only_flags_in_use(args: argparse.Namespace) -> List[str]:
         `--mode backtest` 帶著它們照樣解析得過，然後被整個忽略。
 
         代價不對稱：以為自己在連正式環境下單、其實只跑了回測，
-        會讓人以為「今天沒有訊號」；而 `--production` 是全專案防呆最多的旗標
-        （刻意沒有環境變數），它被靜默忽略尤其不能接受。
+        會讓人以為「今天沒有訊號」——`--production` 被靜默忽略尤其不能接受。
     - Parameters:
         - args: argparse.Namespace
             命令列參數
@@ -492,10 +486,8 @@ def main() -> None:
         print(f"Available strategies: {available}", file=sys.stderr)
         sys.exit(EXIT_STRATEGY_NOT_FOUND)
 
-    # Initialize strategy
     strategy: BaseStrategy = strategies[strategy_name]()
 
-    # Backtest or Live Trading
     if args.mode == "backtest":
         backtester: Backtester = build_backtester(strategy)
         # 命令列旗標優先於環境變數；兩者都沒給就是不開圖

@@ -19,10 +19,9 @@ from core.utils import Action, PositionType, StockOrderCond, Units
 
 對帳與資金分配都建立在這裡的數字上，所以兩件事特別要緊：
 
-1. **交割款依「欄位名」加總，不用位置索引。** 舊 `ShioajiAccount.get_settlement_capital()`
-   寫的是 `settlements.loc[1:2, "amount"].sum()`——交割日數一變、或回傳列數一變，
-   它會安靜地算到別的金額。Shioaji 的 `Settlement` 本來就有
-   `t_money`／`t1_money`／`t2_money` 具名欄位，沒有理由去數列號。
+1. **交割款依「欄位名」加總，不用位置索引。** Shioaji 的 `Settlement` 本來就有
+   `t_money`／`t1_money`／`t2_money` 具名欄位；靠列號取值（例如取第 1、2 列當成
+   T+1、T+2）時，交割日數或回傳列數一變就會安靜地算到別的金額。
 2. **帳務查詢全部走 `ACCOUNT` 類限流**（25 次／5 秒）。它與下單額度分開計算，
    但一樣會因為超限被暫停服務——而對帳失敗會讓整段交易停下來。
 """
@@ -289,8 +288,6 @@ class ShioajiAccountQuery:
             - `settlements()` 的 `SettlementV1`：每列一筆，`T` 是第幾天、`amount` 是金額。
 
             兩種都支援，是因為券商的兩支查詢 API 回傳不同形狀，呼叫端可能拿到任一種。
-            曾經的寫法 `loc[1:2, "amount"]` 靠的是「第 1、2 列剛好是 T+1、T+2」——
-            列數一變就會安靜地算到別的金額。
         - Parameters:
             - settlements: Any
                 券商回傳的交割款資料

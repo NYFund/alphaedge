@@ -13,8 +13,8 @@ from typing import Dict, List, Set, Tuple
 不是錯誤。
 
 另一類是**檔案被刪除**。搬家看得到（有同名檔可比對），刪除看不到——
-沒有同名檔就落進「多半是規劃中的未來檔案」那一堆。實測曾有兩份 README 指向
-一支已刪除的策略檔而無人察覺，故另以 git 歷史判斷：指不到、全 repo 無同名檔、
+沒有同名檔就落進「多半是規劃中的未來檔案」那一堆，README 指向一支已刪除的
+策略檔也不會有人察覺。故另以 git 歷史判斷：指不到、全 repo 無同名檔、
 **但歷史上存在過**，那就是刪除造成的懸空引用。
 
 - Features:
@@ -187,14 +187,12 @@ def _moved_to(reference: str, real_paths: List[str]) -> List[str]:
     - Description:
         找出這個引用「搬到哪裡去了」
 
-        判準是**最後兩段相同**（父目錄 ＋ 檔名）：`core/api/futures_chip_api.py`
-        搬成 `core/api/tw/futures_chip_api.py`，兩者的最後兩段是
-        `api/futures_chip_api.py` 與 `tw/futures_chip_api.py`——不相同，
-        故改以「檔名相同且引用的父目錄仍是新路徑的一段」收斂。
+        判準是**檔名相同，且引用寫的每一段父目錄仍出現在新路徑裡**。
 
-        只比對檔名太寬：`base.py` 全 repo 有七個，
-        `backlog/美股ETL與回測架構規劃.md` 的 `providers/base.py`
-        是規劃中的未來檔案，不該被判成漂移。
+        只比對檔名太寬：`base.py` 全 repo 有七個，規劃文件裡的
+        `providers/base.py` 會被任何一個 `base.py` 認領成「搬過去了」。
+        只比對最後兩段又太窄：`core/api/futures_chip_api.py` 搬成
+        `core/api/tw/futures_chip_api.py` 時，最後兩段已經不同。
     - Parameters:
         - reference: str
             文件裡寫的路徑
@@ -248,8 +246,8 @@ def check_markdown_links() -> List[str]:
 
         **與路徑漂移是兩回事**：漂移是「行內程式碼寫的原始碼路徑」搬過家，
         這裡是「Markdown 連結」指向的檔案不存在。後者最常見的成因是
-        **文件結案後搬出 `backlog/`，而引用它的人沒改指向**——實測曾有
-        一份文件結案刪除後，引用它的連結斷了九天沒人發現。
+        **文件結案後搬出 `backlog/`，而引用它的人沒改指向**——斷掉的連結
+        不會有人主動發現，只能靠這道檢查。
 
         錨點（`#section`）只取檔案部分比對，外部網址略過。
     - Return:

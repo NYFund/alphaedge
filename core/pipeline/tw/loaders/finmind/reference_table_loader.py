@@ -15,9 +15,9 @@ from core.pipeline.utils.exceptions import DataLoadError
 FinMind「參考資料表」的共用入庫流程
 
 台股總覽、台股總覽（含權證）、證券商資訊三張表都是**單鍵的現況快照**：
-一支 CSV 對一張表、以單一欄位為主鍵、重跑以新值覆蓋同鍵的舊值。三者原本是三份逐字
-複製的實作（約 85% 相同），只有四個東西不同——資料表、CSV 檔名、去重鍵、
-欄位順序——改一處要記得改三處。
+一支 CSV 對一張表、以單一欄位為主鍵、重跑以新值覆蓋同鍵的舊值。三者只差四個東西
+——資料表、CSV 檔名、去重鍵、欄位順序——故流程只留一份，差異全部收進
+`ReferenceTableSpec`，避免改一處而漏改另外兩處。
 
 **券商分點不走這裡**：它是 `(stock_id, date, securities_trader_id)` 三欄複合鍵的
 時間序列，且分成 DataFrame 直入與 CSV 目錄批次兩條路徑，見 `broker_trading_loader.py`。
@@ -30,7 +30,7 @@ class ReferenceTableSpec:
     一張參考資料表的入庫規格
 
     `label` 只用於 log 措辭——回補時那幾行是判斷「跑到哪張表」的唯一依據，
-    合併實作時必須逐字保留原本的用字。
+    改字等於改掉維運時唯一的辨識線索。
     """
 
     data_type: FinMindDataType  # 決定 downloads 底下的子目錄
@@ -51,16 +51,16 @@ def load_reference_table(
 
         流程：讀 CSV → 檔內去重 → 依 `column_order` 排欄 → `INSERT OR REPLACE`。
 
-        **已存在的列以新值覆蓋**：它們是現況快照，欄位會變。新股上市櫃前一定先在
-        興櫃交易，第一次入庫的 `type` 必然是 `emerging`；以前「只補新增」，這個值
-        永遠不會更新，而以 `type IN ('twse', 'tpex')` 取清單的地方（財報權益變動表）
-        就永遠排除這檔、不會有 warning。更名、產業別變更也同樣進不來。
+        **已存在的列以新值覆蓋，不可改成「只補新增」**：它們是現況快照，欄位會變。
+        新股上市櫃前一定先在興櫃交易，第一次入庫的 `type` 必然是 `emerging`；
+        只補新增的話這個值永遠停在 `emerging`，而以 `type IN ('twse', 'tpex')`
+        取清單的地方（財報權益變動表）就永遠排除這檔、不會有 warning。
+        更名、產業別變更也同樣進不來。
         **快照裡沒有的舊列不刪**：下市的標的仍要查得到歷史。
 
-        **舊版每次都把整張表的主鍵讀進記憶體再比對**，現在交給資料庫的主鍵約束；
-        寫入包在 savepoint 內，失敗時整檔回滾。成功就 commit，與舊版 `to_sql`
-        自行 commit 的持久化時點一致——門面 loader 依序載入三張表，後一張失敗時
-        前一張已寫入的資料不可跟著消失。
+        去重交給資料庫的主鍵約束，不把整張表的主鍵讀進記憶體比對；寫入包在
+        savepoint 內，失敗時整檔回滾。**成功即 commit**：門面 loader 依序載入
+        三張表，後一張失敗時前一張已寫入的資料不可跟著消失。
     - Parameters:
         - conn: DBConnection
             資料庫連線（由 `FinMindLoader` 持有並負責開關）
@@ -74,8 +74,8 @@ def load_reference_table(
         - DataLoadError
             入庫失敗（欄位不符、檔案損毀、DB 錯誤）
 
-            舊版整段包在 `try/except Exception` 裡、只記一行 `logger.error` 就回，
-            於是三張 FinMind 參考表的入庫失敗會被算成「跳過」，
+            **失敗一定要往外拋，不可只記一行 `logger.error` 就回**：
+            那會讓三張 FinMind 參考表的入庫失敗被算成「跳過」，
             `update_db` 照樣以結束碼 0 回報成功。
     """
 

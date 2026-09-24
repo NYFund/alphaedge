@@ -15,7 +15,7 @@ from core.utils import FileEncoding
 
 
 class MonthlyRevenueReportCleaner(BaseDataCleaner):
-    """TWSE & TPEX Monthly Revenue Report Crawler"""
+    """TWSE & TPEX Monthly Revenue Report Cleaner (Transform)"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -25,7 +25,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         self.monthly_revenue_report_cleaned_cols: List[str] = []
         self.monthly_revenue_report_col_map: Dict[str, List[str]] = {}
 
-        # MMR Cleaned Columns Path
+        # MRR Cleaned Columns Path
         self.monthly_revenue_report_cleaned_cols_path: Path = (
             MONTHLY_REVENUE_REPORT_META_DIR_PATH
             / f"{DataType.MRR.lower()}_cleaned_columns.json"
@@ -52,7 +52,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         # Create the downloads directory
         self.mrr_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load MMR Column Names
+        # Load MRR Column Names
         self.load_all_column_names()
         self.load_column_maps()
 
@@ -62,10 +62,21 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         year: int,
         month: int,
     ) -> pd.DataFrame:
-        """Clean TWSE Monthly Revenue Report"""
         """
-        資料格式
-        上市: 102（2013）年前資料無區分國內外（目前先從 102 年開始爬）
+        - Description:
+            清洗月營收報表（TWSE／TPEX 共用）
+
+            民國 102（2013）年起才區分國內外營收，故只涵蓋 102 年以後的資料。
+        - Parameters:
+            - df_list: List[pd.DataFrame]
+                crawler 取得的原始表格清單（一頁一個 DataFrame）
+            - year: int
+                資料年度（西元）
+            - month: int
+                資料月份
+        - Return:
+            - pd.DataFrame
+                清洗後的月營收資料
         """
 
         # Step 1: 載入已清洗欄位，若未成功則執行清洗流程
@@ -151,18 +162,14 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
     ) -> List[str]:
         """
         - Description:
-            清洗 MRR 的 Column Names
-
+            清洗 MRR 的 Column Names，並把結果寫入 metadata JSON 供後續沿用
         - Parameters:
             - raw_cols: List[str]
                 原始欄位名稱清單
             - front_cols: List[str]
-                優先排序欄位 (例如 year, month 等)
-            - save_path: Path
-                儲存清洗後欄位的 JSON 路徑
-
-        - Returns:
-            - cleaned_cols: List[str]
+                優先排序欄位（例如 year、month）
+        - Return:
+            - List[str]
                 已清洗、排序、去重後的欄位名稱清單
         """
 
@@ -198,7 +205,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         return cleaned_cols
 
     def load_all_column_names(self) -> None:
-        """載入 MMR Column Names"""
+        """載入 MRR 的所有原始 Column Names"""
 
         file_path: Path = (
             MONTHLY_REVENUE_REPORT_META_DIR_PATH
@@ -212,7 +219,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         self.monthly_revenue_report_cols = DataUtils.load_json(file_path=file_path)
 
     def load_cleaned_column_names(self) -> None:
-        """載入已清洗過的 MMR Column Names"""
+        """載入已清洗過的 MRR Column Names"""
 
         if not self.monthly_revenue_report_cleaned_cols_path.exists():
             logger.warning(

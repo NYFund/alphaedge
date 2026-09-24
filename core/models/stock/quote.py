@@ -87,22 +87,14 @@ class StockQuote(BaseQuote):
 
 class PreOpenStockQuote(PreOpenQuoteMixin, StockQuote):
     """
-    盤前（開盤段）的個股報價：**只有參考價，沒有 OHLC**
+    盤前（開盤段）的個股報價：**只有參考價與漲跌停，沒有 OHLC**
 
-    開盤前根本不存在當日 OHLC。**不可以把它們填成參考價**——
-    以 `quote.signal_close / 昨收 - 1` 算漲幅的策略會永遠算出 0%，
-    訊號默默不成立，而且不會有任何錯誤訊息。所以這裡讓它**讀取時就炸**：
-    策略作者會在 dry-run 當場看到，然後被迫明確改寫成「以參考價為基準」，
-    並在 docstring 說明與回測的差異。
+    開盤前不存在當日 OHLC，**不可以把它們填成參考價**——以
+    `quote.signal_close / 昨收 - 1` 算漲幅的策略會永遠算出 0%，訊號默默不成立，
+    而且不會有任何錯誤訊息。故 OHLC 相關欄位一律讀取即拋（`PreOpenQuoteMixin`），
+    策略作者在 dry-run 當場就會看到，被迫明確改寫成「以參考價為基準」。
 
-    三個實作細節都是必要的，少一個就漏掉一條路徑：
-
-    1. **property 要帶 setter。** `BaseQuote.__init__` 會直接做 `self.open = open`，
-       沒有 setter 的話物件根本建不出來（`AttributeError`），連拋出「拿不到資料」
-       的機會都沒有。setter 刻意什麼都不做——盤前沒有這些值可存。
-    2. **`adj_close` 也要擋。** 它是 `signal_close` 的來源。
-    3. **`signal_close` 要自己覆寫。** 它在 `adj_close` 非 None 時**完全不讀 `close`**，
-       只擋 `close` 的話，盤前只要 `adj_close` 有值，訊號就照樣算得出來。
+    **Mixin 必須排在 `StockQuote` 之前**，否則 MRO 會先找到父類那份 property。
     """
 
     UNAVAILABLE_HINT: str = (

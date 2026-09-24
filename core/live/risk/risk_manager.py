@@ -29,8 +29,8 @@ from core.utils import Action, PositionType
 
 **為什麼現在就分**：回測端目前沒有、也不需要事前風控。但日後若要讓回測**事前**
 評估「這支策略在實盤風控下會被擋掉多少」（現在只能靠盤後 parity 事後量），
-純判定那幾條可以直接重用；綁死在長駐狀態上就得再搬一次。
-`sizing.py` 從 `core/backtest/models/` 搬到 `core/portfolio/` 就是同一個錯誤的後果。
+純判定那幾條可以直接重用；綁死在長駐狀態上就得再搬一次——`core/portfolio/sizing.py`
+當初從 `core/backtest/models/` 搬過來，就是同一個錯誤的代價。
 
 **kill switch 的檢查時點寫死在送單路徑上**：每張單送出前檢查一次。
 只在啟動時檢查等於沒有 kill switch——真正需要它的時候，程式早就已經在跑了。

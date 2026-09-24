@@ -67,7 +67,7 @@ class BaseQuote:
             反過來，成交價、手續費、證交稅、漲跌停與檔位判定**一律用 `close`**，
             因為稅費是對實際成交金額課徵的。
 
-            未啟用還原時本 property 等於 `close`，既有策略行為完全不變。
+            未啟用還原時本 property 等於 `close`。
         - Return:
             - float
                 訊號用收盤價
@@ -97,9 +97,8 @@ class PreOpenQuoteMixin:
            **完全不讀 `close`**，只擋 `close` 的話，盤前只要 `adj_close` 有值，
            訊號就照樣算得出來。
 
-        **這三個陷阱各市場複製一份，就是複製三份**——第三個市場加進來時，
-        漏掉 `signal_close` 那條不會報錯，只會讓盤前訊號默默算得出來。
-        故收在這裡，新市場只要繼承就全部到位。
+        **三個細節收在這個 Mixin 而不是各市場各寫一份**：漏掉 `signal_close`
+        那條不會報錯，只會讓盤前訊號默默算得出來，新市場繼承就全部到位。
 
         **Mixin 要排在具體報價類別之前**（`class X(PreOpenQuoteMixin, StockQuote)`），
         否則 MRO 會先找到父類那份 property，六道防線全部失效。

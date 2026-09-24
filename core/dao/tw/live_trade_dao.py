@@ -102,10 +102,11 @@ class LiveTradeDAO(BaseDAO):
     TABLE_NAME: str = LIVE_ORDER_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_TRADING_DB_PATH
 
-    # 交易模式的值域；與 `core/live/risk/trading_mode.py` 的狀態機一致
     # 結束原因；存活監控以「是否等於正常結束」判定要不要推播，兩邊共用這個常數
     END_REASON_NORMAL: str = "正常結束"
     END_REASON_CRASHED: str = "CRASHED"  # 非正常結束（上次沒有走到 `finish_run()`）
+
+    # 交易模式的值域；與 `core/live/risk/trading_mode.py` 的狀態機一致
     MODE_NORMAL: str = "NORMAL"
 
     # 跨日待辦的狀態
@@ -734,7 +735,7 @@ class LiveTradeDAO(BaseDAO):
     def get_symbol_holder(self, symbol: str) -> Optional[str]:
         """
         - Description:
-            這個標的目前被哪一支策略持有（D8 的跨策略守門用）
+            這個標的目前被哪一支策略持有（跨策略守門用）
         - Parameters:
             - symbol: str
                 商品代號

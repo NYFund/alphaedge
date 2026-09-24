@@ -52,7 +52,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         super().__init__()
 
         # **讀（快照是否已入庫、前一份快照、差分）與寫（loader）共用同一個 DAO**：
-        # 舊版每個查詢方法各自 `sqlite3.connect()` 一次
+        # 一次更新只開一條連線，不讓每個查詢方法各自 connect
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
             db_path=TW_FUTURES_DB_PATH

@@ -86,8 +86,8 @@ class FuturesMarginAPI(BaseDataAPI):
         """
 
         # 表不存在（尚未跑過保證金 ETL）：與「查無該商品」同樣回 None，
-        # 由呼叫端決定要中止還是退回比率近似。**只判斷表存不存在**——
-        # 舊版連 `database is locked` 一起吞，會讓回測誤用比率近似值
+        # 由呼叫端決定要中止還是退回比率近似。DAO **只吞「表不存在」**——
+        # 連 `database is locked` 一起吞會讓回測誤用比率近似值
         row: Optional[Tuple[Any, ...]] = self.dao.get_margin_in_effect(
             product,
             date,
@@ -161,8 +161,8 @@ class FuturesMarginAPI(BaseDataAPI):
                 （與 `get_margin()` 同一套語意）
         """
 
-        # 表不存在時與 `get_margin()` 同樣回 None：**更舊的版本只有 `get_margin()`
-        # 有這段**，於是同一個「還沒跑 ETL」的環境下，查金額回 None、查比例卻直接拋例外
+        # 表不存在時與 `get_margin()` 同樣回 None：兩者的缺表語意必須一致，
+        # 否則同一個「還沒跑 ETL」的環境下，查金額回 None、查比例卻拋例外
         row: Optional[Tuple[Any, ...]] = self.dao.get_rates_in_effect(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )

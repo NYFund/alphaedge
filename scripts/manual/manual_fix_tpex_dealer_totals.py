@@ -127,6 +127,8 @@ def apply_fix(conn: sqlite3.Connection, backup_path: Path) -> None:
 
 
 def main() -> None:
+    """統計受影響的列數；帶 `--apply` 才備份並更新"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="修正上櫃中段自營商買進／賣出合計欄（預設只統計）"
     )

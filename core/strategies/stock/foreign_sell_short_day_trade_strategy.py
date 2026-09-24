@@ -1,4 +1,3 @@
-# Python standard library
 import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -67,7 +66,7 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
 
     1. **當日部位的回補價以收盤價近似尾盤**。`Scale.DAY` 沒有真正的尾盤價，落差未量化；
        要量化必須升級 `Scale.TICK`（tick 資料在 DolphinDB，非 `tw_stock.db`）。
-       被迫留倉的部位已改用開盤價（見 `get_cover_price()`）。
+       被迫留倉的部位則以開盤價回補（見 `get_cover_price()`）。
     2. **未排除處置股／非當沖標的**。兩者都沒有資料源（見 `REJECT_BELOW_REFERENCE_OPEN`
        的說明），實際可交易的機會數會少於 1,096 筆。
     3. **部位大小以「全額買進」為基準等權切分**。現股當沖沖賣其實不需保證金，
@@ -84,7 +83,7 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
     DEFAULT_BACKTEST_START_DATE: datetime.date = datetime.date(2020, 1, 1)
     DEFAULT_BACKTEST_END_DATE: datetime.date = datetime.date(2025, 12, 31)
 
-    # 開倉訊號參數（皆為 T−1 的條件；使用者標註賣超門檻為「先暫定」，故全部可調）
+    # 開倉訊號參數（皆為 T−1 的條件；門檻未經參數研究，全部可調）
     MIN_FOREIGN_NET_SELL_LOTS: int = 1000  # 外資最小賣超（張）
     MIN_PRICE_CHANGE_PCT_FOR_SIGNAL: float = 8.0  # 相對前一交易日之最小漲幅（%）
     MIN_VOLUME_LOTS: int = 1000  # 最小成交量（張）
@@ -131,11 +130,10 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
         # short_method 不設：當沖時由 factory 強制為 DAY_TRADE
         # cost_config 不設：設了會讓 factory 跳過 is_day_trade 的推導，當沖稅率減半失效
         #
-        # short_constraint 不設：本策略維持券源檢核關閉，但這已是選擇而非限制。
-        # `TwStockFillModel.check_short_borrowable()` 現在會跳過 `ShortMethod.DAY_TRADE`
-        # ——沖賣是先賣後買、不需要券源——所以即使開啟也不會誤拒本策略的開倉單。
-        # 仍維持關閉的理由：當日必平的沖賣本來就不吃券源，檢核對本策略沒有實際約束力，
-        # 只會多一組每日融券餘額查詢。
+        # short_constraint 不設：沖賣是先賣後買、不吃券源
+        # （`TwStockFillModel.check_short_borrowable()` 本來就會跳過
+        # `ShortMethod.DAY_TRADE`，開啟也不會誤拒本策略的開倉單），
+        # 檢核對本策略沒有實際約束力，只會多一組每日融券餘額查詢。
         self.position_type: PositionType = PositionType.SHORT
         self.enable_intraday: bool = True  # 現股當沖沖賣
 

@@ -49,7 +49,7 @@ class BaseOrder:
         # 另外從餘額扣一筆。它只用於統計，見 `BaseAccount.total_slippage_cost`。
         self.reference_price: Optional[float] = reference_price
 
-        # === 實盤執行欄位（回測完全不讀，全部有預設值，故回歸零變動）===
+        # === 實盤執行欄位（回測完全不讀，且全部有預設值）===
         #
         # 委託效期。回測是「當根 bar 撮合完就結束」，沒有留單的概念，
         # 故 ROD／IOC／FOK 的差別只在實盤成立

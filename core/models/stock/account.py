@@ -48,7 +48,7 @@ class StockAccount(BaseAccount):
         stock_id: str,
         position_type: Optional[PositionType] = None,
     ) -> bool:
-        """檢查指定的股票是否有在庫存；position_type 為 None 時不分方向（維持既有行為）"""
+        """檢查指定的股票是否有未平倉部位；position_type 為 None 時不分方向"""
 
         return super().check_has_position(symbol=stock_id, position_type=position_type)
 

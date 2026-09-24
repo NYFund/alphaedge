@@ -20,9 +20,9 @@ class StockInfoDAO(BaseDAO):
         `taiwan_stock_info` 表（不含權證）的建表、寫入與查詢
 
         股票清單是多條 ETL 的「要爬哪些股票」來源（財報逐檔查詢、FinMind 回補）。
-        **表不存在時回空清單、其他查詢錯誤一律往外拋**：舊版 `except Exception`
-        回空清單，「DB 被鎖住」與「還沒跑過 stock_info」長得一模一樣，
-        下游只會印一行「沒有目標股票」就結束，行程結束碼是 0。
+        **表不存在時回空清單、其他查詢錯誤一律往外拋**：一律吞成空清單的話，
+        「DB 被鎖住」與「還沒跑過 stock_info」長得一模一樣，
+        下游只會印一行「沒有目標股票」就結束，行程結束碼還是 0。
     """
 
     TABLE_NAME: str = STOCK_INFO_TABLE_NAME

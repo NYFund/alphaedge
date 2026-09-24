@@ -12,11 +12,11 @@ from core.pipeline.shared.base_crawler import CrawlStatus
 """
 「這次要向站方請求哪些日期」的共用決策
 
-**舊做法是 `MAX(date) + 1`**，於是中間缺的日子永遠不會再被嘗試：
-某天因為連線失敗沒抓到，隔天照樣從新的 `MAX(date)+1` 起跑，那個洞就留在資料庫裡，
-而回測遇到缺日會當成休市靜默跳過。
+**候選日期一律用差集算，不可改回 `MAX(date) + 1`**：後者會讓中間缺的日子永遠不再
+被嘗試——某天因為連線失敗沒抓到，隔天照樣從新的 `MAX(date)+1` 起跑，那個洞就留在
+資料庫裡，而回測遇到缺日會當成休市靜默跳過。
 
-改為**差集**：
+差集公式：
 
     候選日期 ＝ 日曆 − 表內已有的日期 − 已確認沒有資料的日期 ＋ 上次沒跑完的日期
 
@@ -63,6 +63,16 @@ class DateProgressStore:
     """
 
     def __init__(self, source: str, path: Optional[Path] = None) -> None:
+        """
+        - Description:
+            建立進度檔並立即載入既有內容
+        - Parameters:
+            - source: str
+                資料來源代號，決定預設檔名與訊息前綴
+            - path: Optional[Path]
+                進度檔路徑；None 取 `no_data/{source}_date_progress.json`
+        """
+
         self.source: str = source
         self.path: Path = path or (
             DOWNLOADS_METADATA_DIR_PATH / "no_data" / f"{source}_date_progress.json"

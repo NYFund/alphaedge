@@ -47,7 +47,7 @@ class GracefulStop:
                     stop.sleep(delay)  # 可被中止打斷的節流
 
         **不接手訊號時一樣能用**：非主執行緒無法註冊處理器（`signal.signal()`
-        會拋 `ValueError`），此時 `requested` 永遠是 False，行為退化成原本的
+        會拋 `ValueError`），此時 `requested` 永遠是 False，行為退化成預設的
         直接中斷，而不是讓呼叫端整段爬取失敗。
     """
 
@@ -63,6 +63,16 @@ class GracefulStop:
         label: str = "crawl",
         signals: Optional[Tuple[int, ...]] = None,
     ) -> None:
+        """
+        - Description:
+            建立中止旗標；此時尚未接手訊號，`install()`（或 `with`）才會註冊
+        - Parameters:
+            - label: str
+                來源名稱，只用於訊息
+            - signals: Optional[Tuple[int, ...]]
+                要接手的訊號；None 取 `HANDLED_SIGNALS`
+        """
+
         self.label: str = label
         self.signals: Tuple[int, ...] = (
             tuple(signals) if signals is not None else self.HANDLED_SIGNALS
@@ -71,7 +81,7 @@ class GracefulStop:
         self.signal_count: int = 0
         self.reason: str = ""
 
-        # 原本的處理器，離開 context 時還原；只放實際註冊成功的訊號
+        # 先前的處理器，離開 context 時還原；只放實際註冊成功的訊號
         self._previous_handlers: Dict[int, Any] = {}
 
     def __enter__(self) -> "GracefulStop":

@@ -1,15 +1,3 @@
-"""刪除 price 表中指定日期的資料
-
-**這支腳本會不可逆地刪資料**，卻沒有任何預覽或確認：
-打錯一個日期就少掉一整天、上千檔的收盤行情，而且要重跑 ETL 才補得回來。
-
-故改為預設**只預覽不刪除**：
-
-    python -m tasks.delete_price_data --date 2025-07-13              # 只報告
-    python -m tasks.delete_price_data --date 2025-07-13 --apply      # 互動確認後刪除
-    python -m tasks.delete_price_data --date 2025-07-13 --apply --yes  # 不確認（排程用）
-"""
-
 import argparse
 import datetime
 import sys
@@ -22,14 +10,26 @@ from core.config import TW_STOCK_DB_PATH
 from core.dao.connection import DBError
 from core.dao.tw.stock_price_dao import StockPriceDAO
 
+"""
+刪除 price 表中指定日期的資料
+
+**刪除不可逆**：打錯一個日期就少掉一整天、上千檔的收盤行情，要重跑 ETL 才補得回來。
+故預設**只預覽不刪除**，`--apply` 才會寫入，且互動環境下還要再輸入一次日期確認。
+
+    python -m tasks.delete_price_data --date 2025-07-13                # 只報告
+    python -m tasks.delete_price_data --date 2025-07-13 --apply        # 互動確認後刪除
+    python -m tasks.delete_price_data --date 2025-07-13 --apply --yes  # 不確認（排程用）
+"""
+
 
 def parse_date(date_str: str) -> str:
     """解析日期字串，回傳標準格式 YYYY-MM-DD"""
-    # 嘗試多種日期格式
+
+    # 支援連字號與斜線兩種寫法；月日不補零（`2025/7/13`）也解得開
     formats: List[str] = [
-        "%Y-%m-%d",  # 2025-07-13
-        "%Y/%m/%d",  # 2025/7/13 或 2025/07/13
-        "%Y-%m-%d",  # 2025-7-13
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y-%m-%d",
     ]
 
     for fmt in formats:
@@ -68,8 +68,8 @@ def delete_price_data_by_date(
         **預設只預覽不刪除**：`apply` 為 True 才會真的寫入。
 
         **失敗要讓呼叫端知道**：`--yes` 的用途是排程，而排程只看得到結束碼。
-        舊版任何失敗都只記一行 log 就 return，行程照樣以 0 結束——
-        日期打錯、資料庫被鎖、DB 根本不存在，在排程端長得跟成功一模一樣。
+        任何失敗都必須回 False 讓 `main()` 以非零結束，否則日期打錯、資料庫被鎖、
+        DB 根本不存在，在排程端都長得跟成功一模一樣。
     - Parameters:
         - date_str: str
             要刪除的日期
@@ -82,7 +82,6 @@ def delete_price_data_by_date(
             是否順利完成（預覽模式與「本來就沒有這天的資料」皆算成功）
     """
 
-    # 解析日期
     try:
         formatted_date: str = parse_date(date_str)
     except ValueError as e:
@@ -95,11 +94,10 @@ def delete_price_data_by_date(
         logger.error(f"找不到資料庫 {TW_STOCK_DB_PATH}")
         return False
 
-    # 連接資料庫；路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
+    # 路徑在呼叫當下才從本模組讀取，測試才能以 monkeypatch 換掉
     dao: StockPriceDAO = StockPriceDAO(db_path=TW_STOCK_DB_PATH)
 
     try:
-        # 先查詢要刪除的資料筆數
         count: int = dao.count_by_date(formatted_date)
 
         if count == 0:
@@ -116,11 +114,10 @@ def delete_price_data_by_date(
             logger.info("未確認，已取消")
             return False
 
-        # 刪除資料並提交
         dao.delete_by_date(formatted_date)
         dao.commit()
 
-        # 驗證刪除結果
+        # 刪完再數一次才回報成功：commit 沒拋例外不等於那一天真的歸零
         remaining_count: int = dao.count_by_date(formatted_date)
 
         if remaining_count == 0:
@@ -139,6 +136,8 @@ def delete_price_data_by_date(
 
 
 def main() -> None:
+    """進入點；刪除失敗時以非零結束碼結束，讓排程看得見"""
+
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
         description="刪除 price table 中指定日期的資料"
     )

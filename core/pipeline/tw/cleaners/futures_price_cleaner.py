@@ -138,7 +138,6 @@ class FuturesPriceCleaner(BaseDataCleaner):
         """
         - Description:
             單一商品、單一時段、單日行情的清洗
-
         - Parameters:
             - df: pd.DataFrame
                 crawler 取得的原始表格
@@ -148,7 +147,6 @@ class FuturesPriceCleaner(BaseDataCleaner):
                 商品代碼（Ex: TX）
             - session: FuturesSession
                 交易時段
-
         - Return:
             - Optional[pd.DataFrame]
                 清洗後的 DataFrame；欄位數不符或無有效資料時回傳 None
@@ -195,8 +193,8 @@ class FuturesPriceCleaner(BaseDataCleaner):
             aligned_df, exclude_cols=["date", "product", "expiry", "session"]
         )
 
-        # 成交量缺值才填 0（沒有成交就是 0 口）；**價格欄位一律保留 NaN**，
-        # 見本檔說明第 2 點
+        # 成交量缺值才填 0（沒有成交就是 0 口）；**價格欄位一律保留 NaN**：
+        # 結算價填 0 會讓損益與維持率整段歸零，且不會有任何徵兆
         aligned_df["成交量"] = aligned_df["成交量"].fillna(0).astype(int)
 
         aligned_df = DataUtils.remove_duplicate_rows(

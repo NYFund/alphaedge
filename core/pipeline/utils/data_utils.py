@@ -8,12 +8,20 @@ from loguru import logger
 
 from core.utils import FileEncoding
 
+"""
+Pipeline 共用的資料處理工具
+
+清洗階段跨來源共用的小工具：DataFrame 欄位搬移／刪除／轉型、欄位名稱標準化
+（各來源的全半形括號、破折號、空白寫法都不一致），以及 JSON 中繼檔的讀寫。
+不綁任何市場，只有跨市場都適用的操作才放這裡。
+"""
+
 # 全專案 JSON 儲存預設縮排
 DEFAULT_JSON_INDENT: int = 2
 
 
 class DataUtils:
-    """Data Tools"""
+    """資料處理工具（欄位整理、名稱標準化、JSON 讀寫）"""
 
     @staticmethod
     def move_col(
@@ -31,7 +39,7 @@ class DataUtils:
         """刪除 DataFrame 中最後 n row"""
 
         if len(df) <= n_rows:
-            return df.iloc[0:0]  # return empty DataFrame
+            return df.iloc[0:0]  # 列數不足時回傳空表（保留欄位結構）
         return df.iloc[:-n_rows]
 
     @staticmethod
@@ -56,7 +64,8 @@ class DataUtils:
 
     @staticmethod
     def pad2(n: Union[int, str]) -> str:
-        """將數字補足為兩位數字字串"""
+        """將數字補足為兩位數字字串（月份、日期組 URL 時用）"""
+
         return str(n).zfill(2)
 
     @staticmethod
@@ -106,19 +115,17 @@ class DataUtils:
     ) -> bool:
         """
         - Description:
-            檢查 DataFrame 是否包含必要欄位，可設定為必須全數存在或至少存在一個
-            常用於清洗資料前驗證欄位完整性
-
+            檢查 DataFrame 是否包含必要欄位；清洗前驗證來源版面用
         - Parameters:
             - df: pd.DataFrame
                 欲檢查的 DataFrame
             - required_cols: List[str]
                 欲確認是否存在的欄位名稱列表
-            - require_all: bool
-                預設為 True，表示所有欄位皆需存在；若為 False，表示只要存在任一欄位即可通過
-
-        - Return: bool
-            - 是否符合條件（True: 符合，False: 不符合）
+            - required_all: bool
+                True（預設）表示所有欄位皆需存在；False 表示存在任一欄位即可
+        - Return:
+            - bool
+                是否符合條件
         """
 
         if required_all:
@@ -148,20 +155,22 @@ class DataUtils:
         - Description:
             清除空白與特殊符號（括號、全半形減號），標準化欄位名稱用
 
+            同一個欄位在各來源與各年度的寫法會有全半形、破折號與空白的差異，
+            不先拉齊就會被當成兩個不同的欄位。
         - Parameters:
             - word: str
                 欲清理的欄位名稱
             - replace_pairs: Dict[str, str]
-                要替換的字元對 (如 {"（": "(", "）": ")"})
+                要替換的字元對（Ex: {"（": "(", "）": ")"}）
             - remove_chars: List[str]
-                要統一替換成的文字，例如: 總額
+                要直接刪除的字元
             - remove_dash: List[str]
-                要刪除的 dash (Default: ["－", "-", "—", "–", "─"])
+                要刪除的 dash（全形與半形共五種寫法）
             - remove_whitespace: bool
-                是否移除所有空白 (包含 tab、全形空白)
-
-        - Return: str
-            - 處理後的欄位名稱
+                是否移除所有空白（含 tab、換行、全形空白）
+        - Return:
+            - str
+                處理後的欄位名稱
         """
 
         word: str = str(word)
@@ -197,19 +206,17 @@ class DataUtils:
     ) -> str:
         """
         - Description:
-            將欄位名稱中出現的指定關鍵字（如「合計」、「總計」）替換為指定詞（如「總額」）
-            e.g. 資產總計 -> 資產總額
-
+            將欄位名稱中出現的指定關鍵字替換為統一用詞（Ex: 資產總計 → 資產總額）
         - Parameters:
             - col_name: str
                 欄位名稱
             - keywords: List[str]
-                欲替換的關鍵字列表，例如: 合計"、"總計"
+                欲替換的關鍵字列表（Ex: ["合計", "總計"]）
             - replacement: str
-                要統一替換成的文字，例如: 總額
-
-        - Return: str
-            - 處理後的欄位名稱
+                要統一替換成的文字（Ex: "總額"）
+        - Return:
+            - str
+                處理後的欄位名稱；沒有命中任何關鍵字時回傳原名
         """
 
         for keyword in keywords:
@@ -226,16 +233,19 @@ class DataUtils:
     ) -> pd.DataFrame:
         """
         - Description:
-            移除以指定字串開頭或包含指定字串的欄位名稱
-
+            移除以指定字串開頭或包含指定字串的欄位
         - Parameters:
-            - df: 原始 DataFrame
-            - startswith: 欲刪除欄位的開頭關鍵字，例如 ["Unnamed"]
-            - contains: 欲刪除欄位的包含關鍵字，例如 ["錯誤"]
-            - case_insensitive: 是否忽略大小寫（預設 True）
-
-        - Returns:
-            - 已刪除指定欄位的 DataFrame
+            - df: pd.DataFrame
+                原始 DataFrame
+            - startswith: Optional[List[str]]
+                欲刪除欄位的開頭關鍵字（Ex: ["Unnamed"]）
+            - contains: Optional[List[str]]
+                欲刪除欄位的包含關鍵字（Ex: ["錯誤"]）
+            - case_insensitive: bool
+                是否忽略大小寫（預設 True）
+        - Return:
+            - pd.DataFrame
+                已刪除指定欄位的 DataFrame（欄名維持原本大小寫）
         """
 
         # 確保 startswith / contains 一定是 list 型別，避免為 None 時無法迭代
@@ -271,15 +281,18 @@ class DataUtils:
         """
         - Description:
             移除符合指定關鍵字的欄位名稱（以開頭或包含），並回傳保留的欄位清單
-
         - Parameters:
-            - columns: 欲移除的欄位名稱清單
-            - startswith: 欲排除的開頭字串，例如 ["Unnamed"]
-            - contains: 欲排除的部分字串，例如 ["錯誤"]
-            - case_insensitive: 是否忽略大小寫（預設 True）
-
-        - Returns:
-            - 過濾後保留的欄位名稱 List[str]
+            - items: List[str]
+                欲過濾的欄位名稱清單
+            - startswith: Optional[List[str]]
+                欲排除的開頭字串（Ex: ["Unnamed"]）
+            - contains: Optional[List[str]]
+                欲排除的部分字串（Ex: ["錯誤"]）
+            - case_insensitive: bool
+                是否忽略大小寫（預設 True）
+        - Return:
+            - List[str]
+                過濾後保留的欄位名稱；`case_insensitive` 為 True 時一併轉為小寫
         """
 
         startswith_list: List[str] = startswith or []
@@ -313,21 +326,19 @@ class DataUtils:
         """
         - Description:
             根據指定欄位去除重複的資料列，並重設 index
-
         - Parameters:
             - df: pd.DataFrame
                 要處理的資料表
-            - subsets: List[str]
-                用來判斷重複的欄位名稱列表（例如 ["year", "month", "stock_id", "公司名稱"]）
+            - subset: List[str]
+                用來判斷重複的欄位名稱列表（Ex: ["year", "month", "stock_id"]）
             - keep: Union[str, bool]
                 要保留哪一筆重複資料：
                     - "first": 保留第一筆（預設）
                     - "last": 保留最後一筆
                     - False: 移除所有重複的列
-
-        - Returns:
+        - Return:
             - Optional[pd.DataFrame]
-                去除重複值並重設 index 的資料表；若輸入為 None 或空表則回傳 None
+                去除重複值並重設 index 的資料表；輸入為 None 或空表時回傳 None
         """
 
         if df is None or df.empty:
@@ -345,8 +356,7 @@ class DataUtils:
     ) -> None:
         """
         - Description:
-            將資料儲存成 JSON 檔案
-
+            將資料儲存成 JSON 檔案（父目錄不存在時一併建立）
         - Parameters:
             - data: Any
                 要儲存的 Python 資料結構（如 dict 或 list）
@@ -369,15 +379,15 @@ class DataUtils:
         """
         - Description:
             從指定 JSON 檔案讀取資料
-
         - Parameters:
             - file_path: Path
                 JSON 檔案的完整路徑
             - encoding: str
                 檔案編碼（預設為 utf-8）
-
-        - Returns: Any
-            從 JSON 載入的 Python 資料（通常為 dict 或 list）
+        - Return:
+            - Any
+                從 JSON 載入的 Python 資料（通常為 dict 或 list）；
+                **檔案不存在或格式錯誤時記錄錯誤並回 None**，由呼叫端決定要不要中止
         """
 
         try:

@@ -44,8 +44,9 @@ class BaseDataFeed(ABC):
             依策略宣告的級別建立所需的資料 API
         - Parameters:
             - strategy: BaseStrategy
-                本次回測的策略
+                本次要執行的策略（回測與實盤共用此介面）
         """
+
         pass
 
     @abstractmethod
@@ -58,7 +59,9 @@ class BaseDataFeed(ABC):
                 待判定的日期
         - Return:
             - bool
+                該日是否為交易日
         """
+
         pass
 
     def close(self) -> None:
@@ -195,4 +198,5 @@ class BaseDataFeed(ABC):
             - List[BaseQuote]
                 該日報價；無資料時回傳空 list
         """
+
         pass

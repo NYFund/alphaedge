@@ -46,31 +46,25 @@ class StockBacktestReporter(BaseBacktestReporter):
     ) -> None:
         super().__init__(strategy, output_dir)
 
-        # 由 Backtester 傳入 DataFeed 已經開好的連線；未指定時自行建立並由
-        # `close()` 負責關掉（舊版每跑一次回測就多一條不再使用的連線）
+        # 由 Backtester 傳入 DataFeed 已開好的連線；未指定時自行建立，
+        # 並由 `close()` 負責關掉
         self.price: Optional[StockPriceAPI] = price
 
-        # 畫完是否在瀏覽器開圖。舊版寫死 True，於是每跑一次回測就彈出 5 個分頁，
-        # 批次跑參數掃描時等於一次開幾十個
+        # 畫完是否在瀏覽器開圖。預設交由環境變數決定：一次回測會產生五張圖，
+        # 批次跑參數掃描時無條件開圖等於一次彈出幾十個分頁
         self.show: bool = resolve_show_figures() if show is None else show
 
-        # Backtest date
-        self.start_date: datetime.date = self.strategy.start_date  # Backtest start date
-        self.end_date: datetime.date = self.strategy.end_date  # Backtest end date
+        self.start_date: datetime.date = self.strategy.start_date
+        self.end_date: datetime.date = self.strategy.end_date
 
         # 起始前一天，用來當作初始資金節點
         self.origin_date: datetime.date = self.start_date - datetime.timedelta(days=1)
 
-        # Benchmark
-        self.benchmark: str = "0050"  # Benchmark stock
-
-        # Benchmark price
+        self.benchmark: str = "0050"  # 對標標的
         self.benchmark_price: Optional[pd.Series] = None
+        self.trading_report: Optional[pd.DataFrame] = None
 
-        # Trading report
-        self.trading_report: Optional[pd.DataFrame] = None  # Trading report
-
-        # 繪圖交給渲染器；報表端只負責備資料（見 `plotting.py` 的說明）
+        # 繪圖交給渲染器；報表端只負責備資料
         self.renderer: EquityChartRenderer = EquityChartRenderer(self)
 
         self.setup()
@@ -88,11 +82,10 @@ class StockBacktestReporter(BaseBacktestReporter):
             `get_adjusted_close_series()` 一次處理完，這裡不可再套一次分割調整。
         """
 
-        # Price data；`conn` 由呼叫端注入時共用同一條連線，close() 不會關掉別人的
+        # 由呼叫端注入時共用同一條連線，`close()` 不會關掉別人的
         if self.price is None:
             self.price = StockPriceAPI()
 
-        # Benchmark price（還原價）
         self.benchmark_price: pd.Series = self.price.get_adjusted_close_series(
             stock_id=self.benchmark,
             start_date=self.start_date,
@@ -116,10 +109,9 @@ class StockBacktestReporter(BaseBacktestReporter):
         """
         benchmark 的還原價（**分割已由還原係數涵蓋，本方法不再另外調整**）
 
-        2026-09-13 之前這裡會再套一次 `stock_split.apply_split_adjustment()`，
-        因為當時的還原係數只認除權息、不含分割。`corporate_action` 表上線後
-        分割與減資都進了累乘係數，**再套一次就是重複調整**——實測 0050 會從
-        1.82% 變成 303%。本方法保留只是為了讓兩處呼叫端不必各自改。
+        `corporate_action` 的累乘係數已含除權息、分割與減資，**這裡不可再套一次
+        `stock_split.apply_split_adjustment()`**——重複調整實測會讓 0050 的
+        期間報酬從 1.82% 變成 303%。方法保留是為了讓兩處呼叫端共用同一個入口。
         """
 
         return price_series
@@ -156,20 +148,15 @@ class StockBacktestReporter(BaseBacktestReporter):
             "Cumulative Balance",
         ]
 
-        # Initialize cumulative values for PnL and Balance
         cumulative_pnl: float = 0.0
         cumulative_balance: float = self.account.init_capital
 
-        # 過濾出已平倉的交易記錄（只有已平倉的記錄才有完整的買賣資訊）
-        # 確保交易記錄按 exit_date（平倉日）排序（對於 tick 級別回測，同一天可能有多筆交易）
-        # 排序確保累積值的計算順序正確，以及繪圖時 groupby().last() 能取得正確的最後一筆
-        # 此排序邏輯對 tick 和 day 級別回測都適用
-        #
-        # 排序邏輯：
-        # 1. 主要排序：按 exit_date（平倉日期；SHORT 的 sell_date 是開倉日，不可用）
-        # 2. 次要排序：保持 trade_records 的原始添加順序（使用索引）
-        #    原因：trade_records 是按平倉順序添加的，而 id 是按開倉順序生成的
-        #    使用原始順序可以確保同一天內的多筆交易按實際平倉時間順序排列
+        # 只取已平倉紀錄（未平倉沒有完整的買賣資訊），並依「平倉順序」排序：
+        # 累積損益與餘額的加總順序、以及繪圖時 `groupby().last()` 取到的那一筆，
+        # 都依賴這個順序正確。
+        # 1. 主鍵 `exit_date`：SHORT 的 `sell_date` 是開倉日，不可拿來當平倉日
+        # 2. 次鍵為原始索引：`trade_records` 依平倉順序附加，而 `id` 依開倉順序
+        #    生成，用索引才能讓同一天的多筆維持實際平倉先後（TICK 回測常見）
         closed_records_with_index: List[Tuple[int, StockTradeRecord]] = [
             (i, r) for i, r in enumerate(self.account.trade_records) if r.is_closed
         ]
@@ -184,7 +171,6 @@ class StockBacktestReporter(BaseBacktestReporter):
             )
         ]
 
-        # Generate trading report
         rows: List[Dict[str, Any]] = []
         for record in sorted_records:
             cumulative_pnl += record.realized_pnl
@@ -225,7 +211,6 @@ class StockBacktestReporter(BaseBacktestReporter):
             }
             rows.append(row)
 
-        # Convert to DataFrame
         df: pd.DataFrame = pd.DataFrame(rows, columns=report_columns)
         self.save_report(df, f"{self.strategy.strategy_name}_trading_report.csv")
         return df
@@ -299,9 +284,9 @@ class StockBacktestReporter(BaseBacktestReporter):
         - Description:
             輸出整體績效指標（`<策略>_metrics_summary.csv`）
 
-            **不開前端也看得到，且只有一份計算**：Sharpe／Sortino／MDD 原本只存在
-            於前端與 MDD 圖，公式散在兩處。本方法一律呼叫
-            `core/backtest/analysis/performance_metrics.py` 的純函式。
+            **不開前端也看得到，且只有一份計算**：Sharpe／Sortino／MDD 一律呼叫
+            `core/backtest/analysis/performance_metrics.py` 的純函式，
+            不在報表與前端各寫一份——兩份實作必然漂移。
 
             **格式是長表**（`Metric`／`Value`／`Note`）：新增指標不必改欄位結構，
             前端也能逐列直接顯示；`Note` 放口徑說明，避免兩種口徑的數字被混讀。
@@ -387,9 +372,8 @@ class StockBacktestReporter(BaseBacktestReporter):
         - Description:
             滑價吃掉的價差總額與它佔損益的比例
 
-            **原本完全看不見**：報表只知道「有沒有開滑價」，不知道它總共吃掉多少
-            ——一支策略的績效若有三成被滑價吃掉，那是該被看見的事實，而調參數的人
-            無從判斷這組假設的影響有多大。
+            **單獨列出金額而非只標示有無開滑價**：一支策略的績效若有三成被滑價
+            吃掉，調參數的人必須看得到這個量級才判斷得出這組假設的影響。
 
             **不併進交易成本**：滑價是內含在成交價裡的，損益早就反映了它，
             加進 `total_transaction_cost` 等於重複計算（見
@@ -663,18 +647,16 @@ class StockBacktestReporter(BaseBacktestReporter):
 
     def save_report(self, df: pd.DataFrame, file_name: str = "") -> None:
         """儲存回測報告"""
+
         if not file_name:
             raise ValueError("file_name 不能是空字串")
 
-        # 決定輸出路徑
         if self.output_dir is not None:
             save_path: Path = self.output_dir / file_name
         else:
             save_path: Path = Path(file_name)
 
-        # 確保資料夾存在
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 輸出 CSV 檔案
         df.to_csv(save_path, index=False, encoding=FileEncoding.UTF8_SIG.value)
         logger.info(f"* Report saved to: {save_path}")

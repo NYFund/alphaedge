@@ -15,7 +15,7 @@ class URLManager:
     # fmt: off
     # 本表刻意以空行分隔每一條 URL，維護時一眼就看得出邊界；
     # ruff-format 會移除 dict 內的空行，故以 fmt: off／on 圈住這一段。
-    # **例外僅限這個 dict**，其餘程式碼一律交給 formatter（見 CLAUDE.md §2.10）
+    # **例外僅限這個 dict**，其餘程式碼一律交給 formatter
     URLS: Dict[str, str] = {
         # 台灣證券交易所首頁 URL
         "TWSE_URL": "https://www.twse.com.tw/zh/",

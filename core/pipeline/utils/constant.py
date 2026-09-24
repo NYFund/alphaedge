@@ -1,5 +1,13 @@
 from enum import Enum
 
+"""
+Pipeline 共用常數
+
+每個 `DataType` 對應一整組 crawler／cleaner／loader／updater。**值會被拿去組
+落地檔名與子目錄**（`FinMindDataType` 另外還是 updater 收的字串參數），
+改動既有的值等於改掉路徑，已落地的資料會突然找不到。
+"""
+
 
 class DataType(str, Enum):
     """資料類型"""

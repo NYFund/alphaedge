@@ -7,16 +7,15 @@ from core.utils import Units
 """
 部位大小模型：把「檔數上限 ＋ 等權資金切分 ＋ 張數換算」收成單一實作
 
-原本這段公式在五支動能策略的 `calculate_position_size()` 內各寫一遍，且已經開始
-漂移（`max_holdings is None` 的語意在其中一支與其餘四支完全相反）。
-（那五支策略已於 2026-08-15 收斂為 `momentum_strategy_1` 一支，其餘刪除。）
+**公式只留一份**：讓各策略各寫一遍的話，`max_holdings is None` 這種邊界語意
+會在策略之間悄悄分岔，而分岔不會報錯，只會讓部位大小整段偏掉。
 
 責任邊界（新增策略時請遵守）：
 - **策略決定**：選哪些標的、用什麼參考價、訂單的方向與動作
 - **Sizer 決定**：這些候選各買幾張
 
-參考價**由呼叫端傳入**：五支策略分別用 `close`／`tick_quote.close`／`open`，
-那是策略決策，不該由 sizer 代為選擇。
+參考價**由呼叫端傳入**：要用 `close`、`tick_quote.close` 還是 `open` 是策略決策，
+不該由 sizer 代為選擇。
 """
 
 
@@ -54,14 +53,13 @@ class BasePositionSizer(ABC):
             - List[Tuple[BaseQuote, float, int]]
                 (報價, 參考價, 張數)；張數不足 1 張者不回傳
         """
+
         pass
 
 
 class EqualWeightSizer(BasePositionSizer):
     """
     等權資金切分：可開檔數均分餘額，逐檔換算張數
-
-    公式與取整規則沿用 `momentum_strategy_1` 的版本（其餘四支皆由它衍生）：
 
     ```
     可開檔數 = max(0, max_holdings - 現有持倉檔數)   # max_holdings 為 None 時不限制
@@ -83,7 +81,6 @@ class EqualWeightSizer(BasePositionSizer):
     ) -> List[Tuple[BaseQuote, float, int]]:
         """依剩餘可開倉名額均分餘額並換算張數"""
 
-        # max_holdings 為 None 時不限制持倉檔數
         available_position_cnt: int = (
             max(0, max_holdings - account.get_position_count())
             if max_holdings is not None
@@ -100,8 +97,7 @@ class EqualWeightSizer(BasePositionSizer):
             if available_position_cnt == 0:
                 break
 
-            # 參考價無效時跳過；原本只有三支策略有這道檢查，`_1`／`_3` 會直接
-            # ZeroDivisionError 中斷整場回測
+            # 參考價無效時跳過；少了這道檢查會直接 ZeroDivisionError 中斷整場回測
             if ref_price <= 0:
                 continue
 

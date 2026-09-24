@@ -6,9 +6,8 @@ from core.utils import Action, PositionType
 """
 Signal: Alpha 層的輸出型別（選了哪個標的、什麼方向、用什麼價）
 
-原本策略是把 `List[StockQuote]` 直接丟給 `calculate_position_size()`，外加一個
-`action` 參數——**報價不是訊號**：它沒有方向、沒有強度，也分不出開倉與平倉，
-層次邊界因此表達不出來。
+**報價不是訊號**：報價沒有方向、沒有強度，也分不出開倉與平倉，直接把
+`List[BaseQuote]` 交給 portfolio 層的話，層次邊界表達不出來。
 
 責任邊界（`sizing.py` 的模組說明是同一條線的另一半）：
 - **策略決定**：選哪些標的、方向、下單價，以及**平倉要平多少**
@@ -66,8 +65,8 @@ class Signal:
 
         # 訊號強度：**目前沒有任何策略使用**，一律 None。
         #
-        # 留著是因為它是「換配置演算法時要不要動 Alpha 層」的分界：日後改成
-        # 波動度加權或 conviction 加權，portfolio 層需要一個強度輸入；沒有這個
+        # 刻意保留，因為它是「換配置演算法時要不要動 Alpha 層」的分界：改成
+        # 波動度加權或 conviction 加權時，portfolio 層需要一個強度輸入；沒有這個
         # 欄位的話，換演算法就得回頭改每一支策略的訊號產生邏輯。
         self.strength: Optional[float] = strength
 

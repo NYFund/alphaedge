@@ -51,6 +51,7 @@ class FinMindLoader(BaseDataLoader):
 
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Loader"""
+
         self.connect()
 
         # Ensure Database Tables Exist
@@ -154,6 +155,7 @@ class FinMindLoader(BaseDataLoader):
             - Optional[int]
                 DataFrame 路徑回傳新寫入的列數；CSV 路徑回傳 None
         """
+
         if self.conn is None:
             self.connect()
 

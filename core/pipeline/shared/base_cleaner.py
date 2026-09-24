@@ -18,6 +18,7 @@ class BaseDataCleaner(ABC):
     """Base Class of Data Cleaner"""
 
     def __init__(self) -> None:
+        """建立 cleaner；設定一律由子類的 `setup()` 負責"""
         pass
 
     @abstractmethod

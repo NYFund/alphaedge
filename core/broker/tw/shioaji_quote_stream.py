@@ -16,7 +16,7 @@ from core.utils import FUTURES_MULTIPLIER, FuturesSession, Scale
 即時行情：快照與逐筆訂閱，轉成與回測同款的報價物件
 
 **策略讀到的報價物件必須和回測一模一樣**，否則同一支策略在兩邊會拿到不同結構，
-D0「策略層不分家」就不成立了。
+同一份策略程式碼就沒辦法回測與實盤共用。
 
 兩個一定要說清楚的語意：
 
@@ -25,7 +25,7 @@ D0「策略層不分家」就不成立了。
    **永遠不會成立**，策略整天不開倉而且不會有任何錯誤訊息。
 2. **盤中的 `close` 是暫定值。** 它是「目前最新成交價」，收盤前還會變。
    策略若用它算「今天漲幅」，得到的是此刻的漲幅，不是收盤漲幅——
-   這正是 D1 要把日頻策略拆成開盤段與尾盤段的原因。
+   日頻策略因此要拆成開盤段與尾盤段，收盤漲幅要到尾盤段才接近定案。
 
 〈本檔與 `core/adapters/` 的關係〉
 
@@ -346,9 +346,9 @@ class ShioajiQuoteStream:
 
         close: Optional[float] = resolve_close(getattr(snapshot, "close", None))
         if close is None:
-            # **回 None 而不是 0 元報價**：停牌或快照缺值時原本會產出一個
-            # `close=0` 的 `StockQuote`，而回測那一側是直接濾掉這檔的
-            # （`has_valid_price()`）。兩邊不一致的症狀是實盤拿 0 元算訊號與成交價，
+            # **回 None 而不是 0 元報價**：停牌或快照缺值時若照樣產出 `close=0` 的
+            # `StockQuote`，就會與回測不一致——回測那一側是直接濾掉這檔的
+            # （`has_valid_price()`）。不一致的症狀是實盤拿 0 元算訊號與成交價，
             # 且不會有任何錯誤
             logger.warning(
                 f"[Quote] {getattr(snapshot, 'code', '?')} 快照無有效成交價，略過該檔"

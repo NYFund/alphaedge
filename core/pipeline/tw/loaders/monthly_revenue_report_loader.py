@@ -16,6 +16,13 @@ from core.pipeline.utils import DataType
 from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import PipelineError
 
+"""
+Monthly Revenue Report Loader（上市＋上櫃月營收）
+
+欄位由 cleaner 產出的 `*_cleaned_columns.json` 決定，故建表要等清洗完才做得到。
+去重交給資料庫的主鍵約束（`INSERT OR IGNORE`），同一份 CSV 重跑是冪等操作。
+"""
+
 
 class MonthlyRevenueReportLoader(BaseDataLoader):
     """TWSE & TPEX Monthly Revenue Report Loader"""
@@ -84,9 +91,9 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
         - Description:
             將 downloads 內的月營收 CSV 入庫；有任何檔案失敗就拋 `DataLoadError`
 
-            **去重走 `INSERT OR IGNORE`**：舊版每個 CSV 都把整張表的主鍵讀進記憶體、
-            以 merge 找出新列再 `to_sql` 追加——表越大越慢，且同一檔內自己重複的列
-            會讓 `to_sql` 撞主鍵、整檔失敗。改用資料庫自己的主鍵約束後兩者皆免。
+            **去重走 `INSERT OR IGNORE`**，不可改回「把整張表的主鍵讀進記憶體、
+            以 merge 找出新列再 `to_sql` 追加」：那個做法表越大越慢，
+            且同一檔內自己重複的列會讓 `to_sql` 撞主鍵而整檔失敗。
 
             **每個檔案包在 savepoint 內**：檔案寫到一半出錯時整檔回滾，
             不會被迴圈結束後的 `commit()` 一起寫進去。

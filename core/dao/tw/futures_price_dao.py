@@ -177,8 +177,8 @@ class FuturesPriceDAO(BaseDAO):
             取得區間內表內有資料的日期（已排序、去重；不過濾 session）
 
             **表不存在時回空清單並警告**（尚未跑過 `--target futures_price` 是全新環境的
-            正常狀態）；其他查詢錯誤往外拋。舊版以 `except pd.errors.DatabaseError`
-            一併吞掉，「欄名打錯、DB 損毀」也會變成「沒有交易日」。
+            正常狀態）；其他查詢錯誤往外拋——一併吞掉的話，「欄名打錯、DB 損毀」
+            也會變成「沒有交易日」。
         - Parameters:
             - start_date / end_date: datetime.date
                 查詢區間（含頭含尾）

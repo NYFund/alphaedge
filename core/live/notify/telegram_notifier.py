@@ -4,7 +4,7 @@ import requests
 
 from core.live.notify.base import SEND_TIMEOUT_SECONDS, BaseNotifier, NotifyLevel
 
-"""TelegramNotifier：本階段唯一實作的推播通道"""
+"""TelegramNotifier：以 Telegram Bot API 送出推播"""
 
 # 等級前綴；手機上一眼就能分出輕重，不必點進去看內容
 _LEVEL_PREFIX: dict = {
