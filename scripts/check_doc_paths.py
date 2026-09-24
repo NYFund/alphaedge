@@ -61,12 +61,10 @@ _HISTORICAL_DOCS: Set[str] = set()
 _NARRATIVE: Set[Tuple[str, str]] = {
     # `core/utils/order.py`（舊的 `OrderUtils`）已刪除；同名的
     # `core/utils/constant/order.py` 是常數拆分後的新檔，兩者無關
-    ("backlog/架構重構與冗餘收斂.md", "core/utils/order.py"),
     ("backlog/實盤下單架構規劃.md", "core/utils/order.py"),
     ("backlog/Shioaji升級至1.7.md", "core/utils/order.py"),
     ("backlog/PostgreSQL遷移計畫.md", "core/config.py"),
     ("backlog/index.md", "core/config.py"),
-    ("backlog/架構重構與冗餘收斂.md", "core/config.py"),
 }
 
 # 規劃中的搬家目標：`backlog/` 寫的是**搬完之後**的新路徑，現在當然指不到，
