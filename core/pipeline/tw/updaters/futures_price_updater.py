@@ -340,6 +340,9 @@ class FuturesPriceUpdater(BaseDataUpdater):
             try:
                 self.update_product(product, start_date, end_date, resume=resume)
             except Exception as error:
+                # **這層盲捕不可收斂**：`update_product()` 是一整條子管線，
+                # 上面那行註解寫的「或任何例外」就是它的契約。收斂成列舉的話，
+                # 漏掉的那一種會讓後面的商品全部不跑，而 target 仍以成功結束
                 logger.opt(exception=True).error(
                     f"* {product} 更新失敗，繼續下一個商品：{type(error).__name__}"
                 )

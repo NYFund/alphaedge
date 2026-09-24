@@ -89,6 +89,9 @@ class MarketHolidayUpdater(BaseDataUpdater):
             try:
                 cleaned: pd.DataFrame = self.cleaner.clean(result.data, year)
             except Exception as error:
+                # **這層盲捕不可收斂**：`cleaner.clean()` 是各來源自己實作的，
+                # 與 `BaseDataUpdater.clean_one_day()` 同一種外掛邊界。
+                # 收斂等於要求清洗器只能拋我們列得出來的那幾種
                 logger.error(
                     f"[market_holiday] {year} 年清洗失敗（{type(error).__name__}: "
                     f"{error}），本年度不入庫"
