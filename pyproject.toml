@@ -100,26 +100,26 @@ ignore = [
     "UP006",  # §2.4.3 List/Dict，不改 list[...]/dict[...]
     "UP035",  # 同上，不移除 typing import
     "UP007",  # §2.4.3 Union[X, Y]，不改 X | Y
-    "UP045",  # §2.4.4 Optional[T]，不改 T | None（391 處，數量最大的一條）
+    "UP045",  # §2.4.4 Optional[T]，不改 T | None（1,690 處，數量最大的一條）
 
     # --- 與 CLAUDE.md §2.7 常數與 Enum 規範衝突 ---
     "UP042",  # §2.7 明訂 class XxxEnum(str, Enum)，不改 StrEnum
 
     # --- 行寬交給 formatter ---
     # formatter 已強制 line-length 88，但無法拆分註解、docstring 與長字串，
-    # 而本專案的中文註解與結構化 docstring 必然有超長行（597 處）。
+    # 而本專案的中文註解與結構化 docstring 必然有超長行（589 處）。
     # 留著只會讓 CI 永遠紅燈，且逼人把中文註解硬折行，可讀性反而更差
     "E501",
 
     # --- 例外處理：只量化不修，數量記在各條的行尾註解 ---
     # 數量過大會讓 CI 永遠紅燈，故先 ignore 並逐條記錄；
     # 不可因為「讓 CI 變綠」就當成永久豁免
-    "BLE001",  # blind-except，70 處
+    "BLE001",  # blind-except，110 處
     "TRY003",  # 例外訊息長度，與 §2.1 中文訊息衝突
     "TRY300",  # try-consider-else，20 處
-    "TRY301",  # raise-within-try，3 處
+    "TRY301",  # raise-within-try，7 處
     "TRY201",  # verbose-raise，3 處
-    "TRY004",  # type-check-without-type-error，4 處
+    "TRY004",  # type-check-without-type-error，2 處
 
     # --- 設計選擇，非缺陷 ---
     # 基底類別刻意留的 no-op 掛點（例如股票的 settle_daily：股票沒有每日結算），
@@ -130,16 +130,17 @@ ignore = [
     "B905",
 
     # --- 潛在缺陷，已逐點記錄，待後續收斂 ---
-    # 這 10 處**不是樣式問題，是真的可能出錯的地方**，逐處位置用
+    # 這 6 處**不是樣式問題，是真的可能出錯的地方**，逐處位置用
     # `ruff check --select <規則>` 查。之所以先 ignore 而非在原地加 noqa：
     # 加了 noqa 會讓該行超過 88 字元，formatter 就把運算式拆成多行，
     # noqa 反而跟著跑到別行去、失去效力（實測過）。
     # **修掉之後要把對應那條從本清單移除**，不要讓它長期留著——留著等於對那類
     # 問題永久失明。2026-09-18 實查後移除已歸零的 B008／F841／F811，
     # 並修掉 B007 最後一處（`tests/test_futures_continuous.py` 的未用迴圈變數）。
-    "B006",  # 可變預設參數，4 處
+    # 2026-09-24 修掉全部三處裸 `except:`（清暫存檔失敗時吞掉，改 `except OSError:`
+    # ——裸 except 連 KeyboardInterrupt 都吞得下去），E722 歸零故整條移除。
+    "B006",  # 可變預設參數，3 處
     "B904",  # raise 未帶 from，3 處
-    "E722",  # 裸 except，3 處
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -212,10 +212,12 @@ class StockTickUtils:
                 temp_path.replace(TICK_METADATA_PATH)
                 logger.info("Successfully updated tick_metadata.json")
             except Exception as e:
-                # 如果寫入失敗，刪除臨時文件
+                # 如果寫入失敗，刪除臨時文件。
+                # **只吞檔案系統的錯**：清不掉暫存檔不該蓋掉真正的失敗原因，
+                # 而裸 except 連 KeyboardInterrupt 都吞得下去
                 try:
                     temp_path.unlink()
-                except:
+                except OSError:
                     pass
                 raise e
 
