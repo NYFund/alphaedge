@@ -841,6 +841,37 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
 
+    def get_pending_actions_resolved_on(
+        self, run_date: datetime.date
+    ) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            取得某一交易日**被處理掉**的跨日待辦
+
+            與 `get_pending_actions()` 相反：那支取的是還沒做的（只看 `status`
+            與 `due_date`），這支取的是當天做完的（看 `resolved_at`）。
+            parity 比對需要後者——次日補平單在實盤有、在回測沒有，
+            那不是訊號漂移，是前一天的平倉單沒成交。沒有這份證據，
+            補平單會被歸進 `UNEXPLAINED`，而那一類是要推播 CRITICAL 的。
+
+            **不過濾 `status`**：`DONE`（補成功）與 `ABANDONED`（人工放棄）
+            都代表「這筆待辦當天有動作」，兩者都可能在實盤留下一張單。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                待辦清單，依處理時間排序
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_PENDING_ACTION_TABLE_NAME} "
+            "WHERE resolved_at IS NOT NULL AND substr(resolved_at, 1, 10) = ? "
+            "ORDER BY resolved_at, action_id",
+            _to_live_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_PENDING_ACTION_TABLE_NAME, rows)
+
     def get_risk_events_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:
