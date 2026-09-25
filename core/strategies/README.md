@@ -714,14 +714,21 @@ stock_prices = self.price.get_stock_price(
 **取得指定日期的逐筆資料**:
 
 ```python
-# 取得 2024/1/1 的逐筆資料
-ticks = self.tick.get(date=datetime.date(2024, 1, 1))
+# 取得一段期間的逐筆資料（**收起訖日，不是單一天**）
+ticks = self.tick.get(
+    start_date=datetime.date(2024, 1, 1),
+    end_date=datetime.date(2024, 1, 1),
+)
 ```
 
 **取得指定個股的逐筆資料**:
 
 ```python
-stock_ticks = self.tick.get_stock_tick(stock_id="2330", date=datetime.date(2024, 1, 1))
+stock_ticks = self.tick.get_stock_ticks(
+    stock_id="2330",
+    start_date=datetime.date(2024, 1, 1),
+    end_date=datetime.date(2024, 1, 1),
+)
 ```
 
 ### StockChipAPI - 籌碼資料
@@ -756,18 +763,20 @@ mrr = self.mrr.get(year=2024, month=1)
 **取得指定年季的財報資料**:
 
 ```python
-# 取得 2024 年第 1 季的財報資料
-fs = self.fs.get(year=2024, season=1)
+# 取得 2024 年第 1 季的財報資料。**`table_name` 是必填**——
+# 財報有四張表（`balance_sheet`／`comprehensive_income`／`cash_flow`／`equity_change`），
+# 這支 API 不預設要查哪一張
+fs = self.fs.get(table_name="balance_sheet", year=2024, season=1)
 # 回傳 DataFrame，包含各種財務指標
 ```
 
 ## 策略載入機制
 
-AlphaEdge 使用 `StrategyLoader` 自動載入策略。系統會自動掃描 `core/strategies/stock/` 目錄下的所有 Python 檔案，找出繼承 `BaseStockStrategy` 的類別。
+AlphaEdge 使用 `StrategyLoader` 自動載入策略。它以 `pkgutil.iter_modules` 走過 `core/strategies/` 底下**所有子套件**（`stock/` 與 `futures/`），找出**非抽象的 `BaseStrategy` 子類**——期貨策略就是靠同一條路徑載入的。
 
 ### 自動載入規則
 
-1. **檔案位置**: 策略檔案必須放在 `core/strategies/stock/` 目錄下
+1. **檔案位置**: 策略檔案必須放在 `core/strategies/<商品類別>/` 目錄下（台股現貨放 `stock/`、期貨放 `futures/`）
 2. **類別命名**: 策略類別名稱會作為策略識別名稱
 3. **繼承要求**: 必須繼承 `BaseStockStrategy` 且不能是 `BaseStockStrategy` 本身
 
@@ -805,18 +814,24 @@ python run.py --mode live --strategy MomentumStrategy1 --phase open
 
 ### 回測結果
 
-回測完成後，結果會儲存在 `results/<StrategyName>/` 目錄（檔名一律以策略名稱為前綴）：
+回測完成後，結果會儲存在 `results/<策略>/` 目錄（檔名一律以同一個名稱為前綴）。
+
+⚠️ **`<策略>` 是 `strategy.strategy_name`，不是類別名**——上面 `--strategy` 吃的是類別名
+（`MomentumStrategy1`），而輸出目錄用的是 `strategy_name`（`Momentum-1`），兩者可以不同。
+以下的 `<策略>` 一律指後者：
 
 1. **報表 CSV**:
-   - `<StrategyName>_trading_report.csv` - 已平倉交易的逐筆明細與損益統計
-   - `<StrategyName>_direction_summary.csv` - 多空分開的勝率、損益與成本統計
-   - `<StrategyName>_event_report.csv` - 強制回補、斷頭、拒單等事件計數
-   - `<StrategyName>_daily_equity.csv` - **含未實現損益**的逐日權益序列
+   - `<策略>_trading_report.csv` - 已平倉交易的逐筆明細與損益統計
+   - `<策略>_direction_summary.csv` - 多空分開的勝率、損益與成本統計
+   - `<策略>_event_report.csv` - 強制回補、斷頭、拒單等事件計數
+   - `<策略>_daily_equity.csv` - **含未實現損益**的逐日權益序列
+   - `<策略>_metrics_summary.csv` - 整體績效指標（`Metric`／`Value`／`Note` 長表）
 2. **圖表分析**:
-   - `<StrategyName>_balance_curve.png` - 資產曲線圖
-   - `<StrategyName>_networth.png` - 策略與 benchmark（`0050`）淨值比較圖
-   - `<StrategyName>_mdd.png` - 最大回撤圖
-   - `<StrategyName>_everyday_profit.png` - 每日損益圖
+   - `<策略>_balance_curve.png` - 資產曲線圖
+   - `<策略>_networth.png` - 策略與 benchmark（`0050`）淨值比較圖
+   - `<策略>_mdd.png` - 最大回撤圖
+   - `<策略>_everyday_profit.png` - 每日損益圖
+   - `<策略>_everyday_equity_change.png` - 每日權益變化圖
 3. **日誌檔案** - 落在 `logs/backtest/`
 
 各檔案由哪個方法產生，見[模組使用關係 §4](../../docs/backtest/module-map.md)。
@@ -839,9 +854,10 @@ import datetime
 from typing import List
 
 from core.datafeed.base import BaseDataFeed
-from core.models import StockAccount, StockOrder, StockQuote
+from core.models import StockAccount, StockQuote
+from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale, Units
+from core.utils import Action, PositionType, Scale
 
 
 class SimpleStrategy(BaseStockStrategy):
@@ -913,7 +929,7 @@ python run.py --strategy SimpleStrategy
 ---
 
 **注意事項**:
-- 策略檔案必須放在 `core/strategies/stock/` 目錄下
+- 策略檔案必須放在 `core/strategies/<商品類別>/` 目錄下（本範例是現貨，故為 `stock/`）
 - 策略類別名稱會作為策略識別名稱
 - 確保所有必須的方法都已實作
 - 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
@@ -966,7 +982,8 @@ import datetime
 from typing import List
 
 from core.datafeed.base import BaseDataFeed
-from core.models import StockAccount, StockOrder, StockQuote
+from core.models import StockAccount, StockQuote
+from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, ShortMethod
 

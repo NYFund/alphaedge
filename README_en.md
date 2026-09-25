@@ -433,7 +433,6 @@ AlphaEdge/
 │   ├── strategies/            # strategy implementations
 │   │   ├── base.py            # BaseStrategy (market-agnostic)
 │   │   ├── strategy_loader.py # auto-scans every instrument-type sub-package (stock / futures)
-│   │   ├── ridge.py           # ridge signal shared by research and production (a module on purpose)
 │   │   ├── stock/             # BaseStockStrategy + concrete stock strategies
 │   │   └── futures/           # BaseFuturesStrategy + TW futures strategies
 │   ├── api/                   # query interfaces and business rules (no SQL; builds DAOs with conn=)
