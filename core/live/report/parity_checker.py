@@ -29,7 +29,25 @@ from core.utils import LiveOrderStatus
 # 差異類別。**順序即判定優先級**：一筆差異可能同時符合多條，取第一條命中的
 CATEGORY_SNAPSHOT_GAP: str = "SNAPSHOT_GAP"
 CATEGORY_RISK_REJECTED: str = "RISK_REJECTED"
+
+# 送出但未成交所造成的差異，成因是「開倉未成交一律放棄、平倉與停損未成交必須補」。
+# **兩種後果都是跨日的**，故判定要有當天以外的證據：
+#   1. 平倉未成交 → 次日補平單。實盤有、回測沒有（回測那天早就平掉了）。
+#      證據是 `live_pending_action` 當天被處理掉的那幾筆。
+#   2. 開倉未成交 → 放棄 → 實盤沒有部位 → 次日回測有平倉單、實盤沒有。
+#      **這一種目前判不出來**：放棄不寫事件也不寫待辦，唯一的痕跡是前一交易日
+#      委託列的 `filled_volume < volume`，而那要往前翻不定長度的歷史
 CATEGORY_UNFILLED: str = "UNFILLED"
+
+# `ExecutionTiming` 造成的段落差異。
+# **目前不會有任何一筆落在這一類，而那是刻意的**：開倉與平倉分屬不同段落時，
+# 實際順序由段落決定、`bar_execution_order` 形同失效，這個矛盾由
+# `core/live/strategy_guard.py` 的 `check_schedule_conflicts()` 在 `prepare()`
+# 啟動時擋掉（拋 `LiveReadinessError`），跑不到 parity 比對這一步。
+# 保留這個類別是因為**檢查沒有涵蓋 `stop_loss`**——它若宣告在與 `close` 不同的段落，
+# 與回測「停損 → 一般平倉」的固定順序就會分岔，而目前三支策略都沒有實作停損，
+# 所以踩不到。真要收掉的做法是把 `stop_loss` 納入啟動檢查（防止），
+# 而不是在這裡分類（事後解釋）
 CATEGORY_TIMING: str = "TIMING"
 CATEGORY_CROSS_STRATEGY_BLOCKED: str = "CROSS_STRATEGY_BLOCKED"
 CATEGORY_CAPITAL_EXHAUSTED: str = "CAPITAL_EXHAUSTED"
@@ -154,6 +172,9 @@ class ParityChecker:
 
         live_orders: List[Dict[str, Any]] = self.dao.get_orders_by_date(run_date)
         events: List[Dict[str, Any]] = self.dao.get_risk_events_by_date(run_date)
+        resolved: List[Dict[str, Any]] = self.dao.get_pending_actions_resolved_on(
+            run_date
+        )
 
         result: Dict[str, List[ParityDiff]] = {}
         for name in sorted({str(row["strategy_name"]) for row in live_orders}):
@@ -162,6 +183,7 @@ class ParityChecker:
                 run_date,
                 [row for row in live_orders if row["strategy_name"] == name],
                 [event for event in events if event.get("strategy_name") == name],
+                [row for row in resolved if row.get("strategy_name") == name],
             )
             result[name] = diffs
             self._persist(name, run_date, diffs)
@@ -174,6 +196,7 @@ class ParityChecker:
         run_date: datetime.date,
         live_orders: List[Dict[str, Any]],
         events: List[Dict[str, Any]],
+        resolved_actions: Sequence[Dict[str, Any]] = (),
     ) -> List[ParityDiff]:
         """比對單一策略；回測跑不起來時視為整批未解釋，不是靜靜跳過"""
 
@@ -197,7 +220,7 @@ class ParityChecker:
                 )
             ]
 
-        return compare(live_orders, backtest_orders, events)
+        return compare(live_orders, backtest_orders, events, resolved_actions)
 
     def _persist(
         self, strategy_name: str, run_date: datetime.date, diffs: List[ParityDiff]
@@ -242,10 +265,27 @@ class ParityChecker:
         return path
 
 
+def covered_keys(actions: Sequence[Dict[str, Any]]) -> set:
+    """
+    由當天處理掉的跨日待辦推出「哪些單是補前一天的」
+
+    回傳的鍵與 `order_key()` 同形（標的 ＋ 買賣別），才能直接比對。
+    """
+
+    keys: set = set()
+    for action in actions:
+        symbol: Optional[str] = action.get("symbol")
+        action_side: Optional[str] = action.get("action")
+        if symbol and action_side:
+            keys.add(order_key(str(symbol), str(action_side)))
+    return keys
+
+
 def compare(
     live_orders: Sequence[Dict[str, Any]],
     backtest_orders: Sequence[BaseOrder],
     events: Sequence[Dict[str, Any]],
+    resolved_actions: Sequence[Dict[str, Any]] = (),
 ) -> List[ParityDiff]:
     """
     - Description:
@@ -261,6 +301,9 @@ def compare(
             同一天回測會送出的委託
         - events: Sequence[Dict[str, Any]]
             當日 `live_risk_event` 的列；用來歸因「實盤沒送出去」的那些
+        - resolved_actions: Sequence[Dict[str, Any]]
+            當日被處理掉的 `live_pending_action` 列；用來歸因「實盤多送出去」的
+            那些——次日補平單在回測沒有對應，因為回測前一天就已經平掉了
     - Return:
         - List[ParityDiff]
             差異清單；兩邊完全一致時為空
@@ -277,6 +320,7 @@ def compare(
         ).append(order)
 
     blocked: Dict[str, str] = _blocked_symbols(events)
+    covered: set = covered_keys(resolved_actions)
 
     diffs: List[ParityDiff] = []
     for key in sorted(set(live_by_key) | set(backtest_by_key)):
@@ -285,16 +329,26 @@ def compare(
         bt_orders: List[BaseOrder] = backtest_by_key.get(key, [])
 
         if live_rows and not bt_orders:
+            # 優先序：快照口徑 → 次日補平 → 未解釋。
+            # 兩者互斥（補平是平倉單，快照口徑只認開倉單），但仍依宣告順序判定
+            if _is_threshold_gap(live_rows):
+                extra_category: str = CATEGORY_SNAPSHOT_GAP
+                note: str = ""
+            elif key in covered:
+                extra_category = CATEGORY_UNFILLED
+                note = "前一交易日的平倉或停損未成交，今天依 D7 補送"
+            else:
+                extra_category = CATEGORY_UNEXPLAINED
+                note = ""
             diffs.append(
                 _make_diff(
                     len(diffs) + 1,
                     symbol,
                     side,
-                    CATEGORY_SNAPSHOT_GAP
-                    if _is_threshold_gap(live_rows)
-                    else CATEGORY_UNEXPLAINED,
+                    extra_category,
                     "；".join(summarize_row(row) for row in live_rows),
                     "（回測沒有這張單）",
+                    note=note,
                 )
             )
             continue

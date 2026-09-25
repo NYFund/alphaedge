@@ -10,6 +10,7 @@ from core.live.report.parity_checker import (
     CATEGORY_RISK_REJECTED,
     CATEGORY_SNAPSHOT_GAP,
     CATEGORY_UNEXPLAINED,
+    CATEGORY_UNFILLED,
     ParityChecker,
     ParityDiff,
     compare,
@@ -65,6 +66,20 @@ def make_backtest_order(
 
 def make_event(category: str, symbol: str = "2317") -> Dict[str, Any]:
     return {"category": category, "symbol": symbol, "strategy_name": "Alpha"}
+
+
+def make_resolved_action(
+    symbol: str = "2454", action: str = "Sell", volume: int = 2
+) -> Dict[str, Any]:
+    """一筆當天被處理掉的跨日待辦（前一交易日的平倉單沒成交）"""
+
+    return {
+        "symbol": symbol,
+        "action": action,
+        "volume": volume,
+        "status": "DONE",
+        "strategy_name": "Alpha",
+    }
 
 
 # === 純比對 ===
@@ -147,6 +162,69 @@ def test_extra_live_closing_order_is_not_a_snapshot_gap() -> None:
     )
 
     assert [diff.category for diff in diffs] == [CATEGORY_UNEXPLAINED]
+
+
+def test_next_day_cover_order_is_unfilled_not_unexplained() -> None:
+    """
+    次日補平單要歸 `UNFILLED`，不是未解釋
+
+    D7：平倉未成交必須補，待辦寫進 `live_pending_action`，次日開盤段第一件事送出。
+    那張單在回測沒有對應——回測前一天就已經平掉了——**但那不是訊號漂移**。
+    沒有這條判定，每一張補平單都會推播一次 CRITICAL。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [make_live_order("2454", action="Sell", position_type="LONG")],
+        [],
+        [],
+        [make_resolved_action("2454", action="Sell")],
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNFILLED]
+    assert "D7" in diffs[0].note
+
+
+def test_cover_evidence_must_match_symbol_and_side() -> None:
+    """
+    證據要對得上標的**與買賣別**才算數
+
+    只比標的的話，「2454 的買單」會被「2454 的賣單待辦」解釋掉——
+    那是方向相反的兩張單，歸成同一類等於把真正的問題蓋掉。
+    """
+
+    wrong_symbol: List[ParityDiff] = compare(
+        [make_live_order("2454", action="Sell", position_type="LONG")],
+        [],
+        [],
+        [make_resolved_action("2330", action="Sell")],
+    )
+    wrong_side: List[ParityDiff] = compare(
+        [make_live_order("2454", action="Sell", position_type="LONG")],
+        [],
+        [],
+        [make_resolved_action("2454", action="Buy")],
+    )
+
+    assert [diff.category for diff in wrong_symbol] == [CATEGORY_UNEXPLAINED]
+    assert [diff.category for diff in wrong_side] == [CATEGORY_UNEXPLAINED]
+
+
+def test_snapshot_gap_still_wins_over_unfilled() -> None:
+    """
+    開倉單仍先歸快照口徑
+
+    兩者實際上互斥（補平是平倉單、快照口徑只認開倉單），但判定順序要照
+    模組宣告的優先序，不可因為多了一條證據就把既有歸因蓋掉。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [make_live_order("2454")],
+        [],
+        [],
+        [make_resolved_action("2454", action="Buy")],
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_SNAPSHOT_GAP]
 
 
 def test_volume_mismatch_is_reported_as_one_diff() -> None:

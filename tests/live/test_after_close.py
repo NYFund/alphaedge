@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Any, Dict, List
 
 import pandas as pd
 import pytest
@@ -266,6 +266,13 @@ def test_pending_action_is_idempotent(dao: LiveTradeDAO) -> None:
     dao.resolve_pending_action("2026-09-21-run1-0001", dao.ACTION_DONE, NOW)
 
     assert dao.get_pending_actions(tomorrow) == []
+
+    # parity 要的是反面：當天**被處理掉**的那幾筆。`get_pending_actions()` 只回
+    # `PENDING`，補平單送出後那一筆就查不到了，於是補平單會被歸進 `UNEXPLAINED`
+    resolved: List[Dict[str, Any]] = dao.get_pending_actions_resolved_on(TODAY)
+    assert [row["symbol"] for row in resolved] == ["2330"]
+    assert resolved[0]["action"] == "Sell"
+    assert dao.get_pending_actions_resolved_on(tomorrow) == []
 
 
 def test_failed_cover_stays_pending_and_rolls_forward(dao: LiveTradeDAO) -> None:
