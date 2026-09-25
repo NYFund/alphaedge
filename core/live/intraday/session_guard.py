@@ -99,26 +99,6 @@ def session_open_date(moment: datetime.datetime) -> datetime.date:
     return moment.date()
 
 
-def resolve_quote_date(moment: datetime.datetime) -> datetime.date:
-    """
-    - Description:
-        查歷史行情要用的日期
-
-        `futures_price_daily` 把夜盤存在**開盤當天的日曆日**（資料表忠實記錄來源），
-        所以查詢一律用那一天，不是帳務日。
-    - Parameters:
-        - moment: datetime.datetime
-            當下時刻（台北）
-    - Return:
-        - datetime.date
-            查詢用日期
-    """
-
-    if not is_night_session(moment):
-        return moment.date()
-    return session_open_date(moment)
-
-
 def resolve_accounting_date(
     moment: datetime.datetime,
     next_trading_day: Callable[[datetime.date], datetime.date],
@@ -146,6 +126,38 @@ def resolve_accounting_date(
     if not is_night_session(moment):
         return moment.date()
     return next_trading_day(session_open_date(moment))
+
+
+def resolve_quote_date(
+    moment: datetime.datetime,
+    next_trading_day: Callable[[datetime.date], datetime.date],
+) -> datetime.date:
+    """
+    - Description:
+        查歷史行情要用的日期；**與帳務日相同**
+
+        `futures_price_daily` 存的是夜盤**所屬的交易日**，不是它開盤的曆日——
+        星期五晚上那一段記在星期一那一列。兩項實測佐證：
+
+        1. TX 第一筆 `night` 列是 2017-05-16，而夜盤制度是 2017-05-15 **晚上**上線；
+        2. 2023 年起的近月樣本中，夜盤開盤價與「前一交易日日盤收盤」的差距中位數
+           12 點，與「同日日盤收盤」則是 75 點——夜盤實際發生在前一晚，
+           開盤價必然貼近前一交易日的收盤。
+
+        所以兩個日期同值。**本函式刻意保留而不是叫呼叫端去用帳務日**：
+        「要查哪一天的行情」與「成交記在哪一天」是兩個問題，
+        它們在這張表上碰巧同值，不代表下一張表也會。
+    - Parameters:
+        - moment: datetime.datetime
+            當下時刻（台北）
+        - next_trading_day: Callable[[datetime.date], datetime.date]
+            給定日期求次一交易日；由呼叫端以交易日曆注入
+    - Return:
+        - datetime.date
+            查詢用日期
+    """
+
+    return resolve_accounting_date(moment, next_trading_day)
 
 
 def uncovered_day_trade_positions(account: BaseAccount) -> List[BasePosition]:

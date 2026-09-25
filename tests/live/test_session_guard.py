@@ -34,6 +34,12 @@ def at(
 
 
 # === 政策對映 ===
+def next_day(date: datetime.date) -> datetime.date:
+    """次一交易日的最小替身：本檔用到的日期都不跨週末"""
+
+    return date + datetime.timedelta(days=1)
+
+
 def test_force_cover_is_used_as_is() -> None:
     """照做的政策不該產生告警——每次都告警的話沒有人會再看它"""
 
@@ -153,17 +159,46 @@ def test_day_session_accounting_date_is_today() -> None:
     )
 
 
-def test_quote_date_uses_the_session_open_day_not_the_accounting_day() -> None:
+def test_quote_date_uses_the_trading_day_the_session_belongs_to() -> None:
     """
-    **查行情用開盤當天，不是帳務日**
+    **查行情用夜盤所屬的交易日，不是它開盤的曆日**
 
-    `futures_price_daily` 把夜盤存在開盤當天的日曆日（資料表忠實記錄來源）。
-    拿帳務日去查會查不到東西，而那是空報價不是錯誤。
+    `futures_price_daily` 存的是所屬交易日——星期五晚上那一段記在星期一那一列。
+    兩項實測佐證：TX 第一筆 `night` 列是 2017-05-16，而夜盤制度是 2017-05-15
+    **晚上**上線；2023 年起近月樣本中，夜盤開盤價與「前一交易日日盤收盤」的
+    差距中位數 12 點，與「同日日盤收盤」則是 75 點。
+
+    **拿開盤曆日去查會查不到東西，而那是空報價不是錯誤**——整段夜盤行情
+    安靜地差一個交易日，沒有任何徵兆。
     """
 
-    assert resolve_quote_date(at(2026, 9, 21, 20)) == datetime.date(2026, 9, 21)
-    assert resolve_quote_date(at(2026, 9, 22, 0, 30)) == datetime.date(2026, 9, 21)
-    assert resolve_quote_date(at(2026, 9, 21, 10)) == datetime.date(2026, 9, 21)
+    # 星期一晚上開始的那一段夜盤，屬於星期二
+    assert resolve_quote_date(at(2026, 9, 21, 20), next_day) == datetime.date(
+        2026, 9, 22
+    )
+    # 跨午夜仍是同一段，所屬交易日不變
+    assert resolve_quote_date(at(2026, 9, 22, 0, 30), next_day) == datetime.date(
+        2026, 9, 22
+    )
+    # 日盤時段就是當天
+    assert resolve_quote_date(at(2026, 9, 21, 10), next_day) == datetime.date(
+        2026, 9, 21
+    )
+
+
+def test_quote_date_and_accounting_date_agree() -> None:
+    """
+    兩者同值，但**不可因此把其中一個刪掉**
+
+    「要查哪一天的行情」與「成交記在哪一天」是兩個問題，它們在
+    `futures_price_daily` 上碰巧同值，是因為這張表以所屬交易日為鍵——
+    換一張以開盤曆日為鍵的表就不成立了。
+    """
+
+    for moment in (at(2026, 9, 21, 20), at(2026, 9, 22, 0, 30), at(2026, 9, 21, 10)):
+        assert resolve_quote_date(moment, next_day) == resolve_accounting_date(
+            moment, next_day
+        )
 
 
 # === 當沖回補 ===
