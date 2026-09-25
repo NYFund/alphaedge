@@ -423,4 +423,11 @@ core/
   - [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 `core/dao/`；loader／DAO／updater 職責切分）
   - [台期貨平台](../docs/futures/tw-futures-platform.md)（同樣是「平行市場模組、共享核心、不共享市場細節」的前例）
 - **相關 backlog**：
-  - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md)（美股資料量較大，建議 DB 遷移先收斂；表名前綴的考量同源）
+  - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md)（美股資料量較大，建議 DB 遷移先收斂；表名前綴的考量同源）。
+    **若本文件先落地**：§3.3 要求的 `INSERT OR IGNORE` 正是該計畫 Phase2-1 要剷掉的 SQLite 專屬語法，
+    `core/dao/us/` 一寫就讓它的工作量變大，`get_engine()` 與 fallback 也要從兩個研究庫擴到三個
+    （`US_STOCK_DB_PATH` 是本文件 Phase1-2 的產出）。**該計畫若已完成或正在並行，`core/dao/us/`
+    直接寫 `ON CONFLICT`，不要新增 `INSERT OR IGNORE`。**
+  - [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)：它會把 `run.py` 換成
+    `python -m apps.backtest`。本文件的驗收標準與 Phase3-1 驗證方式已改成不綁入口名稱的寫法，
+    動工時以當時的回測入口為準。
