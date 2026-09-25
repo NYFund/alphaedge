@@ -1,3 +1,4 @@
+import functools
 import pathlib
 import re
 import subprocess
@@ -38,8 +39,9 @@ def declared_counts() -> Dict[str, int]:
     return counts
 
 
-def actual_counts(rules: List[str]) -> Dict[str, int]:
-    """現查各規則的實際處數"""
+@functools.cache
+def _actual_counts(rules: Tuple[str, ...]) -> Tuple[Tuple[str, int], ...]:
+    """現查各規則的實際處數；**同一組規則只跑一次 ruff**（兩條測試共用）"""
 
     result: subprocess.CompletedProcess = subprocess.run(
         [
@@ -57,12 +59,26 @@ def actual_counts(rules: List[str]) -> Dict[str, int]:
         text=True,
     )
 
+    # **指令失敗一定要紅**：失敗時 stdout 是空的，於是每條規則的實際處數都留在 0，
+    # 而主斷言比的是「實際 > 註記」——`0 > N` 恆為 False，整條 ratchet 會無條件通過。
+    # ruff 有違規時回 1，那是正常的
+    assert result.returncode in (0, 1), (
+        f"ruff 指令失敗（returncode={result.returncode}），"
+        f"處數查不到就等於這條 ratchet 失效：\n{result.stderr}"
+    )
+
     counts: Dict[str, int] = dict.fromkeys(rules, 0)
     for line in result.stdout.splitlines():
         parts: List[str] = line.split()
         if len(parts) >= 2 and parts[1] in counts:
             counts[parts[1]] = int(parts[0])
-    return counts
+    return tuple(sorted(counts.items()))
+
+
+def actual_counts(rules: List[str]) -> Dict[str, int]:
+    """現查各規則的實際處數（結果快取，避免全庫跑兩次 ruff）"""
+
+    return dict(_actual_counts(tuple(rules)))
 
 
 # **刻意的風格選擇，不是債務**：CLAUDE.md §2.4 要求 `Optional[T]` 而非 `T | None`，

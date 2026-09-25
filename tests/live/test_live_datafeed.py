@@ -373,6 +373,15 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     backtest_apis: set = assigned_api_names(TwStockDataFeed) - {"tick"}
     live_apis: set = assigned_api_names(TwStockLiveDataFeed)
 
+    # **先確認掃描結果非空**：`assigned_api_names()` 是從原始碼刮出
+    # `self.x = XxxAPI(` 這種行，哪天 `setup()` 改用迴圈、dict 或 factory 建 API，
+    # 它就會回空集合——而 `set() <= 任何集合` 恆為真，下面那條斷言會無條件通過，
+    # 這道護欄就在沒人察覺的情況下死掉
+    assert len(backtest_apis) >= 5, (
+        f"只從回測資料源刮到 {sorted(backtest_apis)}，抽取方式可能已失效"
+    )
+    assert live_apis, "從實盤資料源刮不到任何 API，抽取方式可能已失效"
+
     assert backtest_apis <= live_apis, (
         f"實盤資料源少建了這些 API：{sorted(backtest_apis - live_apis)}"
     )
