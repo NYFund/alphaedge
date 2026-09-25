@@ -245,6 +245,9 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **目的**：寫入要用 psycopg 3 的 `COPY`，讀取要用 ConnectorX。
 - **做法**：
   - `pyproject.toml` 的 `[project.optional-dependencies]` 改成 `tick = ["psycopg[binary]>=3.2", "connectorx>=0.4"]`，執行 `uv lock` 鎖定精確版本。
+  - **若 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的 Phase0-3 已先完成**，`psycopg` 已在主
+    `dependencies`（研究庫遷移後每次存取都要它），本步驟只要留 `tick = ["connectorx>=0.4"]`——
+    extra 再列一次是多餘的。反過來本步驟先完成的話，那一步要把它從 extra 搬到主 `dependencies`。
   - **`dolphindb` 先搬到另一個 extra `futures-tick`**，不要直接刪。期貨 tick 仍在用它，最終去留在 Phase5-2 裁示。
   - 這兩個套件只在 `core/dao/timescale.py`、`core/dao/tw/stock_tick_dao.py` 內惰性 import（分層檢查只允許資料庫驅動出現在 `core/dao/`），比照現行 `dolphindb` 的寫法加註解；`[tool.ruff.lint.per-file-ignores]` 若需要 F401 例外，改指向這兩支 DAO 模組，舊的 tick 例外到 Phase5-2 再移除。
 - **產出**：`pyproject.toml`、`uv.lock`。
