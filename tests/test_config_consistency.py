@@ -1,5 +1,6 @@
 import ast
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Set
@@ -212,6 +213,68 @@ def test_per_file_ignores_point_to_existing_paths() -> None:
     ]
 
     assert missing == [], f"per-file-ignores 指到不存在的路徑：{missing}"
+
+
+def test_per_file_ignores_are_all_still_triggered() -> None:
+    """
+    每條豁免都要**還會被觸發**
+
+    `pyproject.toml` 自己寫著「修掉之後要把對應那條從本清單移除，不要讓它長期留著
+    ——留著等於對那類問題永久失明」。但上一條只驗路徑存在，**不驗規則是否還會觸發**，
+    所以失效完全沒有訊號。2026-09-25 實查就有兩條已經失效
+    （`scripts/manual/*` 的 `E402` 歸零、`stock_tick_loader.py` 的 `F401` 不再觸發）。
+
+    做法：對每條豁免的路徑單獨跑 ruff，**只選它豁免的那些規則**並加 `--no-cache`
+    ＋ `--isolated`（不讀 `pyproject.toml`，否則豁免本身會讓它永遠是 0）。
+    一條都沒抓到就代表該豁免可以移除了。
+    """
+
+    patterns: Dict[str, Any] = load_pyproject()["tool"]["ruff"]["lint"][
+        "per-file-ignores"
+    ]
+
+    stale: List[str] = []
+    for pattern, rules in patterns.items():
+        if "/" not in pattern or not rules:
+            continue
+        paths: List[str] = [str(path) for path in PROJECT_ROOT.glob(pattern)]
+        if not paths:
+            continue
+        # **逐條檢查，不可整組一起選**：同一個路徑豁免多條規則時，
+        # 只要還有一條會觸發，整組就看起來還活著——失效的那條仍然被蓋過去
+        for rule in rules:
+            result: subprocess.CompletedProcess = subprocess.run(
+                [
+                    "uv",
+                    "run",
+                    "ruff",
+                    "check",
+                    "--isolated",
+                    "--no-cache",
+                    "--select",
+                    rule,
+                    "--output-format",
+                    "concise",
+                    *paths,
+                ],
+                cwd=PROJECT_ROOT,
+                capture_output=True,
+                text=True,
+            )
+            # 指令本身失敗（規則名打錯、ruff 沒裝）要紅，不可當成「沒有違規」
+            assert result.returncode in (0, 1), (
+                f"{pattern} 的 {rule} 檢查失敗（returncode={result.returncode}）：\n"
+                f"{result.stderr}"
+            )
+            # **以 returncode 判定，不看 stdout**：沒有違規時 ruff 仍會印
+            # `All checks passed!`，用 stdout 是否為空來判斷永遠不會成立
+            if result.returncode == 0:
+                stale.append(f"{pattern} 的 {rule}")
+
+    assert stale == [], (
+        "以下 per-file-ignores 已經不會被觸發，請移除（留著等於對那類問題永久失明）：\n  "
+        + "\n  ".join(stale)
+    )
 
 
 # === uv.lock ===

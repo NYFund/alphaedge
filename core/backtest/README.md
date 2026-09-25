@@ -335,24 +335,42 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 
 回測完成後，系統會自動產生以下內容：
 
-### 1. 交易報告 (`trading_report.csv`)
+**檔名一律帶策略名前綴**（以下 `<策略>` 指 `strategy.strategy_name`，見〈儲存位置〉）。
 
-包含所有交易記錄、損益統計等詳細資訊。
+### 1. CSV（五份）
 
-### 2. 圖表分析
+| 檔名 | 內容 |
+|------|------|
+| `<策略>_trading_report.csv` | 逐筆交易紀錄與損益 |
+| `<策略>_direction_summary.csv` | 多空分別的統計 |
+| `<策略>_event_report.csv` | `event_counts` 的明細（拒單、鎖漲停回補失敗等）|
+| `<策略>_metrics_summary.csv` | 整體績效指標（長表，欄位見〈績效指標〉）|
+| `<策略>_daily_equity.csv` | 每日權益序列 |
 
-- **資產曲線圖** (`balance_curve.png`): 顯示資產隨時間的變化
-- **資產與基準比較圖** (`balance_and_benchmark_curve.png`): 比較策略表現與基準（如大盤指數）
-- **最大回撤圖** (`balance_mdd.png`): 顯示最大回撤情況
-- **每日損益圖** (`everyday_profit.png`): 顯示每日損益分布
+### 2. 圖表（五張）
 
-### 3. 日誌檔案 (`<StrategyName>.log`)
+| 檔名 | 內容 |
+|------|------|
+| `<策略>_balance_curve.png` | 資產隨時間的變化 |
+| `<策略>_networth.png` | 策略與基準（大盤）的淨值比較 |
+| `<策略>_mdd.png` | 最大回撤 |
+| `<策略>_everyday_profit.png` | 每日損益分布 |
+| `<策略>_everyday_equity_change.png` | 每日權益變化 |
 
-記錄回測過程中的所有資訊、警告和錯誤。
+### 3. 日誌檔案
+
+`logs/backtest/<策略>.log`——**不在 `results/` 底下**。
+`core/config/paths.py` 把 `LOGS_DIR_PATH` 與 `RESULTS_DIR_PATH` 訂成兩個平行的根。
 
 ### 儲存位置
 
-回測結果儲存路徑：`results/<StrategyName>/`
+回測結果儲存路徑：`results/<策略>/`，其中 `<策略>` 取的是
+**`strategy.strategy_name`**（例如 `Momentum-1`、`Momentum-Futures`、
+`Foreign-Sell-Short-Day-Trade`）。
+
+⚠️ **那不是類別名**。`--strategy` 吃的是類別名（`MomentumStrategy1`），
+輸出目錄吃的是 `strategy_name`，**兩者可以不同**——跑
+`--strategy MomentumStrategy1` 會產出 `results/Momentum-1/`。
 
 ## 績效指標
 
@@ -428,11 +446,11 @@ python run.py --mode live --strategy MomentumStrategy1 --phase open
 
 ### 注意事項
 
-- Strategy Name 是 Class 的名稱
+- `--strategy` 吃的是**類別名稱**（例如 `MomentumStrategy1`）
 - 策略由 `strategy_loader` 逐一掃描 `core/strategies/` 底下的商品類別子目錄
   （`stock/`、`futures/`）載入，新增商品類別不需要改程式
 - 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
-- 回測結果會儲存在 `results/<StrategyName>/` 目錄
+- 回測結果會儲存在 `results/<策略>/` 目錄，其中 `<策略>` 是 **`strategy.strategy_name`**（例如 `Momentum-1`），**與 `--strategy` 吃的類別名不同**
 
 ## 相關文檔
 

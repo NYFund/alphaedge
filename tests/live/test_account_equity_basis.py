@@ -104,18 +104,27 @@ def test_quota_check_is_skipped_rather_than_faked() -> None:
     那 5%：3,000,000 vs 2,850,000。捏數字不只不誠實，還剛好行不通。
     """
 
-    import inspect
-
     from core.live.capital_allocator import CapitalAllocator
+    from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 
-    source: str = inspect.getsource(LiveTrader.prepare)
+    # **驗行為不驗方法名**：原本是比對 `inspect.getsource(prepare)` 含不含
+    # `"equity_unavailable()"` 與 `"verify_quota"` 這兩個字面值——改名或內聯就紅，
+    # 而行為根本沒變。改成直接問那道閘門本身。
+    blind: LiveTrader = make_trader(
+        total_equity=0.0, quotas={"A": 1_000_000.0}, simulation=True
+    )
+    visible: LiveTrader = make_trader(
+        total_equity=582_608.0, quotas={"A": 400_000.0}, simulation=True
+    )
 
-    assert "equity_unavailable()" in source, "額度檢查沒有先問「查不查得到帳務」"
-    assert "verify_quota" in source
+    assert blind.equity_unavailable() is True, "模擬環境查不到帳務時要能自己說出來"
+    assert visible.equity_unavailable() is False, "查得到帳務就不該略過檢查"
 
-    # 釘住那個必然不成立的關係：安全係數 < 1
-    allocator: CapitalAllocator = CapitalAllocator.__new__(CapitalAllocator)
-    allocator.safety_ratio = 0.95
+    # 釘住那個必然不成立的關係：安全係數 < 1。
+    # **要讀真正的預設值**——自己設一個再斷言它小於 1 是同義反覆，
+    # 有人把 `CAPITAL_SAFETY_RATIO` 改成 1.0 也照樣綠，而那正是這條要防的事
+    allocator: CapitalAllocator = CapitalAllocator({"Alpha": 1_000_000.0})
+    assert allocator.safety_ratio == CAPITAL_SAFETY_RATIO
     assert allocator.safety_ratio < 1.0
 
 
@@ -164,9 +173,9 @@ def test_every_caller_uses_the_same_basis() -> None:
     assert "self.allocator.available_balance + sum(" not in source, (
         "又有人把總權益的公式內嵌抄了一份"
     )
-    assert source.count("self._account_equity()") >= 3, (
-        "額度檢查、單日虧損、批次曝險三處都該走同一個方法"
-    )
+    # **只留負向斷言**。原本還有一條 `count("self._account_equity()") >= 3`，
+    # 釘的是呼叫點數量——把三處抽成一個 helper 行為完全沒變，測試卻會紅。
+    # 要防的是「公式被抄第二份」，上面那條就夠了
 
 
 # === 實盤額度與回測本金脫鉤 ===
