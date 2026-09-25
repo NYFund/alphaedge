@@ -115,7 +115,7 @@ ignore = [
     # --- 例外處理：只量化不修，數量記在各條的行尾註解 ---
     # 數量過大會讓 CI 永遠紅燈，故先 ignore 並逐條記錄；
     # 不可因為「讓 CI 變綠」就當成永久豁免
-    "BLE001",  # blind-except，95 處
+    "BLE001",  # blind-except，92 處
     "TRY003",  # 例外訊息長度，與 §2.1 中文訊息衝突
     "TRY300",  # try-consider-else，20 處
     "TRY301",  # raise-within-try，7 處

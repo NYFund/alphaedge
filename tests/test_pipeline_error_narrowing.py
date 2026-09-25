@@ -1,6 +1,7 @@
 import json
 import pathlib
-from typing import List
+from types import SimpleNamespace
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import pytest
@@ -14,6 +15,12 @@ from core.pipeline.shared.base_crawler import (
 from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.shared.request_utils import FetchResult, FetchStatus
 from core.pipeline.shared.season_planner import SeasonProgressStore
+from core.pipeline.tw.crawlers import financial_statement_crawler as fs_crawler_module
+from core.pipeline.tw.crawlers.financial_statement_crawler import (
+    FinancialStatementCrawler,
+)
+from core.pipeline.tw.utils.mops_payload import Payload
+from core.pipeline.utils import ListingBoard
 
 """
 盲捕收斂之後，**原本接得住的仍要接得住**
@@ -135,3 +142,132 @@ def test_csv_read_failures_do_not_stop_the_batch(tmp_path: pathlib.Path) -> None
     missing: pathlib.Path = tmp_path / "not_here.csv"
     with pytest.raises(OSError):
         pd.read_csv(missing)
+
+
+# === MOPS 財報爬蟲：傳輸失敗與版面失敗要分開 ===
+def make_mops_crawler(
+    monkeypatch: pytest.MonkeyPatch,
+    response: Any,
+) -> FinancialStatementCrawler:
+    """
+    - Description:
+        建一支不連外的 MOPS 爬蟲，`requests_post()` 的回應由測試指定
+    - Parameters:
+        - monkeypatch: pytest.MonkeyPatch
+            用來換掉 `RequestUtils.requests_post`
+        - response: Any
+            要回傳的假回應；為 Exception 實例時改為拋出
+    - Return:
+        - FinancialStatementCrawler
+    """
+
+    def fake_post(url: str, data: Dict[str, str]) -> Any:
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(fs_crawler_module.RequestUtils, "requests_post", fake_post)
+
+    crawler: FinancialStatementCrawler = FinancialStatementCrawler.__new__(
+        FinancialStatementCrawler
+    )
+    crawler.payload = Payload(
+        firstin="1", step="1", TYPEK="sii", co_id=None, year="113", season="1"
+    )
+    crawler.listing_boards = [ListingBoard.SII]
+    return crawler
+
+
+def test_empty_body_fails_the_season_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    HTTP 200 但 body 全空：整季視為失敗，不可讓例外炸穿
+
+    這一種是 MOPS 異常時最常見的樣子，而它拋的**不是 `ValueError`**——
+    lxml 解空字串拋 `XMLSyntaxError`，繼承的是 `SyntaxError`。
+    只收 `ValueError` 的話，本來只記一行 warning 的情況會變成整批中止。
+    """
+
+    crawler: FinancialStatementCrawler = make_mops_crawler(
+        monkeypatch, SimpleNamespace(text="")
+    )
+
+    assert crawler.crawl_balance_sheet(2024, 1) is None
+
+
+def test_transport_failure_fails_the_season(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    傳輸層失敗照樣是「整季視為失敗」
+
+    `requests` 的例外與作業系統層的 `ConnectionError` 都繼承 `OSError`，
+    收斂成 `OSError` 之後兩者都還要接得住。
+    """
+
+    for error in (
+        ConnectionError("RemoteDisconnected"),
+        requests.exceptions.TooManyRedirects("redirect loop"),
+    ):
+        crawler: FinancialStatementCrawler = make_mops_crawler(monkeypatch, error)
+
+        assert crawler.crawl_balance_sheet(2024, 1) is None, (
+            f"{type(error).__name__} 應該被當成整季失敗"
+        )
+
+
+def test_programming_errors_are_not_swallowed_as_a_failed_season(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    程式自己寫錯必須現形，不可退化成「整季視為失敗」
+
+    退化的後果不是報錯，是**每一次重跑都以警告收場**：年季永遠補不齊，
+    而 log 看起來只是站方又不穩。
+    """
+
+    crawler: FinancialStatementCrawler = make_mops_crawler(
+        monkeypatch, TypeError("payload 欄位型別錯了")
+    )
+
+    with pytest.raises(TypeError):
+        crawler.crawl_balance_sheet(2024, 1)
+
+
+def test_equity_changes_empty_body_stays_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    權益變動表拿到空 body 時回 None（待重試），不可拋出
+
+    拋出的話會被逐檔隔離的斷路器計為一次非預期例外，連三檔就中止整段回補
+    ——但空 body 是站方異常，屬於該重試的那一類。
+    **不可以回 `[]`**：那會把這一檔寫進「查無資料」的永久名單。
+    """
+
+    crawler: FinancialStatementCrawler = make_mops_crawler(
+        monkeypatch, SimpleNamespace(text="")
+    )
+    monkeypatch.setattr(crawler, "EQUITY_CHANGE_RETRY_DELAY_SECONDS", 0)
+
+    result: Optional[List[pd.DataFrame]] = crawler.crawl_equity_changes(2024, 1, "2330")
+
+    assert result is None
+
+
+def test_equity_changes_programming_errors_reach_the_circuit_breaker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    非傳輸層的例外要往上拋，讓逐檔斷路器看得到
+
+    在爬蟲內就地吞掉的話，「環境或程式壞了」會退化成每一檔都重試三次，
+    連續例外的斷路器永遠不會觸發，整段回補會以十萬次無效請求收場。
+    """
+
+    crawler: FinancialStatementCrawler = make_mops_crawler(
+        monkeypatch, AttributeError("session 沒有 post")
+    )
+    monkeypatch.setattr(crawler, "EQUITY_CHANGE_RETRY_DELAY_SECONDS", 0)
+
+    with pytest.raises(AttributeError):
+        crawler.crawl_equity_changes(2024, 1, "2330")

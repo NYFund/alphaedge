@@ -212,7 +212,12 @@ class FinancialStatementCrawler(BaseDataCrawler):
                 res: Optional[requests.Response] = RequestUtils.requests_post(
                     url, data=self.payload.convert_to_clean_dict()
                 )
-            except Exception as error:
+            except OSError as error:
+                # 只收 I/O 層失敗。`requests` 的例外全繼承 `OSError`，作業系統層的
+                # `ConnectionError` 也是，一條就涵蓋所有傳輸失敗而不必逐一列舉。
+                # **不放寬成 `except Exception`**：payload 組錯拋的 TypeError 之類
+                # 是程式壞了，被當成「整季視為失敗」會每次重跑、每次以警告收場，
+                # 資料永遠補不齊而沒有人會發現
                 logger.warning(
                     f"Cannot get {market}（{type(error).__name__}: {error}）；"
                     f"整季視為失敗"
@@ -225,7 +230,12 @@ class FinancialStatementCrawler(BaseDataCrawler):
 
             try:
                 df_list.extend(pd.read_html(StringIO(res.text)))
-            except Exception as error:
+            except (ValueError, SyntaxError) as error:
+                # 解析失敗分兩種，兩種都要接：內容不含表格是 `ValueError`，
+                # body 全空或只有空白則是 lxml 的 `XMLSyntaxError`——它繼承
+                # `SyntaxError` 而**不繼承 `ValueError`**，只寫 ValueError 會漏掉
+                # 「HTTP 200 但沒有內容」這一種，而那正是站方異常最常見的樣子。
+                # 缺解析後端（ImportError）刻意不接：整季重試永遠不會讓套件自己長回來
                 logger.warning(
                     f"No tables found in {market}（{type(error).__name__}）；"
                     f"整季視為失敗"
@@ -293,7 +303,11 @@ class FinancialStatementCrawler(BaseDataCrawler):
             res: Optional[requests.Response] = None
             try:
                 res = RequestUtils.requests_post(url, data=payload)
-            except Exception as error:
+            except OSError as error:
+                # 只收 I/O 層失敗（`requests` 的例外與作業系統層的連線錯誤都繼承
+                # `OSError`），其餘一律往上拋給逐檔隔離與斷路器判斷：
+                # 在這裡吞掉的話，「環境或程式壞了」會退化成每一檔都重試三次，
+                # 逐檔回補的三檔連續例外斷路器就永遠不會觸發
                 logger.warning(
                     f"Request failed on equity changes {stock_id} {year}Q{season}: {error}"
                 )
@@ -306,7 +320,11 @@ class FinancialStatementCrawler(BaseDataCrawler):
                 if self.EQUITY_CHANGE_UNREACHABLE_MARKER not in res.text:
                     try:
                         return pd.read_html(StringIO(res.text))
-                    except ValueError:
+                    except (ValueError, SyntaxError):
+                        # body 全空時 lxml 拋的 `XMLSyntaxError` 繼承 `SyntaxError`
+                        # 而不繼承 `ValueError`。漏接它的話「HTTP 200 但沒有內容」
+                        # 會被算成一次非預期例外，連三檔就把整段回補斷路掉，
+                        # 而那其實是站方異常、屬於該重試的那一類
                         # 導流到「採 IFRSs 前」端點：回 [] 讓它寫進查無資料的永久名單，
                         # 回 None（待重試）的話每輪整段回補都會重打，而結果永遠一樣
                         if self.EQUITY_CHANGE_PRE_IFRS_MARKER in res.text:
