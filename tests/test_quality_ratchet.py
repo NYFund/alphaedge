@@ -21,7 +21,7 @@ import pytest
 
 PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 
-# 行尾註解形如 `"BLE001",  # blind-except，95 處`；數字可帶千分位逗號
+# 行尾註解形如 `"BLE001",  # blind-except，92 處`；數字可帶千分位逗號
 ANNOTATION: re.Pattern = re.compile(
     r'^\s*"(?P<rule>[A-Z]+\d+)",\s*#[^\n]*?(?P<count>[\d,]+)\s*處'
 )
