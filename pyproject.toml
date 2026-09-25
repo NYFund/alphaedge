@@ -148,13 +148,11 @@ ignore = [
 # 套件的 re-export 門面：__init__.py 的 import 就是對外介面，不是未使用
 "__init__.py" = ["F401"]
 
-# 獨立執行的手動腳本：`.env` 必須在部分 import **之前**載入（那些模組在 import
-# 期就讀環境變數），所以 import 之間夾著程式碼是刻意的，E402 屬預期行為。
-# `tests/*` 與 `strategy_lab/*` 原本也在這裡，是為了遷就 `sys.path.insert`
-# 卡在 import 中間。那 18 處已於 2026-09-10 清除，殘留的
-# `_PROJECT_ROOT` 賦值一併移到 import 之後，兩條豁免因此不再需要——
-# 移除後 `ruff check .` 對 `tests/` 與 `strategy_lab/` 全綠
-"scripts/manual/*" = ["E402", "ANN201"]
+# 手動腳本的 helper 回傳型別。**原本還豁免 `E402`**（`.env` 要在部分 import 之前
+# 載入，所以 import 之間夾著程式碼），但 2026-09-25 現查那種寫法已經一處都不剩，
+# 該條因此移除——留著等於對那類問題永久失明。
+# `tests/*` 與 `strategy_lab/*` 的 `E402` 也早在 2026-09-10 一併清掉了
+"scripts/manual/*" = ["ANN201"]
 
 # 測試內的 helper／fixture／替身方法（24 處）：它們的回傳型別多半是「某個
 # 被 monkeypatch 過的 loader」或 `(物件, 路徑)` 的 tuple，標註要嘛得把類別
@@ -164,9 +162,10 @@ ignore = [
 "tests/*" = ["ANN201"]
 
 # dolphindb 是選用相依（見 [project.optional-dependencies] 的 tick），
-# 這幾處的 import 是「可用性探測」，不是沒用到的 import
+# 這幾處的 import 是「可用性探測」，不是沒用到的 import。
+# **`stock_tick_loader.py` 原本也在這裡**，但它的 `import dolphindb as ddb` 現在
+# 寫在 `try:` 裡並被實際使用，不再觸發 F401，2026-09-25 移除
 "core/pipeline/tw/utils/stock_tick_utils.py" = ["F401"]
-"core/pipeline/tw/loaders/stock_tick_loader.py" = ["F401"]
 "scripts/manual/manual_tick_updater.py" = ["F401"]
 
 

@@ -41,7 +41,10 @@ repos:
         name: 禁用 exc_info=（loguru 請用 logger.opt(exception=True)）
         entry: exc_info=
         language: pygrep
-        files: ^(core|tasks)/.*\.py$
+        # 範圍要與 `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES`
+        # 一致——兩邊不同步就會一邊綠一邊紅。`scripts/` 有 11 支用 loguru，
+        # 含存活監控 `live_watchdog.py`
+        files: ^((core|tasks|scripts|strategy_lab)/.*\.py|run\.py|conftest\.py)$
 
       # 註解不得引用 backlog 的步驟編號、健檢發現編號或 backlog 路徑
       # （`CLAUDE.md` §2.1 第 4 點）：文件會改版、會刪除，註解不會跟著更新，

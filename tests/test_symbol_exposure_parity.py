@@ -1,3 +1,5 @@
+import ast
+import pathlib
 from typing import Dict, List, Optional, Tuple
 
 import pytest
@@ -216,21 +218,109 @@ def test_both_sides_point_at_each_other() -> None:
 def collect_ratio_multiplications() -> Dict[str, int]:
     """統計還有誰自己寫 `init_capital * ratio` 這條公式"""
 
-    import pathlib
-
     root: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
     counts: Dict[str, int] = {}
 
-    for path in list((root / "core").rglob("*.py")):
-        text: str = path.read_text()
-        hits: int = text.count("init_capital * max_ratio")  # 舊公式的字面形式
+    for path in sorted((root / "core").rglob("*.py")):
+        hits: int = count_capital_times_ratio(path.read_text())
         if hits:
             counts[str(path.relative_to(root))] = hits
 
     return counts
 
 
-def test_nobody_reimplements_the_formula() -> None:
-    """公式只有一份；`init_capital * max_ratio` 不該再出現在別處"""
+def count_capital_times_ratio(source: str) -> int:
+    """
+    以 AST 數出「資金 × 比例」的乘法
 
-    assert collect_ratio_multiplications() == {}
+    **不用字面字串比對**：原本找的是 `"init_capital * max_ratio"`，
+    而權威實作寫的是 `init_capital * ratio`——**連它自己都抓不到**，
+    於是斷言 `== {}` 永遠成立，這道護欄早就死了而沒人發現。
+    去掉空格、換行、或把變數改名，字面比對一樣會失效。
+
+    判準：乘法的兩個運算元名稱，一邊含 `capital`、另一邊**同時含 `ratio` 與
+    `symbol`**。**只認單一標的那一條**——`risk_manager` 另有四條同形狀的上限
+    （單筆金額、單日金額、批次總曝險、單日虧損），它們是實盤獨有、沒有回測那一半
+    可以漂，不在本護欄的守備範圍。
+    """
+
+    multiplications: int = 0
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Mult):
+            continue
+        names: List[str] = [
+            _operand_name(node.left).lower(),
+            _operand_name(node.right).lower(),
+        ]
+        if any("capital" in name for name in names) and any(
+            "ratio" in name and "symbol" in name for name in names
+        ):
+            multiplications += 1
+    return multiplications
+
+
+def _operand_name(node: ast.expr) -> str:
+    """取運算元的名稱；`a.b` 取 `b`，其餘回空字串"""
+
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+# 允許出現「資金 × 單一標的比例」的位置。**每一處都要有理由**。
+# 2026-09-25 現查只有這兩處：
+# **權威實作不會被命中，那是刻意的**：`exceeds_symbol_exposure()` 是純函式，
+# 參數名就叫 `ratio`——它不知道自己在算哪一種比例，所以沒有 `symbol` 字樣。
+# 反過來說，任何把比例**具名成單一標的**再自己乘一次的地方，就是在重算這條公式。
+_ALLOWED_SYMBOL_EXPOSURE_SITES: Dict[str, int] = {
+    # **批次截斷這條路徑其實沒有呼叫權威實作，而是把同一條公式再算一次**
+    # （`symbol_cap = init_capital * symbol_ratio`）。它上方的註解宣稱
+    # 「公式與回測共用」，但程式是內嵌重算的——兩者之間沒有任何東西保證一致。
+    # 之所以還沒收掉：`exceeds_symbol_exposure()` 回的是 bool（單筆判定），
+    # 批次截斷要的是 cap（跟累計值比），改法要先決定介面。
+    # 收掉的做法是讓權威實作多一個「回 cap」的入口，兩邊都呼叫它；
+    # 那會動到實盤風控，故尚未施作。**這一筆例外不可再增加**
+    "core/live/risk/risk_manager.py": 1,
+}
+
+
+def test_the_detector_actually_matches_the_formula() -> None:
+    """
+    先證明這個偵測器抓得到東西
+
+    護欄本身會悄悄失效是這一類測試最常見的死法：抓不到就是通過。
+    以合成的違規程式碼驗一次，並確認它對無關的乘法不誤報。
+    """
+
+    assert count_capital_times_ratio("x = init_capital * symbol_ratio") == 1
+    assert count_capital_times_ratio("x = init_capital*max_symbol_ratio") == 1
+    assert (
+        count_capital_times_ratio(
+            "x = self.init_capital * cfg.single_symbol_exposure_ratio"
+        )
+        == 1
+    )
+    # 其餘四條上限不在守備範圍
+    assert count_capital_times_ratio("x = init_capital * daily_loss_ratio") == 0
+    assert count_capital_times_ratio("x = init_capital * total_exposure_ratio") == 0
+    assert count_capital_times_ratio("x = volume * price") == 0
+    assert count_capital_times_ratio("x = init_capital * 2") == 0
+
+
+def test_nobody_reimplements_the_formula() -> None:
+    """
+    「資金 × 比例」只能出現在權威實作那一處
+
+    再出現第二份就是兩邊各算一次曝險上限，而它們會漂。
+    """
+
+    counts: Dict[str, int] = collect_ratio_multiplications()
+
+    assert counts == _ALLOWED_SYMBOL_EXPOSURE_SITES, (
+        "「資金 × 單一標的比例」的乘法出現在未登記的位置。"
+        f"實際：{dict(sorted(counts.items()))}；"
+        f"允許：{dict(sorted(_ALLOWED_SYMBOL_EXPOSURE_SITES.items()))}。"
+        "新增一處之前先想清楚為什麼不能呼叫 `exceeds_symbol_exposure()`"
+    )

@@ -1,8 +1,11 @@
 import argparse
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
 import pytest
 
@@ -34,15 +37,43 @@ EXIT_UNHANDLED_EXCEPTION: int = 1
 
 
 def run_entry(*args: str) -> subprocess.CompletedProcess:
-    """以子行程跑 `run.py`，回傳完整結果（退出碼、stdout、stderr）"""
+    """
+    以子行程跑 `run.py`，回傳完整結果（退出碼、stdout、stderr）
 
-    return subprocess.run(
-        [sys.executable, str(_RUN_PY), *args],
-        capture_output=True,
-        text=True,
-        cwd=_PROJECT_ROOT,
-        timeout=180,
-    )
+    **環境要沙箱化**：根目錄 `conftest.py` 對 `LiveTradeDAO.DEFAULT_DB_PATH` 的
+    patch 只在行程內有效，子行程會從 `ALPHAEDGE_DATA_DIR` 重算，而資料根**刻意
+    不整個導走**（`slow` 測試要讀真的 `tw_stock.db`）。直接繼承 `os.environ`
+    等於把本機 `.env` 的真實金鑰與真實資料根交給子行程——
+    `conftest.py` 記載的那起事故就是這個形狀：一條測試以子行程跑實盤入口、
+    用本機金鑰登入模擬環境，累積出 19 筆 `REDUCE_ONLY`。
+
+    金鑰清成**空字串而不是刪除**：`load_dotenv()` 不覆寫已存在的鍵，
+    刪掉反而會被 `.env` 補回來。寫法與 `tests/live/test_live_factory_and_entry.py`
+    的 `_run_cli()` 一致，兩處要一起改。
+    """
+
+    sandbox: Path = Path(tempfile.mkdtemp(prefix="alphaedge-run-entry-"))
+    (sandbox / "data" / "db").mkdir(parents=True)
+    env: Dict[str, str] = {
+        **os.environ,
+        "ALPHAEDGE_DATA_DIR": str(sandbox / "data"),
+        "ALPHAEDGE_RESULTS_DIR": str(sandbox / "results"),
+        "ALPHAEDGE_LOGS_DIR": str(sandbox / "logs"),
+        "ALPHAEDGE_LIVE_KILL_SWITCH_PATH": str(sandbox / "KILL_SWITCH"),
+        "API_KEY": "",
+        "API_SECRET_KEY": "",
+    }
+    try:
+        return subprocess.run(
+            [sys.executable, str(_RUN_PY), *args],
+            capture_output=True,
+            text=True,
+            cwd=_PROJECT_ROOT,
+            timeout=180,
+            env=env,
+        )
+    finally:
+        shutil.rmtree(sandbox, ignore_errors=True)
 
 
 def test_unknown_strategy_exits_with_usage_error() -> None:

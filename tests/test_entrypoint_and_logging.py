@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import Callable, List, Set
+from typing import Callable, List, Set, Tuple
 
 import pytest
 
@@ -317,12 +317,24 @@ def test_log_file_is_recreated_after_external_deletion(tmp_path: Path) -> None:
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 
 
+# 護欄的掃描範圍。**要與 `.pre-commit-config.yaml` 的 `no-stdlib-exc-info`
+# 那條 `files` 一致**——兩邊不同步就會變成一邊綠一邊紅。
+# 涵蓋每一個用 loguru 的地方：`scripts/` 有 11 支（含存活監控 `live_watchdog.py`，
+# 而它自己的說明寫著「監控自己死掉而沒人知道，和沒有監控是同一件事」），
+# `strategy_lab/` 也有；漏掉它們等於那些檔案可以靜默丟掉 traceback
+_GUARDED_PACKAGES: Tuple[str, ...] = ("core", "tasks", "scripts", "strategy_lab")
+_GUARDED_FILES: Tuple[str, ...] = ("run.py", "conftest.py")
+
+
 def iter_project_sources() -> List[Path]:
-    """列出 `core/` 與 `tasks/` 底下所有 .py（護欄的掃描範圍）"""
+    """列出護欄掃描範圍內的所有 .py"""
 
     paths: List[Path] = []
-    for package in ("core", "tasks"):
+    for package in _GUARDED_PACKAGES:
         paths.extend(sorted((PROJECT_ROOT / package).rglob("*.py")))
+    paths.extend(
+        PROJECT_ROOT / name for name in _GUARDED_FILES if (PROJECT_ROOT / name).exists()
+    )
     return paths
 
 
