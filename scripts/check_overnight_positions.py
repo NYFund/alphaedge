@@ -1,11 +1,11 @@
 import argparse
 import datetime
-import sqlite3
 import sys
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.config import TW_TRADING_DB_PATH
+from core.dao.connection import DBConnection, connect_live_trading
 
 """
 模擬環境是否保留隔夜部位？——唯讀分析 `live_position_snapshot`
@@ -39,12 +39,12 @@ LOCAL_SOURCE: str = "local"
 PositionMap = Dict[Tuple[str, str], int]
 
 
-def load_snapshots(conn: sqlite3.Connection) -> Dict[str, Dict[str, PositionMap]]:
+def load_snapshots(conn: DBConnection) -> Dict[str, Dict[str, PositionMap]]:
     """
     - Description:
         讀出每個日期、每個來源的部位
     - Parameters:
-        - conn: sqlite3.Connection
+        - conn: DBConnection
             `tw_trading.db` 的唯讀連線
     - Return:
         - Dict[str, Dict[str, PositionMap]]
@@ -66,7 +66,7 @@ def load_snapshots(conn: sqlite3.Connection) -> Dict[str, Dict[str, PositionMap]
     return snapshots
 
 
-def load_closing_records(conn: sqlite3.Connection) -> Dict[str, Set[str]]:
+def load_closing_records(conn: DBConnection) -> Dict[str, Set[str]]:
     """
     - Description:
         讀出每個日期本地記錄的平倉標的
@@ -74,7 +74,7 @@ def load_closing_records(conn: sqlite3.Connection) -> Dict[str, Set[str]]:
         用來區分「部位消失是因為我們平掉了」還是「模擬環境自己清掉了」——
         少了這一層，正常的平倉會被誤判成環境清倉。
     - Parameters:
-        - conn: sqlite3.Connection
+        - conn: DBConnection
             `tw_trading.db` 的唯讀連線
     - Return:
         - Dict[str, Set[str]]
@@ -240,7 +240,7 @@ def report_mismatch(snapshots: Dict[str, Dict[str, PositionMap]]) -> None:
             print(f"\n{date}  ✓ 一致")
 
 
-def report_risk_events(conn: sqlite3.Connection) -> None:
+def report_risk_events(conn: DBConnection) -> None:
     """
     列出對帳不一致的風控事件
 
@@ -287,7 +287,7 @@ def main() -> int:
     args: argparse.Namespace = parser.parse_args()
 
     # 唯讀開啟：這支工具在演練進行中會被執行，絕不能干擾正在寫入的行程
-    conn: sqlite3.Connection = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
+    conn: DBConnection = connect_live_trading(args.db, read_only=True)
 
     print(f"紀錄庫：{args.db}")
     print(f"查詢時間：{datetime.datetime.now().isoformat(timespec='seconds')}")

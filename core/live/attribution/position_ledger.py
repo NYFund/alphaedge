@@ -105,7 +105,7 @@ class PositionAttributionLedger:
                 "client_order_id": client_order_id,
             }
         )
-        self.dao.conn.commit()
+        self.dao.commit()
         return lot_id
 
     def adopt_broker_positions(
@@ -143,7 +143,7 @@ class PositionAttributionLedger:
                 )
             )
 
-        self.dao.conn.commit()
+        self.dao.commit()
         return created
 
     def add_unattributed_lot(
@@ -251,7 +251,7 @@ class PositionAttributionLedger:
                 "差額將由下一次對帳抓出"
             )
 
-        self.dao.conn.commit()
+        self.dao.commit()
         return closed
 
     # === 查詢 ===

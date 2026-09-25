@@ -1538,7 +1538,7 @@ class LiveTrader:
                     + position_value(context.account),
                 }
             )
-        self.dao.conn.commit()
+        self.dao.commit()
 
     # === 盤後 ===
     def run_after_close(self) -> Dict[str, Any]:

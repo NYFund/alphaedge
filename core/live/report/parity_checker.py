@@ -218,7 +218,7 @@ class ParityChecker:
                     "note": diff.note,
                 }
             )
-        self.dao.conn.commit()
+        self.dao.commit()
 
         directory: Path = self.output_root / strategy_name
         directory.mkdir(parents=True, exist_ok=True)

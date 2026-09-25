@@ -10,8 +10,8 @@
   - 把雲端上的歷史 CSV 一次匯入並壓縮。
 - **範圍界線**：
   - **不做期貨 tick**：2026-09-15 已裁示不做，`futures_tick_*` 的 DolphinDB 程式原樣保留，去留見 Phase5-2 的裁示。
-  - **DolphinDB 殘留的完整清單**（程式、設定、測試、文件、本機資料）見 Phase5-2，2026-09-17 由健檢第五輪的盤點搬進本文件；施作時照那份走即可，不必重新掃。
-  - **不做**台股日頻資料的 SQLite → PostgreSQL 遷移，那是 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的範圍；本文件只和它共用 PostgreSQL 容器、driver 與連線層。
+  - **DolphinDB 殘留的完整清單**（程式、設定、測試、文件、本機資料）見 Phase5-2，2026-09-17 由健檢第五輪的盤點搬進本文件，2026-09-25 依現行程式補齊漏列項目；施作時以那份為主，但動手前仍要跑一次 Phase5-2／Phase5-3 的 `grep` 驗證指令確認沒有新增的殘留。
+  - **不做**台股日頻資料的 SQLite → PostgreSQL 遷移，那是 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的範圍；本文件只和它共用 PostgreSQL 容器、driver 與資料存取層（`core/dao/`）。
   - **不改**爬蟲（`StockTickCrawler`）與清洗邏輯（`StockTickCleaner` 的欄位格式），也不改 tick 回測引擎的成交語意。
   - **不做** tick 回補續跑到今天。回補要不要做、做多少是另一個決策，本文件只保證 updater 在新儲存上可以續跑。
   - **實作完成後不自動把資料寫進正式資料庫**（2026-09-18 使用者裁示）。以下三件事都**等使用者明確下指令才執行**，程式與腳本寫好、以抽樣或測試 schema 驗證過即為該步驟完成：
@@ -26,10 +26,9 @@
 
 ---
 
-> **2026-09-16：連線層位置調整。** 資料存取層已統一放在 `core/dao/`（設計見 [資料存取層](../docs/dev/data-access-layer.md)）。
-> 本文件 Phase1-1 的 `core/db/timescale.py` 改為 `core/dao/timescale.py`，
-> 分層登記沿用既有的 `("core.dao", 2, ...)`；`StockTickLoader`／`StockTickAPI` 的 SQL
-> 改收進 `core/dao/tw/stock_tick_dao.py`，〈資料表設計〉與〈讀取介面契約〉不變。
+> **分層前提（2026-09-16 定案，2026-09-25 併入本文）：** 資料存取層統一放在 `core/dao/`（設計見 [資料存取層](../docs/dev/data-access-layer.md)），
+> 不另建 `core/db/`。tick 的連線放 `core/dao/timescale.py`，DDL 與所有 SQL 收進 `core/dao/tw/stock_tick_dao.py`；
+> `StockTickLoader`／`StockTickUtils`／`StockTickAPI` 只呼叫 DAO，不直接 import `psycopg`／`connectorx`（分層檢查會擋）。
 
 ## 進度追蹤表
 
@@ -38,19 +37,19 @@
 | Phase0-1 | `docker-compose.yml` 新增 TimescaleDB service | `docker-compose.yml`、`.env.example` | `psql` 連線後 `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'` 有值 | ⬜ | 與 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase0-1 共用同一個 service；Docker Desktop 磁碟上限要先調大 |
 | Phase0-2 | 新增 `TICK_DATABASE_URL` 設定 | `core/config/settings.py`、`.env.example`、`tests/test_config_consistency.py` | `pytest tests/test_config_consistency.py` 通過 | ⬜ | 刻意不用 `DATABASE_URL`，理由見步驟詳述 |
 | Phase0-3 | `[tick]` 選用相依改為 `psycopg`＋`connectorx` | `pyproject.toml`、`uv.lock` | `uv sync --extra tick` 後可 import 兩者 | ⬜ | `dolphindb` 的去留在 Phase5-2 裁示，本步驟先不移除 |
-| Phase1-1 | 建立 `core/db/` 連線層 | `core/db/__init__.py`、`core/db/timescale.py`、`scripts/check_layer_deps.py` | `python scripts/check_layer_deps.py` 通過；`SELECT 1` 可執行 | ⬜ | 相依 Phase0-2；PostgreSQL遷移計畫 Phase1-1 之後在同一目錄擴充 |
-| Phase1-2 | 建表：`stock_tick` hypertable 與 `stock_tick_load_log` | `core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py` | 建表函式重跑兩次不報錯；`timescaledb_information.hypertables` 查得到 | ⬜ | 相依 Phase1-1；schema 詳見〈資料表設計〉 |
-| Phase1-3 | 設定壓縮與壓縮 policy | 同上 | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ⬜ | 相依 Phase1-2 |
-| Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等） | `core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變 | ⬜ | 相依 Phase1-2 |
-| Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1 |
-| Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-2 |
-| Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/adapters/tw/stock_quote_adapter.py`、`core/api/base.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
+| Phase1-1 | 在 `core/dao/` 建立 TimescaleDB 連線入口 | `core/dao/timescale.py`、`scripts/check_layer_deps.py` | `python scripts/check_layer_deps.py` 通過；`SELECT 1` 可執行 | ⬜ | 相依 Phase0-2、Phase0-3；與 `core/dao/connection.py` 同目錄，PostgreSQL遷移計畫 Phase1-1 在隔壁擴充 |
+| Phase1-2 | 建表：`stock_tick` hypertable 與 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py` | 建表函式重跑兩次不報錯；`timescaledb_information.hypertables` 查得到 | ⬜ | 相依 Phase1-1；schema 詳見〈資料表設計〉 |
+| Phase1-3 | 設定壓縮與壓縮 policy | `core/dao/tw/stock_tick_dao.py` | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ⬜ | 相依 Phase1-2 |
+| Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等） | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變 | ⬜ | 相依 Phase1-2 |
+| Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1 |
+| Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-2 |
+| Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
 | Phase4-1 | 盤點 Google 雲端的歷史 CSV | 本文件（盤點紀錄） | 檔案佈局、日期範圍、總列數、欄位格式差異寫入本文件 | ⬜ | **無相依，可最先做**；結果可能改變 Phase2-1 的 CSV 解析 |
 | Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1；**只用抽樣，541 檔全量入庫需使用者要求**（見〈範圍界線〉） |
 | Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」的 DB 列數＝CSV 列數＝`load_log.row_count` | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ⬜ | 相依 Phase2-2、Phase3-1 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* tasks` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示** |
-| Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
+| Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`core/strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
 
 ---
 
@@ -81,14 +80,14 @@ table "tick"
 | 方法 | 查詢 | 使用端 |
 |------|------|--------|
 | `get(start, end)` | `select * where time between nanotimestamp(start):nanotimestamp(end+1)` | 無呼叫端 |
-| `get_ordered_ticks(start, end)` | 同上，加 `order by time` | `StockQuoteAdapter.convert_to_tick_quotes()`，**回測每個交易日呼叫一次、start＝end** |
+| `get_ordered_ticks(start, end)` | 同上，加 `order by time` | `StockDataFeed.get_quotes()`，**回測每個交易日呼叫一次、start＝end**，結果交給 `StockQuoteAdapter.from_tick_rows(ticks, date)` |
 | `get_stock_ticks(stock_id, start, end)` | 同上，加 `stock_id=` 條件 | `get_last_tick()` |
 | `get_last_tick(stock_id, date)` | `get_stock_ticks(...).iloc[-1:]` | 無呼叫端（有單元測試） |
 
 - `between a:b` 兩端都包含，會多含到隔天 00:00:00 那一個瞬間。台股沒有這個時間點的 tick，實際上沒影響，改寫時直接換成半開區間。
 - `get()` 的 docstring 說「個股各自排序好」，但 query 沒有 `order by`，順序其實是分區掃描順序，沒有保證。
 
-使用端：只有 `StockDataFeed.setup()` 在 `strategy.scale == Scale.TICK` 時建立 `StockTickAPI()`。`generate_stock_quotes()` 對每一列 `itertuples()` 讀 `stock_id`／`time`／`close`／`volume`／`bid_*`／`ask_*`／`tick_type` 建立 `TickQuote`。**目前沒有任何策略使用 `Scale.TICK`。**
+使用端：只有 `StockDataFeed.setup()` 在 `strategy.scale == Scale.TICK` 時建立 `StockTickAPI()`。`StockQuoteAdapter.from_tick_rows()`（`core/adapters/tw/stock_quote_adapter.py`）以 `itertuples()` 逐列交給 `from_tick_row()`，讀 `stock_id`／`time`／`close`／`volume`／`bid_*`／`ask_*`／`tick_type` 建立 `TickQuote`；adapter 是純轉換，查詢由 DataFeed 負責。**目前沒有任何策略使用 `Scale.TICK`。**
 
 ### ETL 流程
 
@@ -247,7 +246,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **做法**：
   - `pyproject.toml` 的 `[project.optional-dependencies]` 改成 `tick = ["psycopg[binary]>=3.2", "connectorx>=0.4"]`，執行 `uv lock` 鎖定精確版本。
   - **`dolphindb` 先搬到另一個 extra `futures-tick`**，不要直接刪。期貨 tick 仍在用它，最終去留在 Phase5-2 裁示。
-  - 這兩個套件都是由 tick 模組惰性 import，比照現行 `dolphindb` 的寫法加註解，並把 `[tool.ruff.lint.per-file-ignores]` 那段的 F401 例外換成新模組。
+  - 這兩個套件只在 `core/dao/timescale.py`、`core/dao/tw/stock_tick_dao.py` 內惰性 import（分層檢查只允許資料庫驅動出現在 `core/dao/`），比照現行 `dolphindb` 的寫法加註解；`[tool.ruff.lint.per-file-ignores]` 若需要 F401 例外，改指向這兩支 DAO 模組，舊的 tick 例外到 Phase5-2 再移除。
 - **產出**：`pyproject.toml`、`uv.lock`。
 - **驗證方式**：`uv sync --extra tick` 後，`python -c "import psycopg, connectorx"` 成功。
 - **相依**：無。
@@ -256,17 +255,18 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 ## Phase 1：連線層與 schema
 
-### Phase1-1. 建立 `core/db/` 連線層 ⬜
+### Phase1-1. 在 `core/dao/` 建立 TimescaleDB 連線入口 ⬜
 
-- **目的**：loader（`core/pipeline`）和 API（`core/api`）都要連 TimescaleDB。連線邏輯不能各寫一份，也不能讓 `core/api` 去 import `core/pipeline`。
+- **目的**：loader（`core/pipeline`）和 API（`core/api`）都要連 TimescaleDB。連線邏輯不能各寫一份，也不能讓 `core/api` 去 import `core/pipeline`；現行專案的連線單一入口在 `core/dao/`（`core/dao/connection.py`），tick 沿用同一層。
 - **做法**：
-  - 新增 `core/db/timescale.py`，提供：
+  - 新增 `core/dao/timescale.py`（量少時也可直接併入 `core/dao/connection.py`，實作時擇一），提供：
     - `get_tick_database_url() -> str`：呼叫 `require_tick_database_url()`。
     - `connect_tick_db(autocommit: bool = False) -> psycopg.Connection`：寫入用。
     - `get_connectorx_uri() -> str`：讀取用。ConnectorX 吃的是 `postgresql://` URI，不接受 psycopg 的 connection。
-  - `scripts/check_layer_deps.py` 的 `_LAYER_RULES` 新增 `("core.db", 1, "共用層／資料庫連線", False)`，與 `core.utils` 同層，才能被 `core.api` 與 `core.pipeline` 共用。
-  - 路徑與 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase1-1 的 `core/db/connection.py` 放在同一個目錄。那份計畫之後的 SQLAlchemy engine 會放在隔壁，兩者不衝突。
-- **產出**：`core/db/__init__.py`、`core/db/timescale.py`、`scripts/check_layer_deps.py`。
+  - **分層登記不用新增**：`scripts/check_layer_deps.py` 已有 `("core.dao", 2, "資料存取層（DAO）", False)`，`core.api` 與 `core.pipeline`（第 3 層）都可以 import。
+  - `scripts/check_layer_deps.py` 的 `_DB_DRIVER_MODULES` 由 `{"sqlite3"}` 擴充為 `{"sqlite3", "psycopg", "connectorx"}`，讓「資料庫驅動只能在 `core/dao/` 內 import」的檢查也涵蓋 tick 的新驅動。
+  - 與 `core/dao/connection.py` 放在同一個目錄。[PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase1-1 之後會在 `core/dao/connection.py` 加 SQLAlchemy engine，兩者不衝突；那份計畫完成後可評估 tick 連線是否併入同一入口。
+- **產出**：`core/dao/timescale.py`（或 `core/dao/connection.py`）、`scripts/check_layer_deps.py`。
 - **驗證方式**：`python scripts/check_layer_deps.py` 通過；在有 DB 的環境 `connect_tick_db().execute("SELECT 1")` 成功。
 - **相依**：Phase0-2、Phase0-3。
 
@@ -275,21 +275,23 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **目的**：取代 DolphinDB 的 `create_db()`。
 - **做法**：
   - `core/config/schema.py`：新增 `STOCK_TICK_TABLE_NAME: str = "stock_tick"`、`STOCK_TICK_LOAD_LOG_TABLE_NAME: str = "stock_tick_load_log"`。`TICK_DB_NAME`／`TICK_DB_PATH`／`TICK_TABLE_NAME` 留到 Phase5-2 移除。
-  - `StockTickLoader.create_db()` 改成依序執行：
+  - 新增 `core/dao/tw/stock_tick_dao.py` 的 `StockTickDAO`，DDL 全放在它的 `create_tables()`，依序執行：
     1. `CREATE EXTENSION IF NOT EXISTS timescaledb`
     2. 〈資料表設計〉的兩段 DDL
     3. 建立 index
+  - `StockTickDAO` **不繼承 `BaseDAO`**：`BaseDAO` 綁 `sqlite3.Connection`。它自行持有 `connect_tick_db()` 的連線與 `get_connectorx_uri()`，連線所有權沿用 `owns_conn` 慣例。
+  - `StockTickLoader.create_db()` 只呼叫 `StockTickDAO.create_tables()`，loader 本身不寫 SQL、不 import `psycopg`。
   - 全部用 `IF NOT EXISTS`／`if_not_exists => TRUE`，重跑不報錯。
   - 移除 `DEFAULT_TICK_DB_START_TIME`／`DEFAULT_TICK_DB_END_TIME`／`TICK_DB_HASH_PARTITIONS`：hypertable 會自動長出 chunk，不需要預先宣告日期範圍。這也順便解決 DolphinDB 分區只開到 2030-12-31 的隱藏上限。
   - 移除 `setup()` 裡的 `setTSDBCacheEngineSize`，那是 DolphinDB 專用設定。
-- **產出**：`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py`、`core/config/__init__.py`。
+- **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py`、`core/config/__init__.py`。
 - **驗證方式**：連續呼叫 `create_db()` 兩次不報錯；`SELECT hypertable_name FROM timescaledb_information.hypertables` 回傳 `stock_tick`；`\d stock_tick` 的欄位型別與 DDL 一致。
 - **相依**：Phase1-1。
 
 ### Phase1-3. 設定壓縮與壓縮 policy ⬜
 
 - **目的**：歷史 tick 寫入後不再修改，壓縮能把磁碟用量與全市場查詢的 I/O 降到約十分之一。
-- **做法**：`create_db()` 建完 hypertable 後接著執行：
+- **做法**：`StockTickDAO.create_tables()` 建完 hypertable 後接著執行：
 
   ```sql
   ALTER TABLE stock_tick SET (
@@ -301,8 +303,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   ```
 
   - 14 天讓每日更新寫入的最近兩個 chunk 保持未壓縮，重跑最近幾天時不用先解壓。
-  - 另外在 loader 提供 `compress_chunks_before(older_than: datetime.date) -> int`，包一層 `SELECT compress_chunk(c, if_not_compressed => TRUE) FROM show_chunks('stock_tick', older_than => ...) c`，給 Phase4-3 的匯入腳本逐週呼叫。
-- **產出**：`core/pipeline/tw/loaders/stock_tick_loader.py`。
+  - 另外在 `StockTickDAO` 提供 `compress_chunks_before(older_than: datetime.date) -> int`，包一層 `SELECT compress_chunk(c, if_not_compressed => TRUE) FROM show_chunks('stock_tick', older_than => ...) c`，給 Phase4-3 的匯入腳本逐週呼叫（腳本經 loader 或直接建 DAO 呼叫，不自己寫 SQL）。
+- **產出**：`core/dao/tw/stock_tick_dao.py`。
 - **驗證方式**：`SELECT * FROM timescaledb_information.jobs WHERE hypertable_name = 'stock_tick'` 有 compression job；寫入樣本後呼叫 `compress_chunks_before()`，`chunk_compression_stats('stock_tick')` 顯示已壓縮。
 - **相依**：Phase1-2。
 
@@ -318,7 +320,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `load_csv(csv_path: Path) -> int`：
     1. `pd.read_csv(csv_path, dtype={"stock_id": str}, parse_dates=["time"])`，檢查 9 個欄位齊全。
     2. 加上 `trade_date = time.dt.date`，依原始列序算出 `seq = groupby(["stock_id", "trade_date"]).cumcount()`。
-    3. **一個交易日一個 transaction**，逐日處理：
+    3. **一個交易日一個 transaction**，逐日交給 `StockTickDAO.replace_day(stock_id, trade_date, day_df, source_file) -> int`；以下 SQL 全在 DAO 內，loader 不 import `psycopg`：
        - `DELETE FROM stock_tick WHERE stock_id = %s AND time >= %s AND time < %s`（該日 00:00 到隔天 00:00）
        - 用 `cursor.copy("COPY stock_tick (stock_id, time, seq, close, volume, bid_price, bid_volume, ask_price, ask_volume, tick_type) FROM STDIN")` 以 `write_row()` 寫入
        - `INSERT INTO stock_tick_load_log ... ON CONFLICT (stock_id, trade_date) DO UPDATE SET row_count = EXCLUDED.row_count, source_file = EXCLUDED.source_file, loaded_at = now()`
@@ -326,9 +328,9 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     4. 回傳寫入的總列數。
   - **為什麼選「刪除後重寫」而不是 `ON CONFLICT DO NOTHING`**：完全相同的重複列本來就是合法資料（實測 32 列），沒有自然唯一鍵可以用；而且 CSV 是「整段區間覆寫」產生的，同一天再出現時應該以新檔為準。
   - **目標 chunk 已壓縮時**：TimescaleDB 2.11 以上支援對壓縮 chunk 做 `DELETE`／`INSERT`，但很慢。日常更新只會碰到最近 14 天（未壓縮），可以忽略。歷史重灌時，由 Phase4-3 的腳本先 `decompress_chunk` 再寫入。
-  - SQL 參數一律走 `%s` 佔位符（CLAUDE.md §2.10），表名從 `schema.py` 常數以 `psycopg.sql.Identifier` 組合。
+  - DAO 內的 SQL 參數一律走 `%s` 佔位符（CLAUDE.md §2.10），表名從 `schema.py` 常數以 `psycopg.sql.Identifier` 組合。
   - 移除 `append_csv_to_dolphinDB`／`append_all_csv_to_dolphinDB`／`clear_all_cache`／`delete_dolphinDB`。
-- **產出**：`core/pipeline/tw/loaders/stock_tick_loader.py`。
+- **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`。
 - **驗證方式**：新增整合測試（見 Phase5-1）：
   1. 同一份 CSV 載入兩次，`stock_tick` 列數不變，`load_log.row_count` 與 CSV 一致。
   2. 載入一份內容較少的同日 CSV，舊列被完整取代。
@@ -340,17 +342,17 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **目的**：`tick_metadata.json` 的日期是從 CSV 掃出來的，入庫失敗時也會前進，改成以資料庫實際寫入的紀錄為準。
 - **做法**：
   - `StockTickUtils`：
-    - 新增 `get_loaded_last_dates() -> Dict[str, datetime.date]`，查詢 `SELECT stock_id, max(trade_date) FROM stock_tick_load_log GROUP BY stock_id`。
+    - 新增 `get_loaded_last_dates() -> Dict[str, datetime.date]`，轉呼叫 `StockTickDAO.get_loaded_last_dates()`（DAO 內查 `SELECT stock_id, max(trade_date) FROM stock_tick_load_log GROUP BY stock_id`）。
     - `check_date_crawled()` 改用這份結果，語意維持「`date <= last_date` 就跳過」，和現行一致（停牌日不會每次重爬）。
-    - `get_table_latest_date()` 改查 `max(trade_date)`。
+    - `get_table_latest_date()` 改由 DAO 查 `max(trade_date)`。
     - update 開頭查一次，傳給各 thread，**不要每檔股票查一次 DB**。
   - `StockTickUpdater.update()`：
-    - 開頭那段「比對 metadata 刪 CSV」改成：CSV 裡每個交易日在 `load_log` 都有紀錄、且 `row_count` 一致，才刪除。
+    - 開頭那段「比對 metadata 刪 CSV」改成：CSV 裡每個交易日在 `load_log` 都有紀錄、且 `row_count` 一致，才刪除（`load_log` 的查詢同樣由 `StockTickDAO` 提供）。
     - 結尾的 `update_tick_metadata_from_csv()` 移除。
   - `generate_tick_metadata_backup()`、`update_tick_metadata_from_csv()`、`load_tick_metadata_stocks()`、`scan_tick_downloads_folder()` 移除。`tick_metadata.json` 檔案本身留到 Phase5-2 再刪，作為對照。
   - `scripts/manual/manual_init_tick_metadata.py` 失去用途，在 Phase5-2 刪除。
   - 模組說明字串（`"""台股 tick 的 DolphinDB 與 metadata 工具"""`）與 class docstring 同步更新。
-- **產出**：`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`。
+- **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`。
 - **驗證方式**：以 Phase4-2 的 3 天樣本入庫後，手動刪掉某檔股票最後一天的 `load_log` 與資料，對 2024-05-13～05-15 跑 `update()`（**crawler 一律用替身**，不對外連線、也不對正式資料表跑真實更新，見〈範圍界線〉），只有那檔股票被重爬。
 - **相依**：Phase2-1。
 
@@ -362,12 +364,13 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 - **目的**：讓回測用的查詢在 TimescaleDB 上跑得快，並符合〈讀取介面契約〉。
 - **做法**：
-  - `setup()`：移除 DolphinDB session 與 `setTSDBCacheEngineSize`，改成取得 `get_connectorx_uri()`，並確認資料表存在（查一次 `to_regclass('stock_tick')`，不存在時記 error 並拋出）。現行「資料庫不存在只 `print`」的行為一併修正，避免回測跑完才發現整段沒有報價。
-  - 三個查詢方法共用私有方法 `_query_ticks(where_sql: str, params: Tuple, order_by: str) -> pd.DataFrame`：
+  - 比照 `core/api/tw/stock_price_api.py` 的慣例，SQL 全在 DAO，API 只呼叫 DAO。由於 `StockTickDAO` 不收 SQLite 連線，`StockTickAPI` 維持 `DEFAULT_DB_PATH = None`、`DAO_CLASS = None`，在 `setup()` 先呼叫 `super().setup()`，再自行建立 `self.dao = StockTickDAO()`。
+  - `setup()`：移除 DolphinDB session 與 `setTSDBCacheEngineSize`，改成建立 `StockTickDAO`，並由 DAO 確認資料表存在（查一次 `to_regclass('stock_tick')`，不存在時記 error 並拋出）。現行「資料庫不存在只 `print`」的行為一併修正，避免回測跑完才發現整段沒有報價。
+  - 三個查詢方法都轉呼叫 `StockTickDAO` 的查詢；DAO 內共用私有方法 `_query_ticks(where_sql: str, params: Tuple, order_by: str) -> pd.DataFrame`：
 
     ```python
     tick: pd.DataFrame = cx.read_sql(
-        self.uri,
+        self.uri,  # get_connectorx_uri()
         query,  # SELECT <9 欄> FROM stock_tick WHERE ... ORDER BY ...
         return_type="pandas",
     )
@@ -377,9 +380,9 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     - 只 `SELECT` 契約列出的 9 個欄位，不用 `SELECT *`：壓縮 chunk 是按欄位解壓的，而且回傳結果不應帶出 `seq`。
     - 查完之後強制轉 dtype（`astype`），保證空表與非空表的欄位型別一致。
   - `get_last_tick()` 不改。
-  - `close()`：ConnectorX 每次查詢自行開關連線，沒有常駐連線，覆寫成 no-op 並寫註解說明。
+  - `close()`：ConnectorX 每次查詢自行開關連線，讀取路徑沒有常駐連線；API 的 `close()` 只轉呼叫 `StockTickDAO.close()`（DAO 若沒有常駐連線即為 no-op），並寫註解說明。
   - **不採用 `pd.read_sql`**：它是逐列轉成 Python 物件，百萬列級查詢要慢上數十倍，這是換 TimescaleDB 後最容易踩到的效能陷阱。
-- **產出**：`core/api/tw/stock_tick_api.py`。
+- **產出**：`core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py`。
 - **驗證方式**：`pytest tests/test_api_public_interfaces.py -k tick` 通過；Phase5-1 的整合測試驗證三個查詢的排序與 dtype；Phase4-2 記錄查詢耗時。
 - **相依**：Phase1-1、Phase1-2。
 
@@ -390,7 +393,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `core/backtest/datafeed/tw/stock_datafeed.py`：class docstring 的「DolphinDB 的 Tick」改成「TimescaleDB 的 Tick」，`setup()` 的 docstring 同步修改。
   - `core/api/base.py` 的 `close()` docstring 中「非 SQLite 的資料源（如 DolphinDB）自行覆寫」改成 TimescaleDB。
   - `core/strategies/stock/foreign_sell_short_day_trade_strategy.py` 的註解「tick 資料在 DolphinDB」改掉。
-  - `StockQuoteAdapter.convert_to_tick_quotes()` 不用改，但要確認 `generate_stock_quotes()` 對 `time` 欄的使用可以接受 `datetime64[ns]`。
+  - `StockQuoteAdapter.from_tick_rows()`／`from_tick_row()` 不用改，但要確認 `TickQuote(time=row.time)` 可以接受 `datetime64[ns]` 經 `itertuples()` 取出的 `pd.Timestamp`。
+  - `core/api/__init__.py`、`core/api/tw/__init__.py` 的模組說明字串「不做 eager import 是因為 `stock_tick_api` 相依 DolphinDB」改成相依選用套件 `psycopg`／`connectorx`（經 `core/dao/tw/stock_tick_dao.py`）；若 DAO 改成在函式內惰性 import、這條理由已不成立，就依實際情況改寫說明，不要留下 DolphinDB 字樣。
 - **產出**：上列檔案。
 - **驗證方式**：寫一支只在測試裡用的 `Scale.TICK` 最小策略，對 Phase4-2 的 3 天樣本跑一次回測，不報錯，而且 `get_quotes()` 每天回傳的 `TickQuote` 數量等於當天的 DB 列數。
 - **相依**：Phase3-1。
@@ -486,21 +490,21 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     - `.env.example` 的 DolphinDB 區塊
     - `data/downloads/tw_stock/meta/tick/tick_metadata.json`（以及 backup）
     - `scripts/manual/manual_init_tick_metadata.py`
-    - `pyproject.toml` 裡 `stock_tick_utils.py`／`stock_tick_loader.py` 的 F401 例外
+    - `pyproject.toml` 裡 `stock_tick_utils.py`／`stock_tick_loader.py`／`scripts/manual/manual_tick_updater.py` 的 F401 例外（後者若 Phase5-2 決定保留該腳本且不再 import `dolphindb`，例外同樣移除）
   - `scripts/manual/manual_tick_updater.py`／`manual_tick_crawler.py`：逐支判斷改寫或刪除。
   - `tasks/update_db.py` 說明文字中的 `futures_tick（Shioaji → DolphinDB…）` 依下方裁示結果更新。
   - **需使用者裁示：期貨 tick 的 DolphinDB 程式怎麼處理**（`futures_tick_crawler.py`／`cleaner`／`updater`／`loader`、`DDB_PATH`、`futures-tick` extra）：
     - **選項 A（建議）**：一併刪除。期貨 tick 已裁示不做（2026-09-15），這些程式沒有落地目標；日後要做時，比照本文件另立 backlog 改寫成 TimescaleDB 的 `futures_tick` 表。`tasks/update_db.py` 的 `futures_tick` target 與 `DataType.FUTURES_TICK` 一併移除，`tests/test_futures_tick.py` 與 `test_entrypoint_and_logging.py` 的兩個相關測試跟著調整。
     - **選項 B**：原樣保留，`DDB_PATH` 與 `futures-tick` extra 繼續存在，只刪台股的部分。
-    - **裁示的依據補充（2026-09-21，[專案優化與改善清單.md](專案優化與改善清單.md) Phase3-8 的發現）**：
+    - **裁示的依據補充（2026-09-21 專案優化與改善清單的發現，該清單已完成並移出）**：
       - 期貨 tick 目前**每跑一次就重複寫入一份**：`futures_tick_updater.py` 逐日逐契約爬取、沒有已爬紀錄可續跑；DolphinDB 表設 `keepDuplicates=ALL`（`futures_tick_loader.py`）；`load_csv_files()` 每次重放整個目錄。近月契約的成交量會隨執行次數被放大，每個候選日還先耗一次 `api.usage()` 配額。
       - 在那之前 `--target all` 會帶到它；Phase3-8 已把 `futures_tick` 改為只能明確點名（與 `futures_stock_price` 同列），`all`／`no_tick` 都不再執行。
       - 因此**選項 B 不能「原樣」保留**：選 B 時至少要補「契約 × 日」的載入紀錄並讓 loader 只載本次新增的檔，否則點名執行一次就多一份重複資料。選項 A 不受影響。
-- **DolphinDB 殘留的完整盤點**（施作時直接照這份走，不必重新掃）：
-  - **程式**：`core/api/tw/stock_tick_api.py`（本規劃改寫成 TimescaleDB，不刪）；`core/pipeline/tw/crawlers/{stock,futures}_tick_crawler.py`、`cleaners/{stock,futures}_tick_cleaner.py`、`loaders/{stock,futures}_tick_loader.py`、`updaters/{stock,futures}_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`；`core/backtest/datafeed/tw/stock_datafeed.py` 的 `Scale.TICK` 分支；`tasks/update_db.py` 的 `tick`／`futures_tick` target；`scripts/manual/manual_tick_{crawler,updater}.py`、`manual_init_tick_metadata.py`。
+- **DolphinDB 殘留的完整盤點**（2026-09-25 依現行程式補齊；施作時以這份為主，收尾仍以本步驟與 Phase5-3 的 `grep` 驗證為準）：
+  - **程式**：`core/api/tw/stock_tick_api.py`（本規劃改寫成 TimescaleDB，不刪）；`core/pipeline/tw/crawlers/{stock,futures}_tick_crawler.py`、`cleaners/{stock,futures}_tick_cleaner.py`、`loaders/{stock,futures}_tick_loader.py`、`updaters/{stock,futures}_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`；`core/backtest/datafeed/tw/stock_datafeed.py` 的 `Scale.TICK` 分支；`tasks/update_db.py` 的 `tick`／`futures_tick` target；`scripts/manual/manual_tick_{crawler,updater}.py`、`manual_init_tick_metadata.py`；`core/api/__init__.py`、`core/api/tw/__init__.py` 模組說明字串提到 DolphinDB（Phase3-2 處理）；`core/pipeline/tw/cleaners/stock_tick_cleaner.py` 兩處註解以「DolphinDB 要求固定精度」解釋補齊 microsecond（cleaner 邏輯不改，只把理由改成「欄位契約固定 26 字元、PostgreSQL `TIMESTAMP` 上限為 microsecond」）。
   - **設定**：`core/config/settings.py`（`TICK_UPDATE_START_DATE`、`DDB_*`、tick 爬蟲多帳號 `API_KEYS`）、`core/config/schema.py`（`TICK_DB_*`、`require_tick_db_path()`、`TICK_TABLE_NAME`、`FUTURES_TICK_TABLE_NAME`）、`core/config/__init__.py`、`core/pipeline/utils/constant.py`、`pyproject.toml`（`tick` extra 與 per-file-ignores）、`.env.example`。
-  - **測試**：`tests/test_futures_tick.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_strategy_data_access.py`、`tests/test_api_public_interfaces.py`、`tests/test_config_consistency.py` 的 tick 相關段落。
-  - **文件**：兩份 README、`strategy_lab/README.md`、`scripts/manual/README.md`，以及 `docs/` 下 `pipeline/etl-ingestion.md`、`futures/tw-futures-platform.md`、`setup/dev-setup.md`、`exchanges/data_coverage.md`、`backtest/module-map.md`、`deployment/dev-deployment.md`、`dev/runtime-artifacts.md`、`dev/code-quality.md`、兩份 `commands/command-usage*.md`。
+  - **測試**：`tests/test_futures_tick.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_strategy_data_access.py`、`tests/test_api_public_interfaces.py`、`tests/test_config_consistency.py` 的 tick 相關段落；`tests/backtest/test_intraday_contract.py` 的註解「TICK 回測要 DolphinDB」改成要 TimescaleDB（測試邏輯不變）。
+  - **文件**：清單統一維護在 Phase5-3，這裡不重列。
   - **本機資料**（不在版控）：`data/downloads/tw_stock/tick/` 541 個 CSV 與 `tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**這 541 個 CSV 是目前唯一的本機測試素材，不刪**（本步驟只刪 `tick_metadata.json`）；它們要不要入庫見〈範圍界線〉。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core tasks scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
@@ -516,17 +520,20 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `docs/exchanges/data_coverage.md`（tick 的日期範圍改成 Phase4-3 的實際結果）
   - `docs/pipeline/etl-ingestion.md`
   - `docs/dev/runtime-artifacts.md`
-  - `docs/dev/naming-axes.md`
+  - `docs/dev/data-access-layer.md`（「tick 不在此列、仍走 DolphinDB」與 `update_db` 收尾說明兩處，改成 tick 已由 `core/dao/tw/stock_tick_dao.py` 管理）
+  - `docs/dev/naming-axes.md`（沒有 DolphinDB 字樣，但以「metadata 的鍵是台股代號」說明 `stock_tick_utils.py`，metadata 移除後要改）
+  - `docs/futures/tw-futures-platform.md`（期貨 tick 走 DolphinDB 的三處，依 Phase5-2 的期貨裁示更新或保留）
   - `docs/dev/code-quality.md`
   - `docs/backtest/module-map.md`
   - `docs/commands/command-usage.md`／`command-usage.zh-TW.md`
-  - `core/strategies/README.md`
+  - `core/backtest/README.md`（`Scale.TICK` 那列寫 DolphinDB）
+  - `core/strategies/README.md`（`StockTickAPI` 小節；目前沒有 DolphinDB 字樣，確認說明與新契約一致即可）
   - `strategy_lab/README.md`
   - `scripts/manual/README.md`
 
   新的 schema 設計理由（〈資料表設計〉的決策表）寫進 `docs/pipeline/etl-ingestion.md` 的 tick 小節；進度表與量測紀錄不搬過去。
 - **產出**：上列文件。
-- **驗證方式**：`grep -rni "dolphin" README.md README_en.md docs core/strategies/README.md strategy_lab/README.md scripts/manual/README.md` 只剩裁示保留的期貨部分；依 `docs/setup/dev-setup.md` 從零啟動 TimescaleDB 並跑通 Phase4-2 的查詢。
+- **驗證方式**：`grep -rni "dolphin" README.md README_en.md docs core/backtest/README.md core/strategies/README.md strategy_lab/README.md scripts/manual/README.md` 只剩裁示保留的期貨部分；依 `docs/setup/dev-setup.md` 從零啟動 TimescaleDB 並跑通 Phase4-2 的查詢。
 - **相依**：Phase5-2。
 
 ---
@@ -540,14 +547,14 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 | 磁碟寫滿 | 未壓縮的全量資料推估 80～160 GB | Docker Desktop 磁碟上限調到 ≥ 150 GB；匯入逐週壓縮 |
 | 時區錯位 | 用 `TIMESTAMPTZ` 時，ConnectorX 會回傳 UTC | schema 固定用 `TIMESTAMP`；整合測試驗證 `time` 為 naive 且等於 CSV 原值 |
 | 雲端 CSV 格式不一致 | 早期資料可能與現行 cleaner 輸出不同 | Phase4-1 先盤點，差異在匯入腳本轉換 |
-| 與 PostgreSQL 遷移計畫衝突 | 兩份工作都要動 compose、driver、`core/db/` | service 名稱、目錄、環境變數鍵已在本文件預先對齊（Phase0-1、Phase0-2、Phase1-1），先做的建立、後做的沿用 |
+| 與 PostgreSQL 遷移計畫衝突 | 兩份工作都要動 compose、driver、`core/dao/` 的連線入口 | service 名稱、目錄、環境變數鍵已在本文件預先對齊（Phase0-1、Phase0-2、Phase1-1），先做的建立、後做的沿用 |
 
 ---
 
 ## 關聯與狀態
 
 - **優先級**：P2（tick 級回測目前沒有資料源；無其他工作被它阻塞）
-- **相關程式**：`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`、`core/pipeline/tw/cleaners/stock_tick_cleaner.py`（不改，欄位契約的來源）、`core/api/tw/stock_tick_api.py`、`core/adapters/tw/stock_quote_adapter.py`、`core/backtest/datafeed/tw/stock_datafeed.py`、`core/config/`、`tasks/update_db.py`
+- **相關程式**：`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`、`core/pipeline/tw/cleaners/stock_tick_cleaner.py`（邏輯不改，是欄位契約的來源；只改提到 DolphinDB 的註解）、`core/dao/timescale.py`（新增）、`core/dao/tw/stock_tick_dao.py`（新增）、`scripts/check_layer_deps.py`、`core/api/tw/stock_tick_api.py`、`core/adapters/tw/stock_quote_adapter.py`、`core/backtest/datafeed/tw/stock_datafeed.py`、`core/config/`、`tasks/update_db.py`
 - **相關 backlog**：
   - 2026-09-14／09-15 使用者裁示（原記於已刪除的爬蟲缺口回補文件）：不再使用 DolphinDB、台股 tick 不回補、期貨 tick 不做；本文件是台股 tick 的新落地方式。DolphinDB 殘留中，台股部分由本文件 Phase5-2 處理，期貨 tick 的殘留依 Phase5-2 的裁示處理；完整殘留清單見 Phase5-2。
-  - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md)：共用 PostgreSQL 容器（Phase0-1）、driver（Phase0-3）、`core/db/`（Phase1-1）。兩份工作都不以對方為前置，先做的建立、後做的沿用。
+  - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md)：共用 PostgreSQL 容器（Phase0-1）、driver（Phase0-3）、`core/dao/` 連線入口（本文件 `core/dao/timescale.py` 與該計畫 Phase1-1 的 `core/dao/connection.py` 同目錄）。兩份工作都不以對方為前置，先做的建立、後做的沿用。

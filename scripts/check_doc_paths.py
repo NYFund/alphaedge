@@ -62,7 +62,6 @@ _NARRATIVE: Set[Tuple[str, str]] = {
     # `core/utils/order.py`（舊的 `OrderUtils`）已刪除；同名的
     # `core/utils/constant/order.py` 是常數拆分後的新檔，兩者無關
     ("backlog/實盤下單架構規劃.md", "core/utils/order.py"),
-    ("backlog/Shioaji升級至1.7.md", "core/utils/order.py"),
     ("backlog/PostgreSQL遷移計畫.md", "core/config.py"),
     ("backlog/index.md", "core/config.py"),
 }
