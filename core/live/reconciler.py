@@ -290,7 +290,7 @@ class Reconciler:
                 }
             )
 
-        self.dao.conn.commit()
+        self.dao.commit()
 
     def _write_event(self, message: str, result: ReconcileResult) -> None:
         """寫一筆風控事件，明細帶上兩邊的數字"""

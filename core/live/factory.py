@@ -872,7 +872,7 @@ def _record_run(
             "shioaji_version": _shioaji_version(),
         }
     )
-    dao.conn.commit()
+    dao.commit()
 
 
 def _git_commit() -> str:

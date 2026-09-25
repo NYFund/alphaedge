@@ -163,11 +163,7 @@ class AccountSynchronizer:
     def _resolve_strategy(self, report: ExecutionReport) -> Optional[str]:
         """由委託序號反查策略；查不到回 None"""
 
-        rows: List[Tuple[object, ...]] = self.dao.conn.execute(
-            "SELECT strategy_name FROM live_order WHERE broker_seqno = ? LIMIT 1",
-            (report.broker_seqno,),
-        ).fetchall()
-        return str(rows[0][0]) if rows else None
+        return self.dao.find_strategy_by_broker_seqno(report.broker_seqno)
 
     def _resolve_direction(
         self, strategy_name: str, report: ExecutionReport

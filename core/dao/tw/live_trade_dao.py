@@ -798,6 +798,27 @@ class LiveTradeDAO(BaseDAO):
         result: List[Dict[str, Any]] = self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
         return result[0] if result else None
 
+    def find_strategy_by_broker_seqno(self, broker_seqno: str) -> Optional[str]:
+        """
+        - Description:
+            以券商委託序號反查送單的策略
+
+            成交回報只帶券商序號；要記進哪一支策略的歸屬帳，得回頭查當初是誰送的。
+        - Parameters:
+            - broker_seqno: str
+                券商委託序號
+        - Return:
+            - Optional[str]
+                策略名稱；查不到時為 None
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT strategy_name FROM {LIVE_ORDER_TABLE_NAME} "
+            "WHERE broker_seqno = ? LIMIT 1",
+            (broker_seqno,),
+        ).fetchall()
+        return str(rows[0][0]) if rows else None
+
     def get_orders_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:

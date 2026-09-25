@@ -253,6 +253,26 @@ def test_lookup_by_custom_field(dao: LiveTradeDAO) -> None:
     assert dao.find_order_by_custom_field("9-9999") is None
 
 
+def test_lookup_strategy_by_broker_seqno(dao: LiveTradeDAO) -> None:
+    """
+    券商序號要反查得到送單的策略
+
+    成交回報只帶券商序號；查不到策略的成交記不進任何一支策略的歸屬帳。
+    """
+
+    dao.upsert_order(
+        make_order(
+            strategy_name="ForeignSellShortDayTradeStrategy", broker_seqno="000123"
+        )
+    )
+
+    assert (
+        dao.find_strategy_by_broker_seqno("000123")
+        == "ForeignSellShortDayTradeStrategy"
+    )
+    assert dao.find_strategy_by_broker_seqno("999999") is None
+
+
 # === 成交 ===
 def test_same_fill_written_twice_stays_one_row(dao: LiveTradeDAO) -> None:
     """

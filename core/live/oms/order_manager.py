@@ -781,7 +781,7 @@ class OrderManager:
                     "updated_at": ticket.updated_at,
                 },
             )
-            self.dao.conn.commit()
+            self.dao.commit()
             return
 
         self.dao.upsert_order(
@@ -810,7 +810,7 @@ class OrderManager:
                 "updated_at": ticket.updated_at,
             }
         )
-        self.dao.conn.commit()
+        self.dao.commit()
 
     @staticmethod
     def _enum_value(member: Any) -> Optional[str]:
@@ -841,7 +841,7 @@ class OrderManager:
                 "occurred_at": self._now(),
             }
         )
-        self.dao.conn.commit()
+        self.dao.commit()
 
     def _write_risk_event(
         self, category: str, message: str, ticket: Optional[OrderTicket]

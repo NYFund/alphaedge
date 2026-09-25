@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional, Set
 
 import pytest
 
+from core.dao.connection import connect_live_trading
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 
 """
@@ -242,12 +243,13 @@ def test_the_script_opens_the_database_read_only() -> None:
     """
     演練進行中會執行這支工具，絕不能干擾正在寫入的行程
 
-    以 `mode=ro` 開啟，寫入會直接被 SQLite 擋下。
+    經實盤紀錄庫的連線入口以唯讀開啟，寫入會直接被 SQLite 擋下。
     """
 
     source: str = SCRIPT.read_text()
 
-    assert "mode=ro" in source and "uri=True" in source
+    assert "connect_live_trading(args.db, read_only=True)" in source
+    assert "sqlite3.connect" not in source
     for forbidden in ("INSERT", "UPDATE ", "DELETE", "DROP"):
         assert forbidden not in source.upper().replace("UPSERT", ""), (
             f"腳本含有 {forbidden}，它應該是唯讀的"
@@ -260,8 +262,8 @@ def test_read_only_connection_actually_rejects_writes(
     """不只檢查字串，實際開一條唯讀連線確認寫入會被拒絕"""
 
     make_db().close()
-    read_only: sqlite3.Connection = sqlite3.connect(
-        f"file:{tmp_path / 'trading.db'}?mode=ro", uri=True
+    read_only: sqlite3.Connection = connect_live_trading(
+        tmp_path / "trading.db", read_only=True
     )
 
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
