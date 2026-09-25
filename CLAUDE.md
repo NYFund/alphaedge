@@ -6,7 +6,7 @@
 |------|----------|------------------|
 | [1. 通用原則](#1-通用原則) | 全專案 | — |
 | [2. Coding Style](#2-coding-style) | `**/*.py` | `.cursor/rules/coding-style-zh.mdc` |
-| [3. Backlog 管理](#3-backlog-管理) | `backlog/**` | — |
+| [3. Backlog 管理](#3-backlog-管理) | `backlog/**`、**回覆中提到步驟編號時** | — |
 | [4. Commit 與 Push](#4-commit-與-push) | 全專案 | `.cursor/rules/commit-message-zh.mdc`（alwaysApply） |
 | [5. 目錄專屬規則](#5-目錄專屬規則) | 各子目錄 | `.cursor/rules/strategy-lab-layout.mdc` |
 
@@ -179,6 +179,33 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 `backlog/` 存放**尚未實作**的待辦與規劃紀錄；說明文件（API 文檔、教學）放 `docs/`。所有待辦文件的清單、優先級與狀態一律只維護在 [`backlog/index.md`](backlog/index.md)。
 
 完整規範（狀態圖例、文件必要結構、狀態更新方式、`index.md` 索引維護、完成後的處理方式）放在 [`.claude/skills/manage-backlog/SKILL.md`](.claude/skills/manage-backlog/SKILL.md)。**動到 `backlog/` 內容前，一律先載入該 skill**，不要憑記憶撰寫。
+
+### 3.1 提到 backlog 步驟時一律帶上文件名
+
+**回覆中只要出現步驟編號，就必須同時寫出它屬於哪一份 `.md`。**
+
+步驟編號在各文件內獨立編號，**跨文件會大量重複**：2026-09-25 實查，`backlog/` 共有 42 個
+編號同時存在於兩份以上文件，`Phase1-1` 甚至同時存在於六份。最容易誤讀的是：
+
+| 文件 | `Phase7-1` 是什麼 |
+|------|-------------------|
+| `實盤下單架構規劃.md` | 模擬環境端到端演練（連續 5 個交易日）|
+| `重構後全專案健檢.md` | 拆 `core/live/trader.py`（2,086 行）|
+
+兩者毫無關係，一個要等交易日、一個是純重構。只講「Phase7-1」讀的人無從分辨。
+
+寫法：
+
+- ✅ `實盤下單架構規劃.md` 的 Phase7-1（模擬環境端到端演練）
+- ✅ 健檢 Phase1-3（parity 補上 `UNFILLED`／`TIMING`）——**前提是同一段已經指明過是哪一份**
+- ❌ Phase7-1 要等演練結束
+- ❌ 先做 Phase1-3
+
+**這條規則與「有沒有要編輯 backlog」無關**——回答「接下來做什麼」「這部分能不能現在做」
+這類問題時最常出現，而那些情境不會載入 `manage-backlog` skill，所以規則放在這裡而不是 skill 裡。
+
+同一條規則適用於跨文件相依的描述：寫「相依 Phase6-6」不夠，要寫
+「相依 `實盤下單架構規劃.md` Phase6-6」。
 
 ---
 
