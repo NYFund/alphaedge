@@ -40,9 +40,13 @@ class FillConfig:
     """
     成交假設設定
 
-    **刻意與 `FillModel` 放在同一個檔案**：回測假設一律與其 model 同檔
-    （對照 `CostConfig` 之於 `CostModel`），語意上則與「法規費率」
-    （`Commission`）分離——前者是可調的模擬參數，後者是外部給定的規則。
+    目前與 `FillModel` 放在同一個檔案，但**這只是還沒搬**：對照組
+    `CostConfig` 早就獨立在 `core/models/cost_config.py`，理由寫在該檔的模組說明
+    ——設定放進 `core/backtest/models/` 的話，`core/managers/` 為了拿一個 dataclass
+    就得 import 整個回測套件。本類別有同樣的問題（策略基底也 import 它）。
+
+    語意上與「法規費率」（`Commission`）分離：前者是可調的模擬參數，
+    後者是外部給定的規則。
 
     全部預設為關閉，此時不改動任何訂單的價量。
     """
