@@ -20,7 +20,8 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 
 | 項目 | 做法 | 為什麼 |
 |------|------|--------|
-| core 的 Python 相依 | 以 uv 照 `uv.lock` 安裝：先 `uv sync --frozen --no-install-project` 裝第三方套件，COPY 原始碼後再 `uv sync --frozen` 裝本專案；環境放在 `/opt/venv` | 與本機、CI 同一份 lock；只改原始碼時第一層仍吃快取；環境不放 `/app`，compose 掛載 `/app` 底下的目錄時不會蓋到它 |
+| core 的 Python 相依 | 以 uv 照 `uv.lock` 安裝：先 `uv sync --frozen --no-dev --no-install-project` 裝第三方套件，COPY 原始碼後再 `uv sync --frozen --no-dev` 裝本專案；環境放在 `/opt/venv` | 與本機、CI 同一份 lock；只改原始碼時第一層仍吃快取；環境不放 `/app`，compose 掛載 `/app` 底下的目錄時不會蓋到它。`dev` 是預設會裝的 dependency group，不加 `--no-dev` 會把 ruff 等開發工具裝進正式映像。**映像裡仍有 pytest 與 pytest-timeout**：前者是 FinMind、後者是 kaleido 宣告的執行期相依，排除不掉 |
+| 時區 `TZ=Asia/Taipei` | 寫在 `core/Dockerfile` 的 `ENV` | 實盤一律用 aware datetime，但 ETL 與部分判斷（例如期貨籌碼的「今天」）仍用 `date.today()`：UTC 容器在台北 08:00 前會差一天，log 時間戳也偏八小時 |
 | editable 安裝 | 必須是 `-e`，不可一般安裝 | `core/config/paths.py` 以 `__file__` 推算專案根目錄，一般安裝會把程式複製進 site-packages，`results/`、`logs/` 就不會落在 `/app` 底下的掛載點 |
 | core 內含 `chromium` | apt 安裝並設 `BROWSER_PATH=/usr/bin/chromium` | 回測報表存 PNG 走 plotly → kaleido 1.x，它不內建瀏覽器，缺了會在報表最後一步失敗（CSV 已寫出、圖全沒有）。`plotly_get_chrome` 下載的 Chrome for Testing 沒有 linux arm64 版本，故用 Debian 套件 |
 | frontend 相依 | 只裝 `frontend/requirements.txt` | 前端映像不安裝本專案，只 COPY `frontend/`：前端完全不 import `core`，績效指標一律讀 reporter 落地的 CSV（`tests/test_frontend_metrics.py` 盯住這件事） |

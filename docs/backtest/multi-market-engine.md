@@ -30,7 +30,7 @@ Backtester                      ← 唯一引擎，市場無關，無子類
 
 | 性質 | 內容 |
 |------|------|
-| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`execute_bar()` 執行順序、`validate_orders()` 方向白名單、`resolve_open/close_action()`、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
+| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`execute_bar()` 執行順序、委託前處理（`validate_orders()` 方向白名單、`resolve_open/close_action()`、`check_max_holdings()`、`sort_orders()`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
 | **市場規則**（介面共用、實作不同） | 成交價驗證、價格區間、開盤判定 |
 | **台股信用交易專屬** | 成本設定推導、隨單欄位補值、當沖強制回補、轉融券留倉、持有成本計提、維持率追繳 |
 
@@ -68,15 +68,23 @@ class Backtester:
         data_feed: BaseDataFeed,
         reporter_cls: Type[BaseBacktestReporter],
         event_counts: Optional[Dict[str, int]] = None,
-    ):
+        adjusted_price: bool = False,
+        write_artifacts: bool = True,
+    ) -> None:
 ```
 
 `account`、`position_manager` 與 `reporter_cls` 也在注入之列——不一併注入就達不到「引擎不認識任何市場」。`reporter_cls` 傳的是**類別而非實例**，避免與 `strategy_result_dir` 的建立順序打結。
+
+`adjusted_price`（訊號是否用還原價）在引擎層預設 `False`、在 `build_backtester()` 預設 `True`：引擎不預設任何政策，用哪種價格由 factory 這個政策層決定。`write_artifacts=False` 讓實盤 parity 比對跑引擎而不寫報表與 log。
 
 ### 2.2 單根 bar 的流程
 
 ```python
 def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
+    # 下單前先由 DataFeed 推入當日的市場事件：
+    # 漲跌停基準、券源餘額 → FillModel；停券、現金股利、配股 → SettlementModel
+    ...
+
     if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
         self.execute_open_signal(quotes)
         self.execute_close_signal(quotes)
@@ -100,7 +108,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 |------|----------|------|
 | 開倉階段 vs 平倉階段 | `BarExecutionOrder`（策略宣告或引擎推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
 | 平倉階段內部 | 引擎寫死 | 停損 → 一般平倉；停損執行完會重掃剩餘部位 |
-| 同一階段內的多筆委託 | `Backtester.sort_orders()` | 依 `(date, symbol)` **穩定**排序 |
+| 同一階段內的多筆委託 | `sort_orders()`（`core/execution/order_preprocess.py`，引擎經 `Backtester.sort_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
 
 **為什麼第三層要由引擎自己排**：`check_max_holdings()` 的截斷與 `PositionManager` 的餘額不足檢查，都會讓「先處理誰」直接改變成交結果。而委託的到達順序完全繼承自報價順序，報價又來自 `SELECT * FROM price WHERE date = ?`——這句沒有 `ORDER BY`，實際列順序取決於 SQLite 選到哪個索引。多加一個索引就可能翻掉，且翻掉時不會報錯，只會讓回測結果無聲改變。
 
@@ -112,7 +120,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 ### 2.3 方向與商品類別是兩條獨立的軸
 
-**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），一律留在引擎內。
+**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/execution/order_preprocess.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以同名方法薄包裝呼叫。
 
 [放空回測框架規格](short-selling-framework.md) §1 原則 2「方向來自訂單，策略只做白名單」是本架構的**基礎**。
 
@@ -123,13 +131,16 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | 引擎 | `core/backtest/backtester.py` | 唯一引擎，不含任何 `Stock*` |
 | 組裝 | `core/backtest/factory.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_cost_config()` |
 | 行為 model | `core/backtest/models/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
-| | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／期貨實作 |
-| | `core/backtest/models/cost_model.py` | `BaseCostModel` ＋ `CostConfig`／`ShortConstraint`／`StockCostModel`／期貨實作 |
-| | `core/backtest/models/settlement_model/` | `BaseSettlementModel` ＋ `TwStockSettlementModel`／`TwFuturesSettlementModel` |
-| 資料源 | `core/datafeed/base.py`（契約）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py`／`tw/market_calendar.py`／`tw/futures_calendar.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
+| | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／`TwFuturesFillModel` |
+| | `core/backtest/models/cost_model.py` | `BaseCostModel` ＋ `CostConfig`／`ShortConstraint`／`StockCostModel`／`TwFuturesCostModel` |
+| | `core/backtest/models/settlement_model/` | 套件：`base.py`（`BaseSettlementModel`）＋ `tw_stock.py`（`TwStockSettlementModel`）／`tw_futures.py`（`TwFuturesSettlementModel`），由 `__init__.py` re-export |
+| 資料源 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
+| 市場結構 | `core/market/tw/market_calendar.py`／`futures_calendar.py`／`futures_roll.py`／`futures_margin_config.py` | 交易日曆、期貨結算日、換月規則、保證金設定；ETL、回測、實盤、策略共用，不屬於回測套件 |
+| 委託前處理 | `core/execution/order_preprocess.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序；回測與實盤共用 |
 | 資料模型 | `core/models/base/` | `BaseQuote`／`BaseOrder`／`BasePosition`／`BaseTradeRecord`／`BaseAccount`，識別欄位一律 `symbol` |
 | 策略 | `core/strategies/base.py` | `BaseStrategy`，`market` ＋ `instrument_type` 兩欄位為 factory 的分派鍵 |
 | 部位 | `core/managers/base/position_manager.py` | FIFO 拆單主幹 ＋ `settle_daily()` 掛點 |
+| 部位大小 | `core/portfolio/sizing.py` | `BasePositionSizer` ＋ `EqualWeightSizer`（以張 `Units.LOT` 換算）；回測與實盤共用 |
 
 ### 報價轉換：為什麼有兩個轉換器
 
@@ -200,14 +211,31 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 ## 四、新增一個（市場, 商品）組合要做什麼
 
+**商品類別側**（新商品才需要；目錄承載商品軸）：
+
 1. `core/models/<instrument>/`：繼承 `core/models/base/` 的五個 model（識別欄位用 `symbol`）。
 2. `core/strategies/<instrument>/base.py`：繼承 `BaseStrategy`，設定 `self.market` 與 `self.instrument_type`。
-3. `core/backtest/models/`：實作該組合的 `InstrumentSpec`／`FillModel`／`CostModel`／`SettlementModel`（命名帶市場前綴，如 `TwStockSpec`）。
-4. `core/backtest/datafeed/<market>/`：實作該組合的 `DataFeed`。
-5. `core/managers/<instrument>/position_manager.py`：繼承 `BasePositionManager`，實作 `close_single_position()` 與 `settle_daily()`。
-6. `core/backtest/factory.py`：加一個 `elif (strategy.market, strategy.instrument_type) == (...)` 分支。
+3. `core/managers/<instrument>/position_manager.py`：繼承 `BasePositionManager`，實作 `close_single_position()` 與 `settle_daily()`。
 
-**既有檔案的改動量：`factory.py` 一個分支。** `backtester.py`、`StrategyLoader`、`run.py` 皆為 0 行——`StrategyLoader` 會自動掃描 `core/strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
+**市場側**（新市場才需要；目錄承載市場軸，子目錄名 `<market>` 如 `tw`／`us`）：
+
+4. `core/dao/<market>/`：資料表的 DAO。**SQL 只能寫在 DAO**，規則見[資料存取層](../dev/data-access-layer.md)。
+5. `core/api/<market>/`：策略與資料源取數用的資料 API（SQLite 資料經 DAO 查詢）。
+6. `core/adapters/<market>/`：raw 資料 → `Quote` 的轉換器（不做 I/O，見上方〈報價轉換〉）。
+7. `core/market/<market>/`：交易日曆、結算日、換月規則等市場結構。與 `core.api` 同屬第 3 層，ETL、回測、實盤、策略共用同一份。
+8. `core/backtest/datafeed/<market>/`：實作該組合的 `DataFeed`（繼承 `core/datafeed/base.py` 的 `BaseDataFeed`）。
+
+**回測組裝**：
+
+9. `core/backtest/models/`：實作該組合的 `InstrumentSpec`／`FillModel`／`CostModel`（命名帶市場前綴，如 `TwStockSpec`）；`SettlementModel` 在 `settlement_model/` 套件內新增 `<market>_<instrument>.py`（如 `us_stock.py`），並在其 `__init__.py` 登記 re-export。
+10. `core/backtest/factory.py`：`build_backtester()` 加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支，並新增對應的 `build_<market>_<instrument>_backtester()`。
+
+**既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`run.py` 皆為 0 行——`StrategyLoader` 會自動掃描 `core/strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
+
+新增市場時還要注意兩處**會跑得動但數字錯**的地方：
+
+- **部位大小**：`core/portfolio/sizing.py` 的 `EqualWeightSizer` 以張（`Units.LOT` ＝ 1000 股）換算下單量，股票策略基底預設用它。交易單位不是「張」的市場（如美股以股計）必須另寫 sizer，否則換算出的下單量單位是錯的，且不會報錯。
+- **市場軸目錄的權威清單**是 `scripts/check_layer_deps.py` 的 `_MARKET_AXIS_PACKAGES`：`core/api`、`core/broker`、`core/live/datafeed`、`core/adapters`、`core/dao`、`core/backtest/datafeed`、`core/market`、`core/pipeline`。只做回測時動的是上面第 4~8 步；上實盤還要補 `core/broker/<market>/`（券商閘道）與 `core/live/datafeed/<market>/`（實盤資料源），ETL 則在 `core/pipeline/<market>/`。新開的市場軸套件要登記進該清單，跨軸混放才會被擋。
 
 > **注意**：`core/backtest/__init__.py` 與 `core/strategies/__init__.py` 刻意**不做套件層 eager import**。任何在此 re-export 的模組都會讓「引擎的相依項無法反向 import 引擎底下的模組」，形成循環 import。呼叫端一律使用完整模組路徑。
 
@@ -219,7 +247,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 |------|------|----------|
 | **per-instrument 粒度的 model 掛載** | 無法在同一次回測同時持有台股與台指期（跨市場組合／避險） | 業界（Lean 掛在 `Security`、Nautilus 掛在 `Instrument`）確實是這個粒度，本專案採 per-run 簡化。升級路徑乾淨：把 model 從 `Backtester` 移到 `InstrumentSpec` 物件上，引擎迴圈不動 |
 | 事件驅動 order queue（T+1 延遲成交、限價單未成交、部分成交） | 追繳仍只能以觸發當日收盤價回補 | 本質是引擎典範轉移，見 [§5.1](#51-事件驅動迴圈長期方向) |
-| `core/utils/instrument.py` 未移出 | `core/utils/` 仍留一個領域模組 | `StockUtils` 有 `core/backtest/` 以外的使用者（pipeline、adapters、`strategy_lab`）。移進 `core/backtest/` 會讓資料管線反過來相依於回測引擎，是更嚴重的層級問題；其各函式的歸屬需先拆解 |
+| `core/utils/instrument.py` 未移出 | `core/utils/` 仍留一個領域模組 | `StockUtils` 有 `core/backtest/` 以外的使用者（pipeline、api、adapters、broker、managers、`strategy_lab`）。移進 `core/backtest/` 會讓資料管線反過來相依於回測引擎，是更嚴重的層級問題；其各函式的歸屬需先拆解 |
 | 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「前收 ±幅度後往內對齊檔位」推算，與交易所公告值多數差一檔，影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 公告值可經 `DataFeed.get_price_limit_basis()` 同一掛點推入（該掛點已存在且已被引擎呼叫）、公式版退為 fallback；待辦見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S6 |
 
 ### 5.1 事件驅動迴圈（長期方向）
@@ -257,7 +285,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 | 回歸線 | 內容 | 需求 |
 |---|---|---|
 | SHORT | 12 組腳本情境、3 份快照（交易紀錄／期末未平倉部位／帳戶與事件計數） | 純記憶體，不連 DB（CI 有跑） |
-| LONG | `MomentumStrategy1` 2024-01~06 的交易紀錄逐筆比對 | 需 `data/db/tw_stock.db`（僅本機） |
+| LONG | `MomentumStrategy1` 2024 全年的交易紀錄逐筆比對 | 需 `data/db/tw_stock.db`（僅本機） |
 
 SHORT 的 12 組情境刻意各只動一個變因，任一情境快照有變即可直接指向出問題的掛點：當沖同日回補（稅率減半）、融券留倉 10 天、FIFO 部分回補的等比例攤提、維持率斷頭、當沖鎖漲停轉留倉、當沖遇停券回補日（釘住結算順序）、SBL 與 MARGIN 借券費對照、除權息停券日的 MARGIN／SBL 對照、跨除息日的股利補償（含部分回補攤提）。
 

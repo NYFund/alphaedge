@@ -11,7 +11,7 @@
 |------|------|------|
 | 套件定義 | `pyproject.toml` `[project]` | 唯一的相依宣告；`uv sync` 以 editable 安裝後任意目錄可 `import core` |
 | Lint／格式 | `pyproject.toml` `[tool.ruff]` | 執行 `CLAUDE.md` §2.5（import 排序）、§2.10（行寬 88、雙引號） |
-| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"` |
+| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"`；另一個平行的 `docker` job 建置 core 與 frontend 映像並各跑一次冒煙 |
 | 本機防線 | `.pre-commit-config.yaml` | commit 前先跑一次同一組檢查（需自行 `pre-commit install`） |
 
 `uv.lock` 由 `uv lock` 從 `pyproject.toml` 解析產生，鎖定整棵相依樹；本機、CI（`--locked`）與 Docker build（`--frozen`）都從同一份安裝。
@@ -151,6 +151,9 @@ CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `cor
 | `no-doc-step-refs`（pygrep） | pre-commit | 註解不得引用 backlog 步驟編號、健檢編號或 `backlog/` 路徑（`CLAUDE.md` §2.1 第 4 點）|
 | SHORT 回歸線 | CI ＋ 本機 | 純記憶體、不需要資料庫 |
 | **LONG 回歸線與 `slow` 測試** | **只在本機** | 需要 `data/db/tw_stock.db`、`tw_futures.db` 或外部 API |
+| 映像建置與冒煙（`docker` job） | **只在 CI** | core 映像跑一次預設的 `run.py --help`；frontend 映像在工作目錄 `/` 下 import `frontend.config` 與 `app.py` 的相依（在 `/app` 底下跑的話，拿掉 `PYTHONPATH=/app` 也照樣 import 得到，就驗不到 Streamlit 實際執行時的條件）|
+| 前端冒煙測試（`tests/test_frontend_app_smoke.py`） | CI ＋ 本機 | 以 Streamlit `AppTest` 把 `frontend/app.py` 真的跑一遍；沒裝 `--extra frontend` 時略過並在 `-rs` 列出，CI 一定會裝 |
+| 測試產物隔離與絆線（專案根目錄 `conftest.py`） | 每一次 pytest | 見下方 |
 
 **skip 不算通過**：`scripts/run_regression.sh` 以 `-rs` 執行並偵測 `SKIPPED`，有即以**結束碼 3**
 結束並印出是哪一條、為什麼。否則「沒有資料庫」與「回歸真的通過」在輸出上會長得一模一樣。
@@ -162,6 +165,21 @@ CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `cor
 rsync -a --exclude='.venv' --exclude='.git' --exclude='data/db' --exclude='.env' ./ /tmp/cisim/
 cd /tmp/cisim && env -u API_KEY -u API_SECRET_KEY python -m pytest tests -q -m "not slow"
 ```
+
+### 測試不得寫進正式產物
+
+專案根目錄的 `conftest.py` 在任何 `core` 模組 import 之前，把 `results/`、`logs/` 與 kill switch
+導到本次 session 的暫存目錄，並把實盤紀錄庫（`LiveTradeDAO.DEFAULT_DB_PATH`）換成暫存路徑；
+資料根不導走，因為 `slow` 測試要讀真的 `tw_stock.db`。session 開始與結束各記一次正式
+`tw_trading.db`（含 `-wal`）與 `results/` 的檔案狀態，有差異就讓 pytest 以失敗結束並列出檔案。
+
+- **為什麼要這麼嚴**：實盤啟動時會讀回上一次的交易模式，測試留在正式紀錄庫的 `REDUCE_ONLY`
+  會讓下一次真正的實盤直接降級或拒絕啟動。
+- **為什麼放根目錄、不做成 `-p tests.xxx` plugin**：`core/config/paths.py` 在 import 時就把環境變數
+  算成路徑常數，fixture 執行時已經來不及；而 kaleido 1.2.0 把自己的 `tests/` 裝成 site-packages
+  的頂層套件，以 `tests.` 開頭的模組名載入 plugin 會載到它的。升級 kaleido 前不要用這種寫法。
+- 要驗「未設定環境變數時的預設路徑」的測試，用 `pristine_config_paths` fixture 重新載入一份
+  獨立的 `core/config/paths.py`，不要直接讀已被導走的常數。
 
 ---
 

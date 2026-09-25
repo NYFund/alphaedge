@@ -197,6 +197,8 @@ class ShioajiExecutionHandler:
             op_code=self._as_text(operation.get("op_code")),
             op_msg=self._as_text(operation.get("op_msg")),
             symbol=self._as_text(contract.get("code")),
+            # 期貨的委託回報沒有 `custom_field` 這個 key（shioaji 1.7.5 模擬環境實測，
+            # 股票有），這裡會是空字串；OMS 先以 seqno 比對，不依賴它
             custom_field=self._as_text(order.get("custom_field")),
             exchange_ts=self._parse_timestamp(status.get("exchange_ts")),
             raw=dict(msg),

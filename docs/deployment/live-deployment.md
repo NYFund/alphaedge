@@ -85,7 +85,33 @@ CRON_TZ=Asia/Taipei
 - macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組排程，安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`），存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
-## 5) 停止與退出碼
+## 5) 對帳不一致後以券商部位重建歸屬帳
+
+券商強制平倉、人工在券商端平倉或回報漏接之後，本地歸屬帳（`live_position_lot`）會與券商對不上。
+人工確認要以券商為準時，走 `--resync-from-broker`，**分兩次執行、都不要放進排程**：
+
+```bash
+# 1. 只列計畫、不寫入（退出碼 7）
+uv run python run.py --mode live --strategy <策略> --resync-from-broker
+# 2. 看過計畫後才寫入
+uv run python run.py --mode live --strategy <策略> --resync-from-broker --confirm-resync
+# 3. 確認重建結果無誤後，另外解除降級
+uv run python run.py --mode live --strategy <策略> --resume-trading
+```
+
+- **規則**：逐標的、逐方向比對。券商多出來的量收進 `__unattributed__`（只允許平倉）；券商比本地少時，
+  依 FIFO 扣減該標的唯一持有者的 lot；方向相反時本地方向扣到 0、券商方向整筆收進 `__unattributed__`。
+  **同一標的出現兩個持有者就整份拒絕**（退出碼 4），要人工處理——不按比例分配，因為同一標的
+  只允許一支策略持有，猜一個分法會讓各策略的已實現損益都錯、合計卻對，對帳看不出來。
+- 每一筆異動寫一筆 `RESYNC_FROM_BROKER` 風控事件：部位在系統外消失時損益本地算不出來，
+  要以券商對帳單補登。寫入在同一個 savepoint 內，中途失敗整批回滾；寫入後再重建一次並對帳。
+- **它是獨立作業**：不跑段落、不可與 `--phase` 併用；**也不恢復交易模式**，不可與 `--resume-trading`
+  併用——降級要人看過重建結果後另外解除。今天還有未終結的委託時拒絕（券商部位還在變，計畫下一秒就不對）。
+- **已知限制**：每個段落啟動時的「從券商重建」會把券商多出的量收進 `__unattributed__`，
+  即使該標的已有策略持有。這會自己造出「同一標的兩個持有者」，之後這一檔的重建就一律被拒絕、
+  只能人工改 `live_position_lot`。
+
+## 6) 停止與退出碼
 
 - **SIGTERM**（`docker stop`、排程逾時、`kill`）：先撤未成交單、續收回報、把結束原因寫進 `live_run`，再以退出碼 **143** 結束。收尾期間再收到的 SIGTERM 會被忽略；要強制結束用 SIGKILL。
 - 退出碼（排程可據此決定要不要告警）：
@@ -102,7 +128,7 @@ CRON_TZ=Asia/Taipei
 | 7 | `--resync-from-broker` 只列出計畫、沒有寫入 |
 | 143 | 收到 SIGTERM，已撤單並寫入結束紀錄 |
 
-## 6) 已知限制
+## 7) 已知限制
 
 - **期貨換月比回測早一天**：回測可以撐過最後交易日、隔天以結算價平掉舊月；實盤在最後交易日的尾盤段舊月已收盤，故一律在最後交易日的前一個交易日換月。
 - **官方開休市日曆只涵蓋已入庫的年度**：換月判定的未來交易日取平日扣掉官方休市日；落在未入庫年度（例如 12 月公告前的明年）的國定假日排除不了，距到期日之間夾著假日時可能晚一天換月。颱風等臨時停市不在公告表上。
