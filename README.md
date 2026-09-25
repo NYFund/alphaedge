@@ -425,7 +425,6 @@ AlphaEdge/
 │   ├── strategies/            # 策略實作
 │   │   ├── base.py            # BaseStrategy（市場無關）
 │   │   ├── strategy_loader.py # 自動掃描所有商品類別子套件（stock／futures）
-│   │   ├── ridge.py           # 研究版與成品版共用的 ridge 訊號（刻意為模組，不是子套件）
 │   │   ├── stock/             # BaseStockStrategy ＋ 各支台股策略
 │   │   └── futures/           # BaseFuturesStrategy 與台期貨策略
 │   ├── api/                   # 資料查詢介面與業務規則（不寫 SQL，以 conn= 建 DAO）

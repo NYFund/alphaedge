@@ -53,7 +53,7 @@
 | **角色**      | 正式上線、可被 `run.py` 載入的策略    | R&D、實驗、靈感、半成品、筆記             |
 | **結構**     | 強型別，繼承 `BaseStockStrategy`      | 自由發揮，可用 `.py` 或 `.ipynb`          |
 | **回測引擎** | `core/backtest/backtester.py`         | 自寫 vectorized backtest 或借用 core API |
-| **產出**     | 標準回測報表（`balance_curve.png` …） | 圖表、CSV、Word 報告、markdown 筆記       |
+| **產出**     | 標準回測報表（`<策略>_balance_curve.png` …） | 圖表、CSV、Word 報告、markdown 筆記       |
 | **觸發**     | `run.py --strategy <Name>`            | 直接 `python <script>.py` 或 notebook    |
 
 **重要原則：** 研究階段請優先 **複用 `core/api/` 與 `core/utils/`**，
@@ -149,7 +149,7 @@ df_2330 = price.get_stock_price(
 )
 ```
 
-回傳欄位（典型）：`date, stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交量, ...`
+回傳欄位（典型）：`date, stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交股數, ...`（**是 `成交股數` 不是 `成交量`**——後者只存在於期貨表，單位是口。要張數請用 `StockPriceAPI.get_volume_lots_map()`）
 
 ### StockTickAPI — 逐筆成交資料 (DolphinDB)
 
@@ -486,7 +486,9 @@ print(realistic_pnl(600.0, 620.0, 5))
    .venv/bin/python run.py --strategy <YourStrategyName>
    ```
 4. 結果會落到 `results/<strategy_name>/`（資料夾名稱取自策略的 `self.strategy_name`，不是類別名稱），
-   會自動產出 `balance_curve.png / balance_mdd.png / trading_report.csv` 等標準報表。
+   會自動產出 `<策略>_balance_curve.png / <策略>_mdd.png / <策略>_trading_report.csv /
+   <策略>_metrics_summary.csv` 等標準報表（**檔名一律帶策略名前綴**，共 5 份 CSV ＋ 5 張圖；
+   完整清單見 [回測引擎說明](../core/backtest/README.md#回測結果)）。
 
 > 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`core/strategies/README.md`](../core/strategies/README.md)。
 > 現成的範例是 `core/strategies/stock/` 底下的策略檔。

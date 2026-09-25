@@ -118,5 +118,7 @@ strategies/<your_topic>/
 .venv/bin/python run.py --strategy <YourStrategyName>
 ```
 
-結果會落到 `results/<YourStrategyName>/`，
-含 `balance_curve.png`、`balance_mdd.png`、`trading_report.csv` 等標準報表。
+結果會落到 `results/<策略>/`——**資料夾名稱取自 `self.strategy_name`，不是類別名稱**，
+含 `<策略>_balance_curve.png`、`<策略>_mdd.png`、`<策略>_trading_report.csv`
+等標準報表（**檔名一律帶策略名前綴**；完整清單見
+[回測引擎說明](../../core/backtest/README.md#回測結果)）。
