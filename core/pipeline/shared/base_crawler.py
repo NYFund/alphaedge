@@ -119,6 +119,14 @@ class BaseDataCrawler(ABC):
     # TAIFEX／TPEX 被擋時回的是一整頁 HTML，長度上就與訊息頁不同。
     NO_DATA_TEXT_MAX_LENGTH: int = 4096
 
+    # `pd.read_html()` 解析失敗的兩種形態，**判準只留這一份**：
+    # 頁面上沒有表格拋 `ValueError`；body 全空或只有空白則是 lxml 的
+    # `XMLSyntaxError`，它繼承 `SyntaxError` 而**不繼承 `ValueError`**。
+    # 分開各寫一份必然漂移——漏掉後者時，「HTTP 200 但沒有內容」會炸穿整批，
+    # 而那是站方異常、屬於該記為失敗後重試的那一類。
+    # 缺解析後端（`ImportError`）刻意不收：重試永遠不會讓套件自己長回來
+    HTML_PARSE_ERRORS: tuple = (ValueError, SyntaxError)
+
     def __init__(self) -> None:
         """建立 crawler；連線與參數一律由子類的 `setup()` 負責"""
         pass
@@ -226,9 +234,9 @@ class BaseDataCrawler(ABC):
             df: pd.DataFrame = pd.read_html(StringIO(result.text), **read_html_kwargs)[
                 index
             ]
-        except (ValueError, IndexError) as error:
-            # `read_html()` 找不到表格時拋 `ValueError`，表格數量少於預期時
-            # 取索引拋 `IndexError`——兩者都是「版面變了」。
+        except (*cls.HTML_PARSE_ERRORS, IndexError) as error:
+            # 解析失敗（見 `HTML_PARSE_ERRORS`）之外多收一個 `IndexError`：
+            # 表格數量少於預期時取索引會拋它，同樣是「版面變了」。
             # 其餘例外（例如參數給錯）代表呼叫端寫錯，要讓它現形
             logger.warning(
                 f"{label}: 版面解析失敗（{type(error).__name__}: {error}）；"

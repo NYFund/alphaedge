@@ -107,9 +107,13 @@ def test_layout_change_is_reported_not_raised() -> None:
     """
     版面變了要回失敗結果，不可拋出
 
-    兩種形態：頁面上沒有任何表格（`read_html` 拋 `ValueError`）、
-    表格數量少於預期（取索引拋 `IndexError`）。**兩者都要接住**——
-    只收 `ValueError` 的話，少一張表的那天會整批中止。
+    三種形態：頁面上沒有任何表格（`read_html` 拋 `ValueError`）、
+    表格數量少於預期（取索引拋 `IndexError`）、body 全空或只有空白
+    （lxml 拋 `XMLSyntaxError`，繼承的是 `SyntaxError`）。**三者都要接住**——
+    少一張表的那天、或站方回 HTTP 200 卻沒有內容的那天，都會整批中止。
+
+    這條守的是共用入口，四支日更 crawler（股價、融資券、籌碼、除權息）
+    共七個呼叫點全部經過它。
     """
 
     no_table: CrawlResult = BaseDataCrawler.parse_html_table(
@@ -123,6 +127,12 @@ def test_layout_change_is_reported_not_raised() -> None:
         index=5,
     )
     assert missing_index.status is CrawlStatus.FAILED
+
+    for body in ("", "  \n "):
+        empty: CrawlResult = BaseDataCrawler.parse_html_table(
+            make_fetch_result(body), "測試"
+        )
+        assert empty.status is CrawlStatus.FAILED, f"{body!r} 應記為失敗而非拋出"
 
 
 def test_csv_read_failures_do_not_stop_the_batch(tmp_path: pathlib.Path) -> None:
