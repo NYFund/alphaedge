@@ -29,7 +29,7 @@ graph TB
     end
 
     subgraph backtest_layer ["Backtest Engine (market-agnostic)"]
-        BTFactory["core/backtest/factory.py<br/>(only 'if market ==' in repo)"]
+        BTFactory["core/backtest/factory.py<br/>(only 'if market ==' on the backtest path; live: core/live/factory.py)"]
         Backtester["core/backtest/backtester.py"]
         BTModels["core/backtest/models<br/>InstrumentSpec／FillModel<br/>CostModel／SettlementModel"]
         BTFeed["core/backtest/datafeed"]
