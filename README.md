@@ -366,7 +366,8 @@ cp .env.example .env
 uv sync               # 相依 + 專案本身 + 開發工具
 ```
 
-其他選用相依：`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、`lab` `strategy_lab` 報告輸出；
+其他選用相依：`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、
+`lab` `strategy_lab` 的報告輸出與美股／匯率資料（`python-docx`、`yfinance`）；
 回測與 ETL 主流程不需要它們。
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**：沒列在指令上的 extra 會被移除（開發工具不受影響）。
@@ -393,7 +394,7 @@ pre-commit run --all-files
 **CI**：每次 push 時 GitHub Actions 會依序跑 `ruff check`、`ruff format --check`、
 分層相依檢查（`scripts/check_layer_deps.py`）、文件路徑檢查（`scripts/check_doc_paths.py`）、
 `pre-commit run --all-files` 的其餘檢查、API 死介面檢查（`scripts/check_api_orphan_methods.py`）、
-SHORT 回歸線、`pytest -m "not slow"`、覆蓋率報告（`continue-on-error`）；
+SHORT 回歸線、`pytest -m "not slow"`（覆蓋率報告併在同一次跑，不另跑一遍整套）；
 **另有一個平行的 job** 建置 `core` 與 `frontend` 兩個 Docker 映像並各跑一次冒煙
 ——它沒有宣告 `needs:`，所以與上面那串同時開始，不是最後才跑
 （見 `.github/workflows/ci.yml`）。**LONG 回歸線需要 `data/db/tw_stock.db`，

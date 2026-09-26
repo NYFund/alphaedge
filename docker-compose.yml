@@ -67,8 +67,16 @@ services:
       ALPHAEDGE_RESULTS_DIR: /results
     volumes:
       - alphaedge_results:/results
-    depends_on:
-      - core
+    # **刻意沒有 `depends_on: [core]`**：`core` 是跑完就結束的一次性批次容器，
+    # 而本服務是常駐 Web，只讀 volume 裡 reporter 落地的 CSV，兩者沒有執行期相依。
+    # 加了的實際效果是 `docker compose up frontend` 順手跑一整場回測。
+    # 先跑 `docker compose up core` 產生結果，再開前端
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   alphaedge_results:

@@ -150,7 +150,6 @@ dependencies = [
     { name = "requests" },
     { name = "shioaji" },
     { name = "tqdm" },
-    { name = "yfinance" },
 ]
 
 [package.optional-dependencies]
@@ -159,6 +158,7 @@ frontend = [
 ]
 lab = [
     { name = "python-docx" },
+    { name = "yfinance" },
 ]
 tick = [
     { name = "dolphindb" },
@@ -190,7 +190,7 @@ requires-dist = [
     { name = "shioaji", specifier = ">=1.7" },
     { name = "streamlit", marker = "extra == 'frontend'", specifier = ">=1.49" },
     { name = "tqdm", specifier = ">=4.67" },
-    { name = "yfinance", specifier = ">=1.3" },
+    { name = "yfinance", marker = "extra == 'lab'", specifier = ">=1.3" },
 ]
 provides-extras = ["frontend", "tick", "lab"]
 

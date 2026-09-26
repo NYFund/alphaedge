@@ -37,7 +37,6 @@ dependencies = [
     # `contracts_timeout`、`stream_data_type` 只剩相容層。`core/broker/tw/` 依 1.7 寫成，
     # 裝到 1.5 以下會在登入與行情重放時失敗，下限不可放寬
     "shioaji>=1.7",
-    "yfinance>=1.3",
 ]
 
 # 開發工具放 dependency group 而不是 extra：`uv sync` 預設就會裝 `dev` 這一組，
@@ -60,7 +59,13 @@ dev = [
 # 硬列進去只會讓每個環境（含 Docker 映像）都變重。需要時以 `uv sync --extra <名稱>` 加裝
 frontend = ["streamlit>=1.49"]  # frontend/ 的 Streamlit 介面（1.49 起才有 width="stretch"）
 tick = ["dolphindb>=3.0"]  # Tick 級資料的 DolphinDB 儲存（loader 內為惰性 import）
-lab = ["python-docx>=1.2"]  # strategy_lab/ 的報告輸出
+lab = [
+    "python-docx>=1.2",  # strategy_lab/ 的報告輸出
+    # 美股與匯率日線，**只有 `strategy_lab/strategies/tsmc_overnight_signal/` 用到**。
+    # 原本列在主 dependencies，與 `python-docx` 同一處境卻兩種待遇；
+    # 它連網抓資料，進 Docker 映像只是讓映像變大並多一個對外連線的套件
+    "yfinance>=1.3",
+]
 
 [tool.setuptools.packages.find]
 # `core.managers` 等目錄沒有 __init__.py，靠 PEP 420 namespace package 運作，

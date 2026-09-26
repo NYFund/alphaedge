@@ -22,12 +22,15 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 """
 
 
-def live_block() -> List[str]:
+def service_block(name: str) -> List[str]:
     """
-    取出 `live:` service 的內容行
+    取出某個 service 的內容行
 
     **以縮排層級定位，不比對 `"  live:"` 的字面值**——縮排改一格就 `ValueError`
     的寫法，本身就是這檔要修掉的那種脆弱。
+
+    **區塊一定要收在下一個同層鍵之前**：讀到檔尾的寫法只在該 service 剛好排最後
+    時才正確，而那是排列順序的巧合，不是保證。
     """
 
     lines: List[str] = (
@@ -37,13 +40,13 @@ def live_block() -> List[str]:
     start: int = -1
     indent: int = 0
     for index, line in enumerate(lines):
-        matched: re.Match = re.match(r"^(\s+)live:\s*$", line)
+        matched: re.Match = re.match(rf"^(\s+){re.escape(name)}:\s*$", line)
         if matched:
             start = index
             indent = len(matched.group(1))
             break
 
-    assert start >= 0, "`docker-compose.yml` 找不到 `live` service"
+    assert start >= 0, f"`docker-compose.yml` 找不到 `{name}` service"
 
     end: int = len(lines)
     for index in range(start + 1, len(lines)):
@@ -56,6 +59,12 @@ def live_block() -> List[str]:
             break
 
     return lines[start + 1 : end]
+
+
+def live_block() -> List[str]:
+    """取出 `live:` service 的內容行"""
+
+    return service_block("live")
 
 
 def normalized(line: str) -> str:
@@ -166,4 +175,25 @@ def test_core_service_mounts_data_read_only() -> None:
     assert core_mounts, "找不到任何 `/app/data` 掛載"
     assert any(line.endswith("/app/data:ro") for line in core_mounts), (
         f"沒有任何 `/app/data` 是唯讀掛載：{core_mounts}"
+    )
+
+
+def test_frontend_does_not_depend_on_the_batch_container() -> None:
+    """
+    `frontend` 不可宣告 `depends_on: core`
+
+    `core` 是跑完就結束的一次性批次容器，`frontend` 是常駐 Web，只讀 volume 裡
+    已落地的 CSV——兩者沒有執行期相依。宣告了的實際效果是
+    `docker compose up frontend` 順手跑一整場回測，而那不會有任何錯誤訊息。
+    """
+
+    block: List[str] = [
+        normalized(line)
+        for line in service_block("frontend")
+        if not line.strip().startswith("#")
+    ]
+
+    assert block, "`docker-compose.yml` 的 `frontend` 區塊是空的"
+    assert not any(line.startswith("depends_on") for line in block), (
+        "`frontend` 宣告了 `depends_on`——`docker compose up frontend` 會順手跑回測"
     )
