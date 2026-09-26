@@ -46,6 +46,8 @@ core.config (0) ← core.utils (1) ← core.dao (2) ← core.api / core.pipeline
 | `FuturesMarginDAO` | `futures_margin_history` ＋ `stock_futures_margin_rate_history` | `tw_futures.db` |
 | `FuturesChipDAO(table_name)` | 期貨籌碼三表（表名白名單） | `tw_futures.db` |
 | `FuturesContinuousDAO` | `futures_continuous`（衍生表） | `tw_futures.db` |
+| `MarketHolidayDAO` | `market_holiday` | `tw_stock.db` |
+| `LiveTradeDAO` | 實盤紀錄各表（`live_run`／`live_order`／`live_fill`／`live_position_lot` 等） | `tw_trading.db` |
 
 **tick 不在此列**：台股與期貨 tick 仍走 DolphinDB，改用 TimescaleDB 的規劃見
 [台股tick改用TimescaleDB](../../backlog/台股tick改用TimescaleDB.md)，其連線層同樣放在 `core/dao/`。

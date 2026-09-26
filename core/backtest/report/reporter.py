@@ -109,9 +109,10 @@ class StockBacktestReporter(BaseBacktestReporter):
         """
         benchmark 的還原價（**分割已由還原係數涵蓋，本方法不再另外調整**）
 
-        `corporate_action` 的累乘係數已含除權息、分割與減資，**這裡不可再套一次
-        `stock_split.apply_split_adjustment()`**——重複調整實測會讓 0050 的
-        期間報酬從 1.82% 變成 303%。方法保留是為了讓兩處呼叫端共用同一個入口。
+        `corporate_action` 的累乘係數已含除權息、分割與減資，**這裡不可再另外
+        調整一次分割**——重複調整實測會讓 0050 的期間報酬從 1.82% 變成 303%。
+        當年那支獨立的分割還原函式就是因此整個刪掉的；方法保留是為了讓兩處
+        呼叫端共用同一個入口。
         """
 
         return price_series

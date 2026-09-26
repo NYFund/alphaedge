@@ -45,7 +45,7 @@ class TwStockDataFeed(BaseDataFeed):
     FORCE_COVER_LOOKBACK_DAYS: int = 21
 
     def __init__(self) -> None:
-        # 單次回測共用一條 SQLite 連線：四個 API 查的是同一個 DB 檔，
+        # 單次回測共用一條 SQLite 連線：六個 API 查的是同一個 DB 檔，
         # 各開一條沒有任何好處，只會讓連線數隨 API 數量線性成長
         self.conn: Optional[DBConnection] = None
 

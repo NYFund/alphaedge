@@ -698,7 +698,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                **不分放空管道一律適用**——引擎不替使用者的政策再加條件。
             2. 除權息行事曆推導的融券最後回補日（由 DataFeed 每根 bar 推入）：
                這是**融券制度**的規則，故只對 `MARGIN` 生效。SBL 借券不受強制回補
-               約束，其跨除息日的成本改由 `compensate_cash_dividend()` 反映；
+               約束，其跨除息日的成本改由 `settle_cash_dividend()` 反映；
                `DAY_TRADE` 當日已由 `enforce_day_trade_cover()` 處理完畢。
         - Parameters:
             - date: datetime.date

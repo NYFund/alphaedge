@@ -578,7 +578,8 @@ class StockPositionManager(BasePositionManager):
         # Update account：釋回保證金並結算損益
         # realized_pnl 已扣掉開倉成本，而開倉成本在開倉當下就從餘額扣過了，
         # 故此處加回 entry_cost，避免同一筆成本被扣兩次（與 LONG 的現金流口徑一致）。
-        # 股利補償同理：除息當日就已從餘額扣款（`compensate_cash_dividend()`），
+        # 股利補償同理：除息當日就已從餘額扣款（`settle_cash_dividend()`，
+        # 是否補償由 `CostConfig.compensate_cash_dividend` 決定），
         # 這裡加回攤提進 realized_pnl 的那一份。
         # **與 accrued_borrow_fee 的差異**：借券費不動餘額、只在平倉時經損益扣一次；
         # 股利補償走即時扣款，除息日的價格跳空才會被同額的現金流出抵銷，

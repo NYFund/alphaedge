@@ -132,7 +132,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | 組裝 | `core/backtest/factory.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_cost_config()` |
 | 行為 model | `core/backtest/models/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
 | | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／`TwFuturesFillModel` |
-| | `core/backtest/models/cost_model.py` | `BaseCostModel` ＋ `CostConfig`／`ShortConstraint`／`StockCostModel`／`TwFuturesCostModel` |
+| | `core/backtest/models/cost_model.py` | `BaseCostModel`／`StockCostModel`／`TwFuturesCostModel`（設定類別 `CostConfig`／`FuturesCostConfig`／`ShortConstraint` 在 `core/models/cost_config.py`，回測與實盤共用）|
 | | `core/backtest/models/settlement_model/` | 套件：`base.py`（`BaseSettlementModel`）＋ `tw_stock.py`（`TwStockSettlementModel`）／`tw_futures.py`（`TwFuturesSettlementModel`），由 `__init__.py` re-export |
 | 資料源 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
 | 市場結構 | `core/market/tw/market_calendar.py`／`futures_calendar.py`／`futures_roll.py`／`futures_margin_config.py` | 交易日曆、期貨結算日、換月規則、保證金設定；ETL、回測、實盤、策略共用，不屬於回測套件 |
@@ -237,7 +237,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 - **部位大小**：`core/portfolio/sizing.py` 的 `EqualWeightSizer` 以張（`Units.LOT` ＝ 1000 股）換算下單量，股票策略基底預設用它。交易單位不是「張」的市場（如美股以股計）必須另寫 sizer，否則換算出的下單量單位是錯的，且不會報錯。
 - **市場軸目錄的權威清單**是 `scripts/check_layer_deps.py` 的 `_MARKET_AXIS_PACKAGES`：`core/api`、`core/broker`、`core/live/datafeed`、`core/adapters`、`core/dao`、`core/backtest/datafeed`、`core/market`、`core/pipeline`。只做回測時動的是上面第 4~8 步；上實盤還要補 `core/broker/<market>/`（券商閘道）與 `core/live/datafeed/<market>/`（實盤資料源），ETL 則在 `core/pipeline/<market>/`。新開的市場軸套件要登記進該清單，跨軸混放才會被擋。
 
-> **注意**：`core/backtest/__init__.py` 與 `core/strategies/__init__.py` 刻意**不做套件層 eager import**。任何在此 re-export 的模組都會讓「引擎的相依項無法反向 import 引擎底下的模組」，形成循環 import。呼叫端一律使用完整模組路徑。
+> **注意**：`core/backtest/__init__.py` 與 `core/strategies/__init__.py` 刻意**不 eager import 具體實作**（`Backtester`、`StrategyLoader`、具體策略）——那會讓「引擎的相依項無法反向 import 引擎底下的模組」，形成循環 import。**抽象契約不受此限**：`core/strategies/__init__.py` 轉出 `BaseStrategy`，它只相依中立型別。呼叫端取具體實作一律使用完整模組路徑。
 
 ---
 

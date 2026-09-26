@@ -16,7 +16,7 @@ from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 2. **不屬於任何策略的持倉**：接管來的 `__unattributed__` 不在任何策略的
    `Account` 裡，於是它的價值整個消失。
 
-`BrokerAccountQuery.get_stock_account()` 早就把 `total_equity` 算好了，
+`ShioajiAccountQuery.get_stock_account()` 早就把 `total_equity` 算好了，
 而且它的說明直接寫著「拿可用餘額當分母的話，只要隔日還有部位在場上就必然
 誤判成額度超標」。2026-09-23 的演練正是如此：帳上 6 檔接管部位、現金為 0，
 總權益被算成 0，三個段落全部在 `prepare()` 就拒絕啟動。
