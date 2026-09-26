@@ -10,10 +10,14 @@ from frontend.services.report_loader import (
     compute_daily_pnl,
     extract_starting_capital,
     load_backtest_report,
+    metrics_note_map,
+    metrics_to_map,
     read_daily_equity,
     read_direction_summary,
     read_event_report,
+    read_metrics_summary,
     read_trading_report,
+    resolve_symbol_column,
     sort_by_exit_date,
     summarise_overview,
 )
@@ -252,3 +256,97 @@ def test_only_directories_with_a_report_are_listed(tmp_path: Path) -> None:
     assert [path.name for path in list_strategy_dirs(tmp_path)] == [
         "Foreign-Sell-Short-Day-Trade"
     ]
+
+
+_LEGACY_FIXTURE_DIR: Path = (
+    Path(__file__).resolve().parent / "fixtures" / "frontend_report_legacy"
+)
+
+
+def test_fixture_uses_the_current_identifier_column(trading_df: pd.DataFrame) -> None:
+    """
+    fixture 的識別欄要是**現行**欄名
+
+    2026-09-26 之前 fixture 的首欄還是 `Stock ID`，而產生端早已改寫 `Symbol`——
+    於是前端的候選順序永遠落到第三個，**現行主路徑一次都沒被走過，
+    刻意保留的相容分支反客為主成了唯一被測的分支**。
+    """
+
+    assert resolve_symbol_column(trading_df) == "Symbol", (
+        "fixture 的識別欄不是現行欄名，主路徑沒有被測到"
+    )
+    assert "Stock ID" not in trading_df.columns
+
+
+def test_legacy_column_name_still_opens(trading_df: pd.DataFrame) -> None:
+    """
+    舊欄名那條退路仍然有效
+
+    它存在的理由是「改名前產出的結果資料夾照樣打得開」，而那個保證只有
+    真的拿一份舊欄名的報表來驗才算數。
+    """
+
+    legacy: pd.DataFrame = read_trading_report(
+        _LEGACY_FIXTURE_DIR / "Legacy-Stock-Id_trading_report.csv"
+    )
+
+    assert resolve_symbol_column(legacy) == "Stock ID"
+    # 現行欄名同時存在時要優先取現行的，不可被舊欄名蓋掉
+    both: pd.DataFrame = legacy.rename(columns={"Stock ID": "Symbol"}).assign(
+        **{"Stock ID": legacy["Stock ID"]}
+    )
+    assert resolve_symbol_column(both) == "Symbol"
+
+
+def test_no_identifier_column_is_handled(trading_df: pd.DataFrame) -> None:
+    """三個候選都沒有時回 None，而不是拋例外——前端據此不提供篩選"""
+
+    assert resolve_symbol_column(pd.DataFrame({"Realized PnL": [1.0]})) is None
+
+
+def test_metrics_summary_is_located(report: BacktestReport) -> None:
+    """
+    fixture 要有 `metrics_summary.csv`
+
+    以前沒有，於是 smoke test 永遠走「metrics 為空」的早退分支——
+    Sharpe／Sortino／IR／MDD 的顯示路徑一條都沒被驗證過。
+    """
+
+    assert report.metrics_summary_path is not None
+
+
+def test_metrics_are_read_verbatim(report: BacktestReport) -> None:
+    """
+    取出的值與 CSV **逐值相同**
+
+    前端對這些指標不做任何換算——四捨五入、乘 100、改符號都不行。
+    同一個指標在報表與前端顯示成兩個數字時，讀的人無從判斷哪個對。
+    """
+
+    metrics: pd.DataFrame = read_metrics_summary(report.metrics_summary_path)
+    values: Dict[str, object] = metrics_to_map(metrics)
+
+    assert not metrics.empty
+    for metric, expected in (
+        ("Sharpe Ratio", "1.9294"),
+        ("Sortino Ratio", "3.379"),
+        ("Max Drawdown (%)", "-11.43"),
+        ("Annualized Volatility (%)", "14.63"),
+        ("Final Equity", "4811419.0"),
+    ):
+        assert str(values[metric]) == expected, f"{metric} 被前端改過了"
+
+
+def test_blank_metrics_carry_a_reason(report: BacktestReport) -> None:
+    """
+    留空的指標要帶 `Note`
+
+    不寫原因的話，「N/A」與「算出來是 0」在畫面上分不開。
+    """
+
+    metrics: pd.DataFrame = read_metrics_summary(report.metrics_summary_path)
+    values: Dict[str, object] = metrics_to_map(metrics)
+    notes: Dict[str, str] = metrics_note_map(metrics)
+
+    assert pd.isna(values["Information Ratio"])
+    assert notes["Information Ratio"]
