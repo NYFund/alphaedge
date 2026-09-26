@@ -53,7 +53,7 @@ ideas/
 ## 流轉路徑
 
 ```
-ideas/<topic>/ ──驗證可行──▶ data_analysis/<topic>/ ──訊號穩定──▶ strategies/<topic>/ ──成熟──▶ core/strategies/stock/<name>.py
+ideas/<topic>/ ──驗證可行──▶ data_analysis/<topic>/ ──訊號穩定──▶ strategies/<topic>/ ──成熟──▶ core/strategies/{stock,futures}/<name>.py
                                                                                                       │
                                                                                                       ▼
                                                                                              run.py --strategy <name>
