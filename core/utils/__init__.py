@@ -46,3 +46,10 @@ from .constant import (
 )
 from .log_manager import LogManager
 from .time import TimeUtils
+
+"""
+通用工具門面：常數、時間換算、商品計算、日誌與裝飾器
+
+**門面轉出而不重新實作**：`from core.utils import Action` 這種寫法全庫上百處，
+改成逐一指定子模組會動到太多檔。真正的定義各在子模組裡。
+"""

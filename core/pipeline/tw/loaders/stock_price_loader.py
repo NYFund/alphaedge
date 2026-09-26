@@ -5,6 +5,8 @@ from core.config import PRICE_DOWNLOADS_PATH, TW_STOCK_DB_PATH
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
+"""台股日行情入庫：`price` 表的落地端，schema 與寫入語意全在 `StockPriceDAO`"""
+
 
 class StockPriceLoader(BaseDataLoader):
     """Stock Price Loader"""

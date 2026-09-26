@@ -9,6 +9,18 @@ from core.pipeline.shared.base_cleaner import BaseDataCleaner
 from core.pipeline.utils import FinMindDataType
 from core.utils import FileEncoding
 
+"""
+FinMind 參考資料清洗：股票基本資料與券商分點
+
+- Features:
+    1. 股票基本資料（含權證版本）的清洗
+    2. 券商分點基本資料與日成交報告的清洗
+    3. 同一檔多筆時只留最新一筆
+- 使用場景:
+    FinMind 的參考表是**全量快照**而不是增量：同一檔可能出現多筆歷史版本，
+    直接入庫會撞主鍵，故一律先收斂成每檔一筆。
+"""
+
 
 class FinMindCleaner(BaseDataCleaner):
     """FinMind Cleaner (Transform): validate data, write CSV, return DataFrame"""
