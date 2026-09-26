@@ -225,3 +225,124 @@ def test_margin_config_from_api_requires_an_api() -> None:
 
     with pytest.raises(TypeError):
         FuturesMarginConfig.from_api()  # type: ignore[call-arg]
+
+
+def test_chain_check_reports_a_gap_and_is_wired_into_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    鏈式比對真的會跑、斷鏈真的會出現在 log
+
+    這是偵測「站方改措辭導致靜默漏抓」的唯一手段。它原本是 60 行的完整實作卻
+    **零呼叫**，而部署文件把它當成現行機制描述——文件保證了一道從未執行過的防線。
+
+    **只記不拒**：斷點代表中間漏了一次調整，而漏掉的那次可能根本不在抓得到的
+    範圍內。拒收會讓這次真的抓到的資料也進不去。
+    """
+
+    from loguru import logger
+
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
+    # TX 連續三次公告，而中間那次「刻意不入庫」——模擬漏抓一則公告
+    updater.dao.insert_rows(
+        FuturesMarginDAO.TABLE_NAME,
+        make_margin(
+            [
+                ["2024-01-05", "TX", 184000, "announcement"],
+                # 缺 2024-02-01 的那一則
+                ["2024-08-09", "TX", 265000, "announcement"],
+            ]
+        ),
+    )
+    updater.dao.commit()
+
+    messages: List[str] = []
+    sink_id: int = logger.add(lambda message: messages.append(message), level="WARNING")
+    try:
+        updater.log_margin_chain_gaps()
+    finally:
+        logger.remove(sink_id)
+    updater.close()
+
+    assert any("斷鏈" in text for text in messages), f"斷鏈沒有出現在 log：{messages}"
+
+
+def test_known_gaps_are_listed_per_date_not_per_product() -> None:
+    """
+    已知斷點以「商品 ＋ 生效日」登記，不可整商品跳過
+
+    整商品跳過的話，同一商品日後真的漏抓一則公告就再也看不到——而那正是這道
+    檢查存在的唯一理由。清單裡每一筆都必須是二元組。
+    """
+
+    gaps = FuturesMarginUpdater.KNOWN_CHAIN_GAPS
+
+    assert gaps, "已知斷點清單是空的——實查有 10 處，空清單代表清單失效"
+    for entry in gaps:
+        assert isinstance(entry, tuple) and len(entry) == 2, (
+            f"已知斷點必須是 (商品, 生效日)：{entry}"
+        )
+        product, effective_date = entry
+        assert product and product.isupper()
+        assert len(effective_date) == 10 and effective_date.count("-") == 2
+
+
+def test_known_gaps_are_not_warned_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    已知斷點不重複告警
+
+    每次更新都叫一次只會讓人學會忽略這道警告，而下一次**真的**漏抓時，
+    那則警告就混在同一批噪音裡。
+    """
+
+    from loguru import logger
+
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
+    product, effective_date = sorted(FuturesMarginUpdater.KNOWN_CHAIN_GAPS)[0]
+    monkeypatch.setattr(
+        updater, "dao", updater.dao
+    )  # 保持同一個 DAO，僅替換下面兩支查詢
+    monkeypatch.setattr(
+        type(updater.dao), "get_announcement_products", lambda self: [product]
+    )
+    monkeypatch.setattr(
+        type(updater),
+        "check_margin_chain",
+        lambda self, p: [(effective_date, 100, 200)],
+    )
+
+    messages: List[str] = []
+    sink_id: int = logger.add(lambda message: messages.append(message), level="WARNING")
+    try:
+        updater.log_margin_chain_gaps()
+    finally:
+        logger.remove(sink_id)
+    updater.close()
+
+    assert not any("斷鏈" in text for text in messages), f"已知斷點仍被告警：{messages}"
+
+
+def test_chain_check_is_called_by_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    `update()` 的收尾一定要呼叫鏈式比對
+
+    上一條驗的是「比對本身有效」，這一條驗的是「它真的被接上」——
+    這道防線原本的問題不是算錯，而是從來沒有被呼叫。
+    """
+
+    updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
+    called: List[bool] = []
+
+    monkeypatch.setattr(updater, "update_index_margin", lambda: None)
+    monkeypatch.setattr(updater, "update_stock_margin", lambda: None)
+    monkeypatch.setattr(updater, "log_summary", lambda: None)
+    monkeypatch.setattr(updater, "log_margin_chain_gaps", lambda: called.append(True))
+
+    updater.update()
+    updater.close()
+
+    assert called == [True], "`update()` 沒有呼叫鏈式比對"

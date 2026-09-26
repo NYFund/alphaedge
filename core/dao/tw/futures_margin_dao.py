@@ -338,6 +338,17 @@ class FuturesMarginDAO(BaseDAO):
             (product,),
         )
 
+    def get_announcement_products(self) -> List[str]:
+        """金額表中有調整公告紀錄的商品代碼，依代碼排序"""
+
+        return [
+            row[0]
+            for row in self.conn.execute(
+                f"SELECT DISTINCT product FROM {self.TABLE_NAME} "
+                f"WHERE source = 'announcement' ORDER BY product"
+            ).fetchall()
+        ]
+
     def get_table_summaries(
         self,
     ) -> List[Tuple[str, int, int, Optional[str], Optional[str]]]:
