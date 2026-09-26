@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Callable, Iterable, List, Optional
+from typing import Any, Callable, Iterable, List, Optional, Tuple
 
 from loguru import logger
 
@@ -13,6 +13,7 @@ from core.models import (
     StockPositionSnapshot,
 )
 from core.utils import Action, PositionType, StockOrderCond, Units
+from core.utils.instrument import FuturesUtils
 
 """
 帳務查詢：把券商的餘額、交割款、部位與保證金轉成正規化快照
@@ -370,25 +371,24 @@ class ShioajiAccountQuery:
         return None
 
     @staticmethod
-    def split_contract_code(code: str) -> tuple:
+    def split_contract_code(code: str) -> Tuple[str, str]:
         """
         - Description:
             把期貨合約代號拆成商品與到期月份
 
-            代號格式是 `{商品}{YYYYMM}`（Ex: `TX202601`）。拆不開時回
-            `(code, "")`，不拋出——拆不開只是少了換月判斷的依據，
-            而部位本身仍然要進對帳。
+            **只是 `FuturesUtils.split_contract_id()` 的別名**：實盤換月那條路徑
+            用的是同一條規則，而本層與 `core/live/` 不可互相 import，故權威實作
+            下推到 `core/utils/`。原本兩邊各有一份逐位元組相同的實作，
+            而分岔不會報錯——只會讓某一邊認不出該換月的合約。
         - Parameters:
             - code: str
                 合約代號
         - Return:
-            - tuple
+            - Tuple[str, str]
                 `(product, expiry)`
         """
 
-        if len(code) > 6 and code[-6:].isdigit():
-            return (code[:-6], code[-6:])
-        return (code, "")
+        return FuturesUtils.split_contract_id(code)
 
     @staticmethod
     def _dump(model: Any) -> dict:

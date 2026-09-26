@@ -64,6 +64,18 @@ class FuturesQuoteAdapter:
         **未登錄的商品直接 KeyError**（理由見該常數）。股票期貨的乘數是會隨
         除權息調整的「契約單位」，查不到是正常的——那種商品要由呼叫端傳入
         `multiplier_resolver`（`TwFuturesDataFeed` 已備好，見該處）。
+
+        〈實盤有同名的一份，fallback 政策不同〉
+
+        `ShioajiQuoteStream.resolve_multiplier()` 查不到時會**改讀合約的
+        `multiplier`／`unit`，兩者都沒有才 warning 後回 0**。差異的來源是
+        「手上有什麼可退」：實盤握有券商合約物件，那上面就有正確的契約單位；
+        回測只有商品代碼，沒有任何可靠的替代來源，猜一個乘數會讓整條 PnL
+        靜默偏掉，中斷反而好查。
+
+        **回 0 這件事本身待裁示**：乘數 0 會讓 PnL 全部算成 0，與
+        `FuturesPositionManager.get_multiplier()` 明訂的「查不到一律中斷、
+        不退回近似值」相矛盾。改它會動到實盤主流程，未在此處理。
         """
 
         return FUTURES_MULTIPLIER[product]

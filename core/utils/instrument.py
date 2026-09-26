@@ -4,16 +4,17 @@ from typing import List, Tuple
 from .constant import PRICE_TICK_TABLE, Commission, Units
 
 """
-台股交易計算工具：張／股換算、成本、損益、檔位對齊
+台股商品計算工具：張／股換算、成本、損益、檔位對齊、期貨契約代號拆解
 
-**只有台股**：本檔僅定義 `StockUtils`，沒有期貨或選擇權的對應工具
-（期貨成本在 `TwFuturesCostModel`、期貨規格在 `TwFuturesSpec`）。
+**只有台股**：成本與損益的公式只有股票那一套（期貨成本在 `TwFuturesCostModel`、
+期貨規格在 `TwFuturesSpec`）；`FuturesUtils` 只放**不含任何公式**的代號解析。
 
 - Features:
     1. 張與股的換算
     2. 手續費、證交稅、交易成本、淨損益與 ROI 的純計算
     3. 跳動點對齊與漲跌停價換算
     4. 代號過濾（只留普通股）
+    5. 期貨契約代號拆成商品與到期月份（`FuturesUtils`）
 - 使用場景:
     **生產路徑不呼叫本檔的成本函式**。回測與實盤的記帳一律走
     `StockCostModel`，它自己從 `CostConfig` 推算；本檔的成本函式現行只有
@@ -311,3 +312,35 @@ class StockUtils:
             for stock_id in stock_ids
             if stock_id.isdigit() and len(stock_id) == 4 and int(stock_id) >= 1001
         ]
+
+
+class FuturesUtils:
+    """台期貨的契約代號解析（純字串處理，不含任何公式）"""
+
+    @staticmethod
+    def split_contract_id(symbol: str) -> Tuple[str, str]:
+        """
+        - Description:
+            把契約代號拆成商品與到期月份；拆不開時回 `(symbol, "")`
+
+            代號格式是 `{商品}{YYYYMM}`（Ex: `TX202601`），
+            `FuturesOrder.symbol` 就是 `f"{product}{expiry}"`，本函式是它的反向。
+
+            **拆不開時回原值而不拋出**：拆不開只是少了換月判斷的依據，
+            而部位本身仍然要進對帳。
+
+            **擺在這一層而不是資料源或券商層**：實盤換月與帳戶重建都要用同一條規則
+            （`live_position_lot` 只記 symbol），而那兩條路徑分屬 `core/live/` 與
+            `core/broker/`，彼此不可互相 import。各寫一份會在換月時分岔，
+            而分岔不會報錯——只會讓某一邊認不出該換月的合約。
+        - Parameters:
+            - symbol: str
+                合約代號
+        - Return:
+            - Tuple[str, str]
+                `(商品, 到期月份)`
+        """
+
+        if len(symbol) > 6 and symbol[-6:].isdigit():
+            return (symbol[:-6], symbol[-6:])
+        return (symbol, "")

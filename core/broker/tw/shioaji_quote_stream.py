@@ -11,6 +11,7 @@ from core.broker.tw.shioaji_contract_resolver import to_futures_product
 from core.config.settings import get_live_timezone
 from core.models import FuturesQuote, StockQuote
 from core.utils import FUTURES_MULTIPLIER, FuturesSession, Scale
+from core.utils.instrument import FuturesUtils
 
 """
 即時行情：快照與逐筆訂閱，轉成與回測同款的報價物件
@@ -446,8 +447,18 @@ class ShioajiQuoteStream:
             取契約乘數
 
             指數期貨查 `FUTURES_MULTIPLIER`；查不到時**改用合約的 `multiplier`／`unit`**
-            （股票期貨的乘數會隨除權息調整，寫死必錯）。兩邊都沒有就回 0——
-            呼叫端會在算 PnL 時發現，比默默用一個猜的乘數好。
+            （股票期貨的乘數會隨除權息調整，寫死必錯）。兩邊都沒有就回 0。
+
+            〈回測有同名的一份，fallback 政策不同〉
+
+            `FuturesQuoteAdapter.resolve_multiplier()` 查不到時**直接 KeyError**。
+            差異的來源是「手上有什麼可退」：本層握有券商合約物件，那上面就有
+            正確的契約單位；回測只有商品代碼，沒有可靠的替代來源。
+
+            **回 0 這件事本身待裁示**：乘數 0 會讓 PnL 全部算成 0，
+            而那不是「呼叫端會發現」——它沒有任何徵兆，與
+            `FuturesPositionManager.get_multiplier()` 明訂的「查不到一律中斷、
+            不退回近似值」相矛盾。改它會動到實盤主流程，未在此處理。
         - Parameters:
             - product: str
                 商品代碼
@@ -509,9 +520,12 @@ class ShioajiQuoteStream:
         `{分類}{YYYYMM}`），分類改讀 `root`，月份讀 `delivery_month`。
         """
 
+        # 拆解規則走共用的那一份：這裡只是「拆得開就用」，
+        # 拆不開才退回讀合約欄位。規則自己抄一遍就會與換月那條路徑分岔
         symbol: str = str(getattr(contract, "symbol", "") or "")
-        if len(symbol) > 6 and symbol[-6:].isdigit():
-            return (symbol[:-6], symbol[-6:])
+        product, expiry = FuturesUtils.split_contract_id(symbol)
+        if expiry:
+            return (product, expiry)
 
         category: str = str(
             getattr(contract, "root", None)
