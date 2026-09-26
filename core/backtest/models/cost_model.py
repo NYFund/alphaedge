@@ -19,8 +19,15 @@ from core.utils.instrument import StockUtils
 """
 成本模型：手續費／稅／借券費／保證金／損益口徑
 
+本檔定義三個類別：
+
 - BaseCostModel：各市場共用的介面（對應 Lean 的 FeeModel）
-- ShortConstraint / CostConfig / StockCostModel：台股實作，含信用交易
+- StockCostModel：台股實作，含信用交易
+- TwFuturesCostModel：台期貨實作（期交稅、逐筆保證金）
+
+`CostConfig`／`FuturesCostConfig`／`ShortConstraint` **不在本檔**，是從
+`core/models/cost_config.py` import 進來的：成本設定回測與實盤都要用，
+放在回測領域會讓實盤反向相依引擎。
 
 **放在回測領域而非 `core/utils/`**：成本口徑是回測的核心假設，
 與 log_manager、decorators 這類通用工具混在一起會讓 `core/utils/` 變成雜物櫃。
