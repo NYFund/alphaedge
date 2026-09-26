@@ -16,7 +16,7 @@
 | 財報 | MOPS | `FinancialStatementAPI` | SQLite `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | 2013 年第 1 季（`DEFAULT_START_YEAR`） | 權益變動表的資料形狀與限制見 [權益變動表](../pipeline/equity-change.md) |
 | FinMind 參考資料 | FinMind API | `FinMindAPI` | SQLite FinMind 相關表 | 券商分點：`2021-06-30`（`FINMIND_BROKER_TRADING_START_DATE`）；台股總覽／證券商為 API 快照 | 股票、券商、分點 |
 | 台期貨日線 | TAIFEX 每日行情頁（POST） | `FuturesPriceAPI` | SQLite `tw_futures.db` `futures_price_daily` | 2015-01-01（`DEFAULT_FUTURES_START_DATE`） | 日盤／夜盤分列存（`session` 欄位）；指數期貨 7 檔（`FUTURES_TARGET_PRODUCTS`）＋ 股票期貨（預設流動性前 20 檔） |
-| 台期貨連續合約 | 由 `futures_price_daily` 衍生（不連網路） | `FuturesPriceAPI`（`get_continuous*`） | SQLite `tw_futures.db` `futures_continuous` | 同上 | 3 種調整方式 × 3 種換月規則；每次整段重建 |
+| 台期貨連續合約 | 由 `futures_price_daily` 衍生（不連網路） | `FuturesContinuousAPI` | SQLite `tw_futures.db` `futures_continuous` | 同上 | 3 種調整方式 × 3 種換月規則；每次整段重建 |
 | 台期貨保證金 | TAIFEX 公告附件（CSV） | `FuturesMarginAPI` | SQLite `tw_futures.db` `futures_margin_history`（指數類每口金額）、`stock_futures_margin_rate_history`（股票類比例） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
 | 台期貨籌碼 | TAIFEX 三大法人／大額交易人／選擇權 PCR | `FuturesChipAPI` | SQLite `tw_futures.db` `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | 三大法人：2023-09-04（來源只保留約三年）；其餘以庫內最早一筆為準 | `get_available()` 只回傳查詢日之前已公布者（避免前視） |
 | 股票期貨標的池 | TAIFEX 標的證券一覽表（GET） | `FuturesStockUniverseAPI` | SQLite `tw_futures.db` `futures_stock_universe` | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
@@ -35,7 +35,8 @@
 | `FinancialStatementAPI` | `core/api/tw/financial_statement_api.py` | SQLite | `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` |
 | `FinMindAPI` | `core/api/tw/finmind_api.py` | SQLite | `taiwan_stock_info`、`taiwan_stock_info_with_warrant`、`taiwan_securities_trader_info`、`taiwan_stock_trading_daily_report_secid_agg` |
 | `StockTickAPI` | `core/api/tw/stock_tick_api.py` | DolphinDB | `tickDB` / `tick` |
-| `FuturesPriceAPI` | `core/api/tw/futures_price_api.py` | SQLite | `futures_price_daily`、`futures_continuous`（`tw_futures.db`） |
+| `FuturesPriceAPI` | `core/api/tw/futures_price_api.py` | SQLite | `futures_price_daily`（`tw_futures.db`） |
+| `FuturesContinuousAPI` | `core/api/tw/futures_continuous_api.py` | SQLite | `futures_continuous`（`tw_futures.db`） |
 | `FuturesMarginAPI` | `core/api/tw/futures_margin_api.py` | SQLite | `futures_margin_history`、`stock_futures_margin_rate_history` |
 | `FuturesChipAPI` | `core/api/tw/futures_chip_api.py` | SQLite | `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` |
 | `FuturesStockUniverseAPI` | `core/api/tw/futures_stock_universe_api.py` | SQLite | `futures_stock_universe` |

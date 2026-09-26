@@ -21,7 +21,7 @@ load_dotenv()
 # === 台期貨爬取範圍 ===
 # -----------------------------------------------------------------------
 #
-# 「有哪些商品」定義在 `core/utils/constant.py` 的 `FuturesProduct`；
+# 「有哪些商品」定義在 `core/utils/constant/futures.py` 的 `FuturesProduct`；
 # 「這次要抓哪些」則是本清單——兩者刻意分開，否則想暫時只跑一檔就得改 Enum。
 #
 # **此處刻意寫字面值而不 import `FuturesProduct`**：`core.config` 是最底層模組，

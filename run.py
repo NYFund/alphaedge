@@ -22,8 +22,10 @@ if TYPE_CHECKING:
 # -----------------------------------------------------------------------
 # Description: 本檔案為交易系統主程式入口，用於執行指定策略的回測或實盤
 # Parameters: --mode (backtest | live), --strategy (策略類別名稱，必填)
-# Example: python run.py --strategy MeanReversion
-# Notes: Strategy Name 為 Class 名稱
+# Example: python run.py --strategy MomentumStrategy1
+# Notes: --strategy 收的是**策略的類別名稱**；可用的策略以
+#        core/strategies/{stock,futures}/ 底下的非抽象子類為準，
+#        其餘旗標詳見 --help（不在此另開一份會漂移的清單）
 #
 # -----------------------------------------------------------------------
 # 退出碼

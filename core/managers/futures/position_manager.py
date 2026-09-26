@@ -359,7 +359,7 @@ class FuturesPositionManager(BasePositionManager):
                 損益（未扣交易成本）
         """
 
-        # **一律走成本模型**：損益公式只留 `FuturesCostModel.realized_pnl()` 一份。
+        # **一律走成本模型**：損益公式只留 `TwFuturesCostModel.realized_pnl()` 一份。
         # 本層若自己再算一次，改動乘數或多空方向的處理時另一邊不會跟著改，
         # 也不會有測試失敗，兩份必然漂移
         return self.cost_model.realized_pnl(
