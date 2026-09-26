@@ -33,7 +33,7 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 
 **本模組只產出候選，不自動入庫**：倍率是從價格反推的近似值，而且「資料錯誤」
 與「公司行動」在數字上長得一樣。要寫進資料表得由人確認後以 `detected` 來源
-明確加入（見 `CorporateActionUpdater.load_detected_events()`）。
+明確加入。人工入口是 `scripts/manual/manual_corporate_action_detect.py`（不帶 `--confirm` 只列計畫，不寫入），它會呼叫 `CorporateActionUpdater.load_detected_events()`。
 """
 
 # 台股單日漲跌幅上限 ±10%，取 15% 留一段緩衝，超過的多半是公司行動或資料錯誤。
