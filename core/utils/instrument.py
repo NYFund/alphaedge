@@ -4,15 +4,21 @@ from typing import List, Tuple
 from .constant import PRICE_TICK_TABLE, Commission, Units
 
 """
-instrument.py
+台股交易計算工具：張／股換算、成本、損益、檔位對齊
 
-Utility functions for asset trading calculations, including support for stocks, futures, and options.
+**只有台股**：本檔僅定義 `StockUtils`，沒有期貨或選擇權的對應工具
+（期貨成本在 `TwFuturesCostModel`、期貨規格在 `TwFuturesSpec`）。
 
-Features:
-- Calculate commission, tax, net profit, and ROI
-- 跳動點與漲跌停價的換算
-
-Designed for use in backtesting and trading performance analysis
+- Features:
+    1. 張與股的換算
+    2. 手續費、證交稅、交易成本、淨損益與 ROI 的純計算
+    3. 跳動點對齊與漲跌停價換算
+    4. 代號過濾（只留普通股）
+- 使用場景:
+    **生產路徑不呼叫本檔的成本函式**。回測與實盤的記帳一律走
+    `StockCostModel`，它自己從 `CostConfig` 推算；本檔的成本函式現行只有
+    同檔的 `calculate_transaction_cost()`、`strategy_lab/` 的研究腳本與測試在用。
+    `round_to_tick()`、`convert_*` 與 `filter_common_stocks()` 則是全庫共用的純換算。
 """
 
 
