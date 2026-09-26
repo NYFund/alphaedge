@@ -27,9 +27,6 @@ STOCK_PRICE_TYPE_LIMITPRICE = "LMT"
 STOCK_PRICE_TYPE_MKT = "MKT"
 
 
-STOCK_PRICE_TYPE_CLOSE = "Close"
-
-
 # 定義期貨價格類型常量（比股票多一個 MKP 範圍市價）
 FUTURES_PRICE_TYPE_LIMITPRICE = "LMT"
 
@@ -176,6 +173,8 @@ class StockOrderLot(str, Enum):
     """股票下單單位；整股與零股的成交規則與撮合時段皆不同"""
 
     Common = STOCK_ORDER_LOT_COMMON  # 整股
+    # 鉅額交易**尚未納入下單範圍**，代碼先登錄：它的撮合與申報方式與整股不同，
+    # 真的要用時是獨立一條路徑，不是換個參數就好
     BlockTrade = STOCK_ORDER_LOT_BLOCKTRADE  # 鉅額
     Fixing = STOCK_ORDER_LOT_FIXING  # 定盤
     Odd = STOCK_ORDER_LOT_ODD  # 零股

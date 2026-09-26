@@ -30,7 +30,6 @@ class EventKind(str, Enum):
 
     QUOTE = "QUOTE"  # 一筆行情
     EXECUTION = "EXECUTION"  # 一筆成交回報
-    HEARTBEAT = "HEARTBEAT"  # 沒有事件時的計時脈衝
 
 
 @dataclass(frozen=True)

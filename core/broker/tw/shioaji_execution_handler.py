@@ -25,9 +25,6 @@ from core.utils import Action, OrderState
 之後所有回報靜默消失，而程式看起來還活著。
 """
 
-# 券商成功回應的 `op_code`
-OP_CODE_SUCCESS: str = "00"
-
 
 class ShioajiExecutionHandler:
     """

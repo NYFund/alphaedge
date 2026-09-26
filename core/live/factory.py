@@ -539,7 +539,6 @@ def _build_context(
         account=account,
         position_manager=manager,
         data_feed=feed,
-        risk_config=risk_config if risk_config is not None else RiskConfig(),
         symbols=list(getattr(strategy, "symbols", []) or []),
         calculate_notional=_make_notional_calculator(spec),
         build_filled_order=build_order,

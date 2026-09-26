@@ -16,6 +16,11 @@ from core.utils import Action, LiveOrderStatus, PositionType
 實盤的每一張單都要能回答「現在走到哪了、券商那邊叫什麼編號、成交了多少」。
 """
 
+# 券商回應成功的 `op_code`。**定義在判定點這一側**：它原本放在
+# `core/broker/tw/shioaji_execution_handler.py`，而唯一的判定在本檔寫死字面值
+# ——一條規則、一個常數、零個使用者。券商層比本層高，不可反向引用，故常數留這裡
+OP_CODE_SUCCESS: str = "00"
+
 
 def _as_date(raw: Any) -> datetime.date:
     """TEXT／`date`／`datetime` 一律收成 `date`"""
@@ -179,7 +184,7 @@ class OrderStatusEvent:
     做了什麼」。合成一種的話，`quantity` 這個欄位會一下子代表成交量、一下子代表
     剩餘量，而兩者的差別正是殘量處理要用的。
 
-    `op_code` 為 `"00"` 以外的值代表這次操作失敗，`op_msg` 是券商的原文訊息。
+    `op_code` 為 `OP_CODE_SUCCESS` 以外的值代表這次操作失敗，`op_msg` 是券商的原文訊息。
     """
 
     def __init__(
@@ -218,9 +223,9 @@ class OrderStatusEvent:
 
     @property
     def is_failure(self) -> bool:
-        """這次操作是否失敗；`op_code` 為 `"00"` 才是成功"""
+        """這次操作是否失敗；`op_code` 等於 `OP_CODE_SUCCESS` 才是成功"""
 
-        return bool(self.op_code) and self.op_code != "00"
+        return bool(self.op_code) and self.op_code != OP_CODE_SUCCESS
 
 
 class BrokerPositionSnapshot:

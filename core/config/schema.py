@@ -216,4 +216,7 @@ class ChipColumn(str, Enum):
 
     FOREIGN_NET_SHARES = CHIP_COL_FOREIGN_NET_SHARES
     TRUST_NET_SHARES = CHIP_COL_TRUST_NET_SHARES
+    # 自營商欄位**已入庫但尚無取用方法**：`StockChipAPI` 有外資與投信的
+    # `get_*_net_shares_map()`，獨缺自營商，三大法人少一隻。策略要用自營商籌碼時
+    # 要補那支方法，不要在策略裡直接對 raw DataFrame 取中文欄位
     DEALER_NET_SHARES = CHIP_COL_DEALER_NET_SHARES
