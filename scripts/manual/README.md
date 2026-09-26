@@ -7,9 +7,10 @@
 它們原本放在 `tests/`，但 pytest 只收集 `test_*.py`，所以**從來沒有被執行過**。
 放在那裡造成三個問題：
 
-1. **它們是「永遠不會失敗」型態的唯一來源**。9 支裡有 19 處 `return False`、
-   7 檔 `except Exception` 把錯誤吞掉。稽核 `tests/` 的測試品質時，
-   每次都要先把它們排除，否則統計數字全是假的。
+1. **它們是「永遠不會失敗」型態的唯一來源**：出錯一律吞掉並印訊息，
+   靠人看輸出判斷，沒有任何斷言。稽核 `tests/` 的測試品質時每次都要先把它們
+   排除，否則統計數字全是假的。**這裡不記處數**——腳本增減時數字不會跟著改，
+   要看實況就 `grep -c "except Exception" scripts/manual/*.py`。
 2. **覆蓋率與 grep 統計被污染**。
 3. **新人會以為它們是測試**，看到「測試」失敗卻沒有人管而困惑。
 
@@ -46,6 +47,10 @@
 | `manual_shioaji_quote_record.py` | 盤中行情錄製：訂閱逐筆與委買賣、把原始回呼存成 JSONL 並印出**欄位名、型別與範例值**。**要在交易日盤中跑**；不下單、不連正式環境。輸出落 `data/records/`（已被 gitignore） | 寫入 |
 | `manual_tick_crawler.py` | tick 爬蟲的手動驗證（需 Shioaji 金鑰） | — |
 | `manual_tick_updater.py` | tick updater 的手動驗證（需 DolphinDB） | 寫入 |
+| `manual_probe_pnl_fields.py` | 單日損益的來源欄位實際取得到什麼值？連模擬環境唯讀核對。單日虧損檢查（`RiskConfig.daily_loss_ratio`）一律以券商端為準，所以要先確認期貨 `Margin` 與股票帳戶快照的各欄位語意 | — |
+| `manual_verify_contract_probe.py` | 期貨合約有沒有 `update_date`？連模擬環境唯讀核對。實盤的交易日判定在平日只剩「券商合約檔更新日」一個佐證，而**必須問期貨合約**——拿股票合約去問，兩個市場開休市不一致的那天會誤判為開市 | — |
+| `manual_verify_quota_basis.py` | 資金額度的計算基準與券商實際權益對不對得上？連模擬環境唯讀核對 `check_quota_against_equity()` 與 `CAPITAL_SAFETY_RATIO` 的實際效果 | — |
+| `../check_overnight_positions.py` | 模擬環境是否保留隔夜部位？（**不在本目錄**）唯讀分析 `live_position_snapshot`：模擬環境若每晚清倉，從第 2 天起本地歸屬帳與券商部位必然不一致，多日演練建立在隔夜部位上的驗收項目就達不到。不連券商、不寫任何東西 | 唯讀 |
 
 **已刪除的腳本**（2026-09-16，DAO 資料存取層收斂時）：
 
