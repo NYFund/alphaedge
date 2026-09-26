@@ -27,14 +27,9 @@ loguru 的 file sink 只在達到 `rotation` 條件時才重開檔案。目錄�
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, Optional, Set, Tuple
+from typing import Callable, Dict, Optional, Set, Tuple
 
 from loguru import logger
-
-if TYPE_CHECKING:
-    # loguru 只在 `__init__.pyi` 宣告 `Logger`，執行期 import 會 ImportError，
-    # 故只給型別檢查器看（`get_logger()` 的回傳型別）
-    from loguru import Logger
 
 from core.config import (
     BACKTEST_LOGS_DIR_PATH,
@@ -206,39 +201,3 @@ class LogManager:
             retention=retention,
             level=level,
         )
-
-    @staticmethod
-    def remove_default_handler() -> None:
-        """Remove the default loguru handler (console output)"""
-
-        logger.remove()
-
-    @staticmethod
-    def add_console_handler(
-        level: str = "INFO",
-        format: str = "{message}",
-    ) -> None:
-        """
-        Add a console handler for logging to stdout.
-
-        - Parameters:
-            - level: str
-                Logging level for console output
-            - format: str
-                Log message format string
-
-        Example:
-            LogManager.add_console_handler(level="DEBUG")
-        """
-
-        logger.add(
-            lambda msg: print(msg, end=""),
-            format=format,
-            level=level,
-        )
-
-    @staticmethod
-    def get_logger() -> "Logger":
-        """Get the loguru logger instance"""
-
-        return logger

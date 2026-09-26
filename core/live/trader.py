@@ -38,7 +38,6 @@ from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
-from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow, resolve_window
@@ -112,7 +111,6 @@ class StrategyContext:
     account: BaseAccount
     position_manager: BasePositionManager
     data_feed: BaseLiveDataFeed
-    risk_config: RiskConfig
     # 本策略要處理的標的；實盤不掃全市場，標的池由策略決定
     symbols: List[str] = field(default_factory=list)
     # 把一張委託換算成金額（風控與資金保留都要用）。

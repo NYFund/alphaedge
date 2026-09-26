@@ -24,17 +24,6 @@ class TimeUtils:
     ROC_EPOCH_YEAR: int = 1911  # 民國年與西元年換算：西元 = 民國 + ROC_EPOCH_YEAR
 
     @staticmethod
-    def get_time_diff_in_sec(
-        start_time: datetime.datetime,
-        end_time: datetime.datetime,
-    ) -> float:
-        """計算兩時間的時間差（秒數）"""
-
-        time_diff: float = (end_time - start_time).total_seconds()
-        time_diff = time_diff if time_diff >= 0 else 0
-        return time_diff
-
-    @staticmethod
     def convert_ad_to_roc_year(year: int | str) -> str:
         """將西元年轉換成民國年"""
 
@@ -74,15 +63,6 @@ class TimeUtils:
         """產生從 start_year 到 end_year 的所有年份"""
 
         return [year for year in range(start_year, end_year + 1)]
-
-    @staticmethod
-    def generate_season_range(
-        start_season: int,
-        end_season: int,
-    ) -> List[int]:
-        """產生從 start_season 到 end_season 的所有季度"""
-
-        return [season for season in range(start_season, end_season + 1)]
 
     @staticmethod
     def generate_year_period_range(
