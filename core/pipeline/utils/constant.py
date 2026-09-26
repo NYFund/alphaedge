@@ -48,6 +48,9 @@ class ListingBoard(str, Enum):
 
     SII = "sii"  # 上市（Securities Investment Information）
     OTC = "otc"  # 上櫃
+    # 興櫃與公開發行**尚未納入爬取範圍**，代碼先登錄：來源頁面接受這兩個值，
+    # 但本專案的行情與籌碼只涵蓋上市與上櫃。少了它們，日後要抓時會有人以為
+    # 來源不支援而另找資料源
     ROTC = "rotc"  # 興櫃
     PUB = "pub"  # 公開發行
     ALL = "all"  # 全部

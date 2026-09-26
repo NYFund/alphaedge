@@ -43,15 +43,6 @@ class DataUtils:
         return df.iloc[:-n_rows]
 
     @staticmethod
-    def remove_redundant_col(df: pd.DataFrame, col_name: str) -> pd.DataFrame:
-        """刪除 DataFrame 中指定 column 欄位後面的所有欄位"""
-
-        if col_name in df.columns:
-            last_col_loc: int = df.columns.get_loc(col_name)
-            df = df.iloc[:, : last_col_loc + 1]
-        return df
-
-    @staticmethod
     def convert_col_to_numeric(
         df: pd.DataFrame, exclude_cols: List[str]
     ) -> pd.DataFrame:
@@ -61,12 +52,6 @@ class DataUtils:
             if col not in exclude_cols:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         return df
-
-    @staticmethod
-    def pad2(n: Union[int, str]) -> str:
-        """將數字補足為兩位數字字串（月份、日期組 URL 時用）"""
-
-        return str(n).zfill(2)
 
     @staticmethod
     def fill_nan(
@@ -197,32 +182,6 @@ class DataUtils:
             if col in variants:
                 return std_col
         return col
-
-    @staticmethod
-    def replace_column_name(
-        col_name: str,
-        keywords: List[str],
-        replacement: str,
-    ) -> str:
-        """
-        - Description:
-            將欄位名稱中出現的指定關鍵字替換為統一用詞（Ex: 資產總計 → 資產總額）
-        - Parameters:
-            - col_name: str
-                欄位名稱
-            - keywords: List[str]
-                欲替換的關鍵字列表（Ex: ["合計", "總計"]）
-            - replacement: str
-                要統一替換成的文字（Ex: "總額"）
-        - Return:
-            - str
-                處理後的欄位名稱；沒有命中任何關鍵字時回傳原名
-        """
-
-        for keyword in keywords:
-            if keyword in col_name:
-                return col_name.replace(keyword, replacement)
-        return col_name
 
     @staticmethod
     def remove_cols_by_keywords(

@@ -252,7 +252,6 @@ class Harness:
                         is_open=is_open,
                         latest_data_date=latest_data_date,
                     ),
-                    risk_config=RiskConfig(),
                     symbols=["2330"],
                     calculate_notional=lambda order: order.price * order.volume * 1000,
                     # 與 `factory._build_context()` 一致；少了它，
