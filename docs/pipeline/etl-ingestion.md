@@ -176,7 +176,7 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 ### 3.3 交易日判定不可用「非週末」近似
 
 台股有**補行交易日**（補班的週六照常開市）。以 `date.weekday()` 判斷會整天漏掉這些日子。
-正確做法是以 `price` 表實際有資料的日期為準（見 `StockMarginUpdater.get_candidate_dates()`）。
+正確做法是以 `price` 表實際有資料的日期為準（見 `StockMarginUpdater.plan_dates()`）。
 
 `price` 自己就是日曆來源，候選母集合只能是平日，於是**被刪掉的補行交易日不會再被請求**。
 故 `StockPriceUpdater` 以 `chip` ∪ `margin` 在區間內的週末日期當 `plan()` 的 `extra_dates`
@@ -292,7 +292,7 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 
 1. **長時間回補必須分批入庫**，不要等整段爬完才寫資料庫。
 2. **入庫失敗要拋 `DataLoadError`**，不可只記 warning；重複鍵要走 `INSERT OR IGNORE`，不可算成失敗（§3.1、§3.2）。
-3. **主鍵必須能唯一識別商品。** `price` 把上市與上櫃合併存放卻沒有市場欄位，兩邊曾有代號相撞（上櫃 ETF 早年用 4 碼代號）；主鍵含證券名稱的表會兩者並存、不含的表會直接撞鍵。`StockQuoteAdapter.warn_duplicate_symbols()` 讓同一 bar 內的重複代號不再靜默。
+3. **主鍵必須能唯一識別商品。** `price` 把上市與上櫃合併存放卻沒有市場欄位，兩邊曾有代號相撞（上櫃 ETF 早年用 4 碼代號）；主鍵含證券名稱的表會兩者並存、不含的表會直接撞鍵。`core/adapters/quote_validation.py` 的 `warn_duplicate_symbols()`（股票與期貨的報價轉接層都呼叫）讓同一 bar 內的重複代號不再靜默。
 4. **不要用「連續 N 筆都沒資料」判斷「整批都沒資料」。** 股票代號是排序過的，某個號段連續都是新上市股完全正常；早退條件一旦與順序耦合，連 resume 都會在同一個地方再次誤判。要判斷整批是否為空，就去找能代表整批的樣本（`EQUITY_CHANGE_PROBE_STOCK_IDS`：三檔長期上市的權值股全部查無資料才判定未申報）。
 5. **每批結束留一行統計，而且要數到最後一層。** 統計只數請求層（`N requested / N no data / N unreachable`）時，「兩千次請求全部成功、清洗後零列入庫」會長得跟正常一模一樣。現行格式是 `N requested / N ok / N no data / N unreachable / N cleaned empty`，`cleaned empty` 非 0 即升為 warning。
 6. **跨期間的來源要逐期間實查，測試 fixture 要涵蓋每一種期間。** MOPS 權益變動表的本期標籤 Q1 是「第N季」、Q2／Q3／Q4 分別是「上半年度／前3季／年度」；只用 Q1 驗證時，測試與實跑會同時漏掉另外三季。

@@ -1,4 +1,5 @@
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -17,11 +18,17 @@ from typing import Dict, List, Set, Tuple
 策略檔也不會有人察覺。故另以 git 歷史判斷：指不到、全 repo 無同名檔、
 **但歷史上存在過**，那就是刪除造成的懸空引用。
 
+第三類是**符號層面的漂移**：檔案還在、路徑還對，但裡面的類別或方法已改名或搬走。
+路徑檢查對這一類完全失明，而它比路徑漂移更常見——重構改方法名不必動任何檔名。
+判準與路徑那邊同一套邏輯：只在**有正面證據**時回報（類別找得到、成員找不到）。
+
 - Features:
     1. 抓行內程式碼（`` `core/xxx/yyy.py` ``）與 Markdown 連結中的帶目錄路徑
     2. 指得到就跳過；指不到但全 repo 有同名檔即回報，並列出實際位置
     3. 指不到、無同名檔、但 git 歷史存在過 → 回報為「指向已刪除的檔案」
     4. 只寫檔名不寫目錄的簡稱（`` `factory.py` ``）不算——那是行文，不是連結
+    5. 反引號內的 `` `Class.method()` ``：類別在全庫有定義而成員（含繼承）
+       找不到時回報，`.md` 與 `.py` 註解一起掃
 - 使用場景:
     python scripts/check_doc_paths.py           # 有漂移時以非零狀態碼結束
     python scripts/check_doc_paths.py --list-unknown  # 另列指不到且無同名檔者
@@ -29,8 +36,14 @@ from typing import Dict, List, Set, Tuple
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
-# 掃描哪些 `.md`
+# 掃描哪些 `.md`。
+# `.claude/`、`.cursor/`、`.github/` 是 AI 工具與 CI 讀規則的入口，那裡的路徑指錯
+# **會讓規則靜默失效**——沒有任何錯誤訊息，只是那條規則從此不生效，
+# 正是這支腳本存在的理由。`.github/` 目前無 `.md`，先納入以防日後新增
 _SCAN_DIRS: Tuple[str, ...] = (
+    ".claude",
+    ".cursor",
+    ".github",
     "docs",
     "backlog",
     "core",
@@ -52,6 +65,16 @@ _EXTENSIONS: Tuple[str, ...] = (".py", ".sh", ".yaml", ".yml", ".toml", ".cfg", 
 
 # 行內程式碼與 Markdown 連結目標
 _INLINE_CODE: re.Pattern = re.compile(r"`([^`\n]+?)`")
+
+# 符號引用只認 `Class.method()`：類別名開頭大寫，才有辦法與「變數.方法()」分開。
+# 接收者是變數時（`risk.check()`）無從得知它的型別，判不了真假
+_SYMBOL_CALL: re.Pattern = re.compile(
+    r"([A-Z][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\(\)"
+)
+
+# 符號檢查不掃的目錄：`backlog/` 一律引用**還不存在**的規劃符號，
+# 並且會刻意引述「原本寫錯的名字」當對照。理由與 `_DELETION_EXEMPT_DIRS` 相同
+_SYMBOL_EXEMPT_DIRS: Tuple[str, ...] = ("backlog/",)
 
 # 歷史紀錄檔：當時的路徑就是那樣，改成現在的路徑反而讓紀錄失真
 _HISTORICAL_DOCS: Set[str] = set()
@@ -146,6 +169,21 @@ def _iter_markdown_files() -> List[Path]:
     return sorted(set(files))
 
 
+def _iter_python_files() -> List[Path]:
+    """取得掃描範圍內所有 `.py`（含 repo 根目錄那幾支入口）"""
+
+    files: List[Path] = []
+    for directory in _SCAN_DIRS:
+        root: Path = _PROJECT_ROOT / directory
+        if not root.exists():
+            continue
+        files.extend(
+            path for path in root.rglob("*.py") if not _EXCLUDE_PARTS & set(path.parts)
+        )
+    files.extend(_PROJECT_ROOT.glob("*.py"))
+    return sorted(set(files))
+
+
 def _collect_real_paths() -> List[str]:
     """全 repo 中所有原始碼／設定檔的相對路徑"""
 
@@ -186,12 +224,17 @@ def _moved_to(reference: str, real_paths: List[str]) -> List[str]:
     - Description:
         找出這個引用「搬到哪裡去了」
 
-        判準是**檔名相同，且引用寫的每一段父目錄仍出現在新路徑裡**。
+        判準是**檔名相同，且兩條路徑的父目錄集合有一邊包含另一邊**。
 
         只比對檔名太寬：`base.py` 全 repo 有七個，規劃文件裡的
         `providers/base.py` 會被任何一個 `base.py` 認領成「搬過去了」。
         只比對最後兩段又太窄：`core/api/futures_chip_api.py` 搬成
         `core/api/tw/futures_chip_api.py` 時，最後兩段已經不同。
+
+        **兩個方向都要比**。只比「引用的父目錄 ⊆ 新路徑」時，僅抓得到搬得更深
+        （`core/api/x.py` → `core/api/tw/x.py`）；檔案**往上搬**時引用會多出一段
+        已不存在的目錄，那一段永遠不可能出現在新路徑裡，於是整條被歸進
+        「指不到又無同名檔」而靜默放過——而重構把套件攤平時，往上搬才是多數。
     - Parameters:
         - reference: str
             文件裡寫的路徑
@@ -206,11 +249,18 @@ def _moved_to(reference: str, real_paths: List[str]) -> List[str]:
     name: str = parts[-1]
     ancestors: Set[str] = set(parts[:-1])
 
-    return [
-        real
-        for real in real_paths
-        if Path(real).name == name and ancestors <= set(Path(real).parts[:-1])
-    ]
+    matched: List[str] = []
+    for real in real_paths:
+        if Path(real).name != name:
+            continue
+        real_ancestors: Set[str] = set(Path(real).parts[:-1])
+        # 真實路徑在 repo 根目錄時 `real_ancestors` 是空集合，而空集合是任何集合的
+        # 子集——不擋掉的話，根目錄放一支 `base.py` 就會被每一條 `*/base.py` 認領
+        if ancestors <= real_ancestors or (
+            real_ancestors and real_ancestors <= ancestors
+        ):
+            matched.append(real)
+    return matched
 
 
 def _split_into_package(reference: str) -> bool:
@@ -265,6 +315,132 @@ def check_markdown_links() -> List[str]:
                 broken.append(f"{rel_doc}: {match.group(1)}")
 
     return broken
+
+
+def _index_classes() -> Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]:
+    """
+    - Description:
+        以 AST 索引全庫的類別成員與基底類別
+
+        **同名類別的成員取聯集**：同一個名字在不同檔案各有一份時（測試替身最常見），
+        分不出文件講的是哪一份，取聯集才不會把存在的成員誤判成不存在。
+        基底只記名字不記模組——這裡只需要「往上找得到這個成員嗎」。
+    - Return:
+        - Tuple[Dict[str, Set[str]], Dict[str, Set[str]]]
+            （類別名 → 自身成員名）、（類別名 → 基底類別名）
+    """
+
+    members: Dict[str, Set[str]] = {}
+    bases: Dict[str, Set[str]] = {}
+
+    for path in _iter_python_files():
+        try:
+            tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            own: Set[str] = members.setdefault(node.name, set())
+            parents: Set[str] = bases.setdefault(node.name, set())
+
+            for base in node.bases:
+                if isinstance(base, ast.Name):
+                    parents.add(base.id)
+                elif isinstance(base, ast.Attribute):
+                    parents.add(base.attr)
+
+            for sub in ast.walk(node):
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    own.add(sub.name)
+                elif isinstance(sub, ast.AnnAssign) and isinstance(
+                    sub.target, ast.Name
+                ):
+                    own.add(sub.target.id)
+                elif isinstance(sub, ast.Assign):
+                    for target in sub.targets:
+                        if isinstance(target, ast.Name):
+                            own.add(target.id)
+                        elif isinstance(target, ast.Attribute):
+                            # `self.xxx = ...`：實例屬性也算成員，否則文件提到
+                            # 在 `__init__` 裡才長出來的屬性會被誤判
+                            own.add(target.attr)
+
+    return members, bases
+
+
+def _resolve_members(
+    class_name: str,
+    members: Dict[str, Set[str]],
+    bases: Dict[str, Set[str]],
+    seen: Set[str],
+) -> Set[str]:
+    """沿基底類別往上收集所有成員名（`seen` 擋住繼承環，不然遇到環會無限遞迴）"""
+
+    if class_name in seen:
+        return set()
+    seen.add(class_name)
+
+    resolved: Set[str] = set(members.get(class_name, set()))
+    for parent in bases.get(class_name, set()):
+        resolved |= _resolve_members(parent, members, bases, seen)
+    return resolved
+
+
+def check_symbol_references() -> List[Tuple[str, str, str]]:
+    """
+    - Description:
+        檢查反引號內的 `` `Class.method()` `` 解析得到
+
+        **只回報「類別找得到、成員找不到」**。這與路徑檢查只回報「同名檔存在於別處」
+        是同一個判準：要有正面證據才算漂移。放寬會立刻淹掉——實測全庫有 84 處
+        `X()` 或 `x.y()` 形式的引用，其中絕大多數是 builtin（`print()`）、
+        第三方（`pd.DataFrame()`）、規劃中還不存在的符號，或接收者是變數而非類別
+        （`capital_allocator.reserve()`）。那些一律無從判斷，報出來只會讓閘門被噪音鎖死。
+
+        `.py` 也掃：反引號在 Python 裡只出現在註解與說明字串，而**註解指向已改名的
+        方法**正是最常見的一類——改名時 grep 不到反引號裡的舊名字。
+    - Return:
+        - List[Tuple[str, str, str]]
+            （檔案、寫的符號、該類別實際有的相近成員）；全部解析得到時為空
+    """
+
+    members, bases = _index_classes()
+    findings: List[Tuple[str, str, str]] = []
+
+    for path in _iter_markdown_files() + _iter_python_files():
+        rel: str = str(path.relative_to(_PROJECT_ROOT))
+        if rel.startswith(_SYMBOL_EXEMPT_DIRS):
+            continue
+
+        for raw in sorted(set(_INLINE_CODE.findall(path.read_text(encoding="utf-8")))):
+            matched: re.Match = _SYMBOL_CALL.fullmatch(raw.strip())
+            if matched is None:
+                continue
+
+            owner, member = matched.group(1), matched.group(2)
+            if owner not in members:
+                continue
+            if member in _resolve_members(owner, members, bases, set()):
+                continue
+
+            findings.append((rel, f"{owner}.{member}()", _hint(owner, member, members)))
+
+    return findings
+
+
+def _hint(owner: str, member: str, members: Dict[str, Set[str]]) -> str:
+    """給出該類別實際有的相近成員，讓修的人不必自己再 grep 一次"""
+
+    keywords: Set[str] = {part for part in member.split("_") if len(part) > 3}
+    near: List[str] = sorted(
+        name
+        for name in members.get(owner, set())
+        if not name.startswith("_") and keywords & set(name.split("_"))
+    )
+    return "、".join(f"{owner}.{name}()" for name in near[:3])
 
 
 def main() -> int:
@@ -370,6 +546,19 @@ def main() -> int:
         return 1
 
     print("指不到檔案的 Markdown 連結：0 條")
+
+    stale_symbols: List[Tuple[str, str, str]] = check_symbol_references()
+    if stale_symbols:
+        print(f"\n解析不到的符號引用（{len(stale_symbols)} 處）：")
+        for rel_doc, symbol, hint in stale_symbols:
+            print(f"  {rel_doc}")
+            print(f"      寫的是 {symbol}（類別有定義，這個成員沒有）")
+            if hint:
+                print(f"      該類別實際有 {hint}")
+        print("\n改成現存的名字；類別確實不再有這個成員時，連敘述一起改掉。")
+        return 1
+
+    print("解析不到的符號引用：0 處")
     return 0
 
 

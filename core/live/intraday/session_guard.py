@@ -164,7 +164,7 @@ def uncovered_day_trade_positions(account: BaseAccount) -> List[BasePosition]:
     """
     找出當沖放空且尚未回補的部位
 
-    判準與回測的 `TwStockSettlementModel.cover_day_trade_shorts()` 一致：
+    判準與回測的 `TwStockSettlementModel.enforce_day_trade_cover()` 一致：
     未平倉的空單，且 `is_day_trade` 為真。兩邊不一致的話，回測看得到的留倉
     在實盤不會發生（或反過來），而 parity 比對會把它歸成未解釋差異。
     """

@@ -26,7 +26,7 @@ except (ModuleNotFoundError, ImportError):
     DOLPHINDB_AVAILABLE = False
     print("⚠️  dolphindb 模組未安裝，使用 mock 模組（測試模式）")
 
-from core.config import TICK_DOWNLOADS_PATH, TICK_METADATA_DIR_PATH
+from core.config import TICK_DOWNLOADS_PATH, TICK_METADATA_PATH
 from core.pipeline.tw.updaters.stock_tick_updater import StockTickUpdater
 from core.pipeline.tw.utils.stock_tick_utils import StockTickUtils
 
@@ -164,21 +164,21 @@ def test_scan_tick_downloads_folder():
         return {}
 
 
-def test_update_tick_downloads_metadata() -> None:
-    """測試 `StockTickUtils.update_tick_downloads_metadata()`：更新 tick_downloads_metadata.json"""
+def test_update_tick_metadata_from_csv() -> None:
+    """測試 `StockTickUtils.update_tick_metadata_from_csv()`：更新 `tick_metadata.json`"""
 
     print(f"\n{'=' * 60}")
-    print("測試 update_tick_downloads_metadata()")
+    print("測試 update_tick_metadata_from_csv()")
     print(f"{'=' * 60}")
 
-    downloads_metadata_path = TICK_METADATA_DIR_PATH / "tick_downloads_metadata.json"
-    print(f"Metadata 檔案路徑: {downloads_metadata_path}")
+    metadata_path = TICK_METADATA_PATH
+    print(f"Metadata 檔案路徑: {metadata_path}")
 
     try:
         # 先讀更新前的內容，才比得出這次增減了幾檔
         metadata_before = None
-        if downloads_metadata_path.exists():
-            with open(downloads_metadata_path, encoding="utf-8") as f:
+        if metadata_path.exists():
+            with open(metadata_path, encoding="utf-8") as f:
                 import json
 
                 metadata_before = json.load(f)
@@ -188,13 +188,13 @@ def test_update_tick_downloads_metadata() -> None:
         else:
             print("\n📄 metadata 檔案不存在，將創建新檔案")
 
-        print("\n開始更新 tick_downloads_metadata...")
-        StockTickUtils.update_tick_downloads_metadata()
+        print("\n開始更新 tick_metadata...")
+        StockTickUtils.update_tick_metadata_from_csv()
 
         print("\n✅ 更新完成！")
 
-        if downloads_metadata_path.exists():
-            with open(downloads_metadata_path, encoding="utf-8") as f:
+        if metadata_path.exists():
+            with open(metadata_path, encoding="utf-8") as f:
                 import json
 
                 metadata_after = json.load(f)
@@ -221,12 +221,12 @@ def test_update_tick_downloads_metadata() -> None:
                         last_date = stock_info.get("last_date", "N/A")
                         print(f"   {i}. {stock_id}: last_date = {last_date}")
 
-                print(f"\n📁 Metadata 檔案已保存至: {downloads_metadata_path}")
+                print(f"\n📁 Metadata 檔案已保存至: {metadata_path}")
         else:
             print("\n⚠️  metadata 檔案未生成（可能沒有找到任何 CSV 檔案）")
 
     except Exception as e:
-        print(f"\n❌ 執行 update_tick_downloads_metadata() 時發生錯誤: {e}")
+        print(f"\n❌ 執行 update_tick_metadata_from_csv() 時發生錯誤: {e}")
         import traceback
 
         traceback.print_exc()
@@ -236,19 +236,19 @@ def test_both_functions() -> None:
     """掃描與更新 metadata 一起跑，並驗證兩者看到的股票集合一致"""
 
     print(f"\n{'=' * 60}")
-    print("測試 scan_tick_downloads_folder() 和 update_tick_downloads_metadata()")
+    print("測試 scan_tick_downloads_folder() 和 update_tick_metadata_from_csv()")
     print(f"{'=' * 60}")
 
     print("\n【步驟 1】測試 scan_tick_downloads_folder()")
     stock_last_dates = test_scan_tick_downloads_folder()
 
-    print("\n【步驟 2】測試 update_tick_downloads_metadata()")
-    test_update_tick_downloads_metadata()
+    print("\n【步驟 2】測試 update_tick_metadata_from_csv()")
+    test_update_tick_metadata_from_csv()
 
     print("\n【步驟 3】驗證一致性")
-    downloads_metadata_path = TICK_METADATA_DIR_PATH / "tick_downloads_metadata.json"
-    if downloads_metadata_path.exists():
-        with open(downloads_metadata_path, encoding="utf-8") as f:
+    metadata_path = TICK_METADATA_PATH
+    if metadata_path.exists():
+        with open(metadata_path, encoding="utf-8") as f:
             import json
 
             metadata = json.load(f)
@@ -289,7 +289,7 @@ if __name__ == "__main__":
         print("=" * 60)
         print("1. 測試 StockTickUpdater.update() - 不存入資料庫")
         print("2. 測試 scan_tick_downloads_folder() - 掃描下載資料夾")
-        print("3. 測試 update_tick_downloads_metadata() - 更新 metadata")
+        print("3. 測試 update_tick_metadata_from_csv() - 更新 metadata")
         print("4. 測試兩個函數的組合使用")
         print("5. 執行所有測試")
         print("=" * 60)
@@ -325,7 +325,7 @@ if __name__ == "__main__":
         print("=" * 60)
 
     elif choice == "3":
-        test_update_tick_downloads_metadata()
+        test_update_tick_metadata_from_csv()
         print("\n" + "=" * 60)
         print("測試完成！")
         print("=" * 60)
@@ -341,8 +341,8 @@ if __name__ == "__main__":
         print("\n【測試 1/3】scan_tick_downloads_folder()")
         test_scan_tick_downloads_folder()
 
-        print("\n【測試 2/3】update_tick_downloads_metadata()")
-        test_update_tick_downloads_metadata()
+        print("\n【測試 2/3】update_tick_metadata_from_csv()")
+        test_update_tick_metadata_from_csv()
 
         print("\n【測試 3/3】組合測試")
         test_both_functions()

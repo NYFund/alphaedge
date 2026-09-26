@@ -19,7 +19,7 @@
 | 台期貨連續合約 | 由 `futures_price_daily` 衍生（不連網路） | `FuturesPriceAPI`（`get_continuous*`） | SQLite `tw_futures.db` `futures_continuous` | 同上 | 3 種調整方式 × 3 種換月規則；每次整段重建 |
 | 台期貨保證金 | TAIFEX 公告附件（CSV） | `FuturesMarginAPI` | SQLite `tw_futures.db` `futures_margin_history`（指數類每口金額）、`stock_futures_margin_rate_history`（股票類比例） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
 | 台期貨籌碼 | TAIFEX 三大法人／大額交易人／選擇權 PCR | `FuturesChipAPI` | SQLite `tw_futures.db` `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | 三大法人：2023-09-04（來源只保留約三年）；其餘以庫內最早一筆為準 | `get_available()` 只回傳查詢日之前已公布者（避免前視） |
-| 股票期貨標的池 | TAIFEX 標的證券一覽表（GET） | `FuturesStockUniverseAPI` | SQLite `tw_futures.db` `futures_stock_universe` | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseUpdater.get_active_products()` |
+| 股票期貨標的池 | TAIFEX 標的證券一覽表（GET） | `FuturesStockUniverseAPI` | SQLite `tw_futures.db` `futures_stock_universe` | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
 | 市場開休市日期 | TWSE `holidaySchedule`（JSON，一年一次請求） | `MarketHolidayAPI` | SQLite `market_holiday` | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
 | Tick 逐筆 | Shioaji + DolphinDB | `StockTickAPI` | DolphinDB `tickDB` | 預設更新起日 `2024-05-10`（`TICK_UPDATE_START_DATE`）；Shioaji 可查區間約自 **2020-03-02** | 需 DDB 環境 |
 
