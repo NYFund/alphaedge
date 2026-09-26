@@ -49,6 +49,7 @@ updater 負責串起流程與決定要處理哪些日期。
 | `FuturesContinuousUpdater` | 每組（商品, 換月規則）寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
 | `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1，**加上**表內最早與最新之間、期貨有交易卻沒有籌碼的月份（交易日取自 `futures_price_daily`） | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
 | `FuturesTickUpdater` | 全部跑完 | 以日線行情表決定契約、預設只爬近月 | **無**（DolphinDB `keepDuplicates=ALL`，寫入路徑尚未實測） | `DataLoadError` |
+| `MarketHolidayUpdater` | 每年度寫完 | 逐年度重抓前一年、今年與明年（**先刪後寫**，站方更正公告時舊列才不會留著） | `INSERT OR IGNORE`（先刪該年度） | `DataLoadError`（全部年度跑完才拋） |
 
 **未分批的幾個並非疏漏**：dividend／mrr／fs 的量級是十餘年 × 數十個年月或年季，
 單次執行以分鐘計，中斷重跑的成本可接受。tick 走 DolphinDB，語意與 SQLite 組不同。

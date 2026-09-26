@@ -10,7 +10,7 @@
 2. **方向來自訂單，策略只做白名單**：記帳與成本路徑一律依**每一張 `StockOrder` 自己的 `position_type`** 決定；策略層的 `allowed_directions` 只用於驗證與提供預設值。這與業界框架（Lean／Backtrader／Zipline 的 signed quantity 模型）一致——方向是部位的屬性，不是策略的屬性——要做多空並存的市場中性策略時不需重構引擎。
 3. **成本模型可插拔**：手續費／稅／券費／利息／保證金集中在 `StockCostModel`，由「放空管道（`ShortMethod`）+ 是否當沖」決定參數組合，不在 `PositionManager` 裡散落 if-else。
 4. **當沖與留倉同骨架**：兩者差別只是「是否收借券費／利息、是否佔用保證金、稅率是否減半」，共用同一組開倉／平倉流程。
-5. **保守預設、可調參數**：所有費率集中在 `constant.py` 與策略可覆寫的 config，不寫死在公式裡；預設值取市場常見值（見 §2.3）。
+5. **保守預設、可調參數**：所有費率集中在 `core/utils/constant/` 與策略可覆寫的 config，不寫死在公式裡；預設值取市場常見值（見 §2.3）。
 6. **不可靜默失敗**：放空路徑任何無法成交（券源不足、非可空標的、漲停無法回補、保證金不足）都必須 log warning 或計入統計，禁止讓單安靜地消失。
 7. **成交價必須可信**：任何成交價都要落在當日 `[low, high]` 與漲跌停區間內，違反即拒單。同一根 bar 內「先開後平」的當沖模式最容易混入前視偏誤（策略看得到當日收盤，卻宣稱以開盤價放空），這道檢查是唯一防線。
 8. **明確標示未模擬的部分**：T+2 交割、券源可得性的個股費率等一律列入「已知簡化」（§5.7），不假裝有做。
@@ -134,7 +134,7 @@ TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計
 
 ⚠️ **型別注意**：`Commission` / `ShortCost` 是 `(float, Enum)`，塞不進 `date` 或 `int` 語意的成員。因此 `DAY_TRADE_TAX_EXPIRY = datetime.date(2027, 12, 31)` 與 `DAYS_PER_YEAR = 365` 一律放 **module-level 常數**。回測區間跨過 `DAY_TRADE_TAX_EXPIRY` 時，`StockCostModel` 會 `logger.warning` 提醒「當沖稅率減半假設可能已失效」——**看的是回測區間，不是執行當下的日期**。
 
-### 3.3 成本模型（`core/backtest/models/cost_model.py`）
+### 3.3 成本模型（`core/backtest/models/cost_model.py`；設定類別在 `core/models/cost_config.py`）
 
 `CostConfig` 為一次回測固定的成本參數，`StockCostModel` 為方向感知的成本／損益計算，`PositionManager` 只呼叫這一層。
 
@@ -211,13 +211,22 @@ class StockCostModel:
 - **實際記帳與成本路徑**：一律看 `order.position_type` / `position.position_type`，引擎與 `PositionManager` **不得**回頭讀 `strategy.position_type` 做分支。
 - 要寫市場中性策略，只需 `allowed_directions = {LONG, SHORT}`，引擎不用改（同標的雙向仍禁止，見 §5.5）。
 
-### 3.5 `Backtester` 的方向中立機制
+### 3.5 方向中立機制
+
+前四個是**純函式，住在 `core/execution/order_preprocess.py`**（回測與實盤共用同一份）；
+`Backtester` 只有 `validate_orders()`、`enrich_orders()`、`validate_fill_price()`
+三個薄包裝，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
 
 ```python
 resolve_open_action(position_type)   # LONG → BUY；SHORT → SELL
 resolve_close_action(position_type)  # LONG → SELL；SHORT → BUY
 validate_orders(orders, stage)       # 白名單 + action 與方向是否相符，不符 warning 剔除
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
+```
+
+另外兩個是 `Backtester` 自己的方法，不在前處理層：
+
+```python
 validate_fill_price(order, quote)    # §5.6 的三道檢查
 snapshot_daily_equity(...)           # 含未實現損益的逐日權益
 ```
@@ -458,7 +467,7 @@ snapshot_daily_equity(date, quotes)
 | 檔案 | 內容 |
 |------|------|
 | `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
-| `core/backtest/models/cost_model.py` | `CostConfig`／`ShortConstraint`／`StockCostModel` |
+| `core/backtest/models/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
 | `core/backtest/models/fill_model.py` | 成交價驗證、券源檢核、當日累計高低點 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/managers/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |

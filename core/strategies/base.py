@@ -171,8 +171,9 @@ class BaseStrategy(ABC):
             數量由 portfolio 層依資金或保證金換算（見 `check_open_signal()`），
             故回傳的 `Signal` 一律不填 `volume`。
 
-            尚未搬到分層鉤子的策略仍自行覆寫 `check_open_signal()`，那條路徑
-            不會走到這裡；**兩條路徑只能擇一**，同時覆寫等於讓本方法變成死碼。
+            **策略不覆寫 `check_open_signal()`**：那是基底提供的引擎契約，
+            現行三支正式策略全部只實作 `generate_*_signals()`。覆寫它會讓
+            本方法整個不被走到，數量換算與風控前處理也一併被跳過。
         - Parameter:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊

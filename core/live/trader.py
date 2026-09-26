@@ -1844,7 +1844,7 @@ class LiveTrader:
 
             **取券商快照的 `total_equity`，不是「可用餘額 ＋ 各策略持倉占用」**。
             後者少算兩樣東西：未交割款，以及**不屬於任何策略的持倉**
-            （接管來的 `__unattributed__`）。`BrokerAccountQuery.get_stock_account()`
+            （接管來的 `__unattributed__`）。`ShioajiAccountQuery.get_stock_account()`
             的說明寫明 `total_equity` 才是額度檢查該用的值——拿可用餘額當基準的話，
             只要隔日還有部位在場上就必然誤判成額度超標，整天都啟動不了。
 
