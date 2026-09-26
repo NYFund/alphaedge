@@ -53,9 +53,14 @@ class StockUtils:
         - Description:
             計算股票買賣時的手續費
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel`**，不要從 `core/managers/`、
-            `core/backtest/` 或策略層直接呼叫本函式；它只是底層純計算，
-            僅供 `StockCostModel` 與研究腳本使用。
+            ⚠️ **記帳的唯一入口是 `StockCostModel.commission()`**，不要從
+            `core/managers/`、`core/backtest/` 或策略層直接呼叫本函式。
+
+            **兩者尚未收斂**：`StockCostModel.commission()` 自己從 `self.config`
+            推算，一次都沒有呼叫過本函式。現行呼叫端只有同檔的
+            `calculate_transaction_cost()`、`strategy_lab/` 的研究腳本與測試，
+            所以口徑差異目前不影響任何回測數字；但同一條規則存在兩份，
+            改費率時只改一邊就會分岔。
         - Parameters:
             - price: float
                 成交價格
@@ -90,9 +95,16 @@ class StockUtils:
         - Description:
             計算股票賣出時的交易稅
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel`**，不要從 `core/managers/`、
-            `core/backtest/` 或策略層直接呼叫本函式；它只是底層純計算，
-            僅供 `StockCostModel` 與研究腳本使用。
+            ⚠️ **記帳的唯一入口是 `StockCostModel.tax()`**，不要從 `core/managers/`、
+            `core/backtest/` 或策略層直接呼叫本函式。
+
+            **兩者尚未收斂，而且口徑不同**：`StockCostModel.tax()` 自己從
+            `self.config` 推算，並會**依成交日**判斷當沖減半是否已實施；本函式吃
+            模組層級常數、不看日期，`is_day_trade=True` 就一律減半。它一次都沒有
+            被 `StockCostModel` 呼叫過，現行呼叫端只有同檔的
+            `calculate_transaction_cost()`、`strategy_lab/` 的研究腳本與測試，
+            所以差異目前不影響任何回測數字；但同一條規則存在兩份，
+            改法規時只改一邊就會分岔。
         - Parameters:
             - price: float
                 成交價格

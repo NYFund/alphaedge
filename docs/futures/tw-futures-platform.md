@@ -267,9 +267,11 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 - 契約單位歷史由**快照差分**推得（`get_contract_size_history()`），查詢日早於第一份快照時退回最早一份——近似，非事實。
 - 標的池的掛牌日 ≈ 首次出現、下市日 ≈ 最後一次出現早於最新快照，**都是觀測值不是官方日期**，
   故建議每日更新標的池（快照愈稀疏，推出來的日期誤差愈大）。
-- ⚠️ **這條路目前只走通了報價這半邊**：adapter 拿到的 `FuturesQuote.multiplier` 是對的，
-  但 `FuturesPositionManager` 開倉時會自己再查一次 `FUTURES_MULTIPLIER`，股期當場 `KeyError`。
-  股期因此**還不能回測**，詳見 §六〈已知限制〉。
+- **乘數兩層都已接上**：除了 adapter 那半邊，`FuturesPositionManager` 也收
+  `multiplier_resolver`，`get_multiplier()` 先走 resolver 再退回常數，而
+  `core/backtest/factory.py` 實際注入的就是 `TwFuturesDataFeed.resolve_multiplier`。
+  開倉不會再落到 `FUTURES_MULTIPLIER` 查不到股期而 `KeyError`。
+  真正的阻塞只剩**行情覆蓋**（目前三檔試跑），詳見 §六〈已知限制〉。
 
 ---
 

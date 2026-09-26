@@ -248,17 +248,33 @@ sequenceDiagram
 
 ## 七、已知的相依例外
 
-§一的圖描述的是**呼叫方向**；實際 `import` 方向有幾處與圖不同，皆登錄在 `scripts/check_layer_deps.py` 的 `_KNOWN_REVERSE`（ratchet：新增反向相依會讓腳本以非零結束）：
+§一的圖描述的是**呼叫方向**；實際 `import` 方向與圖不同的地方分兩類，由
+`scripts/check_layer_deps.py` 分開處理：
 
-| 現況 | 為什麼先不動 |
+- **反向相依**（低層 import 高層）：`_KNOWN_REVERSE` 現在是**空字典**，也就是一條都沒有。
+  這是目標狀態而不是「還沒登記」——ratchet 的意思是**再出現一條就讓腳本以非零結束**。
+- **同層不同套件互相 import**：腳本的 F 區，**只列出不擋**，需人工判讀。
+  同層之間沒有方向可言，機器判不出哪一條是設計、哪一條是疏漏。
+  條數以腳本輸出為準，本文件不複製數字——那種數字只會靜默過期。
+
+下表是 F 區裡需要解釋的幾組，以及它們為什麼是刻意的：
+
+| 現況 | 為什麼是這樣 |
 |---|---|
-| `core/utils/instrument.py` import 引擎層的 `market_calendar` | `StockUtils` 有 pipeline／adapters／strategy_lab 三方使用者，搬進 `core/backtest/` 會讓資料管線反向相依引擎（見 [多市場回測引擎架構 §五](multi-market-engine.md#五已知簡化)） |
-| `core/pipeline/tw/cleaners/futures_tick_cleaner.py` 與 `futures_continuous_*` import `futures_calendar`／`futures_roll` | 交易日曆與換月規則屬「市場結構」，目前住在 `datafeed/` 下；正確歸屬是獨立的市場結構層，待美股進來時一併搬 |
-| 策略層與引擎層互相引用契約：引擎／factory／報表 → 策略契約（三個 `base.py`）→ 引擎的 model 型別 | 圖的用途是說明呼叫序列，改畫相依圖反而難讀；`check_layer_deps.py` 以獨立的「策略契約」等級處理 |
-| `core/pipeline/tw/updaters/*` import `core/api/tw/*`（期貨行情、標的池 API） | 單向（api 已不再 import pipeline：欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`）；同層不同套件，`check_layer_deps.py` 只列出不擋 |
-| `settlement_model.py` import `futures_roll`（datafeed）、`StockCostModel`、兩個 PositionManager 的具體類別 | 期貨轉倉需要 planner 與 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
-| **策略層仍 import `core/backtest/` 的 `BaseDataFeed`、`CostConfig`／`FuturesCostConfig`、`FillConfig`／`FuturesFillConfig`、`MarketCalendar`、`FuturesCalendar`、`FuturesRollConfig`**（2026-09-19 實測 6 檔、13 處） | 與 `sizing.py` 原本放在 `core/backtest/models/` 是**同一種分層錯置**——那些設定回測與實盤都要用，不是回測概念。`sizing.py` 已於 2026-09-19 搬到 `core/portfolio/`，這幾個沒跟著搬是因為影響面差很多：搬動它們會牽動 DataFeed 與成本／成交模型的**所有**呼叫端。實盤下單規劃對 `BaseDataFeed` 有相同裁示（`LiveDataFeed` 會繼承它，因為策略的 `setup_apis(feed)` 型別就是它） |
-| `core/portfolio/construction.py` import `core/managers/futures/position_manager.py` 的 `FuturesMarginConfig` | 同層不同套件（皆為分層 4），`check_layer_deps.py` 只列出不擋。期貨的部位建構要算每口保證金，而保證金設定的權威來源在部位管理層——複製一份到 portfolio 層會與 `FuturesPositionManager` 的比率模式漂移，算出的口數開不進去 |
+| 策略契約與引擎互相引用：引擎／factory／報表／`core/datafeed/base.py` → 策略契約（三個 `base.py`） | 圖的用途是說明呼叫序列，改畫相依圖反而難讀；`check_layer_deps.py` 以獨立的「策略契約」等級處理，不列入反向相依 |
+| `core/pipeline/tw/updaters/*` → `core/api/tw/*`（期貨行情、標的池 API） | 單向：api 已不再 import pipeline（欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`） |
+| `core/pipeline/tw/` → `core/market/tw/`（`futures_calendar`、`futures_roll`） | 交易日曆與換月規則屬市場結構，**已經住在 `core/market/`**，與 pipeline 同層。清洗連續合約需要換月規則，是刻意的 |
+| `core/backtest/models/settlement_model/` → `core/managers/*/position_manager.py` | 期貨轉倉與股票的除權息記帳需要 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
+| **策略層仍 import `core/backtest/models/fill_model.py` 的 `FillConfig`／`FuturesFillConfig`／`VolumeCapPolicy`**（3 檔 3 處） | 只剩**成交假設**這一組。成本設定已搬到 `core/models/`、日曆與換月已搬到 `core/market/`、`sizing.py` 已搬到 `core/portfolio/`；成交假設沒跟著搬，是因為它與 `FillModel` 的實作綁得最緊，搬動會牽動所有成交路徑的呼叫端 |
+
+**已經解決、不再列入的三條**（留紀錄以免有人照舊文件重新引入）：
+
+- `core/utils/instrument.py` 曾 import 引擎層的日曆，現在它**不 import 任何 `core/` 模組**。
+- `core/portfolio/construction.py` 曾從 `core/managers/futures/position_manager.py` 取
+  `FuturesMarginConfig`，現在取自 `core/market/tw/futures_margin_config.py`（正常向下相依）。
+- 策略層曾 import `BaseDataFeed`、`CostConfig`／`FuturesCostConfig`、`MarketCalendar`、
+  `FuturesCalendar`、`FuturesRollConfig`（2026-09-19 實測 6 檔 13 處），現在那些型別都已
+  下沉到 `core/models/`、`core/market/`、`core/datafeed/`。
 
 ## 相關文件
 

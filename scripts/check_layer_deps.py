@@ -59,8 +59,9 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 報表與（日後的）策略都要呼叫同一份公式，故必須擺在所有呼叫端之下
     ("core.backtest.analysis", 1, "共用層／績效公式", False),
     # 部位建構層：回測與實盤共用，**不是**回測概念。只可 import `core.models`／
-    # `core.utils`／`core.config`／`core.api`；需要 `FuturesMarginConfig` 時會 import
-    # 同層的 `core.managers`，那會列在 F 區（同層互相 import，僅供人工判讀），是刻意的
+    # `core.utils`／`core.config`／`core.api`／`core.market`——期貨的部位建構要算
+    # 每口保證金，而 `FuturesMarginConfig` 的權威來源在市場結構層（比本層低，屬正常
+    # 向下相依）。複製一份到本層會與部位管理層的比率模式漂移，算出的口數開不進去
     ("core.portfolio", 4, "部位建構層", False),
     # 引擎 ↔ 資料源的共用契約：回測與實盤共用，**不是**回測概念
     # （與 `core.portfolio`、`core.execution` 同一個理由）
