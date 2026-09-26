@@ -7,7 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
-from core.dao.base import BaseDAO, create_symbol_date_index, to_sql_params
+from core.dao.base import BaseDAO, to_sql_params
 
 """台股日 K（`price` 表）的資料存取"""
 
@@ -24,19 +24,12 @@ class StockPriceDAO(BaseDAO):
 
     TABLE_NAME: str = PRICE_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    NEEDS_SYMBOL_DATE_INDEX: bool = True
 
     # 主鍵含證券名稱：同一天同一檔若更名，來源會出現兩列，兩列都要留下
     PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("date", "stock_id", "證券名稱")
 
     # === 建表 ===
-    def ensure_table(self) -> None:
-        """確保資料表與 `(stock_id, date)` 索引存在；可重複呼叫"""
-
-        if not self.table_exists():
-            self.create_table()
-
-        create_symbol_date_index(self.conn, self.TABLE_NAME)
-
     def create_table(self) -> None:
         """建立 `price` 表並 commit"""
 
@@ -71,55 +64,6 @@ class StockPriceDAO(BaseDAO):
             logger.warning(f"Table {self.TABLE_NAME} create unsuccessfully!")
 
     # === 查詢 ===
-    def get_by_date(self, date: datetime.date) -> pd.DataFrame:
-        """取得所有股票指定日期的日 K"""
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE date = ?
-            """,
-            (date,),
-        )
-
-    def get_range(
-        self,
-        start_date: datetime.date,
-        end_date: datetime.date,
-    ) -> pd.DataFrame:
-        """取得所有股票指定日期範圍的日 K；`start_date > end_date` 時回傳空表"""
-
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE date BETWEEN ? AND ?
-            """,
-            (start_date, end_date),
-        )
-
-    def get_by_stock(
-        self,
-        stock_id: str,
-        start_date: datetime.date,
-        end_date: datetime.date,
-    ) -> pd.DataFrame:
-        """取得指定個股在區間內的日 K；`start_date > end_date` 時回傳空表"""
-
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE stock_id = ?
-            AND date BETWEEN ? AND ?
-            """,
-            (stock_id, start_date, end_date),
-        )
-
     def get_trading_days(
         self,
         start_date: datetime.date,
@@ -248,8 +192,3 @@ class StockPriceDAO(BaseDAO):
             f"DELETE FROM {self.TABLE_NAME} WHERE date = ?", to_sql_params(date)
         )
         return cursor.rowcount
-
-    def get_latest_date(self) -> Optional[Any]:
-        """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""
-
-        return self._get_latest_value("date")

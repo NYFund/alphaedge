@@ -126,29 +126,3 @@ class CorporateActionLoader(BaseDataLoader):
             downloads_path=CORPORATE_ACTION_DOWNLOADS_PATH,
             new_rows=new_rows,
         )
-
-    def upsert(self, df: pd.DataFrame) -> int:
-        """
-        - Description:
-            以 `INSERT OR REPLACE` 寫入（不 commit），讓重跑與跨來源覆蓋成為冪等操作
-
-            新增列數以寫入前後的列數差計算：`INSERT OR REPLACE` 覆寫既有主鍵時
-            列數不變，送出的列數分不出「新資料」與「重跑覆寫」。
-        - Parameters:
-            - df: pd.DataFrame
-                要寫入的資料
-        - Return:
-            - int
-                新增的列數（覆寫既有主鍵的不計）
-        """
-
-        if df.empty:
-            return 0
-
-        before: int = self.dao.count_rows()
-        written: int = self.dao.insert_or_replace(df)
-        new_rows: int = self.dao.count_rows() - before
-        logger.info(
-            f"[corporate_action] 寫入 {written} 列（新增 {new_rows}、覆寫 {written - new_rows}）"
-        )
-        return new_rows

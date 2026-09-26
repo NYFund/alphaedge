@@ -194,6 +194,17 @@ class BaseDAO:
     TABLE_NAME: str = ""
     DEFAULT_DB_PATH: Optional[Path] = None
 
+    # 共用查詢用的欄名。**以類別屬性而不是寫死在 SQL 裡**：日期欄與標的欄的
+    # 名稱在不同表上可能不同（命名軸線收斂時 `stock_id` 會改成 `symbol`），
+    # 改名時只動這兩行，不必回頭改每一支 DAO 的 SQL
+    DATE_COLUMN: str = "date"
+    SYMBOL_COLUMN: str = "stock_id"
+
+    # 建表後是否補 `(標的, 日期)` 複合索引。**逐表宣告而不是一律建**：
+    # 只有一列一（標的, 日期）的明細表才吃得到它，參考表（股票基本資料、
+    # 券商名冊）建了只是白佔空間與寫入成本
+    NEEDS_SYMBOL_DATE_INDEX: bool = False
+
     def __init__(
         self,
         conn: Optional[sqlite3.Connection] = None,
@@ -345,6 +356,98 @@ class BaseDAO:
         if row is None or row[0] is None:
             return None
         return row[0]
+
+    # === 建表 ===
+    def ensure_table(self) -> None:
+        """
+        確保資料表（與需要的索引）存在；可重複呼叫
+
+        原本在十支 DAO 各有一份實作，分成兩種只差「要不要建複合索引」的版本。
+        索引需求改用 `NEEDS_SYMBOL_DATE_INDEX` 宣告，建表 DDL 仍由各 DAO 自己寫
+        ——那才是每張表真正不同的部分。
+        """
+
+        if not self.table_exists():
+            self.create_table()
+
+        if self.NEEDS_SYMBOL_DATE_INDEX:
+            create_symbol_date_index(self.conn, self.TABLE_NAME)
+
+    def create_table(self) -> None:
+        """
+        建立本表並 commit
+
+        **基底不提供實作**：DDL 是每張表唯一真正不同的東西。沒有覆寫就是
+        這支 DAO 還沒宣告 schema，讓它當場 `NotImplementedError` 比默默不建表好
+        ——不建表的話後續查詢會回空表，看起來像「這天沒資料」。
+        """
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 未實作 create_table()，無法建立 {self.TABLE_NAME}"
+        )
+
+    # === 共用查詢 ===
+    # 以下四支原本在五支 DAO 各有一份**逐字相同**的實作。上提的理由不只是少幾行：
+    # 換資料庫後端時要改寫的 SQLite 專屬語法就在這裡，重複五份就得改五次，
+    # 而漏改一份不會報錯——只會讓那一張表的查詢走不同的語意
+    def get_by_date(self, date: datetime.date) -> pd.DataFrame:
+        """取得指定日期的全部列"""
+
+        return self.query_df(
+            f"""
+            SELECT * FROM {self.TABLE_NAME}
+            WHERE {self.DATE_COLUMN} = ?
+            """,
+            (date,),
+        )
+
+    def get_range(
+        self,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> pd.DataFrame:
+        """
+        取得日期區間內的全部列；`start_date > end_date` 時回傳空表
+
+        **區間反了回空表而不是拋出**：呼叫端多半是把使用者給的兩個日期直接傳進來，
+        反了就是查無資料，不是程式錯誤。
+        """
+
+        if start_date > end_date:
+            return pd.DataFrame()
+
+        return self.query_df(
+            f"""
+            SELECT * FROM {self.TABLE_NAME}
+            WHERE {self.DATE_COLUMN} BETWEEN ? AND ?
+            """,
+            (start_date, end_date),
+        )
+
+    def get_by_stock(
+        self,
+        stock_id: str,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> pd.DataFrame:
+        """取得指定標的在區間內的全部列；`start_date > end_date` 時回傳空表"""
+
+        if start_date > end_date:
+            return pd.DataFrame()
+
+        return self.query_df(
+            f"""
+            SELECT * FROM {self.TABLE_NAME}
+            WHERE {self.SYMBOL_COLUMN} = ?
+              AND {self.DATE_COLUMN} BETWEEN ? AND ?
+            """,
+            (stock_id, start_date, end_date),
+        )
+
+    def get_latest_date(self) -> Optional[Any]:
+        """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""
+
+        return self._get_latest_value(self.DATE_COLUMN)
 
     # === 寫入與交易 ===
     def insert_or_ignore(self, df: pd.DataFrame) -> Tuple[int, int]:
