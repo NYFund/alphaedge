@@ -297,7 +297,11 @@ def test_unknown_multiplier_is_zero_not_a_guess() -> None:
     """
     取不到乘數時回 0 並 warning，不猜
 
-    猜一個值會讓 PnL 靜默偏掉；回 0 則會在算 PnL 時被發現。
+    **這條只是釘住現行行為，不是主張它是對的**：回測那一側同名的
+    `FuturesQuoteAdapter.resolve_multiplier()` 直接 `KeyError`，而
+    `FuturesPositionManager.get_multiplier()` 也明訂「查不到一律中斷、
+    不退回近似值」。乘數 0 會讓 PnL 全部算成 0，那沒有任何徵兆——
+    改成中斷會動到實盤主流程，故目前先保留並釘住。
     """
 
     assert ShioajiQuoteStream.resolve_multiplier("UNKNOWN") == 0
