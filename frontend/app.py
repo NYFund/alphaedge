@@ -32,6 +32,7 @@ try:
         read_event_report,
         read_metrics_summary,
         read_trading_report,
+        resolve_symbol_column,
         sort_by_exit_date,
         summarise_overview,
         to_numeric,
@@ -61,6 +62,7 @@ except ModuleNotFoundError:
         read_event_report,
         read_metrics_summary,
         read_trading_report,
+        resolve_symbol_column,
         sort_by_exit_date,
         summarise_overview,
         to_numeric,
@@ -413,16 +415,9 @@ with detail_tab:
     st.subheader("交易報表")
     # 一律依**平倉日**排序：`Sell Date` 對 SHORT 是開倉日
     detail_df = sort_by_exit_date(df)
-    # 期貨的識別欄是 Contract ID（`{商品}{到期月}`），股票是 Symbol。
-    # **`Stock ID` 是舊欄名**，保留在候選裡是為了讓改名前產出的結果資料夾照樣打得開
-    stock_col = next(
-        (
-            column
-            for column in ("Symbol", "Contract ID", "Stock ID")
-            if column in detail_df.columns
-        ),
-        None,
-    )
+    # 判斷收在 `resolve_symbol_column()`：內嵌在這裡的話，舊欄名那條退路
+    # 只有實際開頁才走得到，測不到也就沒人知道它還有沒有效
+    stock_col = resolve_symbol_column(detail_df)
     if stock_col:
         stock_ids = sorted(detail_df[stock_col].dropna().astype(str).unique().tolist())
         selected_stock = st.multiselect("依股票代號／契約篩選", options=stock_ids)

@@ -1,0 +1,18 @@
+Metric,Value,Note
+Trades,1096,
+Win Count,655,
+Loss Count,441,平盤出場不計入勝敗任一邊
+Win Rate (%),59.76,
+Win/Loss Ratio,1.4853,
+Profit Factor,1.5939,
+Avg ROI (%),0.82,
+Avg Holding Days,0.02,
+Total PnL,3811419.0,
+Final Equity,4811419.0,
+Max Drawdown (%),-11.43,
+Annualized Volatility (%),14.63,
+Sharpe Ratio,1.9294,
+Sortino Ratio,3.379,
+Benchmark,未設定,
+Information Ratio,,未設定對標，無從計算
+Equity Basis,Daily,

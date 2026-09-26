@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -186,6 +186,33 @@ def read_event_report(csv_path: Optional[Path]) -> pd.DataFrame:
     """讀尾部事件計數；沒有這份檔案時回空表"""
 
     return _read_csv(csv_path)
+
+
+SYMBOL_COLUMN_CANDIDATES: Tuple[str, ...] = ("Symbol", "Contract ID", "Stock ID")
+
+
+def resolve_symbol_column(trading_df: pd.DataFrame) -> Optional[str]:
+    """
+    - Description:
+        找出這份報表的識別欄
+
+        期貨的識別欄是 `Contract ID`（`{商品}{到期月}`），股票是 `Symbol`。
+        **`Stock ID` 是舊欄名**，保留在候選裡是為了讓改名前產出的結果資料夾
+        照樣打得開。
+
+        **順序就是優先序**：同時存在時取現行欄名，舊欄名只當退路。
+    - Parameters:
+        - trading_df: pd.DataFrame
+            交易報表
+    - Return:
+        - Optional[str]
+            識別欄名；三個候選都沒有時為 None（前端改為不提供篩選）
+    """
+
+    return next(
+        (column for column in SYMBOL_COLUMN_CANDIDATES if column in trading_df.columns),
+        None,
+    )
 
 
 def to_numeric(df: pd.DataFrame, column: str) -> pd.Series:
