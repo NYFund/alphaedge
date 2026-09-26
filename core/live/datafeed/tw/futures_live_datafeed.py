@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from loguru import logger
 
@@ -30,6 +30,7 @@ from core.utils import (
     OrderType,
     PositionType,
 )
+from core.utils.instrument import FuturesUtils
 
 """
 台期貨的實盤資料源
@@ -41,18 +42,10 @@ from core.utils import (
 """
 
 
-def split_contract_id(symbol: str) -> Tuple[str, str]:
-    """
-    把契約代號拆成商品與到期月份；拆不開時回 `(symbol, "")`
-
-    `FuturesOrder.symbol` 是 `f"{product}{expiry}"`，本函式是它的反向。
-    **放模組層而不是掛在資料源上**：帳戶重建也要用同一條規則
-    （`live_position_lot` 只記 symbol），各寫一份會在換月時分岔。
-    """
-
-    if len(symbol) > 6 and symbol[-6:].isdigit():
-        return (symbol[:-6], symbol[-6:])
-    return (symbol, "")
+# 契約代號的拆解**權威實作在 `core/utils/instrument.py` 的 `FuturesUtils`**：
+# 帳戶重建（`core/broker/`）也要用同一條規則，而那一層不可 import 本層。
+# 此處只取個短名字給本模組與既有呼叫端用，不再另寫一份
+split_contract_id = FuturesUtils.split_contract_id
 
 
 class TwFuturesLiveDataFeed(BaseLiveDataFeed):
