@@ -1,12 +1,11 @@
 import datetime
-from typing import List, Optional, Set
+from typing import List, Optional
 
 from core.config import TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection
 from core.dao.tw.stock_margin_dao import StockMarginDAO
-from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_updater import DailyTwoMarketUpdater
-from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
+from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.tw.cleaners.stock_margin_cleaner import StockMarginCleaner
 from core.pipeline.tw.crawlers.stock_margin_crawler import StockMarginCrawler
 from core.pipeline.tw.loaders.stock_margin_loader import StockMarginLoader
@@ -50,23 +49,6 @@ class StockMarginUpdater(DailyTwoMarketUpdater):
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> List[datetime.date]:
-        """
-        以 `price` 表的交易日為日曆
+        """以 `price` 表的交易日為日曆（與 `chip`／`margin` 另一支共用同一份實作）"""
 
-        台股有補行交易日（補班的週六照常開市，2013 起有 11 天），用「非週末」
-        近似會整天漏抓。`price` 落後於 margin 時該區間會少幾天——實務上 price
-        一律先於 margin 更新，風險極低，且下次執行會自動補上。
-        """
-
-        # 日曆來源（`price`）與目標表同庫，共用本 updater 的連線
-        calendar_dates: Set[datetime.date] = DatePlanner.get_trading_dates(
-            StockPriceDAO(conn=self.dao.conn), start_date, end_date
-        )
-        return DatePlanner.plan(
-            dao=self.dao,
-            start_date=start_date,
-            end_date=end_date,
-            no_data_dates=progress.no_data,
-            incomplete_dates=progress.incomplete,
-            calendar_dates=calendar_dates or None,
-        )
+        return self.plan_dates_by_price_calendar(progress, start_date, end_date)
