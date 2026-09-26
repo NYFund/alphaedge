@@ -146,7 +146,7 @@ graph TB
 
 | 市場 × 商品 | 狀態 | 範圍與資料區間 | K 棒級別 | 方向 | 策略基底 |
 | ----------- | ---- | -------------- | -------- | ---- | -------- |
-| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-23（最新交易日 2,395 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-24 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
+| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-24（最新交易日 2,395 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-24 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
 | 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-24<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
 | 股票期貨／ETF 期貨 | ⚠️ 程式可跑，缺行情 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29、09-02、09-16 共 3 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料，**不足以跑出有意義的回測**（回補待辦見 [暫緩工作彙整](backlog/暫緩工作彙整.md) S4）<br>**程式面已接通**：乘數由 DataFeed 的 `resolve_multiplier()` 逐日查標的池的契約單位；保證金先查金額表（ETF 期貨 NYF 在此，2020-07-22 起），個股期貨改走比例表（`標的股價 × 契約單位 × 適用比例`，標的股價跨庫取自 `tw_stock.db`）<br>**其餘限制**：契約單位只回溯到 2026-08-29 的首份快照，更早的除權息調整查不到 | 僅 `DAY` | 同台指數期貨 | `BaseFuturesStrategy` |
 | 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
@@ -393,8 +393,9 @@ pre-commit run --all-files
 **CI**：每次 push 時 GitHub Actions 會依序跑 `ruff check`、`ruff format --check`、
 分層相依檢查（`scripts/check_layer_deps.py`）、文件路徑檢查（`scripts/check_doc_paths.py`）、
 `pre-commit run --all-files` 的其餘檢查、API 死介面檢查（`scripts/check_api_orphan_methods.py`）、
-SHORT 回歸線、`pytest -m "not slow"`、覆蓋率報告（`continue-on-error`），
-最後建置 `core` 與 `frontend` 兩個 Docker 映像並各跑一次冒煙
+SHORT 回歸線、`pytest -m "not slow"`、覆蓋率報告（`continue-on-error`）；
+**另有一個平行的 job** 建置 `core` 與 `frontend` 兩個 Docker 映像並各跑一次冒煙
+——它沒有宣告 `needs:`，所以與上面那串同時開始，不是最後才跑
 （見 `.github/workflows/ci.yml`）。**LONG 回歸線需要 `data/db/tw_stock.db`，
 CI 沒有該檔，只能在本機跑。**
 
@@ -460,7 +461,14 @@ AlphaEdge/
 │   │   └── tw/                # 登入／CA、合約解析、委託轉換、回報正規化、帳務、即時行情
 │   └── live/                  # 實盤引擎
 │       ├── trader.py          # 逐段落生命週期（開盤／尾盤／盤中／盤後）
+│       ├── segment.py         # 段落定義與「現在該跑哪一段」的判定
 │       ├── factory.py         # 依（market, instrument_type）組裝實盤元件
+│       ├── reconciler.py      # 收盤後與券商部位對帳
+│       ├── account_sync.py    # 對帳不一致時以券商部位重建歸屬帳
+│       ├── capital_allocator.py  # 多策略資金額度分配
+│       ├── after_close.py     # 盤後：對帳、報表與 parity 比對
+│       ├── strategy_guard.py  # 啟動前檢查策略宣告與回測語意是否一致
+│       ├── termination.py     # SIGTERM 收尾與退出碼
 │       ├── oms/               # 委託狀態機、回報佇列、重啟接管
 │       ├── risk/              # 事前風控、交易模式狀態機、風控事件紀錄
 │       ├── attribution/       # 多策略部位歸屬帳與跨策略衝突守門
@@ -468,9 +476,9 @@ AlphaEdge/
 │       ├── intraday/          # 盤中事件迴圈與日終強制動作
 │       ├── notify/            # 告警推播（失敗不影響主流程）
 │       └── report/            # 實盤日報與實盤／回測訊號 parity 比對
-├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db、實盤紀錄庫 tw_trading.db）＋ downloads/
+├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db、實盤紀錄庫 tw_trading.db）、downloads/、backup/、records/
 ├── results/                   # 各策略回測輸出（csv／png），不進版控
-├── logs/                      # api/、pipeline/、backtest/ 三桶，不進版控
+├── logs/                      # api/、pipeline/、backtest/、launchd/ 四桶，不進版控
 ├── frontend/                  # Streamlit Docker 映像
 │   ├── app.py                 # Streamlit 入口
 │   ├── config.py              # frontend 設定
@@ -502,8 +510,11 @@ AlphaEdge/
 │   ├── check_doc_paths.py     # 文件裡指不到的檔案路徑（搬家後沒更新的引用；CI 與 pre-commit 皆跑）
 │   ├── check_api_orphan_methods.py  # `core/api` 零呼叫零測試的公開方法（CI 跑）
 │   ├── clean_pycache.sh／.ps1 # 清除 __pycache__ 與 .pyc（macOS／Linux、Windows）
+│   ├── live_watchdog.py       # 實盤存活監控（排程用的獨立行程，不連券商）
+│   ├── check_overnight_positions.py  # 模擬環境是否保留隔夜部位（唯讀分析）
+│   ├── launchd/               # macOS 排程設定（逐段落啟動）
 │   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
-├── docker-compose.yml         # compose：core + frontend + 共用 results volume
+├── docker-compose.yml         # compose：core ＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ 共用 results volume
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）
 ├── run.py

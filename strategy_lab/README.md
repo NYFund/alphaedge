@@ -4,14 +4,14 @@
 **分析資料、思考交易策略、做小型實驗、寫筆記** 的地方。
 
 > **這裡不負責「跑正式回測」**。AlphaEdge 已經在 `core/` 提供一套完整的策略框架與回測器（`Backtester`、`StockBacktestReporter`、`StrategyLoader`），
-> 想跑正式回測請把策略放到 `core/strategies/stock/`，然後執行：
+> 想跑正式回測請把策略放到 `core/strategies/stock/`（股票）或 `core/strategies/futures/`（期貨），然後執行：
 >
 > ```bash
 > .venv/bin/python run.py --strategy <StrategyName>
 > ```
 >
 > `strategy_lab/` 是它的 **上游**：把想法、資料分析、研究筆記都在這裡完成，
-> 成熟後再「**搬到 `core/strategies/stock/`**」就能直接接上正式框架。
+> 成熟後再「**搬到 `core/strategies/stock/` 或 `core/strategies/futures/`**」就能直接接上正式框架。
 
 ---
 
@@ -97,7 +97,7 @@ strategy_lab/
 ## 研究工作流（從想法到上線）
 
 ```
-ideas/           data_analysis/      strategies/<name>/      core/strategies/stock/<name>.py
+ideas/           data_analysis/      strategies/<name>/      core/strategies/{stock,futures}/<name>.py
   │                  │                     │                            │
   ▼                  ▼                     ▼                            ▼
 寫一段假設     EDA、相關性、IC    寫完整 pipeline，產圖表        繼承 BaseStockStrategy
@@ -474,7 +474,7 @@ print(realistic_pnl(600.0, 620.0, 5))
 
 當 `strategy_lab/strategies/<name>/` 的研究結論穩定後，按以下步驟「**搬家**」：
 
-1. 在 `core/strategies/stock/` 建立 `<your_strategy>.py`，繼承 `BaseStockStrategy`。
+1. 在 `core/strategies/stock/` 建立 `<your_strategy>.py` 繼承 `BaseStockStrategy`；期貨策略則放 `core/strategies/futures/` 並繼承 `BaseFuturesStrategy`。
 2. 把研究階段的訊號邏輯抽成 `_build_signals()`，
    並實作框架要求的 5 個 method：
    `setup_account / setup_apis / generate_open_signals / generate_close_signals / generate_stop_loss_signals`。
@@ -491,7 +491,7 @@ print(realistic_pnl(600.0, 620.0, 5))
    完整清單見 [回測引擎說明](../core/backtest/README.md#回測結果)）。
 
 > 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`core/strategies/README.md`](../core/strategies/README.md)。
-> 現成的範例是 `core/strategies/stock/` 底下的策略檔。
+> 現成的範例是 `core/strategies/stock/` 與 `core/strategies/futures/` 底下的策略檔。
 >
 > **搬進 `core/` 的成品可能會被刪掉**：`tsmc_overnight_signal` 的成品策略就在 2026-09-17
 > 因結論為否定而移除。研究資料夾要能獨立成立，不要把結論只寫在成品策略的 docstring 裡。
@@ -513,6 +513,7 @@ print(realistic_pnl(600.0, 620.0, 5))
 **不建議：**
 
 - 在 `strategy_lab/` 頂層直接放 script / notebook / md（請先建 `<category>/<topic>/` 子資料夾）。
+  頂層目前只有 `CLAUDE.md`、`README.md` 與 `__init__.py`，那是目錄本身需要的，不是研究產出。
 - 重複實作 `core/` 已有的 API、手續費、交易日邏輯。
 - 在 R&D 階段就用 `BaseStockStrategy`（除非確定要上線）——R&D 階段請保持自由。
 

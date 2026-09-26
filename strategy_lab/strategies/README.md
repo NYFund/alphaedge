@@ -100,7 +100,7 @@ strategies/<your_topic>/
 
 ## 「我覺得這策略 OK 了」之後怎麼做？
 
-把訊號邏輯複寫進 `core/strategies/stock/<your_name>.py`，
+把訊號邏輯複寫進 `core/strategies/stock/<your_name>.py`（期貨策略放 `core/strategies/futures/`），
 繼承 `BaseStockStrategy`，實作以下 5 個 method：
 
 - `setup_account` / `setup_apis`
