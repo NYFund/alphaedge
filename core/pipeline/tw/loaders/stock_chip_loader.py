@@ -5,6 +5,8 @@ from core.config import CHIP_DOWNLOADS_PATH, TW_STOCK_DB_PATH
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
+"""台股三大法人籌碼入庫：落地端，schema 與寫入語意全在 `StockChipDAO`"""
+
 
 class StockChipLoader(BaseDataLoader):
     """Stock Chip Loader"""

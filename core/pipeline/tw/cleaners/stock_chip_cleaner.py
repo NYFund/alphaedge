@@ -9,6 +9,18 @@ from core.pipeline.shared.base_cleaner import BaseDataCleaner
 from core.pipeline.utils.data_utils import DataUtils
 from core.utils import TimeUtils
 
+"""
+台股三大法人籌碼清洗：跨改制日期的欄位對齊
+
+- Features:
+    1. TWSE 與 TPEX 各自的籌碼清洗
+    2. 自營商欄位的合併（自行買賣與避險分列，合計欄有時缺）
+- 使用場景:
+    **來源改制過兩次**，兩市場的改制日期還不同（TWSE 2014-12-01／2017-12-18，
+    TPEX 2014-12-01／2018-01-15）：改制前後欄位數與語意都不一樣，
+    清洗必須依日期分支，否則早年資料會對錯欄。
+"""
+
 
 class StockChipCleaner(BaseDataCleaner):
     """Stock Chip Cleaner (Transform)"""

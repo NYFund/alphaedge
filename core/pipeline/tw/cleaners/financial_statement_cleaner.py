@@ -13,6 +13,22 @@ from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.data_utils import DataUtils
 from core.utils import FileEncoding, TimeUtils
 
+"""
+季報財務報表清洗：四張報表與權益變動表
+
+- Features:
+    1. 資產負債表、綜合損益表、現金流量表的清洗（走欄名對照表）
+    2. 權益變動表的清洗（**攤平後的長表**，欄位固定六個，不走對照表）
+    3. 權益變動表的分批落地與續跑
+- 使用場景:
+    前三張報表的欄名逐年逐公司不同，靠對照表推導；權益變動表的來源版面是
+    「權益項目 × 變動原因」的交叉表，攤平成長表後欄位固定，兩條路不共用。
+
+    **各季的期別標籤不一致**（只有 Q1 是「第N季」，其餘三季用別的寫法），
+    認錯就抓到別季的表，故以來源表左上角的固定字樣先確認「這張是報表」
+    而不是頁面上的公告文字表格。
+"""
+
 
 class FinancialStatementCleaner(BaseDataCleaner):
     """Cleaner for quarterly financial Statement"""

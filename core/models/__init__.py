@@ -35,3 +35,5 @@ from .stock import (
     StockTradeRecord,
     TickQuote,
 )
+
+"""資料模型門面：帳戶、委託、部位、報價與券商快照的共用型別"""

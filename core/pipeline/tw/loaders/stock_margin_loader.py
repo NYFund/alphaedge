@@ -7,6 +7,8 @@ from core.config import MARGIN_DOWNLOADS_PATH, TW_STOCK_DB_PATH
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
+"""台股融資券餘額入庫：落地端，schema 與寫入語意全在 `StockMarginDAO`"""
+
 
 class StockMarginLoader(BaseDataLoader):
     """Stock Margin Loader"""
