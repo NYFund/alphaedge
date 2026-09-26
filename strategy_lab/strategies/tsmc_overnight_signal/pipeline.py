@@ -24,7 +24,7 @@ import plotly.graph_objects as go
 import yfinance as yf
 
 from core.api.tw.stock_price_api import StockPriceAPI
-from core.utils import Units
+from core.utils import Commission, Units
 from core.utils.instrument import StockUtils
 from strategy_lab.strategies.tsmc_overnight_signal.ridge import (
     ridge_fit_predict,
@@ -42,8 +42,16 @@ VAL_START = dt.date(2021, 1, 1)
 VAL_END = dt.date(2021, 12, 31)
 TEST_START = dt.date(2022, 1, 1)
 
-FEE_BUY: float = 0.001425
-FEE_SELL_PLUS_TAX: float = 0.001425 + 0.003
+# 正規化權益模型（`run_vectorized_continuous_backtest()`）用的費率。
+# **由 `Commission` 推導，不寫死數字**：同檔的 `run_backtest_with_signal()` 走
+# `StockUtils`，兩處各寫一份費率時必然分岔——原本寫死版就漏了 `Discount`，
+# 把手續費高估 3.33 倍（0.1425% vs 0.04275%）。
+#
+# **最低手續費（`MinFee`）在這個模型裡無從適用**：權益從 1.0 起算，沒有價格與
+# 張數，也就沒有「金額不足 20 元」這件事。要含最低手續費的請看
+# `run_backtest_with_signal()`（逐張、逐筆金額）。
+FEE_BUY: float = float(Commission.CommRate) * float(Commission.Discount)
+FEE_SELL_PLUS_TAX: float = FEE_BUY + float(Commission.TaxRate)
 
 # Plot export: reduce title/legend clipping in PNG
 _PLOT_MARGIN = dict(l=72, r=108, t=100, b=80)

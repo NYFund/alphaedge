@@ -1,7 +1,14 @@
+import datetime
 from decimal import ROUND_CEILING, ROUND_FLOOR, ROUND_HALF_UP, Decimal
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
-from .constant import PRICE_TICK_TABLE, Commission, Units
+from .constant import (
+    DAY_TRADE_TAX_EXPIRY,
+    DAY_TRADE_TAX_START,
+    PRICE_TICK_TABLE,
+    Commission,
+    Units,
+)
 
 """
 台股商品計算工具：張／股換算、成本、損益、檔位對齊、期貨契約代號拆解
@@ -93,10 +100,39 @@ class StockUtils:
         )
 
     @staticmethod
+    def is_day_trade_tax_effective(date: Optional[datetime.date]) -> bool:
+        """
+        - Description:
+            該日是否適用現股當沖證交稅減半
+
+            **減半優惠自 2017-04-28 起實施**，在那之前一律課 0.3%。不看日期就
+            一律減半的話，2013-01 ~ 2017-04 的每一筆當沖賣出都少算一半的稅
+            ——約 4 年 4 個月，而且結果只會偏樂觀。
+
+            **這個判定只有一份**，`StockCostModel.is_day_trade_tax_effective()`
+            轉呼叫本方法：兩處各寫一份的話，只要有一邊忘了看日期就會少算一半，
+            而少算的稅不會讓任何測試變紅。
+        - Parameters:
+            - date: Optional[datetime.date]
+                成交日；None 代表呼叫端沒有日期資訊，視為現行制度
+        - Return:
+            - bool
+                適用減半為 True
+        """
+
+        if date is None:
+            return True
+
+        return DAY_TRADE_TAX_START <= date <= DAY_TRADE_TAX_EXPIRY
+
+    @staticmethod
     def calculate_transaction_tax(
         price: float = 0.0,
         volume: int = 0,
         is_day_trade: bool = False,
+        date: Optional[datetime.date] = None,
+        tax_rate: Optional[float] = None,
+        day_trade_tax_rate: Optional[float] = None,
     ) -> int:
         """
         - Description:
@@ -105,13 +141,9 @@ class StockUtils:
             ⚠️ **記帳的唯一入口是 `StockCostModel.tax()`**，不要從 `core/managers/`、
             `core/backtest/` 或策略層直接呼叫本函式。
 
-            **兩者尚未收斂，而且口徑不同**：`StockCostModel.tax()` 自己從
-            `self.config` 推算，並會**依成交日**判斷當沖減半是否已實施；本函式吃
-            模組層級常數、不看日期，`is_day_trade=True` 就一律減半。它一次都沒有
-            被 `StockCostModel` 呼叫過，現行呼叫端只有同檔的
-            `calculate_transaction_cost()`、`strategy_lab/` 的研究腳本與測試，
-            所以差異目前不影響任何回測數字；但同一條規則存在兩份，
-            改法規時只改一邊就會分岔。
+            **公式只有這一份**：`StockCostModel.tax()` 轉呼叫本函式，只是由它
+            決定「買進不課稅」與稅率來源（`CostConfig` 可被使用者覆寫）。
+            本函式不傳稅率時取模組層級常數，供研究腳本直接用。
         - Parameters:
             - price: float
                 成交價格
@@ -119,6 +151,12 @@ class StockUtils:
                 成交張數（Unit: Lots）
             - is_day_trade: bool
                 是否為現股當沖賣出（稅率減半），預設 False 維持既有行為
+            - date: Optional[datetime.date]
+                成交日；決定當沖減半是否已實施。**None 視為現行制度**
+            - tax_rate: Optional[float]
+                一般稅率；None 時取 `Commission.TaxRate`
+            - day_trade_tax_rate: Optional[float]
+                當沖稅率；None 時取 `Commission.DayTradeTaxRate`
         - Return:
             - tax: int
                 交易稅
@@ -128,10 +166,11 @@ class StockUtils:
             - 放空的證交稅課在「賣出（開倉）」這端，與做多相反
         """
 
-        tax_rate: float = (
-            Commission.DayTradeTaxRate if is_day_trade else Commission.TaxRate
-        )
-        return max(1, int(price * StockUtils.convert_lot_to_share(volume) * tax_rate))
+        halved: bool = is_day_trade and StockUtils.is_day_trade_tax_effective(date)
+        rate: Optional[float] = day_trade_tax_rate if halved else tax_rate
+        if rate is None:
+            rate = float(Commission.DayTradeTaxRate if halved else Commission.TaxRate)
+        return max(1, int(price * StockUtils.convert_lot_to_share(volume) * rate))
 
     @staticmethod
     def round_to_tick(price: float, direction: str = "nearest") -> float:

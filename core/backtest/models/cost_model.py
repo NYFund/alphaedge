@@ -253,9 +253,10 @@ class StockCostModel(BaseCostModel):
         - Description:
             該日是否適用現股當沖證交稅減半
 
-            **減半優惠自 2017-04-28 起實施**，在那之前一律課 0.3%。不看日期就
-            一律減半的話，2013-01 ~ 2017-04 的每一筆當沖賣出都少算一半的稅
-            ——約 4 年 4 個月，而且結果只會偏樂觀。
+            **只是 `StockUtils.is_day_trade_tax_effective()` 的別名**：判定下推到
+            `core/utils/`，讓本檔與研究腳本用的是同一份。原本兩處各有一份實作，
+            而其中一處不看日期——只要有人從生產程式碼傳 `is_day_trade=True`，
+            2017-04-28 之前的稅就會少算一半，且不會有任何訊號。
         - Parameters:
             - date: Optional[datetime.date]
                 成交日；None 代表呼叫端沒有日期資訊，視為現行制度
@@ -264,10 +265,7 @@ class StockCostModel(BaseCostModel):
                 適用減半為 True
         """
 
-        if date is None:
-            return True
-
-        return DAY_TRADE_TAX_START <= date <= DAY_TRADE_TAX_EXPIRY
+        return StockUtils.is_day_trade_tax_effective(date)
 
     def tax(
         self,
@@ -302,12 +300,17 @@ class StockCostModel(BaseCostModel):
         day_trade: bool = (
             self.config.is_day_trade if is_day_trade is None else is_day_trade
         )
-        halved: bool = day_trade and self.is_day_trade_tax_effective(date)
-        tax_rate: float = (
-            self.config.day_trade_tax_rate if halved else self.config.tax_rate
+        # **公式不在本檔**：稅額的算式與日期閘門都在 `StockUtils`，本層只決定
+        # 「買進不課稅」與稅率來源（`CostConfig` 可被使用者覆寫）。
+        # 兩邊各寫一份公式時，改法規只改一邊不會讓任何測試變紅
+        return StockUtils.calculate_transaction_tax(
+            price=price,
+            volume=volume,
+            is_day_trade=day_trade,
+            date=date,
+            tax_rate=self.config.tax_rate,
+            day_trade_tax_rate=self.config.day_trade_tax_rate,
         )
-        shares: int = StockUtils.convert_lot_to_share(volume)
-        return max(1, int(price * shares * tax_rate))
 
     # === 放空專屬 ===
     def borrow_fee(
