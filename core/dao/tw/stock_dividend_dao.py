@@ -1,12 +1,12 @@
 import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import List, Optional
 
 import pandas as pd
 from loguru import logger
 
 from core.config import DIVIDEND_TABLE_NAME, TW_STOCK_DB_PATH
-from core.dao.base import BaseDAO, create_symbol_date_index
+from core.dao.base import BaseDAO
 
 """台股除權除息計算結果（`dividend` 表）的資料存取"""
 
@@ -22,16 +22,9 @@ class StockDividendDAO(BaseDAO):
 
     TABLE_NAME: str = DIVIDEND_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    NEEDS_SYMBOL_DATE_INDEX: bool = True
 
     # === 建表 ===
-    def ensure_table(self) -> None:
-        """確保資料表與 `(stock_id, date)` 索引存在；可重複呼叫"""
-
-        if not self.table_exists():
-            self.create_table()
-
-        create_symbol_date_index(self.conn, self.TABLE_NAME)
-
     def create_table(self) -> None:
         """建立 `dividend` 表並 commit"""
 
@@ -65,35 +58,6 @@ class StockDividendDAO(BaseDAO):
             logger.warning(f"Table {self.TABLE_NAME} create unsuccessfully!")
 
     # === 查詢 ===
-    def get_by_date(self, date: datetime.date) -> pd.DataFrame:
-        """取得所有股票指定日期的除權除息資料"""
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE date = ?
-            """,
-            (date,),
-        )
-
-    def get_range(
-        self,
-        start_date: datetime.date,
-        end_date: datetime.date,
-    ) -> pd.DataFrame:
-        """取得所有股票日期範圍內的除權除息資料；`start_date > end_date` 時回傳空表"""
-
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE date BETWEEN ? AND ?
-            """,
-            (start_date, end_date),
-        )
-
     def get_by_stock(
         self,
         stock_id: str,
@@ -133,8 +97,3 @@ class StockDividendDAO(BaseDAO):
         """取得全期間的除權息事件鍵（`date`／`stock_id` 兩欄，未排序）"""
 
         return self.query_df(f"SELECT date, stock_id FROM {self.TABLE_NAME}")
-
-    def get_latest_date(self) -> Optional[Any]:
-        """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""
-
-        return self._get_latest_value("date")

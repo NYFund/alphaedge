@@ -1,12 +1,12 @@
 import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 from loguru import logger
 
 from core.config import CORPORATE_ACTION_TABLE_NAME, TW_STOCK_DB_PATH
-from core.dao.base import BaseDAO, create_symbol_date_index
+from core.dao.base import BaseDAO
 
 """台股非除權息公司行動（`corporate_action` 表：減資、分割、面額變更）的資料存取"""
 
@@ -22,16 +22,9 @@ class CorporateActionDAO(BaseDAO):
 
     TABLE_NAME: str = CORPORATE_ACTION_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    NEEDS_SYMBOL_DATE_INDEX: bool = True
 
     # === 建表 ===
-    def ensure_table(self) -> None:
-        """確保資料表與 `(stock_id, date)` 索引存在；可重複呼叫"""
-
-        if not self.table_exists():
-            self.create_table()
-
-        create_symbol_date_index(self.conn, self.TABLE_NAME)
-
     def create_table(self) -> None:
         """建立 `corporate_action` 表並 commit"""
 
@@ -68,11 +61,6 @@ class CorporateActionDAO(BaseDAO):
         """取得全期間的公司行動事件鍵（`date`／`stock_id` 兩欄，未排序）"""
 
         return self.query_df(f"SELECT date, stock_id FROM {self.TABLE_NAME}")
-
-    def get_latest_date(self) -> Optional[Any]:
-        """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""
-
-        return self._get_latest_value("date")
 
     def get_adjust_ratios_by_date(self, date: datetime.date) -> pd.DataFrame:
         """取得單日的調整倍率（`date`／`stock_id`／`調整倍率` 三欄）；表不存在時為空表"""

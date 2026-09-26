@@ -27,12 +27,6 @@ class MarketHolidayDAO(BaseDAO):
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
 
     # === 建表 ===
-    def ensure_table(self) -> None:
-        """確保資料表存在；可重複呼叫"""
-
-        if not self.table_exists():
-            self.create_table()
-
     def create_table(self) -> None:
         """建立開休市日期表並 commit"""
 

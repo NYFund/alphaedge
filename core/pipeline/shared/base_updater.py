@@ -3,13 +3,14 @@ import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
+from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
-from core.pipeline.shared.date_planner import DateProgressStore
+from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.utils.log_manager import LogManager
 
@@ -407,6 +408,46 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
             - List[datetime.date]
                 本次待爬日期，已排序
         """
+
+    def plan_dates_by_price_calendar(
+        self,
+        progress: DateProgressStore,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> List[datetime.date]:
+        """
+        - Description:
+            以 `price` 表的交易日為日曆規劃待爬日期
+
+            **共用給以 `price` 為日曆的來源**（`chip`／`margin`）：兩邊原本各有
+            一份逐位元組相同的實作。`plan_dates()` 本身仍是抽象的——`price` 自己
+            就是日曆來源，不能用這一份，給預設值等於讓漏填的新來源靜靜用錯日曆。
+
+            台股有補行交易日（補班的週六照常開市，2013 起有 11 天），用「非週末」
+            近似會整天漏抓。`price` 落後於目標表時該區間會少幾天——實務上 `price`
+            一律先於這兩支更新，風險極低，且下次執行會自動補上。
+        - Parameters:
+            - progress: DateProgressStore
+                本來源的進度檔
+            - start_date / end_date: datetime.date
+                回補區間（含頭含尾）
+        - Return:
+            - List[datetime.date]
+                本次待爬日期，已排序
+        """
+
+        # 日曆來源（`price`）與目標表同庫，共用本 updater 的連線
+        calendar_dates: Set[datetime.date] = DatePlanner.get_trading_dates(
+            StockPriceDAO(conn=self.dao.conn), start_date, end_date
+        )
+        return DatePlanner.plan(
+            dao=self.dao,
+            start_date=start_date,
+            end_date=end_date,
+            no_data_dates=progress.no_data,
+            incomplete_dates=progress.incomplete,
+            calendar_dates=calendar_dates or None,
+        )
 
     def crawl_day(self, date: datetime.date) -> Tuple[CrawlResult, CrawlResult]:
         """爬取單日的上市與上櫃資料"""

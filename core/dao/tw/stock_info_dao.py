@@ -32,12 +32,6 @@ class StockInfoDAO(BaseDAO):
     KEY_COLUMN: str = "stock_id"
 
     # === 建表 ===
-    def ensure_table(self) -> None:
-        """確保資料表存在；可重複呼叫"""
-
-        if not self.table_exists():
-            self.create_table()
-
     def create_table(self) -> None:
         """建立台股總覽表並 commit"""
 

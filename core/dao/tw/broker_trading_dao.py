@@ -83,35 +83,6 @@ class BrokerTradingDAO(BaseDAO):
             logger.warning(f"Table {self.TABLE_NAME} create unsuccessfully!")
 
     # === 查詢 ===
-    def get_by_date(self, date: datetime.date) -> pd.DataFrame:
-        """取得指定日期的全部券商分點日報"""
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE date = ?
-            """,
-            (date,),
-        )
-
-    def get_range(
-        self,
-        start_date: datetime.date,
-        end_date: datetime.date,
-    ) -> pd.DataFrame:
-        """取得日期區間內的全部券商分點日報；`start_date > end_date` 時回傳空表"""
-
-        if start_date > end_date:
-            return pd.DataFrame()
-
-        return self.query_df(
-            f"""
-            SELECT * FROM {self.TABLE_NAME}
-            WHERE date BETWEEN ? AND ?
-            """,
-            (start_date, end_date),
-        )
-
     def get_by_stock_and_date(self, stock_id: str, date: datetime.date) -> pd.DataFrame:
         """取得指定股票在指定日期的券商分點日報"""
 
