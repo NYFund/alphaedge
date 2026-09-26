@@ -367,7 +367,8 @@ The dev tools (pytest, pytest-timeout, pytest-cov, ruff) are the `dev` dependenc
 uv sync               # dependencies + the project + dev tools
 ```
 
-Other optional extras: `frontend` (Streamlit UI), `tick` (DolphinDB tick storage), `lab` (`strategy_lab` report output);
+Other optional extras: `frontend` (Streamlit UI), `tick` (DolphinDB tick storage),
+`lab` (`strategy_lab` report output and U.S./FX data: `python-docx`, `yfinance`);
 the backtest and ETL paths run without them.
 
 **`uv sync` makes the environment match exactly what you ask for**: extras not listed on the command are removed (the dev tools are not affected).
@@ -395,7 +396,8 @@ pre-commit run --all-files
 layer-dependency gate (`scripts/check_layer_deps.py`), the doc path check
 (`scripts/check_doc_paths.py`), the remaining `pre-commit run --all-files` hooks, the API
 orphan-method check (`scripts/check_api_orphan_methods.py`), the SHORT regression line,
-`pytest -m "not slow"` and a coverage report under `continue-on-error`. **A separate job
+`pytest -m "not slow"` (the coverage report rides along in the same run rather than
+repeating the whole suite). **A separate job
 runs in parallel** building the `core` and `frontend` Docker images and smoke-testing each —
 it declares no `needs:`, so it starts alongside the list above rather than after it
 (see `.github/workflows/ci.yml`). **The LONG regression line needs

@@ -405,9 +405,10 @@ print(monthly_vol.tail())
 .venv/bin/python -m strategy_lab.data_analysis.<your_topic>.run
 ```
 
-> **要產 Word 報告（`reports/generate_docx.py` 那類）得先裝 `lab` extra**：
-> `uv sync --extra lab`。`python-docx` 只在 `[project.optional-dependencies].lab` 裡，
-> 預設的 `uv sync` 不會裝，直接跑會 `ModuleNotFoundError`。
+> **要產 Word 報告、或要抓美股與匯率資料，得先裝 `lab` extra**：
+> `uv sync --extra lab`。`python-docx`（報告輸出）與 `yfinance`（美股／匯率日線）
+> 都只在 `[project.optional-dependencies].lab` 裡，預設的 `uv sync` 不會裝，
+> 直接跑會 `ModuleNotFoundError`。
 > 注意 `uv sync` 會把環境同步成「剛好」指定的內容，要同時保留其他 extra 就一起列出。
 
 ### 常見模式：IC（Information Coefficient）分析

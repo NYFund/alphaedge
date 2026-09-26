@@ -33,8 +33,16 @@ ENV_SCAN_PATHS: List[str] = ["core", "tasks", "frontend", "scripts", "run.py"]
 # 以字面值當第一個參數讀環境變數的函式：標準函式庫與專案內的兩個包裝
 ENV_READER_NAMES: Set[str] = {"getenv", "get_env_path", "get_int_env"}
 
-# 範本有列、但程式不直接讀的鍵（鍵 → 理由）
-ENV_EXAMPLE_ONLY_KEYS: Dict[str, str] = {}
+# 範本有列、但程式不直接讀的鍵（鍵 → 理由）。
+# **這四個是 `docker compose` 解析設定檔時替換的內插變數**，程式一行都不讀：
+# compose 自己認得 `.env`，所以列在範本裡才不必每次在指令前加一串環境變數。
+# 不列的話它們就完全沒有文件——`docker-compose.yml` 裡只看得到 `${X:-預設值}`
+ENV_EXAMPLE_ONLY_KEYS: Dict[str, str] = {
+    "MODE": "docker-compose 的 `core` service 啟動參數（`--mode`）",
+    "STRATEGY": "docker-compose 的 `core` service 啟動參數（`--strategy`）",
+    "ALPHAEDGE_CA_DIR": "docker-compose 的 `live` service 掛進容器的 CA 目錄",
+    "SHIOAJI_CA_FILE": "docker-compose 的 `live` service 使用的憑證檔名",
+}
 
 # 範本裡「鍵=值」的行，選填鍵以 `# KEY=` 的註解形式列出，一併計入
 ENV_EXAMPLE_KEY_PATTERN: re.Pattern = re.compile(r"^#?\s*([A-Z][A-Z0-9_]*)=")
@@ -193,6 +201,27 @@ def test_env_example_has_no_key_the_code_never_reads() -> None:
     assert stale == [], f".env.example 列了程式不讀的鍵：{stale}"
     # 例外清單本身也要誠實：程式開始讀之後就該從清單移除
     assert set(ENV_EXAMPLE_ONLY_KEYS) & code_keys == set()
+
+
+def test_compose_interpolated_keys_are_still_interpolated() -> None:
+    """
+    例外清單裡的 compose 內插變數要真的還在 compose 裡被內插
+
+    這幾個鍵的豁免理由是「`docker compose` 會替換它」。設定檔改掉之後，
+    理由就不成立了，而**沒有任何東西會提醒**——豁免清單會變成一份永久失明的名單，
+    那正是 `_PLANNED`／`_PENDING` 這類清單的典型死法。
+    """
+
+    compose: str = (PROJECT_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    orphaned: List[str] = sorted(
+        key
+        for key, reason in ENV_EXAMPLE_ONLY_KEYS.items()
+        if "docker-compose" in reason and f"${{{key}" not in compose
+    )
+
+    assert orphaned == [], (
+        f"這些鍵已不再被 docker-compose 內插，豁免理由不成立：{orphaned}"
+    )
 
 
 # === pyproject.toml ===
