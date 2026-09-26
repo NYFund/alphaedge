@@ -29,7 +29,7 @@ graph TB
     end
 
     subgraph backtest_layer ["回測引擎（市場無關）"]
-        BTFactory["core/backtest/factory.py<br/>（全專案唯一 if market ==）"]
+        BTFactory["core/backtest/factory.py<br/>（回測唯一 if market ==；實盤見 core/live/factory.py）"]
         Backtester["core/backtest/backtester.py"]
         BTModels["core/backtest/models<br/>InstrumentSpec／FillModel<br/>CostModel／SettlementModel"]
         BTFeed["core/backtest/datafeed"]
