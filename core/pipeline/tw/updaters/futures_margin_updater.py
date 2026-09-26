@@ -7,7 +7,7 @@ import pandas as pd
 from loguru import logger
 
 from core.config import FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH, TW_FUTURES_DB_PATH
-from core.dao.connection import DBConnection
+from core.dao.connection import DBConnection, DBError
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
@@ -209,6 +209,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 failures.append(name)
 
         self.log_summary()
+        self.log_margin_chain_gaps()
 
         if failures:
             raise DataLoadError("futures_margin", failures, succeeded=2 - len(failures))
@@ -277,6 +278,83 @@ class FuturesMarginUpdater(BaseDataUpdater):
             logger.info(
                 f"* ETF 股期（金額）生效日 {amount_df['effective_date'].iloc[0]}："
                 f"抓到 {len(amount_df)} 檔、新增 {inserted} 列"
+            )
+
+    # 已知且**無法補回**的斷點：`(商品, 生效日)`。全部對應附件已被站方覆寫的公告
+    # ——同一個附件網址被後來的公告重用，舊公告的內容已經拿不到了，不是我們漏抓。
+    #
+    # **必須逐筆列出而不是整個商品跳過**：整商品跳過的話，同一商品日後真的漏抓
+    # 一則公告就再也看不到。2026-09-26 實查 60 個有公告紀錄的商品、共 10 處斷點。
+    #
+    # **補回或確認來源恢復後要把該筆刪掉**——留著不刪，這道檢查就對那個生效日永久失明。
+    KNOWN_CHAIN_GAPS: Set[Tuple[str, str]] = {
+        ("NYF", "2025-09-11"),
+        ("OAF", "2024-02-05"),
+        ("OBF", "2024-02-05"),
+        ("OJF", "2024-02-05"),
+        ("OKF", "2024-02-05"),
+        ("OOF", "2024-02-05"),
+        ("SRF", "2025-09-11"),
+        ("XBF", "2022-07-14"),
+        ("XIF", "2026-08-12"),
+        ("XJF", "2022-10-21"),
+    }
+
+    def log_margin_chain_gaps(self) -> None:
+        """
+        - Description:
+            逐商品跑鏈式比對，把斷點記成 warning
+
+            **只記不拒**：斷點代表「中間漏了一次調整」，而漏掉的那一次可能根本
+            不在我們抓得到的範圍內（例如站方改了措辭而整段沒抓到）。拒收會讓
+            這次真的抓到的資料也進不去；記錄下來才能事後人工補登。
+
+            這是偵測「站方改措辭導致靜默漏抓」的唯一手段——保證金錯了不會有任何
+            執行期徵兆，只會讓可開口數與追繳門檻一路偏掉。
+
+            **已知斷點不重複告警**（`KNOWN_CHAIN_GAPS`）：那 10 處是來源本身的
+            損失，每次更新都叫一次只會讓人學會忽略這道警告，而下一次真的漏抓時
+            那則警告就混在裡面了。
+
+            **查不到商品或查詢失敗不影響更新結果**：本檢查是附加的健康度回報，
+            不該讓一次成功的更新因為它而失敗。
+        """
+
+        try:
+            products: List[str] = self.dao.get_announcement_products()
+        except DBError as error:
+            logger.warning(f"[Futures Margin] 鏈式比對略過：查不到商品清單（{error}）")
+            return
+
+        new_gaps: int = 0
+        known_seen: int = 0
+        for product in products:
+            for (
+                effective_date,
+                previous_after,
+                current_before,
+            ) in self.check_margin_chain(product):
+                if (product, effective_date) in self.KNOWN_CHAIN_GAPS:
+                    known_seen += 1
+                    continue
+
+                new_gaps += 1
+                logger.warning(
+                    f"[Futures Margin] {product} 保證金序列在 {effective_date} 斷鏈："
+                    f"前一筆調整後 {previous_after}、本筆調整前 {current_before}"
+                    "——中間可能漏了一次調整公告"
+                )
+
+        if new_gaps:
+            logger.warning(
+                f"[Futures Margin] 鏈式比對出現 {new_gaps} 處**新**斷點"
+                f"（另有 {known_seen} 處已知），可開口數與追繳門檻在那些區間會偏掉，"
+                "需人工補登漏掉的公告"
+            )
+        else:
+            logger.info(
+                f"* 鏈式比對：{len(products)} 個商品無新斷點"
+                f"（已知斷點 {known_seen} 處，皆為來源已覆寫附件）"
             )
 
     def log_summary(self) -> None:
