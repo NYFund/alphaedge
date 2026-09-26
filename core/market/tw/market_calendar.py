@@ -6,6 +6,22 @@ import pandas as pd
 
 from core.api.tw.stock_price_api import StockPriceAPI
 
+"""
+台股交易日曆：開盤日判定與營業日平移
+
+- Features:
+    1. 判定某日是否開盤
+    2. 以交易日為單位前後平移 N 日
+    3. 取某日之前最後一個交易日
+- 使用場景:
+    **判準是「`price` 表那天有沒有資料」而不是官方開休市日曆**：台股有補行
+    交易日（補班的週六照常開市），用「非週末」近似會整天判錯；而官方日曆
+    只替已入庫的年度作答。故本類別的每個方法都要收 `StockPriceAPI`。
+
+    放在 `core/market/` 而不是回測底下：交易日判定回測與實盤都要用，
+    擺進引擎會讓實盤反向相依回測。
+"""
+
 
 class MarketCalendar:
     """台股交易日曆：開盤日判定與營業日平移"""

@@ -1,1 +1,6 @@
-# pipeline/shared/__init__.py
+"""
+四層 ETL 的市場無關基底：Crawler／Cleaner／Loader／Updater
+
+每一層的職責邊界寫在各自的 `base_*.py`。**續跑與日期規劃在基底**，
+子類不自己實作——各來源各寫一份的話，「哪幾天已經抓過」會有幾套不同答案。
+"""

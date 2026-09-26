@@ -4,6 +4,19 @@ from typing import Any, List, Optional, Tuple
 import pandas as pd
 from dateutil.rrule import DAILY, rrule
 
+"""
+時間換算工具：民國年、日期區間產生、型別正規化
+
+- Features:
+    1. 民國年與西元年互轉（財報與月營收的來源頁面一律用民國年）
+    2. 日期／年／季／年期別區間的產生（ETL 逐期爬取用）
+    3. `to_date()` 把來源給的各種型別（字串、`datetime`、`pd.Timestamp`）
+       收斂成 `datetime.date`
+- 使用場景:
+    全庫共用的純換算，不碰 DB 也不碰網路。ETL 各層與回測都會用到，
+    故擺在 `core/utils/` 而不是 pipeline 底下。
+"""
+
 
 class TimeUtils:
     """處理各式關於時間問題的工具"""

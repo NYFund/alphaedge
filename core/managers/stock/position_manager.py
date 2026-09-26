@@ -11,6 +11,19 @@ from core.models.cost_config import CostConfig
 from core.utils import Action, PositionType, ShortMethod, TimeUtils
 from core.utils.instrument import StockUtils
 
+"""
+台股部位管理：多空記帳、借券費攤提與逐日結算
+
+- Features:
+    1. 開倉（LONG／SHORT）與平倉的記帳
+    2. 逐日結算與借券費累計
+    3. 部位市值計算
+- 使用場景:
+    **多空的記帳差異全部收斂在本檔**，費用與損益一律走 `StockCostModel`——
+    本層只決定「什麼時候收」，費率與公式全在 model。兩處各算一份必然漂移，
+    而成本算錯不會有任何徵兆，只會讓整條 PnL 靜默偏掉。
+"""
+
 
 class StockPositionManager(BasePositionManager):
     """

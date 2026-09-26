@@ -12,6 +12,19 @@ from loguru import logger
 from core.config import TICK_DOWNLOADS_PATH
 from core.pipeline.shared.base_cleaner import BaseDataCleaner
 
+"""
+台股 tick 清洗：欄位正規化與時間精度補齊
+
+- Features:
+    1. 逐支股票清洗當日 tick，落地成 CSV
+    2. 時間欄補齊到 microsecond（固定 26 字元）
+    3. 每檔股票一把鎖，多執行緒同時清同一檔時 CSV 不會互相覆蓋
+- 使用場景:
+    tick 是全專案量最大的資料，單檔動輒數十萬列，故清洗與落地都逐檔進行、
+    不整批讀進記憶體。Windows 上另有關檔等待與儲存重試——檔案還被前一個
+    handle 佔住時直接寫會失敗。
+"""
+
 
 class StockTickCleaner(BaseDataCleaner):
     """Stock Tick Cleaner (Transform)"""

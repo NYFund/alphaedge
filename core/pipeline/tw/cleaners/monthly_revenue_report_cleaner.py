@@ -13,6 +13,18 @@ from core.pipeline.utils import DataType
 from core.pipeline.utils.data_utils import DataUtils
 from core.utils import FileEncoding
 
+"""
+月營收報表清洗：欄名對照表驅動的欄位收斂
+
+- Features:
+    1. TWSE 與 TPEX 月營收的清洗
+    2. 以外部 JSON 的欄名對照表把歷年不同寫法收斂成同一組欄
+    3. 修補來源頁面的破字
+- 使用場景:
+    **欄名逐年變動**，硬編碼欄位順序必然在某一年對錯欄；故欄名對照表放在
+    `meta/` 的 JSON 而不是程式碼裡，新增一種寫法只要改資料。
+"""
+
 
 class MonthlyRevenueReportCleaner(BaseDataCleaner):
     """TWSE & TPEX Monthly Revenue Report Cleaner (Transform)"""
