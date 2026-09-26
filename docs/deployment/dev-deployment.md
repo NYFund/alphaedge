@@ -50,6 +50,7 @@ python run.py --strategy MomentumFuturesStrategy            # 台指期動能（
 | `<StrategyName>_direction_summary.csv` | 多空分開的勝率、損益與成本統計 |
 | `<StrategyName>_event_report.csv` | 強制回補、斷頭、拒單等事件計數 |
 | `<StrategyName>_daily_equity.csv` | 含未實現損益的逐日權益序列 |
+| `<StrategyName>_metrics_summary.csv` | Sharpe／Sortino／IR／MDD／波動度等整體指標（`Metric`／`Value`／`Note` 長表）|
 | `<StrategyName>_balance_curve.png` | 資產曲線 |
 | `<StrategyName>_networth.png` | 策略與 benchmark（`0050`）淨值比較 |
 | `<StrategyName>_mdd.png` | 最大回撤 |
@@ -63,6 +64,16 @@ streamlit run frontend/app.py
 ```
 
 不設環境變數時前端讀 `PROJECT_ROOT/results`，與回測輸出同一處。
+
+用容器跑時**先跑回測、再開前端**，兩者沒有執行期相依：
+
+```bash
+docker compose up core        # 一次性批次容器，跑完就結束
+docker compose up -d frontend # 常駐 Web，只讀 volume 裡已落地的 CSV
+```
+
+`frontend` 刻意**不宣告** `depends_on: [core]`——宣告了的話 `docker compose up frontend`
+會順手跑一整場回測。結果目錄是空的時候前端會顯示「找不到報表」而不是當掉。
 
 ## 5) 常用維運指令
 

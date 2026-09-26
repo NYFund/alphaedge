@@ -12,6 +12,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # 整份約 3 分鐘；卡住時不要佔用 runner 六小時（GitHub 預設上限）
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +57,14 @@ jobs:
       - name: 文件路徑檢查
         run: uv run python scripts/check_doc_paths.py
 
+      # hook 環境（pygrep 之外的都要建 venv）每次重建約 30 秒，快取後幾乎為零。
+      # key 綁設定檔內容：改了 hook 版本就自動重建
+      - name: 快取 pre-commit hook 環境
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+
       # pre-commit 的其餘 hook：註解不得引用 backlog 步驟編號（CLAUDE.md §2.1）、
       # 禁用 exc_info=、YAML／TOML 語法、檔尾換行、行尾空白、大檔。
       # 它們原本只在裝了 hook 的本機生效，而本機多半沒裝——等於沒有閘門，
@@ -70,7 +80,9 @@ jobs:
       - name: API 死介面檢查
         run: uv run python scripts/check_api_orphan_methods.py
 
-      # SHORT 回歸線：純記憶體、不需要資料庫，約 0.7 秒
+      # SHORT 回歸線：純記憶體、不需要資料庫，約 0.7 秒。
+      # **雖然下一步的整套測試也會跑到它，仍刻意單獨跑一次**：它壞掉時要一眼看到
+      # 「SHORT 回歸線」紅，而不是在 2,400 條裡找哪一條。0.7 秒的重複換這個訊號值得。
       # LONG 線需要 data/db/tw_stock.db，CI 沒有，故仍只能在本機跑
       # （`scripts/run_regression.sh` 現在會在 skip 時以結束碼 3 明說沒跑）
       - name: SHORT 回歸線
@@ -83,19 +95,23 @@ jobs:
       # **`-rs` 不可拿掉**：沒有它，被 skip 的測試在輸出裡只是一個 `s`，
       # 整組因為 fixture 不存在而永遠跳過也看起來是綠的（前端回歸的 14 條
       # 就這樣從來沒在 CI 跑過）。加上它，跳過的原因會列在 short summary 裡
-      - name: 測試（略過需要資料庫與外部 API 的項目）
-        run: uv run pytest -m "not slow" --timeout=300 -rs
-
-      # 覆蓋率只建立基線、不設門檻：覆蓋率明顯偏低時設門檻只會鼓勵寫無效測試
-      - name: 測試覆蓋率（僅報告，不阻擋）
-        continue-on-error: true
-        run: uv run pytest -m "not slow" --cov=core --cov-report=term-missing
+      #
+      # **覆蓋率併在同一次跑**：原本測試與覆蓋率各跑一次完整套件，整套跑兩遍。
+      # 覆蓋率只建立基線、不設門檻（覆蓋率偏低時設門檻只會鼓勵寫無效測試），
+      # 而 `--cov` 本身不會讓指令失敗，故不需要 `continue-on-error`——
+      # 分成兩步時那個旗標反而讓「測試紅了」與「覆蓋率收集失敗」看起來一樣
+      - name: 測試與覆蓋率（略過需要資料庫與外部 API 的項目）
+        run: >-
+          uv run pytest -m "not slow" --timeout=300 -rs
+          --cov=core --cov-report=term-missing
 
   # 兩個 Docker 映像：以前 CI 從不 build，映像壞掉要等有人手動 build 才發現
   # （`frontend/Dockerfile` 開頭的註解記錄的就是一次這樣的迴歸）。
   # 與 `check` 平行跑，不必等測試
   docker:
     runs-on: ubuntu-latest
+    # 兩個映像建置約 4 分鐘
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4

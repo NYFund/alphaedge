@@ -23,7 +23,8 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 
 開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `pyproject.toml` 的 `[dependency-groups].dev`，
 `uv sync` 預設就會裝，正式映像以 `--no-dev` 排除。其他選用相依（預設不裝，主流程不需要）：
-`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、`lab` `strategy_lab` 報告輸出。
+`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、
+`lab` `strategy_lab` 的報告輸出與美股／匯率資料（`python-docx`、`yfinance`）。
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**，沒列在指令上的 extra 會被移除（`dev` group 不受影響）。
 要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab`），或用 `uv sync --all-extras`。
