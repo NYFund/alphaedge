@@ -211,6 +211,41 @@ def test_tax_rate_switch() -> None:
     assert StockUtils.calculate_transaction_tax(100.0, 1, is_day_trade=True) == 150
 
 
+def test_day_trade_tax_halving_respects_the_effective_date() -> None:
+    """
+    當沖減半只在 2017-04-28 之後適用，**兩個入口都要一致**
+
+    公式與日期閘門都只有一份（`StockUtils`），`StockCostModel.tax()` 轉呼叫它。
+    原本兩處各有一份實作，而 `StockUtils` 那一份不看日期——只要有人從生產
+    程式碼傳 `is_day_trade=True`，2013-01 ~ 2017-04 的每一筆當沖賣出都會少算
+    一半的稅（約 4 年 4 個月），而少算的稅不會讓任何測試變紅。
+    """
+
+    model: StockCostModel = StockCostModel()
+    before: datetime.date = datetime.date(2017, 4, 27)
+    after: datetime.date = datetime.date(2017, 4, 28)
+
+    # 實施日之前：一般稅率
+    assert model.tax(100.0, 1, Action.SELL, is_day_trade=True, date=before) == 300
+    assert (
+        StockUtils.calculate_transaction_tax(100.0, 1, is_day_trade=True, date=before)
+        == 300
+    )
+
+    # 實施日當天起：減半
+    assert model.tax(100.0, 1, Action.SELL, is_day_trade=True, date=after) == 150
+    assert (
+        StockUtils.calculate_transaction_tax(100.0, 1, is_day_trade=True, date=after)
+        == 150
+    )
+
+    # 沒有日期資訊時視為現行制度（兩邊同一個判定）
+    assert model.is_day_trade_tax_effective(None) is True
+    assert StockUtils.is_day_trade_tax_effective(None) is True
+    assert model.is_day_trade_tax_effective(before) is False
+    assert StockUtils.is_day_trade_tax_effective(before) is False
+
+
 @pytest.mark.parametrize(
     "price, direction, expected",
     [
