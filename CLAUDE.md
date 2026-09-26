@@ -17,6 +17,7 @@
 | [`manage-backlog`](.claude/skills/manage-backlog/SKILL.md) | 新增／更新 `backlog/**` 文件與 `index.md` | `.cursor/skills/manage-backlog/SKILL.md` |
 | [`develop-strategy`](.claude/skills/develop-strategy/SKILL.md) | 新增／修改 `core/strategies/{stock,futures}/` 策略 | `.cursor/rules/strategy-development-sdd.mdc` |
 | [`commit-push-merge`](.claude/skills/commit-push-merge/SKILL.md) | 使用者要求「commit + push + merge」 | `.cursor/skills/commit-push-merge/SKILL.md`、`.cursor/rules/commit-message-zh.mdc` |
+| [`health-check`](.claude/skills/health-check/SKILL.md) | 使用者要求健檢（`diff`：每段工作後；`milestone`：里程碑才做全專案） | `.cursor/skills/health-check/SKILL.md` |
 
 > **上表「對應 Cursor Rule」欄一律是指標，不是副本。** 規則內容只維護在本檔、`.claude/skills/`
 > 或 `strategy_lab/CLAUDE.md`；`.cursor/` 底下的檔案只寫「去讀哪一份」，不重複規則本文。
