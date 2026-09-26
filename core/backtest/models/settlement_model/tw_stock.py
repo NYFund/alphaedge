@@ -176,7 +176,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         """
         判定是否全日鎖漲停（開高低收皆等於漲停價），此時放空無法回補
 
-        判定式與成交價驗證共用 `InstrumentSpec.is_locked_at_limit()`——
+        判定式與成交價驗證共用 `TwStockSpec.is_locked_at_limit()`——
         兩邊各寫一份必然漂移。
         """
 
