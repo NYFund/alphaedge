@@ -47,6 +47,7 @@
 | `manual_shioaji_quote_record.py` | 盤中行情錄製：訂閱逐筆與委買賣、把原始回呼存成 JSONL 並印出**欄位名、型別與範例值**。**要在交易日盤中跑**；不下單、不連正式環境。輸出落 `data/records/`（已被 gitignore） | 寫入 |
 | `manual_tick_crawler.py` | tick 爬蟲的手動驗證（需 Shioaji 金鑰） | — |
 | `manual_tick_updater.py` | tick updater 的手動驗證（需 DolphinDB） | 寫入 |
+| `manual_corporate_action_detect.py` | 公司行動偵測與人工補登：先列出「單日變動超過門檻、且無法由除權息或已知公司行動解釋」的候選（唯讀），逐筆判斷後補登。ETF 的受益權單位分割不在任何結構化端點裡，只能走這條路；**不帶 `--confirm` 只列計畫**，停止買賣前收盤價由腳本自己從 `price` 表取（不讓人手打） | 寫入（需 `--confirm`） |
 | `manual_probe_pnl_fields.py` | 單日損益的來源欄位實際取得到什麼值？連模擬環境唯讀核對。單日虧損檢查（`RiskConfig.daily_loss_ratio`）一律以券商端為準，所以要先確認期貨 `Margin` 與股票帳戶快照的各欄位語意 | — |
 | `manual_verify_contract_probe.py` | 期貨合約有沒有 `update_date`？連模擬環境唯讀核對。實盤的交易日判定在平日只剩「券商合約檔更新日」一個佐證，而**必須問期貨合約**——拿股票合約去問，兩個市場開休市不一致的那天會誤判為開市 | — |
 | `manual_verify_quota_basis.py` | 資金額度的計算基準與券商實際權益對不對得上？連模擬環境唯讀核對 `check_quota_against_equity()` 與 `CAPITAL_SAFETY_RATIO` 的實際效果 | — |
