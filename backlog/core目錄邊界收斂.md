@@ -344,21 +344,22 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 以下護欄以**寫死的目錄清單**決定掃描範圍（2026-09-26 以 grep 盤點）。任何新的頂層套件
 （本份的 `strategies/`、`pipeline/`，以及 `回測與實盤入口拆分及架構收斂.md` 的 `apps/`）
 都要逐一判斷是否加入。**不加入時要在該處註解寫明理由**，不要只是漏掉。
+`apps/` 已於 2026-09-30（`回測與實盤入口拆分及架構收斂.md` Phase1-1）逐項判斷完畢：覆蓋率兩處刻意不加，其餘全數加入。
 
 | 位置 | 目前範圍 | 守的是什麼 |
 |------|----------|------------|
-| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`tasks`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
+| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`tasks`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
 | `scripts/check_layer_deps.py` 的 `_NON_CORE_TOPS` | 同上加 `run` | `core/` 不得 import 的頂層套件 |
-| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`tasks` | `sqlite3` 只能出現在 `core/dao/` |
-| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`tasks`、`strategy_lab` 等 | 文件路徑與符號引用 |
-| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`tasks`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
-| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`tasks`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
-| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`tasks`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
-| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`tasks`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
-| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`tasks`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
-| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`tasks`、`scripts` | 暫存檔有清理 |
+| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`tasks` | `sqlite3` 只能出現在 `core/dao/` |
+| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`tasks`、`strategy_lab` 等 | 文件路徑與符號引用 |
+| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`tasks`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
+| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`tasks`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
+| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`tasks`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
+| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`tasks`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
+| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`tasks`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
+| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`tasks`、`scripts` | 暫存檔有清理 |
 | `tests/test_strategy_data_access.py` 的 `STRATEGY_DIR` | `core/strategies` | 策略不得寫資料庫欄位字面值（見 Phase2-2） |
 | `pyproject.toml` 的 `[tool.coverage.run] source` | `core` | 覆蓋率報告範圍 |
 | `.github/workflows/ci.yml` 的 `--cov=core` | `core` | 同上（CI 端） |
-| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`tasks*`、`tests*` | editable 安裝後可 import |
-| `core/Dockerfile` 的 `COPY` | `run.py`、`core`、`tasks` | 映像內容 |
+| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`tasks*`、`tests*` | editable 安裝後可 import |
+| `core/Dockerfile` 的 `COPY` | `run.py`、`core`、`tasks`、`apps` | 映像內容 |

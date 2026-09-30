@@ -18,7 +18,7 @@ from typing import List, Set, Tuple
 PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 
 # 掃描範圍：`core/`、`tasks/` 與 `scripts/` 的全部程式碼
-SCAN_DIRS: Tuple[str, ...] = ("core", "tasks", "scripts")
+SCAN_DIRS: Tuple[str, ...] = ("core", "apps", "tasks", "scripts")
 
 
 def find_bare_excepts(path: pathlib.Path) -> List[int]:

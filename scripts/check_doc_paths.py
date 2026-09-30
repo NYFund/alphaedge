@@ -47,6 +47,7 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "docs",
     "backlog",
     "core",
+    "apps",
     "tasks",
     "frontend",
     "strategy_lab",

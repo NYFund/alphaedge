@@ -46,6 +46,8 @@ COPY core /app/core
 # `tasks/` 是 ETL 的入口（`python -m tasks.update_db`）。少了它，映像只跑得了
 # 回測，compose 描述的資料更新流程在容器裡完全不存在
 COPY tasks /app/tasks
+# `apps/` 是回測與實盤的入口套件（`python -m apps.<name>`）
+COPY apps /app/apps
 
 # 裝本專案本身，與本機、CI 同一種安裝方式。
 # **必須是 editable**（uv sync 對本專案預設即是）：`core/config/paths.py` 以 `__file__`

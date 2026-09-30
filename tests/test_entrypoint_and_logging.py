@@ -322,7 +322,13 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 # 涵蓋每一個用 loguru 的地方：`scripts/` 有 11 支（含存活監控 `live_watchdog.py`，
 # 而它自己的說明寫著「監控自己死掉而沒人知道，和沒有監控是同一件事」），
 # `strategy_lab/` 也有；漏掉它們等於那些檔案可以靜默丟掉 traceback
-_GUARDED_PACKAGES: Tuple[str, ...] = ("core", "tasks", "scripts", "strategy_lab")
+_GUARDED_PACKAGES: Tuple[str, ...] = (
+    "core",
+    "apps",
+    "tasks",
+    "scripts",
+    "strategy_lab",
+)
 _GUARDED_FILES: Tuple[str, ...] = ("run.py", "conftest.py")
 
 

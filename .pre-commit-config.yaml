@@ -44,7 +44,7 @@ repos:
         # 範圍要與 `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES`
         # 一致——兩邊不同步就會一邊綠一邊紅。`scripts/` 有 11 支用 loguru，
         # 含存活監控 `live_watchdog.py`
-        files: ^((core|tasks|scripts|strategy_lab)/.*\.py|run\.py|conftest\.py)$
+        files: ^((core|apps|tasks|scripts|strategy_lab)/.*\.py|run\.py|conftest\.py)$
 
       # 註解不得引用 backlog 的步驟編號、健檢發現編號或 backlog 路徑
       # （`CLAUDE.md` §2.1 第 4 點）：文件會改版、會刪除，註解不會跟著更新，
@@ -57,7 +57,7 @@ repos:
         language: pygrep
         # `scripts/` 刻意不在範圍內：`check_doc_paths.py` 的職責就是掃描文件
         # 路徑，`backlog/` 這種字面值在那裡是資料不是引用
-        files: ^((core|tasks|tests|frontend|strategy_lab)/.*\.py|run\.py)$
+        files: ^((core|apps|tasks|tests|frontend|strategy_lab)/.*\.py|run\.py)$
 
       # 分層相依閘門（反向 import、循環 import、市場語意洩漏、跨軸目錄污染）。
       # 這支腳本原本永遠 exit 1（strategy_lab 的循環 import 把整個閘門鎖住），

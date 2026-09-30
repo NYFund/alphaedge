@@ -28,7 +28,7 @@ from core.config.settings import NUM_API
 
 
 # 掃描範圍：執行期會讀環境變數的程式碼。tests/ 刻意不掃——測試會自行設定環境變數
-ENV_SCAN_PATHS: List[str] = ["core", "tasks", "frontend", "scripts", "run.py"]
+ENV_SCAN_PATHS: List[str] = ["core", "apps", "tasks", "frontend", "scripts", "run.py"]
 
 # 以字面值當第一個參數讀環境變數的函式：標準函式庫與專案內的兩個包裝
 ENV_READER_NAMES: Set[str] = {"getenv", "get_env_path", "get_int_env"}
