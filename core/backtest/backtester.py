@@ -12,7 +12,6 @@ from core.backtest.report.base import BaseBacktestReporter
 from core.config import BACKTEST_RESULT_DIR_PATH
 from core.datafeed.base import BaseDataFeed
 from core.execution import order_preprocess
-from core.managers.base.position_manager import BasePositionManager
 from core.market.cost_model import BaseCostModel
 from core.market.instrument_spec import InstrumentSpec
 from core.models import (
@@ -22,6 +21,7 @@ from core.models import (
     BaseQuote,
     BaseTradeRecord,
 )
+from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     BarExecutionOrder,

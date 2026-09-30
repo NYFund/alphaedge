@@ -16,8 +16,8 @@ from core.live.attribution.position_ledger import (
 )
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
-from core.managers.base.position_manager import BasePositionManager
 from core.models import BrokerPositionSnapshot, StockPositionSnapshot
+from core.position.base.position_manager import BasePositionManager
 
 """
 Reconciler：本地與券商不一致時，要在下一張委託之前發現

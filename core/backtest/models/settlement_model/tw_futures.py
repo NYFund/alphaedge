@@ -5,7 +5,6 @@ from loguru import logger
 
 from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.settlement_model.base import BaseSettlementModel
-from core.managers.futures.position_manager import FuturesPositionManager
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
@@ -18,6 +17,7 @@ from core.models import (
     FuturesQuote,
     FuturesTradeRecord,
 )
+from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import (
     Action,
     MarginCallPolicy,

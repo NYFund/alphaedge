@@ -165,7 +165,7 @@ def test_backtest_only_applies_it_to_shorts() -> None:
     import ast
     import inspect
 
-    from core.managers.stock.position_manager import StockPositionManager
+    from core.position.stock.position_manager import StockPositionManager
 
     # 以 AST 數**呼叫**，不是字串出現次數——註解裡提到它是正常的
     tree: ast.Module = ast.parse(inspect.getsource(StockPositionManager))

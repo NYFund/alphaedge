@@ -21,7 +21,7 @@ Backtester                      ← 唯一引擎，市場無關，無子類
 這是 Backtrader `Cerebro`、Zipline `run_algorithm`、QuantConnect Lean `Engine`、Nautilus `BacktestEngine` 的一致做法：**引擎唯一，行為注入**。
 
 **五個 model 不全住在回測套件裡**：`InstrumentSpec` 與 `CostModel` 是**市場規則**（跳動點、漲跌停、手續費、交易稅），
-部位帳務（`core/managers/`）、實盤估成本與換算金額（`core/live/factory.py`）也要用同一份，所以放在 `core/market/`
+部位帳務（`core/position/`）、實盤估成本與換算金額（`core/live/factory.py`）也要用同一份，所以放在 `core/market/`
 （抽象基底在根目錄、各市場實作在 `<market>/`）。`FillModel` 與 `SettlementModel` 是**回測模擬**（這張單在歷史 bar 上
 能不能成交、收盤後強制執行什麼），留在 `core/backtest/models/`。`scripts/check_layer_deps.py` 禁止回測以外的模組
 import `core.backtest.models`／`datafeed`／`report`，搬出去的東西不會長回來。
@@ -145,7 +145,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | 委託前處理 | `core/execution/order_preprocess.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序；回測與實盤共用 |
 | 資料模型 | `core/models/base/` | `BaseQuote`／`BaseOrder`／`BasePosition`／`BaseTradeRecord`／`BaseAccount`，識別欄位一律 `symbol` |
 | 策略 | `core/strategies/base.py` | `BaseStrategy`，`market` ＋ `instrument_type` 兩欄位為 factory 的分派鍵 |
-| 部位 | `core/managers/base/position_manager.py` | FIFO 拆單主幹 ＋ `settle_daily()` 掛點 |
+| 部位 | `core/position/base/position_manager.py` | FIFO 拆單主幹 ＋ `settle_daily()` 掛點 |
 | 部位大小 | `core/portfolio/sizing.py` | `BasePositionSizer` ＋ `EqualWeightSizer`（以張 `Units.LOT` 換算）；回測與實盤共用 |
 
 ### 報價轉換：為什麼有兩個轉換器
@@ -221,7 +221,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 1. `core/models/<instrument>/`：繼承 `core/models/base/` 的五個 model（識別欄位用 `symbol`）。
 2. `core/strategies/<instrument>/base.py`：繼承 `BaseStrategy`，設定 `self.market` 與 `self.instrument_type`。
-3. `core/managers/<instrument>/position_manager.py`：繼承 `BasePositionManager`，實作 `close_single_position()` 與 `settle_daily()`。
+3. `core/position/<instrument>/position_manager.py`：繼承 `BasePositionManager`，實作 `close_single_position()` 與 `settle_daily()`。
 
 **市場側**（新市場才需要；目錄承載市場軸，子目錄名 `<market>` 如 `tw`／`us`）：
 
@@ -282,7 +282,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 ## 六、回歸護欄
 
-任何動到 `core/backtest/`、`core/managers/`、`core/models/` 的改動，都應通過**回歸雙線**：
+任何動到 `core/backtest/`、`core/position/`、`core/models/` 的改動，都應通過**回歸雙線**：
 
 ```bash
 ./scripts/run_regression.sh    # 任一條失敗即以非零狀態碼結束，且不續跑；有 skip 時結束碼 3

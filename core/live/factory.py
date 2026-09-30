@@ -42,9 +42,6 @@ from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
-from core.managers.base.position_manager import BasePositionManager
-from core.managers.futures.position_manager import FuturesPositionManager
-from core.managers.stock.position_manager import StockPositionManager
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
@@ -58,6 +55,9 @@ from core.models import (
     StockAccount,
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
+from core.position.base.position_manager import BasePositionManager
+from core.position.futures.position_manager import FuturesPositionManager
+from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     FUTURES_MULTIPLIER,

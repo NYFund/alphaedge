@@ -20,7 +20,6 @@ from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.segment import SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
-from core.managers.stock.position_manager import StockPositionManager
 from core.models import (
     BaseOrder,
     BaseQuote,
@@ -30,6 +29,7 @@ from core.models import (
     StockOrder,
     StockQuote,
 )
+from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,

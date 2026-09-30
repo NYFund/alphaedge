@@ -7,13 +7,13 @@ import pytest
 
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
-from core.managers.futures.position_manager import FuturesPositionManager
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
+from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import Action, FuturesRollRule, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
 from tests.conftest import build_futures_quote
@@ -520,9 +520,9 @@ def test_manager_pnl_delegates_to_the_cost_model() -> None:
     也不會有測試失敗。
     """
 
-    from core.managers.futures.position_manager import FuturesPositionManager
     from core.market.tw.cost_model import TwFuturesCostModel
     from core.models import FuturesAccount
+    from core.position.futures.position_manager import FuturesPositionManager
     from core.utils import PositionType
 
     cost_model: TwFuturesCostModel = TwFuturesCostModel()

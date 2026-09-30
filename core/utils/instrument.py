@@ -68,7 +68,7 @@ class StockUtils:
             計算股票買賣時的手續費
 
             ⚠️ **記帳的唯一入口是 `StockCostModel.commission()`**，不要從
-            `core/managers/`、`core/backtest/` 或策略層直接呼叫本函式。
+            `core/position/`、`core/backtest/` 或策略層直接呼叫本函式。
 
             **兩者尚未收斂**：`StockCostModel.commission()` 自己從 `self.config`
             推算，一次都沒有呼叫過本函式。現行呼叫端只有同檔的
@@ -138,7 +138,7 @@ class StockUtils:
         - Description:
             計算股票賣出時的交易稅
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel.tax()`**，不要從 `core/managers/`、
+            ⚠️ **記帳的唯一入口是 `StockCostModel.tax()`**，不要從 `core/position/`、
             `core/backtest/` 或策略層直接呼叫本函式。
 
             **公式只有這一份**：`StockCostModel.tax()` 轉呼叫本函式，只是由它

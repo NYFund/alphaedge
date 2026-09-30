@@ -34,7 +34,7 @@ python -m apps.backtest --strategy MomentumFuturesStrategy            # 台指�
 策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 自動收錄；
 怎麼寫策略見 [策略開發指南](../../core/strategies/README.md)。
 
-動到 `core/backtest/`、`core/managers/`、`core/models/` 之後，先跑回歸雙線：
+動到 `core/backtest/`、`core/position/`、`core/models/` 之後，先跑回歸雙線：
 
 ```bash
 ./scripts/run_regression.sh

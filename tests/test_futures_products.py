@@ -9,11 +9,11 @@ import pytest
 from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
 from core.config import FUTURES_TARGET_PRODUCTS, TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
-from core.managers.futures.position_manager import FuturesPositionManager
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
+from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import Action, PositionType, Scale
 from core.utils.constant import FUTURES_MULTIPLIER
 

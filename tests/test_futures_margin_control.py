@@ -5,11 +5,11 @@ from typing import Dict, List, Optional
 import pytest
 
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
-from core.managers.futures.position_manager import FuturesPositionManager
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesPosition, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
+from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import Action, MarginCallPolicy, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
 from tests.conftest import build_futures_quote

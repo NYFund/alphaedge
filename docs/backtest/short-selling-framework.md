@@ -470,7 +470,7 @@ snapshot_daily_equity(date, quotes)
 | `core/market/tw/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
 | `core/backtest/models/fill_model.py` | 成交價驗證、券源檢核、當日累計高低點 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
-| `core/managers/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
+| `core/position/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
 | `core/backtest/report/reporter.py` | 時間軸用 `exit_date`、放空欄位、多空統計、事件報表 |
 | `core/utils/constant/`／`instrument.py` | enum、費率、檔位表、`round_to_tick` |
 | `core/models/stock/*` | 放空欄位、`entry/exit` 實體欄位、方向感知查詢 |

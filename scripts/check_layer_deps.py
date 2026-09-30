@@ -70,7 +70,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
     ("core.backtest.report", 4, "引擎層／報表", False),
-    ("core.managers", 4, "引擎層／部位與帳務", False),
+    ("core.position", 4, "引擎層／部位與帳務", False),
     ("core.backtest.backtester", 5, "引擎層／引擎本體", False),
     ("core.backtest.factory", 6, "組裝層", False),
     ("core.backtest", 5, "引擎層（套件本身）", False),
@@ -165,7 +165,7 @@ _ENGINE_FILES: Tuple[str, ...] = (
 _INSTRUMENT_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/models",
     "core/strategies",
-    "core/managers",
+    "core/position",
 )
 
 

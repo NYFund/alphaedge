@@ -3,7 +3,6 @@ from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 
-from core.managers.base.position_manager import BasePositionManager
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import (
@@ -13,6 +12,7 @@ from core.models import (
     FuturesTradeRecord,
 )
 from core.models.cost_config import FuturesCostConfig
+from core.position.base.position_manager import BasePositionManager
 from core.utils import Action, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
 

@@ -7,11 +7,6 @@ from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
     TwStockSettlementModel,
 )
-from core.managers.futures.position_manager import (
-    FuturesMarginConfig,
-    FuturesPositionManager,
-)
-from core.managers.stock.position_manager import StockPositionManager
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_roll import FuturesRollConfig
@@ -26,6 +21,11 @@ from core.models import (
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.models.fill_config import FillConfig, FuturesFillConfig
+from core.position.futures.position_manager import (
+    FuturesMarginConfig,
+    FuturesPositionManager,
+)
+from core.position.stock.position_manager import StockPositionManager
 from core.utils import Action, PositionType, Scale, ShortMethod
 from tests.conftest import build_stock_quote
 

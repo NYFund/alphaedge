@@ -25,7 +25,7 @@
               ├── core/backtest/models/      FillModel、SettlementModel（回測模擬）
               ├── core/market/               InstrumentSpec、CostModel（市場規則，回測與實盤共用）
               ├── core/backtest/datafeed/    資料載入與交易日判定
-              ├── core/managers/             部位進出與帳務
+              ├── core/position/             部位進出與帳務
               └── core/backtest/report/      報表與圖表
               │
 資料層      core/api/ ── core/adapters/
@@ -143,8 +143,8 @@ sequenceDiagram
 
 | 檔案 | 職責 |
 |------|------|
-| `core/managers/base/position_manager.py` | `BasePositionManager`：開倉／平倉／`settle_daily()` 的市場無關骨架 |
-| `core/managers/stock/position_manager.py` | 台股實作：FIFO 平倉、多空分流記帳、成本攤提、融券轉換 |
+| `core/position/base/position_manager.py` | `BasePositionManager`：開倉／平倉／`settle_daily()` 的市場無關骨架 |
+| `core/position/stock/position_manager.py` | 台股實作：FIFO 平倉、多空分流記帳、成本攤提、融券轉換 |
 | `core/models/base/` | `BaseAccount`／`BaseOrder`／`BasePosition`／`BaseQuote`／`BaseTradeRecord`；識別欄位一律 `symbol` |
 | `core/models/stock/` | 台股實作，含 `stock_id` 與 `symbol` 的對應 |
 
@@ -218,7 +218,7 @@ sequenceDiagram
 | 新增 | `core/portfolio/construction.py` 的對應建構器（若部位約束與既有兩者都不同） |
 | 新增 | `core/backtest/models/` 的該組合 `InstrumentSpec`／`FillModel`／`CostModel`／`SettlementModel` |
 | 新增 | `core/backtest/datafeed/<market>/` 的該組合 `DataFeed` |
-| 新增 | `core/managers/<instrument>/position_manager.py` |
+| 新增 | `core/position/<instrument>/position_manager.py` |
 | **修改** | `core/backtest/factory.py`：加一個 `elif (strategy.market, strategy.instrument_type) == (...)` 分支 |
 
 `backtester.py`、`strategy_loader.py`、`apps/backtest.py` 皆為 **0 行改動**——`StrategyLoader` 會自動掃描新的子套件，CLI 也不需要 `--market`（市場由策略類別自己宣告）。
@@ -244,7 +244,7 @@ sequenceDiagram
 6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`tasks/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
 7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`tasks/`、`scripts/`、`tests/` 不受限。
 8. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
-9. **任何動到 `core/backtest/`、`core/managers/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
+9. **任何動到 `core/backtest/`、`core/position/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
 
 ---
 
@@ -266,7 +266,7 @@ sequenceDiagram
 | 策略契約與引擎互相引用：引擎／factory／報表／`core/datafeed/base.py` → 策略契約（三個 `base.py`） | 圖的用途是說明呼叫序列，改畫相依圖反而難讀；`check_layer_deps.py` 以獨立的「策略契約」等級處理，不列入反向相依 |
 | `core/pipeline/tw/updaters/*` → `core/api/tw/*`（期貨行情、標的池 API） | 單向：api 已不再 import pipeline（欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`） |
 | `core/pipeline/tw/` → `core/market/tw/`（`futures_calendar`、`futures_roll`） | 交易日曆與換月規則屬市場結構，**已經住在 `core/market/`**，與 pipeline 同層。清洗連續合約需要換月規則，是刻意的 |
-| `core/backtest/models/settlement_model/` → `core/managers/*/position_manager.py` | 期貨轉倉與股票的除權息記帳需要 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
+| `core/backtest/models/settlement_model/` → `core/position/*/position_manager.py` | 期貨轉倉與股票的除權息記帳需要 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
 
 **已經解決、不再列入的四條**（留紀錄以免有人照舊文件重新引入）：
 
@@ -274,7 +274,7 @@ sequenceDiagram
 - 策略層曾 import `core/backtest/models/fill_model.py` 的 `FillConfig`／`FuturesFillConfig`／`VolumeCapPolicy`，
   現在這三個設定類別在 `core/models/fill_config.py`（與 `core/models/cost_config.py` 對稱），
   `fill_model.py` 只留模擬邏輯。
-- `core/portfolio/construction.py` 曾從 `core/managers/futures/position_manager.py` 取
+- `core/portfolio/construction.py` 曾從 `core/position/futures/position_manager.py` 取
   `FuturesMarginConfig`，現在取自 `core/market/tw/futures_margin_config.py`（正常向下相依）。
 - 策略層曾 import `BaseDataFeed`、`CostConfig`／`FuturesCostConfig`、`MarketCalendar`、
   `FuturesCalendar`、`FuturesRollConfig`（2026-09-19 實測 6 檔 13 處），現在那些型別都已

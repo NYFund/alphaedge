@@ -324,8 +324,8 @@ def test_open_signal_skips_when_already_holding(
 ) -> None:
     """本策略不加碼：已有該商品部位就不再開"""
 
-    from core.managers.futures.position_manager import FuturesPositionManager
     from core.models import FuturesOrder
+    from core.position.futures.position_manager import FuturesPositionManager
 
     strategy.futures_price = StubPriceAPI([18000, 18400])
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
@@ -352,8 +352,8 @@ def test_close_signal_respects_minimum_holding_days(
 ) -> None:
     """持有未滿門檻天數不平倉"""
 
-    from core.managers.futures.position_manager import FuturesPositionManager
     from core.models import FuturesOrder
+    from core.position.futures.position_manager import FuturesPositionManager
 
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
     manager = FuturesPositionManager(

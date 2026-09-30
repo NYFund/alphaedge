@@ -44,7 +44,7 @@ def test_outside_imports_of_backtest_internals_are_flagged(
     files: List[Path] = [
         _write(
             tmp_path,
-            "core/managers/stock/position_manager.py",
+            "core/position/stock/position_manager.py",
             "from core.backtest.models.fill_model import TwStockFillModel\n",
         ),
         _write(
@@ -62,7 +62,7 @@ def test_outside_imports_of_backtest_internals_are_flagged(
     hits: List[str] = checker.check_backtest_internal_imports(files)
 
     assert hits == [
-        "core/managers/stock/position_manager.py:1: "
+        "core/position/stock/position_manager.py:1: "
         "import core.backtest.models.fill_model",
         "core/live/factory.py:1: import core.backtest.datafeed.tw.stock_datafeed",
         "apps/report_tool.py:1: import core.backtest.report",
