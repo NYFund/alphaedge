@@ -477,6 +477,8 @@ _PURE_TRANSFORM_DIRS: Tuple[str, ...] = ("core/adapters",)
 _PURE_TRANSFORM_FORBIDDEN: Tuple[str, ...] = ("core.api", "core.dao", "sqlite3")
 
 _DB_DRIVER_MODULES: Set[str] = {"sqlite3"}
+_PIPELINE_PACKAGE: str = "core.pipeline"
+_PIPELINE_DIR: str = "core/pipeline"
 _DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "tasks")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
 
@@ -556,6 +558,48 @@ def check_pure_transform_layers(files: List[Path]) -> List[str]:
                 modules = [node.module]
             for module in modules:
                 if module.startswith(_PURE_TRANSFORM_FORBIDDEN):
+                    hits.append(f"{rel}:{node.lineno}: import {module}")
+    return hits
+
+
+def check_framework_pipeline_imports(files: List[Path]) -> List[str]:
+    """
+    - Description:
+        `core/pipeline/` 以外的 `core/` 模組不得 import `core.pipeline`
+
+        框架（回測、實盤、API、市場結構）只讀資料庫，不碰 ETL 的中間狀態；
+        一旦依賴長回來，資料管線就搬不出 `core/`，搬家時才會發現整串 import 斷掉。
+        分層等級擋不住這條：`core.pipeline` 與 `core.api` 同級，引擎層往下 import
+        它屬於「合法的向下相依」。`tasks/`、`scripts/`、`tests/` 不受限。
+        以 AST 判定，說明文字裡的字樣不算。
+    - Parameters:
+        - files: List[Path]
+            要掃的檔案
+    - Return:
+        - List[str]
+            `檔案:行號: import 敘述` 清單
+    """
+
+    hits: List[str] = []
+    for path in files:
+        rel: str = path.relative_to(_PROJECT_ROOT).as_posix()
+        if not rel.startswith("core/") or rel.startswith(f"{_PIPELINE_DIR}/"):
+            continue
+        try:
+            tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            modules: List[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                modules = [node.module]
+            for module in modules:
+                if module == _PIPELINE_PACKAGE or module.startswith(
+                    f"{_PIPELINE_PACKAGE}."
+                ):
                     hits.append(f"{rel}:{node.lineno}: import {module}")
     return hits
 
@@ -667,6 +711,7 @@ def main() -> int:
     sys_path_hits: List[str] = check_sys_path(files)
     db_driver_hits: List[str] = check_db_driver_imports(files)
     pure_transform_hits: List[str] = check_pure_transform_layers(files)
+    pipeline_hits: List[str] = check_framework_pipeline_imports(files)
 
     def section(title: str, items: List[str]) -> None:
         print(f"\n=== {title}（{len(items)}）===")
@@ -685,6 +730,7 @@ def main() -> int:
     section("E'. 策略套件門面 eager import 具體策略", facades)
     section("E''. DAO 以外 import 資料庫驅動（core／tasks）", db_driver_hits)
     section("E'''. 純轉換層 import 資料層（core/adapters）", pure_transform_hits)
+    section("E''''. 框架 import 資料管線（core/ 內 core/pipeline 以外）", pipeline_hits)
     section("F. 同層不同套件互相 import（僅列出，需人工判讀）", same_layer)
     section("G. sys.path 注入（僅列出）", sys_path_hits)
     if args.edges:
@@ -699,6 +745,7 @@ def main() -> int:
         + len(facades)
         + len(db_driver_hits)
         + len(pure_transform_hits)
+        + len(pipeline_hits)
     )
     print(f"\n違規總數：{violations}")
     return 1 if violations else 0

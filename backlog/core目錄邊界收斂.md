@@ -38,7 +38,7 @@
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
 | Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
-| Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ⬜ | 相依 Phase1-1 |
+| Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ✅ | 2026-09-30 完成：新增 E'''' 項（專屬 AST 掃描，偏離原規劃的分層規則寫法）；突變驗證紅→綠；2 條單元測試 |
 | Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ⬜ | 護欄清單見文末附錄 |
 | Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`run.py`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
 | Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
@@ -112,7 +112,7 @@
 >   在沒有 `data/` 的 worktree 就紅。`make_updater()` 改為一併指走 cleaner 的目錄，
 >   測試自己寫入所需的公告 CSV；拿掉那份 CSV 測試會轉紅（突變驗證）。
 
-### Phase1-2. 分層檢查禁止框架 import `core.pipeline` ⬜
+### Phase1-2. 分層檢查禁止框架 import `core.pipeline` ✅
 
 - **目的**：Phase1-1 切掉之後，要有機器檢查防止依賴長回來，否則 Phase5-1 搬家時才發現。
 - **做法**：在 `scripts/check_layer_deps.py` 加一條規則：`core.pipeline` 以外的 `core.*` 模組
@@ -121,6 +121,17 @@
 - **驗證方式**：在 `core/backtest/` 任一檔刻意加一行 `from core.pipeline.shared import ...`，
   檢查要紅；移除後轉綠。
 - **相依**：Phase1-1。
+
+> **✅ 完成紀錄（2026-09-30）**
+> - `scripts/check_layer_deps.py` 新增 `check_framework_pipeline_imports()`，報告區段
+>   「E''''. 框架 import 資料管線」，計入違規總數。**沒有照原規劃寫成分層規則**：
+>   `core.pipeline` 與 `core.api` 同為等級 3，引擎層（等級 4）往下 import 它在分層檢查裡是合法的，
+>   所以改成與 E''／E''' 同型的專屬 AST 掃描。
+> - 突變驗證：在 `core/backtest/datafeed/tw/stock_datafeed.py` 加一行
+>   `from core.pipeline.shared.date_planner import DatePlanner`，檢查列出 1 處、結束碼 1；還原後 0 處、結束碼 0。
+> - 測試：`tests/test_check_layer_deps_pipeline.py`（抓到 `from … import`／`import …` 兩種寫法；
+>   `core/pipeline/` 自身、`tasks/`、docstring 字樣與 `core.pipelines` 這類前綴相似的名稱不誤報）。
+> - 文件：`docs/backtest/module-map.md` 的注意事項新增一條。
 
 ---
 
