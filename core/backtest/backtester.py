@@ -76,7 +76,7 @@ class Backtester:
         self.reporter_cls: Type[BaseBacktestReporter] = reporter_cls  # 報表產生器
 
         # 回測結束是否在瀏覽器開圖；`None` 代表交給 reporter 依環境變數決定。
-        # 由 `run.py --show/--no-show` 覆寫
+        # 由回測入口（`apps/backtest.py`）的 `--show/--no-show` 覆寫
         self.show_figures: Optional[bool] = None
 
         # 回測參數

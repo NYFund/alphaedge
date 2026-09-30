@@ -91,7 +91,7 @@ STRATEGY=MomentumFuturesStrategy docker compose up core   # 換策略
 ## 6) 建議的正式環境切分
 
 - **資料更新節點**：定時執行 `python -m tasks.update_db ...`
-- **回測節點**：執行 `run.py --strategy ...`，唯讀掛載資料庫
+- **回測節點**：執行 `python -m apps.backtest --strategy ...`，唯讀掛載資料庫
 - **展示節點**：掛載唯讀的 `results` 給前端
 
 ## 7) 健康檢查與維運

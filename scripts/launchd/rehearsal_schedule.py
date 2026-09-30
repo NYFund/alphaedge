@@ -34,16 +34,15 @@ _LABEL_PREFIX: str = "com.alphaedge.live."
 # 台北時間的交易日（週一～五）
 _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 
-# 標籤後綴 → (台北時, 台北分, run.py 參數)
+# 標籤後綴 → (台北時, 台北分, `python` 之後的參數)
 _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
     "update-db": (8, 0, ["-m", "tasks.update_db"]),
     "stock-open": (
         8,
         30,
         [
-            "run.py",
-            "--mode",
-            "live",
+            "-m",
+            "apps.live",
             "--strategy",
             "MomentumStrategy1",
             "--phase",
@@ -54,9 +53,8 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
         8,
         40,
         [
-            "run.py",
-            "--mode",
-            "live",
+            "-m",
+            "apps.live",
             "--strategy",
             "MomentumFuturesStrategy",
             "--phase",
@@ -67,9 +65,8 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
         13,
         20,
         [
-            "run.py",
-            "--mode",
-            "live",
+            "-m",
+            "apps.live",
             "--strategy",
             "MomentumStrategy1",
             "--phase",
@@ -80,9 +77,8 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
         13,
         28,
         [
-            "run.py",
-            "--mode",
-            "live",
+            "-m",
+            "apps.live",
             "--strategy",
             "MomentumFuturesStrategy",
             "--phase",
@@ -93,9 +89,8 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
         14,
         30,
         [
-            "run.py",
-            "--mode",
-            "live",
+            "-m",
+            "apps.live",
             "--strategy",
             "MomentumStrategy1",
             "--phase",
@@ -106,9 +101,8 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
         14,
         35,
         [
-            "run.py",
-            "--mode",
-            "live",
+            "-m",
+            "apps.live",
             "--strategy",
             "MomentumFuturesStrategy",
             "--phase",
@@ -142,7 +136,7 @@ _ONE_OFF_JOBS: Dict[str, Tuple[int, int, int, int, List[str]]] = {
 
 # 排程一律帶 `--no-sync`：`uv run` 預設會先同步環境，`pyproject.toml` 一變動就要重建
 # 套件並連 PyPI 下載 build 相依；排程時段的網路不保證可用，DNS 一失敗段落就在
-# 進 run.py 之前結束。改完相依後手動 `uv sync` 一次即可
+# 進入口之前結束。改完相依後手動 `uv sync` 一次即可
 _UV_RUN_ARGS: Tuple[str, ...] = ("run", "--no-sync", "python")
 
 # 存活監控的觸發間隔（秒）；時段判斷在 watchdog_in_window.sh 裡

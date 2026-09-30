@@ -11,7 +11,7 @@
 ```
 AlphaEdge/
 ├── core/                  # 函式庫：可被 import，不寫任何東西到自己目錄下
-├── run.py  tasks/  frontend/  strategy_lab/  tests/  docs/  backlog/  scripts/
+├── apps/  tasks/  frontend/  strategy_lab/  tests/  docs/  backlog/  scripts/
 │
 ├── data/                  # 資料
 │   ├── db/                # tw_stock.db、tw_futures.db（市場軸由檔名承載）

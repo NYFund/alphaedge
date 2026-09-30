@@ -1,6 +1,6 @@
 # 指令教學
 
-本文件整理常用執行指令，包含資料更新（`tasks.update_db`）、資料維護與回測（`run.py`）。
+本文件整理常用執行指令，包含資料更新（`tasks.update_db`）、資料維護與回測（`apps.backtest`）。
 
 ## 資料更新：`python -m tasks.update_db`
 
@@ -163,18 +163,18 @@ python -m tasks.clean_logs --apply --bucket api --days 7
 
 只刪檔名帶時間戳的已輪替檔，使用中的 `xxx.log` 一律保留。
 
-## 回測：`python run.py --strategy <StrategyClassName>`
+## 回測：`python -m apps.backtest --strategy <StrategyClassName>`
 
 將 `<StrategyClassName>` 替換為你的策略類別名稱。
 
 ```bash
-python run.py --strategy <StrategyClassName>
-python run.py --strategy <StrategyClassName> --show   # 畫完圖在瀏覽器開起來
+python -m apps.backtest --strategy <StrategyClassName>
+python -m apps.backtest --strategy <StrategyClassName> --show   # 畫完圖在瀏覽器開起來
 ```
 
 策略名稱找不到時以結束碼 2 結束。結果輸出在 `results/<StrategyName>/`。
 
-實盤是另一條路徑（`--mode live`，必須帶 `--phase`），**它從不回傳 1**——`1` 保留給未預期的例外。
+實盤是另一個入口（`python -m apps.live`，必須帶 `--phase`），**它從不回傳 1**——`1` 保留給未預期的例外。
 排程要攔的是下列各碼：
 
 | 退出碼 | 意義 |

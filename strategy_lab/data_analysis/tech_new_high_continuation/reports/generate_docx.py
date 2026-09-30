@@ -2,7 +2,7 @@
 """
 將 tech_new_high_continuation 分析 output/ CSV 彙整為精簡 Word 報告（.docx）。
 
-使用方式（專案根目錄，**必須用 `-m`**，理由見 run.py）：
+使用方式（專案根目錄，**必須用 `-m`**，理由見同主題的 `run.py` 模組說明）：
     .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.reports.generate_docx
 
 若尚未有 CSV，請先執行：
@@ -147,8 +147,8 @@ def _load_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     by_stock_path = _OUTPUT_DIR / "tech_new_high_prob_by_stock.csv"
     if not summary_path.exists() or not by_stock_path.exists():
         raise FileNotFoundError(
-            "找不到 output CSV，請先執行 run.py：\n"
-            "  .venv/bin/python strategy_lab/data_analysis/tech_new_high_continuation/run.py"
+            "找不到 output CSV，請先執行同主題的 run.py：\n"
+            "  .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.run"
         )
     return pd.read_csv(summary_path), pd.read_csv(by_stock_path)
 

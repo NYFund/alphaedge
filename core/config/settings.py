@@ -300,7 +300,7 @@ API_LOG_FILE_LEVEL: str = "WARNING"
 # 就彈出 5 個分頁；批次跑參數掃描時一次開幾十個，在無頭環境（CI、容器、
 # nohup 背景作業）更是直接失敗或卡住。圖本來就會存成 PNG，要看打開檔案即可。
 #
-# 需要互動式檢視時以 `python run.py --strategy X --show` 或
+# 需要互動式檢視時以 `python -m apps.backtest --strategy X --show` 或
 # `ALPHAEDGE_SHOW_FIGURES=1` 開啟。
 SHOW_FIGURES_ENV_VAR: str = "ALPHAEDGE_SHOW_FIGURES"
 _TRUTHY_VALUES: frozenset = frozenset({"1", "true", "yes", "on"})

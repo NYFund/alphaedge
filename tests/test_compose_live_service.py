@@ -12,7 +12,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 「那幾條設定還在」。
 
 但**也不比對原始文字**。原本六條都在比對字面值（`'profiles: ["live"]'`、
-`'entrypoint: ["python", "run.py", "--mode", "live"]'`），而且以
+`'entrypoint: ["python", "-m", "apps.live"]'`），而且以
 `lines.index("  live:")` 定位——把 list 改成 block style、雙引號換單引號、
 或縮排變一格，語意完全相同卻會六條一起紅，其中 `lines.index()` 還是直接
 `ValueError`。那是脆弱而不是嚴格：誤報一樣會侵蝕對測試的信任。
@@ -108,12 +108,12 @@ def test_live_service_is_opt_in() -> None:
 
 def test_live_mode_is_fixed_not_templated() -> None:
     """
-    模式寫死在 `entrypoint`，不可由變數決定
+    實盤入口寫死在 `entrypoint`，不可由變數決定
 
-    `run` 的參數會整個取代 `command`，模式寫在 `command` 的話漏寫一次就變成跑回測。
-    **斷言的是「寫死且指向實盤」而不是某一串字面值**：入口日後可能換成
-    `python -m apps.live` 之類的形式，那時要守的仍然是同一件事——
-    模式不可在執行期被換掉。比對字面值的話，換一次入口就得改一次測試。
+    `run` 的參數會整個取代 `command`，入口寫在 `command` 的話漏寫一次就變成
+    映像預設的回測入口。**斷言的是「寫死且指向實盤」而不是某一串字面值**：
+    入口換過形式（`run.py --mode live` → `python -m apps.live`）時要守的仍是同一件事——
+    入口不可在執行期被換掉。比對字面值的話，換一次入口就得改一次測試。
     """
 
     entrypoint: str = settings().get("entrypoint", "")

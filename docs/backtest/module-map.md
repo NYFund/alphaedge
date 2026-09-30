@@ -1,6 +1,6 @@
 # 回測執行路徑的模組使用關係
 
-> 本文件描述「一次回測從 `run.py` 到報表落地」會經過哪些模組、誰呼叫誰、誰持有什麼狀態。
+> 本文件描述「一次回測從入口 `apps/backtest.py` 到報表落地」會經過哪些模組、誰呼叫誰、誰持有什麼狀態。
 > 引擎為何長成這樣（設計取捨、已知簡化）見 [多市場回測引擎架構](multi-market-engine.md)；
 > 方向驅動的記帳原則見 [放空回測框架規格](short-selling-framework.md)。
 
@@ -11,7 +11,7 @@
 相依**單向由上往下**，同層之間不互相 import。違反時 `scripts/check_layer_deps.py` 會以非零狀態碼結束（CI 有跑）。
 
 ```
-入口層      run.py ── tasks/update_db.py
+入口層      apps/backtest.py ── apps/live.py ── tasks/update_db.py
               │
 策略層      core/strategies/          ← 宣告 market，是 factory 的分派鍵
             （Alpha：generate_*_signals() → List[Signal]）
@@ -58,7 +58,7 @@
 
 ```mermaid
 sequenceDiagram
-    participant CLI as run.py
+    participant CLI as apps.backtest
     participant Loader as StrategyLoader
     participant F as factory
     participant BT as Backtester
@@ -117,9 +117,9 @@ sequenceDiagram
 
 | 檔案 | 職責 | 被誰呼叫 |
 |------|------|----------|
-| `run.py` | CLI 解析（`--mode`、`--strategy`、`--show/--no-show`）、載入策略、建引擎、`run()` | 使用者 |
-| `core/strategies/strategy_loader.py` | 掃描 `core/strategies/` 下**所有商品類別子套件**，找出繼承 `BaseStrategy` 的類別；類別名即策略識別名 | `run.py` |
-| `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `run.py`、測試 |
+| `apps/backtest.py` | CLI 解析（`--strategy`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
+| `core/strategies/strategy_loader.py` | 掃描 `core/strategies/` 下**所有商品類別子套件**，找出繼承 `BaseStrategy` 的類別；類別名即策略識別名 | `apps/backtest.py`、`apps/live.py` |
+| `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `apps/backtest.py`、測試 |
 
 ### 引擎與可插拔 model
 
@@ -189,7 +189,7 @@ sequenceDiagram
 | `<策略>_everyday_profit.png` | 每日損益長條圖（**已實現口徑**） | `plot_everyday_profit()` |
 | `<策略>_everyday_equity_change.png` | 每日權益變化（**盯市口徑**，無 `daily_equity` 時不產出） | `plot_everyday_equity_change()` |
 
-日誌落在 `logs/backtest/`。圖表預設不開瀏覽器，要開用 `run.py --show` 或 `ALPHAEDGE_SHOW_FIGURES`。
+日誌落在 `logs/backtest/`。圖表預設不開瀏覽器，要開用 `python -m apps.backtest --show` 或 `ALPHAEDGE_SHOW_FIGURES`。
 
 ### 權益曲線的兩種口徑
 
@@ -220,7 +220,7 @@ sequenceDiagram
 | 新增 | `core/managers/<instrument>/position_manager.py` |
 | **修改** | `core/backtest/factory.py`：加一個 `elif (strategy.market, strategy.instrument_type) == (...)` 分支 |
 
-`backtester.py`、`strategy_loader.py`、`run.py` 皆為 **0 行改動**——`StrategyLoader` 會自動掃描新的子套件，CLI 也不需要 `--market`（市場由策略類別自己宣告）。
+`backtester.py`、`strategy_loader.py`、`apps/backtest.py` 皆為 **0 行改動**——`StrategyLoader` 會自動掃描新的子套件，CLI 也不需要 `--market`（市場由策略類別自己宣告）。
 
 ---
 

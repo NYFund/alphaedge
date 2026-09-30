@@ -25,7 +25,7 @@ from core.utils import Action, PositionType, Units
 
 **與送單段落沒有共用任何狀態**，所以獨立成一個類別而不是留在 `LiveTrader` 裡：
 它自己 `connect()` / `finally: close()`，不碰資金保留、段落時窗與跨策略守門，
-`run.py` 也是以 `--phase after_close` 走完全獨立的分支。
+實盤入口（`apps/live.py`）也是以 `--phase after_close` 走完全獨立的分支。
 
 **只負責「寫下明天要補的事」，不負責執行它**：`apply_pending_actions()` 留在
 `LiveTrader`，因為待辦是在**開盤段**被補平的。寫入端與執行端本來就不對稱，
@@ -131,7 +131,7 @@ class AfterCloseRunner:
             self.dao, self.run_id, now_provider=self._now
         )
 
-        # 本次對帳結果；`run.py` 由它決定退出碼，故盤後跑完要回填給 `LiveTrader`
+        # 本次對帳結果；實盤入口（`apps/live.py`）由它決定退出碼，故盤後跑完要回填給 `LiveTrader`
         self.last_reconcile: Optional[Any] = None
 
     def run(self) -> Dict[str, Any]:

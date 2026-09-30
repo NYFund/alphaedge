@@ -13,7 +13,7 @@
 | 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price`／`futures_tick` |
 | 回測 | 與台股**共用同一支引擎**：`(TW, FUTURE)` 的 model 組（規格／成交／成本／結算／資料源）由 `core/backtest/factory.py` 注入 |
 | 期貨語意 | 逐日盯市、保證金查表與追繳、換月轉倉、日夜盤整併、期交稅與跳動點滑價 |
-| 策略 | `MomentumFuturesStrategy`（示範），`python run.py --strategy MomentumFuturesStrategy` |
+| 策略 | `MomentumFuturesStrategy`（示範），`python -m apps.backtest --strategy MomentumFuturesStrategy` |
 
 ---
 
@@ -278,7 +278,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 ## 四、策略
 
 期貨策略繼承 `core/strategies/futures/base.py` 的 `BaseFuturesStrategy`，由 `StrategyLoader` 自動收錄，
-`run.py` 與 factory 以 `(market, instrument_type)` 分派，不需要任何分流設定。
+入口（`apps/`）與 factory 以 `(market, instrument_type)` 分派，不需要任何分流設定。
 
 | 與股票策略的差異 | 基底提供的東西 |
 |------------------|----------------|

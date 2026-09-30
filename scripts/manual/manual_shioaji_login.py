@@ -24,7 +24,7 @@ from core.config.settings import now_live
 開發機與 CI 不該接觸正式憑證。
 
 **本腳本不會下單**，也**不提供連正式環境的選項**：正式環境只能由
-`run.py --production --confirm-production` 進入。
+`python -m apps.live --production --confirm-production` 進入。
 """
 
 # 要核對的合約欄位：實盤的取價、風控與股期解析都假設它們存在，以實連確認

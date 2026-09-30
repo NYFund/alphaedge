@@ -56,7 +56,7 @@ ideas/
 ideas/<topic>/ ──驗證可行──▶ data_analysis/<topic>/ ──訊號穩定──▶ strategies/<topic>/ ──成熟──▶ core/strategies/{stock,futures}/<name>.py
                                                                                                       │
                                                                                                       ▼
-                                                                                             run.py --strategy <name>
+                                                                                  python -m apps.backtest --strategy <name>
 ```
 
 失敗的想法也要保留檔案，標註 **「結論：不 work，原因：⋯⋯」**。

@@ -11,7 +11,8 @@ AlphaEdge is a strategy research and trading framework focused on Taiwan market 
 ```mermaid
 graph TB
     subgraph entry ["Entry Layer"]
-        RunPy["run.py<br/>--mode backtest | live"]
+        BacktestApp["apps/backtest.py<br/>python -m apps.backtest"]
+        LiveApp["apps/live.py<br/>python -m apps.live"]
         Tasks["tasks/update_db.py"]
     end
 
@@ -71,10 +72,11 @@ graph TB
         FrontendDocker["frontend/Dockerfile"]
     end
 
-    RunPy --> Loader
+    BacktestApp --> Loader
+    LiveApp --> Loader
     Loader --> Strategies
-    RunPy --> BTFactory
-    RunPy --> LiveFactory
+    BacktestApp --> BTFactory
+    LiveApp --> LiveFactory
     Strategies --> Portfolio
     Portfolio --> Execution
     Portfolio --> Models
@@ -161,7 +163,7 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-09-24 and will
 - Futures tick sizes cover only the seven verified index futures (TX / MTX / TMF 1 point, TE / ZEF 0.05, TF / ZFF 0.2); unregistered products fall back to 1 point with a warning, so slippage set in ticks is distorted for them (default slippage is 0, so unaffected).
 - A single backtest cannot hold TW stocks and TW futures at the same time (cross-market portfolios / hedging).
 - The TW stock below-reference-price short restriction and the daily day-trade whitelist are not wired into matching yet, so short and day-trade opportunities are overestimated.
-- Live trading (`--mode live`) has only been rehearsed in the **simulation** environment over several consecutive days; it has not been run in production. Production requires both `--production` and `--confirm-production`, which deliberately have no environment-variable equivalents.
+- Live trading (`python -m apps.live`) has only been rehearsed in the **simulation** environment over several consecutive days; it has not been run in production. Production requires both `--production` and `--confirm-production`, which deliberately have no environment-variable equivalents.
 - The live daily-loss guard is active at the **account level** only (broker-side realized + unrealized P&L); **the per-strategy layer never triggers** — the broker reports combined P&L per symbol, which cannot be split back per strategy.
 
 See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW Futures Platform](docs/futures/tw-futures-platform.md) for details.
@@ -267,16 +269,16 @@ uv sync
 
 The project is installed into `.venv` in editable mode, so `core` / `tasks` / `tests` are importable
 from any directory. Activate the virtualenv in every new terminal (run `deactivate` to leave it);
-alternatively prefix commands with `uv run`, e.g. `uv run python run.py ...`.
+alternatively prefix commands with `uv run`, e.g. `uv run python -m apps.backtest ...`.
 
 **Step 2: Run a backtest**
 
 ```bash
-python run.py --strategy MomentumStrategy1
+python -m apps.backtest --strategy MomentumStrategy1
 ```
 
 - `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
-- Optional: `--show` opens charts in a browser. Live trading is a separate path (`--mode live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
+- Optional: `--show` opens charts in a browser. Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
 **Step 3: Open the frontend to view results**
@@ -333,7 +335,7 @@ docker run --rm \
 
 The image has no database, so mount the host `data/` read-only; results are written back to the host
 `results/`, otherwise they vanish when the container exits. To type commands inside the container
-instead, use `--entrypoint /bin/bash` with `-it`, then run `python run.py --help`.
+instead, use `--entrypoint /bin/bash` with `-it`, then run `python -m apps.backtest --help` (live: `python -m apps.live --help`).
 
 **Step 3: Start the frontend**
 
@@ -418,8 +420,8 @@ python -m tasks.update_db --target no_tick
 Replace `<StrategyClassName>` with your strategy class name. More command scenarios are documented in [Command Usage](docs/commands/command-usage.md).
 
 ```bash
-python run.py --strategy <StrategyClassName>
-# optional: --show opens charts in a browser. Live trading uses --mode live, see docs/deployment/live-deployment.md
+python -m apps.backtest --strategy <StrategyClassName>
+# optional: --show opens charts in a browser. Live trading uses python -m apps.live, see docs/deployment/live-deployment.md
 ```
 
 ## Project Structure
@@ -521,7 +523,8 @@ AlphaEdge/
 ├── docker-compose.yml         # compose: core + live (behind a profile, never started by `up`) + frontend + shared results volume
 ├── pyproject.toml             # dependency declaration (single source) and ruff/pytest config
 ├── uv.lock                    # versions resolved by uv (do not edit; run `uv lock` after changing pyproject)
-├── run.py
+├── apps/                      # entry points: backtest.py (backtest), live.py (live), _common.py (shared)
+├── run.py                     # forwarding shim for the old entry point (temporary, to be deleted; use apps/)
 ├── README.md                  # Chinese (source of truth)
 └── README_en.md               # English translation
 ```

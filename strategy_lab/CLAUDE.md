@@ -29,6 +29,6 @@
 - 研究產出（圖表、CSV）放對應主題的 `output/`；Word/PDF 報告放 `reports/`。
 - 優先複用 `core/api/` 與 `core/utils/`，不在 lab 內重複實作資料讀取、手續費、交易日邏輯。
 - 成熟策略最終搬到 `core/strategies/stock/` 或 `core/strategies/futures/`（**兩條分支**，
-  依策略宣告的商品類別決定），用 `run.py --strategy <類別名>` 跑正式回測。
+  依策略宣告的商品類別決定），用 `python -m apps.backtest --strategy <類別名>` 跑正式回測。
 
 詳細說明、API 用法、工作流 → [`strategy_lab/README.md`](README.md)
