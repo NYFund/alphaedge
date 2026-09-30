@@ -5,7 +5,7 @@ import sys
 import tokenize
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 """
 分層相依檢查：以 AST 掃全專案 import，驗證 `_LAYER_RULES` 宣告的相依方向
@@ -482,6 +482,13 @@ _PURE_TRANSFORM_FORBIDDEN: Tuple[str, ...] = ("core.api", "core.dao", "sqlite3")
 _DB_DRIVER_MODULES: Set[str] = {"sqlite3"}
 _PIPELINE_PACKAGE: str = "core.pipeline"
 _PIPELINE_DIR: str = "core/pipeline"
+# 回測引擎的內部零件：只有回測自己與測試可以 import
+_BACKTEST_INTERNAL_PACKAGES: Tuple[str, ...] = (
+    "core.backtest.models",
+    "core.backtest.datafeed",
+    "core.backtest.report",
+)
+_BACKTEST_DIR: str = "core/backtest"
 _DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "tasks")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
 
@@ -583,10 +590,64 @@ def check_framework_pipeline_imports(files: List[Path]) -> List[str]:
             `檔案:行號: import 敘述` 清單
     """
 
+    return _forbidden_imports(
+        files,
+        lambda rel: rel.startswith("core/") and not rel.startswith(f"{_PIPELINE_DIR}/"),
+        (_PIPELINE_PACKAGE,),
+    )
+
+
+def check_backtest_internal_imports(files: List[Path]) -> List[str]:
+    """
+    - Description:
+        回測的內部零件（`core.backtest.models`、`datafeed`、`report`）只能被
+        `core/backtest/` 自己與 `tests/` import
+
+        市場規則（成本、商品規格）與策略的成交設定已經搬到 `core/market/`、`core/models/`，
+        留在這三個套件裡的是回測模擬本身。分層等級擋不住回流：它們登記在第 4 層，
+        部位管理層與策略契約也在第 4 層（只算「同層互相 import」，不會失敗），
+        實盤組裝層與具體策略又在更高層（向下 import 本來合法）。
+        `core.backtest.factory` 與 `core.backtest.backtester` 不在此列：實盤 parity 比對
+        要真的跑一場回測，那是組裝層的正當相依。以 AST 判定，說明文字裡的字樣不算。
+    - Parameters:
+        - files: List[Path]
+            要掃的檔案
+    - Return:
+        - List[str]
+            `檔案:行號: import 敘述` 清單
+    """
+
+    return _forbidden_imports(
+        files,
+        lambda rel: not rel.startswith((f"{_BACKTEST_DIR}/", "tests/")),
+        _BACKTEST_INTERNAL_PACKAGES,
+    )
+
+
+def _forbidden_imports(
+    files: List[Path],
+    in_scope: Callable[[str], bool],
+    forbidden: Tuple[str, ...],
+) -> List[str]:
+    """
+    - Description:
+        範圍內的檔案若以絕對 import 引用了 `forbidden` 任一套件（或其子模組），列出該處
+    - Parameters:
+        - files: List[Path]
+            要掃的檔案
+        - in_scope: Callable[[str], bool]
+            以專案相對路徑判斷該檔是否受限
+        - forbidden: Tuple[str, ...]
+            禁止 import 的套件
+    - Return:
+        - List[str]
+            `檔案:行號: import 敘述` 清單
+    """
+
     hits: List[str] = []
     for path in files:
         rel: str = path.relative_to(_PROJECT_ROOT).as_posix()
-        if not rel.startswith("core/") or rel.startswith(f"{_PIPELINE_DIR}/"):
+        if not in_scope(rel):
             continue
         try:
             tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
@@ -600,8 +661,9 @@ def check_framework_pipeline_imports(files: List[Path]) -> List[str]:
             elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
                 modules = [node.module]
             for module in modules:
-                if module == _PIPELINE_PACKAGE or module.startswith(
-                    f"{_PIPELINE_PACKAGE}."
+                if any(
+                    module == package or module.startswith(f"{package}.")
+                    for package in forbidden
                 ):
                     hits.append(f"{rel}:{node.lineno}: import {module}")
     return hits
@@ -715,6 +777,7 @@ def main() -> int:
     db_driver_hits: List[str] = check_db_driver_imports(files)
     pure_transform_hits: List[str] = check_pure_transform_layers(files)
     pipeline_hits: List[str] = check_framework_pipeline_imports(files)
+    backtest_internal_hits: List[str] = check_backtest_internal_imports(files)
 
     def section(title: str, items: List[str]) -> None:
         print(f"\n=== {title}（{len(items)}）===")
@@ -734,6 +797,10 @@ def main() -> int:
     section("E''. DAO 以外 import 資料庫驅動（core／tasks）", db_driver_hits)
     section("E'''. 純轉換層 import 資料層（core/adapters）", pure_transform_hits)
     section("E''''. 框架 import 資料管線（core/ 內 core/pipeline 以外）", pipeline_hits)
+    section(
+        "E'''''. 回測以外 import 回測內部零件（models／datafeed／report）",
+        backtest_internal_hits,
+    )
     section("F. 同層不同套件互相 import（僅列出，需人工判讀）", same_layer)
     section("G. sys.path 注入（僅列出）", sys_path_hits)
     if args.edges:
@@ -749,6 +816,7 @@ def main() -> int:
         + len(db_driver_hits)
         + len(pure_transform_hits)
         + len(pipeline_hits)
+        + len(backtest_internal_hits)
     )
     print(f"\n違規總數：{violations}")
     return 1 if violations else 0
