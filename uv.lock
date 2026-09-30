@@ -137,6 +137,7 @@ name = "alphaedge"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "beautifulsoup4" },
     { name = "fake-useragent" },
     { name = "finmind" },
     { name = "html5lib" },
@@ -174,6 +175,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "dolphindb", marker = "extra == 'tick'", specifier = ">=3.0" },
     { name = "fake-useragent", specifier = ">=2.2" },
     { name = "finmind", specifier = ">=1.9" },
