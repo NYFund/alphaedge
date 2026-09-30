@@ -6,6 +6,7 @@ from loguru import logger
 
 from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.api.tw.financial_statement_api import FinancialStatementAPI
+from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.api.tw.monthly_revenue_report_api import MonthlyRevenueReportAPI
 from core.api.tw.stock_chip_api import StockChipAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
@@ -17,7 +18,6 @@ from core.dao.connection import DBConnection, connect_sqlite
 from core.datafeed.base import BaseDataFeed
 from core.market.tw.market_calendar import MarketCalendar
 from core.models import StockQuote
-from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.strategies.base import BaseStrategy
 from core.utils import Scale
 
@@ -56,6 +56,9 @@ class TwStockDataFeed(BaseDataFeed):
         self.margin: Optional[StockMarginAPI] = None  # 融資券餘額
         self.mrr: Optional[MonthlyRevenueReportAPI] = None  # 月營收
         self.fs: Optional[FinancialStatementAPI] = None  # 財報
+        self.market_holiday: Optional[MarketHolidayAPI] = (
+            None  # 官方休市日（缺日診斷用）
+        )
 
         # 回測區間：停券日推導需要往後多看幾個交易日，故必須知道區間
         self.start_date: Optional[datetime.date] = None
@@ -88,6 +91,7 @@ class TwStockDataFeed(BaseDataFeed):
         self.dividend = StockDividendAPI(conn=self.conn)
         self.margin = StockMarginAPI(conn=self.conn)
         self.price = StockPriceAPI(conn=self.conn, dividend_api=self.dividend)
+        self.market_holiday = MarketHolidayAPI(conn=self.conn)
 
         if strategy.scale == Scale.TICK:
             self.tick = StockTickAPI()
@@ -123,53 +127,63 @@ class TwStockDataFeed(BaseDataFeed):
 
             **回測遇到缺日會當成休市靜默跳過**：資料缺一天與
             當天休市在引擎眼裡完全相同，策略少做一天的判斷卻不會有任何跡象。
-            根治在 ETL（見 `core/pipeline/shared/date_planner.py`），這裡負責
-            **讓它在回測起跑時就被看見**。
+            根治在 ETL，這裡負責**讓它在回測起跑時就被看見**。
 
-            **扣掉 ETL 已確認為休市的日期**：`DateProgressStore("price").no_data`
-            記的是「已向交易所確認過、當天確實沒有資料」，那些是國定假日、
-            不是缺口。這份紀錄不存在時（剛 clone 的環境）就全部算成不確定，
-            只報數字不下判斷——寧可說不知道，也不要把連假講成資料缺失。
+            **扣掉交易所公告的休市日**（`market_holiday` 表）：國定假日不是缺口。
+            只有官方行事曆已入庫的年度才下判斷；未入庫的年度無法分辨連假與缺日，
+            那一段只報數字——寧可說不知道，也不要把連假講成資料缺失。
+            `--target market_holiday` 只抓去年到明年，更早的年度一律落在這一段。
+
+            颱風假等臨時休市不在交易所年初公告的行事曆裡，這類日期會被列為
+            「不在休市清單裡」。這是刻意的保守行為，不是漏判：
+            看到那幾天時對照當年的颱風停班公告即可。
         - Return:
             - int
-                無法歸因為休市的缺日數
+                無法歸因為休市的缺日數（含未入庫年度中無法判斷的日期）
         """
 
         if not self.start_date or not self.end_date or self.trading_days is None:
             return 0
 
-        missing: Set[datetime.date] = (
-            DatePlanner.generate_weekdays(self.start_date, self.end_date)
-            - self.trading_days
-        )
+        weekdays: Set[datetime.date] = {
+            self.start_date + datetime.timedelta(days=offset)
+            for offset in range((self.end_date - self.start_date).days + 1)
+            if (self.start_date + datetime.timedelta(days=offset)).weekday() < 5
+        }
+        missing: Set[datetime.date] = weekdays - self.trading_days
         if not missing:
             return 0
 
-        confirmed_holidays: Set[datetime.date] = DateProgressStore("price").no_data
-        unexplained: List[datetime.date] = sorted(missing - confirmed_holidays)
+        covered_years: Set[int] = self.market_holiday.get_covered_years()
+        closures: Set[datetime.date] = self.market_holiday.get_closures(
+            self.start_date, self.end_date
+        )
+        undetermined: List[datetime.date] = sorted(
+            day for day in missing if day.year not in covered_years
+        )
+        gaps: List[datetime.date] = sorted(
+            day for day in missing if day.year in covered_years and day not in closures
+        )
 
-        if not unexplained:
+        if undetermined:
+            logger.info(
+                f"[Calendar] 區間內有 {len(undetermined)} 個平日沒有行情，"
+                f"落在官方休市行事曆未入庫的年度，無法分辨連假與缺日"
+            )
+
+        if gaps:
+            logger.warning(
+                f"[Calendar] 區間內有 {len(gaps)} 個平日沒有行情、"
+                f"且**不在**官方休市清單裡，很可能是資料缺口："
+                f"{gaps[:10]}" + ("…（僅列前 10 筆）" if len(gaps) > 10 else "")
+            )
+        elif not undetermined:
             logger.info(
                 f"[Calendar] 區間內有 {len(missing)} 個平日沒有行情，"
-                f"皆已由 ETL 確認為休市"
+                f"皆為官方公告的休市日"
             )
-            return 0
 
-        if not confirmed_holidays:
-            logger.info(
-                f"[Calendar] 區間內有 {len(unexplained)} 個平日沒有行情。"
-                f"本機沒有 ETL 的休市紀錄，無法分辨連假與缺日——"
-                f"跑過一次 `--target price` 之後這行會變精確"
-            )
-            return len(unexplained)
-
-        logger.warning(
-            f"[Calendar] 區間內有 {len(unexplained)} 個平日沒有行情、"
-            f"且**不在** ETL 已確認的休市清單裡，很可能是資料缺口："
-            f"{unexplained[:10]}"
-            + ("…（僅列前 10 筆）" if len(unexplained) > 10 else "")
-        )
-        return len(unexplained)
+        return len(undetermined) + len(gaps)
 
     def get_quotes(
         self,

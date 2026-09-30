@@ -1,12 +1,15 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional, Set
 
 import pandas as pd
 import pytest
 
 from core.market.tw.market_calendar import MarketCalendar
+
+if TYPE_CHECKING:
+    from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 
 """
 交易日曆的兩條防線
@@ -128,65 +131,88 @@ def test_index_creation_is_idempotent(
 
 
 # === 缺日要被看見 ===
-def test_calendar_gap_report_counts_unexplained_weekdays(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    平日沒有行情、又不在 ETL 的休市紀錄裡，就是可疑的缺口
+class _HolidayStub:
+    """官方休市行事曆：只涵蓋 `covered_years`，休市日為 `closures`"""
 
-    回測遇到缺日會當成休市靜默跳過，策略少做一天的判斷卻不會有任何跡象。
-    """
+    def __init__(self, covered_years: Set[int], closures: Set[datetime.date]) -> None:
+        self.covered_years: Set[int] = covered_years
+        self.closures: Set[datetime.date] = closures
+
+    def get_covered_years(self) -> Set[int]:
+        """已入庫的年度"""
+
+        return self.covered_years
+
+    def get_closures(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> Set[datetime.date]:
+        """區間內的休市日"""
+
+        return {day for day in self.closures if start_date <= day <= end_date}
+
+
+def _gap_feed(
+    start_date: datetime.date,
+    end_date: datetime.date,
+    trading_days: Set[datetime.date],
+    holiday: _HolidayStub,
+) -> "TwStockDataFeed":
+    """不連資料庫、只帶缺日診斷所需欄位的 datafeed"""
 
     from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 
     feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
-    feed.start_date = datetime.date(2024, 1, 1)  # 週一
-    feed.end_date = datetime.date(2024, 1, 5)  # 週五
-    feed.trading_days = {
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 3),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-    }
+    feed.start_date = start_date
+    feed.end_date = end_date
+    feed.trading_days = trading_days
+    feed.market_holiday = holiday
+    return feed
 
-    class _Progress:
-        """ETL 已確認 1/1 是休市（元旦）"""
 
-        no_data = {datetime.date(2024, 1, 1)}
+def test_calendar_gap_report_attributes_official_closures() -> None:
+    """
+    官方公告的休市日不是缺口
 
-    monkeypatch.setattr(
-        "core.backtest.datafeed.tw.stock_datafeed.DateProgressStore",
-        lambda source: _Progress(),
+    回測遇到缺日會當成休市靜默跳過，策略少做一天的判斷卻不會有任何跡象；
+    但連假若也被報成缺口，這行 log 就會被當成噪音忽略。
+    """
+
+    feed = _gap_feed(
+        datetime.date(2025, 1, 1),  # 週三，元旦
+        datetime.date(2025, 1, 3),
+        {datetime.date(2025, 1, 2), datetime.date(2025, 1, 3)},
+        _HolidayStub({2025}, {datetime.date(2025, 1, 1)}),
     )
 
     assert feed.report_calendar_gaps() == 0
 
 
-def test_calendar_gap_report_flags_a_real_hole(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """ETL 沒說是休市的平日缺日要被算出來"""
+def test_calendar_gap_report_flags_a_real_hole() -> None:
+    """已涵蓋的年度裡，不在休市清單上的平日缺日要被算出來"""
 
-    from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
+    feed = _gap_feed(
+        datetime.date(2025, 1, 1),
+        datetime.date(2025, 1, 3),
+        {datetime.date(2025, 1, 3)},  # 1/2 缺
+        _HolidayStub({2025}, {datetime.date(2025, 1, 1)}),
+    )
 
-    feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
-    feed.start_date = datetime.date(2024, 1, 1)
-    feed.end_date = datetime.date(2024, 1, 5)
-    feed.trading_days = {
-        datetime.date(2024, 1, 1),
-        datetime.date(2024, 1, 2),
-        datetime.date(2024, 1, 4),
-        datetime.date(2024, 1, 5),
-    }
+    assert feed.report_calendar_gaps() == 1
 
-    class _Progress:
-        """ETL 有紀錄，但沒說 1/3 是休市"""
 
-        no_data = {datetime.date(2023, 12, 25)}
+def test_calendar_gap_report_does_not_judge_uncovered_years() -> None:
+    """
+    行事曆未入庫的年度只報數字、不下判斷
 
-    monkeypatch.setattr(
-        "core.backtest.datafeed.tw.stock_datafeed.DateProgressStore",
-        lambda source: _Progress(),
+    表裡查不到休市日，可能是「不是假日」也可能是「那年沒入庫」；
+    跨年的區間中，已涵蓋那一段照常歸因，未涵蓋那一段全數列為無法判斷。
+    """
+
+    feed = _gap_feed(
+        datetime.date(2024, 12, 31),  # 週二；2024 未入庫
+        datetime.date(2025, 1, 2),
+        {datetime.date(2025, 1, 2)},
+        _HolidayStub({2025}, {datetime.date(2025, 1, 1)}),
     )
 
     assert feed.report_calendar_gaps() == 1

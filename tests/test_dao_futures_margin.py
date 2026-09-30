@@ -165,6 +165,7 @@ def make_updater(
 ) -> FuturesMarginUpdater:
     """DB 與 downloads 都指向暫存區的保證金 updater"""
 
+    import core.pipeline.tw.cleaners.futures_margin_cleaner as cleaner_module
     import core.pipeline.tw.loaders.futures_margin_loader as loader_module
     import core.pipeline.tw.updaters.futures_margin_updater as updater_module
 
@@ -173,6 +174,11 @@ def make_updater(
     )
     monkeypatch.setattr(
         loader_module, "FUTURES_MARGIN_DOWNLOADS_PATH", tmp_path / "margin"
+    )
+    # 鏈式比對從 cleaner 的目錄讀公告中繼檔；不一起指走的話，
+    # 測試會讀到本機真實下載的 CSV，沒有那批檔案的環境（CI、新 clone）就換了結果
+    monkeypatch.setattr(
+        cleaner_module, "FUTURES_MARGIN_DOWNLOADS_PATH", tmp_path / "margin"
     )
     return updater_module.FuturesMarginUpdater()
 
@@ -255,6 +261,20 @@ def test_chain_check_reports_a_gap_and_is_wired_into_update(
         ),
     )
     updater.dao.commit()
+    # 08-09 那則公告記載的「調整前」是 241000，接不上前一筆的調整後 184000
+    pd.DataFrame(
+        [["2024-08-09", "TX", 265000, "announcement", 241000]],
+        columns=[
+            "effective_date",
+            "product",
+            "原始保證金",
+            "source",
+            "調整前原始保證金",
+        ],
+    ).to_csv(
+        updater.cleaner.margin_dir / "futures_margin_announcement_20240809.csv",
+        index=False,
+    )
 
     messages: List[str] = []
     sink_id: int = logger.add(lambda message: messages.append(message), level="WARNING")
