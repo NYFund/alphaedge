@@ -8,11 +8,7 @@ from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.factory import build_backtester
 from core.backtest.models.cost_model import TwFuturesCostModel
-from core.backtest.models.fill_model import (
-    FillConfig,
-    TwFuturesFillModel,
-    VolumeCapPolicy,
-)
+from core.backtest.models.fill_model import TwFuturesFillModel
 from core.backtest.models.instrument_spec import TwFuturesSpec
 from core.backtest.models.settlement_model import (
     BaseSettlementModel,
@@ -32,6 +28,7 @@ from core.models import (
     StockPosition,
 )
 from core.models.cost_config import FuturesCostConfig
+from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import Action, FuturesSession, PositionType, Scale
 from tests.conftest import build_futures_quote

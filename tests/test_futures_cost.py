@@ -8,11 +8,12 @@ from core.backtest.models.cost_model import (
     StockCostModel,
     TwFuturesCostModel,
 )
-from core.backtest.models.fill_model import FuturesFillConfig, TwFuturesFillModel
+from core.backtest.models.fill_model import TwFuturesFillModel
 from core.backtest.models.instrument_spec import TwFuturesSpec
 from core.managers.futures.position_manager import FuturesPositionManager
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesTradeRecord
+from core.models.fill_config import FuturesFillConfig
 from core.utils import Action, FuturesCost, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER, FUTURES_TICK_SIZE
 
@@ -351,7 +352,7 @@ def test_base_fill_config_is_rejected_for_futures() -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.backtest.models.fill_model import FillConfig
+    from core.models.fill_config import FillConfig
     from core.strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )

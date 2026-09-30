@@ -1,13 +1,10 @@
 import datetime
 from typing import Dict, Optional
 
-from core.backtest.models.fill_model import (
-    FillConfig,
-    TwStockFillModel,
-    VolumeCapPolicy,
-)
+from core.backtest.models.fill_model import TwStockFillModel
 from core.backtest.models.instrument_spec import TwStockSpec
 from core.models import StockOrder, StockQuote
+from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.utils import Action, PositionType, Scale, ShortMethod
 from tests.conftest import build_stock_quote
 
@@ -578,8 +575,9 @@ def test_standalone_fill_model_counts_volume_cap_rejections() -> None:
 def test_standalone_futures_fill_model_counts_volume_cap_rejections() -> None:
     """期貨側同樣的路徑；它在三處直接索引 key，缺一個就整條崩"""
 
-    from core.backtest.models.fill_model import FuturesFillConfig, TwFuturesFillModel
+    from core.backtest.models.fill_model import TwFuturesFillModel
     from core.models import FuturesOrder, FuturesQuote
+    from core.models.fill_config import FuturesFillConfig
 
     fill_model: TwFuturesFillModel = TwFuturesFillModel(
         config=FuturesFillConfig(
