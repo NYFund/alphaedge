@@ -3,7 +3,8 @@ from typing import Optional, Tuple
 
 import pytest
 
-from core.backtest.models.instrument_spec import InstrumentSpec, TwStockSpec
+from core.market.instrument_spec import InstrumentSpec
+from core.market.tw.instrument_spec import TwStockSpec
 from core.utils.instrument import StockUtils
 
 """InstrumentSpec 測試：台股規格的三個介面必須與既有 StockUtils 逐值相同"""

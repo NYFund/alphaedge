@@ -3,11 +3,11 @@ from typing import List, Optional
 
 import pytest
 
-from core.backtest.models.cost_model import TwFuturesCostModel
 from core.managers.futures.position_manager import (
     FuturesMarginConfig,
     FuturesPositionManager,
 )
+from core.market.tw.cost_model import TwFuturesCostModel
 from core.models import (
     FuturesAccount,
     FuturesOrder,

@@ -1,9 +1,9 @@
 import datetime
 from typing import Dict, Optional
 
-from core.backtest.models.cost_model import StockCostModel
 from core.backtest.models.settlement_model import TwStockSettlementModel
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.cost_model import StockCostModel
 from core.models import StockAccount, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
 from core.utils import PositionType

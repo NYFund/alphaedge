@@ -3,8 +3,8 @@ from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 
-from core.backtest.models.cost_model import TwFuturesCostModel
 from core.managers.base.position_manager import BasePositionManager
+from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import (
     FuturesAccount,

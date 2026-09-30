@@ -134,7 +134,7 @@ TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計
 
 ⚠️ **型別注意**：`Commission` / `ShortCost` 是 `(float, Enum)`，塞不進 `date` 或 `int` 語意的成員。因此 `DAY_TRADE_TAX_EXPIRY = datetime.date(2027, 12, 31)` 與 `DAYS_PER_YEAR = 365` 一律放 **module-level 常數**。回測區間跨過 `DAY_TRADE_TAX_EXPIRY` 時，`StockCostModel` 會 `logger.warning` 提醒「當沖稅率減半假設可能已失效」——**看的是回測區間，不是執行當下的日期**。
 
-### 3.3 成本模型（`core/backtest/models/cost_model.py`；設定類別在 `core/models/cost_config.py`）
+### 3.3 成本模型（`core/market/tw/cost_model.py`；設定類別在 `core/models/cost_config.py`）
 
 `CostConfig` 為一次回測固定的成本參數，`StockCostModel` 為方向感知的成本／損益計算，`PositionManager` 只呼叫這一層。
 
@@ -467,7 +467,7 @@ snapshot_daily_equity(date, quotes)
 | 檔案 | 內容 |
 |------|------|
 | `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
-| `core/backtest/models/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
+| `core/market/tw/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
 | `core/backtest/models/fill_model.py` | 成交價驗證、券源檢核、當日累計高低點 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/managers/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |

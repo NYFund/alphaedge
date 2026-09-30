@@ -2,7 +2,7 @@ import datetime
 from typing import Dict, Optional
 
 from core.backtest.models.fill_model import TwStockFillModel
-from core.backtest.models.instrument_spec import TwStockSpec
+from core.market.tw.instrument_spec import TwStockSpec
 from core.models import StockOrder, StockQuote
 from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.utils import Action, PositionType, Scale, ShortMethod
