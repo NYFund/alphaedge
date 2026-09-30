@@ -25,14 +25,14 @@ graph TB
         Portfolio["core/portfolio<br/>signal / sizing / construction<br/>aggregation (multi-strategy arbitration)"]
         Execution["core/execution<br/>pre-submit: direction whitelist<br/>max holdings, exposure, ordering"]
         DataFeedBase["core/datafeed<br/>BaseDataFeed contract"]
-        Market["core/market<br/>calendars / contract roll / margin config"]
+        Market["core/market<br/>calendars / contract roll / margin config<br/>instrument spec / cost model"]
         Managers["core/managers<br/>positions & accounting"]
     end
 
     subgraph backtest_layer ["Backtest Engine (market-agnostic)"]
         BTFactory["core/backtest/factory.py<br/>(only 'if market ==' on the backtest path; live: core/live/factory.py)"]
         Backtester["core/backtest/backtester.py"]
-        BTModels["core/backtest/models<br/>InstrumentSpec／FillModel<br/>CostModel／SettlementModel"]
+        BTModels["core/backtest/models<br/>FillModel／SettlementModel"]
         BTFeed["core/backtest/datafeed"]
         BTReport["core/backtest/report"]
     end
@@ -111,6 +111,10 @@ graph TB
     Managers --> Models
     Models --> Utils
     BTModels --> Models
+    BTModels --> Market
+    Managers --> Market
+    BTFactory --> Market
+    LiveFactory --> Market
     Execution --> Models
 
     BTFeed --> API
@@ -133,7 +137,7 @@ graph TB
 
 **Two engines, one strategy.** `Backtester` and `LiveTrader` are separate lifecycles that run the **same strategy class** — the boundary is only the order list returned by `check_*_signal()`. A strategy needs no rewrite to go live, which is what makes signal differences between live and backtest comparable row by row (the parity check in `core/live/report/`).
 
-**Market-specific behavior is pushed down into pluggable models.** `Backtester` is market-agnostic with no subclasses; `InstrumentSpec`, `FillModel`, `CostModel`, `SettlementModel` and `DataFeed` are assembled by `core/backtest/factory.py` from the `market` + `instrument_type` a strategy declares, so adding a (market, instrument) combination never touches `backtester.py`. `core/live/factory.py` does the same job on the live side.
+**Market-specific behavior is pushed down into pluggable models.** `Backtester` is market-agnostic with no subclasses; `InstrumentSpec`, `FillModel`, `CostModel`, `SettlementModel` and `DataFeed` are assembled by `core/backtest/factory.py` from the `market` + `instrument_type` a strategy declares, so adding a (market, instrument) combination never touches `backtester.py`. `core/live/factory.py` does the same job on the live side. `InstrumentSpec` and `CostModel` are market rules (tick size, price limits, fees) shared by both engines, so they live in `core/market/`; `FillModel` and `SettlementModel` are backtest simulation and stay in `core/backtest/models/`.
 
 **The shared-contract layer is the intersection of the two engines**: position construction (`core/portfolio/`), pre-submit processing (`core/execution/`), the data-feed contract (`core/datafeed/`), market structure (`core/market/`) and position accounting (`core/managers/`) belong to neither engine; both import them. **Every shared rule is written once** — max holdings and single-symbol exposure, for instance, block the same orders in live as they do in backtest.
 
@@ -178,7 +182,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `core/execution/` | Pre-submit processing shared by backtest and live: direction whitelist, max holdings, single-symbol exposure, deterministic ordering |
 | `core/portfolio/` | Position construction shared by backtest and live: signals, capital sizing, entry assembly, multi-strategy arbitration |
 | `core/datafeed/`  | The neutral `BaseDataFeed` contract; backtest and live each implement it, and it is the type of a strategy's `setup_apis(feed)` |
-| `core/market/`    | Market structure (trading calendars, futures roll, margin config), owned by neither engine |
+| `core/market/`    | Market structure and rules (trading calendars, futures roll, margin config, `InstrumentSpec`, `CostModel`), owned by neither engine |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
 | `tasks/`        | Data maintenance and database update scripts                                                                                    |
 | `tests/`        | Unit/integration tests and the backtest regression lines (`tests/backtest/`)                                                    |
@@ -443,7 +447,7 @@ AlphaEdge/
 │   │   ├── quote_validation.py # source-agnostic quote checks: price validity, duplicate symbols
 │   │   └── tw/                # StockQuoteAdapter (one complete path each for day and tick), FuturesQuoteAdapter
 │   ├── datafeed/              # the neutral BaseDataFeed contract (shared; neither engine imports the other)
-│   ├── market/                # market structure: trading calendars, futures roll, margin config
+│   ├── market/                # market structure and rules: trading calendars, futures roll, margin config, instrument spec, cost model
 │   ├── portfolio/             # position construction (shared): signal / sizing / construction / aggregation
 │   ├── execution/             # pre-submit processing (shared): direction whitelist, max holdings, exposure, ordering
 │   ├── managers/              # position managers (base/ + stock/ + futures/)
@@ -459,7 +463,7 @@ AlphaEdge/
 │   │   ├── README.md          # bar scales, price basis, fill assumptions, performance metrics
 │   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses
 │   │   ├── factory.py         # assembles the model set from (market, instrument_type)
-│   │   ├── models/            # InstrumentSpec / FillModel / CostModel / SettlementModel
+│   │   ├── models/            # FillModel / SettlementModel (backtest simulation; instrument spec and cost model live in core/market/)
 │   │   ├── datafeed/          # data loading, quote conversion, trading calendar, futures roll
 │   │   ├── report/            # trading report, direction summary, charts
 │   │   └── analysis/          # performance metrics (`performance_metrics.py` holds pure risk-adjusted return functions, called by the reporter to write metrics_summary.csv)
