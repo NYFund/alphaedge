@@ -241,8 +241,9 @@ sequenceDiagram
 4. **`core/api/` 不可 import `core/utils/instrument.py`。** `StockUtils` 相依 `MarketCalendar`，而後者相依 `StockPriceAPI`；API 層位於其下，反向相依會直接循環。
 5. **回歸雙線不經過 reporter。** `tests/backtest/make_baseline.py` 直接從 `account.trade_records` 組 `DataFrame`，改壞報表欄位兩條線都一樣綠——動 `reporter.py` 時要靠 `test_reporting.py` 與 `test_reporter_timeline.py`。
 6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`tasks/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
-7. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
-8. **任何動到 `core/backtest/`、`core/managers/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
+7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`tasks/`、`scripts/`、`tests/` 不受限。
+8. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
+9. **任何動到 `core/backtest/`、`core/managers/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
 
 ---
 
