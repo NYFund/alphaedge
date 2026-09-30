@@ -140,6 +140,11 @@ _ONE_OFF_JOBS: Dict[str, Tuple[int, int, int, int, List[str]]] = {
     ),
 }
 
+# 排程一律帶 `--no-sync`：`uv run` 預設會先同步環境，`pyproject.toml` 一變動就要重建
+# 套件並連 PyPI 下載 build 相依；排程時段的網路不保證可用，DNS 一失敗段落就在
+# 進 run.py 之前結束。改完相依後手動 `uv sync` 一次即可
+_UV_RUN_ARGS: Tuple[str, ...] = ("run", "--no-sync", "python")
+
 # 存活監控的觸發間隔（秒）；時段判斷在 watchdog_in_window.sh 裡
 _WATCHDOG_INTERVAL_SECONDS: int = 300
 
@@ -228,14 +233,14 @@ def all_plists(uv_bin: str) -> Dict[str, Dict[str, Any]]:
     for suffix, (hour, minute, args) in _DAILY_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
-            [uv_bin, "run", "python", *args],
+            [uv_bin, *_UV_RUN_ARGS, *args],
             calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS),
             uv_bin=uv_bin,
         )
     for suffix, (month, day, hour, minute, args) in _ONE_OFF_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
-            [uv_bin, "run", "python", *args],
+            [uv_bin, *_UV_RUN_ARGS, *args],
             calendar=to_local_once(month, day, hour, minute),
             uv_bin=uv_bin,
         )
