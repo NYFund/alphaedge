@@ -1,3 +1,5 @@
+from typing import Optional
+
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
@@ -18,6 +20,7 @@ from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
     TwStockSettlementModel,
 )
+from core.backtest.overrides import BacktestOverrides
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
 from core.managers.futures.position_manager import FuturesPositionManager
@@ -37,6 +40,7 @@ def build_backtester(
     strategy: BaseStrategy,
     adjusted_price: bool = True,
     write_artifacts: bool = True,
+    overrides: Optional[BacktestOverrides] = None,
 ) -> Backtester:
     """
     - Description:
@@ -61,10 +65,20 @@ def build_backtester(
             要用哪種價格由 factory 這個「政策層」決定
         - write_artifacts: bool
             是否寫出回測報表與 backtest log；實盤 parity 比對傳 False
+        - overrides: Optional[BacktestOverrides]
+            回測區間與初始資金的覆寫；None 時沿用策略的預設
     - Return:
         - Backtester
             已注入該（市場, 商品）組合對應 model 組合的引擎
+    - Raise:
+        - InvalidBacktestOverridesError
+            覆寫值不合法
     """
+
+    # **必須在建立任何元件之前**：帳戶讀 `init_capital`、資料源與引擎讀起訖日，
+    # 晚一步覆寫就會有元件拿到舊值
+    if overrides is not None:
+        overrides.apply_to(strategy)
 
     if (strategy.market, strategy.instrument_type) == (
         Market.TW,

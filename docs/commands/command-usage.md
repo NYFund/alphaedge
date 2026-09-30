@@ -178,9 +178,12 @@ Replace `<StrategyClassName>` with your strategy class name.
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
 python -m apps.backtest --strategy <StrategyClassName> --show   # open the charts in a browser
+# override the strategy's backtest period and initial capital (all optional; defaults come from the strategy)
+python -m apps.backtest --strategy <StrategyClassName> --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
-An unknown strategy name exits with code 2. Results are written to `results/<StrategyName>/`.
+An unknown strategy name, a start date after the end date, a start date before the data start
+(2013-01-01 for stocks, 2015-01-01 for futures), or a non-positive capital exits with code 2. Results are written to `results/<StrategyName>/`.
 
 Live trading is a separate entry point (`python -m apps.live`, which requires `--phase`) and **never returns 1** —
 `1` is reserved for unexpected exceptions. These are the codes a scheduler should act on:

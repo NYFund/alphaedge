@@ -170,9 +170,12 @@ python -m tasks.clean_logs --apply --bucket api --days 7
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
 python -m apps.backtest --strategy <StrategyClassName> --show   # 畫完圖在瀏覽器開起來
+# 覆寫策略宣告的回測區間與初始資金（三者皆選填，不帶時沿用策略預設）
+python -m apps.backtest --strategy <StrategyClassName> --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
-策略名稱找不到時以結束碼 2 結束。結果輸出在 `results/<StrategyName>/`。
+策略名稱找不到、起日晚於迄日、起日早於歷史資料起點（台股 2013-01-01、期貨 2015-01-01）、
+資金不為正數時，都以結束碼 2 結束。結果輸出在 `results/<StrategyName>/`。
 
 實盤是另一個入口（`python -m apps.live`，必須帶 `--phase`），**它從不回傳 1**——`1` 保留給未預期的例外。
 排程要攔的是下列各碼：
