@@ -93,7 +93,10 @@ _NARRATIVE: Set[Tuple[str, str]] = {
 # 規劃中的搬家目標：`backlog/` 寫的是**搬完之後**的新路徑，現在當然指不到，
 # 而 `base.py`、`__init__.py` 這種通用檔名在別處必定有同名檔，於是一律被誤判成漂移。
 # **搬完之後要連同條目一起刪掉**——留著不刪，這份檢查就會對那條路徑永久失明。
-_PLANNED: Set[Tuple[str, str]] = set()
+_PLANNED: Set[Tuple[str, str]] = {
+    # 美股成本模型的新檔；同名的 `core/market/cost_model.py` 是它要繼承的抽象基底
+    ("backlog/美股ETL與回測架構規劃.md", "core/market/us/cost_model.py"),
+}
 
 # 已知待修但暫時擋住的檔案。**解除封鎖後要連同條目一起刪掉**——
 # 留著不刪，這份檢查就會對那個檔案永久失明。

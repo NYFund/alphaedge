@@ -302,7 +302,7 @@ def test_price_limit_basis_overrides_prev_close() -> None:
     """
 
     from core.backtest.models.fill_model import TwStockFillModel
-    from core.backtest.models.instrument_spec import TwStockSpec
+    from core.market.tw.instrument_spec import TwStockSpec
 
     fill_model: TwStockFillModel = TwStockFillModel()
     spec: TwStockSpec = TwStockSpec()

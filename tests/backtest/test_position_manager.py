@@ -4,8 +4,8 @@ from typing import Dict, List, Optional
 import pytest
 
 from core.backtest.backtester import new_event_counts
-from core.backtest.models.cost_model import StockCostModel
 from core.managers.stock.position_manager import StockPositionManager
+from core.market.tw.cost_model import StockCostModel
 from core.models import StockAccount, StockPosition, StockTradeRecord
 from core.models.cost_config import CostConfig, ShortConstraint
 from core.utils import Action, PositionType, ShortMethod

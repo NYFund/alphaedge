@@ -31,7 +31,7 @@
 `check_stock_market_open()` 一次變成正確用法——交易日曆與開盤時間本來就是地區屬性。
 
 **軸 B 命名為 `InstrumentType` 的依據**：專案自己的 `InstrumentSpec`
-（`core/backtest/models/instrument_spec.py`，docstring 即「商品規格」）已經用了這個詞，
+（`core/market/instrument_spec.py`，docstring 即「商品規格」）已經用了這個詞，
 只是沒推廣；亦對齊 Nautilus 的 `Instrument`。
 
 **軸 C 與軸 D 為何要拆**：兩者原本合併在同一個 `MarketType` 裡（`SII0`／`SII1`／`OTC0`／`OTC1`）。

@@ -35,7 +35,7 @@
 | Phase1-2 | `us_universe` ＋ `us_price_daily` ETL（差集續跑、冪等寫入） | `core/pipeline/us/*`、`core/dao/us/`（`us_universe`／`us_price_daily` 的 DAO）、`core/api/us/{price,universe}_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py` 的 `DataType` | 中斷後可續跑；重跑不產生重複資料；統計行格式與台股一致 | ⬜ | 相依 Phase1-1；須符合 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈新增或修改 updater 的檢查表〉與 [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 DAO） |
 | Phase1-3 | 美股日線動能策略跑通回測 | `core/strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/market_calendar.py`、`core/adapters/us/`、`core/backtest/models/`（美股 spec／fill／`settlement_model/us_stock.py`）、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⬜ | 相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
 | Phase2-1 | `us_corporate_actions` ＋ raw/adjusted 回測切換 | `core/pipeline/us/*`、`core/backtest/datafeed/us/stock_datafeed.py` | 同一策略在兩種模式下結果可解釋 | ⬜ | 相依 Phase1-3；`BaseDataFeed` 在中立的 `core/datafeed/base.py`（回測與實盤共用同一份契約） |
-| Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/backtest/models/cost_model.py` | 費用計算有單元測試 | ⬜ | 相依 Phase1-3；繼承既有 `BaseCostModel` |
+| Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/market/us/cost_model.py` | 費用計算有單元測試 | ⬜ | 相依 Phase1-3；繼承既有 `BaseCostModel` |
 | Phase2-3 | 資料品質檢核與異常告警 | `core/pipeline/us/*` | 缺洞天數、成交量異常可被偵測 | ⬜ | 相依 Phase1-2 |
 | Phase3-1 | `us_fundamentals` ETL 支援因子策略 | `core/pipeline/us/*`、`core/api/us/fundamentals_api.py` | 財報欄位可查詢且無未來資料污染 | ⬜ | 相依 Phase2-1 |
 | Phase3-2 | 參數掃描框架（walk-forward / grid search） | `core/backtest/` | 可批次產出參數組合的績效比較 | ⬜ | 相依 Phase2-2 |
@@ -334,9 +334,9 @@ core/
 ### Phase2-2. 美股成本模型 ⬜
 
 - **目的**：手續費結構與台股不同（含 SEC fee、最小費用、無證交稅），不可沿用台股模型。
-- **做法**：於 `core/backtest/models/cost_model.py` 新增 `UsStockCostModel`（繼承 `BaseCostModel`）：手續費、SEC fee、最小費用；
+- **做法**：新增 `core/market/us/cost_model.py`，定義 `UsStockCostModel`（繼承 `core/market/cost_model.py` 的 `BaseCostModel`；成本模型已於 2026-10-01 由 `core/backtest/models/` 下沉到 `core/market/`）：手續費、SEC fee、最小費用；
   滑價放 `CostModel` 或 `FillModel`，動工時對照台股實作決定。放空相關方法（`borrow_fee` 等）若不支援須明確拋錯，不可靜默回 0。
-- **產出**：`core/backtest/models/cost_model.py`、`core/backtest/factory.py`（改用完整版成本模型）。
+- **產出**：`core/market/us/cost_model.py`、`core/backtest/factory.py`（改用完整版成本模型）。
 - **驗證方式**：各項費用有單元測試，含最小費用的邊界案例。
 - **相依**：Phase1-3。
 

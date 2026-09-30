@@ -7,9 +7,7 @@ import pytest
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.factory import build_backtester
-from core.backtest.models.cost_model import TwFuturesCostModel
 from core.backtest.models.fill_model import TwFuturesFillModel
-from core.backtest.models.instrument_spec import TwFuturesSpec
 from core.backtest.models.settlement_model import (
     BaseSettlementModel,
     TwFuturesSettlementModel,
@@ -20,6 +18,8 @@ from core.managers.futures.position_manager import (
     FuturesMarginConfig,
     FuturesPositionManager,
 )
+from core.market.tw.cost_model import TwFuturesCostModel
+from core.market.tw.instrument_spec import TwFuturesSpec
 from core.models import (
     FuturesAccount,
     FuturesOrder,

@@ -130,9 +130,9 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 |---|---|---|
 | 引擎 | `core/backtest/backtester.py` | 唯一引擎，不含任何 `Stock*` |
 | 組裝 | `core/backtest/factory.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_cost_config()` |
-| 行為 model | `core/backtest/models/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
+| 行為 model | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
 | | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／`TwFuturesFillModel` |
-| | `core/backtest/models/cost_model.py` | `BaseCostModel`／`StockCostModel`／`TwFuturesCostModel`（設定類別 `CostConfig`／`FuturesCostConfig`／`ShortConstraint` 在 `core/models/cost_config.py`，回測與實盤共用）|
+| | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | `BaseCostModel`／`StockCostModel`／`TwFuturesCostModel`（設定類別 `CostConfig`／`FuturesCostConfig`／`ShortConstraint` 在 `core/models/cost_config.py`，回測與實盤共用）|
 | | `core/backtest/models/settlement_model/` | 套件：`base.py`（`BaseSettlementModel`）＋ `tw_stock.py`（`TwStockSettlementModel`）／`tw_futures.py`（`TwFuturesSettlementModel`），由 `__init__.py` re-export |
 | 資料源 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
 | 市場結構 | `core/market/tw/market_calendar.py`／`futures_calendar.py`／`futures_roll.py`／`futures_margin_config.py` | 交易日曆、期貨結算日、換月規則、保證金設定；ETL、回測、實盤、策略共用，不屬於回測套件 |

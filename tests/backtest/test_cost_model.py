@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from core.backtest.models.cost_model import StockCostModel
+from core.market.tw.cost_model import StockCostModel
 from core.models import StockTradeRecord
 from core.models.cost_config import CostConfig, ShortConstraint
 from core.utils import Action, PositionType, ShortMethod

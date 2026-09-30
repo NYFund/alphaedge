@@ -5,11 +5,8 @@ from typing import Dict, List, Optional, Set, Tuple
 from loguru import logger
 
 from core.backtest.models.event_counts import new_event_counts
-from core.backtest.models.instrument_spec import (
-    InstrumentSpec,
-    TwFuturesSpec,
-    TwStockSpec,
-)
+from core.market.instrument_spec import InstrumentSpec
+from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.models import BaseOrder, BaseQuote
 from core.models.fill_config import FillConfig, FuturesFillConfig, VolumeCapPolicy
 from core.utils import Action, PositionType, Scale, ShortMethod, TimeUtils

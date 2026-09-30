@@ -5,10 +5,10 @@ from typing import Dict, List, Optional
 
 import pytest
 
-from core.backtest.models.cost_model import TwFuturesCostModel
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
 from core.managers.futures.position_manager import FuturesPositionManager
+from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
@@ -520,8 +520,8 @@ def test_manager_pnl_delegates_to_the_cost_model() -> None:
     也不會有測試失敗。
     """
 
-    from core.backtest.models.cost_model import TwFuturesCostModel
     from core.managers.futures.position_manager import FuturesPositionManager
+    from core.market.tw.cost_model import TwFuturesCostModel
     from core.models import FuturesAccount
     from core.utils import PositionType
 
