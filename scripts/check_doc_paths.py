@@ -96,6 +96,7 @@ _NARRATIVE: Set[Tuple[str, str]] = {
 _PLANNED: Set[Tuple[str, str]] = {
     # 美股成本模型的新檔；同名的 `core/market/cost_model.py` 是它要繼承的抽象基底
     ("backlog/美股ETL與回測架構規劃.md", "core/market/us/cost_model.py"),
+    ("backlog/回測與實盤入口拆分及架構收斂.md", "core/market/us/cost_model.py"),
 }
 
 # 已知待修但暫時擋住的檔案。**解除封鎖後要連同條目一起刪掉**——
