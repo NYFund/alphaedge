@@ -25,14 +25,14 @@ graph TB
         Portfolio["core/portfolio<br/>signal／sizing／construction<br/>aggregation（多策略仲裁）"]
         Execution["core/execution<br/>送單前處理：方向白名單<br/>持倉上限、曝險、決定性排序"]
         DataFeedBase["core/datafeed<br/>BaseDataFeed 契約"]
-        Market["core/market<br/>交易日曆／換月／保證金設定"]
+        Market["core/market<br/>交易日曆／換月／保證金設定<br/>商品規格／成本模型"]
         Managers["core/managers<br/>部位與帳務"]
     end
 
     subgraph backtest_layer ["回測引擎（市場無關）"]
         BTFactory["core/backtest/factory.py<br/>（回測唯一 if market ==；實盤見 core/live/factory.py）"]
         Backtester["core/backtest/backtester.py"]
-        BTModels["core/backtest/models<br/>InstrumentSpec／FillModel<br/>CostModel／SettlementModel"]
+        BTModels["core/backtest/models<br/>FillModel／SettlementModel"]
         BTFeed["core/backtest/datafeed"]
         BTReport["core/backtest/report"]
     end
@@ -111,6 +111,10 @@ graph TB
     Managers --> Models
     Models --> Utils
     BTModels --> Models
+    BTModels --> Market
+    Managers --> Market
+    BTFactory --> Market
+    LiveFactory --> Market
     Execution --> Models
 
     BTFeed --> API
@@ -133,7 +137,7 @@ graph TB
 
 **兩個引擎、一支策略。** `Backtester` 與 `LiveTrader` 是兩條獨立的生命週期，但吃的是**同一支策略類別**——分界線只有 `check_*_signal()` 回傳的訂單清單。策略不必為了上實盤改寫，實盤與回測的訊號差異因此可以逐筆比對（`core/live/report/` 的 parity 檢查）。
 
-**市場差異全部下沉為可插拔的 model。** `Backtester` 市場無關、沒有子類；`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed` 由 `core/backtest/factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝，新增一個（市場, 商品）組合不必改 `backtester.py` 一行。實盤那側由 `core/live/factory.py` 做同一件事。
+**市場差異全部下沉為可插拔的 model。** `Backtester` 市場無關、沒有子類；`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed` 由 `core/backtest/factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝，新增一個（市場, 商品）組合不必改 `backtester.py` 一行。實盤那側由 `core/live/factory.py` 做同一件事。其中 `InstrumentSpec` 與 `CostModel` 是市場規則（跳動點、漲跌停、費率），回測與實盤共用同一份，放在 `core/market/`；`FillModel` 與 `SettlementModel` 是回測模擬，留在 `core/backtest/models/`。
 
 **共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、送單前處理（`core/execution/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/managers/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
 
@@ -179,7 +183,7 @@ graph TB
 | `core/execution/` | 回測與實盤共用的送單前處理：方向白名單、持倉上限、單一標的曝險、決定性排序              |
 | `core/portfolio/` | 回測與實盤共用的部位建構：訊號、資金切分、開倉組裝與多策略仲裁                          |
 | `core/datafeed/`  | 中立的 `BaseDataFeed` 契約：回測與實盤各自實作，策略的 `setup_apis(feed)` 型別就是它 |
-| `core/market/`    | 市場結構（交易日曆、期貨換月與保證金設定），不屬於任一引擎                              |
+| `core/market/`    | 市場結構與市場規則（交易日曆、期貨換月、保證金設定、商品規格 `InstrumentSpec`、成本模型 `CostModel`），不屬於任一引擎 |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
 | `tasks/`        | 資料維護與資料庫更新腳本                                              |
 | `tests/`        | 單元／整合測試與回測回歸線（`tests/backtest/`）                       |
@@ -440,7 +444,7 @@ AlphaEdge/
 │   │   ├── quote_validation.py # 來源無關的報價驗證：價格有效性、重複代號
 │   │   └── tw/               # StockQuoteAdapter（日線與 tick 各一條完整路徑）、FuturesQuoteAdapter
 │   ├── datafeed/              # 中立的 BaseDataFeed 契約（回測與實盤共用，誰都不 import 對方）
-│   ├── market/                # 市場結構：交易日曆、期貨換月、保證金設定
+│   ├── market/                # 市場結構與規則：交易日曆、期貨換月、保證金設定、商品規格、成本模型
 │   ├── portfolio/             # 部位建構（回測與實盤共用）：signal／sizing／construction／aggregation
 │   ├── execution/             # 送單前處理（回測與實盤共用）：方向白名單、持倉上限、曝險、排序
 │   ├── managers/              # 倉位管理器（base/ ＋ stock/ ＋ futures/）
@@ -456,7 +460,7 @@ AlphaEdge/
 │   │   ├── README.md          # 回測級別、價格口徑、成交假設、績效指標
 │   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類
 │   │   ├── factory.py         # 依（market, instrument_type）組合組裝 model 組合
-│   │   ├── models/            # InstrumentSpec／FillModel／CostModel／SettlementModel
+│   │   ├── models/            # FillModel／SettlementModel（回測模擬；商品規格與成本模型在 core/market/）
 │   │   ├── datafeed/          # 資料載入、報價轉換、交易日曆、期貨換月
 │   │   ├── report/            # 交易報表、多空統計、圖表
 │   │   └── analysis/          # 績效指標（`performance_metrics.py` 為風險調整後報酬的純函式，由 reporter 呼叫並輸出 metrics_summary.csv）

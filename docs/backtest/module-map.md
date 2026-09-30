@@ -22,7 +22,8 @@
 組裝層      core/backtest/factory.py  ← 全專案唯一的 if market ==
               │
 引擎層      core/backtest/backtester.py（市場無關，無子類）
-              ├── core/backtest/models/      五個可插拔 model 的其中四個
+              ├── core/backtest/models/      FillModel、SettlementModel（回測模擬）
+              ├── core/market/               InstrumentSpec、CostModel（市場規則，回測與實盤共用）
               ├── core/backtest/datafeed/    資料載入與交易日判定
               ├── core/managers/             部位進出與帳務
               └── core/backtest/report/      報表與圖表

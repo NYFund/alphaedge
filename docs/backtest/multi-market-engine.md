@@ -20,6 +20,12 @@ Backtester                      ← 唯一引擎，市場無關，無子類
 
 這是 Backtrader `Cerebro`、Zipline `run_algorithm`、QuantConnect Lean `Engine`、Nautilus `BacktestEngine` 的一致做法：**引擎唯一，行為注入**。
 
+**五個 model 不全住在回測套件裡**：`InstrumentSpec` 與 `CostModel` 是**市場規則**（跳動點、漲跌停、手續費、交易稅），
+部位帳務（`core/managers/`）、實盤估成本與換算金額（`core/live/factory.py`）也要用同一份，所以放在 `core/market/`
+（抽象基底在根目錄、各市場實作在 `<market>/`）。`FillModel` 與 `SettlementModel` 是**回測模擬**（這張單在歷史 bar 上
+能不能成交、收盤後強制執行什麼），留在 `core/backtest/models/`。`scripts/check_layer_deps.py` 禁止回測以外的模組
+import `core.backtest.models`／`datafeed`／`report`，搬出去的東西不會長回來。
+
 **新增一個（市場, 商品）組合不需要修改 `core/backtest/backtester.py` 一行。**
 
 ---
@@ -227,7 +233,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 **回測組裝**：
 
-9. `core/backtest/models/`：實作該組合的 `InstrumentSpec`／`FillModel`／`CostModel`（命名帶市場前綴，如 `TwStockSpec`）；`SettlementModel` 在 `settlement_model/` 套件內新增 `<market>_<instrument>.py`（如 `us_stock.py`），並在其 `__init__.py` 登記 re-export。
+9. `core/market/<market>/`：實作該組合的 `InstrumentSpec`／`CostModel`（命名帶市場前綴，如 `TwStockSpec`，繼承 `core/market/` 根目錄的抽象基底）；`core/backtest/models/fill_model.py`：實作 `FillModel`；`SettlementModel` 在 `settlement_model/` 套件內新增 `<market>_<instrument>.py`（如 `us_stock.py`），並在其 `__init__.py` 登記 re-export。
 10. `core/backtest/factory.py`：`build_backtester()` 加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支，並新增對應的 `build_<market>_<instrument>_backtester()`。
 
 **既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`apps/backtest.py` 皆為 0 行——`StrategyLoader` 會自動掃描 `core/strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
