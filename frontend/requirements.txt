@@ -22,3 +22,7 @@
 streamlit>=1.49
 pandas>=3.0
 plotly>=6.7
+# 安全下限（非直接相依，由 streamlit → requests 帶入）：2.8.0 修掉三個弱點——
+# chunk-size 行無上限讀入記憶體（GHSA-vxq7-64xx-v4gw）、HTTPS proxy 的 TLS 設定可能被忽略
+# （GHSA-8988-9cw3-xx77）、Chunked Deflate 串流無窮迴圈（GHSA-gh4c-6fx4-qh6g）
+urllib3>=2.8.0
