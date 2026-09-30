@@ -31,6 +31,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 # 掃描範圍：頂層套件與單檔入口；tests/ 也掃，但它可以 import 任何東西（只當 import 端）
 _SCAN_DIRS: Tuple[str, ...] = (
     "core",
+    "apps",
     "tasks",
     "frontend",
     "strategy_lab",
@@ -114,6 +115,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.strategies.futures", 4, "策略契約（套件門面）", True),
     ("core.strategies", 7, "策略層", False),
     ("run", 8, "入口層", False),
+    ("apps", 8, "入口層", False),
     ("tasks", 8, "入口層", False),
     ("frontend", 8, "應用層", False),
     ("strategy_lab", 8, "研究層", False),
@@ -131,6 +133,7 @@ _KNOWN_REVERSE: Dict[Tuple[str, str], str] = {}
 
 # 非 core 的頂層套件：core/ 內任何一處 import 到它們都是反向相依
 _NON_CORE_TOPS: Set[str] = {
+    "apps",
     "tasks",
     "frontend",
     "strategy_lab",
@@ -479,7 +482,7 @@ _PURE_TRANSFORM_FORBIDDEN: Tuple[str, ...] = ("core.api", "core.dao", "sqlite3")
 _DB_DRIVER_MODULES: Set[str] = {"sqlite3"}
 _PIPELINE_PACKAGE: str = "core.pipeline"
 _PIPELINE_DIR: str = "core/pipeline"
-_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "tasks")
+_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "tasks")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
 
 

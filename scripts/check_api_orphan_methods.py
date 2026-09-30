@@ -29,6 +29,7 @@ _API_DIR: Path = _PROJECT_ROOT / "core" / "api"
 # 掃描呼叫點的範圍；`.venv`／快取不掃
 _SCAN_DIRS: Tuple[str, ...] = (
     "core",
+    "apps",
     "tasks",
     "frontend",
     "strategy_lab",
