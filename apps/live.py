@@ -195,12 +195,10 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         print("正式環境不可使用 fake 券商", file=sys.stderr)
         return EXIT_USAGE
 
-    names: List[str] = [
-        name.strip() for name in args.strategy.split(",") if name.strip()
-    ]
+    names: List[str] = _split_strategy_names(args.strategy)
     missing: List[str] = [name for name in names if name not in registry]
     if missing:
-        _report_unknown_strategies(missing, registry)
+        _report_unknown_strategies(missing)
         return EXIT_STRATEGY_NOT_FOUND
 
     strategies: List[BaseStrategy] = [registry[name]() for name in names]
@@ -228,6 +226,12 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
     except LiveTerminated as exc:
         print(f"{exc}：已撤未成交單並寫入結束紀錄", file=sys.stderr)
         return EXIT_TERMINATED
+
+
+def _split_strategy_names(value: str) -> List[str]:
+    """逗號分隔的策略名 → 名稱清單（去空白、略過空項）"""
+
+    return [name.strip() for name in value.split(",") if name.strip()]
 
 
 def _run_live_phase(
@@ -388,7 +392,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     """
 
     args: argparse.Namespace = parse_arguments(argv)
-    registry: Dict[str, Type[BaseStrategy]] = StrategyLoader.load_strategies()
+    # 只載入指定的策略：全掃描會執行每一支策略（含研究中的）的 module-level 程式碼
+    registry: Dict[str, Type[BaseStrategy]] = StrategyLoader.load(
+        _split_strategy_names(args.strategy)
+    )
     return run_live(args, registry)
 
 
