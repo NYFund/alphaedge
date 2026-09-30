@@ -14,6 +14,7 @@ from core.backtest.models.cost_model import (
     TwFuturesCostModel,
 )
 from core.backtest.models.instrument_spec import TwFuturesSpec, TwStockSpec
+from core.backtest.overrides import BacktestOverrides
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimiter
 from core.config.settings import (
@@ -713,13 +714,16 @@ def make_daily_backtest_runner(
             raise UnsupportedMarketError(f"本次執行沒有載入策略 {strategy_name}")
 
         replica: BaseStrategy = type(blueprint)()
-        replica.init_capital = blueprint.init_capital
-        replica.start_date = run_date
-        replica.end_date = run_date
 
         # 不寫報表與 backtest log：盤後每天跑一次，寫的話會蓋掉
         # `results/<策略>/` 的研究用回測，並把實盤的 log 一併寫進 backtest log
-        backtester: Backtester = build_backtester(replica, write_artifacts=False)
+        backtester: Backtester = build_backtester(
+            replica,
+            write_artifacts=False,
+            overrides=BacktestOverrides(
+                start=run_date, end=run_date, capital=blueprint.init_capital
+            ),
+        )
         backtester.run()
         return [order for _, _, order in backtester.submitted_orders]
 
