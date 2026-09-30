@@ -11,4 +11,5 @@ if [ "$now" -lt 0800 ] || [ "$now" -ge 1500 ]; then
 fi
 
 cd "$(dirname "$0")/../.." || exit 1
-exec "$UV_BIN" run python -m scripts.live_watchdog
+# 帶 --no-sync 的理由同 rehearsal_schedule.py 的 _UV_RUN_ARGS：不讓排程依賴網路
+exec "$UV_BIN" run --no-sync python -m scripts.live_watchdog
