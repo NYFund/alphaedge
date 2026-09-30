@@ -1,12 +1,11 @@
 import argparse
 import sys
-from typing import Dict, List, Optional, Type
+from typing import List, Optional
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.config import SHOW_FIGURES_ENV_VAR, resolve_show_figures
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
 
 from ._common import _resolve_strategy_or_exit
 
@@ -77,8 +76,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     args: argparse.Namespace = parse_arguments(argv)
 
-    registry: Dict[str, Type[BaseStrategy]] = StrategyLoader.load_strategies()
-    strategy: BaseStrategy = _resolve_strategy_or_exit(args.strategy, registry)()
+    strategy: BaseStrategy = _resolve_strategy_or_exit(args.strategy)()
 
     backtester: Backtester = build_backtester(strategy)
     # 命令列旗標優先於環境變數；兩者都沒給就是不開圖
