@@ -1,14 +1,12 @@
-import argparse
 import datetime
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, List
 
 import pytest
 
-import run as run_module
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import (
@@ -18,12 +16,10 @@ from core.live.factory import (
     _merge_schedules,
     build_live_trader,
 )
-from core.live.risk.trading_mode import TradingMode
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader
 from core.strategies.base import BaseStrategy
 from core.utils import ExecutionTiming, InstrumentType, LiveHook, Market
-from tests.entry_sandbox import run_isolated
 
 from .conftest import FakeBroker
 
@@ -279,166 +275,7 @@ def test_disjoint_windows_are_refused_not_patched() -> None:
         _merge_schedules([TW_STOCK_SEGMENTS, TW_FUTURES_SEGMENTS])
 
 
-# === CLI ===
-def _run_cli(*arguments: str) -> subprocess.CompletedProcess:
-    """
-    以子行程跑 `run.py`，取得真實的退出碼
-
-    這裡的案例都應該在參數檢查就退出；萬一哪天某個案例走過了檢查，也只會在
-    沙箱裡失敗，不會拿本機 `.env` 的金鑰登入券商、寫進正式的實盤紀錄庫
-    （隔離規則見 `tests/entry_sandbox.py`）。
-    """
-
-    return run_isolated(["run.py", *arguments], timeout=None)
-
-
-def test_production_without_confirmation_is_refused() -> None:
-    """
-    `--production` 沒帶 `--confirm-production` 時不可能連到正式環境
-
-    **防呆在建立任何連線之前**：打錯的代價是真的下單。
-    """
-
-    result: subprocess.CompletedProcess = _run_cli(
-        "--mode",
-        "live",
-        "--strategy",
-        "MomentumStrategy1",
-        "--phase",
-        "close",
-        "--production",
-    )
-
-    assert result.returncode == run_module.EXIT_USAGE
-    assert "confirm-production" in result.stderr
-
-
-def test_fake_broker_is_refused_in_production() -> None:
-    """正式環境不可用假券商：一個打錯的參數不該讓真單變成假單，反過來更不行"""
-
-    result: subprocess.CompletedProcess = _run_cli(
-        "--mode",
-        "live",
-        "--strategy",
-        "MomentumStrategy1",
-        "--phase",
-        "close",
-        "--production",
-        "--confirm-production",
-        "--broker",
-        "fake",
-    )
-
-    assert result.returncode == run_module.EXIT_USAGE
-
-
-def test_phase_is_required() -> None:
-    """沒有段落就不知道要跑什麼；靜默跑預設段落會在錯的時點送單"""
-
-    result: subprocess.CompletedProcess = _run_cli(
-        "--mode", "live", "--strategy", "MomentumStrategy1"
-    )
-
-    assert result.returncode == run_module.EXIT_USAGE
-
-
-def test_unknown_strategy_is_reported() -> None:
-    """策略名打錯要列出可用的"""
-
-    result: subprocess.CompletedProcess = _run_cli(
-        "--mode", "live", "--strategy", "NoSuchStrategy", "--phase", "close"
-    )
-
-    assert result.returncode == run_module.EXIT_STRATEGY_NOT_FOUND
-    assert "Available strategies" in result.stderr
-
-
-def test_after_close_is_wired_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    `--phase after_close` 要真的走盤後流程
-
-    **前身是「尚未實作，明確拒絕」**。接上之後守的東西變成：它不可以再被當成
-    用法錯誤擋掉——否則排程會以為自己打錯參數，而盤後其實從來沒跑過。
-
-    **在行程內驗、不起子行程**：子行程會沿用本機 `.env` 的金鑰登入模擬環境，
-    並把整次執行寫進正式的實盤紀錄庫。這裡改以替身引擎驗兩件事：參數解析器收下
-    `after_close`，以及 `run_live()` 呼叫的是 `run_after_close()` 而不是一般段落。
-    """
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        ["run.py", "--mode", "live", "--strategy", "Alpha", "--phase", "after_close"],
-    )
-    args: argparse.Namespace = run_module.parse_arguments()
-
-    calls: List[str] = []
-
-    class AfterCloseTrader:
-        """只記錄被呼叫的是哪一條流程；其餘屬性供結束碼判定讀取"""
-
-        last_reconcile: Any = None
-        risk_manager: Any = type(
-            "Risk", (), {"is_kill_switch_on": staticmethod(lambda: False)}
-        )()
-        mode_state: Any = type("Mode", (), {"account_mode": TradingMode.NORMAL})()
-
-        def run_after_close(self) -> dict:
-            calls.append("after_close")
-            return {"pending_actions": 0}
-
-        def run(self, timing: Any) -> None:
-            calls.append(f"run:{timing}")
-
-    build_kwargs: Dict[str, Any] = {}
-
-    def fake_build(*arguments: Any, **kwargs: Any) -> AfterCloseTrader:
-        build_kwargs.update(kwargs)
-        return AfterCloseTrader()
-
-    monkeypatch.setattr("core.live.factory.build_live_trader", fake_build)
-
-    code: int = run_module.run_live(args, {"Alpha": LiveStockStrategy})
-
-    assert calls == ["after_close"]
-    assert code == 0
-    # 段落名要傳進 factory 寫進 `live_run`，存活監控才比對得到
-    assert build_kwargs["phase"] == "after_close"
-
-
-def test_exit_codes_are_distinct() -> None:
-    """
-    退出碼要分得開
-
-    排程看到 4／5 是「今天剛出事」，看到 6 是「昨天出的事還沒有人處理」，
-    兩者的處理急迫性不同。
-    """
-
-    codes: List[int] = [
-        run_module.EXIT_USAGE,
-        run_module.EXIT_STALE_DATA,
-        run_module.EXIT_RECONCILE_MISMATCH,
-        run_module.EXIT_KILL_SWITCH,
-        run_module.EXIT_MODE_NOT_NORMAL,
-        run_module.EXIT_RESYNC_PLAN_ONLY,
-    ]
-
-    assert len(set(codes)) == len(codes)
-    assert codes == [2, 3, 4, 5, 6, 7]
-
-
-def test_backtest_path_is_untouched() -> None:
-    """
-    回測入口不受影響：`run.py` 仍有 `run_live()`，段落對照表仍把 `close` 對到 `AT_CLOSE`
-
-    `--mode live` 的新旗標全部有預設值，回測那條路徑一個字都不用改。
-    """
-
-    parser_args: argparse.Namespace = argparse.Namespace()
-
-    assert hasattr(run_module, "run_live")
-    assert run_module.PHASE_TO_TIMING["close"] == "AT_CLOSE"
-    assert parser_args is not None
+# 入口（參數防呆、段落流程、退出碼）的測試在 `tests/test_live_entry.py`
 
 
 def test_mixing_markets_with_disjoint_windows_is_refused(dao: LiveTradeDAO) -> None:

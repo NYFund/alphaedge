@@ -1,4 +1,3 @@
-import argparse
 import os
 import signal
 from typing import Any, Callable, List
@@ -98,31 +97,3 @@ def test_sigterm_mid_segment_cancels_open_orders_and_records_the_end() -> None:
     assert harness.broker.placed_count == 1
     end_reason: str = run_row(harness)[3]
     assert "LiveTerminated" in end_reason
-
-
-def test_run_entry_exits_with_143_on_sigterm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """退出碼 143（128 ＋ 15）是 shell 與容器對「被訊號結束」的慣例值"""
-
-    import run as run_module
-
-    class Terminated:
-        def run(self, timing: Any) -> None:
-            send_sigterm()
-
-    monkeypatch.setattr(
-        "core.live.factory.build_live_trader", lambda *args, **kwargs: Terminated()
-    )
-    args: argparse.Namespace = argparse.Namespace(
-        phase="close",
-        simulation=True,
-        confirm_production=False,
-        broker="fake",
-        strategy="Alpha",
-        dry_run=False,
-        resync_from_broker=False,
-        confirm_resync=False,
-        resume_trading=None,
-    )
-
-    assert run_module.run_live(args, {"Alpha": object}) == run_module.EXIT_TERMINATED
-    assert run_module.EXIT_TERMINATED == 143

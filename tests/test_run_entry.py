@@ -1,353 +1,111 @@
-import argparse
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
 import pytest
 
+import run as run_module
 from tests.entry_sandbox import run_isolated
 
-_PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
-_RUN_PY: Path = _PROJECT_ROOT / "run.py"
-
 """
-`run.py` 的退出碼契約
+`run.py` 轉發 shim 的契約
 
-舊版**兩種失敗都回 0**：策略名找不到只 `print` 後 `return`，`--mode live` 是
-`pass`。目前 `run.py` 只有人手動跑所以還沒出事，但一旦接進批次（例如每晚
-重跑策略），「策略名打錯」與「回測跑完」在退出碼上長得一模一樣——
-那是最典型的假綠燈，與回歸腳本曾把 skip 當通過是同一類問題。
+回測與實盤已拆成 `apps.backtest`／`apps.live`，`run.py` 在過渡期只負責抽出 `--mode`
+並轉發。這裡只驗轉發本身：轉到對的入口、參數原封不動、**退出碼與新入口相同**。
+各入口自己的行為由 `tests/test_backtest_entry.py`、`tests/test_live_entry.py` 驗。
 
-**一定要用 subprocess 驗**：退出碼是**行程**的性質，直接呼叫 `main()` 只驗得到
-有沒有拋例外，驗不到 `sys.exit()` 實際交給呼叫端的那個數字，也驗不到
-訊息去了 stdout 還是 stderr。
-
-本檔的每一條都**不會真的跑回測**——這些情況都在建 Backtester 之前就結束，
-所以不需要 `data/db/*.db`，也不標 `slow`。
+退出碼一律以子行程驗：它是**行程**的性質，直接呼叫 `main()` 驗不到
+`sys.exit()` 實際交給呼叫端（launchd、compose）的那個數字。
 """
 
-
-# 用法錯誤：與 argparse 自己的用法錯誤同碼（缺必填參數時它就回 2）
-EXIT_USAGE_ERROR: int = 2
-
-# 未攔截的例外：Python 行程的預設退出碼（實盤接上之後已沒有路徑會走到）
-EXIT_UNHANDLED_EXCEPTION: int = 1
-
-
-def run_entry(*args: str) -> subprocess.CompletedProcess:
-    """以子行程跑 `run.py`；環境隔離規則見 `tests/entry_sandbox.py`"""
-
-    return run_isolated([str(_RUN_PY), *args])
-
-
-def test_unknown_strategy_exits_with_usage_error() -> None:
-    """
-    策略名找不到 → 退出碼 2，**不是 0**
-
-    這是本步驟的主要目的：讓呼叫端看得出失敗。
-    """
-
-    result: subprocess.CompletedProcess = run_entry("--strategy", "NoSuchStrategy")
-
-    assert result.returncode == EXIT_USAGE_ERROR
-
-
-def test_unknown_strategy_writes_to_stderr_not_stdout() -> None:
-    """
-    錯誤訊息走 stderr
-
-    退出碼與輸出流向要一起改才有意義：訊息印在 stdout 會混進正常輸出，
-    批次作業把 stdout 收去當報表時就看不見這行了。
-    """
-
-    result: subprocess.CompletedProcess = run_entry("--strategy", "NoSuchStrategy")
-
-    assert "NoSuchStrategy" in result.stderr
-    assert "not found" in result.stderr
-    assert "NoSuchStrategy" not in result.stdout
-
-
-def test_unknown_strategy_lists_available_strategies() -> None:
-    """
-    要印出可用清單，否則使用者只知道打錯、不知道該打什麼
-
-    清單本身由 `StrategyLoader` 掃出來，不是寫死的——新增策略會自動出現。
-    """
-
-    result: subprocess.CompletedProcess = run_entry("--strategy", "NoSuchStrategy")
-
-    assert "Available strategies:" in result.stderr
-    # 專案內既有的策略至少要出現一個；寫死一個名字才驗得到「清單真的有內容」
-    assert "MomentumStrategy1" in result.stderr
-
-
-def test_missing_strategy_argument_is_still_a_usage_error() -> None:
-    """
-    缺 `--strategy` 維持 argparse 既有的退出碼 2
-
-    這條不是新行為，是釘住「策略找不到」刻意與它同碼——對呼叫端來說
-    兩者是同一類問題（用法錯誤），不必再多記一個號碼。
-    """
-
-    result: subprocess.CompletedProcess = run_entry()
-
-    assert result.returncode == EXIT_USAGE_ERROR
-
-
-def test_live_mode_without_phase_fails_loudly() -> None:
-    """
-    `--mode live` 少了 `--phase` → 非 0 退出並說明原因
-
-    **本條的前身是「實盤尚未實作」**。實盤做出來之後，要守的變成「參數不全時
-    不可靜默跑一個預設段落」——那會在錯的時點送單，而且看起來完全正常。
-    退出碼 0、零輸出的失敗仍然是最不能接受的那種。
-    """
-
-    result: subprocess.CompletedProcess = run_entry(
-        "--mode", "live", "--strategy", "MomentumStrategy1"
-    )
-
-    assert result.returncode != 0
-    assert "--phase" in result.stderr
-
-
-def test_help_describes_the_production_safety_flags() -> None:
-    """
-    `--help` 要讓人看得出「連正式環境需要兩個旗標」
-
-    前身是「不可讓 live 看起來已經支援」。實盤支援之後，`--help` 的責任變成
-    **講清楚怎樣才會真的下單**——看不出這件事的人，遲早會在正式環境按下 enter。
-    """
-
-    result: subprocess.CompletedProcess = run_entry("--help")
-
-    assert result.returncode == 0
-    assert "--production" in result.stdout
-    assert "--confirm-production" in result.stdout
-    assert "--dry-run" in result.stdout
+_RUN_PY: Path = Path(__file__).resolve().parents[1] / "run.py"
 
 
 @pytest.mark.parametrize(
-    "flags",
+    ("argv", "expected"),
     [
-        ["--production", "--confirm-production"],
-        ["--dry-run"],
-        ["--phase", "open"],
-        ["--broker", "fake"],
-        ["--resync-from-broker"],
-        ["--resume-trading"],
+        ([], ("backtest", [])),
+        (["--strategy", "A"], ("backtest", ["--strategy", "A"])),
+        (["--mode", "live", "--strategy", "A"], ("live", ["--strategy", "A"])),
+        (["--strategy", "A", "--mode=live"], ("live", ["--strategy", "A"])),
+        (["--strategy", "A", "--mode"], (None, ["--strategy", "A"])),
     ],
-    ids=["production", "dry-run", "phase", "broker", "resync", "resume-trading"],
+    ids=["default", "backtest", "live", "equals-form", "missing-value"],
 )
-def test_backtest_mode_refuses_live_only_flags(flags: List[str]) -> None:
-    """
-    回測模式帶到實盤旗標 → 用法錯誤，**不可以靜靜跑一場普通回測**
+def test_split_mode(argv: List[str], expected: Tuple[Optional[str], List[str]]) -> None:
+    """`--mode` 被抽掉、其餘參數順序不變；沒帶時預設回測，與舊入口相同"""
 
-    這些旗標掛在 top-level parser 上，`add_argument_group` 只影響 `--help` 排版、
-    不具解析約束力。少了這道守門，`--production` 在回測模式下連一句警告都沒有——
-    而那是全專案防呆最多的旗標（刻意沒有環境變數，就是不想讓它被順手開啟）。
-    真正的代價是反過來那一次：以為自己在連正式環境下單，其實只是跑了回測。
-    """
-
-    result: subprocess.CompletedProcess = run_entry(
-        "--strategy", "MomentumStrategy1", *flags
-    )
-
-    assert result.returncode == EXIT_USAGE_ERROR
-    assert flags[0] in result.stderr
-
-
-def test_backtest_mode_still_accepts_its_own_flags() -> None:
-    """守門不可以誤傷回測自己的旗標；`--no-show` 要照常走進回測"""
-
-    result: subprocess.CompletedProcess = run_entry(
-        "--strategy", "NoSuchStrategy", "--no-show"
-    )
-
-    # 停在「策略名找不到」，代表 `--no-show` 沒有被守門攔下
-    assert "not found" in result.stderr
+    assert run_module.split_mode(argv) == expected
 
 
 @pytest.mark.parametrize(
-    "args",
+    ("shim_args", "entry_args"),
     [
-        ["--strategy", "NoSuchStrategy"],
-        ["--mode", "live", "--strategy", "MomentumStrategy1"],
-        ["--strategy", "MomentumStrategy1", "--production", "--confirm-production"],
-    ],
-    ids=["unknown-strategy", "live-mode", "backtest-with-live-flag"],
-)
-def test_failure_paths_never_exit_zero(args: List[str]) -> None:
-    """
-    所有失敗路徑都不得回 0
-
-    參數化是為了讓日後新增的失敗路徑直接加進這張表，而不是各寫一條。
-    """
-
-    assert run_entry(*args).returncode != 0
-
-
-@pytest.mark.parametrize(
-    ("overrides", "message"),
-    [
-        ({"resync_from_broker": True}, "--phase"),
-        ({"phase": None, "confirm_resync": True}, "--confirm-resync"),
+        (["--strategy", "NoSuchStrategy"], ["-m", "apps.backtest"]),
         (
-            {"phase": None, "resync_from_broker": True, "resume_trading": []},
-            "--resume-trading",
+            ["--mode", "backtest", "--strategy", "MomentumStrategy1", "--production"],
+            ["-m", "apps.backtest"],
+        ),
+        (["--mode", "live", "--strategy", "MomentumStrategy1"], ["-m", "apps.live"]),
+        (
+            [
+                "--mode",
+                "live",
+                "--strategy",
+                "MomentumStrategy1",
+                "--phase",
+                "close",
+                "--production",
+            ],
+            ["-m", "apps.live"],
+        ),
+        (
+            ["--mode", "live", "--strategy", "NoSuchStrategy", "--phase", "close"],
+            ["-m", "apps.live"],
         ),
     ],
-    ids=["resync-with-phase", "confirm-without-resync", "resync-with-resume"],
-)
-def test_resync_flag_combinations_are_refused_before_building(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
-    overrides: dict,
-    message: str,
-) -> None:
-    """
-    重建是獨立作業：不跑段落、不恢復交易模式，錯的組合在組裝引擎之前就拒絕
-
-    與 `--phase` 併用，人會以為重建完接著跑了段落；與 `--resume-trading` 併用，
-    重建結果還沒人看過，降級就已經解除了。
-    """
-
-    import run as run_module
-
-    def must_not_build(*args: object, **kwargs: object) -> None:
-        raise AssertionError("旗標組合錯誤時不可以組裝實盤引擎")
-
-    monkeypatch.setattr("core.live.factory.build_live_trader", must_not_build)
-    args: argparse.Namespace = make_live_args()
-    for name, value in overrides.items():
-        setattr(args, name, value)
-
-    # 策略要找得到：找不到策略也回用法錯誤，會讓這條在沒擋旗標時照樣通過
-    assert run_module.run_live(args, {"Alpha": object}) == EXIT_USAGE_ERROR
-    assert message in capsys.readouterr().err
-
-
-class ResyncTrader:
-    """只回應重建的替身引擎"""
-
-    def __init__(self, plan: object = None, error: Exception = None) -> None:
-        self.plan: object = plan
-        self.error: Exception = error
-        self.confirm: object = None
-        self.last_reconcile: object = None
-
-    def resync_from_broker(self, confirm: bool) -> object:
-        self.confirm = confirm
-        if self.error is not None:
-            raise self.error
-        return self.plan
-
-
-def run_resync(
-    monkeypatch: pytest.MonkeyPatch, trader: ResyncTrader, confirm: bool
-) -> int:
-    import run as run_module
-
-    monkeypatch.setattr(
-        "core.live.factory.build_live_trader", lambda *args, **kwargs: trader
-    )
-    args: argparse.Namespace = make_live_args()
-    args.phase = None
-    args.resync_from_broker = True
-    args.confirm_resync = confirm
-    return run_module.run_live(args, {"Alpha": object})
-
-
-def test_resync_plan_only_exits_non_zero(monkeypatch: pytest.MonkeyPatch) -> None:
-    """
-    只列計畫回 7，**不是 0**
-
-    只列計畫代表歸屬帳仍與券商不一致，排程若把它當成已處理，下一個段落照樣帶著
-    錯的部位啟動。
-    """
-
-    import run as run_module
-    from core.live.attribution.resync import RESYNC_CLOSE, ResyncAction, ResyncPlan
-
-    plan: ResyncPlan = ResyncPlan(
-        actions=[ResyncAction(RESYNC_CLOSE, "Alpha", "2330", "LONG", 2, "L1")]
-    )
-    trader: ResyncTrader = ResyncTrader(plan=plan)
-
-    assert run_resync(monkeypatch, trader, confirm=False) == (
-        run_module.EXIT_RESYNC_PLAN_ONLY
-    )
-    assert trader.confirm is False
-
-
-def test_refused_resync_exits_with_reconcile_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """歸屬帳已損壞而拒絕重建：與對帳不一致同一件事，都要人工處理"""
-
-    import run as run_module
-    from core.live.attribution.resync import ResyncRefusedError
-
-    trader: ResyncTrader = ResyncTrader(error=ResyncRefusedError("2330 兩個持有者"))
-
-    assert run_resync(monkeypatch, trader, confirm=True) == (
-        run_module.EXIT_RECONCILE_MISMATCH
-    )
-
-
-# === 實盤啟動檢查對應的退出碼 ===
-def make_live_args() -> argparse.Namespace:
-    """一組最小可用的實盤參數（模擬環境、fake 券商）"""
-
-    return argparse.Namespace(
-        phase="close",
-        simulation=True,
-        confirm_production=False,
-        broker="fake",
-        strategy="Alpha",
-        dry_run=False,
-        resync_from_broker=False,
-        confirm_resync=False,
-        resume_trading=None,
-    )
-
-
-@pytest.mark.parametrize(
-    ("exception_path", "message"),
-    [
-        ("core.live.datafeed.base.DataFreshnessError", "資料停在 T-30"),
-        (
-            "core.live.datafeed.calendar.TradingCalendarUnavailableError",
-            "沒有任何來源判定得出",
-        ),
+    ids=[
+        "backtest-unknown-strategy",
+        "backtest-with-live-flag",
+        "live-without-phase",
+        "live-production-unconfirmed",
+        "live-unknown-strategy",
     ],
 )
-def test_startup_check_failures_exit_with_stale_data(
-    monkeypatch: pytest.MonkeyPatch, exception_path: str, message: str
+def test_exit_code_matches_the_new_entry(
+    shim_args: List[str], entry_args: List[str]
 ) -> None:
     """
-    啟動檢查擋下來時要回結束碼 3，**不是 0**
+    shim 與新入口的退出碼相同，而且都不是 0
 
-    接上呼叫端之前，`DataFreshnessError` 沒有任何地方會拋出——`run.py` 特地接住它
-    回 3 的那條路徑因此是死的，ETL 掛掉三天實盤照樣啟動。
+    launchd 與 compose 依退出碼判讀；shim 把它吞成 0 或 1 就是假綠燈。
+    `--mode backtest --production` 仍要回 2：以為在下單、其實跑了回測的情況不可復活。
     """
 
-    import importlib
+    rest: List[str] = run_module.split_mode(shim_args)[1]
+    shim: subprocess.CompletedProcess = run_isolated([str(_RUN_PY), *shim_args])
+    entry: subprocess.CompletedProcess = run_isolated([*entry_args, *rest])
 
-    import run as run_module
+    assert shim.returncode == entry.returncode
+    assert shim.returncode != 0
 
-    module_name, _, class_name = exception_path.rpartition(".")
-    error_type = getattr(importlib.import_module(module_name), class_name)
 
-    class ExplodingTrader:
-        def run(self, timing: object) -> None:
-            raise error_type(message)
+def test_unknown_mode_is_a_usage_error() -> None:
+    """`--mode` 只收 backtest 與 live"""
 
-    monkeypatch.setattr(
-        "core.live.factory.build_live_trader",
-        lambda *args, **kwargs: ExplodingTrader(),
+    result: subprocess.CompletedProcess = run_isolated(
+        [str(_RUN_PY), "--mode", "paper", "--strategy", "MomentumStrategy1"]
     )
 
-    code: int = run_module.run_live(make_live_args(), {"Alpha": object})
+    assert result.returncode == 2
+    assert "--mode" in result.stderr
 
-    assert code == run_module.EXIT_STALE_DATA
+
+def test_shim_warns_with_the_new_command() -> None:
+    """轉發時要寫出新指令，呼叫端才知道要改成什麼"""
+
+    result: subprocess.CompletedProcess = run_isolated(
+        [str(_RUN_PY), "--mode", "live", "--strategy", "NoSuchStrategy"]
+    )
+
+    assert "python -m apps.live" in result.stderr
