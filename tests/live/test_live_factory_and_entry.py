@@ -1,11 +1,8 @@
 import argparse
 import datetime
-import os
-import shutil
 import sqlite3
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -26,6 +23,7 @@ from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader
 from core.strategies.base import BaseStrategy
 from core.utils import ExecutionTiming, InstrumentType, LiveHook, Market
+from tests.entry_sandbox import run_isolated
 
 from .conftest import FakeBroker
 
@@ -286,33 +284,12 @@ def _run_cli(*arguments: str) -> subprocess.CompletedProcess:
     """
     以子行程跑 `run.py`，取得真實的退出碼
 
-    **子行程的環境一律隔離**：產物根指到暫存目錄、金鑰清空。這裡的案例都應該在
-    參數檢查就退出；萬一哪天某個案例走過了檢查，也只會在暫存目錄裡失敗，
-    不會拿本機 `.env` 的金鑰登入券商、寫進正式的實盤紀錄庫。
+    這裡的案例都應該在參數檢查就退出；萬一哪天某個案例走過了檢查，也只會在
+    沙箱裡失敗，不會拿本機 `.env` 的金鑰登入券商、寫進正式的實盤紀錄庫
+    （隔離規則見 `tests/entry_sandbox.py`）。
     """
 
-    sandbox: Path = Path(tempfile.mkdtemp(prefix="alphaedge-cli-"))
-    (sandbox / "data" / "db").mkdir(parents=True)
-    env: Dict[str, str] = {
-        **os.environ,
-        "ALPHAEDGE_DATA_DIR": str(sandbox / "data"),
-        "ALPHAEDGE_RESULTS_DIR": str(sandbox / "results"),
-        "ALPHAEDGE_LOGS_DIR": str(sandbox / "logs"),
-        "ALPHAEDGE_LIVE_KILL_SWITCH_PATH": str(sandbox / "KILL_SWITCH"),
-        # 空字串而非刪除：`load_dotenv()` 不覆寫已存在的鍵，`.env` 就補不回來
-        "API_KEY": "",
-        "API_SECRET_KEY": "",
-    }
-    try:
-        return subprocess.run(
-            [sys.executable, "run.py", *arguments],
-            cwd=PROJECT_ROOT,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
-    finally:
-        shutil.rmtree(sandbox, ignore_errors=True)
+    return run_isolated(["run.py", *arguments], timeout=None)
 
 
 def test_production_without_confirmation_is_refused() -> None:
