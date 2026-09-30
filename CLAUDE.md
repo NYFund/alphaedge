@@ -144,7 +144,7 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 | 函式 / 變數 | `snake_case`；查詢類前綴 `get_`、設定類 `setup_`、**Alpha 層產生訊號 `generate_*_signals`**、引擎契約 `check_*_signal`（由基底提供，策略不實作）、計算 `calculate_` | `get_stock_price()`、`generate_open_signals()` |
 | 模組私有 | 前綴底線 | `_drop_explained()`、`_PROJECT_ROOT` |
 | 常數 | `UPPER_SNAKE_CASE`，策略參數放 class 層級常數並附中文單位註解 | `MIN_VOLUME_LOTS: int = 5000  # 最小成交量（張）` |
-| 策略類別 | 類別名即策略識別名稱，需與 `run.py --strategy` 對應 | `MomentumStrategy1` |
+| 策略類別 | 類別名即策略識別名稱，需與入口 `--strategy` 的值對應 | `MomentumStrategy1` |
 
 ### 2.7 常數與 Enum
 

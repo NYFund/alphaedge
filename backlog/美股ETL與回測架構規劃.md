@@ -10,7 +10,7 @@
   共用 `core/pipeline/shared/` 的 base 類別與既有回測引擎；市場欄位、交易日曆與成本模型分開。跑通最小閉環後再逐步補可信度。
 - **範圍界線**：**保留現有台股流程不動**，不做一次性大重構；本規劃**不含**日內／高頻資料、不含實盤下單路徑、
   不含選擇權與 ETF 衍生商品、不含事件驅動引擎改寫（長期方向見 [多市場回測引擎架構 §5.1](../docs/backtest/multi-market-engine.md#51-事件驅動迴圈長期方向)）。
-- **驗收標準**：`us_universe` 與 `us_price_daily` 可日更、重跑冪等、中斷可續跑；一支美股日線動能策略可經**回測入口**跑完回測（回測入口目前是 `run.py --strategy`，[回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md) 會把它換成 `python -m apps.backtest`；**本條驗收不綁入口名稱，以當時的回測入口為準**），
+- **驗收標準**：`us_universe` 與 `us_price_daily` 可日更、重跑冪等、中斷可續跑；一支美股日線動能策略可經**回測入口**跑完回測（回測入口目前是 `python -m apps.backtest --strategy`，2026-09-30 由 `run.py` 拆出，見 [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)；**本條驗收不綁入口名稱，以當時的回測入口為準**），
   並產出資產曲線與交易明細；raw／adjusted 兩種回測模式可切換。
 
 > **2026-09-15 依現行架構改寫**：原規劃的目錄樹與產出路徑含 `core/strategies/us/`、`core/models/us/`、
@@ -312,7 +312,7 @@ core/
      `BaseStockStrategy` 會帶入台股 API，是否需要另一支不帶台股 API 的美股基底，動工時決定。
   回測報表沿用 `core/backtest/report/reporter.py`，先完成可比較的資產曲線與交易明細。
 - **產出**：上述各檔（含 `core/portfolio/sizing.py`、`core/market/us/market_calendar.py`）。
-- **驗證方式**：以**回測入口**指定該美股策略類別名（動工時為 `python run.py --strategy <類別名>` 或 `python -m apps.backtest --strategy <類別名>`，視入口拆分是否已完成）可產出資產曲線與交易明細；交易日數與 NYSE 日曆一致；
+- **驗證方式**：以**回測入口**指定該美股策略類別名（`python -m apps.backtest --strategy <類別名>`）可產出資產曲線與交易明細；交易日數與 NYSE 日曆一致；
   台股回歸雙線（`./scripts/run_regression.sh`）逐筆相同（證明 factory 分支沒有影響台股）。
 - **相依**：Phase1-2。
 
@@ -428,6 +428,5 @@ core/
     `core/dao/us/` 一寫就讓它的工作量變大，`get_engine()` 與 fallback 也要從兩個研究庫擴到三個
     （`US_STOCK_DB_PATH` 是本文件 Phase1-2 的產出）。**該計畫若已完成或正在並行，`core/dao/us/`
     直接寫 `ON CONFLICT`，不要新增 `INSERT OR IGNORE`。**
-  - [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)：它會把 `run.py` 換成
-    `python -m apps.backtest`。本文件的驗收標準與 Phase3-1 驗證方式已改成不綁入口名稱的寫法，
-    動工時以當時的回測入口為準。
+  - [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)：回測入口已於 2026-09-30
+    由 `run.py` 換成 `python -m apps.backtest`，本文件的驗收標準與 Phase3-1 驗證方式已同步改寫。

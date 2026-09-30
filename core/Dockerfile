@@ -55,5 +55,7 @@ COPY apps /app/apps
 # 就不會落在掛載的 /app 底下
 RUN uv sync --frozen --no-dev --no-cache && uv pip check --python /opt/venv/bin/python
 
-ENTRYPOINT ["python", "run.py"]
+# 預設是回測入口；實盤由 compose 的 `live` service 把 entrypoint 換成 `python -m apps.live`。
+# `run.py` 仍 COPY 進映像：過渡期的舊指令會經由它轉發
+ENTRYPOINT ["python", "-m", "apps.backtest"]
 CMD ["--help"]

@@ -6,7 +6,7 @@
 > 正式回測請看 [`core/strategies/README.md`](../../core/strategies/README.md)，並用：
 >
 > ```bash
-> .venv/bin/python run.py --strategy <StrategyName>
+> .venv/bin/python -m apps.backtest --strategy <StrategyName>
 > ```
 
 ---
@@ -115,7 +115,7 @@ strategies/<your_topic>/
 完成後執行：
 
 ```bash
-.venv/bin/python run.py --strategy <YourStrategyName>
+.venv/bin/python -m apps.backtest --strategy <YourStrategyName>
 ```
 
 結果會落到 `results/<策略>/`——**資料夾名稱取自 `self.strategy_name`，不是類別名稱**，

@@ -2,7 +2,7 @@
 
 > This is the English translation of [`command-usage.zh-TW.md`](command-usage.zh-TW.md); edit the Chinese version first, then sync this one.
 
-This document collects common runtime commands: data updates (`tasks.update_db`), data maintenance, and backtesting (`run.py`).
+This document collects common runtime commands: data updates (`tasks.update_db`), data maintenance, and backtesting (`apps.backtest`).
 
 ## Data Update: `python -m tasks.update_db`
 
@@ -171,18 +171,18 @@ python -m tasks.clean_logs --apply --bucket api --days 7
 
 Only rotated files (timestamped names) are removed; active `xxx.log` files are kept.
 
-## Backtest: `python run.py --strategy <StrategyClassName>`
+## Backtest: `python -m apps.backtest --strategy <StrategyClassName>`
 
 Replace `<StrategyClassName>` with your strategy class name.
 
 ```bash
-python run.py --strategy <StrategyClassName>
-python run.py --strategy <StrategyClassName> --show   # open the charts in a browser
+python -m apps.backtest --strategy <StrategyClassName>
+python -m apps.backtest --strategy <StrategyClassName> --show   # open the charts in a browser
 ```
 
 An unknown strategy name exits with code 2. Results are written to `results/<StrategyName>/`.
 
-Live trading is a separate path (`--mode live`, which requires `--phase`) and **never returns 1** —
+Live trading is a separate entry point (`python -m apps.live`, which requires `--phase`) and **never returns 1** —
 `1` is reserved for unexpected exceptions. These are the codes a scheduler should act on:
 
 | Exit code | Meaning |

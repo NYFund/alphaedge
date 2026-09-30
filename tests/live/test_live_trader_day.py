@@ -925,7 +925,7 @@ def test_stale_data_refuses_to_start() -> None:
     歷史資料沒更新到前一個交易日就拒絕啟動
 
     接上之前，`DataFreshnessError` 全庫只在 `verify_data_freshness()` 內拋出而
-    沒有任何呼叫端——`run.py` 的結束碼 3 因此永遠不會發生，ETL 掛掉三天也照跑。
+    沒有任何呼叫端——實盤入口（`apps/live.py`）的結束碼 3 因此永遠不會發生，ETL 掛掉三天也照跑。
     """
 
     class Alpha(ScriptedStrategy):
@@ -1167,7 +1167,7 @@ def test_finished_segment_is_recorded_as_normal() -> None:
 
 
 def test_aborted_segment_records_the_exception() -> None:
-    """例外中止時結束原因要寫出例外，且例外照樣往外拋給 `run.py`"""
+    """例外中止時結束原因要寫出例外，且例外照樣往外拋給實盤入口"""
 
     class Alpha(ScriptedStrategy):
         def __init__(self) -> None:
@@ -1187,7 +1187,7 @@ def test_kill_switch_end_is_not_recorded_as_normal() -> None:
     """
     kill switch 停下的段落不可寫成正常結束
 
-    `run.py` 以結束碼 5 退出，監控卻只看這一欄；寫成正常結束的話推播就漏了。
+    實盤入口以結束碼 5 退出，監控卻只看這一欄；寫成正常結束的話推播就漏了。
     """
 
     class Alpha(ScriptedStrategy):

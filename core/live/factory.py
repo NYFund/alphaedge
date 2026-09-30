@@ -242,7 +242,7 @@ def build_live_trader(
         - now_provider: Callable[[], datetime.datetime]
             取得目前時間
         - phase: str
-            本次要跑的段落名（`run.py --phase` 的值），寫進 `live_run`；
+            本次要跑的段落名（實盤入口 `--phase` 的值），寫進 `live_run`；
             存活監控依它比對「該跑的段落有沒有跑」
     - Return:
         - LiveTrader

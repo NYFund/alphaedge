@@ -44,7 +44,7 @@ def build_scripted_backtester(strategy: ScriptedStrategy) -> Backtester:
 
     setup() 會建立結果目錄、log 檔與五個資料 API 的連線，本回歸線完全以腳本
     驅動、不連 DB，因此在建構期間暫時停用它。走 factory 而非自行 new，
-    是為了讓快照驗證的是「實際會被 run.py 使用的那組 model 組合」。
+    是為了讓快照驗證的是「實際會被回測入口使用的那組 model 組合」。
     """
 
     original_setup = Backtester.setup

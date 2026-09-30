@@ -290,7 +290,7 @@ class LiveTrader:
         self.last_reconcile: Optional[Any] = None
 
         # 盤後作業。**獨立一個類別**：它與送單段落沒有共用狀態，
-        # 自己 connect／close，`run.py` 也是走完全獨立的分支
+        # 自己 connect／close，實盤入口（`apps/live.py`）也是走完全獨立的分支
         self.after_close: AfterCloseRunner = AfterCloseRunner(
             data_feeds=[context.data_feed for context in contexts],
             broker=broker,
@@ -1544,7 +1544,7 @@ class LiveTrader:
         - Description:
             盤後作業；實作在 `AfterCloseRunner`
 
-            **保留這個方法而不是讓 `run.py` 直接拿 runner**：退出碼由
+            **保留這個方法而不是讓實盤入口（`apps/live.py`）直接拿 runner**：退出碼由
             `trader.last_reconcile` 決定，盤後的對帳結果要回填回來。
         - Return:
             - Dict[str, Any]
@@ -1565,7 +1565,7 @@ class LiveTrader:
         - Description:
             決定本次執行寫進 `live_run` 的結束原因
 
-            判定順序與 `run.py` 的退出碼一致（例外 → kill switch → 對帳不一致 →
+            判定順序與實盤入口（`apps/live.py`）的退出碼一致（例外 → kill switch → 對帳不一致 →
             帳戶層非 NORMAL）：存活監控只看這一欄決定要不要推播，
             退出碼非 0 的執行在這裡卻寫成正常結束，推播就會漏掉。
             非交易日與只跑對帳的段落算正常結束——那是預期中的行為。

@@ -1,6 +1,6 @@
 # 實盤部署與排程（Live Deployment）
 
-實盤以 **Shioaji** 為券商閘道，程式入口是 `run.py --mode live`。本文件說明怎麼在容器裡跑、
+實盤以 **Shioaji** 為券商閘道，程式入口是 `python -m apps.live`（`apps/live.py`）。本文件說明怎麼在容器裡跑、
 怎麼排程，以及停止、失敗時會發生什麼事。映像本身的建置見 [正式環境部署](prod-deployment.md)。
 
 ## 1) 執行模型：逐段落啟動，不常駐
@@ -40,14 +40,14 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 
 | 設定 | 為什麼 |
 |------|--------|
-| `entrypoint` 寫死 `--mode live` | `run` 後面的參數會整個取代 `command`；放在 command 的話漏寫一次就變成跑回測 |
+| `entrypoint` 寫死 `python -m apps.live` | `run` 後面的參數會整個取代 `command`；放在 command 的話漏寫一次就變成跑映像預設的回測入口 |
 | `./data` 可寫掛載 | 要寫 `tw_trading.db`；研究庫（`tw_stock.db` 等）一律唯讀開啟，不會被寫到 |
 | CA 目錄唯讀掛在 `/ca` | 憑證不進映像、不進 git |
 | `TZ=Asia/Taipei` | 段落時窗、交易日判定都以台北時間為準；主機排程也要是台北時間 |
 | `stop_grace_period: 90s` | 停止時要先撤單、等券商回覆、寫結束紀錄；預設 10 秒到了就被 SIGKILL |
 | 預設連**模擬環境** | 正式環境要另外帶 `--production --confirm-production`，**刻意不寫進 compose**：兩個旗標只能出現在排程指令裡、由人明確寫下 |
 
-不用容器時，在專案根目錄以 `uv run python run.py --mode live ...` 執行，效果相同。
+不用容器時，在專案根目錄以 `uv run python -m apps.live ...` 執行，效果相同。
 
 ## 4) 排程
 
@@ -92,11 +92,11 @@ CRON_TZ=Asia/Taipei
 
 ```bash
 # 1. 只列計畫、不寫入（退出碼 7）
-uv run python run.py --mode live --strategy <策略> --resync-from-broker
+uv run python -m apps.live --strategy <策略> --resync-from-broker
 # 2. 看過計畫後才寫入
-uv run python run.py --mode live --strategy <策略> --resync-from-broker --confirm-resync
+uv run python -m apps.live --strategy <策略> --resync-from-broker --confirm-resync
 # 3. 確認重建結果無誤後，另外解除降級
-uv run python run.py --mode live --strategy <策略> --resume-trading
+uv run python -m apps.live --strategy <策略> --resume-trading
 ```
 
 - **規則**：逐標的、逐方向比對。券商多出來的量收進 `__unattributed__`（只允許平倉）；券商比本地少時，

@@ -787,7 +787,7 @@ AlphaEdge 使用 `StrategyLoader` 自動載入策略。它以 `pkgutil.iter_modu
 
 ```bash
 # 如果策略類別名稱是 MomentumStrategy1，則使用 "MomentumStrategy1"
-python run.py --strategy MomentumStrategy1
+python -m apps.backtest --strategy MomentumStrategy1
 ```
 
 ## 使用策略進行回測
@@ -795,22 +795,22 @@ python run.py --strategy MomentumStrategy1
 ### 基本語法
 
 ```bash
-python run.py --strategy <StrategyName>
+python -m apps.backtest --strategy <StrategyName>
 ```
 
 ### 參數說明
 
-- `--mode`: 執行模式，可選 `backtest` 或 `live`，預設為 `backtest`
+- 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（必須帶 `--phase`）
 - `--strategy`: 指定要使用的策略類別名稱（必填）
 
 ### 使用範例
 
 ```bash
-# 執行回測模式，使用名為 "MomentumStrategy1" 的策略（動能 1 日線）
-python run.py --strategy MomentumStrategy1
+# 執行回測，使用名為 "MomentumStrategy1" 的策略（動能 1 日線）
+python -m apps.backtest --strategy MomentumStrategy1
 
 # 執行實盤（必須指定段落；目前只在模擬環境演練過）
-python run.py --mode live --strategy MomentumStrategy1 --phase open
+python -m apps.live --strategy MomentumStrategy1 --phase open
 ```
 
 ### 回測結果
@@ -924,7 +924,7 @@ class SimpleStrategy(BaseStockStrategy):
 將此檔案儲存為 `core/strategies/stock/simple_strategy.py`，即可使用以下指令執行回測：
 
 ```bash
-python run.py --strategy SimpleStrategy
+python -m apps.backtest --strategy SimpleStrategy
 ```
 
 ---

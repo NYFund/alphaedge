@@ -11,7 +11,8 @@ AlphaEdge 是一個聚焦台灣市場工作流程的策略研究與交易框架�
 ```mermaid
 graph TB
     subgraph entry ["入口層"]
-        RunPy["run.py<br/>--mode backtest ｜ live"]
+        BacktestApp["apps/backtest.py<br/>python -m apps.backtest"]
+        LiveApp["apps/live.py<br/>python -m apps.live"]
         Tasks["tasks/update_db.py"]
     end
 
@@ -71,10 +72,11 @@ graph TB
         FrontendDocker["frontend/Dockerfile"]
     end
 
-    RunPy --> Loader
+    BacktestApp --> Loader
+    LiveApp --> Loader
     Loader --> Strategies
-    RunPy --> BTFactory
-    RunPy --> LiveFactory
+    BacktestApp --> BTFactory
+    LiveApp --> LiveFactory
     Strategies --> Portfolio
     Portfolio --> Execution
     Portfolio --> Models
@@ -162,7 +164,7 @@ graph TB
 - 期貨跳動點只涵蓋已查證的七檔指數期貨（TX／MTX／TMF 1 點、TE／ZEF 0.05 點、TF／ZFF 0.2 點）；未登錄的商品退回 1 點並記 warning，以跳動點數設定的滑價會失真（預設滑價為 0，不受影響）。
 - 同一次回測無法同時持有台股與台期貨（跨市場組合／避險）。
 - 台股平盤下放空限制與每日可當沖清單尚未接上撮合，會高估放空與當沖機會。
-- 實盤（`--mode live`）目前只在**模擬環境**跑多日連續演練，尚未在正式環境執行；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
+- 實盤（`python -m apps.live`）目前只在**模擬環境**跑多日連續演練，尚未在正式環境執行；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
 - 實盤的單日虧損守門只在**帳戶層**生效（取券商端的已實現＋未實現）；**逐策略那一層目前恆為不觸發**——券商只給得出逐標的的合併損益，拆不回策略。
 
 細節見[放空回測框架規格](docs/backtest/short-selling-framework.md)與[台期貨平台](docs/futures/tw-futures-platform.md)。
@@ -268,16 +270,16 @@ uv sync
 
 專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`tasks`／`tests`。
 之後每開一個新的終端機都要先啟用虛擬環境（要離開時執行 `deactivate`）；
-不想啟用時，也可以在指令前加 `uv run`，例如 `uv run python run.py ...`。
+不想啟用時，也可以在指令前加 `uv run`，例如 `uv run python -m apps.backtest ...`。
 
 **步驟 2：執行回測**
 
 ```bash
-python run.py --strategy MomentumStrategy1
+python -m apps.backtest --strategy MomentumStrategy1
 ```
 
 - `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
-- 選用參數：`--show` 在瀏覽器開圖。實盤是另一條路徑（`--mode live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
+- 選用參數：`--show` 在瀏覽器開圖。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
 **步驟 3：開啟前端檢視結果**
@@ -332,7 +334,7 @@ docker run --rm \
 ```
 
 映像不含資料庫，所以要唯讀掛入本機 `data/`；結果寫回本機 `results/`，否則容器結束時會跟著消失。
-想進容器手動下指令，改用 `--entrypoint /bin/bash` 並加上 `-it`，進去後執行 `python run.py --help`。
+想進容器手動下指令，改用 `--entrypoint /bin/bash` 並加上 `-it`，進去後執行 `python -m apps.backtest --help`（實盤為 `python -m apps.live --help`）。
 
 **步驟 3：啟動前端**
 
@@ -415,8 +417,8 @@ python -m tasks.update_db --target no_tick
 將 `<StrategyClassName>` 換成你的策略類別名稱；更多指令情境可參考同一份[指令教學](docs/commands/command-usage.zh-TW.md)。
 
 ```bash
-python run.py --strategy <StrategyClassName>
-# 選用：--show 在瀏覽器開圖。實盤走 --mode live，見 docs/deployment/live-deployment.md
+python -m apps.backtest --strategy <StrategyClassName>
+# 選用：--show 在瀏覽器開圖。實盤走 python -m apps.live，見 docs/deployment/live-deployment.md
 ```
 
 ## 專案結構
@@ -518,7 +520,8 @@ AlphaEdge/
 ├── docker-compose.yml         # compose：core ＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ 共用 results volume
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）
-├── run.py
+├── apps/                      # 入口：backtest.py（回測）、live.py（實盤）、_common.py（兩者共用）
+├── run.py                     # 舊入口的轉發 shim（過渡期保留，之後刪除；新指令一律用 apps/）
 ├── README.md                  # 中文（權威版本）
 └── README_en.md               # 英譯
 ```

@@ -423,12 +423,12 @@ reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點�
 ### 基本語法
 
 ```bash
-python run.py --strategy <StrategyName>
+python -m apps.backtest --strategy <StrategyName>
 ```
 
 ### 參數說明
 
-- `--mode`: 執行模式，可選 `backtest` 或 `live`，預設為 `backtest`
+- 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（必須帶 `--phase`）
 - `--strategy`: 指定要使用的策略類別名稱（必填）
 - `--show` / `--no-show`: 回測結束後要不要在瀏覽器開圖。**預設不開**——圖本來就會
   存成 PNG，批次掃參數時一次開幾十個分頁，無頭環境（CI、容器、`nohup`）更會直接失敗。
@@ -437,11 +437,11 @@ python run.py --strategy <StrategyName>
 ### 使用範例
 
 ```bash
-# 執行回測模式，使用名為 "MomentumStrategy1" 的策略
-python run.py --strategy MomentumStrategy1
+# 執行回測，使用名為 "MomentumStrategy1" 的策略
+python -m apps.backtest --strategy MomentumStrategy1
 
 # 執行實盤（必須指定段落；目前只在模擬環境演練過）
-python run.py --mode live --strategy MomentumStrategy1 --phase open
+python -m apps.live --strategy MomentumStrategy1 --phase open
 ```
 
 ### 注意事項

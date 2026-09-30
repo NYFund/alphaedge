@@ -25,7 +25,7 @@
 | **策略邏輯** | 利用「台股開盤前已結束之美股交易日」所累積的隔夜資訊（TSM 報酬、費半 SOX、台幣匯率），以 **Ridge 迴歸** 預測下一個台股交易日 **2330.TW** 之報酬，並依預測正負決定 **做多或空手**（教學用簡化，未模擬融券放空）。 |
 | **樣本切分** | 與期末報告建議一致：**訓練**至 2020-12-31、**驗證** 2021 年（用於 Ridge 懲罰係數 lambda 網格搜尋）、**測試** 2022-01-01 起至資料可取得之最近交易日。 |
 | **交易成本** | **主結果**走 `StockUtils.calculate_transaction_commission()`：手續費 0.1425% × 券商折扣 0.3 ＝ **0.04275%**，且**單筆最低 20 元**；賣出另加證交稅 **0.3%**。另有一條向量化診斷路徑用**同一份費率**但不套整張限制與最低手續費（見 §4.1 的說明）。 |
-| **與 AlphaEdge 關係** | 績效指標命名與圖表角色對齊 `core/backtest/README.md`（資產曲線、MDD、Sharpe 等慣例）；本模組以 **日頻向量回測** 實作，便於與 yfinance 對接，未直接繼承 `Backtester` 類別（可視為研究原型，日後可改寫為 `BaseStockStrategy` 以接入 `run.py`）。 |
+| **與 AlphaEdge 關係** | 績效指標命名與圖表角色對齊 `core/backtest/README.md`（資產曲線、MDD、Sharpe 等慣例）；本模組以 **日頻向量回測** 實作，便於與 yfinance 對接，未直接繼承 `Backtester` 類別（可視為研究原型，日後可改寫為 `BaseStockStrategy` 以接入回測入口 `python -m apps.backtest`）。 |
 
 ---
 
@@ -146,7 +146,7 @@
 2. **匯率代理**：`TWD=X` 為即期匯率代理，非報告中之 NDF。  
 3. **執行假設**：未考慮開盤跳空撮合、漲跌停、盤中停損。  
 4. **法規與多空**：報告提及期貨下單與融券；本專題僅 **現貨做多／空手**。  
-5. **與 AlphaEdge 深度整合**：可將訊號改寫為 `core/strategies/stock/` 下之 `BaseStockStrategy` 子類別，並以 `Backtester` + `StockBacktestReporter` 產出與 `run.py --strategy ...` 完全一致之報表目錄結構。
+5. **與 AlphaEdge 深度整合**：可將訊號改寫為 `core/strategies/stock/` 下之 `BaseStockStrategy` 子類別，並以 `Backtester` + `StockBacktestReporter` 產出與 `python -m apps.backtest --strategy ...` 完全一致之報表目錄結構。
 6. ⚠️ **向量化回測有未來資料洩漏，績效不可信**：`pipeline.py` 的 `wealth *= 1.0 + sig[i] * r[i]` 等於在 d−1 收盤就依 d 日訊號進場，而該訊號的特徵是**台北時間 d 日清晨才收盤**的美股——進場當下那些數字還不存在。逐筆版本（`run_backtest_with_signal()`）沒有這個問題，但它以 d 日收盤成交，賺到的是 d+1 的報酬，同樣與模型目標錯開一天。
    **這個主題的成品策略已於 2026-09-17 刪除**（`core/strategies/stock/overnight_lead_event_strategy.py`）：特徵與目標在時序上對不齊，隔夜跳空在可進場的時點已經發生完畢。要重啟這個主題，先決定一個時序成立的口徑（例如把特徵往前挪一天、改賺開盤後的日內段，或讓成交區間涵蓋模型預測的那一段），再修這兩個回測函式。
 

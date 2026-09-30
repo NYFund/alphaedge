@@ -1,6 +1,6 @@
 # 開發環境設定（Dev Setup）
 
-本文件針對目前 `AlphaEdge` 專案實際結構整理（以 `run.py`、`tasks/update_db.py`、`core/` 為主）。
+本文件針對目前 `AlphaEdge` 專案實際結構整理（以 `apps/`（回測與實盤入口）、`tasks/update_db.py`、`core/` 為主）。
 
 ## 前置需求
 
@@ -64,7 +64,7 @@ cp .env.example .env
 - FinMind：`FINMIND_API_TOKEN`
 - （選填）多組 Shioaji 帳號輪替：`API_KEY_1`~`API_KEY_4`、`API_SECRET_KEY_1`~`API_SECRET_KEY_4`（`core/config/settings.py` 的 `NUM_API`）
 - （選填）執行期產物根目錄覆寫：`ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`（見 [執行期產物](../dev/runtime-artifacts.md)）。**前端讀的是同一個 `ALPHAEDGE_RESULTS_DIR`**，不設也能跑（預設 `PROJECT_ROOT/results`）；舊名 `ALPHAEDGE_BACKTEST_RESULTS` 仍相容一版並會發出警告
-- （選填）回測畫完圖在瀏覽器開啟：`ALPHAEDGE_SHOW_FIGURES=1`（等同 `run.py --show`；預設不開）
+- （選填）回測畫完圖在瀏覽器開啟：`ALPHAEDGE_SHOW_FIGURES=1`（等同 `python -m apps.backtest --show`；預設不開）
 
 `.env.example` 與程式實際讀取的環境變數由 `tests/test_config_consistency.py` 雙向核對：
 程式新增一個 `os.getenv("X")` 卻沒補進範本，或範本留著程式已不再讀的鍵，測試都會失敗。
@@ -86,8 +86,9 @@ mkdir -p data/db data/downloads logs results
 # Backtester` 會失敗
 python -c "from core.backtest.backtester import Backtester; from core.strategies.strategy_loader import StrategyLoader; print('OK')"
 
-# 顯示主程式參數
-python run.py --help
+# 顯示回測／實盤入口參數
+python -m apps.backtest --help
+python -m apps.live --help
 
 # 顯示資料更新參數
 python -m tasks.update_db --help

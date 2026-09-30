@@ -11,7 +11,7 @@
      休市——這是 `core/` 其餘部分對 `pipeline` 的**唯一一條**依賴，也是 `pipeline` 搬不出去
      的唯一障礙。
   2. `core/managers/` 只裝三支 `position_manager.py`，名稱籠統，容易變成雜物間。
-  3. `core/Dockerfile` 打包的是 `run.py`＋`core`＋`tasks` 整個後端，不只是 `core`。
+  3. `core/Dockerfile` 打包的是 `apps`＋`core`＋`tasks`（過渡期另有 `run.py`）整個後端，不只是 `core`。
 - **目標**：`core/` 只剩交易框架本體。具體策略搬到頂層 `strategies/`、資料管線搬到頂層
   `pipeline/`，兩者都只能單向依賴 `core`；策略契約（抽象基底）留在 `core/strategies/`。
   完成後頂層的邊界是：`core/` 框架、`strategies/` 正式策略、`pipeline/` 資料擷取、
@@ -40,7 +40,7 @@
 | Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
 | Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ✅ | 2026-09-30 完成：新增 E'''' 項（專屬 AST 掃描，偏離原規劃的分層規則寫法）；突變驗證紅→綠；2 條單元測試 |
 | Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ⬜ | 護欄清單見文末附錄 |
-| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`run.py`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
+| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
 | Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ⬜ | 排在 `回測與實盤入口拆分及架構收斂.md` Phase3 之後 |
@@ -154,8 +154,8 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 **契約為什麼留在 `core/`**：回測引擎、實盤引擎、`core/execution/`、報表等十幾個模組都要認得
 策略介面；契約搬出去，`core` 就得反過來 import 外部套件。
 
-**`StrategyLoader` 為什麼跟著搬**：它的職責是掃描具體策略，而目前唯一的呼叫端是 `run.py`
-（2026-09-26 確認）。留在 `core/` 的話，框架就必須知道頂層 `strategies/` 的存在，違反單向依賴。
+**`StrategyLoader` 為什麼跟著搬**：它的職責是掃描具體策略，正式呼叫端只有入口層
+（2026-09-26 確認時是 `run.py`；2026-09-30 入口拆分後為 `apps/_common.py` 與 `apps/live.py`）。留在 `core/` 的話，框架就必須知道頂層 `strategies/` 的存在，違反單向依賴。
 
 ### Phase2-1. 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 ⬜
 
@@ -193,7 +193,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
   1. 以 `git mv` 搬移三支策略（及屆時新增的策略），保留歷史。
   2. `core/strategies/strategy_loader.py` → `strategies/loader.py`，掃描目標改成頂層
      `strategies` 套件；逐模組隔離、同名拋錯兩條既有行為不變。
-  3. 呼叫端改 import：`run.py`（或屆時的 `apps/`）、約 25 個測試檔、`scripts/` 中引用者。
+  3. 呼叫端改 import：`apps/_common.py`、`apps/live.py`、約 25 個測試檔、`scripts/` 中引用者。
   4. `check_layer_deps.py` 的 `_INSTRUMENT_AXIS_PACKAGES` 加上 `strategies`，
      讓商品軸命名檢查繼續涵蓋具體策略。
   5. **`tests/test_strategy_data_access.py` 必須同步改，否則變成假綠燈**：它是「策略不得直接
@@ -202,7 +202,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
      門檻照樣通過，實際上一支具體策略都沒掃到。做法：
      - `STRATEGY_DIR` 改成同時掃 `strategies/` 與 `core/strategies/`（契約也不該寫欄位字面值）。
      - 自驗改成「每一支 `StrategyLoader` 載入的策略，其原始檔都在掃描清單內」，不再用檔數門檻。
-- **產出**：`strategies/**`、`run.py`、`tests/`、`scripts/check_layer_deps.py`。
+- **產出**：`strategies/**`、`apps/`、`tests/`、`scripts/check_layer_deps.py`。
 - **驗證方式**：
   1. 回歸雙線零變動。
   2. `StrategyLoader.load_strategies()` 回傳的類別名稱集合與改前完全相同。
@@ -277,7 +277,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 
 ### Phase4-1. `core/Dockerfile` 移到專案根目錄 ⬜
 
-- **目的**：這份 Dockerfile 打包的是 `run.py`、`core`、`tasks`（Phase2 後再加 `strategies`、
+- **目的**：這份 Dockerfile 打包的是 `apps`、`core`、`tasks`（過渡期另有 `run.py`；Phase2 後再加 `strategies`、
   Phase5 後再加 `pipeline`），也就是整個後端。放在 `core/` 底下會讓人以為它只打包框架。
   `frontend/Dockerfile` 只打包前端，留在原位。
 - **做法**：`git mv core/Dockerfile Dockerfile`，更新約 11 個引用處：`docker-compose.yml`

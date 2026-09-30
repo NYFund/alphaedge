@@ -47,7 +47,7 @@ BaseFuturesStrategy: 台期貨策略基底
 
 **載入方式不需要特別處理**：`StrategyLoader.load_strategies()` 會逐一掃描
 `core/strategies/` 底下的所有商品類別子套件，新增 `futures/` 就會自動被收錄，
-`run.py --strategy <類別名>` 直接可用。
+`python -m apps.backtest --strategy <類別名>` 直接可用。
 """
 
 

@@ -98,7 +98,7 @@ ruff check . --select B006,B904             # 看逐處位置
 | `stock_tick_utils.py`、`stock_tick_loader.py` 等 tick 模組 | `F401` | `dolphindb` 是選用相依，該處 import 是「可用性探測」 |
 | `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法（24 處）的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
 
-**`ANN201`／`ANN204` 在 `select` 內**，`core/`／`tasks/`／`frontend/`／`run.py` 兩條都生效：
+**`ANN201`／`ANN204` 在 `select` 內**，`core/`／`tasks/`／`frontend/`／`apps/` 兩條都生效：
 `CLAUDE.md` §2.4 的「所有函式回傳值都要標註，含 `-> None`」沒有機器護欄時，
 缺漏會以百處為單位累積。
 
@@ -152,7 +152,7 @@ CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `cor
 | `no-doc-step-refs`（pygrep） | pre-commit | 註解不得引用 backlog 步驟編號、健檢編號或 `backlog/` 路徑（`CLAUDE.md` §2.1 第 4 點）|
 | SHORT 回歸線 | CI ＋ 本機 | 純記憶體、不需要資料庫 |
 | **LONG 回歸線與 `slow` 測試** | **只在本機** | 需要 `data/db/tw_stock.db`、`tw_futures.db` 或外部 API |
-| 映像建置與冒煙（`docker` job） | **只在 CI** | core 映像跑一次預設的 `run.py --help`；frontend 映像在工作目錄 `/` 下 import `frontend.config` 與 `app.py` 的相依（在 `/app` 底下跑的話，拿掉 `PYTHONPATH=/app` 也照樣 import 得到，就驗不到 Streamlit 實際執行時的條件）|
+| 映像建置與冒煙（`docker` job） | **只在 CI** | core 映像跑一次預設的 `python -m apps.backtest --help`；frontend 映像在工作目錄 `/` 下 import `frontend.config` 與 `app.py` 的相依（在 `/app` 底下跑的話，拿掉 `PYTHONPATH=/app` 也照樣 import 得到，就驗不到 Streamlit 實際執行時的條件）|
 | 前端冒煙測試（`tests/test_frontend_app_smoke.py`） | CI ＋ 本機 | 以 Streamlit `AppTest` 把 `frontend/app.py` 真的跑一遍；沒裝 `--extra frontend` 時略過並在 `-rs` 列出，CI 一定會裝 |
 | 測試產物隔離與絆線（專案根目錄 `conftest.py`） | 每一次 pytest | 見下方 |
 
@@ -221,7 +221,7 @@ chflags nohidden .venv .venv/lib/python3.12/site-packages \
 PYTHONPATH=. python scripts/some_script.py
 ```
 
-從 repo 根目錄執行 `python -m pytest` 或 `python run.py` 不受影響（cwd 會進 `sys.path`）。
+從 repo 根目錄執行 `python -m pytest` 或 `python -m apps.backtest` 不受影響（cwd 會進 `sys.path`）。
 
 ---
 

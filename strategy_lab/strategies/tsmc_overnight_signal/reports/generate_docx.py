@@ -2,7 +2,7 @@
 """
 將 TSMC 隔夜訊號策略 output/ 之圖表與 CSV 彙整為 Word 量化報告（.docx），支援中文／英文。
 
-使用方式（專案根目錄，**必須用 `-m`**，理由見 run.py）：
+使用方式（專案根目錄，**必須用 `-m`**，理由見同主題的 `run.py` 模組說明）：
     .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx
     .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang en
     .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang both

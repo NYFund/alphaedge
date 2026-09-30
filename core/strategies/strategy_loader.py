@@ -15,7 +15,7 @@ from core.strategies.base import BaseStrategy
 StrategyLoader: 自動載入 core/strategies/ 下所有市場的策略類別
 
 **單一模組壞掉不該讓所有策略都跑不了**：`import_module()` 一路往外拋的話，
-任何一支策略有 import 錯誤、或在 module level 做了會炸的事，`run.py --strategy`
+任何一支策略有 import 錯誤、或在 module level 做了會炸的事，入口的 `--strategy`
 就連「有哪些策略可用」都列不出來。故逐模組隔離，壞掉的只記 error 並略過。
 
 **但重複的類別名稱要當場拋出**：`strategies` 以類別名為 key，同名會靜靜
@@ -207,7 +207,7 @@ class StrategyLoader:
                 raise ValueError(
                     f"策略類別名稱重複：{name} 同時定義於 "
                     f"{existing.__module__} 與 {obj.__module__}；"
-                    f"類別名即 `run.py --strategy` 的識別名稱，必須唯一"
+                    f"類別名即入口 `--strategy` 的識別名稱，必須唯一"
                 )
 
             strategies[name] = obj  # 用類別名稱當 key

@@ -212,7 +212,7 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
     單一模組壞掉不該讓所有策略都列不出來
 
     舊版一路 `import_module()` 到底，任何一支策略有 import 錯誤，
-    `run.py --strategy` 連「有哪些策略可用」都印不出來。
+    入口的 `--strategy` 連「有哪些策略可用」都印不出來。
     """
 
     import importlib

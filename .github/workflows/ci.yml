@@ -121,7 +121,7 @@ jobs:
       - name: 建置 core 映像
         run: docker build -f core/Dockerfile -t alphaedge-core .
 
-      # 進入點是 `python run.py`，預設參數 `--help`：跑得起來代表相依裝齊、
+      # 進入點是 `python -m apps.backtest`，預設參數 `--help`：跑得起來代表相依裝齊、
       # editable 安裝與 `core/config/paths.py` 的路徑推導都正常
       - name: core 映像冒煙
         run: docker run --rm alphaedge-core

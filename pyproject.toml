@@ -167,7 +167,7 @@ ignore = [
 # 被 monkeypatch 過的 loader」或 `(物件, 路徑)` 的 tuple，標註要嘛得把類別
 # 從函式內部的 import 搬到檔頭（那會讓 monkeypatch 失效），要嘛只能寫成
 # `Any`——兩者都比不標更糟。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None`；
-# 生產程式碼（`core/`、`tasks/`、`frontend/`、`run.py`）兩條都生效
+# 生產程式碼（`core/`、`apps/`、`tasks/`、`frontend/`）兩條都生效
 "tests/*" = ["ANN201"]
 
 # dolphindb 是選用相依（見 [project.optional-dependencies] 的 tick），

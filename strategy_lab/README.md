@@ -7,7 +7,7 @@
 > 想跑正式回測請把策略放到 `core/strategies/stock/`（股票）或 `core/strategies/futures/`（期貨），然後執行：
 >
 > ```bash
-> .venv/bin/python run.py --strategy <StrategyName>
+> .venv/bin/python -m apps.backtest --strategy <StrategyName>
 > ```
 >
 > `strategy_lab/` 是它的 **上游**：把想法、資料分析、研究筆記都在這裡完成，
@@ -50,11 +50,11 @@
 
 | 區別          | `core/strategies/`                    | `strategy_lab/`                           |
 | ------------- | ------------------------------------- | ----------------------------------------- |
-| **角色**      | 正式上線、可被 `run.py` 載入的策略    | R&D、實驗、靈感、半成品、筆記             |
+| **角色**      | 正式上線、可被入口 `apps/` 載入的策略 | R&D、實驗、靈感、半成品、筆記             |
 | **結構**     | 強型別，繼承 `BaseStockStrategy`      | 自由發揮，可用 `.py` 或 `.ipynb`          |
 | **回測引擎** | `core/backtest/backtester.py`         | 自寫 vectorized backtest 或借用 core API |
 | **產出**     | 標準回測報表（`<策略>_balance_curve.png` …） | 圖表、CSV、Word 報告、markdown 筆記       |
-| **觸發**     | `run.py --strategy <Name>`            | 直接 `python <script>.py` 或 notebook    |
+| **觸發**     | `python -m apps.backtest --strategy <Name>` | 直接 `python <script>.py` 或 notebook    |
 
 **重要原則：** 研究階段請優先 **複用 `core/api/` 與 `core/utils/`**，
 不要在 lab 內重複實作資料讀取、手續費計算、交易日判斷等功能。
@@ -101,10 +101,10 @@ ideas/           data_analysis/      strategies/<name>/      core/strategies/{st
   │                  │                     │                            │
   ▼                  ▼                     ▼                            ▼
 寫一段假設     EDA、相關性、IC    寫完整 pipeline，產圖表        繼承 BaseStockStrategy
-（markdown）   產出 CSV/PNG       與績效報告                     可被 run.py 載入
+（markdown）   產出 CSV/PNG       與績效報告                     可被 apps/ 入口載入
                                                                        │
                                                                        ▼
-                                                            .venv/bin/python run.py
+                                                            .venv/bin/python -m apps.backtest
                                                               --strategy <Name>
 ```
 
@@ -484,7 +484,7 @@ print(realistic_pnl(600.0, 620.0, 5))
 3. 跑回測：
 
    ```bash
-   .venv/bin/python run.py --strategy <YourStrategyName>
+   .venv/bin/python -m apps.backtest --strategy <YourStrategyName>
    ```
 4. 結果會落到 `results/<strategy_name>/`（資料夾名稱取自策略的 `self.strategy_name`，不是類別名稱），
    會自動產出 `<策略>_balance_curve.png / <策略>_mdd.png / <策略>_trading_report.csv /
