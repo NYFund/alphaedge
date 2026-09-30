@@ -18,13 +18,17 @@ dependencies = [
     # 整個 `tests/` 會在 collect 階段就 ImportError（2026-09-01 CI 全紅的成因）。
     # 本專案自己的程式碼沒有 import tqdm，這是**代宣告的傳遞相依**，不是漏列。
     "tqdm>=4.67",
-    # 以下兩個是**執行期才用得到、import 掃描抓不到**的相依，漏列時要等那條路徑跑起來才炸：
+    # 以下三個是**執行期才用得到、import 掃描抓不到**的相依，漏列時要等那條路徑跑起來才炸：
     # - kaleido：plotly 的 `write_image()` 靠它輸出 PNG，每份回測報表的圖都會走到
     #   （`core/backtest/report/reporter.py` 的 `save_figure()`）
     # - html5lib：`pd.read_html` 在 lxml 解不動某些 MOPS 頁面時會退到 bs4 flavor，
     #   缺它就 ImportError（2026-09-04 權益變動表回補實際炸過，當時只補進本機 venv）
+    # - beautifulsoup4：同一條 bs4 flavor 的另一半，html5lib 只是它的解析器。原本靠 yfinance
+    #   間接帶進來，yfinance 移到 lab extra 後，CI 與正式映像（都不裝 lab）就沒有它了
+    #   （2026-09-26 起 CI 的財報測試全紅）
     "kaleido>=1.2",
     "html5lib>=1.1",
+    "beautifulsoup4>=4.12",
     "fake-useragent>=2.2",
     "loguru>=0.7",
     "numpy>=2.4",
