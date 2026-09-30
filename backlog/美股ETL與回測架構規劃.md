@@ -25,20 +25,27 @@
 > `BaseDataFeed` 已在中立的 `core/datafeed/base.py`；結算模型已是 `settlement_model/` package；
 > 交易單位除了 `UsStockSpec`，還要動 `core/portfolio/sizing.py`（`EqualWeightSizer` 寫死以張計）。
 
+> **⏸ 暫緩紀錄（2026-10-01）**
+> - 暫緩原因：使用者裁示整份暫緩，優先處理其他 backlog（`暫緩工作彙整.md` 等）。
+> - 已完成：Phase3-3（多市場共用介面，台股逐步歸位 `tw/`，2026-09-02）；其餘 8 步未動工，**程式碼中沒有任何半成品**。
+> - 解除條件：使用者指示恢復。
+> - 恢復時的下一步：Phase1-1（建立 `us/` 目錄骨架與 provider 介面），無前置相依。恢復前先重跑一次 `scripts/check_doc_paths.py`，
+>   確認本文件的產出路徑仍與現行目錄一致（例如成本模型已於 2026-10-01 由 `core/backtest/models/` 下沉到 `core/market/`，本文件已同步）。
+
 ---
 
 ## 進度追蹤表
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| Phase1-1 | 建立 `us/` 目錄骨架與 provider 介面 | `core/pipeline/us/`（含 `providers/base.py`）、`core/api/us/` | 骨架可 import；`scripts/check_layer_deps.py` 通過；假 provider 可通過介面測試 | ⬜ | 策略**不**開 `us/` 目錄，見 §二 |
-| Phase1-2 | `us_universe` ＋ `us_price_daily` ETL（差集續跑、冪等寫入） | `core/pipeline/us/*`、`core/dao/us/`（`us_universe`／`us_price_daily` 的 DAO）、`core/api/us/{price,universe}_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py` 的 `DataType` | 中斷後可續跑；重跑不產生重複資料；統計行格式與台股一致 | ⬜ | 相依 Phase1-1；須符合 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈新增或修改 updater 的檢查表〉與 [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 DAO） |
-| Phase1-3 | 美股日線動能策略跑通回測 | `core/strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/market_calendar.py`、`core/adapters/us/`、`core/backtest/models/`（美股 spec／fill／`settlement_model/us_stock.py`）、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⬜ | 相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
-| Phase2-1 | `us_corporate_actions` ＋ raw/adjusted 回測切換 | `core/pipeline/us/*`、`core/backtest/datafeed/us/stock_datafeed.py` | 同一策略在兩種模式下結果可解釋 | ⬜ | 相依 Phase1-3；`BaseDataFeed` 在中立的 `core/datafeed/base.py`（回測與實盤共用同一份契約） |
-| Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/market/us/cost_model.py` | 費用計算有單元測試 | ⬜ | 相依 Phase1-3；繼承既有 `BaseCostModel` |
-| Phase2-3 | 資料品質檢核與異常告警 | `core/pipeline/us/*` | 缺洞天數、成交量異常可被偵測 | ⬜ | 相依 Phase1-2 |
-| Phase3-1 | `us_fundamentals` ETL 支援因子策略 | `core/pipeline/us/*`、`core/api/us/fundamentals_api.py` | 財報欄位可查詢且無未來資料污染 | ⬜ | 相依 Phase2-1 |
-| Phase3-2 | 參數掃描框架（walk-forward / grid search） | `core/backtest/` | 可批次產出參數組合的績效比較 | ⬜ | 相依 Phase2-2 |
+| Phase1-1 | 建立 `us/` 目錄骨架與 provider 介面 | `core/pipeline/us/`（含 `providers/base.py`）、`core/api/us/` | 骨架可 import；`scripts/check_layer_deps.py` 通過；假 provider 可通過介面測試 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；策略**不**開 `us/` 目錄，見 §二 |
+| Phase1-2 | `us_universe` ＋ `us_price_daily` ETL（差集續跑、冪等寫入） | `core/pipeline/us/*`、`core/dao/us/`（`us_universe`／`us_price_daily` 的 DAO）、`core/api/us/{price,universe}_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py` 的 `DataType` | 中斷後可續跑；重跑不產生重複資料；統計行格式與台股一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-1；須符合 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈新增或修改 updater 的檢查表〉與 [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 DAO） |
+| Phase1-3 | 美股日線動能策略跑通回測 | `core/strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/market_calendar.py`、`core/adapters/us/`、`core/backtest/models/`（美股 spec／fill／`settlement_model/us_stock.py`）、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
+| Phase2-1 | `us_corporate_actions` ＋ raw/adjusted 回測切換 | `core/pipeline/us/*`、`core/backtest/datafeed/us/stock_datafeed.py` | 同一策略在兩種模式下結果可解釋 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-3；`BaseDataFeed` 在中立的 `core/datafeed/base.py`（回測與實盤共用同一份契約） |
+| Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/market/us/cost_model.py` | 費用計算有單元測試 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-3；繼承既有 `BaseCostModel` |
+| Phase2-3 | 資料品質檢核與異常告警 | `core/pipeline/us/*` | 缺洞天數、成交量異常可被偵測 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2 |
+| Phase3-1 | `us_fundamentals` ETL 支援因子策略 | `core/pipeline/us/*`、`core/api/us/fundamentals_api.py` | 財報欄位可查詢且無未來資料污染 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase2-1 |
+| Phase3-2 | 參數掃描框架（walk-forward / grid search） | `core/backtest/` | 可批次產出參數組合的績效比較 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase2-2 |
 | Phase3-3 | 多市場共用介面，台股逐步歸位 `tw/` | 全專案 | 台股回歸測試逐筆相同 | ✅ | **2026-09-02 結案**：所有市場軸目錄都只有 `tw/`（清單以 `scripts/check_layer_deps.py` 的 `_MARKET_AXIS_PACKAGES` 為準）；`models`／`strategies`／`managers` 依定案承載的是**軸 B**，本來就不該有 `us/`。詳見該步驟 |
 
 ---
@@ -272,7 +279,7 @@ core/
 
 ## Phase 1：最小可跑版本
 
-### Phase1-1. 建立 `us/` 目錄骨架與 provider 介面 ⬜
+### Phase1-1. 建立 `us/` 目錄骨架與 provider 介面 ⏸
 
 - **目的**：先把平行模組的骨架與對外 API 抽象定下來，後續兩步才有落點。
 - **做法**：依 §二建立 `core/pipeline/us/`（含 `providers/`、四層子目錄）與 `core/api/us/`；
@@ -282,7 +289,7 @@ core/
 - **驗證方式**：骨架可 import；`python scripts/check_layer_deps.py` 通過（含跨軸目錄污染檢查）；provider 介面可用一支假 provider 通過測試。
 - **相依**：無。
 
-### Phase1-2. `us_universe` ＋ `us_price_daily` ETL ⬜
+### Phase1-2. `us_universe` ＋ `us_price_daily` ETL ⏸
 
 - **目的**：完成最核心的兩個資料域，讓策略有資料可跑。
 - **做法**：四層 ETL 全套，繼承 `core/pipeline/shared/` 的 base 類別；落實 §3.3 的差集續跑與冪等寫入，
@@ -294,7 +301,7 @@ core/
 - **驗證方式**：中斷後重跑可續跑且不產生重複資料；抽樣比對來源網站數據；新增的 API 公開方法有測試（`scripts/check_api_orphan_methods.py` 通過）。
 - **相依**：Phase1-1。
 
-### Phase1-3. 美股日線動能策略跑通回測 ⬜
+### Phase1-3. 美股日線動能策略跑通回測 ⏸
 
 - **目的**：驗證最小閉環（資料 → 策略 → 報表）可跑通。
 - **做法**：依 [多市場回測引擎架構〈四〉](../docs/backtest/multi-market-engine.md) 新增（美股, 股票）組合：
@@ -320,7 +327,7 @@ core/
 
 ## Phase 2：回測可信度提升
 
-### Phase2-1. `us_corporate_actions` ＋ raw/adjusted 切換 ⬜
+### Phase2-1. `us_corporate_actions` ＋ raw/adjusted 切換 ⏸
 
 - **目的**：沒有公司行為資料，回測價格序列在拆股／配息日會出現假跳空。
 - **做法**：補 `us_corporate_actions` ETL；`UsStockDataFeed` 支援 `raw` 與 `adjusted` 兩種模式，
@@ -331,7 +338,7 @@ core/
 - **驗證方式**：挑一檔有拆股紀錄的標的，`adjusted` 模式下拆股日無假跳空；兩種模式的績效差異可解釋。
 - **相依**：Phase1-3（原為 Phase1-2；美股 DataFeed 在 Phase1-3 建立）。
 
-### Phase2-2. 美股成本模型 ⬜
+### Phase2-2. 美股成本模型 ⏸
 
 - **目的**：手續費結構與台股不同（含 SEC fee、最小費用、無證交稅），不可沿用台股模型。
 - **做法**：新增 `core/market/us/cost_model.py`，定義 `UsStockCostModel`（繼承 `core/market/cost_model.py` 的 `BaseCostModel`；成本模型已於 2026-10-01 由 `core/backtest/models/` 下沉到 `core/market/`）：手續費、SEC fee、最小費用；
@@ -340,7 +347,7 @@ core/
 - **驗證方式**：各項費用有單元測試，含最小費用的邊界案例。
 - **相依**：Phase1-3。
 
-### Phase2-3. 資料品質檢核與異常告警 ⬜
+### Phase2-3. 資料品質檢核與異常告警 ⏸
 
 - **目的**：資料缺洞會靜默地讓回測結果失真。
 - **做法**：落實 §3.3 的 Data Quality Gate——空值率、價格邏輯（`low <= open/close <= high`）、缺洞天數、成交量異常；
@@ -353,7 +360,7 @@ core/
 
 ## Phase 3：策略研究效率提升
 
-### Phase3-1. `us_fundamentals` ETL ⬜
+### Phase3-1. `us_fundamentals` ETL ⏸
 
 - **目的**：支援因子與基本面策略。
 - **做法**：補 `us_fundamentals_quarterly` 四層 ETL；**須同時記錄 `report_date` 與 `publish_date`**，回測一律以 `publish_date` 為可見時點，避免未來資料污染。
@@ -361,7 +368,7 @@ core/
 - **驗證方式**：查詢指定日期只回傳該日之前已公布的財報。
 - **相依**：Phase2-1。
 
-### Phase3-2. 參數掃描框架 ⬜
+### Phase3-2. 參數掃描框架 ⏸
 
 - **目的**：讓策略參數的敏感度可被系統性檢驗。
 - **做法**：建立 walk-forward / grid search 框架，批次產出參數組合的績效比較。框架與市場無關，台股策略同樣可用。
