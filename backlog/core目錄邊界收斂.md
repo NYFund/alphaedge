@@ -37,7 +37,7 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ⬜ | 只影響起跑時的 log，不影響交易日判定 |
+| Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
 | Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ⬜ | 相依 Phase1-1 |
 | Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ⬜ | 護欄清單見文末附錄 |
 | Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`run.py`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
@@ -51,7 +51,7 @@
 
 ## Phase1：切斷框架對資料管線的依賴
 
-### Phase1-1. 回測缺日診斷改用 `MarketHolidayAPI` ⬜
+### Phase1-1. 回測缺日診斷改用 `MarketHolidayAPI` ✅
 
 - **目的**：`TwStockDataFeed` 的缺日診斷（「區間內有 N 個平日沒有行情」那段 log）
   import 了 `core.pipeline.shared.date_planner` 的兩樣東西：
@@ -87,6 +87,30 @@
   4. 回歸雙線零變動（這段只寫 log，不影響交易日判定）。
 
 - **相依**：無。
+
+> **✅ 完成紀錄（2026-09-30）**
+> - `TwStockDataFeed.report_calendar_gaps()` 改用 `MarketHolidayAPI`：休市日取 `get_closures()`，
+>   年度以 `get_covered_years()` 分成「已涵蓋→歸因」與「未涵蓋→只報數字」兩段；
+>   平日改為就地的日期運算，不再 import `DatePlanner`／`DateProgressStore`。
+>   `grep -rnF "core.pipeline" core` 在 `core/pipeline/` 以外只剩 `core/dao/__init__.py` 的一句 docstring，import 為零。
+> - 颱風假：`market_holiday` 的來源是交易所年初公告的行事曆，**不含**臨時休市，
+>   這類日期會被列為「不在官方休市清單裡」；已寫進 docstring，屬刻意的保守行為。
+> - 改前改後（唯讀連本機 `tw_stock.db`）：
+>
+>   | 區間 | 改前 | 改後 |
+>   |------|------|------|
+>   | 2025-01-01～2025-12-31 | 18 個平日沒有行情、無法分辨（回傳 18） | 18 個皆為官方公告的休市日（回傳 0） |
+>   | 2024-01-01～2025-12-31 | 38 個、無法分辨（回傳 38） | 2025 的 18 個歸因；2024 未入庫的 20 個只報數字（回傳 20） |
+>
+>   `--target market_holiday` 只抓去年到明年，2024 以前的年度不會變精確，已寫進 docstring。
+> - 測試：`tests/backtest/test_market_calendar_bounds.py` 以三條測試取代原本兩條 `DateProgressStore` 版本
+>   （歸因官方休市、已涵蓋年度的真缺口、跨到未涵蓋年度只報數字）。
+> - 回歸：本步驟只改 log 與未被使用的回傳值，交易日集合不變，雙線不受影響。
+> - **順帶修正一個假綠燈**：`tests/test_dao_futures_margin.py` 的
+>   `test_chain_check_reports_a_gap_and_is_wired_into_update` 只把 loader 的下載目錄指到暫存區，
+>   鏈式比對卻從 cleaner 的目錄讀公告中繼檔——在主目錄它靠本機 `data/downloads/` 的真實 CSV 才會綠，
+>   在沒有 `data/` 的 worktree 就紅。`make_updater()` 改為一併指走 cleaner 的目錄，
+>   測試自己寫入所需的公告 CSV；拿掉那份 CSV 測試會轉紅（突變驗證）。
 
 ### Phase1-2. 分層檢查禁止框架 import `core.pipeline` ⬜
 
