@@ -10,13 +10,13 @@ from core.live.attribution.position_ledger import (
     UNATTRIBUTED_STRATEGY,
     PositionAttributionLedger,
 )
-from core.managers.base.position_manager import BasePositionManager
 from core.models import (
     BaseOrder,
     BrokerPositionSnapshot,
     ExecutionReport,
     StockOrder,
 )
+from core.position.base.position_manager import BasePositionManager
 from core.utils import Action, PositionType
 
 """

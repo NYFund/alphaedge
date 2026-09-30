@@ -26,7 +26,7 @@ graph TB
         Execution["core/execution<br/>送單前處理：方向白名單<br/>持倉上限、曝險、決定性排序"]
         DataFeedBase["core/datafeed<br/>BaseDataFeed 契約"]
         Market["core/market<br/>交易日曆／換月／保證金設定<br/>商品規格／成本模型"]
-        Managers["core/managers<br/>部位與帳務"]
+        Managers["core/position<br/>部位與帳務"]
     end
 
     subgraph backtest_layer ["回測引擎（市場無關）"]
@@ -139,7 +139,7 @@ graph TB
 
 **市場差異全部下沉為可插拔的 model。** `Backtester` 市場無關、沒有子類；`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed` 由 `core/backtest/factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝，新增一個（市場, 商品）組合不必改 `backtester.py` 一行。實盤那側由 `core/live/factory.py` 做同一件事。其中 `InstrumentSpec` 與 `CostModel` 是市場規則（跳動點、漲跌停、費率），回測與實盤共用同一份，放在 `core/market/`；`FillModel` 與 `SettlementModel` 是回測模擬，留在 `core/backtest/models/`。
 
-**共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、送單前處理（`core/execution/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/managers/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
+**共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、送單前處理（`core/execution/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/position/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
 
 詳見[多市場回測引擎架構](docs/backtest/multi-market-engine.md)與[模組使用關係](docs/backtest/module-map.md)。
 
@@ -447,7 +447,7 @@ AlphaEdge/
 │   ├── market/                # 市場結構與規則：交易日曆、期貨換月、保證金設定、商品規格、成本模型
 │   ├── portfolio/             # 部位建構（回測與實盤共用）：signal／sizing／construction／aggregation
 │   ├── execution/             # 送單前處理（回測與實盤共用）：方向白名單、持倉上限、曝險、排序
-│   ├── managers/              # 倉位管理器（base/ ＋ stock/ ＋ futures/）
+│   ├── position/              # 部位記帳（base/ ＋ stock/ ＋ futures/ 的 position_manager.py）
 │   ├── models/                # 領域模型（base/ ＋ stock/ ＋ futures/）
 │   ├── utils/                 # 共用工具（enum、時間、日誌、Shioaji 帳號）
 │   ├── config/                # 路徑、資料表 schema 與設定常數（全專案最底層）

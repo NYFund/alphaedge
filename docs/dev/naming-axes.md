@@ -57,7 +57,7 @@
 | `core/live/datafeed/` | 實盤資料源（歷史資料到 T−1 ＋ 當日券商報價）：`base.py`、`calendar.py`（盤前交易日判定）為市場無關底座，股票與期貨實作放 `tw/` |
 | `core/broker/` | 券商閘道（送單、收回報、查帳務）：`base.py`（`BaseBroker`）等市場無關元件放根目錄，永豐金 Shioaji 的實作放 `tw/`（`shioaji_*.py`） |
 | `core/pipeline/{shared,tw,utils}/` | 目錄**只承載軸 A**（`tw/`，未來 `us/`）；商品類別由檔名承載（`stock_price_crawler.py` vs `futures_price_crawler.py`）。base 類別放 `shared/`，否則 `us/` 會反過來相依 `tw/`。**`utils/` 是層不是軸**，只放跨市場通用的工具；綁定單一市場的工具歸 `tw/utils/`（見下）|
-| `core/strategies/`、`core/models/`、`core/managers/` | 子目錄承載**軸 B**（`base/` ＋ `stock/` ＋ `futures/`）。`strategy_loader` 逐一掃描這些子套件，新增商品類別不需改程式 |
+| `core/strategies/`、`core/models/`、`core/position/` | 子目錄承載**軸 B**（`base/` ＋ `stock/` ＋ `futures/`）。`strategy_loader` 逐一掃描這些子套件，新增商品類別不需改程式 |
 | `core/portfolio/` | **不承載任何軸**，是平的一層：`signal.py`、`sizing.py`、`construction.py`、`aggregation.py`。商品差異由**類別名**承載（`StockPortfolioConstructor` vs `FuturesPortfolioConstructor`），不開 `stock/`／`futures/` 子目錄——這一層檔案少、且回測與實盤共用，開子目錄只會讓少數幾個檔案各自躺在一個資料夾裡。日後若某個市場需要自己的資金切分規則，再依軸 A 開 `tw/` |
 | `data/db/` | 檔名帶軸 A：`tw_stock.db`、`tw_futures.db`、`tw_trading.db`（實盤交易紀錄；常數 `TW_STOCK_DB_PATH`／`TW_FUTURES_DB_PATH`／`TW_TRADING_DB_PATH`） |
 | `core/pipeline/tw/crawlers/financial_statement_crawler.py` | `self.listing_boards`（軸 C） |

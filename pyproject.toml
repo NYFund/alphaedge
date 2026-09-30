@@ -72,8 +72,8 @@ lab = [
 ]
 
 [tool.setuptools.packages.find]
-# `core.managers` 等目錄沒有 __init__.py，靠 PEP 420 namespace package 運作，
-# 故 namespaces 必須為 true，否則 editable 安裝後 `core.managers.*` 會 import 不到
+# `core.position` 等目錄沒有 __init__.py，靠 PEP 420 namespace package 運作，
+# 故 namespaces 必須為 true，否則 editable 安裝後 `core.position.*` 會 import 不到
 namespaces = true
 include = ["core*", "apps*", "tasks*", "tests*"]
 exclude = [

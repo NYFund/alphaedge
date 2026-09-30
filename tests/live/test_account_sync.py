@@ -11,8 +11,6 @@ from core.live.attribution.position_ledger import (
 )
 from core.live.factory import _build_futures_order
 from core.live.reconciler import Reconciler, ReconcileResult
-from core.managers.futures.position_manager import FuturesPositionManager
-from core.managers.stock.position_manager import StockPositionManager
 from core.models import (
     BrokerPositionSnapshot,
     ExecutionReport,
@@ -22,6 +20,8 @@ from core.models import (
     StockOrder,
     StockPositionSnapshot,
 )
+from core.position.futures.position_manager import FuturesPositionManager
+from core.position.stock.position_manager import StockPositionManager
 from core.utils import Action, PositionType, StockOrderCond
 
 """

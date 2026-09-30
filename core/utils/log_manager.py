@@ -57,7 +57,7 @@ class LogManager:
         "backtest": (
             "core.backtest",
             "core.strategies",
-            "core.managers",
+            "core.position",
             "core.models",
             "core.adapters",
             "strategy_lab",

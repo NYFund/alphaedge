@@ -3,10 +3,6 @@ from typing import List, Optional
 
 import pytest
 
-from core.managers.futures.position_manager import (
-    FuturesMarginConfig,
-    FuturesPositionManager,
-)
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.models import (
     FuturesAccount,
@@ -15,6 +11,10 @@ from core.models import (
     FuturesTradeRecord,
 )
 from core.models.cost_config import FuturesCostConfig
+from core.position.futures.position_manager import (
+    FuturesMarginConfig,
+    FuturesPositionManager,
+)
 from core.utils import Action, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
 

@@ -43,7 +43,7 @@
 | Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
 | Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
-| Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ⬜ | 排在 `回測與實盤入口拆分及架構收斂.md` Phase3 之後 |
+| Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成；回歸雙線零變動。主目錄待 10/1 演練後更新 |
 | Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ⬜ | 排在 Phase2、Phase5 之後，避免 COPY 清單改兩次 |
 | Phase5-1 | `core/pipeline/` 搬到頂層 `pipeline/` | `pipeline/**`、`tasks/update_db.py`、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；`tasks/update_db.py` 各 target 冒煙；`core` 對 `pipeline` 的 import 為零；附錄護欄全數涵蓋 `pipeline/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次 |
 
@@ -255,7 +255,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 
 ## Phase3：`core/managers/` 改名
 
-### Phase3-1. `core/managers/` 改名為 `core/position/` ⬜
+### Phase3-1. `core/managers/` 改名為 `core/position/` ✅
 
 - **目的**：`core/managers/` 底下只有 `base/`、`stock/`、`futures/` 三支 `position_manager.py`，
   職責是部位記帳（FIFO 拆單、成本攤提、損益）。`managers` 這個名稱不說明職責，
@@ -270,6 +270,20 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 - **驗證方式**：回歸雙線零變動；`grep -rn "core[./]managers" .` 為零；分層檢查 0 違規。
 - **相依**：建議排在 `回測與實盤入口拆分及架構收斂.md` Phase3 之後——該階段要改
   `core/managers` 對 `core.backtest.models` 的 import，兩邊同時動會互相衝突。
+
+> **✅ 完成紀錄（2026-10-01）**
+> - `git mv core/managers core/position`，三支 `position_manager.py` 與類別名不變。
+> - 呼叫端：生產碼 14 檔、測試 15 檔的 import；`scripts/check_layer_deps.py` 的分層登記與 `_INSTRUMENT_AXIS_PACKAGES`；
+>   `core/utils/log_manager.py` 的 `BUCKET_PREFIXES`（不跟著改的話，部位記帳的 log 不再被 backtest 桶認領，會靜默改落進總括桶）；
+>   `pyproject.toml` 的 namespace package 註解；`core/` 內三處提到路徑的 docstring。
+> - 文件：README 兩份（專案樹、英文版目錄說明）、`docs/` 六份。
+> - 其他 backlog：`暫緩工作彙整.md` S12 的產出、`美股ETL與回測架構規劃.md` 的目錄落點表與〈4.1〉對照表、
+>   `回測與實盤入口拆分及架構收斂.md` 的 Abstract 驗收標準 3 改成新路徑；已完成步驟的紀錄（含 `重構後全專案健檢.md` 全部、
+>   `實盤下單架構規劃.md` Phase0-4／Phase6-5）與問題的原始描述不改。
+> - 驗證：`git grep -nE "core[./]managers" -- ':!backlog'` 為零；回歸雙線（資料庫快照）SHORT 6 passed、LONG 1 passed 無 skip；
+>   `pytest` 2469 passed；`check_layer_deps.py` 0；`check_doc_paths.py` 0。
+> - **主目錄尚未更新到本步**：`core/live/` 的 import 路徑隨之改變，依 `回測與實盤入口拆分及架構收斂.md` Phase1-6 的安排，
+>   10/1 主目錄維持在 `01fade7`，待新入口跑完一個交易日後再於段落空檔更新（屆時常駐行程無需重啟：每個段落都是新行程）。
 
 ---
 

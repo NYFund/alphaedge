@@ -11,8 +11,6 @@ from core.backtest.models.settlement_model import (
 from core.backtest.overrides import BacktestOverrides
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
-from core.managers.futures.position_manager import FuturesPositionManager
-from core.managers.stock.position_manager import StockPositionManager
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
@@ -20,6 +18,8 @@ from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.models import FuturesAccount, StockAccount
 from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.models.fill_config import FillConfig, FuturesFillConfig
+from core.position.futures.position_manager import FuturesPositionManager
+from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy

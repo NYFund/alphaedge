@@ -26,7 +26,7 @@ graph TB
         Execution["core/execution<br/>pre-submit: direction whitelist<br/>max holdings, exposure, ordering"]
         DataFeedBase["core/datafeed<br/>BaseDataFeed contract"]
         Market["core/market<br/>calendars / contract roll / margin config<br/>instrument spec / cost model"]
-        Managers["core/managers<br/>positions & accounting"]
+        Managers["core/position<br/>positions & accounting"]
     end
 
     subgraph backtest_layer ["Backtest Engine (market-agnostic)"]
@@ -139,7 +139,7 @@ graph TB
 
 **Market-specific behavior is pushed down into pluggable models.** `Backtester` is market-agnostic with no subclasses; `InstrumentSpec`, `FillModel`, `CostModel`, `SettlementModel` and `DataFeed` are assembled by `core/backtest/factory.py` from the `market` + `instrument_type` a strategy declares, so adding a (market, instrument) combination never touches `backtester.py`. `core/live/factory.py` does the same job on the live side. `InstrumentSpec` and `CostModel` are market rules (tick size, price limits, fees) shared by both engines, so they live in `core/market/`; `FillModel` and `SettlementModel` are backtest simulation and stay in `core/backtest/models/`.
 
-**The shared-contract layer is the intersection of the two engines**: position construction (`core/portfolio/`), pre-submit processing (`core/execution/`), the data-feed contract (`core/datafeed/`), market structure (`core/market/`) and position accounting (`core/managers/`) belong to neither engine; both import them. **Every shared rule is written once** — max holdings and single-symbol exposure, for instance, block the same orders in live as they do in backtest.
+**The shared-contract layer is the intersection of the two engines**: position construction (`core/portfolio/`), pre-submit processing (`core/execution/`), the data-feed contract (`core/datafeed/`), market structure (`core/market/`) and position accounting (`core/position/`) belong to neither engine; both import them. **Every shared rule is written once** — max holdings and single-symbol exposure, for instance, block the same orders in live as they do in backtest.
 
 See [Multi-Market Engine](docs/backtest/multi-market-engine.md) and [Module Map](docs/backtest/module-map.md).
 
@@ -176,7 +176,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 
 | Module          | Description                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `core/`         | Core trading domain code (strategies, managers, models, adapters, API, data access layer, ETL, backtest engine; outputs land in the top-level `results/`) |
+| `core/`         | Core trading domain code (strategies, position bookkeeping, models, adapters, API, data access layer, ETL, backtest engine; outputs land in the top-level `results/`) |
 | `core/live/`    | Live trading: per-phase lifecycle, order management (OMS), position attribution, reconciliation, risk control and after-close work |
 | `core/broker/`  | Broker integration (currently Shioaji): login, contract resolution, order mapping, report normalization and quote subscription |
 | `core/execution/` | Pre-submit processing shared by backtest and live: direction whitelist, max holdings, single-symbol exposure, deterministic ordering |
@@ -450,7 +450,7 @@ AlphaEdge/
 │   ├── market/                # market structure and rules: trading calendars, futures roll, margin config, instrument spec, cost model
 │   ├── portfolio/             # position construction (shared): signal / sizing / construction / aggregation
 │   ├── execution/             # pre-submit processing (shared): direction whitelist, max holdings, exposure, ordering
-│   ├── managers/              # position managers (base/ + stock/ + futures/)
+│   ├── position/              # position bookkeeping (position_manager.py under base/ + stock/ + futures/)
 │   ├── models/                # domain models (base/ + stock/ + futures/)
 │   ├── utils/                 # shared helpers (enums, time, logging, Shioaji account)
 │   ├── config/                # paths, table schema and settings constants (lowest layer)

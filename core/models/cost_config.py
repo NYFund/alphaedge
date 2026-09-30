@@ -16,7 +16,7 @@ from core.utils import (
 
 **與成本模型本體分開**：`StockCostModel`／`TwFuturesCostModel` 是回測引擎的可插拔
 model，而這三個 dataclass 只是參數容器——策略層、部位管理層與實盤組裝層都要建一份。
-放在 `core/backtest/models/` 的話，`core/managers/` 為了拿一個 dataclass 就得
+放在 `core/backtest/models/` 的話，`core/position/` 為了拿一個 dataclass 就得
 import 回測套件，那是部位管理層不該有的方向。
 
 三個類別**刻意不合併**：`ShortConstraint` 是「可不可以放空」的市場限制，
