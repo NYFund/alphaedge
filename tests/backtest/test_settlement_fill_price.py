@@ -8,12 +8,7 @@ from core.backtest.models.cost_model import (
     StockCostModel,
     TwFuturesCostModel,
 )
-from core.backtest.models.fill_model import (
-    FillConfig,
-    FuturesFillConfig,
-    TwFuturesFillModel,
-    TwStockFillModel,
-)
+from core.backtest.models.fill_model import TwFuturesFillModel, TwStockFillModel
 from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
     TwStockSettlementModel,
@@ -34,6 +29,7 @@ from core.models import (
     StockPosition,
     StockQuote,
 )
+from core.models.fill_config import FillConfig, FuturesFillConfig
 from core.utils import Action, PositionType, Scale, ShortMethod
 from tests.conftest import build_stock_quote
 

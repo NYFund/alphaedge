@@ -3,10 +3,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from core.backtest.models.fill_model import FillConfig, VolumeCapPolicy
 from core.datafeed.base import BaseDataFeed
 from core.market.tw.market_calendar import MarketCalendar
 from core.models import StockAccount, StockPosition, StockQuote
+from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, Units

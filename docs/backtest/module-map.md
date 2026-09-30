@@ -266,11 +266,13 @@ sequenceDiagram
 | `core/pipeline/tw/updaters/*` → `core/api/tw/*`（期貨行情、標的池 API） | 單向：api 已不再 import pipeline（欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`） |
 | `core/pipeline/tw/` → `core/market/tw/`（`futures_calendar`、`futures_roll`） | 交易日曆與換月規則屬市場結構，**已經住在 `core/market/`**，與 pipeline 同層。清洗連續合約需要換月規則，是刻意的 |
 | `core/backtest/models/settlement_model/` → `core/managers/*/position_manager.py` | 期貨轉倉與股票的除權息記帳需要 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
-| **策略層仍 import `core/backtest/models/fill_model.py` 的 `FillConfig`／`FuturesFillConfig`／`VolumeCapPolicy`**（3 檔 3 處） | 只剩**成交假設**這一組。成本設定已搬到 `core/models/`、日曆與換月已搬到 `core/market/`、`sizing.py` 已搬到 `core/portfolio/`；成交假設沒跟著搬，是因為它與 `FillModel` 的實作綁得最緊，搬動會牽動所有成交路徑的呼叫端 |
 
-**已經解決、不再列入的三條**（留紀錄以免有人照舊文件重新引入）：
+**已經解決、不再列入的四條**（留紀錄以免有人照舊文件重新引入）：
 
 - `core/utils/instrument.py` 曾 import 引擎層的日曆，現在它**不 import 任何 `core/` 模組**。
+- 策略層曾 import `core/backtest/models/fill_model.py` 的 `FillConfig`／`FuturesFillConfig`／`VolumeCapPolicy`，
+  現在這三個設定類別在 `core/models/fill_config.py`（與 `core/models/cost_config.py` 對稱），
+  `fill_model.py` 只留模擬邏輯。
 - `core/portfolio/construction.py` 曾從 `core/managers/futures/position_manager.py` 取
   `FuturesMarginConfig`，現在取自 `core/market/tw/futures_margin_config.py`（正常向下相依）。
 - 策略層曾 import `BaseDataFeed`、`CostConfig`／`FuturesCostConfig`、`MarketCalendar`、

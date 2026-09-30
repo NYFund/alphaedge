@@ -169,7 +169,7 @@ class FuturesCostConfig:
     明顯低於大台，用同一個數字會高估小台的成本。
 
     **本設定不含滑價**：滑價屬「成交假設」不是「費用」，與台股同一種切法放在
-    `FuturesFillConfig`（`core/backtest/models/fill_model.py`），
+    `FuturesFillConfig`（`core/models/fill_config.py`），
     且期貨以**跳動點**表達而非基點。
     """
 

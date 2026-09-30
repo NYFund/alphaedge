@@ -16,7 +16,7 @@
     12. `report/`、`notify/`：實盤報表、parity 與告警推播
 
 **套件層刻意不 eager import 任何子模組**（作法與 `core/backtest/__init__.py` 相同）：
-`core.live.factory` 會 import 到策略層，而策略層的市場基底又要 import 回測的
-**成交假設**（`FillConfig`／`FuturesFillConfig`），在套件層先 import 會讓三者
-形成循環。要用哪個元件就直接 import 那個模組。
+`core.live.factory` 會 import 到策略層與回測組裝層，在套件層先 import 的話，
+任何只想用一個元件的呼叫端都要付整串相依的成本，也更容易繞出循環。
+要用哪個元件就直接 import 那個模組。
 """
