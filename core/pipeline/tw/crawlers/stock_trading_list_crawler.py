@@ -23,9 +23,12 @@ from core.utils import TimeUtils
 **回應的 `date` 一定要核對**：TPEX 收到非斜線格式的日期時不報錯，而是靜靜回傳
 近幾日的資料；拿錯天的名單入庫，回測擋單會整段錯位且沒有任何徵兆。
 
-**交易日回 0 列算失敗，不算查無資料**：兩份名單在任何交易日都有上千檔，
-0 列只可能是站方異常或查詢日期早於起點（TPEX 在起點之前回 `ok`、0 列）。
-記成查無資料會讓那一天永遠不再補，回測又會把「名單是空的」讀成「全部不得放空」。
+**日期相符的 0 列算查無資料**：櫃買中心在休市日回 `ok`、查詢日、0 列（2026-10-02 實查），
+記成失敗的話每個平日休市日都會在每次更新時被重抓。這樣判是安全的：
+- 查無資料的那天**不會入庫**，不會出現「名單是空的、於是全部不得放空」的情況。
+- 只有一個市場回 0 列時，那天仍是部分取得，整天記為失敗、下次重試（`DailyTwoMarketUpdater.record_market_day()`）。
+- 名單起點之前（TPEX 同樣回 `ok`、0 列）由 updater 把起日夾到起點，不會去請求。
+- 當天與未來的查無資料不寫進永久名單，盤後尚未公布不會被永久跳過（`DateProgressStore.record_no_data()`）。
 """
 
 
@@ -122,7 +125,7 @@ class StockTradingListCrawler(BaseDataCrawler):
                 從整份 JSON 取出「含 `fields` 與 `data` 的那一層」
         - Return:
             - CrawlResult
-                站方明確回覆查無資料為 `NO_DATA`；連線、解析、日期不符或 0 列為 `FAILED`
+                站方明確回覆查無資料、或查詢日的 0 列為 `NO_DATA`；連線、解析或日期不符為 `FAILED`
         """
 
         logger.info(f"* Start crawling {label}")
@@ -153,6 +156,15 @@ class StockTradingListCrawler(BaseDataCrawler):
             )
             return CrawlResult.failed("date_mismatch")
 
+        # 休市日的表格形狀與交易日不同（證交所當沖名單：第一張是 0 列的名單、第二張是 `{}`），
+        # 照交易日的位置挑表會挑到空物件；日期相符且每張表都沒有資料，就是當天沒有名單
+        tables: List[Any] = payload.get("tables") or []
+        if tables and all(
+            isinstance(each, dict) and not each.get("data") for each in tables
+        ):
+            logger.info(f"{label}: 查詢日的每一張表都是 0 列（休市或尚未公布）")
+            return CrawlResult.no_data("查詢日的每一張表都是 0 列")
+
         table: Optional[Dict[str, Any]] = locate(payload)
         if table is None:
             logger.warning(
@@ -167,8 +179,38 @@ class StockTradingListCrawler(BaseDataCrawler):
             logger.warning(f"{label}: 回應中沒有欄位定義")
             return CrawlResult.failed("no_fields_in_payload")
 
-        if not rows:
-            logger.warning(f"{label}: 交易日的名單為 0 列，記為失敗待重試")
-            return CrawlResult.failed("empty_list")
+        if not rows or self.is_date_placeholder(rows, date):
+            logger.info(f"{label}: 查詢日的名單為 0 列（休市或尚未公布）")
+            return CrawlResult.no_data("查詢日的名單為 0 列")
+
+        # 欄數對不上就交給 `pd.DataFrame` 的話會拋 `ValueError`，一路炸穿整批更新；
+        # 這是版面異常，記為失敗、下次重試
+        if any(len(row) != len(fields) for row in rows):
+            logger.warning(f"{label}: 資料列欄數與欄位定義（{len(fields)} 欄）不符")
+            return CrawlResult.failed("row_width_mismatch")
 
         return CrawlResult.ok(pd.DataFrame(rows, columns=fields))
+
+    @staticmethod
+    def is_date_placeholder(rows: List[List[Any]], date: datetime.date) -> bool:
+        """
+        - Description:
+            是否為櫃買中心「當天沒有名單」的佔位列：只有一列、唯一的值是民國年的查詢日
+
+            櫃買中心平盤下名單在休市日回 `[['1150925']]`（2026-10-02 實查），
+            名單起點之前也是同一個形狀。判準刻意寫窄（值必須等於查詢日），
+            其他欄數不符的情況仍算版面異常。
+        - Parameters:
+            - rows: List[List[Any]]
+                回應的 `data`
+            - date: datetime.date
+                查詢日
+        - Return:
+            - bool
+                是佔位列為 True
+        """
+
+        roc_date: str = f"{date.year - 1911}{date:%m%d}"
+        return len(rows) == 1 and [str(value).strip() for value in rows[0]] == [
+            roc_date
+        ]

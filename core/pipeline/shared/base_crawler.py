@@ -1,13 +1,14 @@
+import datetime
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from io import StringIO
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
 
-from core.pipeline.shared.request_utils import FetchResult, FetchStatus
+from core.pipeline.shared.request_utils import FetchResult, FetchStatus, RequestUtils
 
 """
 所有「取某一天資料」的 crawler 的共同基底，以及**三種結果的分流**
@@ -28,6 +29,12 @@ from core.pipeline.shared.request_utils import FetchResult, FetchStatus
 **「解析不出表格」歸在 FAILED 而不是 NO_DATA** 是刻意的：站方真的沒資料時會回
 明確訊息，解析不出來代表版面改了或拿到錯誤頁，那是需要人看的狀況。
 寧可多幾次重試，也不要讓改版靜靜變成「這一年都休市」。
+
+**例外是兩站的 HTML 休市頁**（2026-10-02 實查）：證交所回一頁沒有表格、沒有任何文字的空白報表，
+櫃買中心融資融券也沒有表格——HTML 本身無從判斷是休市還是改版，以前一律記為失敗，
+於是每個平日休市日都在每次更新時被重抓。解法是**同一個端點改問 JSON 版**：
+證交所會明說查無資料，櫃買中心會回查詢日的 0 列；JSON 也拿到資料的話仍是 FAILED。
+判準來自站方的明確回應，不是猜頁面長相（見 `confirm_no_data_by_json()`）。
 """
 
 
@@ -199,12 +206,100 @@ class BaseDataCrawler(ABC):
 
         return None
 
+    @staticmethod
+    def is_placeholder_table(df: pd.DataFrame) -> bool:
+        """
+        - Description:
+            表格是否只有「一列文字橫跨整列」的佔位列
+
+            櫃買中心休市日的收盤行情與三大法人回一張只有表頭、「共0筆」與註解列的表；
+            `pd.read_html()` 會把跨欄的那一列展開成「每一格都是同一句話」。
+            真正的資料列一定至少有代號與名稱兩種不同的值，故判準是「每一列都只有一種值」。
+            **只用在兩欄以上的表**：單欄的表每一列本來就只有一種值，套用會把真資料當成佔位。
+        - Parameters:
+            - df: pd.DataFrame
+                解析出的表格
+        - Return:
+            - bool
+                全部都是佔位列（或沒有任何列）為 True
+        """
+
+        if len(df.columns) < 2:
+            return False
+
+        return all(row.astype(str).nunique() <= 1 for _, row in df.iterrows())
+
+    @staticmethod
+    def json_variant(url: str) -> str:
+        """同一端點的 JSON 版網址：兩站的 HTML 與 JSON 只差 `response` 參數"""
+
+        if "response=html" not in url:
+            raise ValueError(f"網址沒有 response=html，無法換成 JSON 版：{url}")
+        return url.replace("response=html", "response=json")
+
+    @classmethod
+    def confirm_no_data_by_json(cls, url: str, date: datetime.date, label: str) -> bool:
+        """
+        - Description:
+            HTML 解析不出表格時，改問同一端點的 JSON 版確認是不是「當天沒有資料」
+
+            兩站的 JSON 版各有明確的「沒有資料」寫法（2026-10-02 實查）：
+            - 證交所：`stat` 為「很抱歉，沒有符合條件的資料!」這類查無資料訊息
+            - 櫃買中心：`date` 等於查詢日、每一張表都是 0 列
+
+            **其餘一律回 False**（連線失敗、JSON 有資料、日期不符）：HTML 拿不到表格、
+            JSON 卻有資料，代表 HTML 版面改了，那仍是要人看的失敗。
+        - Parameters:
+            - url: str
+                JSON 版的網址
+            - date: datetime.date
+                查詢日
+            - label: str
+                來源與日期的描述，只用於訊息
+        - Return:
+            - bool
+                站方明確表示當天沒有資料為 True
+        """
+
+        result: FetchResult = RequestUtils.fetch(url)
+        if not result.ok:
+            return False
+
+        try:
+            payload: Any = result.response.json()
+        except ValueError:
+            return False
+        # 確認流程的任何意外都只能讓結果維持失敗，不可以拋出去中斷整批更新
+        if not isinstance(payload, dict):
+            return False
+
+        if cls.looks_like_no_data(str(payload.get("stat", ""))):
+            logger.info(
+                f"{label}: JSON 版回覆查無資料（{payload.get('stat')}），判為休市"
+            )
+            return True
+
+        tables: List[Dict[str, Any]] = payload.get("tables") or []
+        expected: str = date.strftime("%Y%m%d")
+        if (
+            str(payload.get("date", "")) == expected
+            and tables
+            and all(
+                isinstance(table, dict) and not table.get("data") for table in tables
+            )
+        ):
+            logger.info(f"{label}: JSON 版為查詢日的 0 列，判為休市")
+            return True
+
+        return False
+
     @classmethod
     def parse_html_table(
         cls,
         result: FetchResult,
         label: str,
         index: int = 0,
+        no_data_probe: Optional[Tuple[str, datetime.date]] = None,
         **read_html_kwargs,
     ) -> CrawlResult:
         """
@@ -220,6 +315,9 @@ class BaseDataCrawler(ABC):
                 來源與日期的描述，只用於訊息
             - index: int
                 要取第幾張表（`pd.read_html()` 的結果索引，可為負）
+            - no_data_probe: Optional[Tuple[str, datetime.date]]
+                `(JSON 版網址, 查詢日)`；解析不出表格時用它確認是否休市
+                （見 `confirm_no_data_by_json()`），None 時維持記為失敗
             - read_html_kwargs
                 原樣轉給 `pd.read_html()`（例如 `converters`）
         - Return:
@@ -238,13 +336,17 @@ class BaseDataCrawler(ABC):
             # 解析失敗（見 `HTML_PARSE_ERRORS`）之外多收一個 `IndexError`：
             # 表格數量少於預期時取索引會拋它，同樣是「版面變了」。
             # 其餘例外（例如參數給錯）代表呼叫端寫錯，要讓它現形
+            if no_data_probe is not None and cls.confirm_no_data_by_json(
+                no_data_probe[0], no_data_probe[1], label
+            ):
+                return CrawlResult.no_data("JSON 版確認當天沒有資料")
             logger.warning(
                 f"{label}: 版面解析失敗（{type(error).__name__}: {error}）；"
                 f"這**不是**休市，站方沒資料時會回明確訊息"
             )
             return CrawlResult.failed(f"parse_error: {type(error).__name__}")
 
-        if df.empty:
+        if df.empty or cls.is_placeholder_table(df):
             logger.info(f"{label}: 表格為空（休市或尚未公布）")
             return CrawlResult.no_data("表格為空")
 
