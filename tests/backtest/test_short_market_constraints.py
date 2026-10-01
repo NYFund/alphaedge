@@ -50,8 +50,8 @@ def test_shift_trading_days_skips_weekends() -> None:
     """往前推 4 個營業日必須跳過週末，不可用曆日相減"""
 
     # 1/10 往前推 4 個營業日 → 1/4（中間的 1/6、1/7 為週末，不計）
-    shifted: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-        TRADING_DAYS, datetime.date(2024, 1, 10), -4
+    shifted: Optional[datetime.date] = MarketCalendar(TRADING_DAYS).shift_trading_days(
+        datetime.date(2024, 1, 10), -4
     )
 
     assert shifted == datetime.date(2024, 1, 4)
@@ -61,7 +61,7 @@ def test_shift_trading_days_returns_none_when_out_of_range() -> None:
     """推算結果早於清單起點時回傳 None，代表交易日資料不足以推算"""
 
     assert (
-        MarketCalendar.shift_trading_days(TRADING_DAYS, datetime.date(2024, 1, 3), -4)
+        MarketCalendar(TRADING_DAYS).shift_trading_days(datetime.date(2024, 1, 3), -4)
         is None
     )
 
@@ -69,8 +69,8 @@ def test_shift_trading_days_returns_none_when_out_of_range() -> None:
 def test_shift_trading_days_accepts_non_trading_base_date() -> None:
     """基準日為非交易日時，以不早於它的第一個交易日為準（1/6 → 1/8）"""
 
-    shifted: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-        TRADING_DAYS, datetime.date(2024, 1, 6), -1
+    shifted: Optional[datetime.date] = MarketCalendar(TRADING_DAYS).shift_trading_days(
+        datetime.date(2024, 1, 6), -1
     )
 
     assert shifted == datetime.date(2024, 1, 5)

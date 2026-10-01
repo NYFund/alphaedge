@@ -159,13 +159,13 @@ class MomentumStrategy1(BaseStockStrategy):
         # 早已超出區間；超出時平移會落到清單最後一天（一年多前），
         # 策略就拿那天的收盤當「昨收」算漲幅，而且不會有任何錯誤
         if self.trading_days and date <= self.trading_days[-1]:
-            previous: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-                self.trading_days, date, offset=-1
-            )
+            previous: Optional[datetime.date] = MarketCalendar(
+                self.trading_days
+            ).shift_trading_days(date, offset=-1)
             if previous is not None:
                 return previous
 
-        return MarketCalendar.get_last_trading_date(api=self.price, date=date)
+        return MarketCalendar.previous_trading_day_from_api(self.price, date)
 
     def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
         """開倉訊號：昨收基準漲幅達門檻且成交量達門檻，做多；張數由 portfolio 層依 max_holdings 與資金切分決定"""

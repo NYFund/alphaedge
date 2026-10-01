@@ -146,13 +146,13 @@ class TrustMomentumSwingStrategy(BaseStockStrategy):
         """
 
         if self.trading_days and date <= self.trading_days[-1]:
-            previous: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-                self.trading_days, date, offset=-1
-            )
+            previous: Optional[datetime.date] = MarketCalendar(
+                self.trading_days
+            ).shift_trading_days(date, offset=-1)
             if previous is not None:
                 return previous
 
-        return MarketCalendar.get_last_trading_date(api=self.price, date=date)
+        return MarketCalendar.previous_trading_day_from_api(self.price, date)
 
     def count_holding_days(
         self, open_date: datetime.date, date: datetime.date

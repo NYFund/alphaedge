@@ -118,7 +118,7 @@ class TwStockDataFeed(BaseDataFeed):
             return date in self.trading_days
 
         # `setup()` 尚未跑過（單元測試直接呼叫）時退回逐日查詢
-        return MarketCalendar.check_stock_market_open(api=self.price, date=date)
+        return MarketCalendar.from_api(self.price, date, date).is_trading_day(date)
 
     def report_calendar_gaps(self) -> int:
         """
@@ -375,15 +375,14 @@ class TwStockDataFeed(BaseDataFeed):
             self._suspension_schedule = (trading_days, [])
             return self._suspension_schedule
 
+        calendar: MarketCalendar = MarketCalendar(trading_days)
         schedule: List[Tuple[str, datetime.date, datetime.date]] = []
         for ex_date, stock_id in zip(
             pd.to_datetime(ex_dividend_df["date"]).dt.date,
             ex_dividend_df["stock_id"].astype(str),
         ):
-            cover_date: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-                trading_days,
-                ex_date,
-                -self.FORCE_COVER_TRADING_DAYS_BEFORE_EX_DATE,
+            cover_date: Optional[datetime.date] = calendar.shift_trading_days(
+                ex_date, -self.FORCE_COVER_TRADING_DAYS_BEFORE_EX_DATE
             )
             # 往前多抓之後仍推不出來，代表交易日資料本身不足，不猜
             if cover_date is None:

@@ -252,11 +252,14 @@ from core.market.tw.market_calendar import MarketCalendar
 
 price = StockPriceAPI()
 
-# 1) 某日是否為台股開盤日
-is_open = MarketCalendar.check_stock_market_open(api=price, date=datetime.date(2024, 1, 2))
+# 1) 一次取一段區間的交易日曆（判準：price 表當日有資料），之後的查詢都不再碰資料庫
+calendar = MarketCalendar.from_api(price, datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+is_open = calendar.is_trading_day(datetime.date(2024, 1, 2))
+prev_td = calendar.get_previous_trading_day(datetime.date(2024, 1, 2))  # 嚴格早於指定日；清單內沒有時為 None
+t_minus_4 = calendar.shift_trading_days(datetime.date(2024, 7, 15), -4)  # 往前推 4 個營業日
 
-# 2) 取得「嚴格早於指定日」的前一個交易日（會自動跳過休市日）
-prev_td = MarketCalendar.get_last_trading_date(api=price, date=datetime.date(2024, 1, 2))
+# 2) 手上沒有涵蓋該日的清單時，直接向資料庫要前一個交易日（往前最多找 90 個曆日）
+prev_td = MarketCalendar.previous_trading_day_from_api(price, datetime.date(2024, 1, 2))
 ```
 
 ---

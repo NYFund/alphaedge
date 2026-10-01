@@ -261,8 +261,8 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
         return []
 
     # 取得前一個交易日（非日曆昨日）
-    yesterday: datetime.date = MarketCalendar.get_last_trading_date(
-        api=self.price, date=stock_quotes[0].date
+    yesterday: datetime.date = MarketCalendar.previous_trading_day_from_api(
+        self.price, stock_quotes[0].date
     )
 
     # 訊號用收盤價：與下方的 signal_close 成對，由引擎的還原模式統一決定
