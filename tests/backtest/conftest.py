@@ -4,7 +4,13 @@ from typing import Callable, Dict, List, Optional, Set
 import pytest
 
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
-from core.models import StockAccount, StockOrder, StockQuote
+from core.models import (
+    DayTradeListSnapshot,
+    ShortSaleListSnapshot,
+    StockAccount,
+    StockOrder,
+    StockQuote,
+)
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, ShortMethod
 
@@ -124,8 +130,22 @@ class ScriptedDataFeed(TwStockDataFeed):
         self,
         force_cover_script: Optional[Dict[datetime.date, Set[str]]] = None,
         cash_dividend_script: Optional[Dict[datetime.date, Dict[str, float]]] = None,
+        short_sale_list_script: Optional[
+            Dict[datetime.date, ShortSaleListSnapshot]
+        ] = None,
+        day_trade_list_script: Optional[
+            Dict[datetime.date, DayTradeListSnapshot]
+        ] = None,
     ) -> None:
         super().__init__()
+
+        # 交易所名單同樣由引擎每根 bar 推給 `FillModel`，只能從資料源這一層注入
+        self.short_sale_list_script: Dict[datetime.date, ShortSaleListSnapshot] = (
+            short_sale_list_script or {}
+        )
+        self.day_trade_list_script: Dict[datetime.date, DayTradeListSnapshot] = (
+            day_trade_list_script or {}
+        )
 
         self.force_cover_script: Dict[datetime.date, Set[str]] = (
             force_cover_script or {}
@@ -143,6 +163,18 @@ class ScriptedDataFeed(TwStockDataFeed):
         """依腳本回傳當日除息的每股現金股利"""
 
         return self.cash_dividend_script.get(date, {})
+
+    def get_short_sale_list(
+        self, date: datetime.date
+    ) -> Optional[ShortSaleListSnapshot]:
+        """依腳本回傳當日的平盤下得融（借）券賣出名單"""
+
+        return self.short_sale_list_script.get(date)
+
+    def get_day_trade_list(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:
+        """依腳本回傳當日的現股當沖標的名單"""
+
+        return self.day_trade_list_script.get(date)
 
 
 @pytest.fixture

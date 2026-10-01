@@ -28,6 +28,9 @@ EVENT_KEYS: Tuple[str, ...] = (
     "rejected_insufficient_balance",  # 餘額不足以支應做多開倉（部位價值 ＋ 開倉成本）
     "rejected_no_borrow",  # 融券餘額不足被拒的放空開倉單
     "rejected_short_suspended",  # 停券期間被拒的融券放空開倉單
+    "rejected_short_halted",  # 名單外或被註記暫停融券／借券，被拒的放空開倉單
+    "rejected_below_reference",  # 平盤下不得融（借）券賣出，被拒的放空開倉單
+    "rejected_not_day_tradable",  # 不在現股當沖名單或暫停先賣後買，被拒的當沖放空單
     "rejected_limit_up_locked",  # 全日鎖漲停、買不到，被拒的買進開倉單
     "rejected_limit_down_locked",  # 全日鎖跌停、賣不掉，被拒的放空開倉單
     "rejected_volume_cap",  # 超過當日成交量上限被拒的訂單

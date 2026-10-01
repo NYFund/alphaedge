@@ -1,8 +1,8 @@
 import datetime
 from abc import ABC, abstractmethod
-from typing import Dict, List, Set
+from typing import Dict, List, Optional, Set
 
-from core.models import BaseQuote
+from core.models import BaseQuote, DayTradeListSnapshot, ShortSaleListSnapshot
 from core.strategies.base import BaseStrategy
 from core.utils import Scale
 
@@ -27,6 +27,10 @@ BaseDataFeed: 資料載入、報價轉換與交易日判定
 把第 1 種寫成第 3 種，子類會靜靜沿用一個錯的預設；把第 3 種寫成第 1 種，
 每個子類都被迫寫一份 `pass`，而那等於把「這裡本來就沒事要做」這個資訊丟掉。
 """
+
+
+class TradingListCoverageError(RuntimeError):
+    """開啟了交易所名單檢核，但回測區間早於名單起點或名單有缺日"""
 
 
 class BaseDataFeed(ABC):
@@ -139,6 +143,52 @@ class BaseDataFeed(ABC):
         """
 
         return set()
+
+    def get_short_sale_list(
+        self, date: datetime.date
+    ) -> Optional[ShortSaleListSnapshot]:
+        """
+        - Description:
+            取得當日的平盤下得融（借）券賣出名單；沒有此制度的市場沿用預設即可
+        - Return:
+            - Optional[ShortSaleListSnapshot]
+                預設為 None（沒有資料）
+        """
+
+        return None
+
+    def get_day_trade_list(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:
+        """
+        - Description:
+            取得當日的現股當沖標的名單；沒有此制度的市場沿用預設即可
+        - Return:
+            - Optional[DayTradeListSnapshot]
+                預設為 None（沒有資料）
+        """
+
+        return None
+
+    def ensure_trading_list_coverage(
+        self, check_short_sale_list: bool, check_day_trade_list: bool
+    ) -> None:
+        """
+        - Description:
+            開啟名單檢核時，確認回測區間每個交易日都有名單
+
+            **預設是「有開就拒絕」而不是 no-op**：沒有名單的市場若被設定成開啟檢核，
+            no-op 會讓開關靜靜失效，回測照跑、結果卻沒有任何一張單被檢查過。
+        - Parameters:
+            - check_short_sale_list / check_day_trade_list: bool
+                成交模型是否開啟對應檢核
+        - Raise:
+            - TradingListCoverageError
+                本市場沒有名單資料卻開啟了檢核
+        """
+
+        if check_short_sale_list or check_day_trade_list:
+            raise TradingListCoverageError(
+                f"{type(self).__name__} 沒有交易所名單資料，不能開啟名單檢核"
+            )
 
     def get_cash_dividend_map(self, date: datetime.date) -> Dict[str, float]:
         """

@@ -174,6 +174,12 @@ class Backtester:
         """
 
         self.data_feed.setup(self.strategy)
+        # 開啟名單檢核時，區間早於制度起點或名單缺日都在這裡拒絕執行，
+        # 不讓「缺資料」在回測途中默默變成「不檢查」
+        self.data_feed.ensure_trading_list_coverage(
+            self.fill_model.check_short_sale_list,
+            self.fill_model.check_day_trade_list,
+        )
         self.strategy.setup_apis(self.data_feed)
 
     # === Direction Setting ===
@@ -396,6 +402,19 @@ class Backtester:
             self.fill_model.apply_short_suspended_symbols(
                 self.data_feed.get_short_suspended_symbols(date)
             )
+            # 交易所名單只有開啟檢核時才查：每天兩次查詢，不用的回測不該付這個成本
+            if (
+                self.fill_model.check_short_sale_list
+                or self.fill_model.check_day_trade_list
+            ):
+                self.fill_model.apply_trading_lists(
+                    self.data_feed.get_short_sale_list(date)
+                    if self.fill_model.check_short_sale_list
+                    else None,
+                    self.data_feed.get_day_trade_list(date)
+                    if self.fill_model.check_day_trade_list
+                    else None,
+                )
 
         # **除權息資料兩個方向都要**：做多跨除息要收現金股利、跨配股要調整股數，
         # 不餵的話做多績效會系統性偏低（除權息日的跳空變成憑空虧損）

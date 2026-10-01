@@ -15,6 +15,10 @@ class DataType(str, Enum):
     PRICE = "Price"
     CHIP = "Chip"
     MARGIN = "Margin"  # 信用交易（融資融券餘額）
+    # 平盤下得融（借）券賣出名單（含三個當日暫停註記）
+    SHORT_SALE_LIST = "SHORT_SALE_LIST"
+    # 現股當沖標的名單（含暫停先賣後買註記）
+    DAY_TRADE_LIST = "DAY_TRADE_LIST"
     DIVIDEND = "Dividend"  # 除權除息計算結果表
     # 非除權息的公司行動（減資／面額變更／分割）；與 DIVIDEND 分表，理由見 schema.py
     CORPORATE_ACTION = "CORPORATE_ACTION"

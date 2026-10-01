@@ -24,6 +24,8 @@ If `--target` is omitted, the default is `no_tick` (all datasets except **both**
 | `chip` | Institutional chip data |
 | `price` | Closing prices |
 | `margin` | Margin trading balances (financing / short-selling balances) |
+| `short_sale_list` | Exchange list of securities that may be short-sold below the reference price, with daily suspension flags (from 2013-09-23; used by the backtest short checks). **Not included in `all` or `no_tick`** until the historical backfill is done |
+| `day_trade_list` | Exchange list of securities eligible for cash day trading, with the sell-first suspension flag (from 2014-01-06). **Not included in `all` or `no_tick`** until the historical backfill is done |
 | `dividend` | Ex-dividend / ex-rights table (adjustment factors + cash dividends) |
 | `corporate_action` | Non-dividend corporate actions (capital reductions, splits, par-value changes) |
 | `fs` | Financial statements (including the statement of changes in equity, which is queried per stock) |
@@ -41,7 +43,7 @@ If `--target` is omitted, the default is `no_tick` (all datasets except **both**
 | `futures_chip` | Futures chips (institutional investors, large traders, option PCR) |
 | `market_holiday` | Market holiday schedule (TWSE announcement; re-fetches last / this / next year every run, written to `tw_stock.db`). Primary source for the live pre-open trading-day check |
 | `futures_tick` | Futures tick trades (Shioaji → DolphinDB; requires the `[tick]` extra and credentials). **Not included in `all` or `no_tick`**: it has no resume record and re-running writes duplicate rows, so it only runs when named explicitly |
-| `all` | All datasets (including tick; excludes `futures_tick` and `futures_stock_price`) |
+| `all` | All datasets (including tick; excludes `futures_tick`, `futures_stock_price`, `short_sale_list` and `day_trade_list`) |
 | `no_tick` | All datasets except `tick` **and** `futures_tick` (default). Both need Shioaji credentials and the `[tick]` extra; without the exclusion a machine lacking them would exit 1 every night |
 
 ### Single Target Examples

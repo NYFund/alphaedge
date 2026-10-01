@@ -1,12 +1,12 @@
 import datetime
 import math
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional
 
 from loguru import logger
 
 from core.market.cost_model import BaseCostModel
 from core.models import StockOrder
-from core.models.cost_config import CostConfig, FuturesCostConfig, ShortConstraint
+from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.utils import (
     DAY_TRADE_TAX_EXPIRY,
     DAY_TRADE_TAX_START,
@@ -31,53 +31,10 @@ class StockCostModel(BaseCostModel):
     - 損益與報酬率 round 至小數點後 2 位
     """
 
-    # 尚未接上呼叫端的 ShortConstraint 欄位：{欄位名: (預設值, 未實作的原因)}
-    # 檢查放在建構時，任何建立路徑（factory、測試、未來的實盤）都會經過
-    UNIMPLEMENTED_CONSTRAINTS: Dict[str, Tuple[Any, str]] = {
-        "allow_below_reference": (
-            True,
-            "平盤下放空限制需要警示／處置股清單，尚無資料源",
-        ),
-        "day_trade_whitelist": (None, "每日可當沖清單需要證交所每日公告，尚無資料源"),
-    }
-
     def __init__(self, config: Optional[CostConfig] = None) -> None:
         self.config: CostConfig = config or CostConfig.default()
 
         self.check_day_trade_tax_expiry()
-        self.check_unimplemented_constraints()
-
-    def check_unimplemented_constraints(self) -> None:
-        """
-        - Description:
-            檢查「設了限制卻不生效」的 ShortConstraint 欄位
-
-            這些欄位有定義、無呼叫端。使用者設了限制卻完全不生效、也收不到
-            任何提示，會讓回測結果被誤讀為「已考慮該限制」——這比功能沒做更
-            危險，直接違反「不可靜默失敗」的原則。
-
-            取捨：一律 `warning` 而非 `raise`，避免既有已設定這些欄位的策略
-            直接壞掉。
-
-            **`check_borrowable` 不在本清單**：它已接上
-            `TwStockFillModel.check_short_borrowable()`，設為 `True` 會實際生效。
-            但其資料來源 `margin` 表若為空，`FillModel` 會在每次檢核時 warning
-            提示「查無資料，本次跳過」。
-        """
-
-        constraint: Optional[ShortConstraint] = self.config.short_constraint
-        if constraint is None:
-            return
-
-        for field_name, (
-            default_value,
-            reason,
-        ) in self.UNIMPLEMENTED_CONSTRAINTS.items():
-            if getattr(constraint, field_name) != default_value:
-                logger.warning(
-                    f"[CostModel] ShortConstraint.{field_name} 尚未實作，"
-                    f"本次回測不會生效（{reason}）"
-                )
 
     def check_day_trade_tax_expiry(self) -> None:
         """
