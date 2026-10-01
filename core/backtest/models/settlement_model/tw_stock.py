@@ -186,6 +186,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             close=quote.close,
             side=Action.BUY,
             date=TimeUtils.to_date(quote.date),
+            product=quote.symbol,
         )
 
     def convert_to_margin_position(

@@ -1,4 +1,6 @@
+import datetime
 from abc import ABC, abstractmethod
+from decimal import Decimal
 from typing import Optional, Tuple
 
 from core.utils import (
@@ -62,8 +64,32 @@ class InstrumentSpec(ABC):
         ratio: float = bps / BPS_PER_UNIT
 
         if action == Action.BUY:
-            return self.round_to_tick(price * (1 + ratio), "up", product)
-        return self.round_to_tick(price * (1 - ratio), "down", product)
+            return self.round_to_tick(self.scale_price(price, ratio), "up", product)
+        return self.round_to_tick(self.scale_price(price, -ratio), "down", product)
+
+    @staticmethod
+    def scale_price(price: float, ratio: float) -> float:
+        """
+        - Description:
+            計算 `price × (1 + ratio)`，**以十進位運算後才轉回 float**
+
+            直接用浮點相乘會在檔位對齊時差一檔：`15.5 × 0.9` 是
+            `13.950000000000001`，往上對齊就變成 14.0（應為 13.95），漲跌停因此算錯；
+            滑價也一樣（`3.0 × 1.01` 是 `3.0300000000000002`，往上對齊成 3.04），
+            但頻率低得多（價格 1～1,000 元 × 1～100 bps 的四百萬種組合中有 20 種）。
+            後續的檔位對齊雖然用 `Decimal`，但誤差在相乘時就已經帶進去了。
+        - Parameters:
+            - price: float
+                基準價
+            - ratio: float
+                幅度；負值代表往下
+        - Return:
+            - float
+                調整後、尚未對齊檔位的價格
+        """
+
+        scaled: Decimal = Decimal(str(price)) * (Decimal(1) + Decimal(str(ratio)))
+        return float(scaled)
 
     @abstractmethod
     def to_units(self, volume: int) -> int:
@@ -106,14 +132,21 @@ class InstrumentSpec(ABC):
 
     @abstractmethod
     def get_price_limits(
-        self, prev_close: float
+        self,
+        prev_close: float,
+        date: Optional[datetime.date] = None,
+        product: Optional[str] = None,
     ) -> Tuple[Optional[float], Optional[float]]:
         """
         - Description:
-            依前一交易日收盤價推算漲跌停區間
+            依漲跌停基準價推算漲跌停區間
         - Parameters:
             - prev_close: float
-                前一交易日收盤價
+                漲跌停基準價（一般為前一交易日收盤）
+            - date: Optional[datetime.date]
+                交易日；幅度隨制度改變的市場（台股 2015-06-01 由 7% 放寬為 10%）會用到
+            - product: Optional[str]
+                商品代碼；檔位依商品而不同時（台股的 ETF 與普通股）會用到
         - Return:
             - Tuple[Optional[float], Optional[float]]
                 (跌停價, 漲停價)；無漲跌停制度時回傳 (None, None)

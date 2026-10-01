@@ -374,7 +374,7 @@ class TwStockFillModel(BaseFillModel):
         if prev_close:
             # 帶入報價日期：2015-06-01 前的漲跌停幅度為 7%，非現行的 10%
             limit_down, limit_up = self.instrument.get_price_limits(
-                prev_close, TimeUtils.to_date(quote.date)
+                prev_close, TimeUtils.to_date(quote.date), order.symbol
             )
             if not (limit_down <= order.price <= limit_up):
                 logger.warning(
@@ -387,7 +387,10 @@ class TwStockFillModel(BaseFillModel):
         if self.is_locked_at_limit(order, quote, prev_close):
             return False
 
-        if self.instrument.round_to_tick(order.price, "nearest") != order.price:
+        if (
+            self.instrument.round_to_tick(order.price, "nearest", order.symbol)
+            != order.price
+        ):
             logger.warning(
                 f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊檔位"
             )
@@ -430,6 +433,7 @@ class TwStockFillModel(BaseFillModel):
             close=quote.close,
             side=order.action,
             date=TimeUtils.to_date(quote.date),
+            product=order.symbol,
         ):
             return False
 
@@ -643,7 +647,9 @@ class TwStockFillModel(BaseFillModel):
             if order.action == Action.BUY
             else self.config.slippage_bps_sell
         )
-        return self.instrument.apply_slippage(order.price, order.action, bps)
+        return self.instrument.apply_slippage(
+            order.price, order.action, bps, order.symbol
+        )
 
     def apply_price_limit_basis(self, basis: Dict[str, float]) -> None:
         """

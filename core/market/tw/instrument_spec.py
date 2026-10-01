@@ -31,11 +31,22 @@ class TwStockSpec(InstrumentSpec):
         direction: str = "nearest",
         product: Optional[str] = None,
     ) -> float:
-        """對齊台股六段分段檔位（`product` 用不到：台股的檔位由價格級距決定）"""
+        """
+        對齊台股分段檔位
 
-        return StockUtils.round_to_tick(price, direction)
+        `product` 傳證券代號：檔位先依標的分表（ETF 兩段、普通股六段），再依價格級距取檔；
+        未提供時用普通股表。
+        """
 
-    def get_price_limit_ratio(self, date: Optional[datetime.date] = None) -> float:
+        return StockUtils.round_to_tick(price, direction, product)
+
+    # 槓桿型 ETF（代號 `00` 開頭、`L` 結尾，台灣皆為 2 倍）的漲跌幅是一般幅度乘上槓桿倍數。
+    # 反向型（`R` 結尾）為 -1 倍，幅度與一般相同，不在此列
+    LEVERAGED_ETF_MULTIPLE: int = 2
+
+    def get_price_limit_ratio(
+        self, date: Optional[datetime.date] = None, product: Optional[str] = None
+    ) -> float:
         """
         - Description:
             取得該日適用的漲跌停幅度
@@ -43,23 +54,32 @@ class TwStockSpec(InstrumentSpec):
             **台股於 2015-06-01 由 7% 放寬為 10%**。以 23,972 筆交易所公告的
             漲停／跌停價實測：放寬前中位數 6.92%、放寬後 9.91%。單用 10% 會讓
             2013-01 ~ 2015-05 的區間偏寬約 43%，該期間與官方值的相符率為 0.0%。
+
+            **槓桿型 ETF 的幅度乘上槓桿倍數**：00631L 基準 151.2 時公告漲停 181.4（+20%）。
         - Parameters:
             - date: Optional[datetime.date]
                 交易日；`None` 時採現行幅度（呼叫端未提供日期即視為當代回測）
+            - product: Optional[str]
+                證券代號；用來辨識槓桿型 ETF
         - Return:
             - float
                 該日適用的幅度
         """
 
-        if date is not None and date < PRICE_LIMIT_WIDENED_DATE:
-            return PRICE_LIMIT_RATIO_LEGACY
-
-        return PRICE_LIMIT_RATIO
+        ratio: float = (
+            PRICE_LIMIT_RATIO_LEGACY
+            if date is not None and date < PRICE_LIMIT_WIDENED_DATE
+            else PRICE_LIMIT_RATIO
+        )
+        if product and product.startswith("00") and product.endswith("L"):
+            return ratio * self.LEVERAGED_ETF_MULTIPLE
+        return ratio
 
     def get_price_limits(
         self,
         prev_close: float,
         date: Optional[datetime.date] = None,
+        product: Optional[str] = None,
     ) -> Tuple[Optional[float], Optional[float]]:
         """
         - Description:
@@ -69,19 +89,22 @@ class TwStockSpec(InstrumentSpec):
 
             幅度依 `date` 決定（2015-06-01 前為 7%）；未提供日期時採現行幅度。
 
-            **已知落差（尚未解決）**：以 23,972 筆交易所公告的漲停／跌停價比對，
-            本方法的相符率為 **61.6%**。落差來自**檔位對齊規則**——本方法採
-            「±幅度後往內對齊檔位」，與交易所實際的升降單位取值規則不完全一致，
-            多數不符者相差一個檔位。
+            **與交易所公告值的一致性**（2026-10-01 以 `TWT84U` 抽 2013-06-03、2016-10-03、
+            2020-03-16、2024-01-02 四日實測，以公告的開盤競價基準為輸入、排除無漲跌幅限制者）：
+            3,763 檔中 3,761 檔相符（99.95%），不符的兩檔各差一個檔位、原因不明。
+            先前的落差來自三個已修正的問題——「基準價 × 幅度」以浮點相乘（`15.5 × 0.9`
+            往上對齊成 14.0）、ETF 套用普通股的檔位表、槓桿型 ETF 的幅度未加倍；
+            分別由 `scale_price()`、`StockUtils.get_tick_table()`、`get_price_limit_ratio()` 處理。
+            仍會不一致的是**基準價本身**：本方法只負責「基準 → 漲跌停」，基準價由呼叫端
+            決定（一般為前收，除權息日為開盤競價基準），減資恢復交易等情況要由資料源提供。
 
-            影響範圍：漲跌停只在 `FillModel.validate()` 用於拒單，多數訂單不在
-            邊界上；但放空的「漲停鎖死無法回補」判定（`check_limit_up_locked`）
-            直接依賴此結果，`limit_up_cover_failed` 事件計數會有偏差。
         - Parameters:
             - prev_close: float
                 漲跌停基準價（一般為前一交易日收盤；除權息日為開盤競價基準）
             - date: Optional[datetime.date]
                 交易日，用於選取當時適用的漲跌停幅度
+            - product: Optional[str]
+                證券代號，用於選檔位表（ETF 與普通股不同）；未提供時用普通股表
         - Return:
             - Tuple[Optional[float], Optional[float]]
                 （跌停價, 漲停價）；基準價為 0 時皆為 None
@@ -90,10 +113,14 @@ class TwStockSpec(InstrumentSpec):
         if not prev_close:
             return (None, None)
 
-        ratio: float = self.get_price_limit_ratio(date)
+        ratio: float = self.get_price_limit_ratio(date, product)
 
-        limit_up: float = self.round_to_tick(prev_close * (1 + ratio), "down")
-        limit_down: float = self.round_to_tick(prev_close * (1 - ratio), "up")
+        limit_up: float = self.round_to_tick(
+            self.scale_price(prev_close, ratio), "down", product
+        )
+        limit_down: float = self.round_to_tick(
+            self.scale_price(prev_close, -ratio), "up", product
+        )
         return (limit_down, limit_up)
 
     def is_locked_at_limit(
@@ -105,6 +132,7 @@ class TwStockSpec(InstrumentSpec):
         close: Optional[float],
         side: Action,
         date: Optional[datetime.date] = None,
+        product: Optional[str] = None,
     ) -> bool:
         """
         - Description:
@@ -125,6 +153,8 @@ class TwStockSpec(InstrumentSpec):
                 `BUY` 判漲停鎖死、`SELL` 判跌停鎖死
             - date: Optional[datetime.date]
                 交易日，用於選取當時適用的漲跌停幅度
+            - product: Optional[str]
+                證券代號，用於選檔位表（ETF 與普通股不同）
         - Return:
             - bool
                 是否全日鎖死
@@ -133,7 +163,7 @@ class TwStockSpec(InstrumentSpec):
         if not prev_close:
             return False
 
-        limit_down, limit_up = self.get_price_limits(prev_close, date)
+        limit_down, limit_up = self.get_price_limits(prev_close, date, product)
         limit: Optional[float] = limit_up if side == Action.BUY else limit_down
         if limit is None:
             return False
@@ -265,7 +295,10 @@ class TwFuturesSpec(InstrumentSpec):
         return round(aligned * tick_size, 10)
 
     def get_price_limits(
-        self, prev_close: float
+        self,
+        prev_close: float,
+        date: Optional[datetime.date] = None,
+        product: Optional[str] = None,
     ) -> Tuple[Optional[float], Optional[float]]:
         """
         期貨**沒有固定漲跌停**，一律回傳 `(None, None)`
