@@ -124,20 +124,78 @@ def test_mismatched_date_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.is_failed
 
 
-def test_empty_list_on_a_trading_day_is_a_failure(
+def test_empty_list_for_the_requested_date_is_no_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    交易日的名單 0 列是站方異常，不是「沒有任何證券可放空」
+    櫃買中心在休市日回查詢日的 0 列：判為查無資料，不再每次重抓
 
-    記成查無資料的話那天永遠不會再補，回測又會把它讀成全部不得放空。
+    查無資料的那天不會入庫，所以不會變成「名單是空的、全部不得放空」；
+    只有一個市場 0 列的話整天仍記為失敗（由 updater 判定）。
     """
 
     fake_fetch(monkeypatch, twse_short_sale_payload(rows=[]))
 
     result: CrawlResult = StockTradingListCrawler().crawl_twse_short_sale_list(DATE)
 
+    assert result.is_no_data
+
+
+def test_tpex_date_placeholder_row_is_no_data(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    櫃買中心平盤下名單在休市日回一列只有民國年查詢日的佔位列
+
+    以前直接交給 `pd.DataFrame` 而拋 `ValueError`，會中斷整批更新。
+    """
+
+    fake_fetch(monkeypatch, twse_short_sale_payload(rows=[["1130102"]]))
+
+    result: CrawlResult = StockTradingListCrawler().crawl_twse_short_sale_list(DATE)
+
+    assert result.is_no_data
+
+
+def test_mismatched_row_width_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """欄數對不上、又不是查詢日的佔位列：版面異常，記為失敗而不是拋例外"""
+
+    fake_fetch(monkeypatch, twse_short_sale_payload(rows=[["2330", "台積電"]]))
+
+    result: CrawlResult = StockTradingListCrawler().crawl_twse_short_sale_list(DATE)
+
     assert result.is_failed
+
+
+def test_twse_day_trade_holiday_shape_is_no_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    證交所當沖名單在休市日：第一張是 0 列的名單、第二張是空物件
+
+    照交易日的位置挑第二張表會挑到 `{}`，以前因此記為失敗、每天重抓。
+    """
+
+    fake_fetch(
+        monkeypatch,
+        {
+            "stat": "OK",
+            "date": "20240102",
+            "tables": [
+                {
+                    "fields": [
+                        "證券代號",
+                        "證券名稱",
+                        "暫停現股賣出後現款買進當沖註記",
+                    ],
+                    "data": [],
+                },
+                {},
+            ],
+        },
+    )
+
+    result: CrawlResult = StockTradingListCrawler().crawl_twse_day_trade_list(DATE)
+
+    assert result.is_no_data
 
 
 def test_holiday_message_is_no_data(monkeypatch: pytest.MonkeyPatch) -> None:

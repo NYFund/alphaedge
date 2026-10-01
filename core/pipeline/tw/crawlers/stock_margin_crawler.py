@@ -63,7 +63,11 @@ class StockMarginCrawler(BaseDataCrawler):
         # selectType=ALL 會多回傳一張信用交易統計彙總表，個股明細固定在最後一張；
         # 證券代號含合計列會被推斷為 float，以 converters 保留原始字串
         return self.parse_html_table(
-            result, f"TWSE margin {date}", index=-1, converters={0: str}
+            result,
+            f"TWSE margin {date}",
+            index=-1,
+            no_data_probe=(self.json_variant(twse_url), date),
+            converters={0: str},
         )
 
     def crawl_tpex_margin(self, date: datetime.date) -> CrawlResult:
@@ -84,5 +88,9 @@ class StockMarginCrawler(BaseDataCrawler):
         result: FetchResult = RequestUtils.fetch(tpex_url)
 
         return self.parse_html_table(
-            result, f"TPEX margin {date}", index=0, converters={0: str}
+            result,
+            f"TPEX margin {date}",
+            index=0,
+            no_data_probe=(self.json_variant(tpex_url), date),
+            converters={0: str},
         )

@@ -58,7 +58,11 @@ class StockPriceCrawler(BaseDataCrawler):
         # **證券代號要以 converters 保留原始字串**：某些日期的代號全是數字，
         # pandas 會推斷成整數而讓 `0050` 變成 `50`（與 margin 同一個做法）
         return self.parse_html_table(
-            result, f"TWSE price {date}", index=-1, converters={0: str}
+            result,
+            f"TWSE price {date}",
+            index=-1,
+            no_data_probe=(self.json_variant(url), date),
+            converters={0: str},
         )
 
     def crawl_tpex_price(self, date: datetime.date) -> CrawlResult:
@@ -80,4 +84,9 @@ class StockPriceCrawler(BaseDataCrawler):
         url: str = URLManager.get_url("TPEX_CLOSING_QUOTE_URL", date=date_str)
         result: FetchResult = RequestUtils.fetch(url)
 
-        return self.parse_html_table(result, f"TPEX price {date}", index=0)
+        return self.parse_html_table(
+            result,
+            f"TPEX price {date}",
+            index=0,
+            no_data_probe=(self.json_variant(url), date),
+        )
