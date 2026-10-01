@@ -30,6 +30,7 @@ _API_DIR: Path = _PROJECT_ROOT / "core" / "api"
 _SCAN_DIRS: Tuple[str, ...] = (
     "core",
     "apps",
+    "strategies",
     "tasks",
     "frontend",
     "strategy_lab",

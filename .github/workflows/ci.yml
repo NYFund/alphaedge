@@ -100,12 +100,12 @@ jobs:
       # 覆蓋率只建立基線、不設門檻（覆蓋率偏低時設門檻只會鼓勵寫無效測試），
       # 而 `--cov` 本身不會讓指令失敗，故不需要 `continue-on-error`——
       # 分成兩步時那個旗標反而讓「測試紅了」與「覆蓋率收集失敗」看起來一樣
-      # `--cov=core` 刻意不含入口層（`run.py`、`apps/`、`tasks/`），理由同
+      # `--cov=core --cov=strategies` 刻意不含入口層（`run.py`、`apps/`、`tasks/`），理由同
       # `pyproject.toml` 的 `[tool.coverage.run]`
       - name: 測試與覆蓋率（略過需要資料庫與外部 API 的項目）
         run: >-
           uv run pytest -m "not slow" --timeout=300 -rs
-          --cov=core --cov-report=term-missing
+          --cov=core --cov=strategies --cov-report=term-missing
 
   # 兩個 Docker 映像：以前 CI 從不 build，映像壞掉要等有人手動 build 才發現
   # （`frontend/Dockerfile` 開頭的註解記錄的就是一次這樣的迴歸）。
@@ -125,6 +125,11 @@ jobs:
       # editable 安裝與 `core/config/paths.py` 的路徑推導都正常
       - name: core 映像冒煙
         run: docker run --rm alphaedge-core
+
+      # 具體策略在頂層 `strategies/`：Dockerfile 漏 COPY 時回測照樣啟動得了（`--help` 不載入策略），
+      # 要到指定策略那一刻才 ModuleNotFoundError，所以單獨驗一次
+      - name: core 映像內可 import 具體策略套件
+        run: docker run --rm --entrypoint python alphaedge-core -c "import strategies, strategies.stock, strategies.futures"
 
       - name: 建置 frontend 映像
         run: docker build -f frontend/Dockerfile -t alphaedge-frontend .

@@ -75,7 +75,7 @@ lab = [
 # `core.position` 等目錄沒有 __init__.py，靠 PEP 420 namespace package 運作，
 # 故 namespaces 必須為 true，否則 editable 安裝後 `core.position.*` 會 import 不到
 namespaces = true
-include = ["core*", "apps*", "tasks*", "tests*"]
+include = ["core*", "apps*", "strategies*", "tasks*", "tests*"]
 exclude = [
     # 測試 fixture 目錄：會被 namespace 掃描當成套件，實際上不含任何 .py。
     # `core.*` 的產物排除項已於執行期產物重整後全數刪除——那些目錄不在 core/ 底下了
@@ -190,9 +190,9 @@ markers = [
 ]
 
 [tool.coverage.run]
-# 只量函式庫。入口層（`run.py`、`apps/`、`tasks/`）刻意不列：它們只做參數解析與
+# 量函式庫與具體策略。入口層（`run.py`、`apps/`、`tasks/`）刻意不列：它們只做參數解析與
 # 退出碼翻譯，實盤入口的測試又多以子行程執行，子行程不會被計入，量出來的數字沒有參考價值
-source = ["core"]
+source = ["core", "strategies"]
 omit = [
     "*/__pycache__/*",
 ]

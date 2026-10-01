@@ -325,6 +325,7 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 _GUARDED_PACKAGES: Tuple[str, ...] = (
     "core",
     "apps",
+    "strategies",
     "tasks",
     "scripts",
     "strategy_lab",

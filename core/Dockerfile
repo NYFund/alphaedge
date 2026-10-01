@@ -48,6 +48,8 @@ COPY core /app/core
 COPY tasks /app/tasks
 # `apps/` 是回測與實盤的入口套件（`python -m apps.<name>`）
 COPY apps /app/apps
+# `strategies/` 是具體策略（框架只留契約），回測與實盤都要載入
+COPY strategies /app/strategies
 
 # 裝本專案本身，與本機、CI 同一種安裝方式。
 # **必須是 editable**（uv sync 對本專案預設即是）：`core/config/paths.py` 以 `__file__`

@@ -39,7 +39,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
 | Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ✅ | 2026-09-30 完成：新增 E'''' 項（專屬 AST 掃描，偏離原規劃的分層規則寫法）；突變驗證紅→綠；2 條單元測試 |
-| Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ⬜ | 護欄清單見文末附錄 |
+| Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ✅ | 2026-10-01 完成；八項護欄以暫時檔逐一觸發皆轉紅；`test_strategy_data_access.py` 的假綠燈先行修掉 |
 | Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
 | Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
@@ -157,7 +157,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 **`StrategyLoader` 為什麼跟著搬**：它的職責是掃描具體策略，正式呼叫端只有入口層
 （2026-09-26 確認時是 `run.py`；2026-09-30 入口拆分後為 `apps/_common.py` 與 `apps/live.py`）。留在 `core/` 的話，框架就必須知道頂層 `strategies/` 的存在，違反單向依賴。
 
-### Phase2-1. 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 ⬜
+### Phase2-1. 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 ✅
 
 - **目的**：先把新套件與守門規則建好，搬檔那一步才有檢查可以驗。**這一步的重點是護欄範圍**：
   專案有十幾道護欄以寫死的目錄清單決定掃描範圍，多數只列 `core`、`tasks`、`scripts`、
@@ -186,6 +186,25 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 - **相依**：無。若 `回測與實盤入口拆分及架構收斂.md` Phase1-1 已建立 `apps/`，
   沿用它登記入口層的寫法（`apps/` 同樣要加進附錄的護欄清單）。
 
+> **✅ 完成紀錄（2026-10-01）**
+> - 新增 `strategies/`、`strategies/stock/`、`strategies/futures/`，三個 `__init__.py` 只有說明字串（門面保持空白，具體策略由載入器掃描）。
+> - **命名確認**：頂層 `strategies` 與 `strategy_lab/strategies/` 同名不衝突——研究區程式一律以 `strategy_lab.strategies...` 完整路徑引用，
+>   全庫沒有裸的 `import strategies`；`strategy_lab/CLAUDE.md` 規定一律從根目錄以 `-m` 執行。不改名。
+> - `scripts/check_layer_deps.py`：`_SCAN_DIRS`、`_NON_CORE_TOPS`、`_DB_DRIVER_GUARDED_DIRS`、`_INSTRUMENT_AXIS_PACKAGES` 加入 `strategies`；
+>   `_LAYER_RULES` 登記 `("strategies", 7, "策略層", False)`。**超出原規劃兩處**：門面檢查（E'）擴及新套件，且新門面**一律不准 import
+>   任何專案模組**（`core/strategies` 的門面允許 import 自己的 base，新套件沒有契約可 import）；E'' 區段標題改為列出現行範圍。
+> - 附錄其餘護欄全數加入 `strategies`：`check_doc_paths.py`、`check_api_orphan_methods.py`、兩條 pre-commit hook、
+>   `test_entrypoint_and_logging.py`、`test_config_consistency.py`、`test_temp_file_cleanup.py`；`pyproject.toml` 的 `include` 與
+>   `[tool.coverage.run] source`、CI 的 `--cov`、`core/Dockerfile` 的 `COPY strategies`。
+> - **`tests/test_strategy_data_access.py` 的假綠燈先行修掉**（附錄原本預告 Phase2-2 才會發作）：掃描範圍改為 `core/strategies/` ＋ `strategies/`，
+>   自我檢查由「檔案數 ≥ 6」改為「策略載入器找得到的每一支策略，原始檔都在掃描範圍內」。突變（拿掉 `core/strategies`）會轉紅。
+> - CI 的映像冒煙新增一步 `docker run --entrypoint python alphaedge-core -c "import strategies, ..."`：`--help` 不載入策略，
+>   漏 COPY 時冒煙照樣綠，要到指定策略那一刻才 `ModuleNotFoundError`。
+> - 驗證：以暫時檔逐一觸發——`core/` 反向 import（A）、`strategies/stock/tw/`（E）、門面 import 具體模組（E'）、`import sqlite3`（E''）、
+>   stdlib `exc_info=`（pre-commit ＋ 測試）、註解引用 backlog 步驟（pre-commit）、裸 `except:`、未宣告的環境變數——八項全數轉紅，清除後恢復。
+>   根目錄 `import strategies` 解析到頂層那份；`pytest` 2480 passed；`check_layer_deps.py` 0；`check_doc_paths.py` 0。
+>   **映像內 import 未在本機驗證**（Docker daemon 未啟動），由 CI 新增的那一步把關。
+
 ### Phase2-2. 具體策略與 `StrategyLoader` 搬到 `strategies/` ⬜
 
 - **目的**：把具體策略從框架中移出，這是本份文件的主體。
@@ -194,14 +213,10 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
   2. `core/strategies/strategy_loader.py` → `strategies/loader.py`，掃描目標改成頂層
      `strategies` 套件；逐模組隔離、同名拋錯兩條既有行為不變。
   3. 呼叫端改 import：`apps/_common.py`、`apps/live.py`、約 25 個測試檔、`scripts/` 中引用者。
-  4. `check_layer_deps.py` 的 `_INSTRUMENT_AXIS_PACKAGES` 加上 `strategies`，
-     讓商品軸命名檢查繼續涵蓋具體策略。
-  5. **`tests/test_strategy_data_access.py` 必須同步改，否則變成假綠燈**：它是「策略不得直接
-     寫資料庫欄位字面值」的護欄，掃描目錄寫死為 `core/strategies`，自驗門檻是「至少 6 個檔」。
-     搬完之後 `core/strategies/` 剛好剩 3 個 `__init__.py` 加 3 個 `base.py`，**正好 6 個**——
-     門檻照樣通過，實際上一支具體策略都沒掃到。做法：
-     - `STRATEGY_DIR` 改成同時掃 `strategies/` 與 `core/strategies/`（契約也不該寫欄位字面值）。
-     - 自驗改成「每一支 `StrategyLoader` 載入的策略，其原始檔都在掃描清單內」，不再用檔數門檻。
+  4. ~~`check_layer_deps.py` 的 `_INSTRUMENT_AXIS_PACKAGES` 加上 `strategies`~~——**已於 Phase2-1 完成**（2026-10-01）。
+  5. ~~`tests/test_strategy_data_access.py` 的掃描範圍與自驗~~——**已於 Phase2-1 先行完成**（2026-10-01）：
+     掃描 `core/strategies/` ＋ `strategies/`，自驗改為「載入器找得到的每支策略都在掃描範圍內」。
+     搬完時只需確認它仍綠、且突變（把某支策略移出掃描範圍）會轉紅。
 - **產出**：`strategies/**`、`apps/`、`tests/`、`scripts/check_layer_deps.py`。
 - **驗證方式**：
   1. 回歸雙線零變動。
@@ -362,18 +377,18 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 
 | 位置 | 目前範圍 | 守的是什麼 |
 |------|----------|------------|
-| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`tasks`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
+| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
 | `scripts/check_layer_deps.py` 的 `_NON_CORE_TOPS` | 同上加 `run` | `core/` 不得 import 的頂層套件 |
-| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`tasks` | `sqlite3` 只能出現在 `core/dao/` |
-| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`tasks`、`strategy_lab` 等 | 文件路徑與符號引用 |
-| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`tasks`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
-| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`tasks`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
-| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`tasks`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
-| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`tasks`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
-| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`tasks`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
-| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`tasks`、`scripts` | 暫存檔有清理 |
-| `tests/test_strategy_data_access.py` 的 `STRATEGY_DIR` | `core/strategies` | 策略不得寫資料庫欄位字面值（見 Phase2-2） |
-| `pyproject.toml` 的 `[tool.coverage.run] source` | `core` | 覆蓋率報告範圍 |
-| `.github/workflows/ci.yml` 的 `--cov=core` | `core` | 同上（CI 端） |
-| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`tasks*`、`tests*` | editable 安裝後可 import |
-| `core/Dockerfile` 的 `COPY` | `run.py`、`core`、`tasks`、`apps` | 映像內容 |
+| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`strategies`、`tasks` | `sqlite3` 只能出現在 `core/dao/` |
+| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`strategy_lab` 等 | 文件路徑與符號引用 |
+| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
+| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`strategies`、`tasks`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
+| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`strategies`、`tasks`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
+| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`strategies`、`tasks`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
+| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`strategies`、`tasks`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
+| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`scripts` | 暫存檔有清理 |
+| `tests/test_strategy_data_access.py` 的 `STRATEGY_DIRS` | `core/strategies`、`strategies` | 策略不得寫資料庫欄位字面值；自我檢查改為「載入器找得到的每支策略都在掃描範圍內」（2026-10-01），搬家不再有假綠燈 |
+| `pyproject.toml` 的 `[tool.coverage.run] source` | `core`、`strategies` | 覆蓋率報告範圍 |
+| `.github/workflows/ci.yml` 的 `--cov=core` | `core`、`strategies` | 同上（CI 端） |
+| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`strategies*`、`tasks*`、`tests*` | editable 安裝後可 import |
+| `core/Dockerfile` 的 `COPY` | `run.py`、`core`、`tasks`、`apps`、`strategies` | 映像內容 |

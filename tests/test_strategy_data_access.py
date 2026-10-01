@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 import pytest
 
@@ -16,7 +16,11 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 """
 
 
-STRATEGY_DIR: Path = _PROJECT_ROOT / "core" / "strategies"
+# 策略原始碼所在：`core/strategies/`（契約與尚未搬出的具體策略）與頂層 `strategies/`（具體策略）
+STRATEGY_DIRS: Tuple[Path, ...] = (
+    _PROJECT_ROOT / "core" / "strategies",
+    _PROJECT_ROOT / "strategies",
+)
 
 # 例外清單刻意留空。若日後真有必要保留，須在此明列檔案並註明理由
 ALLOWED_FILES: List[str] = []
@@ -31,19 +35,40 @@ def db_column_names() -> List[str]:
 
 
 def strategy_source_files() -> List[Path]:
-    """`core/strategies/` 下的所有策略原始碼"""
+    """`STRATEGY_DIRS` 下的所有策略原始碼"""
 
     return sorted(
         path
-        for path in STRATEGY_DIR.rglob("*.py")
+        for directory in STRATEGY_DIRS
+        for path in directory.rglob("*.py")
         if "__pycache__" not in path.parts and path.name not in ALLOWED_FILES
     )
 
 
-def test_strategy_dir_has_source_files() -> None:
-    """掃描範圍不得為空，否則本測試會永遠通過而失去意義"""
+def test_every_loaded_strategy_is_scanned() -> None:
+    """
+    策略載入器找得到的每一支策略，原始檔都必須在掃描範圍內
 
-    assert len(strategy_source_files()) >= 6
+    **不用「檔案數 ≥ N」當自我檢查**：具體策略搬出 `core/strategies/` 之後，
+    那裡光剩契約檔就達到門檻，一支策略都沒掃到也照樣通過。改成直接比對
+    「實際會被載入的策略」與「掃描範圍」，搬到哪裡、漏掃哪一支都會紅。
+    """
+
+    import inspect
+
+    from core.strategies.strategy_loader import StrategyLoader
+
+    scanned: Set[Path] = set(strategy_source_files())
+    loaded: List[Path] = [
+        Path(inspect.getfile(strategy)).resolve()
+        for strategy in StrategyLoader.load_strategies().values()
+    ]
+
+    assert loaded, "策略載入器一支策略都找不到，掃描比對失去意義"
+    assert not [path for path in loaded if path not in scanned], (
+        "這些策略不在欄位字面值檢查的掃描範圍內："
+        f"{[str(p) for p in loaded if p not in scanned]}"
+    )
 
 
 @pytest.mark.parametrize("column", db_column_names())
