@@ -198,12 +198,9 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
                 self.end_date,
             )
 
-        yesterday: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-            self.trading_days, date, -1
-        )
-        day_before: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-            self.trading_days, date, -2
-        )
+        calendar: MarketCalendar = MarketCalendar(self.trading_days)
+        yesterday: Optional[datetime.date] = calendar.shift_trading_days(date, -1)
+        day_before: Optional[datetime.date] = calendar.shift_trading_days(date, -2)
 
         if yesterday is None or day_before is None:
             return None

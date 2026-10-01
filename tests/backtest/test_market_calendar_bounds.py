@@ -3,7 +3,6 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Set
 
-import pandas as pd
 import pytest
 
 from core.market.tw.market_calendar import MarketCalendar
@@ -14,65 +13,73 @@ if TYPE_CHECKING:
 """
 交易日曆的兩條防線
 
-1. `get_last_trading_date()` 是無界 `while`，起始日落在資料涵蓋範圍之前時
-   會一天一天往回查到 1970 年也不會停，而且沒有任何錯誤訊息——看起來就是「卡住了」。
-2. `is_market_open()` 每個曆日都對 `price` 表做一次 `SELECT *` 只為了判斷空不空。
+1. 向資料庫要前一個交易日時要有上界：起始日落在資料涵蓋範圍之前時，
+   無界的回推會一路查到 1970 年也不會停，而且沒有任何錯誤訊息——看起來就是「卡住了」。
+2. `is_market_open()` 每個曆日都對 `price` 表做一次查詢只為了判斷空不空。
 """
 
 
 class _FakePriceAPI:
-    """只回答「這天有沒有資料」的最小 StockPriceAPI 替身"""
+    """只回答「區間內有哪些交易日」的最小 StockPriceAPI 替身，並記錄被查過的區間"""
 
     def __init__(self, trading_days: List[datetime.date]) -> None:
         self.trading_days: List[datetime.date] = trading_days
-        self.calls: List[datetime.date] = []
+        self.calls: List[tuple] = []
 
-    def get(self, date: datetime.date) -> pd.DataFrame:
-        self.calls.append(date)
-        if date in self.trading_days:
-            return pd.DataFrame([{"stock_id": "2330", "收盤價": 600.0}])
-        return pd.DataFrame()
+    def get_trading_days(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> List[datetime.date]:
+        """區間內（含頭含尾）的交易日"""
+
+        self.calls.append((start_date, end_date))
+        return [day for day in self.trading_days if start_date <= day <= end_date]
 
 
 def test_lookback_raises_after_max_days() -> None:
     """回推上界內找不到交易日即 `LookupError`，訊息要指出可能原因"""
 
-    # 以 has_data 恆為 False 的路徑模擬「起始日早於資料涵蓋範圍」
-    checked_dates: List[datetime.date] = []
+    # 沒有任何交易日：模擬「起始日早於資料涵蓋範圍」
+    api: _FakePriceAPI = _FakePriceAPI([])
+    date: datetime.date = datetime.date(2013, 1, 2)
 
-    def always_missing(_api, date: datetime.date) -> bool:
-        checked_dates.append(date)
-        return False
+    with pytest.raises(LookupError, match="找不到交易日"):
+        MarketCalendar.previous_trading_day_from_api(api, date)
 
-    original = MarketCalendar.check_price_api_has_data
-    MarketCalendar.check_price_api_has_data = staticmethod(always_missing)
-    try:
-        # **api 只是被原封傳給 `check_price_api_has_data()`**，本身不被檢查型別
-        # （舊版有 `isinstance` 分派，Shioaji 那支走掉之後就不需要真的 API 物件了）
-        with pytest.raises(LookupError, match="找不到交易日"):
-            MarketCalendar.get_last_trading_date(object(), datetime.date(2013, 1, 2))
-    finally:
-        MarketCalendar.check_price_api_has_data = original
-
-    # 有界：恰好查滿上界天數就停，不會一路查到 1970 年
-    assert len(checked_dates) == MarketCalendar.MAX_LOOKBACK_DAYS
+    # 有界：只查一次、範圍恰好是前 MAX_LOOKBACK_DAYS 個曆日，不會一路查到 1970 年
+    assert api.calls == [
+        (
+            date - datetime.timedelta(days=MarketCalendar.MAX_LOOKBACK_DAYS),
+            date - datetime.timedelta(days=1),
+        )
+    ]
 
 
 def test_lookback_returns_the_previous_trading_day() -> None:
-    """正常情況：跨週末往前找到週五"""
+    """正常情況：跨週末往前找到週五；當天本身是交易日也不算"""
 
     monday: datetime.date = datetime.date(2024, 1, 8)
     friday: datetime.date = datetime.date(2024, 1, 5)
+    api: _FakePriceAPI = _FakePriceAPI([friday, monday])
 
-    def has_data(_api, date: datetime.date) -> bool:
-        return date == friday
+    assert MarketCalendar.previous_trading_day_from_api(api, monday) == friday
 
-    original = MarketCalendar.check_price_api_has_data
-    MarketCalendar.check_price_api_has_data = staticmethod(has_data)
-    try:
-        assert MarketCalendar.get_last_trading_date(object(), monday) == friday
-    finally:
-        MarketCalendar.check_price_api_has_data = original
+
+def test_from_api_builds_the_same_calendar_as_the_list() -> None:
+    """`from_api()` 只是取清單的便利入口，查詢結果與直接以清單建構相同"""
+
+    days: List[datetime.date] = [
+        datetime.date(2024, 1, 4),
+        datetime.date(2024, 1, 5),
+        datetime.date(2024, 1, 8),
+    ]
+    from_api: MarketCalendar = MarketCalendar.from_api(
+        _FakePriceAPI(days), datetime.date(2024, 1, 1), datetime.date(2024, 1, 31)
+    )
+
+    assert from_api.trading_days == MarketCalendar(days).trading_days
+    assert from_api.is_trading_day(datetime.date(2024, 1, 5))
+    assert not from_api.is_trading_day(datetime.date(2024, 1, 6))
+    assert from_api.get_previous_trading_day(datetime.date(2024, 1, 4)) is None
 
 
 def test_max_lookback_covers_the_longest_holiday() -> None:
@@ -240,8 +247,8 @@ def test_shift_trading_days_gets_the_previous_day() -> None:
         datetime.date(2024, 1, 8),
     ]
 
-    previous: Optional[datetime.date] = MarketCalendar.shift_trading_days(
-        trading_days, datetime.date(2024, 1, 8), offset=-1
+    previous: Optional[datetime.date] = MarketCalendar(trading_days).shift_trading_days(
+        datetime.date(2024, 1, 8), offset=-1
     )
 
     assert previous == datetime.date(2024, 1, 5)

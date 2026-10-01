@@ -66,7 +66,9 @@ def test_previous_trading_date_beyond_the_prebuilt_list_asks_the_database(
         asked.append(date)
         return datetime.date(2026, 9, 21)
 
-    monkeypatch.setattr(MarketCalendar, "get_last_trading_date", from_database)
+    monkeypatch.setattr(
+        MarketCalendar, "previous_trading_day_from_api", staticmethod(from_database)
+    )
 
     assert strategy.get_previous_trading_date(datetime.date(2026, 9, 22)) == (
         datetime.date(2026, 9, 21)

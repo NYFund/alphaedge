@@ -74,7 +74,7 @@ class StockPriceAPI(BaseDataAPI):
             取得日期範圍內的所有交易日（已排序、去重）
 
             交易日曆直接由 `price` 表推導：當日有日 K 資料即為開盤日，與
-            `MarketCalendar.check_stock_market_open()` 同一套判準。凡是「往前推
+            `MarketCalendar.from_api()` 同一套判準（日曆正是由本方法建立）。凡是「往前推
             N 個營業日」的市場規則（例如融券最後回補日）都應吃這一份，
             自行以曆日相減會在連假整段位移。
         - Parameters:
