@@ -41,14 +41,14 @@
 | Phase1-2 | 建表：`stock_tick` hypertable 與 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py` | 建表函式重跑兩次不報錯；`timescaledb_information.hypertables` 查得到 | ⬜ | 相依 Phase1-1；schema 詳見〈資料表設計〉 |
 | Phase1-3 | 設定壓縮與壓縮 policy | `core/dao/tw/stock_tick_dao.py` | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ⬜ | 相依 Phase1-2 |
 | Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等） | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變 | ⬜ | 相依 Phase1-2 |
-| Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1 |
+| Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1；**一併收窄 `stock_tick_{updater,utils,cleaner,crawler}.py` 的 18 處盲捕**（2026-10-01 由 `暫緩工作彙整.md` S13 移入，見〈附：併入的盲捕收斂〉） |
 | Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-2 |
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
 | Phase4-1 | 盤點 Google 雲端的歷史 CSV | 本文件（盤點紀錄） | 檔案佈局、日期範圍、總列數、欄位格式差異寫入本文件 | ⬜ | **無相依，可最先做**；結果可能改變 Phase2-1 的 CSV 解析 |
 | Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1；**只用抽樣，541 檔全量入庫需使用者要求**（見〈範圍界線〉） |
 | Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」的 DB 列數＝CSV 列數＝`load_log.row_count` | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ⬜ | 相依 Phase2-2、Phase3-1 |
-| Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* tasks` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示** |
+| Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* tasks` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`core/strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
 
 ---
@@ -541,6 +541,26 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **相依**：Phase5-2。
 
 ---
+
+## 附：併入的盲捕收斂（原 `暫緩工作彙整.md` S13 的 tick 部分）
+
+2026-10-01 由 `暫緩工作彙整.md` S13 移入（使用者裁示）。那 23 處 `except Exception`（ruff `BLE001`）
+都在本文件要改寫或可能刪除的檔案裡：先收窄、改寫時再丟掉是白工，所以改成**動到哪個檔案，就在同一步收窄那個檔案**。
+
+| 檔案 | 處數（2026-10-01 現查） | 在哪一步處理 |
+|------|:--:|------|
+| `core/pipeline/tw/updaters/stock_tick_updater.py` | 10 | Phase2-2（續跑依據改寫） |
+| `core/pipeline/tw/utils/stock_tick_utils.py` | 4 | Phase2-2 |
+| `core/pipeline/tw/cleaners/stock_tick_cleaner.py` | 3 | Phase2-2（沒有步驟會改寫它，但它在同一條更新流程上，用 Phase2-2 的樣本資料模擬一併驗證） |
+| `core/pipeline/tw/crawlers/stock_tick_crawler.py` | 1 | Phase2-2（同上） |
+| `core/pipeline/tw/loaders/futures_tick_loader.py` | 3 | Phase5-2：期貨 tick 程式若裁示刪除，這幾處隨檔案消失；若保留，在同一步收窄 |
+| `core/pipeline/tw/updaters/futures_tick_updater.py` | 1 | Phase5-2（同上） |
+| `core/pipeline/tw/crawlers/futures_tick_crawler.py` | 1 | Phase5-2（同上） |
+
+- **判準**沿用 `暫緩工作彙整.md` S13 的做法：只收「該重試的外部失敗」（傳輸用 `OSError`、解析用
+  `BaseDataCrawler.HTML_PARSE_ERRORS`、DAO 用 `DBError`），**逐項隔離迴圈不收窄**，理由就地寫在註解裡。
+- **驗證**：每處收窄各配一個突變測試，併入 `tests/test_pipeline_error_narrowing.py`；處數以
+  `uv run ruff check core/pipeline --select BLE001 --statistics` 現查，`tests/test_quality_ratchet.py` 擋住數量回升。
 
 ## 風險與對策
 
