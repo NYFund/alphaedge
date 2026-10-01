@@ -528,7 +528,6 @@ AlphaEdge/
 ├── pyproject.toml             # dependency declaration (single source) and ruff/pytest config
 ├── uv.lock                    # versions resolved by uv (do not edit; run `uv lock` after changing pyproject)
 ├── apps/                      # entry points: backtest.py (backtest), live.py (live), _common.py (shared)
-├── run.py                     # forwarding shim for the old entry point (temporary, to be deleted; use apps/)
 ├── README.md                  # Chinese (source of truth)
 └── README_en.md               # English translation
 ```

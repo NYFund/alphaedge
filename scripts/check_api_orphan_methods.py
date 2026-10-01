@@ -37,7 +37,8 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "scripts",
     "tests",
 )
-_SCAN_FILES: Tuple[str, ...] = ("run.py",)
+# 頂層的單檔 .py：入口都已收進 `apps/`，目前沒有；日後新增單檔入口時要登記在這裡，否則不會被掃到
+_SCAN_FILES: Tuple[str, ...] = ()
 
 # 基底類別的樣板方法：由子類實作、由框架呼叫，不受本檢查管轄
 _FRAMEWORK_METHODS: Set[str] = {"get", "setup", "close"}

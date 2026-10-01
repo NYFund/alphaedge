@@ -41,7 +41,6 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 # NOTE:
 # Build this Dockerfile with project root as context:
 # docker build -f core/Dockerfile -t alphaedge-core .
-COPY run.py /app/run.py
 COPY core /app/core
 # `tasks/` 是 ETL 的入口（`python -m tasks.update_db`）。少了它，映像只跑得了
 # 回測，compose 描述的資料更新流程在容器裡完全不存在
@@ -57,7 +56,6 @@ COPY strategies /app/strategies
 # 就不會落在掛載的 /app 底下
 RUN uv sync --frozen --no-dev --no-cache && uv pip check --python /opt/venv/bin/python
 
-# 預設是回測入口；實盤由 compose 的 `live` service 把 entrypoint 換成 `python -m apps.live`。
-# `run.py` 仍 COPY 進映像：過渡期的舊指令會經由它轉發
+# 預設是回測入口；實盤由 compose 的 `live` service 把 entrypoint 換成 `python -m apps.live`
 ENTRYPOINT ["python", "-m", "apps.backtest"]
 CMD ["--help"]

@@ -330,7 +330,7 @@ _GUARDED_PACKAGES: Tuple[str, ...] = (
     "scripts",
     "strategy_lab",
 )
-_GUARDED_FILES: Tuple[str, ...] = ("run.py", "conftest.py")
+_GUARDED_FILES: Tuple[str, ...] = ("conftest.py",)
 
 
 def iter_project_sources() -> List[Path]:
