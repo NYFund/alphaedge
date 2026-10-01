@@ -13,8 +13,8 @@
   2. `core/managers/` 只裝三支 `position_manager.py`，名稱籠統，容易變成雜物間。
   3. `core/Dockerfile` 打包的是 `apps`＋`core`＋`tasks`（過渡期另有 `run.py`）整個後端，不只是 `core`。
 - **目標**：`core/` 只剩交易框架本體。具體策略搬到頂層 `strategies/`、資料管線搬到頂層
-  `pipeline/`，兩者都只能單向依賴 `core`；策略契約（抽象基底）留在 `core/strategies/`。
-  完成後頂層的邊界是：`core/` 框架、`strategies/` 正式策略、`pipeline/` 資料擷取、
+  `etl/`（同時由 `pipeline` 改名），兩者都只能單向依賴 `core`；策略契約（抽象基底）留在 `core/strategies/`。
+  完成後頂層的邊界是：`core/` 框架、`strategies/` 正式策略、`etl/` 資料擷取、
   `strategy_lab/` 研究、`apps/` 入口（由 [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md) 建立）。
 - **範圍界線**：**不做**
   1. 不改任何交易、成本、ETL 邏輯——本份只搬位置與改 import，回歸雙線一律零變動。
@@ -27,7 +27,7 @@
   1. `core/` 內對 `core.pipeline` 與頂層 `strategies` 的 import 歸零，並由 `check_layer_deps.py` 守住。
   2. `core/strategies/` 只剩契約（`base.py`、`stock/base.py`、`futures/base.py` 與套件門面）。
   3. `core/managers/` 改名為 `core/position/`；`Dockerfile` 移到專案根目錄。
-  4. Phase5 解除暫緩後，`core/pipeline/` 搬到頂層 `pipeline/`。
+  4. Phase5 解除暫緩後，`core/pipeline/` 搬到頂層並改名為 `etl/`。
   5. 〈附：搬出 `core/` 的目錄範圍護欄清單〉的每一處都涵蓋新的頂層套件——**搬完測試全綠不代表
      護欄還在**，範圍寫死 `core` 的護欄會靜默少掃一塊。
   6. 每一步都通過回歸雙線（`./scripts/run_regression.sh`）、`pytest -m "not slow"`、
@@ -45,7 +45,7 @@
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成；回歸雙線零變動。主目錄待 10/1 演練後更新 |
 | Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ⬜ | 排在 Phase2、Phase5 之後，避免 COPY 清單改兩次 |
-| Phase5-1 | `core/pipeline/` 搬到頂層 `pipeline/` | `pipeline/**`、`tasks/update_db.py`、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；`tasks/update_db.py` 各 target 冒煙；`core` 對 `pipeline` 的 import 為零；附錄護欄全數涵蓋 `pipeline/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次 |
+| Phase5-1 | `core/pipeline/` 搬到頂層並改名 `etl/` | `etl/**`、`tasks/update_db.py`、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；`tasks/update_db.py` 各 target 冒煙；`core` 對 `etl` 的 import 為零；附錄護欄全數涵蓋 `etl/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次。2026-10-01 定案：搬移時一併改名 `etl`，連同日誌桶 `logs/pipeline/` 全部改，範圍見步驟章節 |
 
 ---
 
@@ -307,7 +307,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 ### Phase4-1. `core/Dockerfile` 移到專案根目錄 ⬜
 
 - **目的**：這份 Dockerfile 打包的是 `apps`、`core`、`tasks`（過渡期另有 `run.py`；Phase2 後再加 `strategies`、
-  Phase5 後再加 `pipeline`），也就是整個後端。放在 `core/` 底下會讓人以為它只打包框架。
+  Phase5 後再加 `etl`），也就是整個後端。放在 `core/` 底下會讓人以為它只打包框架。
   `frontend/Dockerfile` 只打包前端，留在原位。
 - **做法**：`git mv core/Dockerfile Dockerfile`，更新約 11 個引用處：`docker-compose.yml`
   （兩個 service 的 `dockerfile:`）、`.github/workflows/ci.yml`、`docs/deployment/`、README。
@@ -321,28 +321,57 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 
 ## Phase5：資料管線搬出 `core/`
 
-### Phase5-1. `core/pipeline/` 搬到頂層 `pipeline/` ⏸
+### Phase5-1. `core/pipeline/` 搬到頂層並改名 `etl/` ⏸
 
 - **目的**：`core/pipeline/`（爬蟲、清洗、入庫、updater）是寫資料庫的另一個應用程式，
   交易框架只讀資料庫。兩者的執行時機（排程與手動 vs 回測與實盤）與失敗模式都不同。
-  搬出去之後，`pipeline` 單向依賴 `core`（`dao`、`config`、`broker` 的 Shioaji session），
-  `core` 完全不知道 `pipeline` 存在。
+  搬出去之後，`etl` 單向依賴 `core`（`dao`、`config`、`broker` 的 Shioaji session），
+  `core` 完全不知道 `etl` 存在。
+- **為什麼改名 `etl`**（2026-10-01 定案）：
+  1. 目錄結構本身就是 ETL——`crawlers/`（Extract）→ `cleaners/`（Transform）→ `loaders/`（Load），
+     `updaters/` 負責串接。
+  2. 專案其他地方早已這樣稱呼：`check_layer_deps.py` 的分層標籤是「資料層（ETL）」、
+     `docs/pipeline/etl-ingestion.md`、`美股ETL與回測架構規劃.md`。
+  3. `pipeline` 在量化專案裡有歧義（回測流程、訊號流程、ML pipeline），看名字分不出是「爬資料寫 DB」。
+  4. 搬移本來就要改全部 import，同時改名幾乎零額外成本；單獨改名則要多搬一次。
+- **改名範圍**（2026-10-01 使用者裁示：**全部改**，不保留任何 `pipeline` 字樣）：
+  1. 套件路徑與 import：`core.pipeline.*` → `etl.*`。
+  2. 由套件名衍生的識別字：`check_layer_deps.py` 的 `_PIPELINE_PACKAGE`／`_PIPELINE_DIR`／
+     `check_framework_pipeline_imports()`、`tests/test_check_layer_deps_pipeline.py`、
+     `core/config/paths.py` 的 `CLEANER_SCHEMA_DIR_PATH` 路徑字串。
+  3. 常數：`PIPELINE_DOWNLOADS_PATH` → `ETL_DOWNLOADS_PATH`（磁碟上仍是 `data/downloads/`，不受影響）；
+     `PIPELINE_LOGS_DIR_PATH` → `ETL_LOGS_DIR_PATH`（連同 `tests/test_config_paths.py` 的常數清單）。
+  4. 日誌桶：`logs/pipeline/` → `logs/etl/`；`core/utils/log_manager.py` 的桶名、docstring 與註解；
+     `tasks/clean_logs.py` 的 `"pipeline"` 鍵；`tests/test_entrypoint_and_logging.py`、`tests/conftest.py`
+     中的桶路徑。
+  5. 文件：`docs/pipeline/` 目錄 → `docs/etl/`；程式註解與文件散文中指這個套件或日誌桶的「pipeline」改為「ETL」。
+- **日誌桶改名的注意事項**：`logs/pipeline/` 是磁碟上的執行期產物（2026-10-01 本機約 26 MB），
+  程式改名後舊目錄不會自動搬，`clean_logs.py` 也不再掃它，會變成永遠不被清理的孤兒目錄。
+  處理方式：
+  1. 開發的 worktree 與主目錄各自執行一次 `mv logs/pipeline/* logs/etl/ && rmdir logs/pipeline`
+     （先 `mkdir -p logs/etl`）。
+  2. 主目錄由 launchd 常駐執行，只能在**段落空檔**更新程式並搬目錄，避免排程中途一半寫舊桶、一半寫新桶。
+  3. 2026-10-01 已確認 `~/Library/LaunchAgents/com.alphaedge.*.plist` 沒有寫死 `logs/pipeline`
+     （launchd 自己的輸出在 `logs/launchd/`），施作時再 grep 一次。
 - **做法**：
-  1. `git mv core/pipeline pipeline`，import 由 `core.pipeline.*` 改為 `pipeline.*`。
+  1. `git mv core/pipeline etl`，import 由 `core.pipeline.*` 改為 `etl.*`。
   2. 呼叫端：`tasks/update_db.py`、`scripts/` 約 5 支、約 56 個測試檔。
-  3. `pyproject.toml`：`include` 加 `pipeline*`；`per-file-ignores` 中 `core/pipeline/...` 的路徑改名。
-  4. `check_layer_deps.py`：Phase1-2 的規則改為把 `pipeline` 加進 `_NON_CORE_TOPS`；
-     `_MARKET_AXIS_PACKAGES` 中的 `core/pipeline` 改名；**`_DB_DRIVER_GUARDED_DIRS` 目前是
-     `("core", "tasks")`，要加上 `pipeline`**——pipeline 是寫資料庫最多的地方，漏掉等於
+  3. `pyproject.toml`：`include` 加 `etl*`；`per-file-ignores` 中 `core/pipeline/...` 的路徑改名。
+  4. `check_layer_deps.py`：Phase1-2 的規則改為把 `etl` 加進 `_NON_CORE_TOPS`；
+     `_MARKET_AXIS_PACKAGES` 中的 `core/pipeline` 改為 `etl`；**`_DB_DRIVER_GUARDED_DIRS` 目前是
+     `("core", "tasks")`，要加上 `etl`**——ETL 是寫資料庫最多的地方，漏掉等於
      「`sqlite3` 只能出現在 `core/dao/`」這條規則對它失效。
-  5. 附錄清單中其餘每一處都加上 `pipeline`。
-  6. `Dockerfile` 加 `COPY pipeline`；`CLAUDE.md`、README 兩份、`docs/` 約 8 份、`backlog/` 中的路徑。
-- **產出**：`pipeline/**` 與上述呼叫端、設定、文件。
+  5. 附錄清單中其餘每一處都加上 `etl`。
+  6. 上列「改名範圍」第 2～5 點的識別字、常數、日誌桶與 `docs/` 目錄；依「日誌桶改名的注意事項」搬移既有日誌。
+  7. `Dockerfile` 加 `COPY etl`；`CLAUDE.md`、README 兩份、`docs/` 約 8 份、`backlog/` 中的路徑。
+- **產出**：`etl/**` 與上述呼叫端、設定、文件。
 - **驗證方式**：
   1. 回歸雙線零變動、`pytest -m "not slow"` 全綠。
   2. `tasks/update_db.py` 每個 target 以測試資料根冒煙一次。
-  3. 分層檢查 0 違規；`grep -rn "core.pipeline" .` 為零。
-  4. 在 `pipeline/` 放一個暫時檔，觸發 `import sqlite3` 與附錄中每道護欄的違規，每一道都要紅。
+  3. 分層檢查 0 違規；`grep -rn "core.pipeline" .` 為零；`grep -rni "pipeline"`（排除 `.git/`、`.venv/`、`backlog/` 的歷史紀錄）為零。
+  4. 在 `etl/` 放一個暫時檔，觸發 `import sqlite3` 與附錄中每道護欄的違規，每一道都要紅。
+  5. `check_doc_paths.py` 通過（`docs/etl/` 的連結全數更新）。
+  6. 跑一次 `tasks/update_db.py` 後，新日誌出現在 `logs/etl/`；`logs/pipeline/` 不存在；`tasks/clean_logs.py` 列得到 `etl` 桶。
 - **相依**：Phase1-2。
 - **暫緩原因與解除條件**：[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 會改寫
   tick 的 loader 與 updater，[PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 會改寫
@@ -371,7 +400,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 ## 附：搬出 `core/` 的目錄範圍護欄清單
 
 以下護欄以**寫死的目錄清單**決定掃描範圍（2026-09-26 以 grep 盤點）。任何新的頂層套件
-（本份的 `strategies/`、`pipeline/`，以及 `回測與實盤入口拆分及架構收斂.md` 的 `apps/`）
+（本份的 `strategies/`、`etl/`，以及 `回測與實盤入口拆分及架構收斂.md` 的 `apps/`）
 都要逐一判斷是否加入。**不加入時要在該處註解寫明理由**，不要只是漏掉。
 `apps/` 已於 2026-09-30（`回測與實盤入口拆分及架構收斂.md` Phase1-1）逐項判斷完畢：覆蓋率兩處刻意不加，其餘全數加入。
 
