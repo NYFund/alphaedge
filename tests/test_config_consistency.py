@@ -35,7 +35,6 @@ ENV_SCAN_PATHS: List[str] = [
     "tasks",
     "frontend",
     "scripts",
-    "run.py",
 ]
 
 # 以字面值當第一個參數讀環境變數的函式：標準函式庫與專案內的兩個包裝

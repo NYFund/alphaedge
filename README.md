@@ -525,7 +525,6 @@ AlphaEdge/
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）
 ├── apps/                      # 入口：backtest.py（回測）、live.py（實盤）、_common.py（兩者共用）
-├── run.py                     # 舊入口的轉發 shim（過渡期保留，之後刪除；新指令一律用 apps/）
 ├── README.md                  # 中文（權威版本）
 └── README_en.md               # 英譯
 ```

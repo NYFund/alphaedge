@@ -39,7 +39,8 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "scripts",
     "tests",
 )
-_SCAN_FILES: Tuple[str, ...] = ("run.py",)
+# 頂層的單檔 .py：入口都已收進 `apps/`，目前沒有；日後新增單檔入口時要登記在這裡，否則不會被掃到
+_SCAN_FILES: Tuple[str, ...] = ()
 
 # 分層等級：數字越大越上層；import 只能由高往低（等級相同且套件不同者另外列為「同層互相 import」）
 # 第四欄 exact=True 表示只比對「模組名完全相同」，不含其子模組——
@@ -117,7 +118,6 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.strategies", 7, "策略層", False),
     # 頂層的具體策略套件：與 `core.strategies` 的具體策略同層，只能往下 import 框架
     ("strategies", 7, "策略層", False),
-    ("run", 8, "入口層", False),
     ("apps", 8, "入口層", False),
     ("tasks", 8, "入口層", False),
     ("frontend", 8, "應用層", False),
@@ -143,7 +143,6 @@ _NON_CORE_TOPS: Set[str] = {
     "strategy_lab",
     "scripts",
     "tests",
-    "run",
 }
 
 # 跨軸目錄規則：每層目錄只承載一條軸
