@@ -32,6 +32,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 _SCAN_DIRS: Tuple[str, ...] = (
     "core",
     "apps",
+    "strategies",
     "tasks",
     "frontend",
     "strategy_lab",
@@ -114,6 +115,8 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.strategies.stock", 4, "策略契約（套件門面）", True),
     ("core.strategies.futures", 4, "策略契約（套件門面）", True),
     ("core.strategies", 7, "策略層", False),
+    # 頂層的具體策略套件：與 `core.strategies` 的具體策略同層，只能往下 import 框架
+    ("strategies", 7, "策略層", False),
     ("run", 8, "入口層", False),
     ("apps", 8, "入口層", False),
     ("tasks", 8, "入口層", False),
@@ -134,6 +137,7 @@ _KNOWN_REVERSE: Dict[Tuple[str, str], str] = {}
 # 非 core 的頂層套件：core/ 內任何一處 import 到它們都是反向相依
 _NON_CORE_TOPS: Set[str] = {
     "apps",
+    "strategies",
     "tasks",
     "frontend",
     "strategy_lab",
@@ -166,6 +170,7 @@ _INSTRUMENT_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/models",
     "core/strategies",
     "core/position",
+    "strategies",
 )
 
 
@@ -455,16 +460,30 @@ def check_axis_dirs() -> List[str]:
 
 
 def check_strategy_facades(graph: Dict[str, Set[str]]) -> List[str]:
-    """策略套件門面（stock/futures 的 __init__）只准 import 自己的 base，不得拉進具體策略"""
+    """
+    策略套件門面不得拉進具體策略
+
+    `core/strategies` 的門面只准 import 自己的 base（契約）；頂層 `strategies` 的門面
+    一律不准 import 任何專案模組——那裡沒有契約，只有具體策略，由載入器依名稱掃描。
+    """
+
+    # 門面 → 允許 import 的模組
+    allowed_by_facade: Dict[str, Set[str]] = {
+        "core.strategies": {"core.strategies.base"},
+        "core.strategies.stock": {"core.strategies.stock.base", "core.strategies.base"},
+        "core.strategies.futures": {
+            "core.strategies.futures.base",
+            "core.strategies.base",
+        },
+        "strategies": set(),
+        "strategies.stock": set(),
+        "strategies.futures": set(),
+    }
 
     problems: List[str] = []
-    for facade in (
-        "core.strategies",
-        "core.strategies.stock",
-        "core.strategies.futures",
-    ):
+    for facade, allowed in allowed_by_facade.items():
         for dst in sorted(graph.get(facade, ())):
-            if dst not in {f"{facade}.base", "core.strategies.base"}:
+            if dst not in allowed:
                 problems.append(
                     f"{facade}/__init__.py import 了 {dst}：門面一 eager import 具體策略"
                     "就會造成循環 import"
@@ -489,7 +508,7 @@ _BACKTEST_INTERNAL_PACKAGES: Tuple[str, ...] = (
     "core.backtest.report",
 )
 _BACKTEST_DIR: str = "core/backtest"
-_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "tasks")
+_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "strategies", "tasks")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
 
 
@@ -794,7 +813,10 @@ def main() -> int:
     section("D. 市場語意洩漏", leakage)
     section("E. 跨軸目錄污染", axis)
     section("E'. 策略套件門面 eager import 具體策略", facades)
-    section("E''. DAO 以外 import 資料庫驅動（core／tasks）", db_driver_hits)
+    section(
+        "E''. DAO 以外 import 資料庫驅動（core／apps／strategies／tasks）",
+        db_driver_hits,
+    )
     section("E'''. 純轉換層 import 資料層（core/adapters）", pure_transform_hits)
     section("E''''. 框架 import 資料管線（core/ 內 core/pipeline 以外）", pipeline_hits)
     section(
