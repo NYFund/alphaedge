@@ -5,6 +5,7 @@ import pytest
 
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.instrument_spec import TwStockSpec
+from core.utils import Action
 from core.utils.instrument import StockUtils
 
 """InstrumentSpec 測試：台股規格的三個介面必須與既有 StockUtils 逐值相同"""
@@ -159,3 +160,62 @@ def test_common_stock_filter_keeps_codes_above_9958() -> None:
     assert StockUtils.filter_common_stocks(
         ["2330", "9960", "9962", "0050", "00878", "030001", "1000"]
     ) == ["2330", "9960", "9962"]
+
+
+# === 與交易所公告值逐筆對照（`TWT84U` 股價升降幅度，以公告的開盤競價基準為輸入） ===
+@pytest.mark.parametrize(
+    ("symbol", "basis", "day", "expected"),
+    [
+        # 浮點誤差：15.5 × 0.9 在浮點數是 13.950000000000001，往上對齊曾變成 14.0
+        ("1906", 15.5, datetime.date(2024, 1, 2), (13.95, 17.05)),
+        ("2101", 42.0, datetime.date(2024, 1, 2), (37.8, 46.2)),
+        ("2211", 104.0, datetime.date(2024, 1, 2), (93.6, 114.0)),
+        # ETF 的檔位表比普通股細：0050 套普通股表曾算成 148.5
+        ("0050", 135.45, datetime.date(2024, 1, 2), (121.95, 148.95)),
+        ("0055", 24.12, datetime.date(2024, 1, 2), (21.71, 26.53)),
+        # 槓桿型 ETF 的幅度乘上 2 倍
+        ("00631L", 151.2, datetime.date(2024, 1, 2), (121.0, 181.4)),
+        ("00631L", 24.48, datetime.date(2016, 10, 3), (19.59, 29.37)),
+    ],
+    ids=[
+        "float-1906",
+        "float-2101",
+        "float-2211",
+        "etf-0050",
+        "etf-0055",
+        "lev-2024",
+        "lev-2016",
+    ],
+)
+def test_price_limits_match_announced_values(
+    symbol: str, basis: float, day: datetime.date, expected: Tuple[float, float]
+) -> None:
+    """每一筆都是交易所當日公告的（跌停價, 漲停價）"""
+
+    assert TwStockSpec().get_price_limits(basis, day, symbol) == expected
+
+
+def test_leveraged_etf_ratio_is_doubled_but_inverse_is_not() -> None:
+    """`L` 結尾（2 倍槓桿）加倍；`R` 結尾（-1 倍反向）與普通股相同"""
+
+    spec: TwStockSpec = TwStockSpec()
+
+    assert spec.get_price_limit_ratio(datetime.date(2024, 1, 2), "00631L") == 0.20
+    assert spec.get_price_limit_ratio(datetime.date(2024, 1, 2), "00632R") == 0.10
+    assert spec.get_price_limit_ratio(datetime.date(2015, 5, 4), "00631L") == 0.14
+
+
+def test_tick_table_depends_on_symbol() -> None:
+    """ETF 用兩段表、普通股用六段表；不給代號時用普通股表（與舊行為相同）"""
+
+    assert StockUtils.round_to_tick(148.97, "down", "0050") == 148.95
+    assert StockUtils.round_to_tick(148.97, "down", "2330") == 148.5
+    assert StockUtils.round_to_tick(148.97, "down") == 148.5
+
+
+def test_slippage_scaling_has_no_float_error() -> None:
+    """3 元加 100 bps：3.0 × 1.01 浮點是 3.0300000000000002，往上對齊曾變成 3.04"""
+
+    assert InstrumentSpec.scale_price(3.0, 0.01) == 3.03
+    assert TwStockSpec().apply_slippage(3.0, Action.BUY, 100, "2330") == 3.03
+    assert TwStockSpec().apply_slippage(3.0, Action.SELL, 100, "2330") == 2.97

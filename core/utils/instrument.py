@@ -5,6 +5,7 @@ from typing import List, Optional, Tuple
 from .constant import (
     DAY_TRADE_TAX_EXPIRY,
     DAY_TRADE_TAX_START,
+    ETF_PRICE_TICK_TABLE,
     PRICE_TICK_TABLE,
     Commission,
     Units,
@@ -173,7 +174,29 @@ class StockUtils:
         return max(1, int(price * StockUtils.convert_lot_to_share(volume) * rate))
 
     @staticmethod
-    def round_to_tick(price: float, direction: str = "nearest") -> float:
+    def get_tick_table(symbol: Optional[str] = None) -> List[Tuple[float, float]]:
+        """
+        - Description:
+            取得該證券適用的價格檔位表：ETF（代號 `00` 開頭）用 ETF 的兩段表，其餘用普通股的六段表
+
+            未提供代號時退回普通股表——那是呼叫端沒有標的資訊時唯一合理的預設，
+            與本方法加入前的行為相同。
+        - Parameters:
+            - symbol: Optional[str]
+                證券代號
+        - Return:
+            - List[Tuple[float, float]]
+                (價格上限, 檔位) 的清單
+        """
+
+        if symbol and symbol.startswith("00"):
+            return ETF_PRICE_TICK_TABLE
+        return PRICE_TICK_TABLE
+
+    @staticmethod
+    def round_to_tick(
+        price: float, direction: str = "nearest", symbol: Optional[str] = None
+    ) -> float:
         """
         - Description:
             將價格對齊台股分段檔位，避免算出不可能成交的價格
@@ -183,6 +206,8 @@ class StockUtils:
             - direction: str
                 取整方向："up"（進位）、"down"（捨去）、"nearest"（就近）
                 放空情境建議：開倉（賣出）用 "down"、回補（買進）用 "up"，較為保守
+            - symbol: Optional[str]
+                證券代號；用來選檔位表（ETF 與普通股不同），未提供時用普通股表
         - Return:
             - price: float
                 對齊檔位後的價格
@@ -191,9 +216,11 @@ class StockUtils:
         if price <= 0:
             return 0.0
 
+        tick_table: List[Tuple[float, float]] = StockUtils.get_tick_table(symbol)
+
         # 找出該價位適用的檔位；邊界值（如 10、50）歸屬較大的檔位級距
-        tick: float = PRICE_TICK_TABLE[-1][1]
-        for upper_bound, tick_size in PRICE_TICK_TABLE:
+        tick: float = tick_table[-1][1]
+        for upper_bound, tick_size in tick_table:
             if price < upper_bound:
                 tick = tick_size
                 break

@@ -51,6 +51,15 @@ PRICE_TICK_TABLE: List[Tuple[float, float]] = [
 ]
 
 
+# ETF（代號 00 開頭）的價格檔位：比普通股細，只分兩段。
+# 套用普通股那張表會把漲跌停算錯一檔以上（0050 基準 135.45 時公告漲停 148.95，
+# 普通股表算出 148.5）；2024-01-02 以 `TWT84U` 公告值實測，ETF 套普通股表的相符率只有 18.9%
+ETF_PRICE_TICK_TABLE: List[Tuple[float, float]] = [
+    (50.0, 0.01),
+    (float("inf"), 0.05),
+]
+
+
 class Market(str, Enum):
     """
     市場（地區）
