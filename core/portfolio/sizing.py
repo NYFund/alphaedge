@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
 
+from loguru import logger
+
 from core.models import BaseAccount, BaseQuote
 from core.utils import Units
 
@@ -88,6 +90,11 @@ class EqualWeightSizer(BasePositionSizer):
         )
 
         if available_position_cnt <= 0:
+            if candidates:
+                logger.info(
+                    f"[Sizing] 持倉已達上限 {max_holdings} 檔，"
+                    f"{len(candidates)} 個開倉候選全數略過"
+                )
             return []
 
         per_position_size: float = account.balance / available_position_cnt
@@ -106,5 +113,13 @@ class EqualWeightSizer(BasePositionSizer):
             if open_volume >= 1:
                 sized.append((quote, ref_price, open_volume))
                 available_position_cnt -= 1
+            else:
+                # 不記的話，整批訊號被切成 0 張時 log 只剩「沒有任何委託」，
+                # 看不出是資金切太細還是訊號根本沒出來
+                logger.info(
+                    f"[Sizing] {quote.symbol} 每檔資金 {per_position_size:,.0f} "
+                    f"不足一張（參考價 {ref_price} × {Units.LOT} ＝ "
+                    f"{ref_price * Units.LOT:,.0f}），略過"
+                )
 
         return sized
