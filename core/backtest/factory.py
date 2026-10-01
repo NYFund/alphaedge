@@ -115,6 +115,8 @@ def build_tw_stock_backtester(
         event_counts=event_counts,
         config=strategy.fill_config or FillConfig(),
         check_borrowable=cost_model.config.short_constraint.check_borrowable,
+        check_short_sale_list=cost_model.config.short_constraint.check_short_sale_list,
+        check_day_trade_list=cost_model.config.short_constraint.check_day_trade_list,
     )
 
     settlement: TwStockSettlementModel = TwStockSettlementModel(

@@ -7,6 +7,7 @@ from typing import Dict, Iterator, List, Optional, Set, Union
 from loguru import logger
 
 from core.config import (
+    DAY_TRADE_LIST_START_DATE,
     DEFAULT_CHIP_START_DATE,
     DEFAULT_CORPORATE_ACTION_START_DATE,
     DEFAULT_DIVIDEND_START_DATE,
@@ -16,6 +17,7 @@ from core.config import (
     DEFAULT_PRICE_START_DATE,
     DEFAULT_START_YEAR,
     FINMIND_BROKER_TRADING_START_DATE,
+    SHORT_SALE_LIST_START_DATE,
     STOCK_FUTURES_TOP_N,
     TICK_UPDATE_START_DATE,
 )
@@ -41,9 +43,15 @@ from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
     MonthlyRevenueReportUpdater,
 )
 from core.pipeline.tw.updaters.stock_chip_updater import StockChipUpdater
+from core.pipeline.tw.updaters.stock_day_trade_list_updater import (
+    StockDayTradeListUpdater,
+)
 from core.pipeline.tw.updaters.stock_dividend_updater import StockDividendUpdater
 from core.pipeline.tw.updaters.stock_margin_updater import StockMarginUpdater
 from core.pipeline.tw.updaters.stock_price_updater import StockPriceUpdater
+from core.pipeline.tw.updaters.stock_short_sale_list_updater import (
+    StockShortSaleListUpdater,
+)
 from core.pipeline.tw.updaters.stock_tick_updater import StockTickUpdater
 from core.pipeline.utils import DataLoadError, DataType, FinMindDataType
 from tasks.clean_logs import clean_logs
@@ -79,6 +87,10 @@ Target 對照表
   tick                        逐筆成交 (Shioaji ticks)
   chip                        三大法人籌碼
   margin                      信用交易（融資融券餘額）
+  short_sale_list             平盤下得融（借）券賣出名單（2013-09-23 起；回測擋單用；
+                              **不含在 all／no_tick 內**，只在此處點名才會跑）
+  day_trade_list              現股當沖標的名單（2014-01-06 起；回測擋單用；
+                              **不含在 all／no_tick 內**，只在此處點名才會跑）
   dividend                    除權除息計算結果表（含還原係數、現金股利）
   corporate_action            非除權息的公司行動（減資、面額變更；含調整倍率）
   price                       收盤價
@@ -129,9 +141,15 @@ TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 # DolphinDB 表又是 `keepDuplicates=ALL`、loader 每次重放整個目錄——每跑一次
 # 近月契約就重抓並多寫一份，成交量被放大 N 倍，每個候選日還先耗一次
 # `api.usage()` 配額。在加上「契約 × 日」的載入紀錄之前，不能讓 `all` 帶到它
+#
+# 兩份交易所資格名單目前也只能點名：從起點回補約 3,200 個交易日 × 每日兩個請求，
+# 以現行節流要數小時。歷史回補完成之前放進 `no_tick`，每天早上的排程更新就會
+# 被這段回補卡住，排在後面的 target 全部延後
 EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
     DataType.FUTURES_STOCK_PRICE,
     DataType.FUTURES_TICK,
+    DataType.SHORT_SALE_LIST,
+    DataType.DAY_TRADE_LIST,
 }
 
 
@@ -252,6 +270,16 @@ def _build_time_config(
     elif data_type == DataType.MARGIN:
         return {
             "start_date": DEFAULT_MARGIN_START_DATE,
+            "end_date": datetime.date.today(),
+        }
+    elif data_type == DataType.SHORT_SALE_LIST:
+        return {
+            "start_date": SHORT_SALE_LIST_START_DATE,
+            "end_date": datetime.date.today(),
+        }
+    elif data_type == DataType.DAY_TRADE_LIST:
+        return {
+            "start_date": DAY_TRADE_LIST_START_DATE,
             "end_date": datetime.date.today(),
         }
     elif data_type == DataType.DIVIDEND:
@@ -428,6 +456,40 @@ def main() -> None:
                 )
             finally:
                 stock_margin_updater.close()
+
+    if DataType.SHORT_SALE_LIST.name.lower() in targets:
+        with target_guard("short_sale_list", failed_targets):
+            time_config: Dict[str, datetime.date | int] = get_update_time_config(
+                data_type=DataType.SHORT_SALE_LIST,
+                from_date=from_date,
+            )
+            short_sale_list_updater: StockShortSaleListUpdater = (
+                StockShortSaleListUpdater()
+            )
+            try:
+                short_sale_list_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                short_sale_list_updater.close()
+
+    if DataType.DAY_TRADE_LIST.name.lower() in targets:
+        with target_guard("day_trade_list", failed_targets):
+            time_config: Dict[str, datetime.date | int] = get_update_time_config(
+                data_type=DataType.DAY_TRADE_LIST,
+                from_date=from_date,
+            )
+            day_trade_list_updater: StockDayTradeListUpdater = (
+                StockDayTradeListUpdater()
+            )
+            try:
+                day_trade_list_updater.update(
+                    start_date=time_config["start_date"],
+                    end_date=time_config["end_date"],
+                )
+            finally:
+                day_trade_list_updater.close()
 
     if DataType.DIVIDEND.name.lower() in targets:
         with target_guard("dividend", failed_targets):

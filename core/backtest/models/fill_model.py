@@ -1,26 +1,33 @@
 import copy
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
 from core.backtest.models.event_counts import new_event_counts
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
-from core.models import BaseOrder, BaseQuote
+from core.models import (
+    BaseOrder,
+    BaseQuote,
+    DayTradeListSnapshot,
+    ShortSaleListSnapshot,
+)
 from core.models.fill_config import FillConfig, FuturesFillConfig, VolumeCapPolicy
 from core.utils import Action, PositionType, Scale, ShortMethod, TimeUtils
 
 """
 FillModel: 這張單成不成交、以什麼價量成交
 
-包含四件事，全部屬「市場執行假設」而非引擎邏輯：
+包含五件事，全部屬「市場執行假設」而非引擎邏輯：
 1. **成交價可信度**（`validate()`）：前視偏誤與不可能成交的擋板
 2. **滑價**（`FillConfig.slippage_bps_*`）：拿不到理想價
 3. **成交量上限**（`FillConfig.max_volume_share`）：一張單不可能吃掉當日大半成交量
 4. **券源檢核**（`ShortConstraint.check_borrowable`）：借不到券就放空不了
+5. **交易所名單檢核**（`ShortConstraint.check_short_sale_list`／`check_day_trade_list`）：
+   不在名單上、被註記暫停，或平盤下不得放空的標的放空不了
 
-2~4 三項的預設值皆為「關閉」，此時不改動任何訂單的價量。
+2~5 四項的預設值皆為「關閉」，此時不改動任何訂單的價量。
 """
 
 
@@ -39,6 +46,11 @@ class BaseFillModel(ABC):
 
     # 數量單位：股票論張、期貨論口。只影響 log 訊息，成交量上限的政策兩邊相同
     VOLUME_UNIT: str = "張"
+
+    # 交易所名單檢核是否開啟；引擎據此要求資料源確認名單涵蓋整段區間。
+    # 沒有名單制度的市場維持 False
+    check_short_sale_list: bool = False
+    check_day_trade_list: bool = False
 
     @abstractmethod
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
@@ -167,6 +179,15 @@ class BaseFillModel(ABC):
 
     def apply_short_suspended_symbols(self, symbols: Set[str]) -> None:
         """一根 bar 開始：更新今日處於停券期間的標的；預設不處理"""
+
+        pass
+
+    def apply_trading_lists(
+        self,
+        short_sale_list: Optional[ShortSaleListSnapshot],
+        day_trade_list: Optional[DayTradeListSnapshot],
+    ) -> None:
+        """一根 bar 開始：更新當日的交易所名單；預設不處理"""
 
         pass
 
@@ -322,6 +343,8 @@ class TwStockFillModel(BaseFillModel):
         event_counts: Optional[Dict[str, int]] = None,
         config: Optional[FillConfig] = None,
         check_borrowable: bool = False,
+        check_short_sale_list: bool = False,
+        check_day_trade_list: bool = False,
     ) -> None:
         self.instrument: InstrumentSpec = instrument or TwStockSpec()
 
@@ -330,6 +353,13 @@ class TwStockFillModel(BaseFillModel):
 
         # 是否檢核券源；由 factory 依 ShortConstraint.check_borrowable 帶入
         self.check_borrowable: bool = check_borrowable
+
+        # 是否依交易所名單檢核放空開倉；由 factory 依 ShortConstraint 帶入
+        self.check_short_sale_list: bool = check_short_sale_list
+        self.check_day_trade_list: bool = check_day_trade_list
+        # 當日名單，由引擎每根 bar 從 DataFeed 推入
+        self.short_sale_list: Optional[ShortSaleListSnapshot] = None
+        self.day_trade_list: Optional[DayTradeListSnapshot] = None
 
         # 當日可借券餘額（張）：{stock_id: 融券今日餘額}，由 DataFeed 於每根 bar 開始時提供
         self.short_balance: Dict[str, int] = {}
@@ -503,10 +533,28 @@ class TwStockFillModel(BaseFillModel):
 
         self.short_suspended_symbols = symbols
 
+    def apply_trading_lists(
+        self,
+        short_sale_list: Optional[ShortSaleListSnapshot],
+        day_trade_list: Optional[DayTradeListSnapshot],
+    ) -> None:
+        """
+        - Description:
+            更新當日的平盤下融（借）券名單與現股當沖名單
+        - Parameters:
+            - short_sale_list: Optional[ShortSaleListSnapshot]
+                當日平盤下得融（借）券賣出名單
+            - day_trade_list: Optional[DayTradeListSnapshot]
+                當日現股當沖標的名單
+        """
+
+        self.short_sale_list = short_sale_list
+        self.day_trade_list = day_trade_list
+
     def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
         """
         - Description:
-            台股的成交假設：券源檢核 → 滑價 → 成交量上限
+            台股的成交假設：交易所名單 → 券源檢核 → 停券 → 滑價 → 成交量上限
 
             三項預設皆為關閉，此時直接回傳**原物件**（不是副本），
             未啟用任何假設時不改動訂單的價量。
@@ -519,6 +567,9 @@ class TwStockFillModel(BaseFillModel):
             - Optional[BaseOrder]
                 可成交的訂單；不可成交時為 None
         """
+
+        if not self.check_trading_lists(order):
+            return None
 
         if not self.check_short_borrowable(order):
             return None
@@ -543,6 +594,106 @@ class TwStockFillModel(BaseFillModel):
         # 它又拿不到原單——兩者只能在副本上碰頭
         filled_order.reference_price = order.price
         return filled_order
+
+    def check_trading_lists(self, order: BaseOrder) -> bool:
+        """
+        - Description:
+            依交易所每日名單檢核**放空開倉**能不能成交
+
+            依放空管道分流：
+            - **融券**：須在平盤下名單內（名單＝可融資融券的證券）且未暫停融券
+            - **借券**：未暫停借券；不要求在名單內
+            - 以上兩者若委託價**低於平盤**（前一交易日收盤，除權息日為開盤競價基準），
+              還須在名單內且未被註記「前一交易日跌停、本日禁止平盤下」
+            - **現股當沖（先賣後買）**：須在當沖名單內且未暫停先賣後買；它是現股賣出，
+              **不受平盤下限制**
+
+            比較的是委託價（滑價前）：平盤下限制管的是委託價格，平盤本身可以賣。
+            沒有平盤基準（回測第一根 bar）時無從判斷平盤下，只檢查名單與暫停註記。
+
+            **開啟檢核卻沒有當日名單時拋錯**：資料源在回測開始前已確認區間每天都有名單，
+            走到這裡沒有名單代表那道檢查被繞過了，照常放行會讓結果看似有檢查。
+        - Parameters:
+            - order: BaseOrder
+                待檢核的訂單
+        - Return:
+            - bool
+                False 時呼叫端應拒單
+        - Raise:
+            - RuntimeError
+                開啟檢核但當日沒有名單
+        """
+
+        is_short_open: bool = (
+            order.action == Action.SELL and order.position_type == PositionType.SHORT
+        )
+        if not is_short_open:
+            return True
+
+        short_method: Optional[ShortMethod] = getattr(order, "short_method", None)
+
+        if short_method == ShortMethod.DAY_TRADE:
+            if not self.check_day_trade_list:
+                return True
+            day_trade_list: DayTradeListSnapshot = self.require_list(
+                self.day_trade_list, "現股當沖標的名單"
+            )
+            if day_trade_list.allows_sell_first(order.symbol):
+                return True
+            logger.warning(
+                f"[Fill] {order.symbol} 當日不在現股當沖名單或暫停先賣後買，拒單"
+            )
+            self.event_counts["rejected_not_day_tradable"] += 1
+            return False
+
+        if not self.check_short_sale_list:
+            return True
+        short_sale_list: ShortSaleListSnapshot = self.require_list(
+            self.short_sale_list, "平盤下得融（借）券賣出名單"
+        )
+
+        if short_method == ShortMethod.MARGIN:
+            allowed: bool = short_sale_list.allows_margin_short(order.symbol)
+        else:
+            allowed = short_sale_list.allows_sbl_short(order.symbol)
+        if not allowed:
+            logger.warning(
+                f"[Fill] {order.symbol} 當日不得{self.short_method_label(short_method)}"
+                f"（名單外或被註記暫停），拒單"
+            )
+            self.event_counts["rejected_short_halted"] += 1
+            return False
+
+        reference: Optional[float] = self.prev_close.get(order.symbol)
+        if (
+            reference
+            and order.price < reference
+            and not short_sale_list.allows_below_reference(order.symbol)
+        ):
+            logger.warning(
+                f"[Fill] {order.symbol} 委託價 {order.price} 低於平盤 {reference}，"
+                f"當日不得平盤下{self.short_method_label(short_method)}，拒單"
+            )
+            self.event_counts["rejected_below_reference"] += 1
+            return False
+
+        return True
+
+    @staticmethod
+    def require_list(snapshot: Optional[Any], label: str) -> Any:
+        """開啟檢核時取當日名單；沒有就拋錯（理由見 `check_trading_lists()`）"""
+
+        if snapshot is None:
+            raise RuntimeError(
+                f"已開啟{label}檢核，但當日沒有名單；資料源的涵蓋檢查應該在回測開始前就擋下"
+            )
+        return snapshot
+
+    @staticmethod
+    def short_method_label(short_method: Optional[ShortMethod]) -> str:
+        """log 用的放空管道名稱"""
+
+        return "融券賣出" if short_method == ShortMethod.MARGIN else "借券賣出"
 
     def check_short_not_suspended(self, order: BaseOrder) -> bool:
         """

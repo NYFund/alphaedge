@@ -3,3 +3,5 @@ partial_cover_fifo,2,2330,SHORT,MARGIN,False,2024-01-03,105.0,1,45,315,444,94500
 limit_up_locked_convert,1,2330,SHORT,MARGIN,False,2024-01-03,110.0,1,47,330,465,99000.0,110000.0,88,0.0,0.0,0
 ex_dividend_force_cover_sbl,1,2330,SHORT,SBL,False,2024-01-02,100.0,2,85,600,685,180000.0,200000.0,0,16.0,0.0,1
 ex_dividend_compensation_partial_cover,1,2330,SHORT,SBL,False,2024-01-02,100.0,3,129,900,1029,270000.0,300000.0,0,48.0,4500.0,2
+short_sale_list_below_reference,1,2330,SHORT,MARGIN,False,2024-01-02,100.0,1,42,300,422,90000.0,100000.0,80,0.0,0.0,1
+short_sale_list_below_reference,2,2330,SHORT,MARGIN,False,2024-01-03,100.0,1,42,300,422,90000.0,100000.0,80,0.0,0.0,0

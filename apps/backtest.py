@@ -7,6 +7,7 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.config import SHOW_FIGURES_ENV_VAR, resolve_show_figures
+from core.datafeed.base import TradingListCoverageError
 from core.strategies.base import BaseStrategy
 
 from ._common import EXIT_USAGE, _resolve_strategy_or_exit
@@ -115,6 +116,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     except InvalidBacktestOverridesError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
+    except TradingListCoverageError as exc:
+        # 名單缺日或區間早於制度起點：訊息已寫明要改起日或先跑哪個 ETL，不需要 traceback
+        print(str(exc), file=sys.stderr)
+        return 1
     # 命令列旗標優先於環境變數；兩者都沒給就是不開圖
     backtester.show_figures = resolve_show_figures() if args.show is None else args.show
     backtester.run()

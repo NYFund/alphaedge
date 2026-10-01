@@ -1,6 +1,6 @@
 import datetime
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from core.utils import (
     DAYS_PER_YEAR,
@@ -28,21 +28,22 @@ import 回測套件，那是部位管理層不該有的方向。
 @dataclass
 class ShortConstraint:
     """
-    放空的可成交限制；全部可選，未提供資料時該項檢查自動跳過
+    放空的可成交限制；全部可選，預設全關（關閉時不改動任何訂單）
 
-    **兩個欄位目前有定義、無呼叫端**（`allow_below_reference`、`day_trade_whitelist`）。
-    設了限制卻不生效比功能沒做更危險，故由 `StockCostModel` 在建構時逐一檢查並發出警告，
-    見 `check_unimplemented_constraints()`。
-
-    `check_borrowable` 則已接上呼叫端（`TwStockFillModel.check_short_borrowable()`），
-    `force_cover_dates` 與 `auto_force_cover_on_ex_dividend` 接上
-    `TwStockSettlementModel.check_force_cover()`。
+    呼叫端：
+    - `check_borrowable` → `TwStockFillModel.check_short_borrowable()`（融券餘額）
+    - `check_short_sale_list`、`check_day_trade_list` → `TwStockFillModel.check_trading_lists()`
+      （交易所每日公告的兩份名單）
+    - `force_cover_dates`、`auto_force_cover_on_ex_dividend` → `TwStockSettlementModel.check_force_cover()`
     """
 
-    allow_below_reference: bool = True  # 是否允許平盤下放空（**尚未實作**）
-    day_trade_whitelist: Optional[Dict[datetime.date, Set[str]]] = (
-        None  # 每日可當沖清單（**尚未實作**）
-    )
+    # 依「平盤下得融（借）券賣出名單」檢核融券／借券放空開倉：
+    # 名單外不得融券、被註記暫停者不得融券或借券、低於平盤須在名單內且未被註記跌停禁止。
+    # **開啟時回測起日不得早於名單起點、區間內不得缺日**，否則拒絕執行（見資料源的
+    # `ensure_trading_list_coverage()`）——缺資料不可以默默變成「不限制」
+    check_short_sale_list: bool = False
+    # 依「現股當沖標的名單」檢核現股當沖放空（先賣後買）；起日不得早於先賣後買開放日
+    check_day_trade_list: bool = False
     check_borrowable: bool = False  # 是否檢核券源（由 FillModel 依融券今日餘額檢核）
     force_cover_dates: Optional[Dict[str, List[datetime.date]]] = None  # 停券強制回補日
     # 是否由除權息行事曆自動推導融券最後回補日（**預設開啟**：這是融券制度的規則，
@@ -56,20 +57,6 @@ class ShortConstraint:
     # 差異寫在那支函式的 docstring——**改這一邊之前先看那份對照表**，
     # 否則會讓回測跑得過的部位規模在實盤被截掉（或反過來）而查不出原因。
     max_short_exposure_ratio: Optional[float] = None
-
-    def check_day_tradable(self, stock_id: str, date: datetime.date) -> bool:
-        """
-        檢查該股票當日是否可當沖；未提供清單時一律視為可當沖
-
-        **目前未被任何路徑呼叫**：引擎的下單流程不會走到這裡，設定
-        `day_trade_whitelist` 不會影響任何回測結果。接上呼叫端前不要
-        以為它已生效。
-        """
-
-        if self.day_trade_whitelist is None:
-            return True
-
-        return stock_id in self.day_trade_whitelist.get(date, set())
 
     def get_force_cover_dates(self, stock_id: str) -> List[datetime.date]:
         """

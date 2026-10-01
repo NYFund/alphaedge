@@ -74,8 +74,8 @@
 
 | 限制 | 影響 | 框架處理 |
 |------|------|----------|
-| 平盤下放空 | 原則全面開放；**警示／處置股期間禁止** | `ShortConstraint.allow_below_reference` 開關，預設 True（**尚無撮合呼叫端**，見下方說明） |
-| 可當沖標的清單 | 證交所每日公告，處置股停止先賣後買 | `ShortConstraint.day_trade_whitelist`（**尚無撮合呼叫端**） |
+| 融券／借券資格與平盤下放空 | 只有可融資融券的證券能融券；個股可能被暫停融券或借券；前一交易日收盤跌停者本日不得平盤下融（借）券 | `ShortConstraint.check_short_sale_list`，預設關閉；資料來自 `short_sale_list` 表（交易所每日公告，2013-09-23 起），拒單計入 `rejected_short_halted`／`rejected_below_reference` |
+| 現股當沖標的清單 | 只有名單內的證券能現股當沖；個股可能被暫停先賣後買 | `ShortConstraint.check_day_trade_list`，預設關閉；資料來自 `day_trade_list` 表（2014-01-06 起），拒單計入 `rejected_not_day_tradable` |
 | 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表，拒單計入 `rejected_no_borrow` |
 | 停券期間（除權息） | 強制回補 | 由 `dividend` 表推導融券最後回補日（`auto_force_cover_on_ex_dividend`，預設開啟）；另可用 `ShortConstraint.force_cover_dates` 手動指定 |
 | 停券期間（股東會） | 強制回補 | **無資料源**，仍以 `max_holding_days` 保險絲近似 |
@@ -85,7 +85,26 @@
 
 **券源檢核只作用在需要券源的放空管道**（`TwStockFillModel.check_short_borrowable()`）：`ShortMethod.DAY_TRADE`（現股當沖沖賣，先賣後買）直接放行，`MARGIN`／`SBL` 才比對餘額——判準是 `short_method`，不是 `is_day_trade`（融券當沖的 `is_day_trade` 也是 True，卻確實借了券）。
 
-`allow_below_reference`、`day_trade_whitelist` 兩個欄位**只有定義沒有呼叫端**——設定後不會生效，但 `StockCostModel` 建構時會發出警告（`check_unimplemented_constraints()`），不會靜默。
+**交易所名單檢核依放空管道分流**（`TwStockFillModel.check_trading_lists()`）：
+
+| 管道 | 名單檢核 | 平盤下（委託價 < 前一交易日收盤，除權息日為開盤競價基準） |
+|------|----------|----------------|
+| `MARGIN` 融券 | 須在平盤下名單內（＝可融資融券）且未暫停融券 | 另須未被註記「前一交易日跌停、本日禁止平盤下」 |
+| `SBL` 借券 | 未暫停借券；**不要求在名單內** | 須在名單內且未被註記跌停禁止 |
+| `DAY_TRADE` 現股當沖先賣 | 須在當沖名單內且未暫停先賣後買 | **不受限**：先賣後買是現股賣出，交易所不以平盤下規則限制 |
+
+比較的是委託價（滑價前），平盤本身可以賣。
+
+**開啟名單檢核時，資料缺口一律拒絕執行而不是放行**（與券源檢核相反）：
+- 回測起日早於制度起點：平盤下名單 2013-09-23、現股當沖先賣後買 **2014-06-30**（名單 2014-01-06 就有，但當時只開放先買後賣）。
+  起點之前的制度是「平盤下不得融（借）券賣出」「不能先賣」，不是不限制，名單無法表達，故拒絕。
+- 區間內有交易日沒有名單（ETL 沒跑或缺日）：`TwStockDataFeed.ensure_trading_list_coverage()` 在回測開始前列出缺幾天與該跑的 ETL 指令。
+
+券源檢核查無資料時放行，是因為 `margin` 表缺資料時「查不到」不等於「借不到」；名單則是「不在名單上＝不得交易」，
+缺資料若照常放行，等於把整段區間當成每檔都在名單內，正是這兩個檢核要修正的高估。
+
+兩份名單的 ETL 目前只能點名執行（`--target short_sale_list`／`day_trade_list`，不含在 `all`／`no_tick`），
+歷史回補約 3,200 個交易日 × 每日 4 個請求，需另外安排長時間執行。
 
 ### 2.5 價格檔位（tick size）
 
@@ -437,7 +456,8 @@ snapshot_daily_equity(date, quotes)
 | T+2 交割（Lean 的 `SettlementModel`） | 資金可用時點被高估；現股當沖實際是淨額交割不需全額現金 | 對日頻策略影響小，實作成本高 |
 | 股東會停券 | 留倉放空的持有天數仍被高估 | 缺股東會行事曆資料源；除權息停券已接上，見 §5.3 |
 | `SBL` 議定費率的個股差異 | 熱門空方標的實際費率遠高於 3%（實務可達 16%） | `accrue_holding_cost()` 已能逐日計提，缺的只是每檔的實際議定費率。**卡借券成交資料源** |
-| 平盤下放空限制與每日可當沖清單 | 高估可放空／可當沖的機會數 | `allow_below_reference` 與 `day_trade_whitelist` **有定義、無撮合呼叫端**（見 §2.4）。**卡處置股／警示股公告與每日可當沖清單資料源**。接上後須移除建構期警告並改寫 `tests/backtest/test_unimplemented_constraints.py`；待辦見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S5 |
+| 交易所名單檢核預設關閉 | 未開啟時仍高估可放空／可當沖的機會數 | 開啟需先回補 `short_sale_list`／`day_trade_list` 兩張表（見 §2.4）；預設關閉是為了讓既有回測結果不變 |
+| 盤中臨時變更交易與處置股的分盤撮合 | 名單是當日開盤前的公告，盤中臨時新增的變更交易標的（會被暫停融資融券）不在名單內 | 缺盤中公告的歷史資料源 |
 | 融資做多槓桿 | LONG 一律以現金全額買進，資金效率被低估 | 會動到 LONG 的資金計算、破壞回歸保護線，且**目前無策略需求** |
 | 同一標的雙向持倉（net position 語意） | 無法對同一檔做多空轉換 | 跨標的的多空並存**不受限**。放寬需要 `StockPosition` 改成淨部位語意、成本攤提與報表全部連動，且**目前無策略需求** |
 | TICK 級別的成交量上限 | Tick 回測的下單張數不受累計成交量約束 | 日 K 已有 `FillConfig.max_volume_share`，見 [`core/backtest/README.md`](../../core/backtest/README.md)〈成交假設〉 |

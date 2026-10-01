@@ -161,6 +161,12 @@ CHIP_DOWNLOADS_PATH: Path = get_static_resolved_path(
 MARGIN_DOWNLOADS_PATH: Path = get_static_resolved_path(
     base_dir=TW_STOCK_DOWNLOADS_PATH, dir_name="margin"
 )
+SHORT_SALE_LIST_DOWNLOADS_PATH: Path = get_static_resolved_path(
+    base_dir=TW_STOCK_DOWNLOADS_PATH, dir_name="short_sale_list"
+)
+DAY_TRADE_LIST_DOWNLOADS_PATH: Path = get_static_resolved_path(
+    base_dir=TW_STOCK_DOWNLOADS_PATH, dir_name="day_trade_list"
+)
 DIVIDEND_DOWNLOADS_PATH: Path = get_static_resolved_path(
     base_dir=TW_STOCK_DOWNLOADS_PATH, dir_name="dividend"
 )

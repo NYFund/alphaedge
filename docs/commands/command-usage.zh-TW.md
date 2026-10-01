@@ -22,6 +22,8 @@
 | `chip`                    | 三大法人籌碼                        |
 | `price`                   | 收盤價                           |
 | `margin`                  | 信用交易（融資融券餘額）              |
+| `short_sale_list`         | 平盤下得融（借）券賣出名單與當日暫停註記（2013-09-23 起；回測放空檢核用）。**歷史回補完成前不含在 `all`／`no_tick` 內**，只在點名時才跑 |
+| `day_trade_list`          | 現股當沖標的名單與暫停先賣後買註記（2014-01-06 起）。**歷史回補完成前不含在 `all`／`no_tick` 內**，只在點名時才跑 |
 | `dividend`                | 除權除息計算結果表（含還原係數、現金股利） |
 | `corporate_action`        | 非除權息的公司行動（減資、分割、面額變更） |
 | `fs`                      | 財報（Financial Statement，含逐檔查詢的權益變動表） |
@@ -39,7 +41,7 @@
 | `futures_chip`            | 台期貨籌碼（三大法人、大額交易人、選擇權 PCR） |
 | `market_holiday`          | 市場開休市日期（TWSE 公告；每次重抓去年／今年／明年，寫入 `tw_stock.db`）。實盤盤前判定交易日的主來源 |
 | `futures_tick`            | 台期貨逐筆成交（Shioaji → DolphinDB；需 `[tick]` 相依與金鑰）。**不含在 `all`／`no_tick` 內**：沒有續跑紀錄、重跑會重複寫入，只在明確點名時才跑 |
-| `all`                     | 全部資料（含 tick；不含 `futures_tick` 與 `futures_stock_price`） |
+| `all`                     | 全部資料（含 tick；不含 `futures_tick`、`futures_stock_price`、`short_sale_list`、`day_trade_list`） |
 | `no_tick`                 | 全部資料（不含 `tick` **與** `futures_tick`，預設）。兩者都需要 Shioaji 金鑰與 `[tick]` 選用相依，不排除的話，沒有金鑰的機器每晚都會以結束碼 1 收場 |
 
 ### 單一 target 範例

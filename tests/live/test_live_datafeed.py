@@ -356,6 +356,8 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     這正是 `MomentumStrategy1` 撞到的——它取 `feed.mrr`，而實盤那邊沒建。
 
     `tick` 不比對：那是盤中（Scale.TICK）才要的，實盤資料源還沒建它。
+    `short_sale_list`／`day_trade_list` 不比對：那是回測成交模型用來模擬交易所擋單的
+    名單，策略不取用；實盤送出的單由交易所直接依名單擋下，不需要在本地重做一次。
     """
 
     import inspect
@@ -370,7 +372,11 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
             if line.strip().startswith("self.") and "API(" in line
         }
 
-    backtest_apis: set = assigned_api_names(TwStockDataFeed) - {"tick"}
+    backtest_apis: set = assigned_api_names(TwStockDataFeed) - {
+        "tick",
+        "short_sale_list",
+        "day_trade_list",
+    }
     live_apis: set = assigned_api_names(TwStockLiveDataFeed)
 
     # **先確認掃描結果非空**：`assigned_api_names()` 是從原始碼刮出

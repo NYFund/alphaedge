@@ -95,15 +95,13 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
 
     # 平盤下放空過濾（預設關閉）
     #
-    # 台股自 2013/9/23 起**全面取消**平盤下放空限制，現行僅「處置股票」仍受限，
-    # 而處置股清單目前沒有資料源，
-    # 因此無法只對真正受限的標的套用。
+    # **本策略的沖賣是現股當沖的先賣後買，那是現股賣出，交易所不以平盤下規則限制它**；
+    # 平盤下限制只管融券與借券賣出（引擎側對應 `ShortConstraint.check_short_sale_list`）。
+    # 真正約束本策略的是「當日是否在現股當沖名單內、是否暫停先賣後買」，
+    # 由 `ShortConstraint.check_day_trade_list` 依交易所每日名單檢核（預設關閉，
+    # 開啟時回測起日不得早於 2014-06-30 先賣後買開放日，且名單須已入庫）。
     #
-    # 引擎側的 `ShortConstraint.allow_below_reference` 目前**有定義、無呼叫端**，
-    # 設了不會生效（`StockCostModel.check_unimplemented_constraints()` 會警告），
-    # 所以本策略把這道過濾實作在策略層而不是交給引擎。
-    #
-    # 設為 True 等於把處置股規則套用到全市場，是**保守上界**而非真實規則，
+    # 設為 True 是把平盤下規則套在現股沖賣上，屬**保守上界**而非真實規則，
     # 用來看「若限制真的存在，訊號還剩多少」。
     REJECT_BELOW_REFERENCE_OPEN: bool = False
 

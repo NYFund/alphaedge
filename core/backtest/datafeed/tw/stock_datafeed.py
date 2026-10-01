@@ -9,15 +9,21 @@ from core.api.tw.financial_statement_api import FinancialStatementAPI
 from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.api.tw.monthly_revenue_report_api import MonthlyRevenueReportAPI
 from core.api.tw.stock_chip_api import StockChipAPI
+from core.api.tw.stock_day_trade_list_api import StockDayTradeListAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
 from core.api.tw.stock_price_api import StockPriceAPI
+from core.api.tw.stock_short_sale_list_api import StockShortSaleListAPI
 from core.api.tw.stock_tick_api import StockTickAPI
-from core.config import TW_STOCK_DB_PATH
+from core.config import (
+    SELL_FIRST_DAY_TRADE_START_DATE,
+    SHORT_SALE_LIST_START_DATE,
+    TW_STOCK_DB_PATH,
+)
 from core.dao.connection import DBConnection, connect_sqlite
-from core.datafeed.base import BaseDataFeed
+from core.datafeed.base import BaseDataFeed, TradingListCoverageError
 from core.market.tw.market_calendar import MarketCalendar
-from core.models import StockQuote
+from core.models import DayTradeListSnapshot, ShortSaleListSnapshot, StockQuote
 from core.strategies.base import BaseStrategy
 from core.utils import Scale
 
@@ -54,6 +60,9 @@ class TwStockDataFeed(BaseDataFeed):
         self.price: Optional[StockPriceAPI] = None
         self.dividend: Optional[StockDividendAPI] = None  # 除權息
         self.margin: Optional[StockMarginAPI] = None  # 融資券餘額
+        # 交易所每日資格名單（平盤下融借券、現股當沖）；只有開啟對應檢核時才會查
+        self.short_sale_list: Optional[StockShortSaleListAPI] = None
+        self.day_trade_list: Optional[StockDayTradeListAPI] = None
         self.mrr: Optional[MonthlyRevenueReportAPI] = None  # 月營收
         self.fs: Optional[FinancialStatementAPI] = None  # 財報
         self.market_holiday: Optional[MarketHolidayAPI] = (
@@ -90,6 +99,8 @@ class TwStockDataFeed(BaseDataFeed):
         self.fs = FinancialStatementAPI(conn=self.conn)
         self.dividend = StockDividendAPI(conn=self.conn)
         self.margin = StockMarginAPI(conn=self.conn)
+        self.short_sale_list = StockShortSaleListAPI(conn=self.conn)
+        self.day_trade_list = StockDayTradeListAPI(conn=self.conn)
         self.price = StockPriceAPI(conn=self.conn, dividend_api=self.dividend)
         self.market_holiday = MarketHolidayAPI(conn=self.conn)
 
@@ -234,6 +245,95 @@ class TwStockDataFeed(BaseDataFeed):
             return {}
 
         return self.margin.get_short_balance_map(date)
+
+    def get_short_sale_list(
+        self, date: datetime.date
+    ) -> Optional[ShortSaleListSnapshot]:
+        """當日的平盤下得融（借）券賣出名單；未入庫時為 None"""
+
+        if self.short_sale_list is None:
+            return None
+
+        return self.short_sale_list.get_snapshot(date)
+
+    def get_day_trade_list(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:
+        """當日的現股當沖標的名單；未入庫時為 None"""
+
+        if self.day_trade_list is None:
+            return None
+
+        return self.day_trade_list.get_snapshot(date)
+
+    def ensure_trading_list_coverage(
+        self, check_short_sale_list: bool, check_day_trade_list: bool
+    ) -> None:
+        """
+        - Description:
+            開啟名單檢核時，確認回測區間從頭到尾都有名單可查
+
+            **兩種情況都拒絕執行，不退回「不檢查」**：
+            1. 區間早於制度起點：之前不是「沒有限制」，而是平盤下原則上不得融（借）券賣出、
+               現股當沖不能先賣——沒有名單可以表達這個語意。
+            2. 區間內有交易日沒有名單：名單是逐日爬的，缺一天就是那天的單全都沒被檢查，
+               而回測結果看不出哪幾天沒檢查。
+        - Parameters:
+            - check_short_sale_list / check_day_trade_list: bool
+                成交模型是否開啟對應檢核
+        - Raise:
+            - TradingListCoverageError
+                區間早於起點或名單有缺日
+        """
+
+        checks: List[Tuple[str, Any, datetime.date, str]] = []
+        if check_short_sale_list:
+            checks.append(
+                (
+                    "平盤下得融（借）券賣出名單",
+                    self.short_sale_list,
+                    SHORT_SALE_LIST_START_DATE,
+                    "short_sale_list",
+                )
+            )
+        if check_day_trade_list:
+            # 名單從 2014-01-06 就有，但先賣後買要到 2014-06-30 才開放
+            checks.append(
+                (
+                    "現股當沖標的名單（先賣後買）",
+                    self.day_trade_list,
+                    SELL_FIRST_DAY_TRADE_START_DATE,
+                    "day_trade_list",
+                )
+            )
+        if not checks:
+            return
+
+        if (
+            self.start_date is None
+            or self.end_date is None
+            or self.trading_days is None
+        ):
+            raise TradingListCoverageError(
+                "開啟名單檢核需要回測區間，策略未設定 start_date／end_date"
+            )
+
+        for label, api, rule_start, target in checks:
+            if self.start_date < rule_start:
+                raise TradingListCoverageError(
+                    f"{label}自 {rule_start} 起才有，回測起日 {self.start_date} 早於它；"
+                    f"之前的制度不是「不限制」，請把起日改到 {rule_start} 之後"
+                )
+
+            covered: Set[datetime.date] = set(
+                api.get_covered_dates(self.start_date, self.end_date)
+            )
+            missing: List[datetime.date] = sorted(self.trading_days - covered)
+            if missing:
+                preview: str = "、".join(str(day) for day in missing[:5])
+                raise TradingListCoverageError(
+                    f"{label}在回測區間內缺 {len(missing)} 個交易日（{preview}"
+                    f"{'…' if len(missing) > 5 else ''}）；請先執行 "
+                    f"`python -m tasks.update_db --target {target} --from {missing[0]}`"
+                )
 
     def get_force_cover_symbols(self, date: datetime.date) -> Set[str]:
         """
@@ -423,6 +523,8 @@ class TwStockDataFeed(BaseDataFeed):
             self.price,
             self.dividend,
             self.margin,
+            self.short_sale_list,
+            self.day_trade_list,
             self.tick,
         ):
             if api is not None:

@@ -300,18 +300,14 @@ def test_record_entry_exit_semantics() -> None:
 
 
 def test_short_constraint_defaults() -> None:
-    """未提供資料時，各項限制檢查一律放行"""
+    """預設不開任何需要外部資料的檢核：既有回測結果不可因新增檢核而改變"""
 
     constraint: ShortConstraint = ShortConstraint()
 
-    assert constraint.check_day_tradable("2330", datetime.date(2024, 1, 2)) is True
+    assert constraint.check_short_sale_list is False
+    assert constraint.check_day_trade_list is False
+    assert constraint.check_borrowable is False
     assert constraint.get_force_cover_dates("2330") == []
-
-    limited: ShortConstraint = ShortConstraint(
-        day_trade_whitelist={datetime.date(2024, 1, 2): {"2317"}}
-    )
-    assert limited.check_day_tradable("2330", datetime.date(2024, 1, 2)) is False
-    assert limited.check_day_tradable("2317", datetime.date(2024, 1, 2)) is True
 
 
 # === 成本與稅率的日期邊界===
