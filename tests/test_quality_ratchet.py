@@ -47,6 +47,8 @@ def _actual_counts(rules: Tuple[str, ...]) -> Tuple[Tuple[str, int], ...]:
         [
             "uv",
             "run",
+            # 不帶 `--no-sync` 的 `uv run` 會把環境同步成預設相依、移除 extras
+            "--no-sync",
             "ruff",
             "check",
             ".",

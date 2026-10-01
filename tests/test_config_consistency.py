@@ -282,6 +282,8 @@ def test_per_file_ignores_are_all_still_triggered() -> None:
                 [
                     "uv",
                     "run",
+                    # 不帶 `--no-sync` 的 `uv run` 會把環境同步成預設相依、移除 extras
+                    "--no-sync",
                     "ruff",
                     "check",
                     "--isolated",
