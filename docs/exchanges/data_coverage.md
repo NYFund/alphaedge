@@ -31,6 +31,8 @@
 | `StockChipAPI` | `core/api/tw/stock_chip_api.py` | SQLite | `chip` |
 | `StockDividendAPI` | `core/api/tw/stock_dividend_api.py` | SQLite | `dividend`、`corporate_action` |
 | `StockMarginAPI` | `core/api/tw/stock_margin_api.py` | SQLite | `margin` |
+| `StockShortSaleListAPI` | `core/api/tw/stock_short_sale_list_api.py` | SQLite | `short_sale_list` |
+| `StockDayTradeListAPI` | `core/api/tw/stock_day_trade_list_api.py` | SQLite | `day_trade_list` |
 | `MonthlyRevenueReportAPI` | `core/api/tw/monthly_revenue_report_api.py` | SQLite | `monthly_revenue` |
 | `FinancialStatementAPI` | `core/api/tw/financial_statement_api.py` | SQLite | `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` |
 | `FinMindAPI` | `core/api/tw/finmind_api.py` | SQLite | `taiwan_stock_info`、`taiwan_stock_info_with_warrant`、`taiwan_securities_trader_info`、`taiwan_stock_trading_daily_report_secid_agg` |
@@ -61,6 +63,8 @@ python -m tasks.update_db --target <targets...>
 | `dividend` | 2013-01-01 |
 | `corporate_action` | 2013-01-01；每次掃整個區間（事件是事後公告） |
 | `margin` | 2013-01-01（`DEFAULT_MARGIN_START_DATE`） |
+| `short_sale_list` | 2013-09-23（`SHORT_SALE_LIST_START_DATE`；交易所名單起點，更早無資料） |
+| `day_trade_list` | 2014-01-06（`DAY_TRADE_LIST_START_DATE`；先賣後買 2014-06-30 才開放） |
 | `fs` | 2013 年第 1 季；`equity_change` 為逐檔查詢，整段回補以十萬次請求計 |
 | `mrr` | 2013 年 1 月 |
 | `tick` | 2024-05-10（`TICK_UPDATE_START_DATE`）；Shioaji 可查約自 2020-03-02 |

@@ -65,6 +65,16 @@ DEFAULT_DIVIDEND_START_DATE: datetime.date = datetime.date(2013, 1, 1)
 # 欄位結構未再改制，更早的年份未驗證
 DEFAULT_CORPORATE_ACTION_START_DATE: datetime.date = DEFAULT_DIVIDEND_START_DATE
 DEFAULT_PRICE_START_DATE: datetime.date = datetime.date(2013, 1, 1)
+# 交易所兩份資格名單的起點（實測：更早的日期 TWSE 回「查詢日期小於…」、TPEx 回 0 列）。
+#
+# **起點之前不是「沒有限制」**：2013-09-23 之前平盤下原則上不得融（借）券賣出，
+# 2014-01-06 之前沒有現股當沖。回測開啟對應檢核時，區間早於起點一律拒絕執行，
+# 不讓「缺資料」默默變成「不限制」
+SHORT_SALE_LIST_START_DATE: datetime.date = datetime.date(2013, 9, 23)
+DAY_TRADE_LIST_START_DATE: datetime.date = datetime.date(2014, 1, 6)
+# 現股當沖「先賣後買」的開放日：比名單起點晚半年（2014-01-06 只開放先買後賣）。
+# 回測的現股當沖放空（先賣）在這天之前一律不合法，開啟當沖名單檢核時區間不得早於它
+SELL_FIRST_DAY_TRADE_START_DATE: datetime.date = datetime.date(2014, 6, 30)
 
 # 台期貨回補起點。
 #

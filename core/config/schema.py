@@ -80,6 +80,11 @@ TW_TRADING_DB_PATH: Path = get_static_resolved_path(
 PRICE_TABLE_NAME: str = "price"
 CHIP_TABLE_NAME: str = "chip"
 MARGIN_TABLE_NAME: str = "margin"
+# 交易所每日公告的兩份資格名單（回測擋單用）：
+# 平盤下得融（借）券賣出名單＝全部可融資融券的證券，另附三個當日暫停註記
+SHORT_SALE_LIST_TABLE_NAME: str = "short_sale_list"
+# 現股當沖標的名單，另附「暫停先賣後買」註記
+DAY_TRADE_LIST_TABLE_NAME: str = "day_trade_list"
 DIVIDEND_TABLE_NAME: str = "dividend"
 # 非除權息的公司行動（減資／面額變更／分割／反向分割）。
 # **刻意與 `dividend` 分表**：`dividend.還原係數` 的語意是「除權息參考價 ÷ 除權息前

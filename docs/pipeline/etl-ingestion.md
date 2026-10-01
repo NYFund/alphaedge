@@ -34,6 +34,7 @@ updater 負責串起流程與決定要處理哪些日期。
 | `StockPriceUpdater` | **每 100 天** | **差集**（見下方說明） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockChipUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockMarginUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
+| `StockShortSaleListUpdater`、`StockDayTradeListUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表；起日不早於名單起點 2013-09-23／2014-01-06） | `INSERT OR IGNORE` | `DataLoadError`；回應日期與查詢日不符、交易日 0 列一律記為失敗 |
 | `StockDividendUpdater` | 全部跑完 | **每次都掃整個區間**（一年一次請求） | `INSERT OR REPLACE` | `DataLoadError` |
 | `CorporateActionUpdater` | 全部跑完 | **每次都掃整個區間**（事件是事後公告） | `INSERT OR REPLACE` | `DataLoadError` |
 | `MonthlyRevenueReportUpdater` | 全部跑完 | 年 × 月的差集 | `INSERT OR IGNORE` | `DataLoadError` |

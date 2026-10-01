@@ -57,6 +57,18 @@ class URLManager:
         # 上櫃信用交易統計（全部，Ex: date = 2026/07/31）
         "TPEX_MARGIN_ALL_URL": "https://www.tpex.org.tw/www/zh-tw/margin/balance?date={date}&id=&response=html",
 
+        # 上市平盤下得融（借）券賣出之證券名單（Ex: date = 20260731）
+        "TWSE_SHORT_SALE_LIST_URL": "https://www.twse.com.tw/exchangeReport/TWT92U?response=json&date={date}",
+
+        # 上櫃平盤下得融（借）券賣出之證券名單（**日期必須是斜線格式**，Ex: date = 2026/07/31）
+        "TPEX_SHORT_SALE_LIST_URL": "https://www.tpex.org.tw/www/zh-tw/margin/mark?date={date}&response=json",
+
+        # 上市現股當日沖銷交易標的（Ex: date = 20260731）
+        "TWSE_DAY_TRADE_LIST_URL": "https://www.twse.com.tw/rwd/zh/dayTrading/TWTB4U?date={date}&selectType=All&response=json",
+
+        # 上櫃現股當沖交易標的（**日期必須是斜線格式**，Ex: date = 2026/07/31）
+        "TPEX_DAY_TRADE_LIST_URL": "https://www.tpex.org.tw/www/zh-tw/intraday/list?date={date}&response=json",
+
         # 上市除權除息計算結果表（支援日期區間，一次可取整年，Ex: 20240101 / 20241231）
         "TWSE_EX_RIGHT_URL": "https://www.twse.com.tw/rwd/zh/exRight/TWT49U?startDate={start_date}&endDate={end_date}&response=html",
 

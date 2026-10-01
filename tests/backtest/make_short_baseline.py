@@ -7,7 +7,12 @@ import pandas as pd
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
-from core.models import StockOrder, StockQuote
+from core.models import (
+    DayTradeListSnapshot,
+    ShortSaleListSnapshot,
+    StockOrder,
+    StockQuote,
+)
 from core.models.cost_config import ShortConstraint
 from core.utils import Action, PositionType, ShortMethod
 from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy
@@ -66,6 +71,12 @@ class ShortScenario:
         bars: List[Tuple[datetime.date, List[StockQuote]]],
         force_cover_script: Optional[Dict[datetime.date, Set[str]]] = None,
         cash_dividend_script: Optional[Dict[datetime.date, Dict[str, float]]] = None,
+        short_sale_list_script: Optional[
+            Dict[datetime.date, ShortSaleListSnapshot]
+        ] = None,
+        day_trade_list_script: Optional[
+            Dict[datetime.date, DayTradeListSnapshot]
+        ] = None,
     ) -> None:
         self.name: str = name  # 情境名稱（快照的分組鍵）
         self.verifies: str = verifies  # 這個情境驗的是什麼
@@ -79,6 +90,12 @@ class ShortScenario:
         )
         self.cash_dividend_script: Dict[datetime.date, Dict[str, float]] = (
             cash_dividend_script or {}
+        )
+        self.short_sale_list_script: Dict[datetime.date, ShortSaleListSnapshot] = (
+            short_sale_list_script or {}
+        )
+        self.day_trade_list_script: Dict[datetime.date, DayTradeListSnapshot] = (
+            day_trade_list_script or {}
         )
 
 
@@ -147,7 +164,7 @@ def make_short_strategy(**overrides: Any) -> ScriptedStrategy:
 def build_scenarios() -> List[ShortScenario]:
     """
     - Description:
-        建立涵蓋放空記帳各條路徑的十二組情境（十個編號，其中兩個各跑兩種放空管道）
+        建立涵蓋放空記帳各條路徑的十四組情境（十二個編號，其中兩個各跑兩種放空管道）
 
         每組都刻意只動一個變因，任一情境的快照有變即可直接指向出問題的掛點。
     - Return:
@@ -358,6 +375,65 @@ def build_scenarios() -> List[ShortScenario]:
         )
     )
 
+    # === 11. 平盤下名單：前一交易日跌停的標的，本日不得平盤下融券 ===
+    #
+    # 第一天在名單內、沒有註記，開倉成交；第二天被註記「禁止平盤下」，
+    # 以低於平盤（前一日收盤 100）的 98 委託被擋，平盤以上的不受影響
+    listed: frozenset = frozenset({STOCK_ID})
+    scenarios.append(
+        ShortScenario(
+            name="short_sale_list_below_reference",
+            verifies="開啟平盤下名單檢核後，被註記跌停禁止的標的平盤下融券被擋",
+            strategy=make_short_strategy(
+                short_constraint=ShortConstraint(check_short_sale_list=True),
+                open_script={
+                    day(0): [make_short_order(day(0), Action.SELL, 100.0, 1)],
+                    day(1): [
+                        make_short_order(day(1), Action.SELL, 98.0, 1),
+                        make_short_order(day(1), Action.SELL, 100.0, 1),
+                    ],
+                },
+            ),
+            bars=[
+                (day(0), [make_quote(day(0), 100.0, high=101.0, low=99.0)]),
+                (day(1), [make_quote(day(1), 99.0, high=100.0, low=97.0)]),
+            ],
+            short_sale_list_script={
+                day(0): ShortSaleListSnapshot(listed=listed),
+                day(1): ShortSaleListSnapshot(
+                    listed=listed, below_reference_banned=listed
+                ),
+            },
+        )
+    )
+
+    # === 12. 現股當沖名單：暫停先賣後買的那天，當沖放空被擋 ===
+    scenarios.append(
+        ShortScenario(
+            name="day_trade_list_sell_first_halted",
+            verifies="開啟當沖名單檢核後，暫停先賣後買的標的不能現股當沖放空",
+            strategy=make_short_strategy(
+                enable_intraday=True,
+                short_constraint=ShortConstraint(check_day_trade_list=True),
+                open_script={
+                    day(0): [make_short_order(day(0), Action.SELL, 100.0, 1)],
+                    day(1): [make_short_order(day(1), Action.SELL, 99.0, 1)],
+                },
+                close_script={day(0): [make_short_order(day(0), Action.BUY, 98.0, 1)]},
+            ),
+            bars=[
+                (day(0), [make_quote(day(0), 99.0, high=101.0, low=97.0)]),
+                (day(1), [make_quote(day(1), 99.0, high=100.0, low=97.0)]),
+            ],
+            day_trade_list_script={
+                day(0): DayTradeListSnapshot(day_tradable=listed),
+                day(1): DayTradeListSnapshot(
+                    day_tradable=listed, sell_first_halted=listed
+                ),
+            },
+        )
+    )
+
     return scenarios
 
 
@@ -368,6 +444,8 @@ def run_scenario(scenario: ShortScenario) -> Backtester:
     backtester.data_feed = ScriptedDataFeed(
         force_cover_script=scenario.force_cover_script,
         cash_dividend_script=scenario.cash_dividend_script,
+        short_sale_list_script=scenario.short_sale_list_script,
+        day_trade_list_script=scenario.day_trade_list_script,
     )
 
     for date, stock_quotes in scenario.bars:
