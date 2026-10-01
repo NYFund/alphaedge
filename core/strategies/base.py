@@ -137,6 +137,14 @@ class BaseStrategy(ABC):
         # **回測完全不讀這個屬性**，兩條路徑因此可以各自調整而互不影響。
         self.live_capital: Optional[float] = None
 
+        # 實盤專用的最大持倉檔數；`None` 表示沿用 `max_holdings`。
+        #
+        # **與 `live_capital` 成對存在**：等權切分的每檔資金是「資金 ÷ 檔數」，
+        # 只把資金調小而檔數不動，每檔分到的錢會小到連一張都買不起——
+        # sizer 無條件捨去成 0 張，訊號整批被丟掉而不報錯。
+        # 同樣不能直接改 `max_holdings`：它也是回歸基準的一部分。
+        self.live_max_holdings: Optional[int] = None
+
     @abstractmethod
     def setup_account(self, account: BaseAccount) -> None:
         """

@@ -147,6 +147,31 @@ def live_capital(strategy: BaseStrategy) -> float:
     return float(declared) if declared is not None else float(strategy.init_capital)
 
 
+def apply_live_max_holdings(strategy: BaseStrategy) -> None:
+    """
+    - Description:
+        策略宣告了 `live_max_holdings` 時，把它寫進這份實盤實例的 `max_holdings`
+
+        **寫回實例而不是另開一個讀取點**：sizer、部位建構器與引擎的持倉檢查都讀
+        `strategy.max_holdings`，各處改讀別的屬性就得改三個地方，漏一處就會
+        「切資金用 3 檔、擋單用 10 檔」。這份實例只活在實盤行程裡；parity 比對
+        跑回測時會重建一份新的策略實例，不受影響。
+    - Parameters:
+        - strategy: BaseStrategy
+            實盤載入的策略實例
+    """
+
+    declared: Optional[int] = getattr(strategy, "live_max_holdings", None)
+    if declared is None:
+        return
+
+    logger.info(
+        f"{type(strategy).__name__} 實盤最大持倉檔數 "
+        f"{strategy.max_holdings} → {declared}（live_max_holdings）"
+    )
+    strategy.max_holdings = declared
+
+
 def make_account_fetcher(
     broker: BaseBroker, strategies: Sequence[BaseStrategy]
 ) -> Callable[[], BrokerAccountSnapshot]:
@@ -308,6 +333,8 @@ def build_live_trader(
     schedules: List[SegmentSchedule] = []
 
     for name, strategy in zip(names, strategies):
+        # 要在組裝任何讀 `max_holdings` 的元件之前寫回
+        apply_live_max_holdings(strategy)
         context, schedule = _build_context(
             name, strategy, resolved_broker, risk_config, now_provider
         )

@@ -242,6 +242,65 @@ def test_backtest_never_reads_live_capital() -> None:
     assert offenders == [], f"回測讀到了實盤專用的額度：{offenders}"
 
 
+# === 實盤持倉檔數與回測脫鉤 ===
+def test_live_max_holdings_is_written_to_the_live_instance() -> None:
+    """宣告 `live_max_holdings` 時，實盤實例的 `max_holdings` 改用它"""
+
+    from core.live.factory import apply_live_max_holdings
+
+    strategy: MomentumStrategy1 = MomentumStrategy1()
+
+    apply_live_max_holdings(strategy)
+
+    assert strategy.max_holdings == strategy.live_max_holdings == 3
+
+
+def test_live_max_holdings_leaves_backtest_defaults_alone() -> None:
+    """
+    新建的實例仍是回測的檔數
+
+    parity 比對跑回測時重建策略實例，靠的就是這一點：寫回只發生在實盤那一份。
+    """
+
+    from core.live.factory import apply_live_max_holdings
+
+    apply_live_max_holdings(MomentumStrategy1())
+
+    assert MomentumStrategy1().max_holdings == MomentumStrategy1.DEFAULT_MAX_HOLDINGS
+
+
+def test_undeclared_live_max_holdings_keeps_max_holdings() -> None:
+    """沒宣告時不動，既有策略行為不變"""
+
+    from core.live.factory import apply_live_max_holdings
+    from core.strategies.stock.trust_momentum_swing_strategy import (
+        TrustMomentumSwingStrategy,
+    )
+
+    strategy: TrustMomentumSwingStrategy = TrustMomentumSwingStrategy()
+    before: object = strategy.max_holdings
+
+    apply_live_max_holdings(strategy)
+
+    assert strategy.live_max_holdings is None
+    assert strategy.max_holdings == before
+
+
+def test_backtest_never_reads_live_max_holdings() -> None:
+    """回測那條路徑一個字都不碰 `live_max_holdings`"""
+
+    import pathlib
+
+    root: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent.parent
+    offenders: List[str] = [
+        str(path.relative_to(root))
+        for path in (root / "core" / "backtest").rglob("*.py")
+        if "live_max_holdings" in path.read_text()
+    ]
+
+    assert offenders == [], f"回測讀到了實盤專用的持倉檔數：{offenders}"
+
+
 # === 依商品分派帳戶 ===
 class _StubBroker:
     """只回兩個帳務快照的假閘道；記下被問了哪幾次"""

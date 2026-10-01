@@ -2,6 +2,7 @@ import datetime
 from typing import Callable, List, Tuple
 
 import pytest
+from loguru import logger
 
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.sizing import EqualWeightSizer
@@ -132,3 +133,40 @@ def test_empty_candidates(sizer) -> None:
     account: StockAccount = StockAccount(1000000.0)
 
     assert sizer.size(account, [], max_holdings=None) == []
+
+
+def test_candidates_below_one_lot_are_logged(sizer, make_candidates) -> None:
+    """
+    切成 0 張的候選要留下 log，寫出每檔資金與一張的金額
+
+    沒有這筆紀錄時，整批訊號被丟掉的 log 只剩「沒有任何委託」：
+    實盤演練曾經 50 個訊號全數切成 0 張，只能從程式反推原因。
+    """
+
+    messages: List[str] = []
+    sink_id: int = logger.add(lambda message: messages.append(message), level="INFO")
+    try:
+        # 每檔 40000：45.15 元一張 45150，買不起
+        sized = sizer.size(
+            StockAccount(400000.0), make_candidates([("3311", 45.15)]), max_holdings=10
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert sized == []
+    assert any("3311" in text and "不足一張" in text for text in messages)
+
+
+def test_full_holdings_are_logged(sizer, make_candidates) -> None:
+    """名額已滿時候選全數略過，也要留下 log"""
+
+    account: StockAccount = StockAccount(1000000.0)
+    messages: List[str] = []
+    sink_id: int = logger.add(lambda message: messages.append(message), level="INFO")
+    try:
+        sized = sizer.size(account, make_candidates([("2330", 100.0)]), max_holdings=0)
+    finally:
+        logger.remove(sink_id)
+
+    assert sized == []
+    assert any("持倉已達上限" in text for text in messages)

@@ -70,6 +70,9 @@ class MomentumStrategy1(BaseStockStrategy):
         # **不能改 `init_capital`**——它同時是回歸基準的初始資金
         self.live_capital: float = 400000.0
         self.max_holdings: int = self.DEFAULT_MAX_HOLDINGS
+        # 40 萬切 10 檔每檔只有 4 萬，漲停股多半一張就超過，sizer 會整批切成 0 張；
+        # 切 3 檔每檔約 13 萬，股價 130 元以下的訊號才下得了單
+        self.live_max_holdings: int = 3
         self.scale: Scale = Scale.DAY
 
         self.start_date: datetime.date = self.DEFAULT_BACKTEST_START_DATE
