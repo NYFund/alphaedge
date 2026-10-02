@@ -239,36 +239,73 @@ def test_unattributed_stock_positions_are_not_capital() -> None:
     """
     接管來的舊持股不是策略可以動用的資金：股票帳戶的總權益要扣掉它們
 
-    2026-10-01 的模擬帳戶現金為 0、總權益 616,343 全是 6 檔接管部位，
-    舊口徑讓 40 萬的額度「通過」檢查。正式環境同樣的帳戶會在盤中才被券商以資金不足退單。
-    空單也要扣（券商總權益把空單成本一併加進去了）；期貨的接管 lot 不在股票帳戶裡，不扣。
+    扣的口徑與券商總權益相同（張數 × 1000 × 均價 ＋ 未實現損益）——只扣成本的話，
+    2026-10-02 的模擬帳戶會留下 104,485 的未實現損益在資金基準裡。
+    空單也要扣；期貨的接管 lot 不在股票帳戶裡，不扣。
     """
 
     from core.live.factory import make_account_fetcher
     from core.models import FuturesPositionSnapshot, StockPositionSnapshot
-    from core.utils import InstrumentType
+    from core.utils import InstrumentType, PositionType
 
     broker: _PositionBroker = _PositionBroker(
-        total_equity=616_343.0,
+        total_equity=200_000.0,
         positions=[
-            StockPositionSnapshot(symbol="2362", volume=1, avg_price=50.0),
-            StockPositionSnapshot(symbol="6134", volume=3, avg_price=20.0),
+            StockPositionSnapshot(
+                symbol="2362", volume=1, avg_price=50.0, unrealized_pnl=5_000.0
+            ),
+            StockPositionSnapshot(
+                symbol="6134",
+                direction=PositionType.SHORT,
+                volume=3,
+                avg_price=20.0,
+                unrealized_pnl=-1_000.0,
+            ),
             FuturesPositionSnapshot(symbol="TXFJ6", volume=1, avg_price=42000.0),
         ],
     )
     dao: _LotDAO = _LotDAO(
         [
-            {"symbol": "2362", "volume": 1, "open_price": 50.0},
-            {"symbol": "6134", "volume": 3, "open_price": 20.0},
-            {"symbol": "TXFJ6", "volume": 1, "open_price": 42000.0},
+            {"symbol": "2362", "direction": "LONG", "volume": 1, "open_price": 50.0},
+            {"symbol": "6134", "direction": "SHORT", "volume": 3, "open_price": 20.0},
+            {
+                "symbol": "TXFJ6",
+                "direction": "LONG",
+                "volume": 1,
+                "open_price": 42000.0,
+            },
         ]
     )
 
     fetch = make_account_fetcher(broker, [_strategy(InstrumentType.STOCK)], dao)
     snapshot: BrokerAccountSnapshot = fetch()
 
-    assert snapshot.raw["unattributed_value"] == pytest.approx(50_000.0 + 60_000.0)
-    assert snapshot.total_equity == pytest.approx(616_343.0 - 110_000.0)
+    # 2362：50,000 ＋ 5,000；6134：60,000 − 1,000
+    assert snapshot.raw["unattributed_value"] == pytest.approx(55_000.0 + 59_000.0)
+    assert snapshot.total_equity == pytest.approx(200_000.0 - 114_000.0)
+
+
+def test_partly_attributed_position_is_prorated() -> None:
+    """同一檔券商部位 5 張、只有 2 張是接管的：只扣 2／5"""
+
+    from core.live.factory import unattributed_stock_value
+    from core.models import StockPositionSnapshot
+
+    broker: _PositionBroker = _PositionBroker(
+        total_equity=0.0,
+        positions=[
+            StockPositionSnapshot(
+                symbol="2330", volume=5, avg_price=100.0, unrealized_pnl=10_000.0
+            )
+        ],
+    )
+    dao: _LotDAO = _LotDAO(
+        [{"symbol": "2330", "direction": "LONG", "volume": 2, "open_price": 100.0}]
+    )
+
+    assert unattributed_stock_value(broker, dao) == pytest.approx(
+        0.4 * (500_000.0 + 10_000.0)
+    )
 
 
 def test_equity_never_goes_negative_after_exclusion() -> None:

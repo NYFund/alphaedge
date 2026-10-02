@@ -180,11 +180,16 @@ def apply_live_max_holdings(strategy: BaseStrategy) -> None:
 def unattributed_stock_value(broker: BaseBroker, dao: LiveTradeDAO) -> float:
     """
     - Description:
-        不屬於任何策略（`__unattributed__`）的**股票**部位的帳面金額（開倉價 × 股數）
+        不屬於任何策略（`__unattributed__`）的**股票**部位，在券商總權益裡佔的金額
 
-        歸屬帳是股票與期貨兩個行程共用的，`__unattributed__` 的 lot 兩種商品都有；
-        lot 本身不記商品，故以券商回報的股票部位代號篩出股票那幾筆。
-        空單也要算：券商的總權益把空單的成本一併加進去了。
+        **口徑與券商總權益相同**：`ShioajiAccountQuery.get_stock_account()` 對每個部位加的是
+        「張數 × 1000 × 均價 ＋ 未實現損益」，這裡就扣同一個數。只扣成本的話，
+        接管部位的未實現損益會留在資金基準裡（2026-10-02 模擬帳戶實測留下 104,485），
+        而那同樣不是策略能動用的錢。
+
+        同一檔、同方向的券商部位可能只有一部分是接管來的（其餘歸屬某支策略），
+        故依接管 lot 的張數佔該部位的比例扣除。歸屬帳是股票與期貨兩個行程共用的，
+        只取券商回報的**股票**部位比對。空單也要扣：券商總權益把空單一併加進去了。
     - Parameters:
         - broker: BaseBroker
             已登入的券商閘道
@@ -192,21 +197,27 @@ def unattributed_stock_value(broker: BaseBroker, dao: LiveTradeDAO) -> float:
             實盤紀錄庫
     - Return:
         - float
-            帳面金額；沒有接管部位時為 0
+            金額；沒有接管部位時為 0
     """
 
-    stock_symbols: Set[str] = {
-        position.symbol
-        for position in broker.get_positions()
-        if isinstance(position, StockPositionSnapshot)
-    }
-    return float(
-        sum(
-            float(lot["volume"]) * Units.LOT * float(lot["open_price"])
-            for lot in dao.get_open_lots(strategy_name=UNATTRIBUTED_STRATEGY)
-            if lot["symbol"] in stock_symbols
+    unattributed: Dict[Tuple[str, str], float] = {}
+    for lot in dao.get_open_lots(strategy_name=UNATTRIBUTED_STRATEGY):
+        key: Tuple[str, str] = (str(lot["symbol"]), str(lot["direction"]))
+        unattributed[key] = unattributed.get(key, 0.0) + float(lot["volume"])
+
+    value: float = 0.0
+    for position in broker.get_positions():
+        if not isinstance(position, StockPositionSnapshot) or position.volume <= 0:
+            continue
+        direction: str = getattr(position.direction, "value", str(position.direction))
+        volume: float = unattributed.get((position.symbol, direction), 0.0)
+        if volume <= 0:
+            continue
+        ratio: float = min(volume / position.volume, 1.0)
+        value += ratio * (
+            position.volume * Units.LOT * position.avg_price + position.unrealized_pnl
         )
-    )
+    return value
 
 
 def exclude_unattributed_stock(
