@@ -24,7 +24,10 @@ from core.live.account_sync import (
 )
 from core.live.after_close import TradeCostEstimator, weighted_fill_price
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
-from core.live.attribution.position_ledger import PositionAttributionLedger
+from core.live.attribution.position_ledger import (
+    UNATTRIBUTED_STRATEGY,
+    PositionAttributionLedger,
+)
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.tw.futures_live_datafeed import (
@@ -53,6 +56,7 @@ from core.models import (
     FuturesOrder,
     RealizedTradeSnapshot,
     StockAccount,
+    StockPositionSnapshot,
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.position.base.position_manager import BasePositionManager
@@ -67,6 +71,7 @@ from core.utils import (
     InstrumentType,
     Market,
     PositionType,
+    Units,
 )
 
 """
@@ -172,8 +177,72 @@ def apply_live_max_holdings(strategy: BaseStrategy) -> None:
     strategy.max_holdings = declared
 
 
+def unattributed_stock_value(broker: BaseBroker, dao: LiveTradeDAO) -> float:
+    """
+    - Description:
+        不屬於任何策略（`__unattributed__`）的**股票**部位的帳面金額（開倉價 × 股數）
+
+        歸屬帳是股票與期貨兩個行程共用的，`__unattributed__` 的 lot 兩種商品都有；
+        lot 本身不記商品，故以券商回報的股票部位代號篩出股票那幾筆。
+        空單也要算：券商的總權益把空單的成本一併加進去了。
+    - Parameters:
+        - broker: BaseBroker
+            已登入的券商閘道
+        - dao: LiveTradeDAO
+            實盤紀錄庫
+    - Return:
+        - float
+            帳面金額；沒有接管部位時為 0
+    """
+
+    stock_symbols: Set[str] = {
+        position.symbol
+        for position in broker.get_positions()
+        if isinstance(position, StockPositionSnapshot)
+    }
+    return float(
+        sum(
+            float(lot["volume"]) * Units.LOT * float(lot["open_price"])
+            for lot in dao.get_open_lots(strategy_name=UNATTRIBUTED_STRATEGY)
+            if lot["symbol"] in stock_symbols
+        )
+    )
+
+
+def exclude_unattributed_stock(
+    snapshot: BrokerAccountSnapshot, unattributed_value: float
+) -> BrokerAccountSnapshot:
+    """
+    - Description:
+        從股票帳戶的總權益扣掉不屬於任何策略的部位
+
+        **那些部位不是策略可以動用的資金**：它們是接管來的舊持股，只允許平倉。
+        算進總權益的話，一個沒有現金、只有舊持股的帳戶也會通過額度檢查，
+        而真的送單時才被券商以資金不足退回。扣完不會是負數。
+    - Parameters:
+        - snapshot: BrokerAccountSnapshot
+            券商的股票帳戶快照
+        - unattributed_value: float
+            不屬於任何策略的股票部位金額
+    - Return:
+        - BrokerAccountSnapshot
+            扣除後的快照；扣掉的金額記在 `raw["unattributed_value"]`
+    """
+
+    return BrokerAccountSnapshot(
+        ts=snapshot.ts,
+        available_balance=snapshot.available_balance,
+        total_equity=max(snapshot.total_equity - unattributed_value, 0.0),
+        realized_pnl=snapshot.realized_pnl,
+        unrealized_pnl=snapshot.unrealized_pnl,
+        raw={**(snapshot.raw or {}), "unattributed_value": unattributed_value},
+    )
+
+
 def make_account_fetcher(
-    broker: BaseBroker, strategies: Sequence[BaseStrategy]
+    broker: BaseBroker,
+    strategies: Sequence[BaseStrategy],
+    dao: Optional[LiveTradeDAO] = None,
 ) -> Callable[[], BrokerAccountSnapshot]:
     """
     - Description:
@@ -191,10 +260,24 @@ def make_account_fetcher(
             已建立的券商閘道
         - strategies: Sequence[BaseStrategy]
             本次載入的策略
+        - dao: Optional[LiveTradeDAO]
+            實盤紀錄庫；提供時股票帳戶的總權益會扣掉不屬於任何策略的部位
+            （`exclude_unattributed_stock()`）。**期貨帳戶不扣**：期貨權益裡的部位
+            是以保證金計，接管來的期貨部位要扣多少需另定口徑，目前也沒有這種部位
     - Return:
         - Callable[[], BrokerAccountSnapshot]
             每次呼叫都重查一次的帳務查詢
     """
+
+    def stock_account() -> BrokerAccountSnapshot:
+        """股票帳戶；有紀錄庫時扣掉不屬於任何策略的部位"""
+
+        snapshot: BrokerAccountSnapshot = broker.get_account()
+        if dao is None:
+            return snapshot
+        return exclude_unattributed_stock(
+            snapshot, unattributed_stock_value(broker, dao)
+        )
 
     instruments: Set[Optional[InstrumentType]] = {
         strategy.instrument_type for strategy in strategies
@@ -203,14 +286,14 @@ def make_account_fetcher(
     wants_futures: bool = bool(instruments - {InstrumentType.STOCK})
 
     if wants_stock and not wants_futures:
-        return broker.get_account
+        return stock_account
     if wants_futures and not wants_stock:
         return broker.get_futures_account
 
     def combined() -> BrokerAccountSnapshot:
         """兩個子帳戶相加"""
 
-        stock: BrokerAccountSnapshot = broker.get_account()
+        stock: BrokerAccountSnapshot = stock_account()
         futures: BrokerAccountSnapshot = broker.get_futures_account()
         return BrokerAccountSnapshot(
             ts=stock.ts,
@@ -407,7 +490,7 @@ def build_live_trader(
         simulation=simulation,
         cost_estimator=make_trade_cost_estimator(),
         # 查哪個帳戶是商品語意，由這裡決定後注入（引擎本體不認得「股票」「期貨」）
-        fetch_account=make_account_fetcher(resolved_broker, strategies),
+        fetch_account=make_account_fetcher(resolved_broker, strategies, resolved_dao),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
         margin_query=(
             getattr(resolved_broker, "get_futures_account", None)
