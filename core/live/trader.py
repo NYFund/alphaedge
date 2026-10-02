@@ -78,25 +78,6 @@ LiveTrader：實盤引擎本體
 """
 
 
-def position_value(account: BaseAccount) -> float:
-    """
-    未平倉部位的帳面金額（開倉價 × 數量）
-
-    **口徑是開倉成本不是即時市值**：本地帳沒有即時報價，硬要取市值就得在每個
-    呼叫點各查一次行情，而帳務類限流只有 25 次／5 秒。總權益因此會落後市場，
-    但它只用在額度與占用這類「分母」上——分母漏掉整批持倉會讓超配變成通過，
-    落後一段行情不會。
-    """
-
-    return float(
-        sum(
-            position.volume * position.price
-            for position in account.positions
-            if not position.is_closed
-        )
-    )
-
-
 @dataclass
 class StrategyContext:
     """
@@ -135,6 +116,31 @@ class StrategyContext:
         if self.calculate_notional is not None:
             return self.calculate_notional(order)
         return float(order.price) * float(order.volume)
+
+    def position_value(self) -> float:
+        """
+        - Description:
+            本策略未平倉部位的帳面金額（開倉價 × 計價單位）
+
+            **要經過與委託相同的換算器**：部位的數量台股是張、期貨是口，只做「價 × 量」
+            的話台股少乘 1000 股——已用額度因此小了一千倍，持倉幾乎不佔額度，
+            而那不會有任何錯誤訊息。換算器只讀 `price` 與 `volume`，部位兩者都有。
+
+            **口徑是開倉成本不是即時市值**：本地帳沒有即時報價，硬要取市值就得在每個
+            呼叫點各查一次行情，而帳務類限流只有 25 次／5 秒。它只用在額度與占用這類
+            「分母」上——分母漏掉整批持倉會讓超配變成通過，落後一段行情不會。
+        - Return:
+            - float
+                帳面金額
+        """
+
+        return float(
+            sum(
+                self.notional(position)
+                for position in self.account.positions
+                if not position.is_closed
+            )
+        )
 
 
 class LiveTrader:
@@ -408,17 +414,19 @@ class LiveTrader:
 
         positions: List[Any] = self.broker.get_positions()
         self.account_sync.rebuild_from_broker(positions)
+        self._reset_local_balances()
         self._refresh_capital()
 
         # 額度總量要在有帳務之後才驗得動（`build_live_trader()` 當下還沒連線），
         # 且要在對帳之前——超配就不該讓這個段落繼續往下走
-        if self.equity_unavailable():
+        if self.uses_virtual_capital():
             # **略過而不是捏一個數字讓它通過**：這道檢查問的是「帳戶撐不撐得住
-            # 這些額度」，而此刻連帳戶有多少都不知道。以 Σ 宣告額度當基準的話，
-            # 檢查會變成「Σ 額度 ≤ Σ 額度 × 安全係數」，反而必然不成立
+            # 這些額度」，而模擬環境的帳務本來就是假的（見 `uses_virtual_capital()`）。
+            # 以 Σ 宣告額度當基準的話，檢查會變成「Σ 額度 ≤ Σ 額度 × 安全係數」，
+            # 反而必然不成立
             logger.warning(
-                "模擬環境查不到帳務（欄位整組回 0），**略過額度總量檢查**。"
-                "正式環境不走這條路：那裡的 0 代表真的沒有資金，會拒絕啟動"
+                "模擬環境的帳務不代表真實資金，以宣告額度為虛擬資金，**略過額度總量檢查**。"
+                "正式環境不走這條路：資金不足會拒絕啟動"
             )
         else:
             self.allocator.verify_quota(self._account_equity())
@@ -1532,8 +1540,7 @@ class LiveTrader:
                     "strategy_name": context.name,
                     "source": SOURCE_LOCAL,
                     "available_balance": context.account.balance,
-                    "total_equity": context.account.balance
-                    + position_value(context.account),
+                    "total_equity": context.account.balance + context.position_value(),
                 }
             )
         self.dao.commit()
@@ -1838,56 +1845,66 @@ class LiveTrader:
     def _account_equity(self) -> float:
         """
         - Description:
-            帳戶總權益；額度檢查、單日虧損與批次曝險共用這一個口徑
+            策略可用的資金基準；額度檢查、單日虧損與批次曝險共用這一個口徑
 
-            **取券商快照的 `total_equity`，不是「可用餘額 ＋ 各策略持倉占用」**。
-            後者少算兩樣東西：未交割款，以及**不屬於任何策略的持倉**
-            （接管來的 `__unattributed__`）。`ShioajiAccountQuery.get_stock_account()`
-            的說明寫明 `total_equity` 才是額度檢查該用的值——拿可用餘額當基準的話，
-            只要隔日還有部位在場上就必然誤判成額度超標，整天都啟動不了。
+            **正式環境：取券商快照的 `total_equity`**，而組裝層注入的帳務查詢已把
+            **不屬於任何策略的部位（`__unattributed__`）扣掉**（見 `factory.make_account_fetcher()`）。
+            那些部位是接管來的舊持股，策略不能拿它們當額度——算進分母的話，
+            一個沒有現金、只有舊持股的帳戶也會通過額度檢查。未交割款仍算在內：
+            它是 T+2 後就會入帳的錢，拿掉會讓隔日還有部位時必然誤判成額度超標。
 
-            **模擬環境的退路**：模擬環境的帳務欄位可能整組回 0
-            （期貨保證金已知如此），此時總權益恆為 0、任何正數額度都過不了。
-            偵測到「模擬環境 ＋ 總權益為 0」就改以 Σ 宣告額度為基準。
-            **正式環境不走這條路**：那裡的 0 是真的沒有錢，就該拒絕啟動。
+            **模擬環境：一律以 Σ 宣告額度為虛擬資金**（見 `uses_virtual_capital()`）。
 
-            放寬只記 `logger.warning`，不落地成風控事件：這條路只在模擬環境成立
-            （見 `equity_unavailable()`），而模擬的期貨帳務欄位**每一次都整組回 0**
-            ——每輪都寫一筆 CRITICAL 等於沒有 CRITICAL。
+            放寬只記 `logger.warning`，不落地成風控事件：這條路每一次模擬都會走，
+            每輪都寫一筆 CRITICAL 等於沒有 CRITICAL。
         - Return:
             - float
-                帳戶總權益
+                資金基準
         """
 
-        equity: float = (
+        if self.uses_virtual_capital():
+            return sum(self.allocator.quotas.values())
+
+        return (
             self.account_snapshot.total_equity
             if self.account_snapshot is not None
             else 0.0
         )
 
-        if not self.equity_unavailable():
-            return equity
-
-        # 查不到帳務時，曝險與虧損檢查改以宣告額度為基準——它們需要一個尺度，
-        # 而「策略自己說要動用多少」是此刻唯一已知的尺度。
-        # **額度總量檢查不走這條**：見 `equity_unavailable()`
-        return sum(self.allocator.quotas.values())
-
-    def equity_unavailable(self) -> bool:
+    def uses_virtual_capital(self) -> bool:
         """
         - Description:
-            模擬環境查不到帳務（欄位整組回 0）
+            是否以宣告額度當作虛擬資金（模擬環境一律是）
 
-            模擬環境的期貨保證金欄位已知會全部回 0，此時總權益恆為 0。
-            **正式環境永遠回 False**：那裡的 0 是真的沒有錢，該讓檢查照常擋下來。
+            **模擬環境的帳務是假的**（Shioaji 文件〈模擬模式注意事項〉）：`account_balance()`
+            一律回 0、交割款與額度查詢回空值，只有持倉與損益走模擬伺服器；
+            模擬下單也**不檢查資金**（模擬環境的拒單訊息沒有任何一條是資金不足）。
+            照實拿券商的 0 當可用資金的話，額度分配會把每一張買單都擋下來，
+            演練永遠驗不到下單路徑；拿模擬持倉的市值當權益，又會把紙上部位當成真錢。
+            **正式環境永遠回 False**：那裡的數字就是真的。
         - Return:
             - bool
-                查不到為 True
+                模擬環境為 True
         """
 
-        if not self.simulation:
-            return False
-        return self.account_snapshot is None or self.account_snapshot.total_equity <= 0
+        return self.simulation
+
+    def _reset_local_balances(self) -> None:
+        """
+        - Description:
+            啟動重建後，把各策略本地帳的餘額設為「額度 − 還持有部位的金額」
+
+            重建時為了把部位還原進帳戶，會暫時停用餘額檢查、結束後把餘額設回原值，
+            而原值是建帳時的完整額度——**持有部位的成本因此沒有被扣掉**。
+            部位管理層會照這個偏大的餘額算張數，再被額度分配整筆拒絕。
+            額度本身固定不滾入已實現損益，與額度分配的 `額度 − 已用` 同一個口徑。
+        """
+
+        for context in self.contexts:
+            quota: float = self.allocator.quotas.get(
+                context.name, context.account.balance
+            )
+            context.account.balance = max(quota - context.position_value(), 0.0)
 
     def _check_daily_loss(self) -> None:
         """
@@ -2001,10 +2018,16 @@ class LiveTrader:
 
         snapshot: BrokerAccountSnapshot = self._query_account_snapshot()
         used: Dict[str, float] = {
-            context.name: position_value(context.account) for context in self.contexts
+            context.name: context.position_value() for context in self.contexts
         }
         self.account_snapshot = snapshot
-        self.allocator.refresh(snapshot.available_balance, used)
+        available: float = (
+            # 模擬環境的可用現金恆為 0（見 `uses_virtual_capital()`），改以額度扣掉已用
+            max(sum(self.allocator.quotas.values()) - sum(used.values()), 0.0)
+            if self.uses_virtual_capital()
+            else snapshot.available_balance
+        )
+        self.allocator.refresh(available, used)
 
     def _query_account_snapshot(self) -> BrokerAccountSnapshot:
         """

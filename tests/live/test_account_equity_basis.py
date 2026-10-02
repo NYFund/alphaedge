@@ -1,5 +1,7 @@
 from types import SimpleNamespace
-from typing import Dict, List
+from typing import Any, Dict, List
+
+import pytest
 
 from core.live.factory import live_capital
 from core.live.trader import LiveTrader
@@ -7,19 +9,18 @@ from core.models import BrokerAccountSnapshot
 from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
 """
-帳戶總權益的口徑
+策略可用的資金基準
 
-額度檢查、單日虧損與批次曝險都拿它當基準，而它曾經被算成
-「可用餘額 ＋ 各策略持倉占用」——那個算式少了兩樣東西：
+額度檢查、單日虧損與批次曝險都拿它當基準。口徑的演進：
 
-1. **未交割款**（T+2 還沒入帳的錢）。
-2. **不屬於任何策略的持倉**：接管來的 `__unattributed__` 不在任何策略的
-   `Account` 裡，於是它的價值整個消失。
-
-`ShioajiAccountQuery.get_stock_account()` 早就把 `total_equity` 算好了，
-而且它的說明直接寫著「拿可用餘額當分母的話，只要隔日還有部位在場上就必然
-誤判成額度超標」。2026-09-23 的演練正是如此：帳上 6 檔接管部位、現金為 0，
-總權益被算成 0，三個段落全部在 `prepare()` 就拒絕啟動。
+1. 最早是「可用餘額 ＋ 各策略持倉占用」，漏了**未交割款**——只要隔日還有部位在場上，
+   就必然誤判成額度超標。
+2. 2026-09-23 改取券商算好的 `total_equity`。那一版把**不屬於任何策略的持倉**
+   （接管來的 `__unattributed__`）也算進來，理由是「它們有價值」。
+3. **2026-10-02 再改**：接管來的舊持股不是策略可以動用的資金，正式環境的總權益要扣掉它們；
+   **模擬環境的帳務本來就是假的**（`account_balance()` 恆為 0、模擬下單不檢查資金），
+   一律以宣告額度為虛擬資金。2026-10-01 的「Σ 額度 40 萬 ≤ 總權益 616,343 × 95%」
+   其實是拿 6 檔模擬持倉當資金，沒有檢查到任何錢。
 """
 
 
@@ -51,21 +52,6 @@ def test_equity_comes_from_the_broker_snapshot() -> None:
     assert trader._account_equity() == 514_890.0
 
 
-def test_positions_without_an_owner_still_count() -> None:
-    """
-    接管來的部位有價值，要算進總權益
-
-    這是舊算式漏掉的那一半：`Σ used` 只加總「各策略的持倉占用」，
-    而 `__unattributed__` 不是策略，它的部位在那個算式裡等於不存在。
-    快照的 `total_equity` 是從券商部位清單直接加總的，不經過策略歸屬。
-    """
-
-    # 券商端：沒有現金，全部價值都在接管來的部位上
-    trader: LiveTrader = make_trader(total_equity=514_890.0, quotas={"A": 400_000.0})
-
-    assert trader._account_equity() > 0, "帳上有部位，總權益不該是 0"
-
-
 def test_missing_snapshot_is_zero_not_a_crash() -> None:
     """還沒刷新過帳務時回 0，不是 AttributeError"""
 
@@ -76,49 +62,50 @@ def test_missing_snapshot_is_zero_not_a_crash() -> None:
     assert trader._account_equity() == 0.0
 
 
-# === 模擬環境的退路 ===
-def test_simulation_falls_back_to_declared_quota_when_equity_is_zero() -> None:
+# === 模擬環境：一律以宣告額度為虛擬資金 ===
+@pytest.mark.parametrize(
+    "paper_equity", [0.0, 616_343.0], ids=["zero", "paper-positions"]
+)
+def test_simulation_always_uses_declared_quota(paper_equity: float) -> None:
     """
-    模擬環境帳務欄位全為 0 時，曝險與虧損檢查改以 Σ 宣告額度為基準
+    模擬環境的帳務是假的：權益一律以 Σ 宣告額度為準
 
-    那兩道檢查需要一個尺度，而「策略自己說要動用多少」是此刻唯一已知的尺度。
-    **額度總量檢查不走這條**，見下一條測試。
+    `account_balance()` 在模擬環境恆為 0，權益只剩模擬持倉的市值——那是紙上部位，
+    不是可以下單的錢。2026-10-01 的 616,343 就是 6 檔接管來的模擬持倉，
+    它讓額度檢查「通過」，實際上沒有檢查到任何資金。
     """
 
     trader: LiveTrader = make_trader(
-        total_equity=0.0,
+        total_equity=paper_equity,
         quotas={"A": 400_000.0, "B": 3_000_000.0},
         simulation=True,
     )
 
-    assert trader.equity_unavailable() is True
+    assert trader.uses_virtual_capital() is True
     assert trader._account_equity() == 3_400_000.0
 
 
 def test_quota_check_is_skipped_rather_than_faked() -> None:
     """
-    **查不到帳務時要略過額度檢查，不是捏一個數字讓它通過**
+    **模擬環境略過額度檢查，不是捏一個數字讓它通過**
 
     以 Σ 宣告額度當基準的話，檢查會變成「Σ 額度 ≤ Σ 額度 × 安全係數」，
     因為安全係數小於 1 而**必然不成立**——2026-09-23 實測到期貨側正好差
-    那 5%：3,000,000 vs 2,850,000。捏數字不只不誠實，還剛好行不通。
+    那 5%：3,000,000 vs 2,850,000。正式環境則照常檢查。
     """
 
     from core.live.capital_allocator import CapitalAllocator
     from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 
-    # **驗行為不驗方法名**：原本是比對 `inspect.getsource(prepare)` 含不含
-    # `"equity_unavailable()"` 與 `"verify_quota"` 這兩個字面值——改名或內聯就紅，
-    # 而行為根本沒變。改成直接問那道閘門本身。
-    blind: LiveTrader = make_trader(
-        total_equity=0.0, quotas={"A": 1_000_000.0}, simulation=True
-    )
-    visible: LiveTrader = make_trader(
+    simulated: LiveTrader = make_trader(
         total_equity=582_608.0, quotas={"A": 400_000.0}, simulation=True
     )
+    production: LiveTrader = make_trader(
+        total_equity=582_608.0, quotas={"A": 400_000.0}, simulation=False
+    )
 
-    assert blind.equity_unavailable() is True, "模擬環境查不到帳務時要能自己說出來"
-    assert visible.equity_unavailable() is False, "查得到帳務就不該略過檢查"
+    assert simulated.uses_virtual_capital() is True
+    assert production.uses_virtual_capital() is False
 
     # 釘住那個必然不成立的關係：安全係數 < 1。
     # **要讀真正的預設值**——自己設一個再斷言它小於 1 是同義反覆，
@@ -130,7 +117,7 @@ def test_quota_check_is_skipped_rather_than_faked() -> None:
 
 def test_production_with_zero_equity_stays_zero() -> None:
     """
-    **正式環境不走退路**
+    **正式環境不走虛擬資金**
 
     那裡的 0 是真的沒有錢。放寬的話，一個空帳戶會通過額度檢查、
     一路跑到盤中被券商退單——而那時已經有部位在場上。
@@ -145,16 +132,155 @@ def test_production_with_zero_equity_stays_zero() -> None:
     assert trader._account_equity() == 0.0
 
 
-def test_simulation_with_real_equity_does_not_fall_back() -> None:
-    """模擬環境查得到權益時照常用它，退路只在查不到時啟動"""
+def test_simulation_allocator_gets_virtual_cash() -> None:
+    """
+    模擬環境的額度分配以「Σ 額度 − Σ 已用」當可用現金
+
+    照實拿券商的 0 的話，`allocate_capital()` 的帳戶上限恆為 0，
+    每一張買單都會被自己的程式擋下、永遠送不到模擬環境。
+    """
+
+    from core.live.capital_allocator import CapitalAllocator
 
     trader: LiveTrader = make_trader(
-        total_equity=514_890.0,
-        quotas={"A": 400_000.0},
-        simulation=True,
+        total_equity=616_343.0, quotas={"A": 400_000.0}, simulation=True
+    )
+    trader.allocator = CapitalAllocator({"A": 400_000.0})
+    trader.contexts = []
+    trader.fetch_account = lambda: BrokerAccountSnapshot(available_balance=0.0)
+
+    trader._refresh_capital()
+
+    assert trader.allocator.available("A") == 400_000.0
+
+
+# === 部位金額與本地餘額 ===
+def make_context(positions: List[Any]) -> Any:
+    """帶台股換算器（張 → ×1000 股）的策略 context"""
+
+    from core.live.trader import StrategyContext
+
+    account: SimpleNamespace = SimpleNamespace(positions=positions, balance=400_000.0)
+    return StrategyContext(
+        strategy=SimpleNamespace(),
+        account=account,
+        position_manager=None,
+        data_feed=None,
+        calculate_notional=lambda order: order.price * order.volume * 1000,
     )
 
-    assert trader._account_equity() == 514_890.0
+
+def test_position_value_uses_the_market_unit() -> None:
+    """
+    部位金額要乘計價單位：台股一張是 1000 股
+
+    以前是「價 × 張」，已用額度小了一千倍，持倉幾乎不佔額度。
+    已平倉的部位不算。
+    """
+
+    context = make_context(
+        [
+            SimpleNamespace(price=45.15, volume=2, is_closed=False),
+            SimpleNamespace(price=100.0, volume=1, is_closed=True),
+        ]
+    )
+
+    assert context.position_value() == pytest.approx(90_300.0)
+
+
+def test_local_balance_is_quota_minus_held_positions() -> None:
+    """
+    啟動重建後，本地餘額 ＝ 額度 − 還持有部位的金額
+
+    重建時餘額被設回建帳時的完整額度，持有部位的成本沒扣掉——
+    部位管理層會照偏大的餘額算張數，再被額度分配整筆拒絕。
+    """
+
+    trader: LiveTrader = make_trader(
+        total_equity=0.0, quotas={"SimpleNamespace": 400_000.0}, simulation=True
+    )
+    context = make_context([SimpleNamespace(price=45.15, volume=2, is_closed=False)])
+    trader.contexts = [context]
+
+    trader._reset_local_balances()
+
+    assert context.account.balance == pytest.approx(400_000.0 - 90_300.0)
+
+
+# === 正式環境：不屬於任何策略的部位不算資金 ===
+class _PositionBroker:
+    """回一個股票帳戶快照與部位清單的假閘道"""
+
+    def __init__(self, total_equity: float, positions: List[Any]) -> None:
+        self.snapshot: BrokerAccountSnapshot = BrokerAccountSnapshot(
+            available_balance=0.0, total_equity=total_equity
+        )
+        self.positions: List[Any] = positions
+
+    def get_account(self) -> BrokerAccountSnapshot:
+        return self.snapshot
+
+    def get_positions(self) -> List[Any]:
+        return self.positions
+
+
+class _LotDAO:
+    """只回 `__unattributed__` lot 的假紀錄庫"""
+
+    def __init__(self, lots: List[Dict[str, Any]]) -> None:
+        self.lots: List[Dict[str, Any]] = lots
+
+    def get_open_lots(self, strategy_name: str) -> List[Dict[str, Any]]:
+        assert strategy_name == "__unattributed__"
+        return self.lots
+
+
+def test_unattributed_stock_positions_are_not_capital() -> None:
+    """
+    接管來的舊持股不是策略可以動用的資金：股票帳戶的總權益要扣掉它們
+
+    2026-10-01 的模擬帳戶現金為 0、總權益 616,343 全是 6 檔接管部位，
+    舊口徑讓 40 萬的額度「通過」檢查。正式環境同樣的帳戶會在盤中才被券商以資金不足退單。
+    空單也要扣（券商總權益把空單成本一併加進去了）；期貨的接管 lot 不在股票帳戶裡，不扣。
+    """
+
+    from core.live.factory import make_account_fetcher
+    from core.models import FuturesPositionSnapshot, StockPositionSnapshot
+    from core.utils import InstrumentType
+
+    broker: _PositionBroker = _PositionBroker(
+        total_equity=616_343.0,
+        positions=[
+            StockPositionSnapshot(symbol="2362", volume=1, avg_price=50.0),
+            StockPositionSnapshot(symbol="6134", volume=3, avg_price=20.0),
+            FuturesPositionSnapshot(symbol="TXFJ6", volume=1, avg_price=42000.0),
+        ],
+    )
+    dao: _LotDAO = _LotDAO(
+        [
+            {"symbol": "2362", "volume": 1, "open_price": 50.0},
+            {"symbol": "6134", "volume": 3, "open_price": 20.0},
+            {"symbol": "TXFJ6", "volume": 1, "open_price": 42000.0},
+        ]
+    )
+
+    fetch = make_account_fetcher(broker, [_strategy(InstrumentType.STOCK)], dao)
+    snapshot: BrokerAccountSnapshot = fetch()
+
+    assert snapshot.raw["unattributed_value"] == pytest.approx(50_000.0 + 60_000.0)
+    assert snapshot.total_equity == pytest.approx(616_343.0 - 110_000.0)
+
+
+def test_equity_never_goes_negative_after_exclusion() -> None:
+    """扣完不可以是負數：負的資金基準傳到下游會被當成一個數字繼續算"""
+
+    from core.live.factory import exclude_unattributed_stock
+
+    snapshot: BrokerAccountSnapshot = exclude_unattributed_stock(
+        BrokerAccountSnapshot(total_equity=100_000.0), 250_000.0
+    )
+
+    assert snapshot.total_equity == 0.0
 
 
 # === 三處共用同一個口徑 ===
