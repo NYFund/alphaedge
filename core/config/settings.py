@@ -72,6 +72,19 @@ DEFAULT_PRICE_START_DATE: datetime.date = datetime.date(2013, 1, 1)
 # 不讓「缺資料」默默變成「不限制」
 SHORT_SALE_LIST_START_DATE: datetime.date = datetime.date(2013, 9, 23)
 DAY_TRADE_LIST_START_DATE: datetime.date = datetime.date(2014, 1, 6)
+# 平盤下名單在來源端就已損毀的「日期 × 市場」→ 損毀情形。
+#
+# 這些日子是交易日，交易所當天一定公告過名單，但站方現存的每一種格式都只剩壞資料，
+# 重爬永遠拿不到。不處理的話那天永遠是未完成，開啟平盤下檢核的回測只要涵蓋它就會拒絕執行。
+# 列在這裡的市場日改以前後交易日推估（規則見 `StockShortSaleListUpdater.merge_strictest()`）。
+#
+# **只收人工確認過的日子**：網路失敗、尚未公布這類重試就會好的缺日不可列進來，
+# 否則「缺資料」會默默變成推估值
+SHORT_SALE_LIST_CORRUPTED_DAYS: Dict[Tuple[datetime.date, str], str] = {
+    # 2026-10-02 實查：JSON、CSV、HTML 與舊版網址都只有一列民國日期 1081002，
+    # 與休市日的佔位列同形；前後交易日（10/01、10/03）名單成員完全相同
+    (datetime.date(2019, 10, 2), "TPEX"): "櫃買中心只剩一列民國日期的佔位列",
+}
 # 現股當沖「先賣後買」的開放日：比名單起點晚半年（2014-01-06 只開放先買後賣）。
 # 回測的現股當沖放空（先賣）在這天之前一律不合法，開啟當沖名單檢核時區間不得早於它
 SELL_FIRST_DAY_TRADE_START_DATE: datetime.date = datetime.date(2014, 6, 30)

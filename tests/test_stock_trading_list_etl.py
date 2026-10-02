@@ -1,13 +1,14 @@
 import datetime
 import json
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set, Tuple
 
 import pandas as pd
 import pytest
 import requests
 
 import core.pipeline.tw.crawlers.stock_trading_list_crawler as crawler_module
+import core.pipeline.tw.updaters.stock_short_sale_list_updater as short_sale_module
 from core.config import DAY_TRADE_LIST_START_DATE, SHORT_SALE_LIST_START_DATE
 from core.pipeline.shared.base_cleaner import ColumnLayoutError
 from core.pipeline.shared.base_crawler import CrawlResult
@@ -295,3 +296,210 @@ def test_plan_never_requests_days_before_the_list_start(
     updater.plan_dates(None, datetime.date(2013, 1, 1), datetime.date(2026, 1, 1))
 
     assert captured == [list_start]
+
+
+# === 來源已損毀的市場日 ===
+CORRUPTED_DAY: datetime.date = datetime.date(2019, 10, 2)
+PREV_DAY: datetime.date = datetime.date(2019, 10, 1)
+NEXT_DAY: datetime.date = datetime.date(2019, 10, 3)
+
+
+def short_sale_frame(rows: List[List[str]]) -> pd.DataFrame:
+    """平盤下名單的原始表格（與爬蟲回傳同形狀）"""
+
+    return pd.DataFrame(rows, columns=SHORT_SALE_FIELDS)
+
+
+def test_merge_strictest_intersects_members_and_unions_flags() -> None:
+    """
+    成員取交集、註記取聯集
+
+    推估錯的代價只能是少放空，不能是放空了實際不能放空的標的。
+    """
+
+    before: pd.DataFrame = short_sale_frame(
+        [
+            ["1111", "甲", "*", "", ""],
+            ["2222", "乙", "", "", ""],
+            ["3333", "丙", "", "", ""],  # 後一日不在名單上
+        ]
+    )
+    after: pd.DataFrame = short_sale_frame(
+        [
+            ["1111", "甲", "", "", ""],
+            ["2222", "乙", "", "Y", ""],
+            ["4444", "丁", "", "", ""],  # 前一日不在名單上
+        ]
+    )
+
+    merged: pd.DataFrame = StockShortSaleListUpdater.merge_strictest(before, after)
+
+    assert merged.values.tolist() == [
+        ["1111", "甲", "*", "", ""],
+        ["2222", "乙", "", "Y", ""],
+    ]
+
+
+def make_updater(
+    monkeypatch: pytest.MonkeyPatch,
+    results: Dict[Tuple[str, datetime.date], CrawlResult],
+    corrupted: Set[Tuple[datetime.date, str]],
+) -> Tuple[StockShortSaleListUpdater, List[Tuple[str, datetime.date]]]:
+    """不連 DB、不連網路的 updater：日曆固定為三天，爬取結果照表回傳並記錄呼叫"""
+
+    calls: List[Tuple[str, datetime.date]] = []
+
+    class FakeCrawler:
+        def crawl_twse_short_sale_list(self, date: datetime.date) -> CrawlResult:
+            calls.append(("TWSE", date))
+            return results[("TWSE", date)]
+
+        def crawl_tpex_short_sale_list(self, date: datetime.date) -> CrawlResult:
+            calls.append(("TPEX", date))
+            return results[("TPEX", date)]
+
+    class FakeDAO:
+        conn: Any = None
+
+    monkeypatch.setattr(
+        short_sale_module,
+        "SHORT_SALE_LIST_CORRUPTED_DAYS",
+        {key: "測試用" for key in corrupted},
+    )
+    monkeypatch.setattr(
+        short_sale_module.DatePlanner,
+        "get_trading_dates",
+        staticmethod(lambda dao, start, end: {PREV_DAY, CORRUPTED_DAY, NEXT_DAY}),
+    )
+    monkeypatch.setattr(short_sale_module, "StockPriceDAO", lambda conn: None)
+
+    updater: StockShortSaleListUpdater = StockShortSaleListUpdater.__new__(
+        StockShortSaleListUpdater
+    )
+    updater.crawler = FakeCrawler()
+    updater.dao = FakeDAO()
+    return updater, calls
+
+
+def placeholder() -> CrawlResult:
+    """櫃買中心損毀那天的爬取結果（佔位列判為查無資料）"""
+
+    return CrawlResult.no_data("查詢日的名單為 0 列")
+
+
+def test_listed_corrupted_day_is_estimated_from_neighbors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """列為損毀的市場日改以前後交易日推估，另一個市場照用真資料"""
+
+    twse_rows: pd.DataFrame = short_sale_frame([["2330", "台積電", "", "", ""]])
+    updater, calls = make_updater(
+        monkeypatch,
+        {
+            ("TWSE", CORRUPTED_DAY): CrawlResult.ok(twse_rows),
+            ("TPEX", CORRUPTED_DAY): placeholder(),
+            ("TPEX", PREV_DAY): CrawlResult.ok(
+                short_sale_frame([["6488", "環球晶", "", "", ""]])
+            ),
+            ("TPEX", NEXT_DAY): CrawlResult.ok(
+                short_sale_frame([["6488", "環球晶", "*", "", ""]])
+            ),
+        },
+        corrupted={(CORRUPTED_DAY, "TPEX")},
+    )
+
+    twse, tpex = updater.crawl_day(CORRUPTED_DAY)
+
+    assert twse.data is twse_rows
+    assert tpex.is_ok
+    assert tpex.data.values.tolist() == [["6488", "環球晶", "*", "", ""]]
+    assert ("TPEX", PREV_DAY) in calls and ("TPEX", NEXT_DAY) in calls
+
+
+def test_unlisted_day_is_never_estimated(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    沒列進清單的失敗照舊記為未完成
+
+    重試就會好的缺日若也推估，「缺資料」會默默變成推估值。
+    """
+
+    updater, calls = make_updater(
+        monkeypatch,
+        {
+            ("TWSE", CORRUPTED_DAY): CrawlResult.ok(short_sale_frame([])),
+            ("TPEX", CORRUPTED_DAY): placeholder(),
+        },
+        corrupted=set(),
+    )
+
+    _, tpex = updater.crawl_day(CORRUPTED_DAY)
+
+    assert not tpex.is_ok
+    assert calls == [("TWSE", CORRUPTED_DAY), ("TPEX", CORRUPTED_DAY)]
+
+
+def test_real_data_wins_over_estimation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """站方修好之後直接用真資料，不必改設定"""
+
+    real: pd.DataFrame = short_sale_frame([["6488", "環球晶", "", "", ""]])
+    updater, calls = make_updater(
+        monkeypatch,
+        {
+            ("TWSE", CORRUPTED_DAY): CrawlResult.ok(short_sale_frame([])),
+            ("TPEX", CORRUPTED_DAY): CrawlResult.ok(real),
+        },
+        corrupted={(CORRUPTED_DAY, "TPEX")},
+    )
+
+    _, tpex = updater.crawl_day(CORRUPTED_DAY)
+
+    assert tpex.data is real
+    assert len(calls) == 2
+
+
+def test_estimation_gives_up_when_a_neighbor_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """鄰日任一邊拿不到就放棄推估，不退而只用單邊"""
+
+    updater, _ = make_updater(
+        monkeypatch,
+        {
+            ("TWSE", CORRUPTED_DAY): CrawlResult.ok(short_sale_frame([])),
+            ("TPEX", CORRUPTED_DAY): placeholder(),
+            ("TPEX", PREV_DAY): CrawlResult.ok(
+                short_sale_frame([["6488", "環球晶", "", "", ""]])
+            ),
+            ("TPEX", NEXT_DAY): CrawlResult.failed("連線失敗"),
+        },
+        corrupted={(CORRUPTED_DAY, "TPEX")},
+    )
+
+    _, tpex = updater.crawl_day(CORRUPTED_DAY)
+
+    assert not tpex.is_ok
+
+
+def test_estimation_fails_the_day_when_neighbor_layouts_differ(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """鄰日版面不同只讓那一天失敗，不拋例外中止整批回補"""
+
+    updater, _ = make_updater(
+        monkeypatch,
+        {
+            ("TWSE", CORRUPTED_DAY): CrawlResult.ok(short_sale_frame([])),
+            ("TPEX", CORRUPTED_DAY): placeholder(),
+            ("TPEX", PREV_DAY): CrawlResult.ok(
+                short_sale_frame([["6488", "環球晶", "", "", ""]])
+            ),
+            ("TPEX", NEXT_DAY): CrawlResult.ok(
+                pd.DataFrame([["6488", "環球晶"]], columns=["證券代號", "證券名稱"])
+            ),
+        },
+        corrupted={(CORRUPTED_DAY, "TPEX")},
+    )
+
+    _, tpex = updater.crawl_day(CORRUPTED_DAY)
+
+    assert not tpex.is_ok
