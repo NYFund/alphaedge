@@ -261,16 +261,27 @@ class BaseDataCrawler(ABC):
                 站方明確表示當天沒有資料為 True
         """
 
+        # **每一條「確認不了」的路徑都要留一行**：它們都讓這天維持失敗、下次重試，
+        # 安靜回 False 的話，log 只看得到 HTML 解析失敗，分不出是確認請求本身失敗
+        # （偶發，下次就好）還是 JSON 真的有資料（版面改了，要人看）
         result: FetchResult = RequestUtils.fetch(url)
         if not result.ok:
+            logger.warning(
+                f"{label}: JSON 版確認請求失敗（{result.status.value}：{result.error}），"
+                f"維持記為失敗、下次重試"
+            )
             return False
 
         try:
             payload: Any = result.response.json()
-        except ValueError:
+        except ValueError as error:
+            logger.warning(
+                f"{label}: JSON 版回應無法解析（{type(error).__name__}），維持記為失敗"
+            )
             return False
         # 確認流程的任何意外都只能讓結果維持失敗，不可以拋出去中斷整批更新
         if not isinstance(payload, dict):
+            logger.warning(f"{label}: JSON 版回應不是物件，維持記為失敗")
             return False
 
         if cls.looks_like_no_data(str(payload.get("stat", ""))):
@@ -291,6 +302,10 @@ class BaseDataCrawler(ABC):
             logger.info(f"{label}: JSON 版為查詢日的 0 列，判為休市")
             return True
 
+        logger.warning(
+            f"{label}: JSON 版不是查無資料（stat={payload.get('stat')}、date={payload.get('date')}），"
+            f"HTML 卻解析不出表格——可能是版面改了，維持記為失敗"
+        )
         return False
 
     @classmethod
