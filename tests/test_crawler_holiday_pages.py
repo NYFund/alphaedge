@@ -220,3 +220,30 @@ def test_holiday_pages_are_no_data(
     result: CrawlResult = crawl()(HOLIDAY)
 
     assert result.is_no_data
+
+
+def test_unconfirmed_probe_leaves_a_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    確認請求失敗時要留下警告，不可以安靜地維持失敗
+
+    2026-10-02 有 2 個休市日的確認請求偶發失敗，log 只看得到 HTML 解析失敗，
+    分不出是請求問題還是版面改了。
+    """
+
+    from loguru import logger
+
+    def fetch(url: str, *args: Any, **kwargs: Any) -> FetchResult:
+        if "response=json" in url:
+            return FetchResult.unreachable("timeout")
+        return FetchResult.succeeded(make_response(TWSE_BLANK_HTML))
+
+    monkeypatch.setattr(RequestUtils, "fetch", fetch)
+    messages: List[str] = []
+    sink_id: int = logger.add(lambda message: messages.append(message), level="WARNING")
+    try:
+        result: CrawlResult = StockPriceCrawler().crawl_twse_price(HOLIDAY)
+    finally:
+        logger.remove(sink_id)
+
+    assert result.is_failed
+    assert any("JSON 版確認請求失敗" in text for text in messages)
