@@ -87,10 +87,8 @@ Target 對照表
   tick                        逐筆成交 (Shioaji ticks)
   chip                        三大法人籌碼
   margin                      信用交易（融資融券餘額）
-  short_sale_list             平盤下得融（借）券賣出名單（2013-09-23 起；回測擋單用；
-                              **不含在 all／no_tick 內**，只在此處點名才會跑）
-  day_trade_list              現股當沖標的名單（2014-01-06 起；回測擋單用；
-                              **不含在 all／no_tick 內**，只在此處點名才會跑）
+  short_sale_list             平盤下得融（借）券賣出名單（2013-09-23 起；回測擋單用）
+  day_trade_list              現股當沖標的名單（2014-01-06 起；回測擋單用）
   dividend                    除權除息計算結果表（含還原係數、現金股利）
   corporate_action            非除權息的公司行動（減資、面額變更；含調整倍率）
   price                       收盤價
@@ -141,15 +139,9 @@ TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 # DolphinDB 表又是 `keepDuplicates=ALL`、loader 每次重放整個目錄——每跑一次
 # 近月契約就重抓並多寫一份，成交量被放大 N 倍，每個候選日還先耗一次
 # `api.usage()` 配額。在加上「契約 × 日」的載入紀錄之前，不能讓 `all` 帶到它
-#
-# 兩份交易所資格名單目前也只能點名：從起點回補約 3,200 個交易日 × 每日兩個請求，
-# 以現行節流要數小時。歷史回補完成之前放進 `no_tick`，每天早上的排程更新就會
-# 被這段回補卡住，排在後面的 target 全部延後
 EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
     DataType.FUTURES_STOCK_PRICE,
     DataType.FUTURES_TICK,
-    DataType.SHORT_SALE_LIST,
-    DataType.DAY_TRADE_LIST,
 }
 
 

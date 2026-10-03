@@ -503,3 +503,19 @@ def test_estimation_fails_the_day_when_neighbor_layouts_differ(
     _, tpex = updater.crawl_day(CORRUPTED_DAY)
 
     assert not tpex.is_ok
+
+
+# === 每日更新 ===
+def test_daily_update_includes_both_lists() -> None:
+    """
+    歷史回補完成後，兩份名單隨每日更新（`no_tick`、`all`）一起跑
+
+    不在每日更新裡的話，回補完的那天之後名單就停住；開啟檢核的回測只要區間碰到
+    之後的日子，就會因名單缺日而拒絕執行。
+    """
+
+    from tasks.update_db import expand_targets
+
+    for shortcut in ("no_tick", "all"):
+        targets = expand_targets({shortcut})
+        assert {"short_sale_list", "day_trade_list"} <= targets, shortcut

@@ -22,7 +22,7 @@
 | S2 | 休市日判為 `no data` 或不請求 | `core/pipeline/shared/base_crawler.py`、三條日頻與名單爬蟲、測試 | 休市日不再進 `incomplete`；`price` 進度檔的 243 筆在下一次更新後消失 | ✅ | 2026-10-02 程式完成（爬蟲層：解析不出表格時改問 JSON 版）；實連兩個休市日、十個端點全部 `no_data`。**主目錄尚未部署**，見步驟詳述 |
 | S3 | 上櫃端點核對回應日期 | `core/pipeline/tw/crawlers/stock_price_crawler.py` 等、測試 | 以別天的回應餵入時記為失敗 | ⬜ | **S1 後降為預防性**：休市日不會回別天資料、既有資料抽查無污染；剩下的風險只有「日期格式送錯時站方回近幾日」，現行程式都送斜線格式。排在 S2 之後 |
 | S4 | 日曆尾端補齊排除休市日 | （無須改動） | 尾端的平日休市日判為 `no data`、不再每次重試 | ✅ | 2026-10-02 由 S2 一併解決，**偏離原規格**：不排除候選，而是請求一次後記為查無資料，見步驟詳述 |
-| S5 | 兩份交易所名單加入每日更新 | `tasks/update_db.py`、`docs/commands/` 兩份 | `no_tick` 展開後含 `short_sale_list`、`day_trade_list`；排程跑完一次 | ⬜ | 相依 S4 與 `暫緩工作彙整.md` S5 的歷史回補 |
+| S5 | 兩份交易所名單加入每日更新 | `tasks/update_db.py`、`docs/commands/` 兩份 | `no_tick` 展開後含 `short_sale_list`、`day_trade_list`；排程跑完一次 | ✅ | 2026-10-04 完成；歷史回補 2026-10-03 完成（兩份名單涵蓋 `price` 的全部交易日）。排程實跑待 2026-10-05 08:00 確認 |
 
 ## S1. 實查兩站在休市日的回應 ✅
 
@@ -103,10 +103,16 @@
 > 但 S2 之後兩站都判為 `NO_DATA`，過去的日子寫進 `no_data`、不再重試；當天與未來的日子本來就不寫入（盤後尚未公布的保護），
 > 最多每次更新多問一天。另外排除候選需要 2013 起的休市日來源（`market_holiday` 表只有 2025、2026），不值得為這一天的請求另建。
 
-## S5. 兩份交易所名單加入每日更新 ⬜
+## S5. 兩份交易所名單加入每日更新 ✅
 
 - **目的**：`short_sale_list`、`day_trade_list` 目前列在 `EXPLICIT_ONLY_DATA_TYPES`，不會隨每日排程更新。
 - **做法**：歷史回補完成且 S4 完成後，從 `EXPLICIT_ONLY_DATA_TYPES` 移除，同步改 `docs/commands/` 兩份與 `tasks/update_db.py` 的說明。
 - **產出**：上列檔案。
 - **驗證方式**：`expand_targets({"no_tick"})` 含兩者；排程跑完一次，兩張表最新日期跟上 `price`。
 - **相依**：S4；`暫緩工作彙整.md` S5 的歷史回補。
+
+> **✅ 完成紀錄（2026-10-04）**：兩份名單從 `EXPLICIT_ONLY_DATA_TYPES` 移除，`no_tick`、`all` 都會帶到；
+> `tasks/update_db.py` 說明、`docs/commands/` 兩份、`docs/backtest/short-selling-framework.md` 同步。
+> 新增 `tests/test_stock_trading_list_etl.py::test_daily_update_includes_both_lists`。
+> 歷史回補於 2026-10-03 完成：平盤下名單 3,182 天（2013-09-23 起）、當沖名單 3,109 天（2014-01-06 起），
+> 皆等於 `price` 表同區間的交易日數、進度檔無失敗日。每日更新多 4 個請求（兩份名單 × 上市上櫃）。
