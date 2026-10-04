@@ -24,9 +24,16 @@
    - `API_KEY`、`API_SECRET_KEY`：Shioaji 金鑰。
    - `SHIOAJI_CA_PASSWORD`：下單憑證密碼（`SHIOAJI_CA_PATH` 在容器內由 compose 覆寫成 `/ca/...`）。
    - （建議）`ALPHAEDGE_LIVE_NOTIFY_CHANNEL`／`_TOKEN`／`_TARGET`：推播管道。`discord` 的 `_TOKEN` 填完整的 webhook URL、不需 `_TARGET`；`telegram` 的 `_TOKEN` 填 bot token、`_TARGET` 填 chat id。沒設的話異常只會寫進 log 與 `live_risk_event`，不會主動通知任何人。
+   - （選填）`ALPHAEDGE_LIVE_KILL_SWITCH_PATH`：kill switch 檔案路徑，檔案存在即停止送單；未設定時為 `data/live/KILL_SWITCH`。
 2. CA 憑證（`.pfx`）放在**專案目錄以外**，預設 `~/.alphaedge/ca/Sinopac.pfx`。
    目錄與檔名可用環境變數 `ALPHAEDGE_CA_DIR`、`SHIOAJI_CA_FILE` 改（compose 讀，程式不讀）。
 3. 策略要標 `live_ready = True` 並宣告 `live_schedule`，否則啟動檢查會拒絕。
+   實盤的資金額度與持倉檔數可與回測分開設定：`live_capital`（`None` 時沿用 `init_capital`）與
+   `live_max_holdings`（`None` 時沿用 `max_holdings`），**兩者要成對調整**——只調小資金而檔數不動，
+   等權切分後每檔資金可能不足一張，訊號會被整批捨成 0 張。回測不讀這兩個屬性。
+   - **模擬環境**：一律以 Σ `live_capital` 當虛擬資金（模擬帳務是假的，可用現金恆為 0），略過帳戶層額度總量檢查。
+   - **正式環境**：資金基準為券商總權益扣掉接管部位（`__unattributed__` 的股票部位，按「成本＋未實現損益」、部分接管按比例扣）；
+     Σ 額度超過總權益 × 安全係數時拒絕啟動（以未預期例外結束，退出碼 1）。
 4. 資料庫要在開盤前更新到前一個交易日：實盤啟動時會檢查，沒更新就以退出碼 3 拒絕啟動。
 
 ## 3) 用容器執行
@@ -47,7 +54,15 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 | `stop_grace_period: 90s` | 停止時要先撤單、等券商回覆、寫結束紀錄；預設 10 秒到了就被 SIGKILL |
 | 預設連**模擬環境** | 正式環境要另外帶 `--production --confirm-production`，**刻意不寫進 compose**：兩個旗標只能出現在排程指令裡、由人明確寫下 |
 
-不用容器時，在專案根目錄以 `uv run python -m apps.live ...` 執行，效果相同。
+不用容器時，在專案根目錄以 `uv run --no-sync python -m apps.live ...` 執行，效果相同。
+
+其他旗標（完整清單見 `python -m apps.live --help`）：
+
+- `--strategy A,B`：逗號分隔多支策略，共用一個帳戶（同一行不可混合台股與期貨策略，見下節）。
+- `--dry-run`：走完整流程但不真的送出委託。
+- `--broker fake`：測試用的假券商，正式環境一律拒絕（退出碼 2）。
+- `--resume-trading [策略名 ...]`：人工恢復交易模式，不給策略名時恢復帳戶層。
+- `--resync-from-broker [--confirm-resync]`：以券商部位重建歸屬帳，見第 5 節。
 
 ## 4) 排程
 
@@ -57,32 +72,34 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 
 | 時間 | 指令 | 說明 |
 |------|------|------|
-| 08:00 | `uv run python -m tasks.update_db` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它 |
+| 08:00 | `uv run --no-sync python -m tasks.update_db` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它 |
 | 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59） |
 | 08:40 | `... run --rm live --strategy <期貨策略> --phase open` | 期貨開盤段（送單時窗 08:45～08:59） |
 | 13:20 | `... run --rm live --strategy <股票策略> --phase close` | 台股尾盤段；程式會等到 13:25 才送單 |
 | 13:28 | `... run --rm live --strategy <期貨策略> --phase close` | 期貨尾盤段；**換月在這一段的開頭執行** |
 | 14:30 | `... run --rm live --strategy <股票策略> --phase after_close` | 台股盤後作業 |
 | 14:35 | `... run --rm live --strategy <期貨策略> --phase after_close` | 期貨盤後作業 |
-| 08:00～15:00 每 5 分鐘 | `uv run python -m scripts.live_watchdog` | 存活監控，**在主機上跑、和 `live` 分開** |
+| 08:00～15:00 每 5 分鐘 | `uv run --no-sync python -m scripts.live_watchdog` | 存活監控，**在主機上跑、和 `live` 分開** |
 
 `crontab` 範例（`...` 為 `docker compose -f /path/to/AlphaEdge/docker-compose.yml --profile live`）：
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  8 * * 1-5  cd /path/to/AlphaEdge && uv run python -m tasks.update_db
+0  8 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m tasks.update_db
 30 8 * * 1-5  ... run --rm live --strategy MomentumStrategy1 --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
 20 13 * * 1-5 ... run --rm live --strategy MomentumStrategy1 --phase close
 28 13 * * 1-5 ... run --rm live --strategy MomentumFuturesStrategy --phase close
 30 14 * * 1-5 ... run --rm live --strategy MomentumStrategy1 --phase after_close
 35 14 * * 1-5 ... run --rm live --strategy MomentumFuturesStrategy --phase after_close
-*/5 8-14 * * 1-5 cd /path/to/AlphaEdge && uv run python -m scripts.live_watchdog
+*/5 8-14 * * 1-5 cd /path/to/AlphaEdge && uv run --no-sync python -m scripts.live_watchdog
 ```
+
+- **排程裡的 `uv run` 一律帶 `--no-sync`**：不帶的話 `uv run` 會先同步環境，`pyproject.toml` 一變動就要連 PyPI 重建；排程時段網路不通時，段落會在進入口之前就失敗。改完相依後手動 `uv sync` 一次即可。
 
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
 - **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商；期貨的尾盤段也要監控時加上 `--expect open=08:30 close=13:28 after_close=14:30`。
-- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組排程，安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`），存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
+- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`），存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
 ## 5) 對帳不一致後以券商部位重建歸屬帳
@@ -91,13 +108,15 @@ CRON_TZ=Asia/Taipei
 人工確認要以券商為準時，走 `--resync-from-broker`，**分兩次執行、都不要放進排程**：
 
 ```bash
-# 1. 只列計畫、不寫入（退出碼 7）
-uv run python -m apps.live --strategy <策略> --resync-from-broker
+# 1. 只列計畫、不寫入（有異動時退出碼 7）
+uv run --no-sync python -m apps.live --strategy <策略> --resync-from-broker
 # 2. 看過計畫後才寫入
-uv run python -m apps.live --strategy <策略> --resync-from-broker --confirm-resync
+uv run --no-sync python -m apps.live --strategy <策略> --resync-from-broker --confirm-resync
 # 3. 確認重建結果無誤後，另外解除降級
-uv run python -m apps.live --strategy <策略> --resume-trading
+uv run --no-sync python -m apps.live --strategy <策略> --resume-trading
 ```
+
+計畫沒有任何異動時不回 7，而是照一般段落的規則決定退出碼（例如帳戶層仍降級時回 6）。
 
 - **規則**：逐標的、逐方向比對。券商多出來的量收進 `__unattributed__`（只允許平倉）；券商比本地少時，
   依 FIFO 扣減該標的唯一持有者的 lot；方向相反時本地方向扣到 0、券商方向整筆收進 `__unattributed__`。
@@ -131,7 +150,7 @@ uv run python -m apps.live --strategy <策略> --resume-trading
 |----|------|
 | 0 | 正常結束（含休市日、只跑對帳的段落） |
 | 1 | 未預期的例外 |
-| 2 | 用法錯誤（策略名、旗標組合） |
+| 2 | 用法錯誤（策略名、旗標組合，例如缺 `--phase`、`--production` 沒帶 `--confirm-production`、重建旗標與 `--phase`／`--resume-trading` 併用、同一行混合兩個市場的策略） |
 | 3 | 資料未更新到前一個交易日，或判定不出是否為交易日 |
 | 4 | 對帳不一致（或以券商部位重建被拒絕） |
 | 5 | kill switch 生效 |

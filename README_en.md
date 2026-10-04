@@ -147,13 +147,13 @@ See [Multi-Market Engine](docs/backtest/multi-market-engine.md) and [Module Map]
 
 Each backtest runs one (market, instrument) combination, declared by the strategy base and dispatched by `factory.py`. Direction (LONG / SHORT) and instrument type are independent axes: accounting always follows each order's `position_type`, and the strategy's `allowed_directions` is only a direction whitelist.
 
-Data ranges below reflect an inventory of `data/db` taken on 2026-09-24 and will move as the data is updated.
+Data ranges below reflect an inventory of `data/db` taken on 2026-10-02 and will move as the data is updated.
 
 | Market × Instrument | Status | Scope and data range | Bar scale | Directions | Strategy base |
 | ------------------- | ------ | -------------------- | --------- | ---------- | ------------- |
-| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-09-24 (2,395 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-09-24 | `DAY`, `TICK` (ticks live in DolphinDB, not `data/db`; needs the `[tick]` extra) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
-| TW index futures (`TW` × `FUTURE`) | ✅ Supported | TX, MTX, TMF, TE, ZEF, TF, ZFF; automatic contract roll<br>**Day-session prices** (`DAY`): TX / MTX / TE / TF from 2015-01-05 (backfill start), ZEF from 2021-06-28, ZFF from 2021-12-06, TMF from 2024-07-29 (listing dates); all products updated to 2026-09-24<br>**Night-session prices** (`NIGHT` / `COMBINED`): TX / MTX from 2017-05-16, TE from 2018-11-20, ZEF from 2021-06-29, TMF from 2024-07-30; **TF / ZFF only from 2025-06-24**<br>**Margin** (lookup mode): TX / MTX from 2020-03-13, TE / TF from 2020-07-22, ZEF from 2021-08-12, ZFF from 2022-01-26, TMF from 2024-08-09 | `DAY` only | **LONG / SHORT**: the same margin trading, daily mark-to-market and margin call; no borrow availability or borrow fees<br>Long and short can coexist across contracts; opposite positions in the same contract are rejected | `BaseFuturesStrategy` |
-| Stock futures / ETF futures | ⚠️ Code works, prices missing | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), universe snapshots for 2026-08-29, 09-02 and 09-16 (3 in total); prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session), **not enough for a meaningful backtest** (backfill tracked in [backlog/暫緩工作彙整.md](backlog/暫緩工作彙整.md) S4)<br>**Code path is wired**: the multiplier comes from the DataFeed's `resolve_multiplier()`, which reads the contract size from the universe snapshot for that day; margin looks up the amount table first (ETF future NYF is there from 2020-07-22) and falls back to the rate table for single-stock futures (`underlying price × contract size × rate`, with the underlying price read across from `tw_stock.db`)<br>**Remaining limit**: contract sizes only go back to the first snapshot on 2026-08-29, so earlier ex-dividend adjustments are invisible | `DAY` only | Same as TW index futures | `BaseFuturesStrategy` |
+| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-10-02 (2,393 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-09-30<br>Exchange below-reference short-sale list (from 2013-09-23) and day-trade list (from 2014-01-06): covering every trading day and updated daily | `DAY`, `TICK` (ticks live in DolphinDB, not `data/db`; needs the `[tick]` extra) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
+| TW index futures (`TW` × `FUTURE`) | ✅ Supported | TX, MTX, TMF, TE, ZEF, TF, ZFF; automatic contract roll<br>**Day-session prices** (`DAY`): TX / MTX / TE / TF from 2015-01-05 (backfill start), ZEF from 2021-06-28, ZFF from 2021-12-06, TMF from 2024-07-29 (listing dates); all products updated to 2026-09-30<br>**Night-session prices** (`NIGHT` / `COMBINED`): TX / MTX from 2017-05-16, TE from 2018-11-20, ZEF from 2021-06-29, TMF from 2024-07-30; **TF / ZFF only from 2025-06-24**<br>**Margin** (lookup mode): TX / MTX from 2020-03-13, TE / TF from 2020-07-22, ZEF from 2021-08-12, ZFF from 2022-01-26, TMF from 2024-08-09 | `DAY` only | **LONG / SHORT**: the same margin trading, daily mark-to-market and margin call; no borrow availability or borrow fees<br>Long and short can coexist across contracts; opposite positions in the same contract are rejected | `BaseFuturesStrategy` |
+| Stock futures / ETF futures | ⚠️ Code works, prices missing | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), 8 universe snapshots from 2026-08-29 to 09-30; prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session), **not enough for a meaningful backtest** (backfill tracked in [backlog/暫緩工作彙整.md](backlog/暫緩工作彙整.md) S4)<br>**Code path is wired**: the multiplier comes from the DataFeed's `resolve_multiplier()`, which reads the contract size from the universe snapshot for that day; margin looks up the amount table first (ETF future NYF is there from 2020-07-22) and falls back to the rate table for single-stock futures (`underlying price × contract size × rate`, with the underlying price read across from `tw_stock.db`)<br>**Remaining limit**: contract sizes only go back to the first snapshot on 2026-08-29, so earlier ex-dividend adjustments are invisible | `DAY` only | Same as TW index futures | `BaseFuturesStrategy` |
 | US market, options | ❌ Not supported | `Market.US` and `InstrumentType.OPTION` are defined only; the factory raises `ValueError` | — | — | — |
 
 > - Holding both directions requires `allowed_directions = {LONG, SHORT}`; a LONG intraday strategy must declare `bar_execution_order = OPEN_THEN_CLOSE` itself.
@@ -166,8 +166,8 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-09-24 and will
 - The futures margin lookup start date differs per product (earliest 2020-03, see the table); earlier periods can only use the `FuturesMarginConfig.ratio()` approximation, which distorts tradable lots and margin-call thresholds.
 - Futures tick sizes cover only the seven verified index futures (TX / MTX / TMF 1 point, TE / ZEF 0.05, TF / ZFF 0.2); unregistered products fall back to 1 point with a warning, so slippage set in ticks is distorted for them (default slippage is 0, so unaffected).
 - A single backtest cannot hold TW stocks and TW futures at the same time (cross-market portfolios / hedging).
-- The TW stock below-reference-price short restriction and the daily day-trade whitelist are not wired into matching yet, so short and day-trade opportunities are overestimated.
-- Live trading (`python -m apps.live`) has only been rehearsed in the **simulation** environment over several consecutive days; it has not been run in production. Production requires both `--production` and `--confirm-production`, which deliberately have no environment-variable equivalents.
+- The TW stock below-reference-price short restriction and the daily day-trade list are wired into matching but **off by default** (`check_short_sale_list` / `check_day_trade_list` on `ShortConstraint`); when on, the backtest checks list coverage before it starts and refuses to run on missing days; leaving them off overestimates short and day-trade opportunities.
+- Live trading (`python -m apps.live`) has only been rehearsed in the **simulation** environment over several days; it has not been run in production. Simulation account data does not represent real money, so the sum of each strategy's declared allocation is used as virtual capital. Production requires both `--production` and `--confirm-production`, which deliberately have no environment-variable equivalents.
 - The live daily-loss guard is active at the **account level** only (broker-side realized + unrealized P&L); **the per-strategy layer never triggers** — the broker reports combined P&L per symbol, which cannot be split back per strategy.
 
 See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW Futures Platform](docs/futures/tw-futures-platform.md) for details.
@@ -185,9 +185,10 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `core/market/`    | Market structure and rules (trading calendars, futures roll, margin config, `InstrumentSpec`, `CostModel`), owned by neither engine |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
 | `tasks/`        | Data maintenance and database update scripts                                                                                    |
-| `tests/`        | Unit/integration tests and the backtest regression lines (`tests/backtest/`)                                                    |
+| `tests/`        | Unit/integration tests, backtest regression lines (`tests/backtest/`) and live-trading tests (`tests/live/`, run against a fake broker gateway) |
 | `scripts/`      | Guardrail checks (layer deps, doc paths, orphan API methods), regression script and manual scripts                              |
 | `docs/`         | Usage and architecture docs (setup, commands, deployment, data, backtest and ETL design)                                       |
+| `strategies/`   | Top-level package for concrete strategies (empty facade for now; strategies still live in `core/strategies/{stock,futures}/` and will move in gradually); dependencies only flow `strategies` → `core` |
 | `strategy_lab/` | Research workspace organized by concept (`strategies/`, `data_analysis/`, `notebooks/`, `ideas/`); see `strategy_lab/README.md` |
 | `backlog/`      | Internal notes and future work items                                                                                            |
 
@@ -273,7 +274,8 @@ uv sync
 
 The project is installed into `.venv` in editable mode, so `core` / `tasks` / `tests` are importable
 from any directory. Activate the virtualenv in every new terminal (run `deactivate` to leave it);
-alternatively prefix commands with `uv run`, e.g. `uv run python -m apps.backtest ...`.
+alternatively prefix commands with `uv run --no-sync`, e.g. `uv run --no-sync python -m apps.backtest ...`
+(plain `uv run` first syncs the environment to the default dependencies, removing any `frontend` / `lab` extras you installed).
 
 **Step 2: Run a backtest**
 
@@ -282,7 +284,7 @@ python -m apps.backtest --strategy MomentumStrategy1
 ```
 
 - `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
-- Optional: `--show` opens charts in a browser. Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
+- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--show` opens charts in a browser. Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
 **Step 3: Open the frontend to view results**
@@ -362,6 +364,9 @@ cp .env.example .env
 | `DDB_PATH`, `DDB_HOST`, `DDB_PORT`, `DDB_USER`, `DDB_PASSWORD` | DolphinDB connection | Accessing tick data, running tick backtests |
 | `API_KEY`, `API_SECRET_KEY` | Sinopac Shioaji API | Crawling tick data |
 | `FINMIND_API_TOKEN` | FinMind API | Updating FinMind data (stock overview, brokers, broker branches) |
+| `SHIOAJI_CA_PATH`, `SHIOAJI_CA_PASSWORD`, `SHIOAJI_PERSON_ID` | Shioaji order-signing certificate | Live trading in production |
+| `ALPHAEDGE_LIVE_NOTIFY_CHANNEL`, `ALPHAEDGE_LIVE_NOTIFY_TOKEN`, `ALPHAEDGE_LIVE_NOTIFY_TARGET` | Live alert delivery (Discord or Telegram) | When you want live alerts |
+| `ALPHAEDGE_DATA_DIR`, `ALPHAEDGE_RESULTS_DIR`, `ALPHAEDGE_LOGS_DIR` | Override runtime artifact roots | Mounting volumes in containers |
 
 `.env` is read by the local code; the Docker images do not include it. Details in [Dev Setup](docs/setup/dev-setup.md).
 
@@ -425,7 +430,7 @@ Replace `<StrategyClassName>` with your strategy class name. More command scenar
 
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
-# optional: --show opens charts in a browser. Live trading uses python -m apps.live, see docs/deployment/live-deployment.md
+# optional: --start/--end YYYY-MM-DD and --capital override strategy defaults; --show opens charts in a browser. Live trading uses python -m apps.live, see docs/deployment/live-deployment.md
 ```
 
 ## Project Structure
@@ -484,7 +489,7 @@ AlphaEdge/
 │       ├── attribution/       # multi-strategy position ledger and cross-strategy conflict guard
 │       ├── datafeed/          # history up to T−1; today's quotes come from the broker
 │       ├── intraday/          # intraday event loop and end-of-session forced actions
-│       ├── notify/            # alert delivery (failures never affect the trading path)
+│       ├── notify/            # alert delivery (Discord, Telegram; failures never affect the trading path)
 │       └── report/            # live daily report and live-vs-backtest signal parity
 ├── data/                      # runtime data (git-ignored): db/ (tw_stock.db, tw_futures.db, live records tw_trading.db), downloads/, backup/, records/
 ├── results/                   # per-strategy backtest outputs (csv / png), git-ignored
@@ -501,9 +506,10 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend container image
 │   ├── README.md              # frontend usage notes
 │   └── __init__.py
+├── strategies/                # top-level package for concrete strategies (stock / futures; empty facade for now — strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
 ├── strategy_lab/              # research workspace (strategies/ / data_analysis/ / notebooks/ / ideas/)
 ├── tasks/                     # data update and maintenance entrypoints (update_db, delete_price_data, clean_logs)
-├── tests/                     # test suites (`backtest/` holds engine and regression lines; `temp/`, `database/`, `downloads/` are runtime artifacts)
+├── tests/                     # test suites (`backtest/` engine and regression lines, `live/` live trading, `execution/` and `portfolio/` shared contracts; `temp/`, `database/`, `downloads/` are runtime artifacts)
 ├── backlog/                   # internal planning notes
 ├── docs/                      # project docs
 │   ├── backtest/              # engine architecture, module map, short-selling spec

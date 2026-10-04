@@ -1,13 +1,14 @@
 # 指令教學
 
-本文件整理常用執行指令，包含資料更新（`tasks.update_db`）、資料維護與回測（`apps.backtest`）。
+本文件整理常用執行指令，包含資料更新（`tasks.update_db`）、資料維護、回測（`apps.backtest`）與實盤（`apps.live`）。
 
 ## 資料更新：`python -m tasks.update_db`
 
 ### 功能說明
 
 `tasks.update_db` 是資料更新系統入口，透過 `--target` 指定要更新的資料類型，可單一或多選。
-未指定 `--target` 時，預設為 `no_tick`（更新全部資料，但不含**兩種** tick）。
+未指定 `--target` 時，預設為 `no_tick`（更新全部資料，但不含**兩種** tick 與只能點名的 target）。
+任一 target 失敗不會中斷其餘 target，但整批跑完會以結束碼 1 收場；收尾會自動清掉 7 天以前的 `logs/api/` 輪替檔。
 
 ### 參數
 
@@ -101,6 +102,10 @@ python -m tasks.update_db --target futures_price
 # 下游要取商品清單一律用 FuturesStockUniverseUpdater.get_active_products()，不要另外手寫清單。
 python -m tasks.update_db --target futures_stock_universe
 
+# 平盤下得融（借）券賣出名單、現股當沖名單（每日更新已含在 all／no_tick 內，這裡是單獨補跑）
+# 從起點回補約 3,200 個交易日 × 每日兩個請求，以現行節流要數小時
+python -m tasks.update_db --target short_sale_list day_trade_list
+
 # 市場開休市日期（寫入 tw_stock.db 的 market_holiday 表）
 # 一年一次請求，每次重抓去年、今年、明年並整年替換。明年的公告通常 12 月才出來，
 # 那之前明年會被記為「尚未公告」跳過，屬正常；實盤查到未入庫年度的日期會拒絕啟動。
@@ -172,22 +177,49 @@ python -m tasks.clean_logs --apply --bucket api --days 7
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
 python -m apps.backtest --strategy <StrategyClassName> --show   # 畫完圖在瀏覽器開起來
+python -m apps.backtest --strategy <StrategyClassName> --no-show   # 不開圖（覆寫 ALPHAEDGE_SHOW_FIGURES）
 # 覆寫策略宣告的回測區間與初始資金（三者皆選填，不帶時沿用策略預設）
 python -m apps.backtest --strategy <StrategyClassName> --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
 策略名稱找不到、起日晚於迄日、起日早於歷史資料起點（台股 2013-01-01、期貨 2015-01-01）、
-資金不為正數時，都以結束碼 2 結束。結果輸出在 `results/<StrategyName>/`。
+資金不為正數時，都以結束碼 2 結束。策略開啟交易所名單檢核（`check_short_sale_list`／`check_day_trade_list`）
+而回測區間早於名單起點或名單有缺日時，印出原因並以結束碼 1 結束（先跑對應的 `update_db` target 或改起日）。
+結果輸出在 `results/<StrategyName>/`。
 
-實盤是另一個入口（`python -m apps.live`，必須帶 `--phase`），**它從不回傳 1**——`1` 保留給未預期的例外。
-排程要攔的是下列各碼：
+## 實盤：`python -m apps.live --strategy <StrategyClassName[,…]> --phase <段落>`
+
+```bash
+# 模擬環境（預設）跑台股開盤段
+python -m apps.live --strategy MomentumStrategy1 --phase open
+# 走完整流程但不送出委託
+python -m apps.live --strategy MomentumStrategy1 --phase close --dry-run
+# 正式環境：兩個旗標缺一不可
+python -m apps.live --strategy MomentumStrategy1 --phase open --production --confirm-production
+# 人工恢復交易模式（不給策略名時恢復帳戶層）；不要放進排程
+python -m apps.live --strategy MomentumStrategy1 --phase open --resume-trading
+# 以券商部位重建歸屬帳：先只列計畫，確認後加 --confirm-resync 再跑一次；不可帶 --phase
+python -m apps.live --strategy MomentumStrategy1 --resync-from-broker
+```
+
+| 旗標 | 說明 |
+|------|------|
+| `--strategy` | 策略類別名稱，可用逗號分隔多支（共用一個帳戶；不可混合台股與期貨） |
+| `--phase` | `open`／`close`／`after_close`／`intraday`；除 `--resync-from-broker` 外必填 |
+| `--simulation`／`--production` | 模擬（預設）／正式環境；`--production` 必須同時帶 `--confirm-production` |
+| `--broker` | `shioaji`（預設）或 `fake`（測試用，正式環境拒絕） |
+| `--dry-run` | 走完整流程但不真的送出委託 |
+| `--resume-trading [策略名 ...]` | 人工恢復交易模式 |
+| `--resync-from-broker`／`--confirm-resync` | 以券商部位重建歸屬帳；不帶 `--confirm-resync` 只列計畫 |
+
+實盤**只有未預期的例外才回傳 1**，其餘結果各有自己的退出碼。排程要攔的是下列各碼：
 
 | 退出碼 | 意義 |
 |:---:|---|
 | 0 | 正常結束 |
 | 1 | 未預期的例外 |
-| 2 | 用法錯誤：策略名找不到，或 `--production` 沒帶 `--confirm-production` |
-| 3 | 資料未更新到前一個交易日 |
+| 2 | 用法錯誤：策略名找不到、缺 `--phase`、`--production` 沒帶 `--confirm-production`、旗標組合不合法 |
+| 3 | 資料未更新到前一個交易日，或判定不出今天是否為交易日 |
 | 4 | 對帳不一致，或以券商部位重建被拒絕 |
 | 5 | kill switch 生效 |
 | 6 | 上次結束時帳戶層交易模式非 NORMAL，本次未帶 `--resume-trading` |

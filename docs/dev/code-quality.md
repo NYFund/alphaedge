@@ -11,8 +11,8 @@
 |------|------|------|
 | 套件定義 | `pyproject.toml` `[project]` | 唯一的相依宣告；`uv sync` 以 editable 安裝後任意目錄可 `import core` |
 | Lint／格式 | `pyproject.toml` `[tool.ruff]` | 執行 `CLAUDE.md` §2.5（import 排序）、§2.10（行寬 88、雙引號） |
-| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"`；另一個平行的 `docker` job 建置 core 與 frontend 映像並各跑一次冒煙 |
-| 本機防線 | `.pre-commit-config.yaml` | commit 前先跑一次同一組檢查（需自行 `pre-commit install`） |
+| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、pre-commit 其餘 hook、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"`（覆蓋率併在同一次）；另一個平行的 `docker` job 建置 core 與 frontend 映像並各跑一次冒煙 |
+| 本機防線 | `.pre-commit-config.yaml` | commit 前先跑一次同一組檢查（需自行 `uv tool install pre-commit` ＋ `pre-commit install`） |
 
 `uv.lock` 由 `uv lock` 從 `pyproject.toml` 解析產生，鎖定整棵相依樹；本機、CI（`--locked`）與 Docker build（`--frozen`）都從同一份安裝。
 
@@ -20,6 +20,8 @@
 
 ```bash
 uv sync                             # 相依 + 專案本身 + pytest / pytest-cov / ruff（dev group 預設即裝）
+                                    # 要前端與 lab 時用 uv sync --extra frontend --extra lab；
+                                    # 不帶 extra 的 uv sync／uv run 會把已裝的 extras 移除
 
 ruff check .                        # lint
 ruff format .                       # 格式化
@@ -32,9 +34,13 @@ pytest                              # 全部（需 data/db/tw_stock.db）
 
 ### optional extras
 
-`dolphindb`（tick）、`streamlit`（frontend）、`python-docx`（lab）**刻意不放進主
+`dolphindb`（tick）、`streamlit`（frontend）、`python-docx`／`yfinance`（lab）**刻意不放進主
 `dependencies`**：回測與 ETL 主流程不需要它們。
 需要時以 `uv sync --extra tick` 等方式個別安裝；開發工具是預設會裝的 `dev` dependency group，加裝 extra 時不會被移除。
+
+⚠️ 反過來，**extra 會被不帶它的 `uv sync`／`uv run` 移除**（`uv run` 預設先做一次同步）。
+測試以子行程呼叫 `uv run` 時一律帶 `--no-sync`，否則跑一次測試就會拔掉開發環境的
+`streamlit` 等套件；`tests/test_subprocess_uv_no_sync.py` 會掃 `tests/`、`scripts/` 擋這種寫法。
 
 ---
 
@@ -94,11 +100,14 @@ ruff check . --select B006,B904             # 看逐處位置
 | 對象 | 規則 | 理由 |
 |------|------|------|
 | `__init__.py` | `F401` | 套件的 re-export 門面，import 就是對外介面 |
-| `scripts/manual/*` | `E402` | 獨立執行的腳本，`.env` 必須在部分 import 之前載入 |
-| `stock_tick_utils.py`、`stock_tick_loader.py` 等 tick 模組 | `F401` | `dolphindb` 是選用相依，該處 import 是「可用性探測」 |
+| `core/pipeline/tw/utils/stock_tick_utils.py`、`scripts/manual/manual_tick_updater.py` | `F401` | `dolphindb` 是選用相依，該處 import 是「可用性探測」 |
 | `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法（24 處）的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
 
-**`ANN201`／`ANN204` 在 `select` 內**，`core/`／`tasks/`／`frontend/`／`apps/` 兩條都生效：
+per-file-ignores 同樣不能長期失明：`scripts/manual/*` 原本豁免的 `E402` 與 `stock_tick_loader.py`
+的 `F401` 都在歸零後移除。`tests/test_config_consistency.py` 會檢查每一條 per-file-ignores
+指向的路徑還存在、且規則仍確實被觸發，過期的那條會讓測試紅。
+
+**`ANN201`／`ANN204` 在 `select` 內**，`core/`／`strategies/`／`tasks/`／`frontend/`／`apps/` 兩條都生效：
 `CLAUDE.md` §2.4 的「所有函式回傳值都要標註，含 `-> None`」沒有機器護欄時，
 缺漏會以百處為單位累積。
 
@@ -128,11 +137,12 @@ ruff check . --select B006,B904             # 看逐處位置
 ## 二、測試與覆蓋率
 
 ```bash
-pytest -m "not slow" --cov=core --cov-report=term-missing
+pytest -m "not slow" --cov=core --cov=strategies --cov-report=term-missing
 ```
 
 **刻意不設 `fail_under` 門檻**：在覆蓋率明顯偏低時設門檻只會鼓勵寫無效測試。
-CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `core/pipeline/` 的 loader → `reporter`。
+CI 會印出覆蓋率報告但不阻擋（與測試併在同一次 pytest）。量測範圍是 `core` 與 `strategies`：
+入口層（`apps/`、`tasks/`）只做參數解析與退出碼翻譯，實盤入口的測試又多以子行程執行而不被計入，刻意不量。補測試的優先順序建議為 `core/pipeline/` 的 loader → `reporter`。
 
 **沒有會失敗的斷言就不是測試。** 要驗證行為就寫真的斷言；要人工探勘就寫成
 `scripts/manual/` 底下的手動腳本。一支「整段包在 `try/except`、失敗時 `return False`」的
@@ -146,15 +156,18 @@ CI 會印出覆蓋率報告但不阻擋。補測試的優先順序建議為 `cor
 | 護欄 | 何處執行 | 說明 |
 |------|----------|------|
 | `ruff check` / `ruff format --check` | CI ＋ pre-commit | 版本釘死，與 `.pre-commit-config.yaml` 的 rev 一致——不釘的話 CI 裝最新版，格式規則一變就出現「本機綠、CI 紅」，而那種紅燈與程式碼品質無關，只會訓練大家忽略 CI |
-| `scripts/check_layer_deps.py` | CI ＋ pre-commit | 反向 import、循環 import、市場語意洩漏、跨軸目錄污染、`core/dao/` 以外 import `sqlite3` |
+| `scripts/check_layer_deps.py` | CI ＋ pre-commit | 反向 import、循環 import、市場語意洩漏、跨軸目錄污染（含頂層 `strategies/`）、策略套件門面 eager import、`core/dao/` 以外 import `sqlite3`（`core`／`apps`／`strategies`／`tasks`）、`core/adapters/` 做 I/O、框架 import `core.pipeline`、回測以外 import 回測內部零件（`core.backtest.models`／`datafeed`／`report`） |
 | `scripts/check_doc_paths.py` | CI ＋ pre-commit | 文件裡指向程式碼的路徑是否還存在（文件搬檔、程式改名後最容易漂的一項）|
 | `scripts/check_api_orphan_methods.py` | **只在 CI** | `core/api` 有沒有零呼叫端的公開方法。**不放 pre-commit**：它要 import `core/api`，比 pygrep 慢一個量級 |
-| `no-doc-step-refs`（pygrep） | pre-commit | 註解不得引用 backlog 步驟編號、健檢編號或 `backlog/` 路徑（`CLAUDE.md` §2.1 第 4 點）|
+| `no-doc-step-refs`（pygrep） | CI ＋ pre-commit | 註解不得引用 backlog 步驟編號、健檢編號或 `backlog/` 路徑（`CLAUDE.md` §2.1 第 4 點）|
+| `no-stdlib-exc-info`（pygrep） | CI ＋ pre-commit | 禁用 `exc_info=`（loguru 會默默丟掉，要用 `logger.opt(exception=True)`）；測試端的等價護欄是 `tests/test_entrypoint_and_logging.py` |
+| YAML／TOML 語法、檔尾換行、行尾空白、大檔 | CI ＋ pre-commit | `pre-commit-hooks` 的通用檢查。CI 以 `uvx pre-commit run --all-files` 跑 pre-commit 的其餘 hook（ruff 與兩支腳本前面已各跑一次，以 `SKIP` 略過）|
 | SHORT 回歸線 | CI ＋ 本機 | 純記憶體、不需要資料庫 |
 | **LONG 回歸線與 `slow` 測試** | **只在本機** | 需要 `data/db/tw_stock.db`、`tw_futures.db` 或外部 API |
-| 映像建置與冒煙（`docker` job） | **只在 CI** | core 映像跑一次預設的 `python -m apps.backtest --help`；frontend 映像在工作目錄 `/` 下 import `frontend.config` 與 `app.py` 的相依（在 `/app` 底下跑的話，拿掉 `PYTHONPATH=/app` 也照樣 import 得到，就驗不到 Streamlit 實際執行時的條件）|
+| 映像建置與冒煙（`docker` job） | **只在 CI** | core 映像跑一次預設的 `python -m apps.backtest --help`，並另外 `import strategies, strategies.stock, strategies.futures`（`--help` 不載入策略，漏 COPY 頂層 `strategies/` 時要到指定策略那一刻才炸）；frontend 映像在工作目錄 `/` 下 import `frontend.config` 與 `app.py` 的相依（在 `/app` 底下跑的話，拿掉 `PYTHONPATH=/app` 也照樣 import 得到，就驗不到 Streamlit 實際執行時的條件）|
 | 前端冒煙測試（`tests/test_frontend_app_smoke.py`） | CI ＋ 本機 | 以 Streamlit `AppTest` 把 `frontend/app.py` 真的跑一遍；沒裝 `--extra frontend` 時略過並在 `-rs` 列出，CI 一定會裝 |
 | 測試產物隔離與絆線（專案根目錄 `conftest.py`） | 每一次 pytest | 見下方 |
+| 子行程 `uv run` 必帶 `--no-sync`（`tests/test_subprocess_uv_no_sync.py`） | CI ＋ 本機 | 見上方 optional extras |
 
 **skip 不算通過**：`scripts/run_regression.sh` 以 `-rs` 執行並偵測 `SKIPPED`，有即以**結束碼 3**
 結束並印出是哪一條、為什麼。否則「沒有資料庫」與「回歸真的通過」在輸出上會長得一模一樣。

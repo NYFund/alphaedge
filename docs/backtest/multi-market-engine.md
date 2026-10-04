@@ -88,7 +88,8 @@ class Backtester:
 ```python
 def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
     # 下單前先由 DataFeed 推入當日的市場事件：
-    # 漲跌停基準、券源餘額 → FillModel；停券、現金股利、配股 → SettlementModel
+    # 漲跌停基準、券源餘額、停券期間、交易所名單（開啟檢核時）→ FillModel；
+    # 停券回補日、現金股利、配股 → SettlementModel
     ...
 
     if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
@@ -135,7 +136,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | 層 | 路徑 | 內容 |
 |---|---|---|
 | 引擎 | `core/backtest/backtester.py` | 唯一引擎，不含任何 `Stock*` |
-| 組裝 | `core/backtest/factory.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_cost_config()` |
+| 組裝 | `core/backtest/factory.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_tw_futures_backtester()`／`build_cost_config()`；回測區間與初始資金的覆寫（`core/backtest/overrides.py` 的 `BacktestOverrides`）在組裝任何元件前套用 |
 | 行為 model | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
 | | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／`TwFuturesFillModel` |
 | | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | `BaseCostModel`／`StockCostModel`／`TwFuturesCostModel`（設定類別 `CostConfig`／`FuturesCostConfig`／`ShortConstraint` 在 `core/models/cost_config.py`，回測與實盤共用）|
@@ -192,8 +193,8 @@ ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心
 
 | Model | 必須回答的問題 | 台股實作的重點 |
 |---|---|---|
-| `InstrumentSpec` | 一張／一口是多少計價單位？價格要對齊什麼跳動點？漲跌停在哪？ | 1 張 ＝ 1000 股、六段跳動點、前收 ±10%（漲停捨去、跌停進位，方向不可對調） |
-| `FillModel` | 這張單在這根 bar 有可能以這個價格成交嗎？ | 日 K 以 OHLC 為界、Tick 以當日已發生的累計高低為界；超出漲跌停拒單；檔位未對齊僅警告 |
+| `InstrumentSpec` | 一張／一口是多少計價單位？價格要對齊什麼跳動點？漲跌停在哪？ | 1 張 ＝ 1000 股、普通股六段跳動點（ETF 兩段）、前收 ±10%（2015-06-01 前 7%；槓桿型 ETF 加倍；以 `Decimal` 計算，漲停捨去、跌停進位，方向不可對調） |
+| `FillModel` | 這張單在這根 bar 有可能以這個價格成交嗎？ | 日 K 以 OHLC 為界、Tick 以當日已發生的累計高低為界；超出漲跌停、全日鎖漲跌停拒單；檔位未對齊僅警告；另負責交易所名單、券源、停券、成交量上限與滑價 |
 | `CostModel` | 這筆交易要付多少錢？損益怎麼算？ | 手續費／證交稅（當沖減半）／融券手續費／SBL 借券費／保證金／融券利息 |
 | `SettlementModel` | 這根 bar 收盤後，市場規則強制要做什麼？ | 當沖日終強制回補、漲停鎖死轉融券留倉、SBL 借券費逐日計提、維持率追繳、停券強制回補、除息日的股利補償 |
 | `DataFeed` | 今天有開市嗎？報價從哪來？ | 當日有日 K 即視為開市；資料 API 共用單一 SQLite 連線 |
@@ -202,7 +203,7 @@ ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心
 
 model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳遞：
 
-- **`event_counts`**：由 factory 建立，同時交給引擎、`FillModel` 與 `SettlementModel`。既有 key 與報表相容，不可更名（新增可以）。
+- **`event_counts`**：由 factory 以 `new_event_counts()`（`core/backtest/models/event_counts.py`）建立，同時交給引擎、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，不可更名（新增可以）。
 - **`prev_close`**：由 `FillModel` 持有（記錄前收是成交價模型的職責），`SettlementModel` 建構時取得同一個 dict 的參照，用於停牌盯市與漲停判定。
 
 `get_mark_price()` 屬 `BaseSettlementModel` 的介面方法而非 `FillModel`——**期貨的盯市價就是每日結算價**，本來就是結算模型的職責；引擎的 `snapshot_daily_equity()` 也用它算未實現損益。
@@ -234,7 +235,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 **回測組裝**：
 
 9. `core/market/<market>/`：實作該組合的 `InstrumentSpec`／`CostModel`（命名帶市場前綴，如 `TwStockSpec`，繼承 `core/market/` 根目錄的抽象基底）；`core/backtest/models/fill_model.py`：實作 `FillModel`；`SettlementModel` 在 `settlement_model/` 套件內新增 `<market>_<instrument>.py`（如 `us_stock.py`），並在其 `__init__.py` 登記 re-export。
-10. `core/backtest/factory.py`：`build_backtester()` 加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支，並新增對應的 `build_<market>_<instrument>_backtester()`。
+10. `core/backtest/factory.py`：`build_backtester()` 加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支，並新增對應的 `build_<market>_<instrument>_backtester()`。要上實盤時，`core/live/factory.py` 以同一組分派鍵另有一份，也要加分支。
 
 **既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`apps/backtest.py` 皆為 0 行——`StrategyLoader` 會自動掃描 `core/strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
 
@@ -253,8 +254,8 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 |------|------|----------|
 | **per-instrument 粒度的 model 掛載** | 無法在同一次回測同時持有台股與台指期（跨市場組合／避險） | 業界（Lean 掛在 `Security`、Nautilus 掛在 `Instrument`）確實是這個粒度，本專案採 per-run 簡化。升級路徑乾淨：把 model 從 `Backtester` 移到 `InstrumentSpec` 物件上，引擎迴圈不動 |
 | 事件驅動 order queue（T+1 延遲成交、限價單未成交、部分成交） | 追繳仍只能以觸發當日收盤價回補 | 本質是引擎典範轉移，見 [§5.1](#51-事件驅動迴圈長期方向) |
-| `core/utils/instrument.py` 未移出 | `core/utils/` 仍留一個領域模組 | `StockUtils` 有 `core/backtest/` 以外的使用者（pipeline、api、adapters、broker、managers、`strategy_lab`）。移進 `core/backtest/` 會讓資料管線反過來相依於回測引擎，是更嚴重的層級問題；其各函式的歸屬需先拆解 |
-| 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「前收 ±幅度後往內對齊檔位」推算，與交易所公告值多數差一檔，影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 公告值可經 `DataFeed.get_price_limit_basis()` 同一掛點推入（該掛點已存在且已被引擎呼叫）、公式版退為 fallback；待辦見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S6 |
+| `core/utils/instrument.py` 未移出 | `core/utils/` 仍留一個領域模組 | `StockUtils` 有 `core/backtest/` 以外的使用者（pipeline、adapters、broker、market、position、`strategy_lab`）。移進 `core/backtest/` 會讓資料管線反過來相依於回測引擎，是更嚴重的層級問題；其各函式的歸屬需先拆解 |
+| 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「基準價 ±幅度後往內對齊檔位」推算（除權息日的基準價已改用公告的開盤競價基準）；修正浮點誤差、ETF 檔位表與槓桿型 ETF 幅度後，28 個抽樣交易日與交易所公告值僅 0.07% 不一致，仍會微幅影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 接公告值要新增資料表、兩支爬蟲與長時間回補，成本與效益不成比例而暫緩；公告值日後可經 `DataFeed.get_price_limit_basis()` 同一掛點推入、公式版退為 fallback。見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S6 |
 
 ### 5.1 事件驅動迴圈（長期方向）
 
@@ -290,12 +291,12 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 | 回歸線 | 內容 | 需求 |
 |---|---|---|
-| SHORT | 12 組腳本情境、3 份快照（交易紀錄／期末未平倉部位／帳戶與事件計數） | 純記憶體，不連 DB（CI 有跑） |
+| SHORT | 14 組腳本情境、3 份快照（交易紀錄／期末未平倉部位／帳戶與事件計數） | 純記憶體，不連 DB（CI 有跑） |
 | LONG | `MomentumStrategy1` 2024 全年的交易紀錄逐筆比對 | 需 `data/db/tw_stock.db`（僅本機） |
 
-SHORT 的 12 組情境刻意各只動一個變因，任一情境快照有變即可直接指向出問題的掛點：當沖同日回補（稅率減半）、融券留倉 10 天、FIFO 部分回補的等比例攤提、維持率斷頭、當沖鎖漲停轉留倉、當沖遇停券回補日（釘住結算順序）、SBL 與 MARGIN 借券費對照、除權息停券日的 MARGIN／SBL 對照、跨除息日的股利補償（含部分回補攤提）。
+SHORT 的 14 組情境刻意各只動一個變因，任一情境快照有變即可直接指向出問題的掛點：當沖同日回補（稅率減半）、融券留倉 10 天、FIFO 部分回補的等比例攤提、維持率斷頭、當沖鎖漲停轉留倉、當沖遇停券回補日（釘住結算順序）、SBL 與 MARGIN 借券費對照、除權息停券日的 MARGIN／SBL 對照、跨除息日的股利補償（含部分回補攤提）、平盤下名單擋單、現股當沖名單暫停先賣後買。
 
-停券日與除息股利由 `DataFeed` 每根 bar 推給 `SettlementModel`，故相關情境的腳本掛在
+停券日、除息股利與交易所名單由 `DataFeed` 每根 bar 推給 model，故相關情境的腳本掛在
 `tests/backtest/conftest.py` 的 `ScriptedDataFeed` 上——直接設 `SettlementModel` 的欄位
 會在下一根 bar 被引擎覆寫。
 

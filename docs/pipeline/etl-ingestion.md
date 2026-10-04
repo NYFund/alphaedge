@@ -20,8 +20,8 @@ updater 負責串起流程與決定要處理哪些日期。
 **入庫時機是這一層最關鍵的設計選擇。** 「整段日期全部爬完才一次 `add_to_db()`」
 會讓中斷成本等於全部重來——已爬了幾千個 CSV，程序一中斷，資料庫仍是 0 列。
 
-高風險的三個來源（price／chip／margin）因此**每 100 天入庫一次**
-（`LOAD_BATCH_SIZE`），中斷最多只損失最後一批。
+高風險的逐日來源（price／chip／margin 與兩份交易所名單）因此**每 100 天入庫一次**
+（`DailyTwoMarketUpdater.LOAD_BATCH_SIZE`），中斷最多只損失最後一批。
 
 ---
 
@@ -34,7 +34,7 @@ updater 負責串起流程與決定要處理哪些日期。
 | `StockPriceUpdater` | **每 100 天** | **差集**（見下方說明） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockChipUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockMarginUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
-| `StockShortSaleListUpdater`、`StockDayTradeListUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表；起日不早於名單起點 2013-09-23／2014-01-06） | `INSERT OR IGNORE` | `DataLoadError`；回應日期與查詢日不符、交易日 0 列一律記為失敗 |
+| `StockShortSaleListUpdater`、`StockDayTradeListUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表；起日不早於名單起點 2013-09-23／2014-01-06） | `INSERT OR IGNORE` | `DataLoadError`；回應日期與查詢日不符一律記為失敗；日期相符的 0 列判為查無資料（休市日）；平盤下名單在 `SHORT_SALE_LIST_CORRUPTED_DAYS` 列出的來源損毀市場日改以前後交易日推估（`StockShortSaleListUpdater.merge_strictest()`） |
 | `StockDividendUpdater` | 全部跑完 | **每次都掃整個區間**（一年一次請求） | `INSERT OR REPLACE` | `DataLoadError` |
 | `CorporateActionUpdater` | 全部跑完 | **每次都掃整個區間**（事件是事後公告） | `INSERT OR REPLACE` | `DataLoadError` |
 | `MonthlyRevenueReportUpdater` | 全部跑完 | 年 × 月的差集 | `INSERT OR IGNORE` | `DataLoadError` |
@@ -57,7 +57,7 @@ updater 負責串起流程與決定要處理哪些日期。
 
 ### Resume 為什麼是「差集」而不是 `MAX(date) + 1`
 
-台股三支日更 updater 的候選日期是：
+台股逐日更新的 updater（price／chip／margin 與兩份交易所名單，皆繼承 `DailyTwoMarketUpdater`）的候選日期是：
 
     候選 ＝ 日曆 − 表內已有的日期 − 已確認沒有資料的日期 ＋ 上次沒跑完的日期
 
@@ -65,7 +65,7 @@ updater 負責串起流程與決定要處理哪些日期。
 沒抓到，隔天照樣從新的 `MAX(date)+1` 起跑，那個洞就留在資料庫裡；
 而回測遇到缺日會當成休市靜默跳過。
 
-最後一項尤其關鍵：price／chip／margin 每天都打**上市與上櫃兩次**請求。
+最後一項尤其關鍵：這幾支 updater 每天都打**上市與上櫃兩次**請求。
 任一邊沒有完整取得時整天不入庫（§3.5），但表內仍可能已有該日的部分資料
 （例如早期寫入的半份批次）——差集會把這天當成「已經有了」而排除，
 **缺的那半永遠補不回來**。故失敗的日期另外記在 `DateProgressStore` 的
@@ -217,7 +217,7 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 
 | 時點 | 實作 | 涵蓋範圍 |
 |------|------|----------|
-| 入庫前（每一批） | `BaseDataLoader.check_symbol_name_uniqueness()`，三支 loader 讀完 CSV 就呼叫 | price／chip／margin |
+| 入庫前（每一批） | `BaseDataLoader.check_symbol_name_uniqueness()`，由 `BaseDataLoader.load_csv_directory()` 讀完每份 CSV 就呼叫 | price／chip／margin／`short_sale_list`／`day_trade_list` |
 | 入庫後（事後護欄） | `tests/test_trading_calendar_guard.py::test_no_symbol_carries_two_names_on_the_same_day` | price／chip |
 
 **事後護欄看不到 `margin`**：它的主鍵是 `(date, stock_id)`，冒名的那一列會被
@@ -255,7 +255,7 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 
 | 範圍 | 判定為「沒有完整取得」 | 處置 | 實作 |
 |------|------------------------|------|------|
-| 日頻三表（逐日） | 任一市場 `FAILED`、任一市場清洗失敗、**一邊 `NO_DATA` 一邊 `OK`** | 兩邊都不清洗／不入庫，記 `incomplete` 下次重試 | `BaseDataUpdater.record_market_day()`、`report_partial_day()` |
+| 日頻三表與兩份交易所名單（逐日） | 任一市場 `FAILED`、任一市場清洗失敗、**一邊 `NO_DATA` 一邊 `OK`** | 兩邊都不清洗／不入庫，記 `incomplete` 下次重試 | `BaseDataUpdater.record_market_day()`、`report_partial_day()` |
 | 財報三表（逐年季） | 任一市場請求失敗、拋例外或解析不出表格 | crawler 整季回 `None`；年季改差集，失敗的那季下次仍會被請求 | `FinancialStatementCrawler._crawl_listing_boards()`、`FinancialStatementUpdater.plan_pending_year_seasons()` |
 | 月營收（逐年月） | 任一市場請求失敗、**一邊 `NO_DATA` 一邊 `OK`** | 整個年月不入庫；年月為差集，失敗的那個月下次仍會被請求 | `MonthlyRevenueReportCrawler.crawl()`、`MonthlyRevenueReportUpdater.plan_pending_year_months()` |
 

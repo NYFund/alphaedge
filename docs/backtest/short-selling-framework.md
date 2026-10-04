@@ -77,7 +77,7 @@
 | 融券／借券資格與平盤下放空 | 只有可融資融券的證券能融券；個股可能被暫停融券或借券；前一交易日收盤跌停者本日不得平盤下融（借）券 | `ShortConstraint.check_short_sale_list`，預設關閉；資料來自 `short_sale_list` 表（交易所每日公告，2013-09-23 起），拒單計入 `rejected_short_halted`／`rejected_below_reference` |
 | 現股當沖標的清單 | 只有名單內的證券能現股當沖；個股可能被暫停先賣後買 | `ShortConstraint.check_day_trade_list`，預設關閉；資料來自 `day_trade_list` 表（2014-01-06 起），拒單計入 `rejected_not_day_tradable` |
 | 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表，拒單計入 `rejected_no_borrow` |
-| 停券期間（除權息） | 強制回補 | 由 `dividend` 表推導融券最後回補日（`auto_force_cover_on_ex_dividend`，預設開啟）；另可用 `ShortConstraint.force_cover_dates` 手動指定 |
+| 停券期間（除權息） | 強制回補；停券期間不得新增融券賣出 | 由 `dividend` 表推導融券最後回補日（`auto_force_cover_on_ex_dividend`，預設開啟）；另可用 `ShortConstraint.force_cover_dates` 手動指定。回補日之後到除權息交易日之間的融券開倉由 `TwStockFillModel.check_short_not_suspended()` 拒單，計入 `rejected_short_suspended` |
 | 停券期間（股東會） | 強制回補 | **無資料源**，仍以 `max_holding_days` 保險絲近似 |
 | 除息日的股利補償 | 放空者須補償出借方現金股利 | `CostConfig.compensate_cash_dividend`（預設開啟），逐筆計入 `dividend_compensation` |
 | 漲停無法回補 | 當沖放空無法平倉，實務轉借券 | 見 §5.1 |
@@ -110,16 +110,16 @@
 
 台股採分段檔位，回補價、強制回補價、滑價調整後的價格都必須**對齊檔位**，否則會算出不可能成交的價格（業界框架以 `SymbolProperties.MinimumPriceVariation` 表達，例如 Lean）。
 
-| 價格區間 | 檔位 |
-|---|---|
-| < 10 | 0.01 |
-| 10 ~ < 50 | 0.05 |
-| 50 ~ < 100 | 0.1 |
-| 100 ~ < 500 | 0.5 |
-| 500 ~ < 1000 | 1 |
-| ≥ 1000 | 5 |
+| 價格區間 | 普通股檔位（`PRICE_TICK_TABLE`） | ETF 檔位（`ETF_PRICE_TICK_TABLE`，代號 `00` 開頭） |
+|---|---|---|
+| < 10 | 0.01 | 0.01 |
+| 10 ~ < 50 | 0.05 | 0.01 |
+| 50 ~ < 100 | 0.1 | 0.05 |
+| 100 ~ < 500 | 0.5 | 0.05 |
+| 500 ~ < 1000 | 1 | 0.05 |
+| ≥ 1000 | 5 | 0.05 |
 
-`StockUtils.round_to_tick(price, direction)` 以 `Decimal` 運算，避免 0.05 檔位的二進位誤差。放空情境的取整方向：**開倉（賣出）向下、回補（買進）向上**，保守估計。與滑價係數共用，順序為「滑價 → 檔位取整 → 算成本」。
+`StockUtils.round_to_tick(price, direction, symbol)` 依 `symbol` 選檔位表（未提供時用普通股表），以 `Decimal` 運算，避免 0.05 檔位的二進位誤差。放空情境的取整方向：**開倉（賣出）向下、回補（買進）向上**，保守估計。與滑價係數共用，順序為「滑價 → 檔位取整 → 算成本」。
 
 ---
 
@@ -137,6 +137,8 @@ StockPositionManager (方向分派：open/close × LONG/SHORT)
 StockCostModel (成本與損益公式；依 ShortMethod + is_day_trade 決定參數)
     ↓
 StockUtils (純數學工具：手續費、稅、股數換算)
+
+TwStockFillModel (開倉前：成交價驗證、交易所名單、券源、停券、成交量上限、滑價)
 
 TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償)
 ```
@@ -232,21 +234,25 @@ class StockCostModel:
 
 ### 3.5 方向中立機制
 
-前四個是**純函式，住在 `core/execution/order_preprocess.py`**（回測與實盤共用同一份）；
-`Backtester` 只有 `validate_orders()`、`enrich_orders()`、`validate_fill_price()`
-三個薄包裝，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
+前三個是**純函式，住在 `core/execution/order_preprocess.py`**（回測與實盤共用同一份）；
+`Backtester` 以 `validate_orders()` 薄包裝呼叫，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
 
 ```python
 resolve_open_action(position_type)   # LONG → BUY；SHORT → SELL
 resolve_close_action(position_type)  # LONG → SELL；SHORT → BUY
 validate_orders(orders, stage)       # 白名單 + action 與方向是否相符，不符 warning 剔除
+```
+
+隨單欄位補值屬市場規則，住在 `StockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
+
+```python
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
 ```
 
-另外兩個是 `Backtester` 自己的方法，不在前處理層：
+另外兩個是 `Backtester` 上的方法：
 
 ```python
-validate_fill_price(order, quote)    # §5.6 的三道檢查
+validate_fill_price(order, quote)    # 轉呼叫 FillModel.validate()，§5.6 的檢查
 snapshot_daily_equity(...)           # 含未實現損益的逐日權益
 ```
 
@@ -262,7 +268,7 @@ settlement.on_bar_close(date, quotes, account, event_counts)
 snapshot_daily_equity(date, quotes)
 ```
 
-訂單處理順序固定為 **`check_*_signal` → `validate_orders` → `enrich_orders` → `validate_fill_price` → `PositionManager`**。
+開倉單處理順序固定為 **`check_*_signal` → `validate_orders` → `enrich_orders` → `sort_orders` → `check_max_holdings` → 無報價拒單 → `validate_fill_price` → `apply_fill_model`（`FillModel.fill()`：交易所名單 → 券源 → 停券 → 滑價 → 成交量上限）→ `PositionManager`**。
 
 **逐日權益快照是放空的必要條件**：每日部位檢查本來就要取當日收盤價算維持率，順手產出「含未實現損益的每日權益快照」成本極低但價值很高——放空最大的風險就是持倉期間的逆勢，只認已實現損益的權益曲線會把這段完全抹平。
 
@@ -357,15 +363,15 @@ snapshot_daily_equity(date, quotes)
 | `CONVERT_TO_MARGIN` | 轉為融券留倉：補收保證金與券費，並補徵當沖減半與全額證交稅的差額 |
 | `RAISE` | 直接 raise，用於嚴格驗證策略邏輯 |
 
-**漲停無法回補的判定規則**：`limit_up = round_to_tick(前一交易日收盤 × 1.1, "down")`。
+**漲停無法回補的判定規則**：`limit_up = round_to_tick(基準價 × (1 + 幅度), "down", 代號)`，由 `TwStockSpec.get_price_limits()` 計算；基準價為前一交易日收盤（除權息日改用公告的開盤競價基準），幅度現行 10%（2015-06-01 前 7%，槓桿型 ETF 加倍），乘法以 `Decimal` 計算。判定式 `TwStockSpec.is_locked_at_limit()` 與成交價驗證共用。
 
 | 級別 | 判定條件 | 處理 |
 |------|----------|------|
-| 日 K | `close == high == limit_up` 且 `low == limit_up`（全日鎖死） | 視為**無法回補**，走 `CONVERT_TO_MARGIN` |
-| 日 K | `close == limit_up` 但 `low < limit_up`（盤中曾打開） | 視為**可回補**，以 `limit_up` 成交（最壞價格），記為「漲停回補」事件 |
-| Tick | 當日最後一筆成交價 == `limit_up` 且該價位無賣方成交量 | 無法回補 |
+| 日 K | `open == high == low == close == limit_up`（全日鎖死） | 視為**無法回補**，不論政策一律轉融券留倉，計入 `limit_up_cover_failed` |
+| 日 K | `close == limit_up` 但盤中曾打開 | 視為**可回補**，依 `day_trade_uncovered_policy` 處理（預設以收盤價＝漲停價回補，計入 `forced_cover_day_trade`），不另計事件 |
+| Tick | — | **未實作**：tick 報價沒有當日四價，無從判定鎖死 |
 
-兩種情況都計入報表的獨立事件計數——這是放空策略最致命的尾部風險，不能被平均掉。
+鎖死的情況單獨計入 `limit_up_cover_failed`——這是放空策略最致命的尾部風險，不能被平均掉。
 
 > **注意**：轉融券留倉時的 `CostConfig` 必須帶融券的保證金成數。當沖設定把 `margin_rate` 歸零，直接沿用會讓保證金算成 0、維持率立即誤觸斷頭。
 
@@ -403,7 +409,7 @@ snapshot_daily_equity(date, quotes)
 使用者透過 `ShortConstraint.force_cover_dates` **手動指定**的日期則**不分管道一律適用**
 ——引擎不替使用者的政策再加條件。
 
-**股利補償的記帳**（`compensate_cash_dividend()`）：
+**股利補償的記帳**（`TwStockSettlementModel.settle_cash_dividend()`，做多部位同一處收取現金股利）：
 
 - 只補償**除息日之前就在倉**的部位：除權息交易日當天賣出者已不含權。
 - 除息當日即從 `balance` 扣款，平倉時再把攤提進 `realized_pnl` 的那一份加回，
@@ -430,11 +436,12 @@ snapshot_daily_equity(date, quotes)
 
 ### 5.6 成交價合理性（前視偏誤防線）
 
-`validate_fill_price` 對每一張 order 檢查三件事：
+`validate_fill_price`（`TwStockFillModel.validate()`）對每一張開倉單檢查四件事：
 
 1. `low <= price <= high`（不得成交在當日沒出現過的價格）→ 不符即拒單；滑價把價格推出區間時先夾回再驗
 2. 落在漲跌停區間內 → 不符即拒單
-3. 已對齊價格檔位（§2.5）→ **僅 warning 不拒單**（既有資料可能有還原價精度問題，拒單會誤擋正常回測）
+3. 全日鎖死在漲停（買進）或跌停（賣出）→ 拒單，分別計入 `rejected_limit_up_locked`／`rejected_limit_down_locked`
+4. 已對齊價格檔位（§2.5）→ **僅 warning 不拒單**（既有資料可能有還原價精度問題，拒單會誤擋正常回測）
 
 當日無成交量（OHLC 為 `NULL`）的標的一律拒單。
 
@@ -445,7 +452,7 @@ snapshot_daily_equity(date, quotes)
 | `DAY` | `StockQuote.high` / `.low` | 已有 OHLC 欄位，直接用 |
 | `TICK` | `FillModel` 維護的**當日累計高低點** | `intraday_range` 記錄各檔當日累計 low/high。**目前有前視**：引擎把整天的 tick 一次交給 `on_bar_open()`，區間是全日高低點而非「該 tick 之前」，盤中較早的委託會通過稍後才出現的價位；TICK 回測只能當量級參考 |
 
-漲跌停基準一律取前一交易日收盤（`prev_close`），首個交易日無前收時跳過該項檢查。
+漲跌停基準取前一交易日收盤（`prev_close`）；除權息日改用 `DataFeed.get_price_limit_basis()` 推入的開盤競價基準。首個交易日無前收時跳過該項檢查。
 
 特別針對 `OPEN_THEN_CLOSE`：策略在日 K 級別拿得到當日 `close`，卻可以宣稱「以 `open` 放空」。引擎無法從價格本身分辨這是合理假設還是前視偏誤，因此**當沖放空策略的文件中必須明確宣告成交價假設**（建議：開倉用 `open`，回補用 `close`），並在 `generate_open_signals` 的實作中只使用該時點之前可得的資訊。這條屬於策略紀律，引擎只能擋掉「不可能的價格」，擋不掉「可能但不誠實的價格」。
 
@@ -488,7 +495,8 @@ snapshot_daily_equity(date, quotes)
 |------|------|
 | `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
 | `core/market/tw/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
-| `core/backtest/models/fill_model.py` | 成交價驗證、券源檢核、當日累計高低點 |
+| `core/backtest/models/fill_model.py` | 成交價驗證、交易所名單檢核、券源檢核、停券期間拒單、當日累計高低點 |
+| `core/backtest/datafeed/tw/stock_datafeed.py` | 推導停券與回補日、每根 bar 推入券源／名單／除權息、開跑前檢查名單涵蓋 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/position/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
 | `core/backtest/report/reporter.py` | 時間軸用 `exit_date`、放空欄位、多空統計、事件報表 |
