@@ -98,6 +98,7 @@ class StockChipCrawler(BaseDataCrawler):
             f"TPEX chip {date}",
             index=0,
             no_data_probe=(self.json_variant(tpex_url), date),
+            page_date=date,
         )
         if not parsed.is_ok:
             return parsed

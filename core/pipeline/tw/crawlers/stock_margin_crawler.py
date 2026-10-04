@@ -92,5 +92,6 @@ class StockMarginCrawler(BaseDataCrawler):
             f"TPEX margin {date}",
             index=0,
             no_data_probe=(self.json_variant(tpex_url), date),
+            page_date=date,
             converters={0: str},
         )
