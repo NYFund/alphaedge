@@ -2,14 +2,15 @@
 
 > This is the English translation of [`command-usage.zh-TW.md`](command-usage.zh-TW.md); edit the Chinese version first, then sync this one.
 
-This document collects common runtime commands: data updates (`tasks.update_db`), data maintenance, and backtesting (`apps.backtest`).
+This document collects common runtime commands: data updates (`tasks.update_db`), data maintenance, backtesting (`apps.backtest`), and live trading (`apps.live`).
 
 ## Data Update: `python -m tasks.update_db`
 
 ### Overview
 
 `tasks.update_db` is the entrypoint of the data update pipeline. Use `--target` to choose one or more update targets.
-If `--target` is omitted, the default is `no_tick` (all datasets except **both** tick targets).
+If `--target` is omitted, the default is `no_tick` (all datasets except **both** tick targets and the explicit-only targets).
+A failing target does not stop the others, but the run exits with code 1 at the end; it also removes rotated `logs/api/` files older than 7 days on the way out.
 
 ### Parameter
 
@@ -106,6 +107,10 @@ python -m tasks.update_db --target futures_price
 # FuturesStockUniverseUpdater.get_active_products(), never a hand-written list.
 python -m tasks.update_db --target futures_stock_universe
 
+# short-sale-below-reference list and cash day-trading list (already part of all / no_tick; this runs them alone)
+# A backfill from the start is about 3,200 trading days × two requests per day — hours at the current throttle
+python -m tasks.update_db --target short_sale_list day_trade_list
+
 # market holiday schedule (written to the market_holiday table in tw_stock.db)
 # One request per year; every run re-fetches last, this and next year and replaces each year whole.
 # Next year's schedule is usually published in December; until then that year is logged as
@@ -180,22 +185,50 @@ Replace `<StrategyClassName>` with your strategy class name.
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
 python -m apps.backtest --strategy <StrategyClassName> --show   # open the charts in a browser
+python -m apps.backtest --strategy <StrategyClassName> --no-show   # do not open them (overrides ALPHAEDGE_SHOW_FIGURES)
 # override the strategy's backtest period and initial capital (all optional; defaults come from the strategy)
 python -m apps.backtest --strategy <StrategyClassName> --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
 An unknown strategy name, a start date after the end date, a start date before the data start
-(2013-01-01 for stocks, 2015-01-01 for futures), or a non-positive capital exits with code 2. Results are written to `results/<StrategyName>/`.
+(2013-01-01 for stocks, 2015-01-01 for futures), or a non-positive capital exits with code 2. If the strategy enables the
+exchange-list checks (`check_short_sale_list` / `check_day_trade_list`) and the period starts before the list's start
+date or the list has missing days, the reason is printed and the run exits with code 1 (run the matching `update_db`
+target or move the start date). Results are written to `results/<StrategyName>/`.
 
-Live trading is a separate entry point (`python -m apps.live`, which requires `--phase`) and **never returns 1** —
-`1` is reserved for unexpected exceptions. These are the codes a scheduler should act on:
+## Live trading: `python -m apps.live --strategy <StrategyClassName[,…]> --phase <phase>`
+
+```bash
+# simulation environment (default), stock open phase
+python -m apps.live --strategy MomentumStrategy1 --phase open
+# run the full flow without sending orders
+python -m apps.live --strategy MomentumStrategy1 --phase close --dry-run
+# production: both flags are required
+python -m apps.live --strategy MomentumStrategy1 --phase open --production --confirm-production
+# manually restore the trading mode (account level when no strategy is named); never schedule this
+python -m apps.live --strategy MomentumStrategy1 --phase open --resume-trading
+# rebuild the attribution ledger from broker positions: plan only first, then rerun with --confirm-resync; no --phase
+python -m apps.live --strategy MomentumStrategy1 --resync-from-broker
+```
+
+| Flag | Description |
+|------|-------------|
+| `--strategy` | Strategy class name; comma-separate several (they share one account; stocks and futures cannot be mixed) |
+| `--phase` | `open` / `close` / `after_close` / `intraday`; required except with `--resync-from-broker` |
+| `--simulation` / `--production` | Simulation (default) / production; `--production` requires `--confirm-production` |
+| `--broker` | `shioaji` (default) or `fake` (tests only, refused in production) |
+| `--dry-run` | Run the full flow without actually sending orders |
+| `--resume-trading [name ...]` | Manually restore the trading mode |
+| `--resync-from-broker` / `--confirm-resync` | Rebuild the attribution ledger from broker positions; without `--confirm-resync` it only prints the plan |
+
+Live trading **returns 1 only for unexpected exceptions**; every other outcome has its own code. These are the codes a scheduler should act on:
 
 | Exit code | Meaning |
 |:---:|---|
 | 0 | Normal exit |
 | 1 | Unexpected exception |
-| 2 | Usage error: unknown strategy name, or `--production` without `--confirm-production` |
-| 3 | Data not updated through the previous trading day |
+| 2 | Usage error: unknown strategy name, missing `--phase`, `--production` without `--confirm-production`, or an invalid flag combination |
+| 3 | Data not updated through the previous trading day, or today's trading-day status cannot be determined |
 | 4 | Reconciliation mismatch, or a refused rebuild from broker positions |
 | 5 | Kill switch triggered |
 | 6 | Account-level trading mode was not NORMAL at last exit and `--resume-trading` was not given |

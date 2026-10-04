@@ -148,13 +148,13 @@ graph TB
 一次回測跑一個（市場, 商品）組合，由策略基底宣告、`factory.py` 分派；方向（LONG／SHORT）與商品類別是兩條獨立的軸，
 記帳一律看每一張訂單的 `position_type`，策略的 `allowed_directions` 只是方向白名單。
 
-表中的資料區間是 2026-09-24 盤點 `data/db` 的結果，更新資料後會跟著變動。
+表中的資料區間是 2026-10-02 盤點 `data/db` 的結果，更新資料後會跟著變動。
 
 | 市場 × 商品 | 狀態 | 範圍與資料區間 | K 棒級別 | 方向 | 策略基底 |
 | ----------- | ---- | -------------- | -------- | ---- | -------- |
-| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-09-24（最新交易日 2,395 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-24 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
-| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-24<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
-| 股票期貨／ETF 期貨 | ⚠️ 程式可跑，缺行情 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29、09-02、09-16 共 3 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料，**不足以跑出有意義的回測**（回補待辦見 [暫緩工作彙整](backlog/暫緩工作彙整.md) S4）<br>**程式面已接通**：乘數由 DataFeed 的 `resolve_multiplier()` 逐日查標的池的契約單位；保證金先查金額表（ETF 期貨 NYF 在此，2020-07-22 起），個股期貨改走比例表（`標的股價 × 契約單位 × 適用比例`，標的股價跨庫取自 `tw_stock.db`）<br>**其餘限制**：契約單位只回溯到 2026-08-29 的首份快照，更早的除權息調整查不到 | 僅 `DAY` | 同台指數期貨 | `BaseFuturesStrategy` |
+| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-10-02（最新交易日 2,393 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-30<br>交易所平盤下融（借）券名單（2013-09-23 起）與現股當沖名單（2014-01-06 起），涵蓋全部交易日並每日更新 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
+| 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-30<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
+| 股票期貨／ETF 期貨 | ⚠️ 程式可跑，缺行情 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29～09-30 共 8 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料，**不足以跑出有意義的回測**（回補待辦見 [暫緩工作彙整](backlog/暫緩工作彙整.md) S4）<br>**程式面已接通**：乘數由 DataFeed 的 `resolve_multiplier()` 逐日查標的池的契約單位；保證金先查金額表（ETF 期貨 NYF 在此，2020-07-22 起），個股期貨改走比例表（`標的股價 × 契約單位 × 適用比例`，標的股價跨庫取自 `tw_stock.db`）<br>**其餘限制**：契約單位只回溯到 2026-08-29 的首份快照，更早的除權息調整查不到 | 僅 `DAY` | 同台指數期貨 | `BaseFuturesStrategy` |
 | 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
 
 > - 多空並存要宣告 `allowed_directions = {LONG, SHORT}`；做多當沖需自行宣告 `bar_execution_order = OPEN_THEN_CLOSE`。
@@ -167,8 +167,8 @@ graph TB
 - 期貨保證金查表的起點依商品而異（最早 2020-03，見上表）；早於起點的區間只能用 `FuturesMarginConfig.ratio()` 近似，可開口數與追繳門檻會失真。
 - 期貨跳動點只涵蓋已查證的七檔指數期貨（TX／MTX／TMF 1 點、TE／ZEF 0.05 點、TF／ZFF 0.2 點）；未登錄的商品退回 1 點並記 warning，以跳動點數設定的滑價會失真（預設滑價為 0，不受影響）。
 - 同一次回測無法同時持有台股與台期貨（跨市場組合／避險）。
-- 台股平盤下放空限制與每日可當沖清單尚未接上撮合，會高估放空與當沖機會。
-- 實盤（`python -m apps.live`）目前只在**模擬環境**跑多日連續演練，尚未在正式環境執行；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
+- 台股平盤下放空限制與每日可當沖名單已接上撮合，但**預設關閉**（`ShortConstraint` 的 `check_short_sale_list`／`check_day_trade_list`）；開啟時回測起跑前會檢查名單涵蓋，缺日即拒絕執行；關閉時會高估放空與當沖機會。
+- 實盤（`python -m apps.live`）目前只在**模擬環境**跑多日演練，尚未在正式環境執行；模擬環境的券商帳務不代表真實資金，一律以各策略宣告額度的總和為虛擬資金；正式環境要帶 `--production --confirm-production` 兩個旗標，刻意沒有對應的環境變數。
 - 實盤的單日虧損守門只在**帳戶層**生效（取券商端的已實現＋未實現）；**逐策略那一層目前恆為不觸發**——券商只給得出逐標的的合併損益，拆不回策略。
 
 細節見[放空回測框架規格](docs/backtest/short-selling-framework.md)與[台期貨平台](docs/futures/tw-futures-platform.md)。
@@ -186,9 +186,10 @@ graph TB
 | `core/market/`    | 市場結構與市場規則（交易日曆、期貨換月、保證金設定、商品規格 `InstrumentSpec`、成本模型 `CostModel`），不屬於任一引擎 |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
 | `tasks/`        | 資料維護與資料庫更新腳本                                              |
-| `tests/`        | 單元／整合測試與回測回歸線（`tests/backtest/`）                       |
+| `tests/`        | 單元／整合測試、回測回歸線（`tests/backtest/`）與實盤測試（`tests/live/`，以 fake 券商閘道跑） |
 | `scripts/`      | 護欄檢查（分層相依、文件路徑、API 孤兒方法）、回歸腳本與人工執行腳本   |
 | `docs/`         | 使用與架構說明文件（安裝、指令、部署、資料、回測與 ETL 設計）          |
+| `strategies/`   | 具體策略的頂層套件（目前為空白門面，策略仍在 `core/strategies/{stock,futures}/`，之後逐步搬入）；相依只能 `strategies` → `core` |
 | `strategy_lab/` | 策略研究工作區，依概念分為 `strategies/`、`data_analysis/`、`notebooks/`、`ideas/`；見 `strategy_lab/README.md` |
 | `backlog/`      | 內部規劃與待辦筆記                                                    |
 
@@ -274,7 +275,8 @@ uv sync
 
 專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`tasks`／`tests`。
 之後每開一個新的終端機都要先啟用虛擬環境（要離開時執行 `deactivate`）；
-不想啟用時，也可以在指令前加 `uv run`，例如 `uv run python -m apps.backtest ...`。
+不想啟用時，也可以在指令前加 `uv run --no-sync`，例如 `uv run --no-sync python -m apps.backtest ...`
+（不帶 `--no-sync` 的 `uv run` 會先把環境同步成預設相依，順手移除另外裝的 `frontend`／`lab` extra）。
 
 **步驟 2：執行回測**
 
@@ -283,7 +285,7 @@ python -m apps.backtest --strategy MomentumStrategy1
 ```
 
 - `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
-- 選用參數：`--show` 在瀏覽器開圖。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
+- 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--show` 在瀏覽器開圖。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
 **步驟 3：開啟前端檢視結果**
@@ -361,6 +363,9 @@ cp .env.example .env
 | `DDB_PATH`、`DDB_HOST`、`DDB_PORT`、`DDB_USER`、`DDB_PASSWORD` | DolphinDB 連線 | 存取 tick 資料、跑 tick 回測 |
 | `API_KEY`、`API_SECRET_KEY` | 永豐 Shioaji API | 爬 tick 資料 |
 | `FINMIND_API_TOKEN` | FinMind API | 更新 FinMind 資料（台股總覽、證券商、券商分點） |
+| `SHIOAJI_CA_PATH`、`SHIOAJI_CA_PASSWORD`、`SHIOAJI_PERSON_ID` | Shioaji 下單憑證 | 實盤正式環境下單 |
+| `ALPHAEDGE_LIVE_NOTIFY_CHANNEL`、`ALPHAEDGE_LIVE_NOTIFY_TOKEN`、`ALPHAEDGE_LIVE_NOTIFY_TARGET` | 實盤告警推播（Discord 或 Telegram） | 實盤要收告警時 |
+| `ALPHAEDGE_DATA_DIR`、`ALPHAEDGE_RESULTS_DIR`、`ALPHAEDGE_LOGS_DIR` | 覆寫執行期產物根目錄 | 容器掛 volume 時 |
 
 `.env` 由本機程式讀取；Docker 映像不會帶入這個檔。細節見[開發環境設定](docs/setup/dev-setup.md)。
 
@@ -422,7 +427,7 @@ python -m tasks.update_db --target no_tick
 
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
-# 選用：--show 在瀏覽器開圖。實盤走 python -m apps.live，見 docs/deployment/live-deployment.md
+# 選用：--start／--end YYYY-MM-DD、--capital 覆寫策略預設；--show 在瀏覽器開圖。實盤走 python -m apps.live，見 docs/deployment/live-deployment.md
 ```
 
 ## 專案結構
@@ -481,7 +486,7 @@ AlphaEdge/
 │       ├── attribution/       # 多策略部位歸屬帳與跨策略衝突守門
 │       ├── datafeed/          # 歷史資料到 T−1，今天的報價由券商提供
 │       ├── intraday/          # 盤中事件迴圈與日終強制動作
-│       ├── notify/            # 告警推播（失敗不影響主流程）
+│       ├── notify/            # 告警推播（Discord、Telegram；失敗不影響主流程）
 │       └── report/            # 實盤日報與實盤／回測訊號 parity 比對
 ├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db、實盤紀錄庫 tw_trading.db）、downloads/、backup/、records/
 ├── results/                   # 各策略回測輸出（csv／png），不進版控
@@ -498,9 +503,10 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend 容器映像
 │   ├── README.md              # frontend 使用說明
 │   └── __init__.py
+├── strategies/                # 具體策略的頂層套件（stock／futures，目前為空白門面；策略契約留在 core/strategies/，相依只能 strategies → core）
 ├── strategy_lab/              # 策略研究工作區（strategies/ / data_analysis/ / notebooks/ / ideas/）
 ├── tasks/                     # 資料更新與維運入口（update_db、delete_price_data、clean_logs）
-├── tests/                     # 測試套件（`backtest/` 為引擎與回歸線；`temp/`、`database/`、`downloads/` 為執行期產物）
+├── tests/                     # 測試套件（`backtest/` 引擎與回歸線、`live/` 實盤、`execution/`、`portfolio/` 共用契約層；`temp/`、`database/`、`downloads/` 為執行期產物）
 ├── backlog/                   # 內部規劃筆記
 ├── docs/                      # 專案文件
 │   ├── backtest/              # 引擎架構、模組使用關係、放空框架規格

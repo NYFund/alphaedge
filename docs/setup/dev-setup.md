@@ -28,6 +28,9 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**，沒列在指令上的 extra 會被移除（`dev` group 不受影響）。
 要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab`），或用 `uv sync --all-extras`。
+**`uv run` 預設也會先做同一個同步**：沒帶 `--no-sync` 的 `uv run ...` 會把環境拉回「不含任何 extra」，
+裝過 `frontend`／`lab` 的環境跑完一次就被拔掉。已建好環境後一律用 `uv run --no-sync ...`
+（排程同理，見 [實盤部署與排程](../deployment/live-deployment.md)）。
 以 pip 安裝時，開發工具要用 `pip install --group dev`（pip 25.1 起支援），不再是 `.[dev]`。
 
 ## 2) 相依的宣告與鎖定
@@ -42,7 +45,8 @@ lock 裡的 Flask、ipython、ta、pytest 看似無關，其實是 FinMind 自�
 
 ```bash
 uv add <套件>                          # 新增主相依（同時更新 pyproject.toml 與 uv.lock）
-uv add --optional dev <套件>           # 新增到某個 extra
+uv add --optional <extra> <套件>       # 新增到某個 extra（frontend／tick／lab）
+uv add --dev <套件>                    # 新增到 dev group（開發工具）
 uv lock                                # 手改 pyproject.toml 後重新解析；已鎖定的版本不會變動
 uv lock --upgrade-package <套件>       # 只升級單一套件（與它強制要求的傳遞相依）
 uv lock --check                        # 確認 lock 與 pyproject.toml 一致
@@ -65,6 +69,10 @@ cp .env.example .env
 - （選填）多組 Shioaji 帳號輪替：`API_KEY_1`~`API_KEY_4`、`API_SECRET_KEY_1`~`API_SECRET_KEY_4`（`core/config/settings.py` 的 `NUM_API`）
 - （選填）執行期產物根目錄覆寫：`ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`（見 [執行期產物](../dev/runtime-artifacts.md)）。**前端讀的是同一個 `ALPHAEDGE_RESULTS_DIR`**，不設也能跑（預設 `PROJECT_ROOT/results`）；舊名 `ALPHAEDGE_BACKTEST_RESULTS` 仍相容一版並會發出警告
 - （選填）回測畫完圖在瀏覽器開啟：`ALPHAEDGE_SHOW_FIGURES=1`（等同 `python -m apps.backtest --show`；預設不開）
+- （選填，只有實盤需要）下單憑證 `SHIOAJI_CA_PATH`／`SHIOAJI_CA_PASSWORD`／`SHIOAJI_PERSON_ID`、
+  kill switch 路徑 `ALPHAEDGE_LIVE_KILL_SWITCH_PATH`、推播 `ALPHAEDGE_LIVE_NOTIFY_CHANNEL`／`_TOKEN`／`_TARGET`
+  （見 [實盤部署與排程](../deployment/live-deployment.md)）
+- （選填）`docker compose` 的內插變數 `STRATEGY`、`ALPHAEDGE_CA_DIR`、`SHIOAJI_CA_FILE`：程式不讀，只給 compose 解析設定檔用
 
 `.env.example` 與程式實際讀取的環境變數由 `tests/test_config_consistency.py` 雙向核對：
 程式新增一個 `os.getenv("X")` 卻沒補進範本，或範本留著程式已不再讀的鍵，測試都會失敗。

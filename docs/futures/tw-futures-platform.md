@@ -75,6 +75,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 ```
 
 - `futures_price` 已被 `--target all` 與 `no_tick` 涵蓋；日常更新以**商品為單位**從表內該商品的最新日接續。
+  `futures_stock_price` 與 `futures_tick` 則**兩個捷徑都不含**（`EXPLICIT_ONLY_DATA_TYPES`），只在明確點名時才跑。
 - **往前擴張回補區間不能用日常指令**：resume 會從表內最新日接續，整段歷史補不到而只顯示「已是最新」。
   要以明確區間呼叫 `FuturesPriceUpdater.update(start_date=..., end_date=..., resume=False)`。
 - **新商品的回補起點要用它的上市日**（`FUTURES_PRODUCT_LISTING_DATES`），不可沿用 `DEFAULT_FUTURES_START_DATE`：

@@ -9,16 +9,19 @@
 source .venv/bin/activate
 ```
 
+不啟用的話改在指令前加 `uv run --no-sync`：不帶 `--no-sync` 的 `uv run` 會先同步環境，把裝過的 extra（`frontend`／`lab`）移除。
+
 ## 2) 更新資料庫
 
 ```bash
-python -m tasks.update_db                          # 全部資料（不含兩種 tick），等同 --target no_tick
+python -m tasks.update_db                          # 全部資料（不含兩種 tick 與只能點名的 target），等同 --target no_tick
 python -m tasks.update_db --target chip price      # 只更新指定資料
 python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
 ```
 
 - 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日。
 - 任一 target 失敗不中斷其餘 target，但整批跑完會以**結束碼 1** 收場；請看 log 尾端的統計行。
+- `futures_stock_price`、`futures_tick` 不含在 `all`／`no_tick` 內，要以 `--target` 明確點名才會跑。
 - **長跑的 ETL 進行中不要動 `logs/` 與 `data/db/`**。
 
 ## 3) 執行回測
@@ -27,8 +30,12 @@ python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB
 
 ```bash
 python -m apps.backtest --strategy MomentumStrategy1                  # 台股做多動能
+python -m apps.backtest --strategy TrustMomentumSwingStrategy        # 台股投信認同強勢股短波段
 python -m apps.backtest --strategy ForeignSellShortDayTradeStrategy   # 台股外資大賣強勢股當沖放空
 python -m apps.backtest --strategy MomentumFuturesStrategy            # 台指期動能（示範用，非交易邏輯）
+
+# 覆寫回測區間與初始資金（皆選填，不帶時沿用策略預設）
+python -m apps.backtest --strategy MomentumStrategy1 --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
 策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 自動收錄；

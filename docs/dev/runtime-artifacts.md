@@ -11,26 +11,32 @@
 ```
 AlphaEdge/
 ├── core/                  # 函式庫：可被 import，不寫任何東西到自己目錄下
-├── apps/  tasks/  frontend/  strategy_lab/  tests/  docs/  backlog/  scripts/
+├── apps/  strategies/  tasks/  frontend/  strategy_lab/  tests/  docs/  backlog/  scripts/
 │
 ├── data/                  # 資料
-│   ├── db/                # tw_stock.db、tw_futures.db（市場軸由檔名承載）
+│   ├── db/                # tw_stock.db、tw_futures.db、tw_trading.db（實盤紀錄；市場軸由檔名承載）
+│   ├── live/              # KILL_SWITCH：檔案存在即停止送單（目錄要按的時候才 mkdir）
 │   └── downloads/         # ETL 中繼檔（市場軸由目錄承載）
-│       ├── tw_stock/      # price, chip, margin, dividend, financial_statement,
-│       │                  # monthly_revenue_report, tick, finmind, meta
+│       ├── tw_stock/      # price, chip, margin, short_sale_list, day_trade_list, dividend,
+│       │                  # corporate_action, financial_statement, monthly_revenue_report,
+│       │                  # tick, finmind, meta
 │       └── tw_futures/    # price, chip, continuous, universe, margin, tick
 │
 ├── results/               # 回測產出：只放要給人看的東西（CSV ＋ PNG）
-│   └── <StrategyName>/
+│   ├── <StrategyName>/
+│   └── live/              # 實盤日報與每日 parity 比對（與回測輸出分層，避免蓋掉回歸比對基準）
 │
 └── logs/
     ├── api/               # core/api/ 的查詢日誌
-    ├── pipeline/          # 爬取／清洗／入庫
-    └── backtest/          # 回測
+    ├── pipeline/          # 爬取／清洗／入庫，以及其餘未被認領的記錄
+    ├── backtest/          # 回測
+    └── launchd/           # 演練排程的 stdout／stderr（scripts/launchd/rehearsal_schedule.py）
 ```
 
 三個根皆可由環境變數覆寫（容器掛載 volume 用）：
-`ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`。
+`ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`；kill switch 另可由
+`ALPHAEDGE_LIVE_KILL_SWITCH_PATH` 單獨指定。`logs/launchd/` 例外：它由 launchd plist 產生器以
+專案根目錄寫死，不跟 `ALPHAEDGE_LOGS_DIR` 走，也不在 `tasks.clean_logs` 的清理範圍內。
 
 護欄在 [`tests/test_config_paths.py`](../../tests/test_config_paths.py)。
 
@@ -53,18 +59,22 @@ AlphaEdge/
 
 ### 為什麼日誌分三桶
 
-依**產生者**分：
+依**產生者**分（`LogManager.BUCKET_PREFIXES` 依記錄的模組名前綴認領）：
 
-| 桶 | 呼叫端 | 性質 |
-|----|--------|------|
-| `api/` | `core/api/tw/` | 每次查詢都寫，量最大、純雜訊，可整桶刪（檔案 sink 只留 WARNING 以上） |
-| `pipeline/` | `core/pipeline/tw/{updaters,crawlers}` | **會回頭讀**（回補的 `N requested / N no data / N unreachable` 統計行） |
-| `backtest/` | `core/backtest/`、`core/utils/` | 單次回測的執行紀錄 |
+| 桶 | 收哪些記錄 | 誰開 sink | 性質 |
+|----|------------|-----------|------|
+| `api/` | `core.api.*` | `core/api/base.py`、`core/api/tw/stock_tick_api.py` | 每次查詢都寫，量最大、純雜訊，可整桶刪（檔案 sink 只留 WARNING 以上，`API_LOG_FILE_LEVEL`） |
+| `backtest/` | `core.backtest`、`core.strategies`、`core.position`、`core.models`、`core.adapters`、`strategy_lab` | 回測引擎（`LogManager.setup_backtest_logger()`，檔名＝策略名） | 單次回測的執行紀錄 |
+| `pipeline/` | **其餘全收**（未被前兩桶認領的記錄） | `core/pipeline/` 的 updater／crawler（`setup_logger()` 未指定目錄時的預設） | **會回頭讀**（回補的 `N requested / N no data / N unreachable` 統計行） |
 
 只分兩桶不成立：`pipeline` 蓋不住 `stock_price_api.log` 這些來自 `core/api/` 的日誌，
 而它們恰好是檔案數最多的一群。分開之後，「可以整桶刪掉的那一批」才被隔離出來。
 
 每個 sink 都帶 `filter`，只收自己那一桶的套件發出的記錄——少了它，一次查詢會同時寫進三個桶的每一個檔案。
+`pipeline` 用排除法而不是白名單：新增的套件會自動落進這一桶，而不是整批消失。
+`core.market` 刻意不列進任何桶：交易日曆由 ETL、回測、實盤共用，列進 `backtest` 桶的話
+ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 sink 收」而消失。
+同一桶內的檔案仍會互收（例如 `update_price.log` 也收得到 `update_chip.log` 的內容）。
 
 ---
 
@@ -100,7 +110,7 @@ AlphaEdge/
 |------|------|--------------|
 | `paths.py` | 原始碼路徑、產物三根與其下所有目錄 | 目錄搬遷時 |
 | `schema.py` | 分庫檔名、完整路徑、資料表名稱 | 新增資料表時 |
-| `settings.py` | 爬取範圍、預設區間、DolphinDB／Shioaji 憑證 | 調整營運參數時 |
+| `settings.py` | 爬取範圍、預設區間、DolphinDB／Shioaji 憑證、實盤參數（時區、通知管道） | 調整營運參數時 |
 
 新程式碼建議直接 import 子模組（`from core.config.paths import DATA_DIR_PATH`），語意較明確。
 

@@ -116,10 +116,6 @@ class StockPriceAPI(BaseDataAPI):
             取得單日全市場的成交量（張）對照表
 
             股 → 張的換算（除以 `Units.LOT`）一律在 API 內完成，策略不自行換算。
-
-            此處**不使用** `StockUtils.convert_share_to_lot()`：`core/utils/instrument.py`
-            相依 `MarketCalendar`，而後者相依本檔案，引用會造成循環 import。
-            `core/api/` 位於 `StockUtils` 之下，不應反向相依。
         - Parameters:
             - date: datetime.date
                 查詢日期

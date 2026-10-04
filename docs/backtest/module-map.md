@@ -13,17 +13,18 @@
 ```
 入口層      apps/backtest.py ── apps/live.py ── tasks/update_db.py
               │
-策略層      core/strategies/          ← 宣告 market，是 factory 的分派鍵
+策略層      core/strategies/、strategies/  ← 宣告 market，是 factory 的分派鍵
             （Alpha：generate_*_signals() → List[Signal]）
               │
 部位建構層  core/portfolio/           ← 回測與實盤共用，不屬於任一市場
             （Signal ＋ Account → List[Order]；**只做開倉**）
               │
-組裝層      core/backtest/factory.py  ← 全專案唯一的 if market ==
+組裝層      core/backtest/factory.py  ← 回測路徑唯一的 if market ==（實盤另有 core/live/factory.py）
               │
 引擎層      core/backtest/backtester.py（市場無關，無子類）
               ├── core/backtest/models/      FillModel、SettlementModel（回測模擬）
-              ├── core/market/               InstrumentSpec、CostModel（市場規則，回測與實盤共用）
+              ├── core/market/               InstrumentSpec、CostModel、交易日曆（市場規則，回測與實盤共用）
+              ├── core/execution/            委託前處理（方向白名單、執行順序、持倉上限、排序；回測與實盤共用）
               ├── core/backtest/datafeed/    資料載入與交易日判定
               ├── core/position/             部位進出與帳務
               └── core/backtest/report/      報表與圖表
@@ -35,6 +36,10 @@
 領域層      core/models/（帳戶、訂單、部位、報價、交易紀錄）
 共用層      core/utils/（enum、路徑、時間、日誌、StockUtils）
 ```
+
+**頂層 `strategies/` 套件**是具體策略日後的落點（相依只能 `strategies` → `core`，`core/` 反向 import 會被
+`check_layer_deps.py` 擋下）；目前只有空的 `stock/`、`futures/` 門面，`StrategyLoader` 也還只掃描
+`core/strategies/`，具體策略仍放在 `core/strategies/{stock,futures}/`。
 
 **引擎不認識任何市場**：`grep "Stock" core/backtest/backtester.py` 為 0。市場語意全部在 `factory.py` 組裝時注入。
 
@@ -69,22 +74,23 @@ sequenceDiagram
     participant SM as SettlementModel
     participant R as Reporter
 
-    CLI->>Loader: load_strategies()
+    CLI->>Loader: load([策略名稱])
     Loader-->>CLI: {類別名稱: 策略類別}
-    CLI->>F: build_backtester(strategy)
+    CLI->>F: build_backtester(strategy, overrides)
 
-    Note over F: 依 strategy.market 組裝<br/>account / position_manager / 四個 model / data_feed
+    Note over F: 先套用 --start／--end／--capital 覆寫<br/>再依 strategy.market 組裝<br/>account / position_manager / 四個 model / data_feed
     F->>BT: Backtester(全部注入)
+    CLI->>BT: run()
     BT->>Feed: setup(strategy)（建立唯一的 SQLite 連線）
+    BT->>Feed: ensure_trading_list_coverage()（開啟名單檢核時）
     BT->>S: setup_apis(data_feed)（策略取用 API，不自行建立）
 
-    CLI->>BT: run()
     loop 回測期間的每一天
         BT->>Feed: is_market_open(date)
         BT->>Feed: get_quotes(date, scale)
-        Note over BT: execute_bar()：依 BarExecutionOrder 決定開平倉先後
+        Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionOrder 決定開平倉先後
         BT->>S: check_open_signal(quotes)
-        BT->>BT: validate_orders() → enrich_orders() → validate_fill_price()
+        BT->>BT: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()
         BT->>PM: open_position(order)
         BT->>S: check_stop_loss_signal() / check_close_signal()
         BT->>PM: close_position(order)
@@ -99,16 +105,18 @@ sequenceDiagram
 
 ### 單根 bar 的訂單流
 
-訂單從策略回傳到真正成交，中間有**四道關卡**，任何一關被擋都會計數，不會靜默丟棄：
+開倉單從策略回傳到真正成交，中間有**六道關卡**，任何一關被擋都會計數，不會靜默丟棄：
 
 | 順序 | 關卡 | 實作位置 | 擋掉時計入 |
 |:----:|------|----------|------------|
-| 1 | 方向白名單（`allowed_directions`、開平倉動作是否相符） | `Backtester.validate_orders()` | `rejected_direction` |
-| 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`） | `CostModel.enrich_orders()` | —（只補值不擋） |
-| 3 | 持倉檔數硬上限（`max_holdings`） | `Backtester.check_max_holdings()` | `rejected_max_holdings` |
-| 4 | 成交價可信度（OHLC 區間、漲跌停、檔位） | `FillModel.validate()` | `rejected_fill_price` |
+| 1 | 方向白名單（`allowed_directions`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/execution/order_preprocess.py` | `rejected_direction` |
+| 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`），之後做決定性排序 | `CostModel.enrich_orders()`、`Backtester.sort_orders()` | —（只補值、排序不擋） |
+| 3 | 持倉檔數硬上限（`max_holdings`） | `Backtester.check_max_holdings()` → `order_preprocess.check_max_holdings()` | `rejected_max_holdings` |
+| 4 | 當日查不到報價（停牌、非股票池） | `Backtester.execute_open_signal()` | `rejected_no_quote` |
+| 5 | 成交價可信度（無成交、OHLC 區間、漲跌停、全日鎖漲跌停；檔位未對齊只警告） | `FillModel.validate()` | `rejected_fill_price`／`rejected_limit_up_locked`／`rejected_limit_down_locked` |
+| 6 | 成交假設（交易所名單、券源、停券、成交量上限、滑價） | `FillModel.fill()`（經 `Backtester.apply_fill_model()`） | `rejected_short_halted`／`rejected_below_reference`／`rejected_not_day_tradable`／`rejected_no_borrow`／`rejected_short_suspended`／`rejected_volume_cap` 等 |
 
-通過四關後才交給 `PositionManager.open_position()`。
+通過六關後才交給 `PositionManager.open_position()`（餘額不足、同標的反向持倉在那一層再擋）。
 
 ---
 
@@ -118,25 +126,29 @@ sequenceDiagram
 
 | 檔案 | 職責 | 被誰呼叫 |
 |------|------|----------|
-| `apps/backtest.py` | CLI 解析（`--strategy`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
-| `core/strategies/strategy_loader.py` | 掃描 `core/strategies/` 下**所有商品類別子套件**，找出繼承 `BaseStrategy` 的類別；類別名即策略識別名 | `apps/backtest.py`、`apps/live.py` |
-| `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `apps/backtest.py`、測試 |
+| `apps/backtest.py` | CLI 解析（`--strategy`、`--start`／`--end`／`--capital`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
+| `apps/_common.py` | 兩個入口共用的策略名解析：只載入指定策略，找不到時才全掃描列出可用策略並以退出碼 2 結束 | `apps/backtest.py`、`apps/live.py` |
+| `core/strategies/strategy_loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描 `core/strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
+| `core/backtest/overrides.py` | `BacktestOverrides`：命令列的回測區間與初始資金覆寫，在組裝任何元件之前套用到策略 | `apps/backtest.py`、實盤 parity |
+| `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `apps/backtest.py`、`core/live/factory.py`、測試 |
 
 ### 引擎與可插拔 model
 
 | 檔案 | 職責 | 持有的狀態 |
 |------|------|------------|
-| `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單四道關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts` |
-| `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊、漲跌停區間 | 無（純規則） |
-| `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交 | `prev_close`、`intraday_range` |
+| `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts` |
+| `core/execution/order_preprocess.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
+| `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊（ETF 另用兩段檔位表）、漲跌停區間（槓桿型 ETF 幅度加倍） | 無（純規則） |
+| `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `prev_close`、`intraday_range`、當日名單與券源快照 |
 | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`），**定義在 `core/models/cost_config.py`** |
-| `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、維持率追繳、停券回補、除息股利補償 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends` 由 `DataFeed` 每根 bar 推入 |
-| `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
-| `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日） | `DataFeed`、策略 |
+| `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
+| `core/backtest/models/event_counts.py` | `EVENT_KEYS` 與 `new_event_counts()`：事件計數 key 的唯一清單 | 無 |
+| `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
+| `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日）；建構子收交易日清單，要從資料庫取清單時用 `MarketCalendar.from_api()`（與 `FuturesCalendar` 同形狀） | 由 `DataFeed`、策略建立；持有交易日清單 |
 
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞，model 之間不互相 import：
 
-- `event_counts`：`factory` 建立 → 同時給 `Backtester`、`FillModel` 與 `SettlementModel`。既有 key 與報表相容，**不可更名**（新增可以）。
+- `event_counts`：`factory` 以 `new_event_counts()` 建立 → 同時給 `Backtester`、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，**不可更名**（新增可以）。
 - `prev_close`：`FillModel` 持有 → `SettlementModel` 建構時取得同一個 dict 的參照。
 
 ### 帳務與領域模型
@@ -157,6 +169,8 @@ sequenceDiagram
 | `core/api/tw/stock_tick_api.py` | 逐筆成交（DolphinDB） |
 | `core/api/tw/stock_chip_api.py`／`stock_margin_api.py` | 三大法人籌碼、融資融券餘額 |
 | `core/api/tw/monthly_revenue_report_api.py`／`financial_statement_api.py` | 月營收、財報 |
+| `core/api/tw/stock_dividend_api.py` | 除權息（現金股利、配股率、除權息日的開盤競價基準） |
+| `core/api/tw/stock_short_sale_list_api.py`／`stock_day_trade_list_api.py` | 交易所每日的平盤下得融（借）券賣出名單、現股當沖標的名單（放空名單檢核用） |
 | `core/adapters/tw/stock_quote_adapter.py` | 日 K／Tick 的 `DataFrame` → `StockQuote` 物件 |
 | `core/dao/connection.py` | 連線的單一入口 `connect_sqlite()`（含唯讀模式）；`DBConnection`／`DBError` 型別別名 |
 | `core/dao/base.py` | `BaseDAO`：`owns_conn` 語意、`table_exists()`、`query_df()`、寫入（`insert_or_ignore`／`insert_or_replace`）與 `savepoint()` |
@@ -167,6 +181,7 @@ sequenceDiagram
 | 檔案 | 職責 |
 |------|------|
 | `core/backtest/report/base.py` | `BaseBacktestReporter`：報表介面與存檔工具 |
+| `core/backtest/report/plotting.py` | `EquityChartRenderer`：只負責畫圖，資料（含權益口徑）一律向報表端取 |
 | `core/backtest/report/reporter.py` | 台股報表：交易明細、多空統計、事件計數、五張圖、benchmark（`0050` 還原價）比較 |
 | `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、對標序列（連續合約優先，查不到退回近月拼接） |
 | `core/backtest/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
@@ -209,17 +224,17 @@ sequenceDiagram
 
 ## 五、新增一個（市場, 商品）組合要動哪些檔案
 
-既有檔案的改動量是**一個 `elif` 分支**：
+既有回測檔案的改動量是**一個分派分支**（加上 `settlement_model/__init__.py` 一行登記）：
 
 | 動作 | 檔案 |
 |------|------|
 | 新增 | `core/models/<instrument>/`（五個領域模型） |
 | 新增 | `core/strategies/<instrument>/base.py`（設定 `self.market` 與 `self.instrument_type`，並實作 `make_portfolio_constructor()` 與 `build_close_orders()`） |
 | 新增 | `core/portfolio/construction.py` 的對應建構器（若部位約束與既有兩者都不同） |
-| 新增 | `core/backtest/models/` 的該組合 `InstrumentSpec`／`FillModel`／`CostModel`／`SettlementModel` |
+| 新增 | `core/market/<market>/` 的該組合 `InstrumentSpec`／`CostModel`；`core/backtest/models/` 的 `FillModel`／`SettlementModel`（後者在 `settlement_model/__init__.py` 登記 re-export） |
 | 新增 | `core/backtest/datafeed/<market>/` 的該組合 `DataFeed` |
 | 新增 | `core/position/<instrument>/position_manager.py` |
-| **修改** | `core/backtest/factory.py`：加一個 `elif (strategy.market, strategy.instrument_type) == (...)` 分支 |
+| **修改** | `core/backtest/factory.py`：加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支；要上實盤時 `core/live/factory.py` 同樣要加 |
 
 `backtester.py`、`strategy_loader.py`、`apps/backtest.py` 皆為 **0 行改動**——`StrategyLoader` 會自動掃描新的子套件，CLI 也不需要 `--market`（市場由策略類別自己宣告）。
 
@@ -239,12 +254,13 @@ sequenceDiagram
    | `StockChipAPI.get_trust_net_shares_map(date)` | 單日全市場投信買賣超股數對照表 |
 
    `tests/test_strategy_data_access.py` 會在策略層出現欄位字面值時失敗——這類錯誤是**靜默**的（換資料源後策略會安靜地不開倉，報表上只表現為訊號變少）。
-4. **`core/api/` 不可 import `core/utils/instrument.py`。** `StockUtils` 相依 `MarketCalendar`，而後者相依 `StockPriceAPI`；API 層位於其下，反向相依會直接循環。
+4. **`core/utils/instrument.py` 只 import `core/utils/constant/`。** `StockUtils` 已不再相依 `MarketCalendar`，因此任何層都能引用它；不要再讓它 import `core/market/` 或 `core/api/`——`MarketCalendar` 相依 `StockPriceAPI`，`core/api/` 一旦反過來用 `StockUtils` 就會循環。
 5. **回歸雙線不經過 reporter。** `tests/backtest/make_baseline.py` 直接從 `account.trade_records` 組 `DataFrame`，改壞報表欄位兩條線都一樣綠——動 `reporter.py` 時要靠 `test_reporting.py` 與 `test_reporter_timeline.py`。
 6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`tasks/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
 7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`tasks/`、`scripts/`、`tests/` 不受限。
-8. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
-9. **任何動到 `core/backtest/`、`core/position/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
+8. **回測以外不可 import 回測內部零件**（`core/backtest/models`／`datafeed`／`report`）。實盤與策略要用的市場規則已在 `core/market/`、設定類別在 `core/models/`；由 `check_layer_deps.py` 的 E''''' 項強制，`tests/` 不受限。
+9. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
+10. **任何動到 `core/backtest/`、`core/position/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
 
 ---
 
@@ -270,7 +286,7 @@ sequenceDiagram
 
 **已經解決、不再列入的四條**（留紀錄以免有人照舊文件重新引入）：
 
-- `core/utils/instrument.py` 曾 import 引擎層的日曆，現在它**不 import 任何 `core/` 模組**。
+- `core/utils/instrument.py` 曾 import 引擎層的日曆，現在它**只 import 同套件的 `core/utils/constant/`**。
 - 策略層曾 import `core/backtest/models/fill_model.py` 的 `FillConfig`／`FuturesFillConfig`／`VolumeCapPolicy`，
   現在這三個設定類別在 `core/models/fill_config.py`（與 `core/models/cost_config.py` 對稱），
   `fill_model.py` 只留模擬邏輯。

@@ -12,12 +12,15 @@
 core.config (0) ← core.utils (1) ← core.dao (2) ← core.api / core.pipeline (3) ← ...
 ```
 
-**SQL、連線與交易只寫在 `core/dao/`。** `core/`、`tasks/` 內 `core/dao/` 以外的檔案不得
+**SQL、連線與交易只寫在 `core/dao/`。** `core/`、`apps/`、`strategies/`、`tasks/` 內 `core/dao/` 以外的檔案不得
 `import sqlite3`，由 `scripts/check_layer_deps.py` 的「E''. DAO 以外 import 資料庫驅動」強制；
 型別標註用 `core.dao.connection.DBConnection`，捕捉資料庫錯誤用 `DBError`。
 
-`core/dao` **只 import `core.config`**，不 import `core.utils`（`core.utils.instrument` 會反向拉進回測層）、
-`core.models`、`core.api`、`core.pipeline`。需要 Enum 的地方（例如期貨交易時段）由上層轉成字串值再傳進來。
+`core/dao` **只 import `core.config`**，不 import `core.utils`、`core.models`、`core.api`、`core.pipeline`。
+需要 Enum 的地方（例如期貨交易時段）由上層轉成字串值再傳進來。`core.api`／`core.pipeline` 在上層，
+import 它們會被分層檢查判成反向相依；`core.models` 同層，會被列進「同層互相 import」。
+不 import `core.utils` 則是慣例、沒有機器護欄：最初的理由是 `core.utils.instrument` 會反向拉進回測層，
+但市場規則下沉到 `core/market/` 後 `core/utils/` 已不 import 任何上層模組，分層檢查也不擋 `core.dao` → `core.utils`。
 
 | 層 | 負責 | 不負責 |
 |----|------|--------|
@@ -38,6 +41,7 @@ core.config (0) ← core.utils (1) ← core.dao (2) ← core.api / core.pipeline
 | `StockPriceDAO` | `price`（同時是台股交易日曆的來源） | `tw_stock.db` |
 | `StockChipDAO`／`StockMarginDAO` | `chip`／`margin` | `tw_stock.db` |
 | `StockDividendDAO`／`CorporateActionDAO` | `dividend`／`corporate_action` | `tw_stock.db` |
+| `StockShortSaleListDAO`／`StockDayTradeListDAO` | `short_sale_list`（平盤下融資融券名單）／`day_trade_list`（現股當沖名單） | `tw_stock.db` |
 | `MonthlyRevenueDAO` | `monthly_revenue` | `tw_stock.db` |
 | `FinancialStatementDAO(table_name)` | 財報四表（表名白名單） | `tw_stock.db` |
 | `StockInfoDAO`／`StockInfoWithWarrantDAO`／`SecuritiesTraderInfoDAO`／`BrokerTradingDAO` | FinMind 四表 | `tw_stock.db` |
@@ -47,7 +51,7 @@ core.config (0) ← core.utils (1) ← core.dao (2) ← core.api / core.pipeline
 | `FuturesChipDAO(table_name)` | 期貨籌碼三表（表名白名單） | `tw_futures.db` |
 | `FuturesContinuousDAO` | `futures_continuous`（衍生表） | `tw_futures.db` |
 | `MarketHolidayDAO` | `market_holiday` | `tw_stock.db` |
-| `LiveTradeDAO` | 實盤紀錄各表（`live_run`／`live_order`／`live_fill`／`live_position_lot` 等） | `tw_trading.db` |
+| `LiveTradeDAO` | 實盤紀錄各表（`live_run`／`live_order`／`live_fill`／`live_position_lot` 等），自行開連線時走 `connect_live_trading()` | `tw_trading.db` |
 
 **tick 不在此列**：台股與期貨 tick 仍走 DolphinDB，改用 TimescaleDB 的規劃見
 [台股tick改用TimescaleDB](../../backlog/台股tick改用TimescaleDB.md)，其連線層同樣放在 `core/dao/`。
@@ -73,6 +77,12 @@ updater 那條從不關閉，兩條連線還會互搶寫入鎖（券商分點曾
 
 **唯讀連線**（`connect_sqlite(path, read_only=True)`）用在只讀的場合：不會與背景 ETL 搶寫入鎖，
 檔案不存在時也不會被 `sqlite3.connect()` 默默建出一個空 DB。
+
+**實盤紀錄庫一律走 `connect_live_trading()`**：在 `connect_sqlite()` 之上加 `journal_mode=WAL`
+（日報、前端與存活監控會在實盤行程寫入的同時讀取，rollback journal 會讓讀寫互相阻塞）與
+`synchronous=FULL`（「先寫 DB 再送單」的恢復保證要求那筆 commit 真的落地）。PRAGMA 下在連線入口
+而不是讓各處自己下，漏掉一次不會報錯、只會在斷電時丟掉最後一筆 commit。實盤行程是唯一寫入者，
+存活監控與報表以 `read_only=True` 開（唯讀連線不改 journal_mode）。
 
 ---
 
@@ -103,7 +113,7 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 
 | 模式 | commit 時點 |
 |------|-------------|
-| 檔案型 loader（price、chip、margin、財報、月營收、期貨行情…） | 整批檔案處理完 `commit()` 一次，再 `finish_load()` 彙報 |
+| 檔案型 loader（price、chip、margin、平盤下融券／當沖名單、財報、月營收、期貨行情…） | 整批檔案處理完 `commit()` 一次，再 `finish_load()` 彙報（共用骨架為 `BaseDataLoader.load_csv_directory()`）|
 | 參考表與 CSV 目錄（FinMind） | 每張表／整個目錄處理完即 commit——後一張失敗拋 `DataLoadError` 時，先成功的不可跟著消失 |
 | 券商分點批次更新 | updater 每 50 個組合 commit；重建 metadata 與等待配額前先 commit |
 | 期貨籌碼 | loader 不 commit，updater 每個月批次寫完 commit |
@@ -158,8 +168,10 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 
 ## 七、新增一張資料表的檢查表
 
-1. **在 `core/dao/tw/` 新增 DAO**，`TABLE_NAME`／`DEFAULT_DB_PATH` 為類別常數；建表 DDL 放 `create_table()`，
-   `ensure_table()` 可重複呼叫（`(stock_id, date)` 類的索引用 `IF NOT EXISTS` 每次補）。
+1. **在 `core/dao/tw/` 新增 DAO**，`TABLE_NAME`／`DEFAULT_DB_PATH` 為類別常數；建表 DDL 放 `create_table()`
+   （基底不提供實作，沒覆寫會 `NotImplementedError`）。`ensure_table()` 由基底提供、可重複呼叫：
+   明細表宣告 `NEEDS_SYMBOL_DATE_INDEX = True`，`(stock_id, date)` 複合索引以 `IF NOT EXISTS` 每次補；
+   走 `load_csv_directory()` 的表另宣告 `PRIMARY_KEY_COLUMNS`（與 DDL 的 PRIMARY KEY 一致，供檔內去重）。
 2. **表不存在時的回傳約定寫進 docstring**，其餘錯誤往外拋（§五）。
 3. **loader 收 `dao=`（或多表時收 `conn=`），不擁有時不關閉**；逐檔包 savepoint，commit 時點依 §4.3 擇一。
 4. **updater 持有 DAO／連線並提供 `close()`**，`tasks/update_db.py` 以 `try/finally` 呼叫。

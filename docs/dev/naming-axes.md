@@ -47,17 +47,17 @@
 | `core/strategies/base.py` | `self.market: Optional[Market]` ＋ `self.instrument_type: Optional[InstrumentType]`，兩個欄位由各商品類別的策略基底填入 |
 | `core/strategies/stock/base.py` | `Market.TW` ＋ `InstrumentType.STOCK`；**個別策略不需自己設** |
 | `core/backtest/factory.py` | 分派鍵為 `(strategy.market, strategy.instrument_type)`；未支援的組合拋出含兩軸值的 `ValueError` |
-| `core/backtest/models/` | 實作類別命名即「地區 ＋ 商品」：`TwStockSpec`、`TwStockFillModel`、`TwStockSettlementModel`、`TwFuturesSpec` |
+| `core/market/tw/`、`core/backtest/models/` | 實作類別命名即「地區 ＋ 商品」：商品規格與成本模型 `TwStockSpec`、`TwFuturesSpec`、`TwFuturesCostModel` 在 `core/market/tw/`；回測模擬零件 `TwStockFillModel`、`TwStockSettlementModel`、`TwFuturesSettlementModel` 在 `core/backtest/models/` |
 | `scripts/check_layer_deps.py` 的 `_MARKET_AXIS_PACKAGES` | **市場軸目錄的權威清單**：`core/api`、`core/broker`、`core/live/datafeed`、`core/adapters`、`core/dao`、`core/backtest/datafeed`、`core/market`、`core/pipeline`。清單內的目錄只承載軸 A（`tw/`，未來 `us/`），商品類別由檔名承載（`stock_price_api.py` vs `futures_price_api.py`）、類別名仍是「地區 ＋ 商品」（`TwStockDataFeed`）；市場無關的底座（`base.py` 等）放在目錄根。新開的市場軸套件要登記進清單，跨軸混放才會被擋 |
 | `core/dao/` | 資料存取層：SQL、連線與交易只寫在這裡。`base.py`、`connection.py` 是市場無關底座，各資料表的 DAO 放 `tw/` |
 | `core/api/` | 策略與資料源取數用的資料 API（SQLite 資料經 DAO 查詢），各市場實作放 `tw/` |
 | `core/adapters/` | raw 資料 → `Quote` 的純轉換層（不做 I/O），市場無關的 `quote_validation.py` 放根目錄、各市場轉換器放 `tw/` |
-| `core/market/` | 市場結構（交易日曆、期貨結算日、換月規則、保證金設定），ETL、回測、實盤、策略共用同一份；台灣市場的實作放 `tw/`（`market_calendar.py`、`futures_calendar.py`、`futures_roll.py`、`futures_margin_config.py`） |
+| `core/market/` | 市場結構與市場規則（交易日曆、期貨結算日、換月規則、保證金設定、商品規格、交易成本），ETL、回測、實盤、策略共用同一份；市場無關的基底（`instrument_spec.py` 的 `InstrumentSpec`、`cost_model.py` 的 `BaseCostModel`）放根目錄，台灣市場的實作放 `tw/`（`market_calendar.py`、`futures_calendar.py`、`futures_roll.py`、`futures_margin_config.py`、`instrument_spec.py`、`cost_model.py`） |
 | `core/backtest/datafeed/` | 回測資料源（`TwStockDataFeed`／`TwFuturesDataFeed`）放 `tw/`；兩邊共用的契約 `BaseDataFeed` 不在這裡，而在不分市場的 `core/datafeed/base.py` |
 | `core/live/datafeed/` | 實盤資料源（歷史資料到 T−1 ＋ 當日券商報價）：`base.py`、`calendar.py`（盤前交易日判定）為市場無關底座，股票與期貨實作放 `tw/` |
 | `core/broker/` | 券商閘道（送單、收回報、查帳務）：`base.py`（`BaseBroker`）等市場無關元件放根目錄，永豐金 Shioaji 的實作放 `tw/`（`shioaji_*.py`） |
 | `core/pipeline/{shared,tw,utils}/` | 目錄**只承載軸 A**（`tw/`，未來 `us/`）；商品類別由檔名承載（`stock_price_crawler.py` vs `futures_price_crawler.py`）。base 類別放 `shared/`，否則 `us/` 會反過來相依 `tw/`。**`utils/` 是層不是軸**，只放跨市場通用的工具；綁定單一市場的工具歸 `tw/utils/`（見下）|
-| `core/strategies/`、`core/models/`、`core/position/` | 子目錄承載**軸 B**（`base/` ＋ `stock/` ＋ `futures/`）。`strategy_loader` 逐一掃描這些子套件，新增商品類別不需改程式 |
+| `core/strategies/`、`core/models/`、`core/position/`、頂層 `strategies/` | 子目錄承載**軸 B**（`stock/` ＋ `futures/`；商品無關的部分在 `core/models/base/`、`core/position/base/`、`core/strategies/base.py`，`core/models/` 根目錄另有兩軸皆無關的 `cost_config.py`、`fill_config.py`）。清單即 `scripts/check_layer_deps.py` 的 `_INSTRUMENT_AXIS_PACKAGES`，其底下出現 `tw/`／`us/` 會被擋。`StrategyLoader` 逐一掃描 `core/strategies/` 的商品子套件，新增商品類別不需改程式；頂層 `strategies/` 是具體策略的新家，門面保持空白 |
 | `core/portfolio/` | **不承載任何軸**，是平的一層：`signal.py`、`sizing.py`、`construction.py`、`aggregation.py`。商品差異由**類別名**承載（`StockPortfolioConstructor` vs `FuturesPortfolioConstructor`），不開 `stock/`／`futures/` 子目錄——這一層檔案少、且回測與實盤共用，開子目錄只會讓少數幾個檔案各自躺在一個資料夾裡。日後若某個市場需要自己的資金切分規則，再依軸 A 開 `tw/` |
 | `data/db/` | 檔名帶軸 A：`tw_stock.db`、`tw_futures.db`、`tw_trading.db`（實盤交易紀錄；常數 `TW_STOCK_DB_PATH`／`TW_FUTURES_DB_PATH`／`TW_TRADING_DB_PATH`） |
 | `core/pipeline/tw/crawlers/financial_statement_crawler.py` | `self.listing_boards`（軸 C） |
@@ -92,7 +92,7 @@
 兩個 SQLite 檔會併進同一個扁平命名空間，前綴更是必要而非多餘。
 
 **真正的不對稱在另一側**：缺前綴的是 `tw_stock.db` 的 `price`／`chip`／`margin`。
-要對稱應該是補上 `stock_` 前綴，但那要改 `tw_stock.db` 全部 15 張表（目前沒有一張帶 `stock_` 前綴）、數 GB 資料與所有 DAO，
+要對稱應該是補上 `stock_` 前綴，但那要改 `tw_stock.db` 全部 17 張表（目前沒有一張帶 `stock_` 前綴）、數 GB 資料與所有 DAO，
 且 PostgreSQL 遷移本來就會重寫這一層——歸 `backlog/PostgreSQL遷移計畫.md`。
 
 ### 每層目錄只承載一條軸
@@ -135,6 +135,6 @@
 | 項目 | 現況 | 歸屬 |
 |------|------|------|
 | `data/downloads/` | 仍是 `tw_stock/`／`tw_futures/` 的壓縮形式。純目錄名的話 `tw/stock/` 才與程式碼側同構，但那是第二次資料搬遷，不值得為一致性單獨做 | 待 PostgreSQL 遷移或下次動 `downloads/` 時順手收斂 |
-| 資料表欄位語言 | **已定案**：跟著**資料來源**走，不跟市場走——交易所網頁／檔案爬來的保留中文欄，API 來源用其原始英文欄。分界線本來就是來源（15 張表中已有 5 張全英文） | 規則與理由見 [ETL 入庫約定 §3.4](../pipeline/etl-ingestion.md) |
+| 資料表欄位語言 | **已定案**：跟著**資料來源**走，不跟市場走——交易所網頁／檔案爬來的保留中文欄，API 來源用其原始英文欄。分界線本來就是來源（`tw_stock.db` 17 張表中已有 5 張全英文） | 規則與理由見 [ETL 入庫約定 §3.4](../pipeline/etl-ingestion.md) |
 | `core/utils/instrument.py` 的 `StockUtils` 歸屬 | 未動 | 取捨表在 [多市場回測引擎架構](../backtest/multi-market-engine.md) |
 | `stock_id` → `symbol` 的資料層改名 | 未動，本次刻意不做 | 歸 `backlog/PostgreSQL遷移計畫.md` 的 schema 批次 |

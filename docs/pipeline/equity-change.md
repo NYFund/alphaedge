@@ -142,7 +142,7 @@ FROM equity_change GROUP BY year, season ORDER BY year, season;
 節流直接決定回補要跑幾天。**常數為權益變動表專用**，與其他三張報表不共用——
 那三張是「全市場一次查完」，整段回補才幾十次請求，沒有放寬的必要。
 
-| 常數（`FinancialStatementUpdater`） | 現行值 |
+| 常數（`EquityChangeMixin`，`core/pipeline/tw/updaters/financial_statement/equity_change.py`；由 `FinancialStatementUpdater` 混入） | 現行值 |
 |---|---|
 | `EQUITY_CHANGE_RANDOM_DELAY_MIN` / `_MAX` | 0.5 / 1.5 秒 |
 | `EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES` | 50 檔 |

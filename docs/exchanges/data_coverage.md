@@ -11,7 +11,9 @@
 | 三大法人籌碼 | TWSE／TPEX | `StockChipAPI` | SQLite `chip` | 2013-01-01（`DEFAULT_CHIP_START_DATE`） | 回測／選股可用 |
 | 除權除息 | **上市**：證交所 `TWT49U`；**上櫃**：櫃買中心 `bulletin/exDailyQ` | `StockDividendAPI` | SQLite `dividend` | 2013-01-01（`DEFAULT_DIVIDEND_START_DATE`） | 股價還原係數、現金股利、開盤競價基準 |
 | 公司行動（減資、分割、面額變更） | **上市**：證交所 `TWTAUU`；**上櫃**：櫃買中心 `bulletin/revivt`；另有由行情偵測並人工確認的事件 | `StockDividendAPI`（併入還原係數） | SQLite `corporate_action` | 2013-01-01 | 見 [非除權息的公司行動](../pipeline/corporate-action.md) |
-| 融資融券餘額 | **上市**：證交所 `MI_MARGN`；**上櫃**：櫃買中心 `margin/balance` | `StockMarginAPI` | SQLite `margin` | 2013-01-01（`DEFAULT_MARGIN_START_DATE`） | 券源檢核（`check_borrowable`）、券資比 |
+| 融資融券餘額 | **上市**：證交所 `MI_MARGN`；**上櫃**：櫃買中心 `margin/balance` | `StockMarginAPI` | SQLite `margin` | 2013-01-01（`DEFAULT_MARGIN_START_DATE`） | 券源檢核（`TwStockFillModel.check_short_borrowable()`）、券資比 |
+| 平盤下得融（借）券賣出名單 | **上市**：證交所 `TWT92U`；**上櫃**：櫃買中心 `margin/mark` | `StockShortSaleListAPI` | SQLite `short_sale_list` | 2013-09-23（`SHORT_SALE_LIST_START_DATE`；更早來源無資料） | 回測放空檢核（`ShortConstraint.check_short_sale_list`，預設關閉）；含暫停融券／暫停借券／禁止平盤下三個註記；來源損毀的市場日（`SHORT_SALE_LIST_CORRUPTED_DAYS`）以前後交易日推估 |
+| 現股當沖標的名單 | **上市**：證交所 `TWTB4U`；**上櫃**：櫃買中心 `intraday/list` | `StockDayTradeListAPI` | SQLite `day_trade_list` | 2014-01-06（`DAY_TRADE_LIST_START_DATE`）；先賣後買自 2014-06-30（`SELL_FIRST_DAY_TRADE_START_DATE`） | 回測現股當沖先賣檢核（`ShortConstraint.check_day_trade_list`，預設關閉）；含暫停先賣後買註記 |
 | 月營收 | MOPS | `MonthlyRevenueReportAPI` | SQLite `monthly_revenue` | 2013-01（`DEFAULT_START_YEAR` 起、1 月） | 基本面可用 |
 | 財報 | MOPS | `FinancialStatementAPI` | SQLite `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | 2013 年第 1 季（`DEFAULT_START_YEAR`） | 權益變動表的資料形狀與限制見 [權益變動表](../pipeline/equity-change.md) |
 | FinMind 參考資料 | FinMind API | `FinMindAPI` | SQLite FinMind 相關表 | 券商分點：`2021-06-30`（`FINMIND_BROKER_TRADING_START_DATE`）；台股總覽／證券商為 API 快照 | 股票、券商、分點 |
@@ -53,6 +55,11 @@
 ```bash
 python -m tasks.update_db --target <targets...>
 ```
+
+不帶 `--target` 時等同 `--target no_tick`。`all`／`no_tick` 兩個捷徑**都不含**
+`futures_stock_price`、`futures_tick`
+（`EXPLICIT_ONLY_DATA_TYPES`），這兩個只在明確點名時才跑；`no_tick` 另外排除 `tick`。
+`--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 不受影響）。
 
 各 target 的預設起始（與 `get_update_time_config`／各 updater 行為一致）：
 
