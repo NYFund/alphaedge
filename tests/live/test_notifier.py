@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 import pytest
+import requests
+from loguru import logger
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import BaseNotifier, NotifyLevel, NullNotifier, redact
+from core.live.notify.discord_notifier import DiscordNotifier
 from core.live.notify.factory import build_notifier
 from core.live.notify.telegram_notifier import TelegramNotifier
 from scripts.live_watchdog import (
@@ -186,6 +189,8 @@ def test_short_numbers_are_not_masked() -> None:
         ("", "t", "c"),
         ("telegram", None, "c"),
         ("telegram", "t", None),
+        ("discord", None, None),
+        ("discord", "only-the-webhook-token", None),
         ("slack", "t", "c"),
     ],
 )
@@ -232,6 +237,145 @@ def test_telegram_error_does_not_leak_the_token() -> None:
 
     assert "secret-token" not in str(error.value)
     assert "403" in str(error.value)
+
+
+_WEBHOOK_URL: str = "https://discord.com/api/webhooks/123/secret-webhook-token"
+
+
+class _Recorder:
+    """記下 `requests.post` 收到的參數，並回指定的狀態碼"""
+
+    def __init__(self, status_code: int) -> None:
+        """建立紀錄器"""
+
+        self.status_code: int = status_code
+        self.calls: List[Tuple[Any, Any]] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """假的 `requests.post`"""
+
+        self.calls.append((args, kwargs))
+        status_code: int = self.status_code
+
+        class Response:
+            pass
+
+        response: Response = Response()
+        response.status_code = status_code
+        return response
+
+
+def _patch_discord_post(recorder: _Recorder) -> Any:
+    """把 Discord 管道的 `requests.post` 換成紀錄器；回傳原函式供還原"""
+
+    module = sys.modules["core.live.notify.discord_notifier"]
+    original = module.requests.post
+    module.requests.post = recorder
+    return original
+
+
+def _restore_discord_post(original: Any) -> None:
+    """還原 Discord 管道的 `requests.post`"""
+
+    sys.modules["core.live.notify.discord_notifier"].requests.post = original
+
+
+def test_complete_config_builds_discord_without_target() -> None:
+    """Discord 的 webhook 已綁定頻道，只要 URL 就能建出通道"""
+
+    assert isinstance(build_notifier("Discord", _WEBHOOK_URL, None), DiscordNotifier)
+
+
+def test_discord_sends_to_webhook_with_mentions_disabled() -> None:
+    """
+    送到 webhook URL，且**關掉 mention 解析**
+
+    內容含外部錯誤字串，若剛好出現 `@everyone` 會對整個伺服器發通知。
+    """
+
+    recorder: _Recorder = _Recorder(204)
+    original: Any = _patch_discord_post(recorder)
+    try:
+        DiscordNotifier(_WEBHOOK_URL, blocking=True).deliver(
+            NotifyLevel.CRITICAL, "標題", "@everyone 內容"
+        )
+    finally:
+        _restore_discord_post(original)
+
+    args, kwargs = recorder.calls[0]
+    assert args[0] == _WEBHOOK_URL
+    assert kwargs["json"]["allowed_mentions"] == {"parse": []}
+    assert "標題" in kwargs["json"]["content"]
+    assert kwargs["json"]["content"].startswith("🚨")
+
+
+def test_discord_long_message_is_truncated_to_limit() -> None:
+    """超過 2000 字元整則會被 Discord 拒收；截斷後至少開頭送得到"""
+
+    recorder: _Recorder = _Recorder(204)
+    original: Any = _patch_discord_post(recorder)
+    try:
+        DiscordNotifier(_WEBHOOK_URL, blocking=True).deliver(
+            NotifyLevel.INFO, "標題", "x" * 5000
+        )
+    finally:
+        _restore_discord_post(original)
+
+    content: str = recorder.calls[0][1]["json"]["content"]
+    assert len(content) == 2000
+    assert content.endswith("（已截斷，完整內容見 log）")
+
+
+def test_discord_error_does_not_leak_the_webhook() -> None:
+    """
+    錯誤訊息只印狀態碼，**不印 URL**
+
+    webhook URL 本身就是憑證，而錯誤訊息會進 log。
+    """
+
+    recorder: _Recorder = _Recorder(404)
+    original: Any = _patch_discord_post(recorder)
+    try:
+        with pytest.raises(RuntimeError) as error:
+            DiscordNotifier(_WEBHOOK_URL, blocking=True).deliver(
+                NotifyLevel.INFO, "標題", "內容"
+            )
+    finally:
+        _restore_discord_post(original)
+
+    assert "secret-webhook-token" not in str(error.value)
+    assert "404" in str(error.value)
+
+
+def test_discord_connection_failure_does_not_leak_the_webhook_into_log() -> None:
+    """
+    連不上時（例如主機開著 VPN）**log 裡也不得出現 webhook token**
+
+    `requests` 的連線例外訊息帶著完整 URL，而骨架會連同 traceback 記進 log；
+    loguru 的 diagnose 還會印出 traceback 每一行的變數值。所以直接看實際寫出的 log，
+    不只看例外訊息。
+    """
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        """模擬連不上 Discord"""
+
+        raise requests.ConnectionError(f"Max retries exceeded with url: {args[0]}")
+
+    # 建構與送出分兩行：traceback 會往上延伸到呼叫端，同一行出現 URL 常數會被
+    # diagnose 印出來，那是測試自己的變數，不是管道漏出去的
+    notifier: DiscordNotifier = DiscordNotifier(_WEBHOOK_URL, blocking=True)
+    lines: List[str] = []
+    sink_id: int = logger.add(lines.append, diagnose=True, backtrace=True)
+    original: Any = _patch_discord_post(refuse)
+    try:
+        notifier.send(NotifyLevel.CRITICAL, "標題", "內容")
+    finally:
+        _restore_discord_post(original)
+        logger.remove(sink_id)
+
+    output: str = "".join(lines)
+    assert "推播失敗" in output
+    assert "secret-webhook-token" not in output
 
 
 # === 存活監控 ===

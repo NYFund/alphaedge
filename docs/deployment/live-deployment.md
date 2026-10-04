@@ -23,7 +23,7 @@
 1. `.env`（專案根目錄，不進 git、不進映像）至少要有：
    - `API_KEY`、`API_SECRET_KEY`：Shioaji 金鑰。
    - `SHIOAJI_CA_PASSWORD`：下單憑證密碼（`SHIOAJI_CA_PATH` 在容器內由 compose 覆寫成 `/ca/...`）。
-   - （建議）`ALPHAEDGE_LIVE_NOTIFY_CHANNEL`／`_TOKEN`／`_TARGET`：推播管道。沒設的話異常只會寫進 log 與 `live_risk_event`，不會主動通知任何人。
+   - （建議）`ALPHAEDGE_LIVE_NOTIFY_CHANNEL`／`_TOKEN`／`_TARGET`：推播管道。`discord` 的 `_TOKEN` 填完整的 webhook URL、不需 `_TARGET`；`telegram` 的 `_TOKEN` 填 bot token、`_TARGET` 填 chat id。沒設的話異常只會寫進 log 與 `live_risk_event`，不會主動通知任何人。
 2. CA 憑證（`.pfx`）放在**專案目錄以外**，預設 `~/.alphaedge/ca/Sinopac.pfx`。
    目錄與檔名可用環境變數 `ALPHAEDGE_CA_DIR`、`SHIOAJI_CA_FILE` 改（compose 讀，程式不讀）。
 3. 策略要標 `live_ready = True` 並宣告 `live_schedule`，否則啟動檢查會拒絕。
