@@ -1,4 +1,5 @@
 import datetime
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -315,6 +316,7 @@ class BaseDataCrawler(ABC):
         label: str,
         index: int = 0,
         no_data_probe: Optional[Tuple[str, datetime.date]] = None,
+        page_date: Optional[datetime.date] = None,
         **read_html_kwargs,
     ) -> CrawlResult:
         """
@@ -333,6 +335,9 @@ class BaseDataCrawler(ABC):
             - no_data_probe: Optional[Tuple[str, datetime.date]]
                 `(JSON 版網址, 查詢日)`；解析不出表格時用它確認是否休市
                 （見 `confirm_no_data_by_json()`），None 時維持記為失敗
+            - page_date: Optional[datetime.date]
+                查詢日；提供時核對頁面上標示的資料日期（見 `check_page_date()`），
+                None 時不核對
             - read_html_kwargs
                 原樣轉給 `pd.read_html()`（例如 `converters`）
         - Return:
@@ -365,4 +370,68 @@ class BaseDataCrawler(ABC):
             logger.info(f"{label}: 表格為空（休市或尚未公布）")
             return CrawlResult.no_data("表格為空")
 
+        if page_date is not None:
+            mismatch: Optional[CrawlResult] = cls.check_page_date(
+                result.text, page_date, label
+            )
+            if mismatch is not None:
+                return mismatch
+
         return CrawlResult.ok(df)
+
+    # 頁面上的資料日期（民國年）：櫃買中心收盤行情與融資融券寫成「資料日期:115/09/24」，
+    # 三大法人寫成「115年09月24日」（2026-10-04 實查 2013～2026 各年代皆如此）
+    PAGE_DATE_PATTERNS: Tuple[str, ...] = (
+        r"資料日期[:：]?\s*(\d{2,3})/(\d{2})/(\d{2})",
+        r"(\d{2,3})年(\d{2})月(\d{2})日",
+    )
+
+    @classmethod
+    def check_page_date(
+        cls, html: str, date: datetime.date, label: str
+    ) -> Optional[CrawlResult]:
+        """
+        - Description:
+            核對頁面標示的資料日期與查詢日；不符或找不到時回 `FAILED`
+
+            **櫃買中心收到不合格式的日期時不報錯，而是靜靜回近幾日的資料**
+            （2026-10-01 盤點交易所來源時實測），表格照樣解析得出來——不核對的話，
+            哪天日期格式寫錯就會把別天的行情存成當天，而且 `INSERT OR IGNORE`
+            之後重跑也蓋不掉。
+
+            **找不到日期也算失敗**：各端點、各年代實查都有標示，找不到代表版面改了，
+            與「解析不出表格」同一個原則——寧可那天重試，也不要讓改版靜靜放行。
+        - Parameters:
+            - html: str
+                回應內容
+            - date: datetime.date
+                查詢日
+            - label: str
+                來源與日期的描述，只用於訊息
+        - Return:
+            - Optional[CrawlResult]
+                相符時為 None；不符或找不到時為 `FAILED`
+        """
+
+        text: str = re.sub(r"<[^>]+>", " ", html)
+        for pattern in cls.PAGE_DATE_PATTERNS:
+            matched: Optional[re.Match] = re.search(pattern, text)
+            if matched is None:
+                continue
+
+            year, month, day = (int(part) for part in matched.groups())
+            try:
+                shown: datetime.date = datetime.date(year + 1911, month, day)
+            except ValueError:
+                break
+            if shown == date:
+                return None
+
+            logger.warning(
+                f"{label}: 頁面資料日期 {shown} 與查詢日 {date} 不符，不入庫"
+                f"（站方可能忽略了日期參數、回傳別天的資料）"
+            )
+            return CrawlResult.failed("page_date_mismatch")
+
+        logger.warning(f"{label}: 頁面上找不到資料日期，版面可能改了，記為失敗")
+        return CrawlResult.failed("page_date_not_found")

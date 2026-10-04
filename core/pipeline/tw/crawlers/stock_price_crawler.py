@@ -89,4 +89,5 @@ class StockPriceCrawler(BaseDataCrawler):
             f"TPEX price {date}",
             index=0,
             no_data_probe=(self.json_variant(url), date),
+            page_date=date,
         )
