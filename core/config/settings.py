@@ -284,7 +284,7 @@ def now_live() -> datetime.datetime:
     return datetime.datetime.now(tz=get_live_timezone())
 
 
-# 事件通知管道（目前僅實作 Telegram）。
+# 事件通知管道：`discord`（TOKEN 為 webhook URL，不需 TARGET）或 `telegram`。
 #
 # 缺值時退化為不推播，但**啟動時要 log 警告並寫進 `live_run`**，不可靜默——
 # 「以為有告警其實沒有」比「知道沒有告警」危險：前者會讓人放心把程式丟著跑
