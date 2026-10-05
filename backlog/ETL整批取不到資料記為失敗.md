@@ -10,7 +10,7 @@
   失敗清單可以拿來判斷資料到底有沒有更新。
 - **範圍界線**：不改重試策略——單日偶發的 `unreachable` 仍維持「下次重試」；不處理 `finmind` 恆失敗造成退出碼恆為 1 的問題；
   期貨線（`futures_price` 的「未取得日盤」）只做檢查，有同樣問題時另立步驟。
-- **驗收標準**：整批 403 時 target 進失敗清單且 `main()` 非零結束；休市日與單日偶發 `unreachable` 不觸發；既有測試全數通過。
+- **驗收標準**：整批 403 時 target 進失敗清單且 `main()` 非零結束；休市日與單日偶發 `unreachable` 不觸發；既有測試全數通過；期貨行情同樣不再假綠燈（S2）。
 
 > 本文件的唯一步驟原為 `ETL休市日誤判與回應日期核對.md` 的 S6（2026-10-02 立項）。該文件在 S1～S5 完成後於 2026-10-04
 > 整份移出 backlog，S6 當時在另一條分支上、沒有一起帶進 main，2026-10-05 移到本文件並改編為 S1。
@@ -19,9 +19,10 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| S1 | 整批 unreachable 的 target 記為失敗 | `core/pipeline/shared/base_updater.py`、`tasks/update_db.py`、測試 | 模擬整批 `0 ok / N unreachable` 時該 target 進失敗清單、`update_db` 非零結束；休市日不觸發 | ⬜ | 2026-10-02 發現。前置的休市日改判為查無資料已完成並部署到主目錄 |
+| S1 | 整批 unreachable 的 target 記為失敗 | `core/pipeline/shared/base_updater.py`、三支區間 updater、`tests/test_unreachable_batch_fails.py` | 13 條新測試＋四種突變各自轉紅；`tests/test_partial_market_guard.py` 五條改為預期失敗；全套 2,562 passed | ✅ | 2026-10-05 完成。判準與原規格略有偏離，見步驟章節 |
+| S2 | 期貨行情被擋時不再當成非交易日 | `core/pipeline/tw/updaters/futures_price_updater.py`、測試 | 模擬最新候選日兩次皆空（被擋）時 target 失敗；真正的非交易日不觸發 | ⬜ | 2026-10-05 做 S1 時確認同一型問題存在，依範圍界線另立 |
 
-## S1. 整批 unreachable 的 target 記為失敗 ⬜
+## S1. 整批 unreachable 的 target 記為失敗 ✅
 
 - **目的**：2026-10-02 的排程 `update-db` 在主機開著 VPN 時執行，櫃買中心 301 次、期交所 34 次請求全部回 HTTP 403，
   證交所的頁面解析不出表格。`price`、`chip`、`margin`、`dividend`、`corporate_action` 的本批統計全是 `0 ok / N unreachable`，
@@ -42,3 +43,30 @@
   休市日與單日偶發 `unreachable` 不觸發；既有測試（`test_crawl_result_semantics.py`、`test_date_gap_backfill.py`、
   `test_entrypoint_and_logging.py` 等）全數通過。
 - **相依**：無未完成的前置。會改每日資料更新，**在 worktree 開發，避開 `實盤下單架構規劃.md` Phase7-1 演練的排程時段部署到主目錄**。
+
+> **✅ 完成紀錄（2026-10-05）**
+> - 前置確認：主目錄 10/5 的排程統計沒有休市日被判成 `unreachable`（`price` 0 requested、`day_trade_list` 4 ok）。
+> - 實作：`UpdateStats.mark_day()` 記下逐日來源每天的最終結果，`failure_reason()` 判斷；
+>   `BaseDataUpdater.raise_if_unreachable()` 在入庫、統計行之後拋 `DataLoadError`。
+>   `DailyTwoMarketUpdater`（price／chip／margin／兩份名單）與 dividend、corporate_action、mrr 的收尾各呼叫一次。
+> - **偏離原規格**：
+>   1. 逐日來源的判準是「最近一個**應有資料**的日子取不到」，排除休市日與**台北的今天**——原規格的「`ok == 0` 且 `unreachable > 0`」
+>      會在盤中手動執行時誤報：上櫃未公布當日資料時回別天的頁面，日期核對不符而判為取不到。
+>      排程主機在美東時區，`date.today()` 是台北的前一天，所以排程跑的最新候選日不會被這條排除。
+>   2. 「整批 0 ok」判準只留給以年、月為單位查詢的來源，它們每次請求都涵蓋到最新日期。
+> - 驗證：`tests/test_unreachable_batch_fails.py` 13 條（判準 9 條、updater 3 條、`update_db.main()` 端到端 1 條）；
+>   突變——拿掉逐日收尾拋出、不排除今天、不排除休市日、拿掉整批判準、拿掉 dividend／corporate_action 的拋出，各自轉紅。
+>   `tests/test_partial_market_guard.py` 中「最新一天取不到」的五條改為預期 `DataLoadError`（不入庫的斷言保留）。
+> - 現行做法寫入 `docs/pipeline/etl-ingestion.md` §3.2。mrr 只有判準層測試，updater 層未另寫。
+
+## S2. 期貨行情被擋時不再當成非交易日 ⬜
+
+- **目的**：`FuturesPriceUpdater.update_product()` 的候選日拿不到日盤時，等待後重試一次，仍為空就當成非交易日：
+  不入庫、不記失敗，只有連續 `EMPTY_PRODUCT_ABORT_THRESHOLD` 個候選日都空才中止。日常一次只跑一兩天，碰不到門檻，
+  所以 2026-10-02 期交所全數回 HTTP 403 時，`futures_price` 同樣列在成功。
+- **做法**：crawler 回報「被擋／連不上」與「站方明確無資料」的區分（比照台股的 `CrawlResult` 三態）；
+  updater 收尾時若**最近一個應有資料的候選日**是被擋而非無資料，拋 `ProductUpdateError` 或 `DataLoadError`。
+  交易日判斷可借 `market_holiday` 表，避免把真正的非交易日算成失敗。
+- **產出**：`core/pipeline/tw/crawlers/futures_price_crawler.py`、`core/pipeline/tw/updaters/futures_price_updater.py`、測試。
+- **驗證方式**：新測試——最新候選日兩次皆被擋時 target 失敗；休市日、只缺夜盤以外的正常情況不觸發；既有期貨 ETL 測試全數通過。
+- **相依**：S1（共用判準的思路）。會改每日資料更新，在 worktree 開發、避開 `實盤下單架構規劃.md` Phase7-1 演練時段部署。

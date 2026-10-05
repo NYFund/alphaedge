@@ -151,6 +151,8 @@ class CorporateActionUpdater(BaseDataUpdater):
         if layout_failures:
             raise CleanFailureError("corporate_action", layout_failures)
 
+        self.raise_if_unreachable("corporate_action", stats)
+
     def load_detected_events(
         self, events: List[Dict[str, object]], file_name: str = "detected.csv"
     ) -> None:
