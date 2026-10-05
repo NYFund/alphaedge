@@ -262,13 +262,13 @@ def test_lookup_strategy_by_broker_seqno(dao: LiveTradeDAO) -> None:
 
     dao.upsert_order(
         make_order(
-            strategy_name="ForeignSellShortDayTradeStrategy", broker_seqno="000123"
+            strategy_name="ForeignSellingReversalShortStrategy", broker_seqno="000123"
         )
     )
 
     assert (
         dao.find_strategy_by_broker_seqno("000123")
-        == "ForeignSellShortDayTradeStrategy"
+        == "ForeignSellingReversalShortStrategy"
     )
     assert dao.find_strategy_by_broker_seqno("999999") is None
 

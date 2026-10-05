@@ -201,7 +201,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
    **不利**的一側。100 元的股票（檔位 0.5）設 10 bps 與 50 bps 都會得到 100.5
    ——低於半個檔位的差異被吸收掉，但**實際付出的是半個檔位以上**，比設定值大。
 
-   **實測**（`ForeignSellShortDayTradeStrategy`，2024-01-02 ~ 03-29，雙邊各 10 bps）：
+   **實測**（`ForeignSellingReversalShortStrategy`，2024-01-02 ~ 03-29，雙邊各 10 bps）：
    名目 0.10%，實際吃掉兩腿名目總額的 **0.2439%（約 2.4 倍）**，
    金額 39,900 元，**佔該期間已實現損益的 42.31%**。
    標的價格越低（檔位佔價格的比例越大），放大越明顯。
@@ -366,7 +366,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 
 回測結果儲存路徑：`results/<策略>/`，其中 `<策略>` 取的是
 **`strategy.strategy_name`**（例如 `Momentum-1`、`Momentum-Futures`、
-`Foreign-Sell-Short-Day-Trade`）。
+`Foreign-Selling-Reversal-Short`）。
 
 ⚠️ **那不是類別名**。`--strategy` 吃的是類別名（`MomentumStrategy1`），
 輸出目錄吃的是 `strategy_name`，**兩者可以不同**——跑

@@ -12,7 +12,7 @@ from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, Units
 
 
-class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
+class ForeignSellingReversalShortStrategy(BaseStockStrategy):
     """
     外資大賣強勢股當沖放空（日線）
 
@@ -116,7 +116,7 @@ class ForeignSellShortDayTradeStrategy(BaseStockStrategy):
         super().__init__()
 
         # === 策略基本資訊 ===
-        self.strategy_name: str = "Foreign-Sell-Short-Day-Trade"
+        self.strategy_name: str = "Foreign-Selling-Reversal-Short"
         self.init_capital: float = 1000000.0
         self.max_holdings: int = self.DEFAULT_MAX_HOLDINGS
         self.scale: Scale = Scale.DAY

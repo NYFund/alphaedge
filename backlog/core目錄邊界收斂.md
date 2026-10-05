@@ -147,7 +147,7 @@ core/strategies/          # 策略契約：引擎、factory、報表都要認得
 strategies/               # 具體策略：使用框架的程式，不屬於框架
     loader.py             # 原 core/strategies/strategy_loader.py
     stock/momentum_strategy_1.py
-    stock/foreign_sell_short_day_trade_strategy.py
+    stock/foreign_selling_reversal_short_strategy.py
     futures/momentum_futures_strategy.py
 ```
 
@@ -230,7 +230,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
   2. **建議排在 `回測與實盤入口拆分及架構收斂.md` Phase1-4（策略依名稱載入）之後**，
      loader 只需改寫一次；若先做本步，該步驟改在 `strategies/loader.py` 上進行。
   3. 施作前確認 `core/strategies/` 沒有開發中未 commit 的變更（2026-09-26 就有一支
-     `trust_momentum_swing_strategy.py` 與 `core/strategies/README.md` 正在修改），
+     `investment_trust_momentum_swing_strategy.py` 與 `core/strategies/README.md` 正在修改），
      避免搬移與開發互相覆蓋。
 
 ### Phase2-3. `core/strategies/` 收斂成只剩契約 ⬜
@@ -389,7 +389,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 | 文件與步驟 | 影響 | 處理 |
 |------------|------|------|
 | `回測與實盤入口拆分及架構收斂.md` Phase1-4（策略依名稱載入） | 產出寫的是 `core/strategies/strategy_loader.py` | 本份 Phase2-2 先做的話，改在 `strategies/loader.py` 上施作 |
-| `回測與實盤入口拆分及架構收斂.md` Phase3-1（`FillConfig` 移到 `core/models/`） | 驗證指令 `grep -rn "fill_model import" core/strategies` 只掃 `core/`；具體策略 `foreign_sell_short_day_trade_strategy.py` 也 import `FillConfig` | 本份 Phase2-2 先做的話，驗證指令要加掃 `strategies/` |
+| `回測與實盤入口拆分及架構收斂.md` Phase3-1（`FillConfig` 移到 `core/models/`） | 驗證指令 `grep -rn "fill_model import" core/strategies` 只掃 `core/`；具體策略 `foreign_selling_reversal_short_strategy.py` 也 import `FillConfig` | 本份 Phase2-2 先做的話，驗證指令要加掃 `strategies/` |
 | `回測與實盤入口拆分及架構收斂.md` Phase3-3（禁止回測以外的模組 import `core.backtest.models`） | 規則若只寫「`core.*` 中非 `core.backtest`」，會漏掉頂層 `strategies` | 規則的適用範圍要包含 `strategies` |
 | `回測與實盤入口拆分及架構收斂.md` Phase3（整階段） | 會改 `core/managers` 的 import | 本份 Phase3-1 排在它之後 |
 | `美股ETL與回測架構規劃.md` | 美股策略的落點寫的是 `core/strategies/stock/`；市場軸 `us/` 規劃開在 `core/pipeline/` | 本份 Phase2-4 與 Phase5-1 施作時一併改路徑 |

@@ -12,7 +12,7 @@ from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, Units
 
 
-class TrustMomentumSwingStrategy(BaseStockStrategy):
+class InvestmentTrustMomentumSwingStrategy(BaseStockStrategy):
     """
     投信認同的強勢股短波段（日線、只做多）
 
@@ -76,7 +76,7 @@ class TrustMomentumSwingStrategy(BaseStockStrategy):
 
     def __init__(self) -> None:
         super().__init__()
-        self.strategy_name: str = "Trust-Momentum-Swing"
+        self.strategy_name: str = "Investment-Trust-Momentum-Swing"
         self.position_type: PositionType = PositionType.LONG
         # 最短持有 10 個交易日，不會當沖；關掉避免被誤認為當沖策略
         self.enable_intraday: bool = False
