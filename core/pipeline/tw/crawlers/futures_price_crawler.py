@@ -4,12 +4,11 @@ from io import StringIO
 from typing import Dict, List, Optional, Set
 
 import pandas as pd
-import requests
 from loguru import logger
 
 from core.config import FUTURES_TARGET_PRODUCTS
-from core.pipeline.shared.base_crawler import BaseDataCrawler
-from core.pipeline.shared.request_utils import RequestUtils
+from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
+from core.pipeline.shared.request_utils import FetchResult, RequestUtils
 from core.pipeline.tw.utils.url_manager import URLManager
 from core.utils import FuturesProduct, FuturesSession, TimeUtils
 
@@ -91,14 +90,17 @@ class FuturesPriceCrawler(BaseDataCrawler):
         date: datetime.date,
         product: str,
         session: FuturesSession,
-    ) -> Optional[pd.DataFrame]:
+    ) -> CrawlResult:
         """
         - Description:
             單一商品、單一交易時段、單日的行情爬取
 
-            **查無資料一律回傳 `None` 而不拋錯**，因為此處無法區分三種成因：
-            非交易日、該商品當日尚未上市、站方尚未更新。三者的因應方式不同，
-            判斷交給 updater（它知道回補區間與商品上市日）。
+            **請求失敗與查無資料分開回報**：被擋、逾時、HTTP 錯誤、解析器出錯是 `FAILED`，
+            頁面正常但沒有行情表是 `NO_DATA`。兩者混成 `None` 的話，站方整批回 HTTP 403
+            時 updater 會把每一天都當成非交易日，資料沒更新也不會報失敗。
+
+            `NO_DATA` 本身仍無法區分三種成因：非交易日、該商品當日尚未上市、站方尚未更新。
+            三者的因應方式不同，判斷交給 updater（它知道回補區間與商品上市日）。
         - Parameters:
             - date: datetime.date
                 查詢日
@@ -107,8 +109,8 @@ class FuturesPriceCrawler(BaseDataCrawler):
             - session: FuturesSession
                 交易時段（日盤／夜盤）
         - Return:
-            - Optional[pd.DataFrame]
-                原始行情表；查無資料時為 None
+            - CrawlResult
+                原始行情表在 `data`；查無資料為 `NO_DATA`、取不到為 `FAILED`
         """
 
         self.validate_product(product)
@@ -118,21 +120,17 @@ class FuturesPriceCrawler(BaseDataCrawler):
         )
 
         url: str = URLManager.get_url("TAIFEX_FUTURES_PRICE_URL")
-        response: Optional[requests.Response] = RequestUtils.requests_post(
-            url, data=self.build_form_data(date, product, session)
+        fetched: FetchResult = RequestUtils.fetch(
+            url, method="post", data=self.build_form_data(date, product, session)
         )
+        if not fetched.ok:
+            return CrawlResult.failed(fetched.error or fetched.status.value)
 
-        if response is None:
-            return None
-
-        df: Optional[pd.DataFrame] = self.extract_quote_table(response.text)
-
-        if df is None or df.empty:
+        result: CrawlResult = self.parse_quote_page(fetched.text)
+        if result.is_no_data:
             # 非交易日／商品尚未上市／站方未更新，三者在此無法區分
             logger.info(f"{date} {product} {session.value}: no data")
-            return None
-
-        return df
+        return result
 
     @classmethod
     def build_form_data(
@@ -179,6 +177,13 @@ class FuturesPriceCrawler(BaseDataCrawler):
 
     @classmethod
     def extract_quote_table(cls, html: str) -> Optional[pd.DataFrame]:
+        """取出行情表；查無資料與解析失敗都回 None（要分辨兩者請用 `parse_quote_page()`）"""
+
+        result: CrawlResult = cls.parse_quote_page(html)
+        return result.data if result.is_ok else None
+
+    @classmethod
+    def parse_quote_page(cls, html: str) -> CrawlResult:
         """
         - Description:
             自回應 HTML 取出行情表
@@ -193,8 +198,8 @@ class FuturesPriceCrawler(BaseDataCrawler):
             - html: str
                 回應內容
         - Return:
-            - Optional[pd.DataFrame]
-                行情表；解析不出或頁面無表格時為 None
+            - CrawlResult
+                行情表在 `data`；頁面無行情表為 `NO_DATA`、解析器出錯為 `FAILED`
         """
 
         try:
@@ -205,7 +210,7 @@ class FuturesPriceCrawler(BaseDataCrawler):
             # 非交易日：頁面仍是正常 HTML，但沒有行情表，pandas 拋 ValueError。
             # 這是預期內的情況，用 info 不用 warning，否則整段回補會被假日洗版
             logger.info("[Futures Price] 頁面無表格（非交易日或站方未更新）")
-            return None
+            return CrawlResult.no_data("no_table")
         except Exception as error:
             # **不可與上面合併，也不可收斂成具名例外**：解析器缺套件、版面改制、
             # 回應被攔截等都會走到這裡，它們是真的壞了，不是「今天沒開盤」。
@@ -214,13 +219,14 @@ class FuturesPriceCrawler(BaseDataCrawler):
             logger.warning(
                 f"[Futures Price] 解析行情頁失敗：{type(error).__name__}: {error}"
             )
-            return None
+            return CrawlResult.failed(f"parse_error: {type(error).__name__}")
 
         for table in tables:
-            if cls.QUOTE_TABLE_KEY_COLUMN in table.columns:
-                return table
+            if cls.QUOTE_TABLE_KEY_COLUMN in table.columns and not table.empty:
+                return CrawlResult.ok(table)
 
-        return None
+        # 只有「價差對價差成交」表、沒有行情表：與沒有表格同樣視為查無資料
+        return CrawlResult.no_data("no_quote_table")
 
     @classmethod
     def validate_product(cls, product: str) -> None:

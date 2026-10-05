@@ -16,7 +16,8 @@ from core.config import (
 from core.dao.connection import DBConnection
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
-from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
+from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.tw.cleaners.futures_price_cleaner import FuturesPriceCleaner
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
@@ -462,7 +463,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
 
     def crawl_and_clean_date(
         self, product: str, date: datetime.date
-    ) -> Set[FuturesSession]:
+    ) -> Tuple[Set[FuturesSession], bool]:
         """
         - Description:
             單日、雙時段（日盤 ＋ 夜盤）的爬取與清洗，回報**各時段**的結果
@@ -477,11 +478,13 @@ class FuturesPriceUpdater(BaseDataUpdater):
             - date: datetime.date
                 查詢日
         - Return:
-            - Set[FuturesSession]
-                本日確實取得並清洗成功的時段
+            - Tuple[Set[FuturesSession], bool]
+                （本日確實取得並清洗成功的時段, 是否有時段取不到）。後者涵蓋被擋、
+                連不上、解析器出錯與清洗後為空，**不含**站方明確查無資料
         """
 
         crawled: Set[FuturesSession] = set()
+        unreachable: bool = False
 
         # **不可寫 `for session in FuturesSession`**：那會連整併用的
         # `COMBINED` 也一起爬，而來源根本沒有那個時段（見 `data_sessions()`）
@@ -489,23 +492,30 @@ class FuturesPriceUpdater(BaseDataUpdater):
             if not self.has_night_session(product, date, session):
                 continue
 
-            raw_df: Optional[pd.DataFrame] = self.crawler.crawl_futures_price(
+            result: CrawlResult = self.crawler.crawl_futures_price(
                 date, product, session
             )
-            if raw_df is None or raw_df.empty:
+            if result.is_failed:
+                logger.warning(
+                    f"{date} {product} {session.value} 取不到：{result.reason}"
+                )
+                unreachable = True
+                continue
+            if not result.is_ok:
                 continue
 
             cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_futures_price(
-                raw_df, date, product, session
+                result.data, date, product, session
             )
             if cleaned_df is None or cleaned_df.empty:
                 logger.warning(
                     f"Cleaned dataframe empty on {date} {product} {session.value}"
                 )
+                unreachable = True
                 continue
             crawled.add(session)
 
-        return crawled
+        return crawled, unreachable
 
     @staticmethod
     def has_night_session(
@@ -627,21 +637,36 @@ class FuturesPriceUpdater(BaseDataUpdater):
             logger.info(f"* {product} 已是最新（起點 {actual_start} 晚於 {end_date}）")
             return
 
-        dates: List[datetime.date] = sorted(
-            set(gaps) | set(self.get_candidate_dates(actual_start, end_date))
+        candidates: List[datetime.date] = self.get_candidate_dates(
+            actual_start, end_date
         )
+        dates: List[datetime.date] = sorted(set(gaps) | set(candidates))
         logger.info(f"* {product}: {actual_start} ~ {end_date}，共 {len(dates)} 天")
 
         file_cnt: int = 0
         batch_dates: List[str] = []
         consecutive_empty: int = 0
+        stats: UpdateStats = UpdateStats()
+        # 擋流量時站方回 HTTP 200 ＋ 沒有行情表的頁面，與非交易日長得一樣；
+        # 現貨有開市的日子期貨也有行情，以此分辨「沒開盤」與「沒拿到」。
+        # 取不到現貨日曆時（只跑期貨的環境）退回只認明確的請求失敗
+        stock_trading_days: Set[datetime.date] = (
+            set(self.get_stock_trading_days(dates[0], dates[-1]) or [])
+            if dates
+            else set()
+        )
+        # 表內中間的缺口只是順便回補，不拿來當「最近一個應有資料的日子」：
+        # 沒有新日期可抓時（週末），補不到的舊缺口會讓 target 天天失敗
+        new_dates: Set[datetime.date] = set(candidates)
 
         with GracefulStop(label=f"futures_price:{product}") as stop:
             for date in dates:
-                crawled: Set[FuturesSession] = self.crawl_and_clean_date(product, date)
+                crawled: Set[FuturesSession]
+                unreachable: bool
+                crawled, unreachable = self.crawl_and_clean_date(product, date)
 
-                # 空產出可能是「非交易日」，也可能是「站方正在擋」——兩者在 crawler
-                # 眼中相同，故一律等待後再試一次，只有第二次仍為空才算真的沒有資料。
+                # 沒拿到日盤時一律等待後再試一次：站方擋流量多半是暫時的，
+                # 第二次仍取不到才記為失敗（或兩個時段都查無資料，才是非交易日）。
                 # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子
                 if not self.is_day_complete(crawled):
                     backoff_seconds: int = self.EMPTY_RETRY_DELAY_SECONDS * min(
@@ -653,12 +678,20 @@ class FuturesPriceUpdater(BaseDataUpdater):
                         f"{backoff_seconds} 秒後重試一次"
                     )
                     self.sleep(backoff_seconds, stop)
-                    crawled = self.crawl_and_clean_date(product, date)
+                    crawled, unreachable = self.crawl_and_clean_date(product, date)
                     if self.is_day_complete(crawled):
                         logger.warning(
                             f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
                             f"不是非交易日"
                         )
+
+                if date in new_dates:
+                    stats.mark_day(
+                        date,
+                        self.classify_day(
+                            crawled, unreachable, date in stock_trading_days
+                        ),
+                    )
 
                 if self.is_day_complete(crawled):
                     batch_dates.append(TimeUtils.format_date(date))
@@ -702,6 +735,45 @@ class FuturesPriceUpdater(BaseDataUpdater):
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:
             self.load_batch(batch_dates)
+
+        # 重試後仍為空就當成非交易日、不入庫也不報錯——站方整批回 HTTP 403 時
+        # 每一天都會這樣，表停在舊資料卻列為成功。故最近一個應有資料的日子取不到時，
+        # 讓這個商品失敗（`update()` 收齊所有商品後統一拋出）
+        self.raise_if_unreachable(f"futures_price:{product}", stats)
+
+    def classify_day(
+        self,
+        crawled: Set[FuturesSession],
+        unreachable: bool,
+        is_stock_trading_day: bool,
+    ) -> CrawlStatus:
+        """
+        - Description:
+            把一天（重試後）的結果歸成 `OK`／`NO_DATA`／`FAILED`
+
+            - 拿到日盤 → `OK`。
+            - 有時段請求失敗、清洗後為空，或**只拿到夜盤** → `FAILED`：日盤已收盤的
+              過去日期缺日盤，表就停在前一天。
+            - 兩個時段都沒有行情表，但現貨當天有開市 → `FAILED`：擋流量時站方回的
+              正是這種頁面。
+            - 其餘 → `NO_DATA`（非交易日）。
+        - Parameters:
+            - crawled: Set[FuturesSession]
+                本日確實取得的時段
+            - unreachable: bool
+                是否有時段取不到
+            - is_stock_trading_day: bool
+                現貨當天是否開市
+        - Return:
+            - CrawlStatus
+                這一天的結果
+        """
+
+        if self.is_day_complete(crawled):
+            return CrawlStatus.OK
+        if unreachable or crawled or is_stock_trading_day:
+            return CrawlStatus.FAILED
+        return CrawlStatus.NO_DATA
 
     def log_summary(self, products: List[str]) -> None:
         """更新後逐商品回報最新日期與列數，讓「有沒有真的補到」一眼可見"""

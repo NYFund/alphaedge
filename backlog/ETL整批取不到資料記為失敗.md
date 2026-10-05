@@ -20,7 +20,7 @@
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
 | S1 | 整批 unreachable 的 target 記為失敗 | `core/pipeline/shared/base_updater.py`、三支區間 updater、`tests/test_unreachable_batch_fails.py` | 13 條新測試＋四種突變各自轉紅；`tests/test_partial_market_guard.py` 五條改為預期失敗；全套 2,562 passed | ✅ | 2026-10-05 完成。判準與原規格略有偏離，見步驟章節 |
-| S2 | 期貨行情被擋時不再當成非交易日 | `core/pipeline/tw/updaters/futures_price_updater.py`、測試 | 模擬最新候選日兩次皆空（被擋）時 target 失敗；真正的非交易日不觸發 | ⬜ | 2026-10-05 做 S1 時確認同一型問題存在，依範圍界線另立 |
+| S2 | 期貨行情被擋時不再當成非交易日 | `futures_price_crawler.py`、`futures_price_updater.py`、`tests/test_futures_price_*.py` | 8 條新測試＋七種突變各自轉紅；正式資料驗證日曆前提；全套通過 | ✅ | 2026-10-05 完成。另補「HTTP 200 空頁」的擋流量（原規格只涵蓋請求失敗） |
 
 ## S1. 整批 unreachable 的 target 記為失敗 ✅
 
@@ -59,7 +59,7 @@
 >   `tests/test_partial_market_guard.py` 中「最新一天取不到」的五條改為預期 `DataLoadError`（不入庫的斷言保留）。
 > - 現行做法寫入 `docs/pipeline/etl-ingestion.md` §3.2。mrr 只有判準層測試，updater 層未另寫。
 
-## S2. 期貨行情被擋時不再當成非交易日 ⬜
+## S2. 期貨行情被擋時不再當成非交易日 ✅
 
 - **目的**：`FuturesPriceUpdater.update_product()` 的候選日拿不到日盤時，等待後重試一次，仍為空就當成非交易日：
   不入庫、不記失敗，只有連續 `EMPTY_PRODUCT_ABORT_THRESHOLD` 個候選日都空才中止。日常一次只跑一兩天，碰不到門檻，
@@ -70,3 +70,18 @@
 - **產出**：`core/pipeline/tw/crawlers/futures_price_crawler.py`、`core/pipeline/tw/updaters/futures_price_updater.py`、測試。
 - **驗證方式**：新測試——最新候選日兩次皆被擋時 target 失敗；休市日、只缺夜盤以外的正常情況不觸發；既有期貨 ETL 測試全數通過。
 - **相依**：S1（共用判準的思路）。會改每日資料更新，在 worktree 開發、避開 `實盤下單架構規劃.md` Phase7-1 演練時段部署。
+
+> **✅ 完成紀錄（2026-10-05）**
+> - crawler：`crawl_futures_price()` 改走 `RequestUtils.fetch()` 並回 `CrawlResult`；請求失敗與解析器出錯為 `FAILED`，
+>   頁面無行情表為 `NO_DATA`（`parse_quote_page()`；`extract_quote_table()` 保留為只回表的薄包裝）。
+> - updater：`crawl_and_clean_date()` 多回報「是否有時段取不到」；`classify_day()` 把重試後的一天歸類，
+>   `update_product()` 以 `UpdateStats.mark_day()` 記下、收尾呼叫 `raise_if_unreachable()`，由 `update()` 收齊成 `ProductUpdateError`。
+> - **偏離原規格（補強）**：`docs/futures/tw-futures-platform.md` 記載期交所擋流量時回 **HTTP 200 ＋ 沒有行情表的頁面**，
+>   光分辨請求失敗抓不到。改以現貨交易日曆（`get_stock_trading_days()`，取自 `price` 表）判斷：兩個時段都無行情表但現貨有開市，記為取不到。
+>   正式資料實查：2015 年起七個指數期貨商品在 2,863 個現貨交易日（TMF、ZEF、ZFF 自各自起點）全部有日盤，缺 0 天。
+>   原規格提的 `market_holiday` 表未採用：`price` 已是本 updater 補缺口用的日曆，再引一份會有兩個日曆來源。
+> - 只拿到夜盤也記為取不到（過去日期缺日盤，表停在前一天）；台北的今天照 S1 排除。表內中間的缺口不當成最近一天。
+> - 驗證：新增 8 條（crawler 三態 4 條；updater 被擋、休市、空頁擋流量、台北當天只有夜盤 4 條）；全套 2,570 passed；
+>   `test_night_only_day_is_not_loaded` 改為預期 `ProductUpdateError` 並改用可正常清洗的夜盤列（原本走的是清洗失敗那條路）。
+>   突變——拿掉商品收尾檢查、被擋當休市、只有夜盤當休市、不看現貨日曆、缺口當最新一天、HTTP 錯誤當查無資料、解析器出錯當查無資料，各自轉紅。
+> - 已知限制寫入 `docs/pipeline/etl-ingestion.md`：取不到現貨日曆或 `price` 同樣被擋時退回舊行為；股票期貨冷門合約未驗證。
