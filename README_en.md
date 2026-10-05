@@ -145,7 +145,7 @@ See [Multi-Market Engine](docs/backtest/multi-market-engine.md) and [Module Map]
 
 ## Backtest Coverage
 
-Each backtest runs one (market, instrument) combination, declared by the strategy base and dispatched by `factory.py`. Direction (LONG / SHORT) and instrument type are independent axes: accounting always follows each order's `position_type`, and the strategy's `allowed_directions` is only a direction whitelist.
+Each backtest runs one (market, instrument) combination, declared by the strategy base and dispatched by `factory.py`. Direction (LONG / SHORT) and instrument type are independent axes: accounting always follows each order's `position_type`, and the strategy's `direction` (`LONG` / `SHORT` / `BOTH`) is only a direction whitelist.
 
 Data ranges below reflect an inventory of `data/db` taken on 2026-10-02 and will move as the data is updated.
 
@@ -156,8 +156,8 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-10-02 and will
 | Stock futures / ETF futures | ⚠️ Code works, prices missing | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), 8 universe snapshots from 2026-08-29 to 09-30; prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session), **not enough for a meaningful backtest** (backfill tracked in [backlog/暫緩工作彙整.md](backlog/暫緩工作彙整.md) S4)<br>**Code path is wired**: the multiplier comes from the DataFeed's `resolve_multiplier()`, which reads the contract size from the universe snapshot for that day; margin looks up the amount table first (ETF future NYF is there from 2020-07-22) and falls back to the rate table for single-stock futures (`underlying price × contract size × rate`, with the underlying price read across from `tw_stock.db`)<br>**Remaining limit**: contract sizes only go back to the first snapshot on 2026-08-29, so earlier ex-dividend adjustments are invisible | `DAY` only | Same as TW index futures | `BaseFuturesStrategy` |
 | US market, options | ❌ Not supported | `Market.US` and `InstrumentType.OPTION` are defined only; the factory raises `ValueError` | — | — | — |
 
-> - Holding both directions requires `allowed_directions = {LONG, SHORT}`; a LONG intraday strategy must declare `bar_execution_order = OPEN_THEN_CLOSE` itself.
-> - `enable_intraday` defaults to `True`, so a SHORT strategy goes through `DAY_TRADE` automatically; to hold shorts overnight, set it to `False` and pick a `short_method`.
+> - Declare the direction with `direction` (`LONG` / `SHORT` / `BOTH`) and whether the strategy may day-trade with `allow_day_trade` (default `False`); both work the same for long and short.
+> - With `allow_day_trade = True`, every short goes through `DAY_TRADE` (cash day-trade sell-first); to hold shorts overnight keep it `False` and pick a `short_method`.
 > - Futures calendar-spread legs each pay full margin (spread margin is not modeled).
 
 ### Main limitations

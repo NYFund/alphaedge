@@ -15,6 +15,7 @@ from core.utils import (
     PositionType,
     Scale,
     ShortMethod,
+    TradeDirection,
 )
 
 """回測引擎的方向驅動、成交價驗證與每日部位檢查測試"""
@@ -39,8 +40,8 @@ def short_strategy(make_strategy, **overrides):
     """建立放空策略的捷徑；預設為留倉融券"""
 
     params: dict = dict(
-        position_type=PositionType.SHORT,
-        enable_intraday=False,
+        direction=TradeDirection.SHORT,
+        allow_day_trade=False,
         short_method=ShortMethod.MARGIN,
     )
     params.update(overrides)
@@ -48,39 +49,50 @@ def short_strategy(make_strategy, **overrides):
 
 
 # === 方向驅動 ===
-def test_execution_order_derivation(make_strategy, make_backtester) -> None:
-    """當沖放空預設先開後平，其餘維持先平後開；策略顯式指定時以策略為準"""
+@pytest.mark.parametrize("direction", list(TradeDirection))
+def test_execution_order_derivation(
+    make_strategy, make_backtester, direction: TradeDirection
+) -> None:
+    """執行順序只由 allow_day_trade 推導，與方向無關；策略顯式指定時以策略為準"""
 
-    day_trade = make_backtester(short_strategy(make_strategy, enable_intraday=True))
+    day_trade = make_backtester(
+        make_strategy(direction=direction, allow_day_trade=True)
+    )
     assert day_trade.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE
 
-    swing = make_backtester(short_strategy(make_strategy, enable_intraday=False))
-    assert swing.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
-
-    long_strategy = make_backtester(make_strategy(position_type=PositionType.LONG))
-    assert long_strategy.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
-
-    # 做多不因 enable_intraday 自動切換：該旗標預設就是 True，自動切換等於在
-    # 無人宣告的情況下改掉所有既有做多策略的成交順序（見 get_execution_order docstring）
-    long_intraday = make_backtester(
-        make_strategy(position_type=PositionType.LONG, enable_intraday=True)
+    no_day_trade = make_backtester(
+        make_strategy(direction=direction, allow_day_trade=False)
     )
-    assert long_intraday.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
+    assert no_day_trade.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
 
     explicit = make_backtester(
         make_strategy(
-            position_type=PositionType.LONG,
+            direction=direction,
+            allow_day_trade=False,
             bar_execution_order=BarExecutionOrder.OPEN_THEN_CLOSE,
         )
     )
     assert explicit.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE
 
 
+def test_day_trade_is_off_by_default(make_strategy, make_backtester) -> None:
+    """
+    預設不當沖、只做多
+
+    預設若改成 True，所有沒宣告的做多策略會在同一根 bar 先開後平，回測結果全部改變
+    """
+
+    backtester: Backtester = make_backtester(make_strategy())
+
+    assert backtester.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
+    assert backtester.get_allowed_directions() == {PositionType.LONG}
+
+
 def test_order_enrichment(make_strategy, make_backtester, make_order) -> None:
     """策略未填放空管道與當沖旗標時，由引擎依成本設定補值"""
 
     backtester: Backtester = make_backtester(
-        short_strategy(make_strategy, enable_intraday=True)
+        short_strategy(make_strategy, allow_day_trade=True)
     )
 
     orders: List[StockOrder] = backtester.enrich_orders(
@@ -120,16 +132,13 @@ def test_wrong_direction_order_rejected(
     assert backtester.event_counts["rejected_direction"] == 2
 
 
-def test_allowed_directions_whitelist(
+def test_both_directions_accepts_long_and_short(
     make_strategy, make_backtester, make_order
 ) -> None:
-    """放寬白名單後即可同時接受多空訂單，引擎不需修改"""
+    """`direction=BOTH` 時多空訂單都接受，引擎不需修改"""
 
     backtester: Backtester = make_backtester(
-        make_strategy(
-            position_type=PositionType.LONG,
-            allowed_directions={PositionType.LONG, PositionType.SHORT},
-        )
+        make_strategy(direction=TradeDirection.BOTH)
     )
 
     orders: List[StockOrder] = backtester.validate_orders(
@@ -208,7 +217,7 @@ def test_same_day_short_cover(
 
     strategy = short_strategy(
         make_strategy,
-        enable_intraday=True,
+        allow_day_trade=True,
         open_script={
             DAY_1: [
                 StockOrder(
@@ -254,7 +263,7 @@ def test_close_then_open_cannot_cover_same_day(
 
     strategy = short_strategy(
         make_strategy,
-        enable_intraday=True,
+        allow_day_trade=True,
         bar_execution_order=BarExecutionOrder.CLOSE_THEN_OPEN,
         day_trade_uncovered_policy=DayTradeUncoveredPolicy.CONVERT_TO_MARGIN,
         open_script={
@@ -298,7 +307,7 @@ def test_uncovered_day_trade_forced(make_strategy, make_backtester, make_quote) 
 
     strategy = short_strategy(
         make_strategy,
-        enable_intraday=True,
+        allow_day_trade=True,
         open_script={
             DAY_1: [
                 StockOrder(
@@ -330,7 +339,7 @@ def test_limit_up_cannot_cover(make_strategy, make_backtester, make_quote) -> No
 
     strategy = short_strategy(
         make_strategy,
-        enable_intraday=True,
+        allow_day_trade=True,
         open_script={
             DAY_1: [
                 StockOrder(
@@ -712,7 +721,7 @@ def test_convert_to_margin_tops_up_tax(
 
     strategy = short_strategy(
         make_strategy,
-        enable_intraday=True,
+        allow_day_trade=True,
         open_script={
             DAY_2: [
                 StockOrder(

@@ -13,7 +13,7 @@ from core.dao.base import BaseDAO
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.models import StockAccount, StockOrder, StockTradeRecord
-from core.utils import Action, PositionType, ShortMethod
+from core.utils import Action, PositionType, ShortMethod, TradeDirection
 
 """每日權益、多空分開統計與事件報表的測試"""
 
@@ -38,8 +38,8 @@ def test_snapshot_daily_equity_includes_unrealized(
     """留倉放空的帳面虧損必須反映在每日權益，不能等到平倉才出現"""
 
     strategy = make_strategy(
-        position_type=PositionType.SHORT,
-        enable_intraday=False,
+        direction=TradeDirection.SHORT,
+        allow_day_trade=False,
         short_method=ShortMethod.MARGIN,
         open_script={
             DAY_1: [

@@ -194,6 +194,8 @@ def make_strategy() -> Callable[..., ScriptedStrategy]:
         )
 
         for key, value in overrides.items():
+            # 欄位改名後，舊名稱只會多掛一個沒人讀的屬性，測試照樣通過卻什麼都沒測到
+            assert hasattr(strategy, key), f"策略沒有 `{key}` 這個設定欄位"
             setattr(strategy, key, value)
 
         return strategy

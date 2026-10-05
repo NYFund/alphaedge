@@ -77,7 +77,7 @@ def open_signals(
         Signal(
             quote=quote,
             action=Action.BUY,
-            position_type=strategy.position_type,
+            position_type=PositionType.LONG,
             order_price=quote.close,
         )
         for quote in quotes

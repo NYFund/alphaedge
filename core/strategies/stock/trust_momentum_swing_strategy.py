@@ -9,7 +9,7 @@ from core.market.tw.market_calendar import MarketCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale, Units
+from core.utils import Action, PositionType, Scale, TradeDirection, Units
 
 
 class TrustMomentumSwingStrategy(BaseStockStrategy):
@@ -77,9 +77,9 @@ class TrustMomentumSwingStrategy(BaseStockStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.strategy_name: str = "Trust-Momentum-Swing"
-        self.position_type: PositionType = PositionType.LONG
-        # 最短持有 10 個交易日，不會當沖；關掉避免被誤認為當沖策略
-        self.enable_intraday: bool = False
+        self.direction: TradeDirection = TradeDirection.LONG
+        # 最短持有 10 個交易日，不會當沖
+        self.allow_day_trade: bool = False
         self.init_capital: float = 1000000.0
         self.max_holdings: int = self.DEFAULT_MAX_HOLDINGS
         self.scale: Scale = Scale.DAY

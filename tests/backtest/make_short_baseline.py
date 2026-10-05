@@ -14,7 +14,7 @@ from core.models import (
     StockQuote,
 )
 from core.models.cost_config import ShortConstraint
-from core.utils import Action, PositionType, ShortMethod
+from core.utils import Action, PositionType, ShortMethod, TradeDirection
 from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy
 from tests.conftest import build_stock_quote
 
@@ -151,11 +151,13 @@ def make_short_strategy(**overrides: Any) -> ScriptedStrategy:
     )
 
     strategy.init_capital = INIT_CAPITAL
-    strategy.position_type = PositionType.SHORT
-    strategy.enable_intraday = False
+    strategy.direction = TradeDirection.SHORT
+    strategy.allow_day_trade = False
     strategy.short_method = ShortMethod.MARGIN
 
     for key, value in overrides.items():
+        # 欄位改名後，舊名稱只會多掛一個沒人讀的屬性，基準照樣產得出來卻設定錯了
+        assert hasattr(strategy, key), f"策略沒有 `{key}` 這個設定欄位"
         setattr(strategy, key, value)
 
     return strategy
@@ -180,7 +182,7 @@ def build_scenarios() -> List[ShortScenario]:
             name="day_trade_same_day_cover",
             verifies="DAY_TRADE 稅率減半、OPEN_THEN_CLOSE 同 bar 開平倉",
             strategy=make_short_strategy(
-                enable_intraday=True,
+                allow_day_trade=True,
                 open_script={day(0): [make_short_order(day(0), Action.SELL, 100.0, 2)]},
                 close_script={day(0): [make_short_order(day(0), Action.BUY, 95.0, 2)]},
             ),
@@ -252,7 +254,7 @@ def build_scenarios() -> List[ShortScenario]:
             name="limit_up_locked_convert",
             verifies="漲停鎖死無法回補 → 轉融券留倉、補收保證金與券費",
             strategy=make_short_strategy(
-                enable_intraday=True,
+                allow_day_trade=True,
                 open_script={day(1): [make_short_order(day(1), Action.SELL, 110.0, 1)]},
             ),
             bars=[
@@ -275,7 +277,7 @@ def build_scenarios() -> List[ShortScenario]:
             name="day_trade_on_force_cover_date",
             verifies="enforce_day_trade_cover 必須早於 execute_daily_position_check",
             strategy=make_short_strategy(
-                enable_intraday=True,
+                allow_day_trade=True,
                 short_constraint=ShortConstraint(
                     force_cover_dates={STOCK_ID: [day(0)]}
                 ),
@@ -413,7 +415,7 @@ def build_scenarios() -> List[ShortScenario]:
             name="day_trade_list_sell_first_halted",
             verifies="開啟當沖名單檢核後，暫停先賣後買的標的不能現股當沖放空",
             strategy=make_short_strategy(
-                enable_intraday=True,
+                allow_day_trade=True,
                 short_constraint=ShortConstraint(check_day_trade_list=True),
                 open_script={
                     day(0): [make_short_order(day(0), Action.SELL, 100.0, 1)],

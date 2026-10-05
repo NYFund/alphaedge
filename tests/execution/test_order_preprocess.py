@@ -5,7 +5,7 @@ import pytest
 
 from core.execution import order_preprocess
 from core.models import BaseOrder, StockOrder
-from core.utils import Action, BarExecutionOrder, PositionType
+from core.utils import Action, BarExecutionOrder, PositionType, TradeDirection
 
 """
 共用委託前處理：回測與實盤唯一的一份
@@ -37,58 +37,43 @@ def make_order(
 
 
 # === 方向白名單 ===
-def test_allowed_directions_default_to_the_declared_one() -> None:
-    """未指定白名單時等同策略宣告的方向"""
+@pytest.mark.parametrize(
+    "direction, expected",
+    [
+        (TradeDirection.LONG, {PositionType.LONG}),
+        (TradeDirection.SHORT, {PositionType.SHORT}),
+        (TradeDirection.BOTH, {PositionType.LONG, PositionType.SHORT}),
+    ],
+)
+def test_allowed_directions_follow_the_declared_direction(
+    direction: TradeDirection, expected: Set[PositionType]
+) -> None:
+    """白名單直接由策略的 `direction` 決定"""
 
-    assert order_preprocess.get_allowed_directions(None, PositionType.SHORT) == {
-        PositionType.SHORT
-    }
-
-
-def test_explicit_whitelist_wins() -> None:
-    """明確宣告時以宣告為準（多空都做的策略）"""
-
-    both: Set[PositionType] = {PositionType.LONG, PositionType.SHORT}
-
-    assert order_preprocess.get_allowed_directions(both, PositionType.LONG) == both
+    assert order_preprocess.get_allowed_directions(direction) == expected
 
 
 # === 單根 bar 的執行順序 ===
 @pytest.mark.parametrize(
-    "position_type, enable_intraday, expected",
+    "allow_day_trade, expected",
     [
-        (PositionType.LONG, True, BarExecutionOrder.CLOSE_THEN_OPEN),
-        (PositionType.LONG, False, BarExecutionOrder.CLOSE_THEN_OPEN),
-        (PositionType.SHORT, True, BarExecutionOrder.OPEN_THEN_CLOSE),
-        (PositionType.SHORT, False, BarExecutionOrder.CLOSE_THEN_OPEN),
+        (True, BarExecutionOrder.OPEN_THEN_CLOSE),
+        (False, BarExecutionOrder.CLOSE_THEN_OPEN),
     ],
 )
 def test_execution_order_derivation(
-    position_type: PositionType,
-    enable_intraday: bool,
-    expected: BarExecutionOrder,
+    allow_day_trade: bool, expected: BarExecutionOrder
 ) -> None:
-    """
-    推導表
+    """當沖先開後平（當天開的部位當天就可能出場），否則先平後開"""
 
-    SHORT ＋ 當沖採先開後平：現股當沖沖賣必須先賣才可能同日回補。
-    **LONG 不自動切換**：`enable_intraday` 預設為 True，自動切換等於在無人宣告的
-    情況下改掉每一支做多策略的成交順序與回測結果。
-    """
-
-    assert (
-        order_preprocess.get_execution_order(None, position_type, enable_intraday)
-        is expected
-    )
+    assert order_preprocess.get_execution_order(None, allow_day_trade) is expected
 
 
 def test_explicit_execution_order_bypasses_the_table() -> None:
-    """策略填了就完全不參與推導——推導出的是預設建議，不是政策"""
+    """策略填了就完全不參與推導"""
 
     assert (
-        order_preprocess.get_execution_order(
-            BarExecutionOrder.OPEN_THEN_CLOSE, PositionType.LONG, False
-        )
+        order_preprocess.get_execution_order(BarExecutionOrder.OPEN_THEN_CLOSE, False)
         is BarExecutionOrder.OPEN_THEN_CLOSE
     )
 
