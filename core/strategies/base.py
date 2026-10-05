@@ -6,7 +6,6 @@ from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
 from core.portfolio.signal import Signal
 from core.utils import (
-    BarExecutionOrder,
     ExecutionTiming,
     InstrumentType,
     Market,
@@ -15,6 +14,21 @@ from core.utils import (
 )
 
 """BaseStrategy: 市場與商品皆無關的策略骨架（market ＋ instrument_type 為 factory 的分派鍵）"""
+
+# 已移除的策略設定欄位 → 改用什麼。
+# Python 允許策略在 `__init__` 指派任意屬性，照舊寫法設這些欄位不會報錯，
+# 引擎卻完全不讀——策略作者以為設定生效，回測與實盤照預設值跑。
+_REMOVED_SETTINGS: Dict[str, str] = {
+    "position_type": "改用 `direction`（TradeDirection.LONG／SHORT／BOTH）",
+    "allowed_directions": "改用 `direction`；多空都做設 TradeDirection.BOTH",
+    "enable_intraday": "改用 `allow_day_trade`（預設 False）",
+    "bar_execution_order": "已移除：執行順序一律由 `allow_day_trade` 推導",
+    "is_intraday": "改用 `is_tick_triggered`",
+}
+
+
+class RemovedStrategySettingError(ValueError):
+    """策略設定了已移除的欄位：引擎不會讀它，照跑只會靜默套用預設值"""
 
 
 class BaseStrategy(ABC):
@@ -70,14 +84,11 @@ class BaseStrategy(ABC):
 
         台股放空另有市場專屬的效果，見 `BaseStockStrategy` 的〈Short Setting〉。
 
-        `bar_execution_order` 是進階覆寫，一般策略不要設：非 None 時引擎一律以它為準，
-        `allow_day_trade` 推導出的順序不再參與判斷。
+        同一根 bar 內先開後平或先平後開由引擎依 `allow_day_trade` 決定，策略不另外設定：
+        另開一個欄位只會讓兩個設定互相矛盾（不當沖卻先開後平＝偷偷當沖）。
         """
         self.direction: TradeDirection = TradeDirection.LONG  # 交易方向
         self.allow_day_trade: bool = False  # 能否當沖
-        self.bar_execution_order: Optional[BarExecutionOrder] = (
-            None  # 單根 K 棒內的執行順序（None 由 allow_day_trade 推導）
-        )
 
         """ === Backtest Setting === """
         self.scale: str = Scale.DAY  # Backtest scale: DAY / TICK
@@ -101,11 +112,12 @@ class BaseStrategy(ABC):
         日 K 在實盤不存在——回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道
         close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點。
 
-        ⚠️ **`live_schedule` 與 `bar_execution_order` 可能互相矛盾。**
-        回測用後者決定同一根 bar 內先平後開還是先開後平；實盤拆成兩段之後，
-        **兩個鉤子分屬不同段落時，實際順序由段落決定，`bar_execution_order`
-        形同失效**。兩者宣告相反時會**靜默**改掉交易順序，回測與實盤的部位軌跡
-        從當天起就不同。故啟動時一律檢查（見 `core/live/strategy_guard.py`）。
+        ⚠️ **`live_schedule` 與 `allow_day_trade` 可能互相矛盾。**
+        回測依 `allow_day_trade` 決定同一根 bar 內先開後平還是先平後開；實盤拆成兩段之後，
+        **兩個鉤子分屬不同段落時，實際順序由段落決定**：`open` 排在 `close` 之前，
+        當天開的部位當天就會被拿去檢查要不要平，等同當沖。兩者不一致時會**靜默**
+        改掉交易順序，回測與實盤的部位軌跡從當天起就不同。
+        故啟動時一律檢查（見 `core/live/strategy_guard.py`）。
 
         `live_tag` 是策略代號，**只寫本地紀錄與報表，不送券商**——券商的
         `custom_field` 那 6 個字元讓給委託識別碼的壓縮碼（壓縮碼反查得到策略，
@@ -132,6 +144,24 @@ class BaseStrategy(ABC):
         # sizer 無條件捨去成 0 張，訊號整批被丟掉而不報錯。
         # 同樣不能直接改 `max_holdings`：它也是回歸基準的一部分。
         self.live_max_holdings: Optional[int] = None
+
+    def check_removed_settings(self) -> List[str]:
+        """
+        - Description:
+            找出策略仍在設定的已移除欄位，回傳說明清單（空清單代表沒有）
+
+            回測與實盤啟動時都會呼叫，見 `build_backtester()` 與
+            `core/live/strategy_guard.py` 的 `inspect_strategy()`。
+        - Return:
+            - List[str]
+                每個已移除欄位一條說明
+        """
+
+        return [
+            f"`{name}` 已不再使用：{hint}"
+            for name, hint in _REMOVED_SETTINGS.items()
+            if name in vars(self)
+        ]
 
     @abstractmethod
     def setup_account(self, account: BaseAccount) -> None:

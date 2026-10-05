@@ -20,7 +20,6 @@ from core.models import (
 from core.models.base.quote import PreOpenQuoteMixin
 from core.strategies.base import BaseStrategy
 from core.utils import (
-    BarExecutionOrder,
     ExecutionTiming,
     LiveHook,
     Scale,
@@ -32,7 +31,7 @@ from core.utils import (
 擋的都是**不會報錯、只會讓結果安靜地不同**的情況：
 
 - 盤前把 OHLC 填成參考價 → 漲幅類訊號永遠算出 0%，整天不開倉。
-- `live_schedule` 與 `bar_execution_order` 矛盾 → 交易順序被默默改掉，
+- `live_schedule` 與 `allow_day_trade` 矛盾 → 交易順序被默默改掉，
   回測與實盤的部位軌跡從當天起就不同。
 - 策略沒宣告 `live_ready` → 作者根本沒確認過它的實盤語意。
 """
@@ -49,13 +48,11 @@ class FakeStrategy(BaseStrategy):
         live_ready: bool = True,
         live_schedule: Optional[Dict[str, ExecutionTiming]] = None,
         allow_day_trade: bool = False,
-        bar_execution_order: Optional[BarExecutionOrder] = None,
     ) -> None:
         super().__init__()
         self.live_ready = live_ready
         self.live_schedule = live_schedule if live_schedule is not None else {}
         self.allow_day_trade = allow_day_trade
-        self.bar_execution_order = bar_execution_order
 
     def setup_account(self, account: object) -> None:
         """測試不需要帳戶"""
@@ -118,6 +115,18 @@ def test_valid_strategy_has_no_problems() -> None:
     assert inspect_strategy(FakeStrategy(live_schedule=BOTH_AT_CLOSE)) == []
 
 
+def test_removed_setting_blocks_live_start() -> None:
+    """設了已移除的欄位不可上實盤：實盤照預設值跑，與作者以為的不同"""
+
+    strategy: FakeStrategy = FakeStrategy(live_schedule=BOTH_AT_CLOSE)
+    strategy.bar_execution_order = "OPEN_THEN_CLOSE"
+
+    problems: List[str] = inspect_strategy(strategy)
+
+    assert len(problems) == 1
+    assert "bar_execution_order" in problems[0]
+
+
 # === 批次檢查 ===
 def test_all_problems_are_reported_at_once() -> None:
     """
@@ -159,25 +168,22 @@ def test_verify_passes_for_a_clean_set() -> None:
     verify_strategies([FakeStrategy(live_schedule=BOTH_AT_CLOSE)])
 
 
-# === schedule 與 bar_execution_order 的一致性 ===
+# === schedule 與 allow_day_trade 的一致性 ===
 def test_same_segment_needs_no_check() -> None:
     """
     兩個鉤子在同一段落時順序由 `get_execution_order()` 決定，與回測一致
 
-    這時 `bar_execution_order` 照樣生效，沒有矛盾可言。
+    這時 `allow_day_trade` 推導的順序照樣生效，沒有矛盾可言。
     """
 
-    strategy: FakeStrategy = FakeStrategy(
-        live_schedule=BOTH_AT_CLOSE,
-        bar_execution_order=BarExecutionOrder.CLOSE_THEN_OPEN,
-    )
+    strategy: FakeStrategy = FakeStrategy(live_schedule=BOTH_AT_CLOSE)
 
     assert check_schedule_conflicts(strategy) is None
 
 
 def test_contradiction_is_detected() -> None:
     """
-    宣告 `CLOSE_THEN_OPEN` 卻把 open 排在前面的段落 → 實際變成先開後平
+    不當沖卻把 open 排在前面的段落 → 實盤等同當沖
 
     **這會靜默改掉交易順序**，回測與實盤的部位軌跡從當天起就不同。
     """
@@ -187,18 +193,35 @@ def test_contradiction_is_detected() -> None:
             LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         },
-        bar_execution_order=BarExecutionOrder.CLOSE_THEN_OPEN,
+        allow_day_trade=False,
     )
 
     conflict: Optional[str] = check_schedule_conflicts(strategy)
 
     assert conflict is not None
-    assert "矛盾" in conflict
+    assert "實盤等同當沖" in conflict
+
+
+def test_day_trade_with_close_first_is_detected() -> None:
+    """當沖卻把 close 排在前面的段落 → 當天開的部位當天平不掉，實盤當不了沖"""
+
+    strategy: FakeStrategy = FakeStrategy(
+        live_schedule={
+            LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+        },
+        allow_day_trade=True,
+    )
+
+    conflict: Optional[str] = check_schedule_conflicts(strategy)
+
+    assert conflict is not None
+    assert "實盤當不了沖" in conflict
 
 
 def test_consistent_cross_segment_schedule_passes() -> None:
     """
-    宣告 `OPEN_THEN_CLOSE` ＋ open 在開盤段：一致
+    當沖 ＋ open 在開盤段、close 在尾盤段：一致
 
     `ForeignSellingReversalShortStrategy` 剛好是這個形狀——**但那是巧合，不是保證**，
     所以還是要檢查。
@@ -209,36 +232,10 @@ def test_consistent_cross_segment_schedule_passes() -> None:
             LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         },
-        bar_execution_order=BarExecutionOrder.OPEN_THEN_CLOSE,
+        allow_day_trade=True,
     )
 
     assert check_schedule_conflicts(strategy) is None
-
-
-def test_derived_execution_order_is_used_when_not_declared() -> None:
-    """
-    策略沒填 `bar_execution_order` 時拿推導值比對
-
-    推導表（當沖 → `OPEN_THEN_CLOSE`，否則 `CLOSE_THEN_OPEN`）與回測用的是同一份函式，
-    比對的才是引擎真正會用的值。
-    """
-
-    day_trade: FakeStrategy = FakeStrategy(
-        live_schedule={
-            LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
-            LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
-        },
-        allow_day_trade=True,
-    )
-    no_day_trade: FakeStrategy = FakeStrategy(
-        live_schedule={
-            LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
-            LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
-        },
-    )
-
-    assert check_schedule_conflicts(day_trade) is None  # 推導出 OPEN_THEN_CLOSE
-    assert check_schedule_conflicts(no_day_trade) is not None  # 推導出 CLOSE_THEN_OPEN
 
 
 def test_intraday_hooks_share_one_segment() -> None:
@@ -249,7 +246,6 @@ def test_intraday_hooks_share_one_segment() -> None:
             LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
             LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
         },
-        bar_execution_order=BarExecutionOrder.CLOSE_THEN_OPEN,
     )
 
     assert check_schedule_conflicts(strategy) is None

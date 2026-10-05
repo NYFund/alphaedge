@@ -13,14 +13,13 @@ from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
 
 1. **沒宣告 `live_ready`** → 策略作者根本沒確認過它的實盤語意。
 2. **沒宣告 `live_schedule`** → 引擎不知道哪個鉤子該在哪一段呼叫。
-3. **`live_schedule` 與 `bar_execution_order` 矛盾** → 交易順序被默默改掉。
+3. **`live_schedule` 與 `allow_day_trade` 矛盾** → 交易順序被默默改掉。
 
-第三條最隱蔽，所以講清楚：回測用 `bar_execution_order` 決定同一根 bar 內
-先平後開還是先開後平。實盤拆成開盤段與尾盤段之後，**兩個鉤子分屬不同段落時，
-實際順序由段落的先後決定，`bar_execution_order` 形同失效**。
-若策略宣告 `CLOSE_THEN_OPEN`，卻把 `close` 排在尾盤段、`open` 排在開盤段，
-實際執行就變成先開後平——回測與實盤的部位軌跡從當天起就不同，
-而且不會有任何錯誤訊息。
+第三條最隱蔽，所以講清楚：回測依 `allow_day_trade` 決定同一根 bar 內
+先開後平（當沖）還是先平後開。實盤拆成開盤段與尾盤段之後，**兩個鉤子分屬不同段落時，
+實際順序由段落的先後決定**。若策略不當沖，卻把 `open` 排在開盤段、`close` 排在尾盤段，
+當天開的部位當天就會被拿去檢查要不要平——實盤偷偷當沖，回測卻沒有，
+兩邊的部位軌跡從當天起就不同，而且不會有任何錯誤訊息。
 """
 
 
@@ -82,7 +81,7 @@ def inspect_strategy(strategy: BaseStrategy) -> List[str]:
             問題說明
     """
 
-    problems: List[str] = []
+    problems: List[str] = list(strategy.check_removed_settings())
 
     if not strategy.live_ready:
         problems.append(
@@ -123,17 +122,16 @@ def _check_schedule_keys(strategy: BaseStrategy) -> List[str]:
 def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
     """
     - Description:
-        檢查 `live_schedule` 與 `bar_execution_order` 是否矛盾
+        檢查 `live_schedule` 與 `allow_day_trade` 是否矛盾
 
         判準：
         - 開倉與平倉落在**同一段落**時，順序由 `get_execution_order()` 決定，
           與回測完全一致，不必檢查。
-        - 落在**不同段落**時，實際順序由段落先後決定；它必須與
-          `bar_execution_order`（策略宣告的，或由方向與當沖旗標推導出來的）一致。
+        - 落在**不同段落**時，實際順序由段落先後決定：`open` 在前等同當沖，
+          `close` 在前等同不當沖；它必須與 `allow_day_trade` 一致。
 
-        `ForeignSellingReversalShortStrategy` 剛好一致（SHORT ＋ 當沖 →
-        `OPEN_THEN_CLOSE`，實盤 `open` 在開盤段、`close` 在尾盤段），
-        **但那是巧合，不是保證**。
+        `ForeignSellingReversalShortStrategy` 剛好一致（當沖，
+        實盤 `open` 在開盤段、`close` 在尾盤段），**但那是巧合，不是保證**。
     - Parameters:
         - strategy: BaseStrategy
             待檢查的策略
@@ -157,20 +155,21 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
         if _TIMING_ORDER[open_timing] < _TIMING_ORDER[close_timing]
         else BarExecutionOrder.CLOSE_THEN_OPEN
     )
-    declared: BarExecutionOrder = get_execution_order(
-        strategy.bar_execution_order,
-        strategy.allow_day_trade,
-    )
+    declared: BarExecutionOrder = get_execution_order(strategy.allow_day_trade)
 
     if actual is declared:
         return None
 
+    if actual is BarExecutionOrder.OPEN_THEN_CLOSE:
+        effect: str = "當天開的部位當天就會被檢查要不要平，實盤等同當沖"
+    else:
+        effect = "當天開的部位要到下一個交易日才會被檢查要不要平，實盤當不了沖"
+
     return (
-        f"live_schedule 與 bar_execution_order 矛盾："
-        f"open 在 {open_timing.value}、close 在 {close_timing.value}，"
-        f"實際順序是 {actual.value}，但回測用的是 {declared.value}。"
-        "兩個鉤子分屬不同段落時，實際順序由段落決定，bar_execution_order 形同失效——"
-        "宣告相反會**靜默**改掉交易順序，回測與實盤的部位軌跡從當天起就不同"
+        f"live_schedule 與 allow_day_trade={strategy.allow_day_trade} 矛盾："
+        f"open 在 {open_timing.value}、close 在 {close_timing.value}，{effect}，"
+        "回測卻不是這樣跑——兩邊的部位軌跡從當天起就不同。"
+        "請調整 live_schedule 或 allow_day_trade 讓兩者一致"
     )
 
 

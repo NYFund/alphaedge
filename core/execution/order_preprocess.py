@@ -32,32 +32,25 @@ def get_allowed_directions(direction: TradeDirection) -> Set[PositionType]:
     return direction.to_position_types()
 
 
-def get_execution_order(
-    bar_execution_order: Optional[BarExecutionOrder],
-    allow_day_trade: bool,
-) -> BarExecutionOrder:
+def get_execution_order(allow_day_trade: bool) -> BarExecutionOrder:
     """
     - Description:
-        決定單根 K 棒內的執行順序；策略顯式指定時一律以策略為準
-
-        未指定時由 `allow_day_trade` 推導，與方向無關：
+        決定單根 K 棒內的執行順序：只由策略能否當沖決定，與方向無關
 
         | allow_day_trade | 順序              | 效果                               |
         |-----------------|-------------------|------------------------------------|
         | True            | `OPEN_THEN_CLOSE` | 當天開的部位當天就會被檢查要不要平 |
         | False           | `CLOSE_THEN_OPEN` | 先平倉釋出資金，當天開的部位留到下一根 bar |
+
+        策略不能另外指定順序：與 `allow_day_trade` 相反的順序只會是「不當沖卻偷偷當沖」
+        或「當沖卻當不了沖」，沒有合理用途。
     - Parameters:
-        - bar_execution_order: Optional[BarExecutionOrder]
-            策略顯式指定的順序（進階覆寫）
         - allow_day_trade: bool
             策略能否當沖
     - Return:
         - BarExecutionOrder
             單根 bar 的開平倉先後
     """
-
-    if bar_execution_order is not None:
-        return bar_execution_order
 
     if allow_day_trade:
         return BarExecutionOrder.OPEN_THEN_CLOSE

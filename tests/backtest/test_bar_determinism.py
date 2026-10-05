@@ -7,7 +7,7 @@ import pytest
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.models import StockOrder, StockTradeRecord
-from core.utils import Action, BarExecutionOrder, PositionType
+from core.utils import Action, PositionType
 
 """單根 bar 的委託決定性排序與同標的開平倉並存規則
 
@@ -217,11 +217,11 @@ def test_stop_loss_precedes_normal_close(
 def test_same_bar_open_and_close_are_not_netted(
     make_strategy, make_backtester, make_quote
 ) -> None:
-    """OPEN_THEN_CLOSE 下同標的當日來回：兩腿分別成交，不合併成淨額委託"""
+    """當沖（先開後平）下同標的當日來回：兩腿分別成交，不合併成淨額委託"""
 
     strategy = make_strategy(
         max_holdings=5,
-        bar_execution_order=BarExecutionOrder.OPEN_THEN_CLOSE,
+        allow_day_trade=True,
         open_script={DAY_1: [buy_order("2330", price=100.0)]},
         close_script={DAY_1: [sell_order("2330", price=105.0)]},
     )
@@ -240,18 +240,18 @@ def test_same_bar_open_and_close_are_not_netted(
     assert len(records) == 1
 
     # 兩腿各自記帳的證據：買賣同日、成交價分別是兩腿的價格，
-    # 且證交稅只課在賣出腿（105 * 1000 * 0.3% = 315）
+    # 且證交稅只課在賣出腿，同日開平走當沖稅率（105 * 1000 * 0.15% = 157）
     record: StockTradeRecord = records[0]
     assert record.buy_date == DAY_1 and record.sell_date == DAY_1
     assert record.buy_price == 100.0 and record.sell_price == 105.0
-    assert record.tax == 315
+    assert record.tax == 157
     assert backtester.account.positions == []
 
 
 def test_close_then_open_reopens_same_symbol_in_one_bar(
     make_strategy, make_backtester, make_quote
 ) -> None:
-    """CLOSE_THEN_OPEN 下同標的的並存訊號是「先出清舊倉再重新建倉」"""
+    """不當沖（先平後開）下同標的的並存訊號是「先出清舊倉再重新建倉」"""
 
     strategy = make_strategy(
         max_holdings=5,

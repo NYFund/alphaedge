@@ -549,7 +549,6 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `instrument_type` | `InstrumentType` | 商品類別，**由 `BaseStockStrategy` 填入，策略不需自己設**；見上列 | `InstrumentType.STOCK` |
 | `direction` | `TradeDirection` | 交易方向：`LONG`（只做多）、`SHORT`（只做空）、`BOTH`（多空都做）；方向不符的訂單會被引擎剔除 | `TradeDirection.LONG` |
 | `allow_day_trade` | `bool` | 能否當沖（同一天開倉又平倉同一檔），見[當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序) | `False` |
-| `bar_execution_order` | `Optional[BarExecutionOrder]` | 進階覆寫：單根 bar 內開平倉的先後，`None` 由 `allow_day_trade` 推導；一般策略不要設 | `None` |
 
 ### 帳戶設定
 
@@ -618,8 +617,12 @@ class MyDayTradeLongStrategy(BaseStockStrategy):
         self.allow_day_trade: bool = True  # 做多當沖
 ```
 
-`bar_execution_order` 是進階覆寫：填了之後引擎一律以它為準，`allow_day_trade`
-推導出的順序不再參與判斷。一般策略不要設。
+執行順序沒有另外的設定欄位：與 `allow_day_trade` 相反的順序只會是「不當沖卻偷偷當沖」
+或「當沖卻當不了沖」，所以一律由它推導。
+
+> 舊版的 `position_type`、`allowed_directions`、`enable_intraday`、`bar_execution_order`、
+> `is_intraday` 已移除。策略若仍設定它們，回測與實盤啟動時會直接報錯並指出改用哪個欄位，
+> 不會被靜默忽略。
 
 同一根 bar 內多筆委託的處理順序（決定性排序）與同標的開平倉並存的規則，
 見[多市場回測引擎架構 §2.2.1 單根 bar 的委託順序](../../docs/backtest/multi-market-engine.md#221-單根-bar-的委託順序)。
@@ -947,7 +950,6 @@ python -m apps.backtest --strategy SimpleStrategy
 | `short_constraint` | `Optional[ShortConstraint]` | `None` | 可成交限制：可當沖清單、券源檢核、停券日、單一標的曝險上限。停券的自動推導預設開啟（`auto_force_cover_on_ex_dividend`），`force_cover_dates` 則是手動加碼 |
 | `day_trade_uncovered_policy` | `DayTradeUncoveredPolicy` | `FORCE_COVER_AT_CLOSE` | 當沖日終未回補的處理 |
 | `margin_call_policy` | `MarginCallPolicy` | `FORCE_COVER` | 維持率跌破 130% 的處理 |
-| `bar_execution_order` | `Optional[BarExecutionOrder]` | `None` | 進階覆寫：單根 K 棒內的執行順序，`None` 由 `allow_day_trade` 推導；非 `None` 時一律以策略為準（見[當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序)） |
 
 ### 訊號方向對照
 

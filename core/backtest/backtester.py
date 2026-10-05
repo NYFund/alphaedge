@@ -191,10 +191,7 @@ class Backtester:
     def get_execution_order(self) -> BarExecutionOrder:
         """單根 bar 的開平倉先後；推導表與理由見 `order_preprocess.get_execution_order()`"""
 
-        return order_preprocess.get_execution_order(
-            self.strategy.bar_execution_order,
-            self.strategy.allow_day_trade,
-        )
+        return order_preprocess.get_execution_order(self.strategy.allow_day_trade)
 
     # === Order Validation ===
     def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
@@ -363,7 +360,7 @@ class Backtester:
             理由是成本與損益歸屬：證交稅只課賣出腿、當沖稅率減半也只認當沖的那一腿，
             合併成一張淨額委託會讓兩腿的費用與稅無法各自計算；且平倉腿必須實際成交
             才會產生 `TradeRecord`，net 掉等於整筆交易在報表上消失。
-            兩腿的先後完全由 `BarExecutionOrder` 決定——這正是它存在的理由：
+            兩腿的先後完全由執行順序決定（依策略的 `allow_day_trade` 推導）——這正是它存在的理由：
 
             - `OPEN_THEN_CLOSE`：先開後平，同一根 bar 內可完成當沖來回。
             - `CLOSE_THEN_OPEN`：先平後開，同一標的是「先出清舊倉再重新建倉」。

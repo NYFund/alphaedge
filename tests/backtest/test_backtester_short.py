@@ -10,7 +10,6 @@ from core.models import StockOrder, StockPosition, StockQuote, StockTradeRecord
 from core.utils import (
     Action,
     BarExecutionOrder,
-    DayTradeUncoveredPolicy,
     MarginCallPolicy,
     PositionType,
     Scale,
@@ -53,7 +52,7 @@ def short_strategy(make_strategy, **overrides):
 def test_execution_order_derivation(
     make_strategy, make_backtester, direction: TradeDirection
 ) -> None:
-    """執行順序只由 allow_day_trade 推導，與方向無關；策略顯式指定時以策略為準"""
+    """執行順序只由 allow_day_trade 推導，與方向無關"""
 
     day_trade = make_backtester(
         make_strategy(direction=direction, allow_day_trade=True)
@@ -64,15 +63,6 @@ def test_execution_order_derivation(
         make_strategy(direction=direction, allow_day_trade=False)
     )
     assert no_day_trade.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
-
-    explicit = make_backtester(
-        make_strategy(
-            direction=direction,
-            allow_day_trade=False,
-            bar_execution_order=BarExecutionOrder.OPEN_THEN_CLOSE,
-        )
-    )
-    assert explicit.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE
 
 
 def test_day_trade_is_off_by_default(make_strategy, make_backtester) -> None:
@@ -259,13 +249,11 @@ def test_same_day_short_cover(
 def test_close_then_open_cannot_cover_same_day(
     make_strategy, make_backtester, make_quote
 ) -> None:
-    """對照組：維持 CLOSE_THEN_OPEN 時，同日開的空單不可能在當日被平掉"""
+    """對照組：不當沖（先平後開）時，同日開的空單不可能在當日被平掉"""
 
     strategy = short_strategy(
         make_strategy,
-        allow_day_trade=True,
-        bar_execution_order=BarExecutionOrder.CLOSE_THEN_OPEN,
-        day_trade_uncovered_policy=DayTradeUncoveredPolicy.CONVERT_TO_MARGIN,
+        allow_day_trade=False,
         open_script={
             DAY_1: [
                 StockOrder(

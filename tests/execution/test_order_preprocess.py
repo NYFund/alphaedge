@@ -66,16 +66,7 @@ def test_execution_order_derivation(
 ) -> None:
     """當沖先開後平（當天開的部位當天就可能出場），否則先平後開"""
 
-    assert order_preprocess.get_execution_order(None, allow_day_trade) is expected
-
-
-def test_explicit_execution_order_bypasses_the_table() -> None:
-    """策略填了就完全不參與推導"""
-
-    assert (
-        order_preprocess.get_execution_order(BarExecutionOrder.OPEN_THEN_CLOSE, False)
-        is BarExecutionOrder.OPEN_THEN_CLOSE
-    )
+    assert order_preprocess.get_execution_order(allow_day_trade) is expected
 
 
 # === 動作推導 ===
