@@ -52,7 +52,7 @@ class ShortConstraint:
     # 單一空單曝險上限（佔初始本金比例）；`None` ＝ 不限制。
     #
     # **實盤有一份對應的設定**：`RiskConfig.single_symbol_exposure_ratio`，
-    # 預設 0.25、多空皆適用、超限是批次截斷而非整筆拒絕。
+    # 預設 0.35、多空皆適用、超限是批次截斷而非整筆拒絕。
     # 公式兩邊共用（`order_preprocess.exceeds_symbol_exposure()`），四個面向的
     # 差異寫在那支函式的 docstring——**改這一邊之前先看那份對照表**，
     # 否則會讓回測跑得過的部位規模在實盤被截掉（或反過來）而查不出原因。

@@ -261,6 +261,40 @@ def test_single_symbol_exposure_is_a_separate_dimension() -> None:
     assert "單一標的上限" in truncated[0][1]
 
 
+def test_live_holdings_fit_within_single_symbol_cap() -> None:
+    """
+    每支股票策略實盤每檔分到的比例（1 ÷ 持倉檔數）不得超過單一標的上限
+
+    部位建構器把資金均分給各檔；比例一超過上限，帳戶層會把每張買單都截斷，
+    下單路徑整個不通卻只留下 WARN。曾經把 `live_max_holdings` 改成 3 檔
+    （約 33%）而上限仍是 25%，演練整天送不出任何一張單。
+    """
+
+    from core.strategies.stock.base import BaseStockStrategy
+    from core.strategies.strategy_loader import StrategyLoader
+
+    cap: float = RiskConfig().single_symbol_exposure_ratio
+    checked: List[str] = []
+    for name, strategy_class in StrategyLoader.load_strategies().items():
+        if not issubclass(strategy_class, BaseStockStrategy):
+            continue
+
+        strategy: BaseStockStrategy = strategy_class()
+        holdings: Optional[int] = (
+            getattr(strategy, "live_max_holdings", None) or strategy.max_holdings
+        )
+        if not holdings:
+            continue
+
+        checked.append(name)
+        assert 1 / holdings <= cap, (
+            f"{name} 實盤 {holdings} 檔、每檔 {1 / holdings:.1%}，"
+            f"超過單一標的上限 {cap:.0%}，每張買單都會被截斷"
+        )
+
+    assert "MomentumStrategy1" in checked
+
+
 def test_existing_exposure_is_counted(dao_factory: object = None) -> None:
     """既有持倉要算進去：只看本批的話，隔日續跑會把額度重新算一次"""
 

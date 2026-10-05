@@ -19,7 +19,7 @@ from core.utils import Action, PositionType
 | | 回測 | 實盤 |
 |---|---|---|
 | 設定 | `ShortConstraint.max_short_exposure_ratio` | `RiskConfig.single_symbol_exposure_ratio` |
-| 預設 | `None`（關閉） | `0.25` |
+| 預設 | `None`（關閉） | `0.35` |
 | 適用 | **只有空單** | 多空皆適用 |
 | 超限行為 | 整筆拒絕開倉 | 批次截斷 |
 
@@ -119,7 +119,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
     """
     實盤比的是**累計**曝險，不是單張金額
 
-    只看單張的話，同一檔分五張各打 20% 就能繞過 25% 的上限。
+    只看單張的話，同一檔拆成多張、每張都低於上限，就能繞過單一標的上限。
     """
 
     config: RiskConfig = RiskConfig()
@@ -150,7 +150,7 @@ def test_backtest_default_is_off_and_live_default_is_on() -> None:
     from core.models.cost_config import ShortConstraint
 
     assert ShortConstraint().max_short_exposure_ratio is None, "回測預設不限制"
-    assert RiskConfig().single_symbol_exposure_ratio == 0.25, "實盤預設 25%"
+    assert RiskConfig().single_symbol_exposure_ratio == 0.35, "實盤預設 35%"
 
 
 def test_backtest_only_applies_it_to_shorts() -> None:

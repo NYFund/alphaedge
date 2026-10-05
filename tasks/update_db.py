@@ -104,13 +104,14 @@ Target 對照表
                               **不含在 all／no_tick 內**：重跑會重複寫入，只在點名時跑）
   fs                          財報 (Financial Statement)
   mrr                         月營收報表 (Monthly Revenue Report)
-  finmind                     全部 FinMind（台股總覽 + 證券商 + 券商分點）
+  finmind                     全部 FinMind（台股總覽 + 證券商 + 券商分點；
+                              **不含在 all／no_tick 內**：帳號等級拿不到券商分點，只在點名時跑）
   stock_info                  FinMind 台股總覽（不含權證）
   stock_info_with_warrant     FinMind 台股總覽（含權證）
   broker_info                 FinMind 證券商資訊
   broker_trading              FinMind 券商分點統計
-  all                         全部資料（含 tick；不含 futures_tick 與 futures_stock_price）
-  no_tick                     全部資料（不含 tick、futures_tick 與 futures_stock_price，預設）
+  all                         全部資料（含 tick；不含 futures_tick、futures_stock_price 與 finmind）
+  no_tick                     全部資料（不含 tick、futures_tick、futures_stock_price 與 finmind，預設）
 
 ================================================================================
 使用範例
@@ -139,9 +140,15 @@ TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 # DolphinDB 表又是 `keepDuplicates=ALL`、loader 每次重放整個目錄——每跑一次
 # 近月契約就重抓並多寫一份，成交量被放大 N 倍，每個候選日還先耗一次
 # `api.usage()` 配額。在加上「契約 × 日」的載入紀錄之前，不能讓 `all` 帶到它
+#
+# FinMind 暫停每日更新：現行帳號等級（register）沒有券商分點的資料集權限，
+# 每晚都在第一個組合就中止、以結束碼 1 收場。恆紅的 target 會讓真正的失敗混在裡面
+# 沒人看；其餘兩份（台股總覽、證券商資訊）幾乎不變，也沒有每日依賴它們的程式。
+# 帳號升級後從這裡移除即可恢復
 EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
     DataType.FUTURES_STOCK_PRICE,
     DataType.FUTURES_TICK,
+    DataType.FINMIND,
 }
 
 

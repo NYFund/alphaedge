@@ -215,7 +215,7 @@ def exceeds_symbol_exposure(
         | | 回測 | 實盤 |
         |---|---|---|
         | 設定 | `ShortConstraint.max_short_exposure_ratio` | `RiskConfig.single_symbol_exposure_ratio` |
-        | 預設 | `None`（關閉） | `0.25` |
+        | 預設 | `None`（關閉） | `0.35` |
         | 適用 | **只有空單** | 多空皆適用 |
         | 超限行為 | 整筆拒絕開倉 | 批次截斷 |
 
@@ -226,7 +226,7 @@ def exceeds_symbol_exposure(
         回測的多單曝險目前完全不受本條限制，只靠 `EqualWeightSizer` 的資金切分
         間接約束。統一適用範圍會改變回測結果、須重產 baseline，故未在此處理。
 
-        兩邊的預設值也不同（`None` vs `0.25`），統一同樣會改回測結果。
+        兩邊的預設值也不同（`None` vs `0.35`），統一同樣會改回測結果。
         **本函式只保證公式是同一條**，四個面向的差異由呼叫端各自決定。
     - Parameters:
         - position_value: float
