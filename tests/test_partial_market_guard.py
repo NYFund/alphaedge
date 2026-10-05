@@ -30,7 +30,11 @@ from core.pipeline.tw.updaters.stock_margin_updater import StockMarginUpdater
 from core.pipeline.tw.updaters.stock_price_updater import StockPriceUpdater
 from core.pipeline.tw.utils.mops_payload import Payload
 from core.pipeline.utils import ListingBoard
-from core.pipeline.utils.exceptions import CleanFailureError, ColumnLayoutError
+from core.pipeline.utils.exceptions import (
+    CleanFailureError,
+    ColumnLayoutError,
+    DataLoadError,
+)
 
 """
 多來源拼成的一份資料：要嘛全部入庫、要嘛全部不入庫
@@ -185,7 +189,9 @@ def test_day_with_a_failed_market_is_not_loaded(
         updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
 
-    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+    # 取不到的那天正好是最新一天：資料沒更新到，target 必須記為失敗
+    with pytest.raises(DataLoadError):
+        updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
 
     assert loaded_dates(loaded) == {"20240102"}
     # 反正不入庫，連清洗都不做，downloads 才不會留下半份 CSV
@@ -225,7 +231,9 @@ def test_day_with_a_failed_cleaner_is_not_loaded(
 
     setattr(updater.cleaner, f"clean_tpex_{kind}", flaky_clean)
 
-    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+    # 取不到的那天正好是最新一天：資料沒更新到，target 必須記為失敗
+    with pytest.raises(DataLoadError):
+        updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
 
     assert loaded_dates(loaded) == {"20240102"}
     assert DateProgressStore(kind).incomplete == {DAY_PARTIAL}
@@ -259,7 +267,9 @@ def test_day_with_an_empty_cleaner_result_is_not_loaded(
 
     setattr(updater.cleaner, f"clean_tpex_{kind}", empty_clean)
 
-    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+    # 取不到的那天正好是最新一天：資料沒更新到，target 必須記為失敗
+    with pytest.raises(DataLoadError):
+        updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
 
     assert loaded_dates(loaded) == {"20240102"}
     assert DateProgressStore(kind).incomplete == {DAY_PARTIAL}
@@ -286,7 +296,9 @@ def test_price_day_with_too_few_raw_rows_is_not_loaded(
         StockPriceUpdater, "price", tmp_path, monkeypatch, results, dao_factory
     )
 
-    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+    # 取不到的那天正好是最新一天：資料沒更新到，target 必須記為失敗
+    with pytest.raises(DataLoadError):
+        updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
 
     assert loaded_dates(loaded) == {"20240102"}
     assert ("TWSE", DAY_PARTIAL) not in cleaned
@@ -322,7 +334,9 @@ def test_day_with_one_market_no_data_is_not_loaded(
         updater_cls, kind, tmp_path, monkeypatch, results, dao_factory
     )
 
-    updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
+    # 取不到的那天正好是最新一天：資料沒更新到，target 必須記為失敗
+    with pytest.raises(DataLoadError):
+        updater.update(start_date=DAY_OK, end_date=DAY_PARTIAL)
 
     assert loaded_dates(loaded) == {"20240102"}
     # 有資料的那一邊也不清洗，downloads 才不會留下半份 CSV

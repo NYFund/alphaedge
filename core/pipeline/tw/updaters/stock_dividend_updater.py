@@ -152,3 +152,5 @@ class StockDividendUpdater(BaseDataUpdater):
 
         if layout_failures:
             raise CleanFailureError("dividend", layout_failures)
+
+        self.raise_if_unreachable("dividend", stats)

@@ -163,6 +163,9 @@ def test_update_backfills_missing_months_instead_of_starting_after_latest(
         def report(self, label: str) -> None:
             pass
 
+        def failure_reason(self, today: object) -> None:
+            return None
+
     updater.crawler = RecordingCrawler()
     updater.loader = NullLoader()
     monkeypatch.setattr(updater_module, "UpdateStats", NullStats)

@@ -141,6 +141,8 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         else:
             logger.warning("No new monthly revenue data was updated")
 
+        self.raise_if_unreachable("mrr", stats)
+
     def plan_pending_year_months(
         self,
         start_year: int,

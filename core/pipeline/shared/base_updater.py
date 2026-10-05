@@ -2,16 +2,18 @@ import datetime
 import random
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Callable, List, Optional, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
+from core.config.settings import now_live
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.utils.exceptions import DataLoadError
 from core.utils.log_manager import LogManager
 
 """
@@ -34,6 +36,9 @@ class UpdateStats:
     unreachable: int = 0  # 取不到且無法斷定站方有沒有資料，下次會重試
     clean_failed: int = 0  # 抓到了但清洗失敗（版面異常），同樣下次會重試
     partial_no_data: int = 0  # 一邊查無資料、另一邊有資料，同樣下次會重試
+    # 逐日來源各日期的最終結果（清洗失敗、單一市場查無資料都已折算成 FAILED）；
+    # 以年、月為單位查詢的來源不填，判斷失敗時改看整批
+    day_statuses: Dict[datetime.date, CrawlStatus] = field(default_factory=dict)
 
     def record(self, *results: CrawlResult) -> CrawlStatus:
         """
@@ -80,6 +85,49 @@ class UpdateStats:
         self.ok = max(self.ok - 1, 0)
         self.unreachable += 1
         self.partial_no_data += 1
+
+    def mark_day(self, date: datetime.date, status: CrawlStatus) -> None:
+        """記下逐日來源某一天的最終結果，供 `failure_reason()` 找出最近一個應有資料的日子"""
+
+        self.day_statuses[date] = status
+
+    def failure_reason(self, today: datetime.date) -> Optional[str]:
+        """
+        - Description:
+            本批是否該讓這個 target 記為失敗；回傳原因，不該失敗時回 None
+
+            `unreachable` 原本只會變成一行 WARNING，下次自動重試。這在回補時是對的：
+            中間偶發連不上的幾天，下次補回來就好。但**連最新一天都拿不到**時，
+            表就停在舊資料上，而失敗清單照樣列它成功——主機走了被擋的出口 IP、
+            站方整批回 HTTP 403 時就是這樣，靠下游的資料新鮮度檢查才會發現。
+
+            - 逐日來源（有 `day_statuses`）：**最近一個應有資料的日子**取不到就算失敗。
+              「應有資料」排除兩種：站方明確查無資料（休市）的日子，以及台北的今天——
+              當天資料可能還沒公布，上櫃在未公布時會回別天的頁面而被判為 FAILED，
+              算進來的話盤中手動執行會誤報。
+            - 以年、月為單位查詢的來源：一個單位都沒拿到、且有取不到的，就算失敗。
+              每次請求都涵蓋到最新日期，沒有「中間偶發」可以等下次補。
+        - Parameters:
+            - today: datetime.date
+                台北的今天
+        - Return:
+            - Optional[str]
+                失敗原因；不該失敗時為 None
+        """
+
+        if self.day_statuses:
+            settled: List[datetime.date] = sorted(
+                date
+                for date, status in self.day_statuses.items()
+                if date < today and status is not CrawlStatus.NO_DATA
+            )
+            if settled and self.day_statuses[settled[-1]] is CrawlStatus.FAILED:
+                return f"最近一個應有資料的日子 {settled[-1]} 取不到"
+            return None
+
+        if self.ok == 0 and self.unreachable > 0:
+            return f"本批 {self.requested} 個單位一個都沒拿到（{self.unreachable} 個取不到）"
+        return None
 
     def summary_line(self, source: str) -> str:
         """單行統計字串"""
@@ -128,6 +176,25 @@ class BaseDataUpdater(ABC):
     def __init__(self) -> None:
         """建立 updater；連線與 log 一律由子類的 `setup()` 負責"""
         pass
+
+    @staticmethod
+    def raise_if_unreachable(source: str, stats: UpdateStats) -> None:
+        """
+        - Description:
+            本批拿不到最新資料時拋 `DataLoadError`，讓 `update_db` 把 target 記為失敗
+
+            **放在入庫與統計行之後**：拿到的部分照常入庫，log 也先印完，
+            拋出只是讓失敗清單與結束碼反映「這個 target 沒更新到」。
+        - Parameters:
+            - source: str
+                資料來源名稱
+            - stats: UpdateStats
+                本批統計
+        """
+
+        reason: Optional[str] = stats.failure_reason(now_live().date())
+        if reason:
+            raise DataLoadError(source, [reason], succeeded=stats.ok)
 
     def throttle_per_file(
         self, file_cnt: int, stop: Optional[GracefulStop] = None
@@ -553,6 +620,7 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
                     stats.count_clean_failure()
 
                 progress.record(date, day_status)
+                stats.mark_day(date, day_status)
 
                 file_cnt += 1
                 if day_status is CrawlStatus.FAILED:
@@ -583,3 +651,4 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
         stats.report(self.SOURCE)
         self.report_cleaner_failures(cleaner_failures)
         self.report_latest_date()
+        self.raise_if_unreachable(self.SOURCE, stats)
