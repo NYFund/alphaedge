@@ -40,7 +40,7 @@
 | Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
 | Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ✅ | 2026-09-30 完成：新增 E'''' 項（專屬 AST 掃描，偏離原規劃的分層規則寫法）；突變驗證紅→綠；2 條單元測試 |
 | Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ✅ | 2026-10-01 完成；八項護欄以暫時檔逐一觸發皆轉紅；`test_strategy_data_access.py` 的假綠燈先行修掉 |
-| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；等另一支開發中的策略先落地；`test_strategy_data_access.py` 不改會變假綠燈 |
+| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；與 `實盤下單架構規劃.md` Phase7-10（`MomentumStrategy1` 改名）同一批施作，先搬家再改名；`test_strategy_data_access.py` 不改會變假綠燈 |
 | Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成；回歸雙線零變動。主目錄待 10/1 演練後更新 |
@@ -228,10 +228,14 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
   1. **避開 `實盤下單架構規劃.md` Phase7-1 模擬演練的排程時段**：模組路徑改變後，
      常駐的實盤行程必須重啟才載得到新路徑。
   2. **建議排在 `回測與實盤入口拆分及架構收斂.md` Phase1-4（策略依名稱載入）之後**，
-     loader 只需改寫一次；若先做本步，該步驟改在 `strategies/loader.py` 上進行。
+     loader 只需改寫一次；若先做本步，該步驟改在 `strategies/loader.py` 上進行。（該步驟已完成，此條已滿足。）
   3. 施作前確認 `core/strategies/` 沒有開發中未 commit 的變更（2026-09-26 就有一支
-     `investment_trust_momentum_swing_strategy.py` 與 `core/strategies/README.md` 正在修改），
-     避免搬移與開發互相覆蓋。
+     `trust_momentum_swing_strategy.py` 與 `core/strategies/README.md` 正在修改；該策略已 merge，
+     2026-10-05 改名為 `investment_trust_momentum_swing_strategy.py`），避免搬移與開發互相覆蓋。
+  4. **與 `實盤下單架構規劃.md` Phase7-10（`MomentumStrategy1` 改名為 `VolumeBreakoutMomentumStrategy`）同一批施作，
+     先搬家、再改名**（2026-10-05 決定）：兩步動的是同一批策略檔、測試與 launchd 排程參數，都要等演練結束；
+     分開做要重裝兩次排程、跑兩次回歸。也不在演練期間先搬沒演練的三支——具體策略會分散在兩處、
+     `StrategyLoader` 要同時掃兩個位置，多出一段過渡狀態。
 
 ### Phase2-3. `core/strategies/` 收斂成只剩契約 ⬜
 
