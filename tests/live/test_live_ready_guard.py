@@ -23,7 +23,6 @@ from core.utils import (
     BarExecutionOrder,
     ExecutionTiming,
     LiveHook,
-    PositionType,
     Scale,
 )
 
@@ -49,15 +48,13 @@ class FakeStrategy(BaseStrategy):
         self,
         live_ready: bool = True,
         live_schedule: Optional[Dict[str, ExecutionTiming]] = None,
-        position_type: PositionType = PositionType.LONG,
-        enable_intraday: bool = True,
+        allow_day_trade: bool = False,
         bar_execution_order: Optional[BarExecutionOrder] = None,
     ) -> None:
         super().__init__()
         self.live_ready = live_ready
         self.live_schedule = live_schedule if live_schedule is not None else {}
-        self.position_type = position_type
-        self.enable_intraday = enable_intraday
+        self.allow_day_trade = allow_day_trade
         self.bar_execution_order = bar_execution_order
 
     def setup_account(self, account: object) -> None:
@@ -222,28 +219,26 @@ def test_derived_execution_order_is_used_when_not_declared() -> None:
     """
     策略沒填 `bar_execution_order` 時拿推導值比對
 
-    推導表（SHORT ＋ 當沖 → `OPEN_THEN_CLOSE`）與回測用的是同一份函式，
+    推導表（當沖 → `OPEN_THEN_CLOSE`，否則 `CLOSE_THEN_OPEN`）與回測用的是同一份函式，
     比對的才是引擎真正會用的值。
     """
 
-    short_intraday: FakeStrategy = FakeStrategy(
+    day_trade: FakeStrategy = FakeStrategy(
         live_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         },
-        position_type=PositionType.SHORT,
-        enable_intraday=True,
+        allow_day_trade=True,
     )
-    long_strategy: FakeStrategy = FakeStrategy(
+    no_day_trade: FakeStrategy = FakeStrategy(
         live_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         },
-        position_type=PositionType.LONG,
     )
 
-    assert check_schedule_conflicts(short_intraday) is None  # 推導出 OPEN_THEN_CLOSE
-    assert check_schedule_conflicts(long_strategy) is not None  # 推導出 CLOSE_THEN_OPEN
+    assert check_schedule_conflicts(day_trade) is None  # 推導出 OPEN_THEN_CLOSE
+    assert check_schedule_conflicts(no_day_trade) is not None  # 推導出 CLOSE_THEN_OPEN
 
 
 def test_intraday_hooks_share_one_segment() -> None:

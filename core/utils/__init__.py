@@ -43,6 +43,7 @@ from .constant import (
     StockOrderCond,
     StockOrderLot,
     StockPriceType,
+    TradeDirection,
     Units,
 )
 from .log_manager import LogManager

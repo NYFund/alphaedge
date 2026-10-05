@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Set
 from loguru import logger
 
 from core.models import BaseOrder
-from core.utils import Action, BarExecutionOrder, PositionType
+from core.utils import Action, BarExecutionOrder, PositionType, TradeDirection
 
 """
 委託前處理：方向白名單、單根 bar 的執行順序、持倉檔數上限、決定性排序
@@ -17,60 +17,40 @@ from core.utils import Action, BarExecutionOrder, PositionType
 """
 
 
-def get_allowed_directions(
-    allowed_directions: Optional[Set[PositionType]],
-    position_type: PositionType,
-) -> Set[PositionType]:
+def get_allowed_directions(direction: TradeDirection) -> Set[PositionType]:
     """
     - Description:
-        取得允許的訂單方向白名單；未指定時等同策略宣告的方向
+        取得允許的訂單方向白名單
     - Parameters:
-        - allowed_directions: Optional[Set[PositionType]]
-            策略宣告的白名單
-        - position_type: PositionType
-            策略的方向
+        - direction: TradeDirection
+            策略宣告的交易方向
     - Return:
         - Set[PositionType]
             允許的方向
     """
 
-    return allowed_directions or {position_type}
+    return direction.to_position_types()
 
 
 def get_execution_order(
     bar_execution_order: Optional[BarExecutionOrder],
-    position_type: PositionType,
-    enable_intraday: bool,
+    allow_day_trade: bool,
 ) -> BarExecutionOrder:
     """
     - Description:
         決定單根 K 棒內的執行順序；策略顯式指定時一律以策略為準
 
-        推導表（僅在 `bar_execution_order` 為 None 時適用）：
+        未指定時由 `allow_day_trade` 推導，與方向無關：
 
-        | position_type | enable_intraday | 預設順序          |
-        |---------------|-----------------|-------------------|
-        | LONG          | 任意            | `CLOSE_THEN_OPEN` |
-        | SHORT         | True            | `OPEN_THEN_CLOSE` |
-        | SHORT         | False           | `CLOSE_THEN_OPEN` |
-
-        SHORT ＋ 當沖採先開後平：現股當沖沖賣必須先賣才可能同日回補；
-        留倉放空等同日頻再平衡，維持先平後開。
-
-        **推導出的是預設建議，不是政策**：策略只要填了 `bar_execution_order`，
-        這張表就完全不參與判斷。
-
-        **LONG 為何不自動切換**：`enable_intraday` 的預設值是 True，
-        既有做多策略沒有一支是刻意宣告當沖的。若讓 LONG ＋ `enable_intraday`
-        自動採 `OPEN_THEN_CLOSE`，等於在無人宣告的情況下改掉每一支做多策略的
-        成交順序與回測結果。做多當沖請在策略 `__init__` 顯式宣告。
+        | allow_day_trade | 順序              | 效果                               |
+        |-----------------|-------------------|------------------------------------|
+        | True            | `OPEN_THEN_CLOSE` | 當天開的部位當天就會被檢查要不要平 |
+        | False           | `CLOSE_THEN_OPEN` | 先平倉釋出資金，當天開的部位留到下一根 bar |
     - Parameters:
         - bar_execution_order: Optional[BarExecutionOrder]
-            策略顯式指定的順序
-        - position_type: PositionType
-            策略的方向
-        - enable_intraday: bool
-            是否允許當日沖銷
+            策略顯式指定的順序（進階覆寫）
+        - allow_day_trade: bool
+            策略能否當沖
     - Return:
         - BarExecutionOrder
             單根 bar 的開平倉先後
@@ -79,7 +59,7 @@ def get_execution_order(
     if bar_execution_order is not None:
         return bar_execution_order
 
-    if position_type == PositionType.SHORT and enable_intraday:
+    if allow_day_trade:
         return BarExecutionOrder.OPEN_THEN_CLOSE
 
     return BarExecutionOrder.CLOSE_THEN_OPEN

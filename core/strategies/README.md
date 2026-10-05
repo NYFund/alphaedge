@@ -26,7 +26,8 @@
     - [帳戶設定](#帳戶設定)
     - [回測設定](#回測設定)
     - [回測級別說明](#回測級別說明)
-    - [單根 bar 的執行順序](#單根-bar-的執行順序)
+    - [盤中逐筆策略：`is_tick_triggered`](#盤中逐筆策略is_tick_triggered)
+    - [當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序)
   - [資料 API 使用方式](#資料-api-使用方式)
     - [StockPriceAPI - 日線價格資料](#stockpriceapi---日線價格資料)
     - [StockTickAPI - 逐筆成交資料](#stocktickapi---逐筆成交資料)
@@ -124,7 +125,7 @@ core/portfolio/                    # 部位建構層（回測與實盤共用，�
 from core.models import StockAccount, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale
+from core.utils import Action, PositionType, Scale, TradeDirection
 
 
 class MyStrategy(BaseStockStrategy):
@@ -145,8 +146,8 @@ def __init__(self):
 
     # === 策略基本資訊 ===
     self.strategy_name: str = "MyStrategy"
-    self.position_type: str = PositionType.LONG
-    self.enable_intraday: bool = True
+    self.direction: TradeDirection = TradeDirection.LONG  # 只做多
+    self.allow_day_trade: bool = False  # 不當沖
 
     # === 帳戶設定 ===
     self.init_capital: float = 1000000.0  # 初始資金 100 萬
@@ -546,9 +547,9 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `strategy_name` | `str` | 策略名稱，用於識別和報告 | `""` |
 | `market` | `Market` | 市場（地區），**由 `BaseStockStrategy` 填入，策略不需自己設**；與 `instrument_type` **兩者的組合**才是 `factory` 組裝 model 組合的分派鍵 | `Market.TW` |
 | `instrument_type` | `InstrumentType` | 商品類別，**由 `BaseStockStrategy` 填入，策略不需自己設**；見上列 | `InstrumentType.STOCK` |
-| `position_type` | `str` | 部位方向，`PositionType.LONG`（做多）或 `PositionType.SHORT`（做空） | `PositionType.LONG` |
-| `enable_intraday` | `bool` | 是否為當沖策略；**只是推導預設執行順序與台股當沖成本的輸入，不是硬性開關**（見[單根 bar 的執行順序](#單根-bar-的執行順序)） | `True` |
-| `bar_execution_order` | `Optional[BarExecutionOrder]` | 單根 bar 內開平倉的先後，`None` 由引擎推導 | `None` |
+| `direction` | `TradeDirection` | 交易方向：`LONG`（只做多）、`SHORT`（只做空）、`BOTH`（多空都做）；方向不符的訂單會被引擎剔除 | `TradeDirection.LONG` |
+| `allow_day_trade` | `bool` | 能否當沖（同一天開倉又平倉同一檔），見[當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序) | `False` |
+| `bar_execution_order` | `Optional[BarExecutionOrder]` | 進階覆寫：單根 bar 內開平倉的先後，`None` 由 `allow_day_trade` 推導；一般策略不要設 | `None` |
 
 ### 帳戶設定
 
@@ -571,20 +572,15 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 - **`Scale.DAY`**: 日線回測，使用每日收盤價
 - **`Scale.TICK`**: 逐筆回測，使用每筆成交資料（僅台股；期貨 Tick 回測未實作）
 
-### 盤中逐筆策略：`is_intraday`
+### 盤中逐筆策略：`is_tick_triggered`
 
 | 參數 | 類型 | 說明 | 預設值 |
 |------|------|------|--------|
-| `is_intraday` | `bool` | 實盤是否**每收到一筆 tick 就呼叫一次策略鉤子** | `False` |
+| `is_tick_triggered` | `bool` | 實盤是否**每收到一筆 tick 就呼叫一次策略鉤子** | `False` |
 
-⚠️ **與 `enable_intraday` 是兩件完全不同的事**，名字像只是巧合：
+與當沖無關：能不能當沖看 `allow_day_trade`。
 
-| 參數 | 回答的問題 | 影響 |
-|------|-----------|------|
-| `enable_intraday` | 允不允許當沖？ | 推導同一根 bar 的開平順序 |
-| `is_intraday` | 實盤要不要逐筆觸發？ | 鉤子的呼叫頻率與每次拿到的報價 |
-
-宣告 `is_intraday = True` 之後：
+宣告 `is_tick_triggered = True` 之後：
 
 1. **每次鉤子只拿到一檔的一筆報價**——`List[StockQuote]` 長度為 1、`scale=TICK`、
    帶 bid/ask。Shioaji 訂閱後本來就是有報價就 callback 推進來，逐筆最貼近原生語意。
@@ -594,44 +590,36 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 3. **不能跑 `Scale.TICK` 回測**。引擎會在建立時就拒絕（`IntradayScaleMismatchError`）——
    同一個 `generate_open_signals(stock_quotes)`，實盤拿到長度 1 的 list、
    TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。要用回測估量級，
-   把 `scale` 設成 `Scale.DAY` 或把 `is_intraday` 關掉。
+   把 `scale` 設成 `Scale.DAY` 或把 `is_tick_triggered` 關掉。
 
-### 單根 bar 的執行順序
+### 當沖與單根 bar 的執行順序
 
-同一根 K 棒（或同一批 tick）內，引擎要先跑平倉還是先跑開倉，由 `bar_execution_order` 決定：
+策略只需要設 `allow_day_trade`，不分做多做空：
 
-| 值 | 行為 | 典型用途 |
-|----|------|----------|
-| `BarExecutionOrder.CLOSE_THEN_OPEN` | 先平倉、再開倉 | 日頻再平衡、換股（先釋放資金） |
-| `BarExecutionOrder.OPEN_THEN_CLOSE` | 先開倉、再平倉 | 當沖／日內反手（同一根 bar 內開平同一標的） |
+| `allow_day_trade` | 同一根 bar 的處理順序 | 效果 |
+|-------------------|----------------------|------|
+| `False`（預設） | 先平倉、再開倉（`CLOSE_THEN_OPEN`） | 當天開的部位最快下一根 bar 才出場；先平倉可先釋放資金給新開倉 |
+| `True` | 先開倉、再平倉（`OPEN_THEN_CLOSE`） | 當天開的部位當天就會被檢查要不要平 |
 
-策略沒填時（`None`），引擎依下表推導：
+台股另有兩項成本效果：
 
-| `position_type` | `enable_intraday` | 推導出的預設 |
-|-----------------|-------------------|--------------|
-| LONG | 任意 | `CLOSE_THEN_OPEN` |
-| SHORT | `True` | `OPEN_THEN_CLOSE` |
-| SHORT | `False` | `CLOSE_THEN_OPEN` |
-
-> **推導出的只是預設建議，仍以策略宣告為準。** 只要策略在 `__init__` 填了
-> `bar_execution_order`，上表就完全不參與判斷。
->
-> **做多當沖必須自己宣告 `OPEN_THEN_CLOSE`**：`enable_intraday` 的預設值就是 `True`，
-> 既有做多策略沒有一支是刻意宣告當沖的，若讓 LONG 也自動切換，等於在無人宣告的情況下
-> 改掉每一支做多策略的成交順序與回測結果。
+- 當天開平的部位，證交稅以當沖稅率計算（做多、做空皆同）。
+- 空單一律走**現股當沖沖賣**（`ShortMethod.DAY_TRADE`），收盤前必須回補；
+  要留倉放空（融券或借券）就把 `allow_day_trade` 設為 `False`，再指定 `short_method`。
 
 ```python
-from core.utils import BarExecutionOrder, PositionType
+from core.utils import TradeDirection
 
 
 class MyDayTradeLongStrategy(BaseStockStrategy):
     def __init__(self):
         super().__init__()
-        self.position_type: PositionType = PositionType.LONG
-        self.enable_intraday: bool = True
-        # 做多當沖：不宣告就走 CLOSE_THEN_OPEN，同一根 bar 內無法開完再平
-        self.bar_execution_order: BarExecutionOrder = BarExecutionOrder.OPEN_THEN_CLOSE
+        self.direction: TradeDirection = TradeDirection.LONG
+        self.allow_day_trade: bool = True  # 做多當沖
 ```
+
+`bar_execution_order` 是進階覆寫：填了之後引擎一律以它為準，`allow_day_trade`
+推導出的順序不再參與判斷。一般策略不要設。
 
 同一根 bar 內多筆委託的處理順序（決定性排序）與同標的開平倉並存的規則，
 見[多市場回測引擎架構 §2.2.1 單根 bar 的委託順序](../../docs/backtest/multi-market-engine.md#221-單根-bar-的委託順序)。
@@ -951,16 +939,15 @@ python -m apps.backtest --strategy SimpleStrategy
 
 | 欄位 | 型別 | 預設 | 說明 |
 | --- | --- | --- | --- |
-| `position_type` | `PositionType` | `LONG` | 設為 `SHORT` 即為放空策略 |
-| `enable_intraday` | `bool` | `True` | `True` 且方向為 SHORT 時，引擎自動採用**現股當沖沖賣**並切換為「先開後平」，使同日開平倉成立 |
+| `direction` | `TradeDirection` | `LONG` | 設為 `SHORT` 即為放空策略；多空都做設為 `BOTH` |
+| `allow_day_trade` | `bool` | `False` | `True` 時空單一律走**現股當沖沖賣**並切換為「先開後平」，使同日開平倉成立；要留倉放空就維持 `False` |
 | `short_method` | `ShortMethod` | `MARGIN` | 留倉放空的管道：`MARGIN`（融券）或 `SBL`（借券）；當沖時由引擎強制為 `DAY_TRADE` |
-| `allowed_directions` | `Optional[Set[PositionType]]` | `None` | 訂單方向白名單，`None` 等同 `{position_type}`；要做多空並存的策略設為 `{LONG, SHORT}` |
 | `max_holding_days` | `Optional[int]` | `None` | 留倉放空的保險絲，超過即強制回補（建議 20~30 天）。除權息停券已由引擎自動處理，本欄位改為近似**股東會停券**，該部分仍無資料源 |
 | `cost_config` | `Optional[CostConfig]` | `None` | 覆寫費率（手續費折扣、券費率等），`None` 使用市場常見預設值 |
 | `short_constraint` | `Optional[ShortConstraint]` | `None` | 可成交限制：可當沖清單、券源檢核、停券日、單一標的曝險上限。停券的自動推導預設開啟（`auto_force_cover_on_ex_dividend`），`force_cover_dates` 則是手動加碼 |
 | `day_trade_uncovered_policy` | `DayTradeUncoveredPolicy` | `FORCE_COVER_AT_CLOSE` | 當沖日終未回補的處理 |
 | `margin_call_policy` | `MarginCallPolicy` | `FORCE_COVER` | 維持率跌破 130% 的處理 |
-| `bar_execution_order` | `Optional[BarExecutionOrder]` | `None` | 單根 K 棒內的執行順序，`None` 由引擎依方向推導；非 `None` 時一律以策略為準（見[單根 bar 的執行順序](#單根-bar-的執行順序)） |
+| `bar_execution_order` | `Optional[BarExecutionOrder]` | `None` | 進階覆寫：單根 K 棒內的執行順序，`None` 由 `allow_day_trade` 推導；非 `None` 時一律以策略為準（見[當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序)） |
 
 ### 訊號方向對照
 
@@ -986,7 +973,7 @@ from core.datafeed.base import BaseDataFeed
 from core.models import StockAccount, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale, ShortMethod
+from core.utils import Action, PositionType, Scale, ShortMethod, TradeDirection
 
 
 class SimpleShortStrategy(BaseStockStrategy):
@@ -1015,8 +1002,8 @@ class SimpleShortStrategy(BaseStockStrategy):
         self.scale: Scale = Scale.DAY
 
         # 放空設定：融券留倉，最長持有 20 個曆日
-        self.position_type: PositionType = PositionType.SHORT
-        self.enable_intraday: bool = False
+        self.direction: TradeDirection = TradeDirection.SHORT
+        self.allow_day_trade: bool = False  # 留倉融券
         self.short_method: ShortMethod = ShortMethod.MARGIN
         self.max_holding_days: int = 20
 
@@ -1118,7 +1105,7 @@ class SimpleShortStrategy(BaseStockStrategy):
 
 1. **資金佔用與做多不同**：放空的賣出價款會留作擔保品，不會進入可用餘額；帳戶當下只扣「保證金 + 開倉成本」，損益要等回補才結算。融券保證金成數為 90%，等於 1 張 100 元的股票會佔用 9 萬元。
 2. **成本課在賣出端**：證交稅在放空**開倉**時就課（當沖 0.15%、留倉 0.3%），與做多相反；融券另有 0.08% 的融券手續費。
-3. **當沖必須當日結清**：`enable_intraday=True` 時，日終仍未回補的部位會被引擎以收盤價強制回補並計數。若當日全日鎖漲停無法回補，會自動轉為融券留倉並記入 `limit_up_cover_failed`——這是放空最致命的尾部風險，**檢視回測結果時務必單獨看這個數字**。
+3. **當沖必須當日結清**：`allow_day_trade=True` 時，日終仍未回補的部位會被引擎以收盤價強制回補並計數。若當日全日鎖漲停無法回補，會自動轉為融券留倉並記入 `limit_up_cover_failed`——這是放空最致命的尾部風險，**檢視回測結果時務必單獨看這個數字**。
 4. **維持率會斷頭**：留倉放空在維持率跌破 130% 時會被強制回補，不是等你自己的停損訊號。停損條件應設得比斷頭門檻更早觸發。
 5. **同一標的不可雙向持倉**：已有多單時開空單會被拒絕（反之亦然）。跨標的的多空並存則不受限制。
 6. **成交價會被驗證**：訂單價格必須落在當日高低區間與漲跌停內，否則會被拒單。當沖策略請明確宣告成交價假設（建議開倉用 `open`、回補用 `close`），並確保 `generate_open_signals` 只使用該時點之前可得的資訊。

@@ -159,8 +159,7 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
     )
     declared: BarExecutionOrder = get_execution_order(
         strategy.bar_execution_order,
-        strategy.position_type,
-        strategy.enable_intraday,
+        strategy.allow_day_trade,
     )
 
     if actual is declared:

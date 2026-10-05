@@ -448,7 +448,7 @@ def test_stop_loss_signal_not_implemented() -> None:
 # === 當沖語意 ===
 def test_engine_derives_day_trade_cost_config() -> None:
     """
-    SHORT ＋ enable_intraday 必須推導出現股當沖沖賣與減半稅率
+    SHORT ＋ allow_day_trade 必須推導出現股當沖沖賣與減半稅率
 
     策略若自行填 `cost_config`，factory 會跳過這段推導、稅率退回一般 0.3%，
     故本測試同時是「不要在策略裡設 cost_config」的防護線。

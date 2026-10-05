@@ -146,7 +146,7 @@ graph TB
 ## 回測支援範圍
 
 一次回測跑一個（市場, 商品）組合，由策略基底宣告、`factory.py` 分派；方向（LONG／SHORT）與商品類別是兩條獨立的軸，
-記帳一律看每一張訂單的 `position_type`，策略的 `allowed_directions` 只是方向白名單。
+記帳一律看每一張訂單的 `position_type`，策略的 `direction`（`LONG`／`SHORT`／`BOTH`）只是方向白名單。
 
 表中的資料區間是 2026-10-02 盤點 `data/db` 的結果，更新資料後會跟著變動。
 
@@ -157,8 +157,8 @@ graph TB
 | 股票期貨／ETF 期貨 | ⚠️ 程式可跑，缺行情 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29～09-30 共 8 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料，**不足以跑出有意義的回測**（回補待辦見 [暫緩工作彙整](backlog/暫緩工作彙整.md) S4）<br>**程式面已接通**：乘數由 DataFeed 的 `resolve_multiplier()` 逐日查標的池的契約單位；保證金先查金額表（ETF 期貨 NYF 在此，2020-07-22 起），個股期貨改走比例表（`標的股價 × 契約單位 × 適用比例`，標的股價跨庫取自 `tw_stock.db`）<br>**其餘限制**：契約單位只回溯到 2026-08-29 的首份快照，更早的除權息調整查不到 | 僅 `DAY` | 同台指數期貨 | `BaseFuturesStrategy` |
 | 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
 
-> - 多空並存要宣告 `allowed_directions = {LONG, SHORT}`；做多當沖需自行宣告 `bar_execution_order = OPEN_THEN_CLOSE`。
-> - SHORT 策略的 `enable_intraday` 預設為 `True`，會自動走 `DAY_TRADE`；要留倉放空必須設為 `False` 再指定 `short_method`。
+> - 方向用 `direction` 宣告（`LONG`／`SHORT`／`BOTH`），能否當沖用 `allow_day_trade` 宣告（預設 `False`），做多做空都一樣。
+> - `allow_day_trade = True` 時空單一律走 `DAY_TRADE` 現股當沖沖賣；要留倉放空就維持 `False` 再指定 `short_method`。
 > - 期貨跨月份價差部位兩腿各繳全額保證金（價差保證金未模擬）。
 
 ### 主要限制

@@ -9,7 +9,7 @@ from core.models import StockAccount, StockPosition, StockQuote
 from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale, Units
+from core.utils import Action, PositionType, Scale, TradeDirection, Units
 
 
 class ForeignSellingReversalShortStrategy(BaseStockStrategy):
@@ -17,8 +17,8 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
     外資大賣強勢股當沖放空（日線）
 
     進出場都在同一個交易日，本質是**現股「先賣後買」當日沖銷**，不是跨日融券放空：
-    免融券保證金、免借券費、證交稅走當沖減半。`enable_intraday=True` ＋
-    `position_type=SHORT` 會讓引擎自動採用 `ShortMethod.DAY_TRADE` 與
+    免融券保證金、免借券費、證交稅走當沖減半。`direction=SHORT` ＋
+    `allow_day_trade=True` 會讓引擎自動採用 `ShortMethod.DAY_TRADE` 與
     `OPEN_THEN_CLOSE`，同一根 bar 內的開平倉才成立。
 
     賣出（開倉）條件（全部以 T−1 已收盤的資料判斷，T 日開盤放空）：
@@ -132,8 +132,8 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
         # （`TwStockFillModel.check_short_borrowable()` 本來就會跳過
         # `ShortMethod.DAY_TRADE`，開啟也不會誤拒本策略的開倉單），
         # 檢核對本策略沒有實際約束力，只會多一組每日融券餘額查詢。
-        self.position_type: PositionType = PositionType.SHORT
-        self.enable_intraday: bool = True  # 現股當沖沖賣
+        self.direction: TradeDirection = TradeDirection.SHORT
+        self.allow_day_trade: bool = True  # 現股當沖沖賣
 
         # === 留倉部位的保險絲 ===
         #

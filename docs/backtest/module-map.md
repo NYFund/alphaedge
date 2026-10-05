@@ -109,7 +109,7 @@ sequenceDiagram
 
 | 順序 | 關卡 | 實作位置 | 擋掉時計入 |
 |:----:|------|----------|------------|
-| 1 | 方向白名單（`allowed_directions`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/execution/order_preprocess.py` | `rejected_direction` |
+| 1 | 方向白名單（`direction`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/execution/order_preprocess.py` | `rejected_direction` |
 | 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`），之後做決定性排序 | `CostModel.enrich_orders()`、`Backtester.sort_orders()` | —（只補值、排序不擋） |
 | 3 | 持倉檔數硬上限（`max_holdings`） | `Backtester.check_max_holdings()` → `order_preprocess.check_max_holdings()` | `rejected_max_holdings` |
 | 4 | 當日查不到報價（停牌、非股票池） | `Backtester.execute_open_signal()` | `rejected_no_quote` |

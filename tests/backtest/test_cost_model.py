@@ -501,8 +501,7 @@ def test_factory_injects_the_backtest_range_into_the_cost_config() -> None:
     from core.backtest.factory import build_cost_config
 
     class _Strategy:
-        position_type = PositionType.SHORT
-        enable_intraday = True
+        allow_day_trade = True
         short_method = ShortMethod.DAY_TRADE
         cost_config = None
         short_constraint = None
@@ -513,3 +512,40 @@ def test_factory_injects_the_backtest_range_into_the_cost_config() -> None:
 
     assert config.backtest_start_date == datetime.date(2026, 1, 5)
     assert config.backtest_end_date == datetime.date(2028, 6, 30)
+
+
+@pytest.mark.parametrize(
+    "allow_day_trade, short_method, expected_method",
+    [
+        (True, ShortMethod.MARGIN, ShortMethod.DAY_TRADE),
+        (True, ShortMethod.SBL, ShortMethod.DAY_TRADE),
+        (False, ShortMethod.MARGIN, ShortMethod.MARGIN),
+        (False, ShortMethod.SBL, ShortMethod.SBL),
+    ],
+)
+def test_factory_derives_day_trade_from_allow_day_trade_only(
+    allow_day_trade: bool, short_method: ShortMethod, expected_method: ShortMethod
+) -> None:
+    """
+    當沖成本只看 `allow_day_trade`，不看方向
+
+    做多策略開了當沖，當天開平的部位也要吃當沖稅率；只在放空時開啟的話，
+    做多當沖會以一般稅率計算，回測成本高估。
+    """
+
+    from core.backtest.factory import build_cost_config
+
+    class _Strategy:
+        cost_config = None
+        short_constraint = None
+        start_date = None
+        end_date = None
+
+    strategy = _Strategy()
+    strategy.allow_day_trade = allow_day_trade
+    strategy.short_method = short_method
+
+    config: CostConfig = build_cost_config(strategy)
+
+    assert config.is_day_trade is allow_day_trade
+    assert config.short_method is expected_method

@@ -130,24 +130,24 @@ class Backtester:
 
             **讓錯誤現形而不是留一個看起來正常的績效**：這是 `PreOpenQuoteMixin`
             「讀 OHLC 就拋」在盤中這一側的對應物。要用回測估量級的人，
-            得自己明確把 `is_intraday` 關掉，不會在不知情的狀況下拿到一份
+            得自己明確把 `is_tick_triggered` 關掉，不會在不知情的狀況下拿到一份
             訊號語意不同的報表。
         - Raise:
             - IntradayScaleMismatchError
-                策略宣告 `is_intraday=True` 且 `scale` 為 `Scale.TICK`
+                策略宣告 `is_tick_triggered=True` 且 `scale` 為 `Scale.TICK`
         """
 
-        if not getattr(self.strategy, "is_intraday", False):
+        if not getattr(self.strategy, "is_tick_triggered", False):
             return
 
         if self.scale != Scale.TICK:
             return
 
         raise IntradayScaleMismatchError(
-            f"{type(self.strategy).__name__} 宣告 is_intraday=True（實盤逐筆觸發，"
+            f"{type(self.strategy).__name__} 宣告 is_tick_triggered=True（實盤逐筆觸發，"
             "每次鉤子只拿到一檔的一筆報價），但現行 Scale.TICK 回測是"
             "**整天的 tick 一次給**，兩者的報價 list 語意不同，訊號不可比。"
-            "要用回測估量級請明確改為 Scale.DAY，或把 is_intraday 關掉。"
+            "要用回測估量級請明確改為 Scale.DAY，或把 is_tick_triggered 關掉。"
         )
 
     def setup(self) -> None:
@@ -184,19 +184,16 @@ class Backtester:
 
     # === Direction Setting ===
     def get_allowed_directions(self) -> Set[PositionType]:
-        """取得允許的訂單方向白名單；策略未指定時等同其宣告方向"""
+        """取得允許的訂單方向白名單：由策略的 `direction` 決定"""
 
-        return order_preprocess.get_allowed_directions(
-            self.strategy.allowed_directions, self.strategy.position_type
-        )
+        return order_preprocess.get_allowed_directions(self.strategy.direction)
 
     def get_execution_order(self) -> BarExecutionOrder:
         """單根 bar 的開平倉先後；推導表與理由見 `order_preprocess.get_execution_order()`"""
 
         return order_preprocess.get_execution_order(
             self.strategy.bar_execution_order,
-            self.strategy.position_type,
-            self.strategy.enable_intraday,
+            self.strategy.allow_day_trade,
         )
 
     # === Order Validation ===

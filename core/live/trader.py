@@ -536,7 +536,7 @@ class LiveTrader:
             回呼導過來。導過去之後 `drain_execution_queue()` 會一直是空的，
             那是刻意的——回報已經改由迴圈逐筆消化，兩邊都撈會重複且順序錯亂。
 
-            **逐筆觸發只給宣告了 `is_intraday` 的策略**：其餘策略的鉤子一次要
+            **逐筆觸發只給宣告了 `is_tick_triggered` 的策略**：其餘策略的鉤子一次要
             一批報價，逐筆餵給它們等於每次只看得到一檔，訊號會完全不同。
         - Parameters:
             - window: Optional[SegmentWindow]
@@ -766,7 +766,7 @@ class LiveTrader:
         """
         一筆行情 → 逐筆觸發策略
 
-        **只餵宣告了 `is_intraday` 的策略**，而且只餵有訂這檔的那些。
+        **只餵宣告了 `is_tick_triggered` 的策略**，而且只餵有訂這檔的那些。
         送單前先確認連線：斷線時繼續算訊號只會產生一批送不出去的單。
         """
 
@@ -777,7 +777,7 @@ class LiveTrader:
             return
 
         for context in self.contexts:
-            if not getattr(context.strategy, "is_intraday", False):
+            if not getattr(context.strategy, "is_tick_triggered", False):
                 continue
             if quote.symbol not in context.symbols:
                 continue
@@ -1106,8 +1106,7 @@ class LiveTrader:
         strategy: BaseStrategy = context.strategy
         execution_order: BarExecutionOrder = order_preprocess.get_execution_order(
             strategy.bar_execution_order,
-            strategy.position_type,
-            strategy.enable_intraday,
+            strategy.allow_day_trade,
         )
 
         exit_orders: List[BaseOrder] = self._exit_orders(context, timing, quotes)
@@ -1169,9 +1168,7 @@ class LiveTrader:
     ) -> List[BaseOrder]:
         """方向白名單 ＋ 持倉檔數上限 ＋ 決定性排序；與回測共用同一份實作"""
 
-        allowed = order_preprocess.get_allowed_directions(
-            context.strategy.allowed_directions, context.strategy.position_type
-        )
+        allowed = order_preprocess.get_allowed_directions(context.strategy.direction)
         valid: List[BaseOrder] = order_preprocess.validate_orders(
             orders, stage, allowed
         )

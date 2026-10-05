@@ -1,6 +1,6 @@
 import datetime
 from enum import Enum
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
 """
 市場制度常量：市場、商品類別、級別、多空、漲跌停與跳動點表
@@ -24,6 +24,16 @@ SHORT_METHOD_MARGIN = "MARGIN"  # 融券賣出（留倉）
 
 
 SHORT_METHOD_SBL = "SBL"  # 借券賣出（留倉，議定費率）
+
+
+# 定義策略交易方向常量
+TRADE_DIRECTION_LONG = "LONG"  # 只做多
+
+
+TRADE_DIRECTION_SHORT = "SHORT"  # 只做空
+
+
+TRADE_DIRECTION_BOTH = "BOTH"  # 多空都做
 
 
 # 台股漲跌停幅度：2015-06-01 由 7% 放寬為 10%
@@ -98,6 +108,26 @@ class PositionType(str, Enum):
 
     LONG = "LONG"
     SHORT = "SHORT"
+
+
+class TradeDirection(str, Enum):
+    """
+    策略的交易方向：只做多、只做空，或多空都做
+
+    與 `PositionType` 分開是刻意的：`PositionType` 標在每一張訂單與每一筆部位上，
+    那裡只可能是多或空；`BOTH` 只對「策略允許哪些方向」有意義。
+    """
+
+    LONG = TRADE_DIRECTION_LONG
+    SHORT = TRADE_DIRECTION_SHORT
+    BOTH = TRADE_DIRECTION_BOTH
+
+    def to_position_types(self) -> Set[PositionType]:
+        """轉成訂單方向的白名單：策略送出的訂單方向必須落在其中"""
+
+        if self is TradeDirection.BOTH:
+            return {PositionType.LONG, PositionType.SHORT}
+        return {PositionType(self.value)}
 
 
 class ShortMethod(str, Enum):

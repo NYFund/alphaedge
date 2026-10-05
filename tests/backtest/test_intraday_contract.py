@@ -33,11 +33,11 @@ def skip_dataset_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Backtester, "load_datasets", lambda self: None)
 
 
-def make_strategy(is_intraday: bool, scale: str) -> BaseStrategy:
+def make_strategy(is_tick_triggered: bool, scale: str) -> BaseStrategy:
     """取一支真實策略再改旗標；不自造假策略，避免與真實基底漂移"""
 
     strategy: BaseStrategy = StrategyLoader.load_strategies()["MomentumStrategy1"]()
-    strategy.is_intraday = is_intraday
+    strategy.is_tick_triggered = is_tick_triggered
     strategy.scale = scale
     strategy.start_date = datetime.date(2024, 1, 2)
     strategy.end_date = datetime.date(2024, 1, 2)
@@ -48,14 +48,14 @@ def test_default_strategy_is_not_intraday() -> None:
     """**預設關閉**：既有策略一支都不該因為新增這個旗標而改變行為"""
 
     registry = StrategyLoader.load_strategies()
-    assert all(cls().is_intraday is False for cls in registry.values())
+    assert all(cls().is_tick_triggered is False for cls in registry.values())
 
 
 def test_intraday_strategy_refuses_tick_backtest() -> None:
     """宣告逐筆觸發的策略跑 `Scale.TICK` 回測要當場拒絕"""
 
     with pytest.raises(IntradayScaleMismatchError, match="語意不同"):
-        build_backtester(make_strategy(is_intraday=True, scale=Scale.TICK))
+        build_backtester(make_strategy(is_tick_triggered=True, scale=Scale.TICK))
 
 
 def test_intraday_strategy_may_still_run_day_backtest() -> None:
@@ -66,7 +66,7 @@ def test_intraday_strategy_may_still_run_day_backtest() -> None:
     要估量級的人明確改設定即可，只是結果不可當實盤預估。
     """
 
-    assert build_backtester(make_strategy(is_intraday=True, scale=Scale.DAY))
+    assert build_backtester(make_strategy(is_tick_triggered=True, scale=Scale.DAY))
 
 
 def test_non_intraday_tick_backtest_is_untouched() -> None:
@@ -78,7 +78,9 @@ def test_non_intraday_tick_backtest_is_untouched() -> None:
     不是守門有沒有放行。
     """
 
-    backtester = build_backtester(make_strategy(is_intraday=False, scale=Scale.DAY))
+    backtester = build_backtester(
+        make_strategy(is_tick_triggered=False, scale=Scale.DAY)
+    )
     backtester.scale = Scale.TICK
 
     backtester._reject_intraday_tick_backtest()

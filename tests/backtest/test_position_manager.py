@@ -468,7 +468,7 @@ def test_long_overnight_sell_is_taxed_at_the_full_rate(make_order) -> None:
     做多部位**隔夜**賣出一律是一般稅率
 
     `cost_model.tax()` 遇 `is_day_trade=None` 會取 `config.is_day_trade`，
-    而那是策略層的開關。放空策略開了當沖、`allowed_directions` 又含 LONG 時，
+    而那是策略層的開關（`allow_day_trade`）。策略開了當沖時，
     做多部位持有 7 天後賣出也會吃到減半稅（實測 150，應為 300）。
     """
 

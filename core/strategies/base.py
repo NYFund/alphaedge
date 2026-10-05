@@ -1,6 +1,6 @@
 import datetime
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
@@ -10,8 +10,8 @@ from core.utils import (
     ExecutionTiming,
     InstrumentType,
     Market,
-    PositionType,
     Scale,
+    TradeDirection,
 )
 
 """BaseStrategy: 市場與商品皆無關的策略骨架（market ＋ instrument_type 為 factory 的分派鍵）"""
@@ -32,16 +32,7 @@ class BaseStrategy(ABC):
         # 兩者皆由各市場的策略基底填入，策略本身不需設定。
         self.market: Optional[Market] = None  # 市場（地區）
         self.instrument_type: Optional[InstrumentType] = None  # 商品類別
-        # 策略主要方向（推導預設值用）
-        self.position_type: PositionType = PositionType.LONG
-        # 策略是否為當沖：只是**推導預設值的輸入**，不是硬性開關。
-        # 真正決定同一根 bar 能否開平同一標的的是 bar_execution_order（見下方區塊）
-        self.enable_intraday: bool = True  # Allow day trade or not
-        # 是否為**盤中逐筆觸發**的策略。
-        #
-        # ⚠️ **與上面的 `enable_intraday` 是兩件完全不同的事**，名字像只是巧合：
-        # `enable_intraday` 是「允不允許當沖」（推導同一根 bar 的開平順序用），
-        # 本旗標是「實盤要不要每收到一筆 tick 就呼叫一次策略」。
+        # 是否為**盤中逐筆觸發**的策略：實盤每收到一筆 tick 就呼叫一次策略。
         #
         # 宣告為 True 的策略，實盤每次鉤子只會拿到**一檔的一筆報價**
         # （`List[StockQuote]` 長度為 1、`scale=TICK`）。需要橫斷面比較
@@ -52,7 +43,9 @@ class BaseStrategy(ABC):
         # 同一個 `check_open_signal(stock_quotes)`，實盤拿到長度 1 的 list、
         # TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。
         # 兩邊都跑得完、都不報錯，而訊號完全不一樣——那是最難查的一種錯。
-        self.is_intraday: bool = False  # 盤中逐筆觸發（實盤）
+        #
+        # 與當沖無關：能不能當沖看下方的 `allow_day_trade`。
+        self.is_tick_triggered: bool = False  # 盤中逐筆觸發（實盤）
         self.init_capital: float = 0  # Initial capital
         # 同時可持有的最大檔數；**預設 None ＝ 不限制**。
         #
@@ -65,30 +58,25 @@ class BaseStrategy(ABC):
         """
         === Direction Setting ===
 
-        方向的責任分工：
-        - position_type 只用來推導預設值，不參與記帳
-        - allowed_directions 是訂單方向的白名單，None 時等同 {position_type}
-        - 實際記帳與成本路徑一律看每一張 order 的 position_type
+        策略只需要決定兩件事：做哪個方向、能不能當沖。
 
-        方向（LONG／SHORT）與商品類別（股票／期貨）是兩條獨立的軸，故本區塊與商品無關。
+        - `direction`：`LONG`（只做多）／`SHORT`（只做空）／`BOTH`（多空都做）。
+          引擎以它為訂單方向的白名單，方向不符的訂單一律剔除並記錄。
+          每一張訂單實際的多空仍由訂單自己的 `position_type` 決定，記帳與成本都看訂單。
+        - `allow_day_trade`：能否在同一天開倉又平倉同一檔。
+          - True：同一根 bar 先處理開倉再處理平倉，當天開的部位當天就可能出場；
+            當天開平的股票部位，證交稅以當沖稅率計算。
+          - False：先平倉再開倉，當天開的部位最快下一根 bar 才會出場。
 
-        執行順序的推導（`order_preprocess.get_execution_order()`，完整對照表在該處）：
+        台股放空另有市場專屬的效果，見 `BaseStockStrategy` 的〈Short Setting〉。
 
-        | position_type | enable_intraday | 推導出的預設 bar_execution_order |
-        |---------------|-----------------|----------------------------------|
-        | LONG          | 任意            | `CLOSE_THEN_OPEN`                |
-        | SHORT         | True            | `OPEN_THEN_CLOSE`                |
-        | SHORT         | False           | `CLOSE_THEN_OPEN`                |
-
-        **推導出的只是預設建議，一旦策略在 `__init__` 填了 `bar_execution_order`，
-        引擎一律以策略宣告為準。** 做多當沖要在同一根 bar 內開平同一標的，
-        必須自己宣告 `OPEN_THEN_CLOSE`——`enable_intraday=True` 不會自動切換，
-        因為它的預設值就是 True，既有做多策略沒有一支是刻意宣告當沖的，
-        自動切換等於在無人宣告的情況下改掉所有做多策略的回測結果。
+        `bar_execution_order` 是進階覆寫，一般策略不要設：非 None 時引擎一律以它為準，
+        `allow_day_trade` 推導出的順序不再參與判斷。
         """
-        self.allowed_directions: Optional[Set[PositionType]] = None  # 允許的訂單方向
+        self.direction: TradeDirection = TradeDirection.LONG  # 交易方向
+        self.allow_day_trade: bool = False  # 能否當沖
         self.bar_execution_order: Optional[BarExecutionOrder] = (
-            None  # 單根 K 棒內的執行順序（None 由引擎推導，見上表；非 None 時一律以策略為準）
+            None  # 單根 K 棒內的執行順序（None 由 allow_day_trade 推導）
         )
 
         """ === Backtest Setting === """

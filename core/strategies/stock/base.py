@@ -39,12 +39,13 @@ class BaseStockStrategy(BaseStrategy):
         """
         === Short Setting ===
 
-        台股信用交易專屬。方向白名單與執行順序與市場、商品皆無關，故放在 `BaseStrategy`
-        （`enable_intraday` 與 `bar_execution_order` 的對應表見 `BaseStrategy.__init__`
-        的〈Direction Setting〉區塊，推導規則見 `order_preprocess.get_execution_order()`）。
+        台股信用交易專屬。方向與當沖與市場、商品皆無關，故放在 `BaseStrategy`
+        （見 `BaseStrategy.__init__` 的〈Direction Setting〉區塊）。
 
-        `enable_intraday` 在台股另有一項市場專屬效果：SHORT ＋ 當沖時
-        `factory.build_cost_config()` 會強制 `ShortMethod.DAY_TRADE`（證交稅減半）。
+        `allow_day_trade=True` 在台股另有一項市場專屬效果：空單一律走現股當沖沖賣
+        （`ShortMethod.DAY_TRADE`，證交稅減半、收盤前必須回補），`short_method`
+        不再參與判斷，由 `factory.build_cost_config()` 強制。要留倉放空（融券或借券）
+        就把 `allow_day_trade` 設為 False。
         """
         self.short_method: ShortMethod = ShortMethod.MARGIN  # 放空管道
         self.cost_config: Optional[CostConfig] = None  # 成本參數（None 用預設）

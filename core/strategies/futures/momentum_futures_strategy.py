@@ -5,7 +5,14 @@ from core.datafeed.base import BaseDataFeed
 from core.models import FuturesAccount, FuturesQuote
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
-from core.utils import Action, ExecutionTiming, LiveHook, PositionType, Scale
+from core.utils import (
+    Action,
+    ExecutionTiming,
+    LiveHook,
+    PositionType,
+    Scale,
+    TradeDirection,
+)
 
 
 class MomentumFuturesStrategy(BaseFuturesStrategy):
@@ -53,7 +60,7 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
         self.init_capital: float = 3000000.0
         self.products: List[str] = self.DEFAULT_PRODUCTS
         self.max_lots: int = self.DEFAULT_MAX_LOTS
-        self.position_type: PositionType = PositionType.LONG
+        self.direction: TradeDirection = TradeDirection.LONG
         self.scale: Scale = Scale.DAY
 
         self.start_date: datetime.date = self.DEFAULT_BACKTEST_START_DATE
@@ -105,10 +112,8 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
         return [
             Signal(
                 quote=quote,
-                action=Action.BUY
-                if self.position_type == PositionType.LONG
-                else Action.SELL,
-                position_type=self.position_type,
+                action=Action.BUY,
+                position_type=PositionType.LONG,
                 order_price=quote.close,
             )
             for quote in candidates
@@ -166,8 +171,7 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
                     action=Action.SELL
                     if position.position_type == PositionType.LONG
                     else Action.BUY,
-                    # 方向沿用策略宣告，不看部位本身的方向
-                    position_type=self.position_type,
+                    position_type=position.position_type,
                     order_price=quote.close,
                     volume=position.volume,
                 )

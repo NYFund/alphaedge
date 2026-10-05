@@ -7,7 +7,7 @@
 ## 一、設計原則
 
 1. **單一引擎**：`core/backtest/backtester.py` 的 `Backtester` 統一處理多空，不另開 `ShortBacktester`。方向差異全部收斂到「成本模型 + 部位管理器 + 結算模型」。
-2. **方向來自訂單，策略只做白名單**：記帳與成本路徑一律依**每一張 `StockOrder` 自己的 `position_type`** 決定；策略層的 `allowed_directions` 只用於驗證與提供預設值。這與業界框架（Lean／Backtrader／Zipline 的 signed quantity 模型）一致——方向是部位的屬性，不是策略的屬性——要做多空並存的市場中性策略時不需重構引擎。
+2. **方向來自訂單，策略只做白名單**：記帳與成本路徑一律依**每一張 `StockOrder` 自己的 `position_type`** 決定；策略層的 `direction` 只用於驗證（方向白名單）。這與業界框架（Lean／Backtrader／Zipline 的 signed quantity 模型）一致——方向是部位的屬性，不是策略的屬性——要做多空並存的市場中性策略時不需重構引擎。
 3. **成本模型可插拔**：手續費／稅／券費／利息／保證金集中在 `StockCostModel`，由「放空管道（`ShortMethod`）+ 是否當沖」決定參數組合，不在 `PositionManager` 裡散落 if-else。
 4. **當沖與留倉同骨架**：兩者差別只是「是否收借券費／利息、是否佔用保證金、稅率是否減半」，共用同一組開倉／平倉流程。
 5. **保守預設、可調參數**：所有費率集中在 `core/utils/constant/` 與策略可覆寫的 config，不寫死在公式裡；預設值取市場常見值（見 §2.3）。
@@ -129,7 +129,7 @@
 
 ```
 strategy (宣告方向與管道)
-    ↓ position_type / short_method / enable_intraday
+    ↓ direction / allow_day_trade / short_method
 Backtester (統一迴圈、方向驗證、執行順序、逐日盯市)
     ↓ StockOrder
 StockPositionManager (方向分派：open/close × LONG/SHORT)
@@ -207,30 +207,31 @@ class StockCostModel:
 
 | 欄位 | 型別 | 預設 | 說明 |
 |------|------|------|------|
-| `allowed_directions` | `Optional[Set[PositionType]]` | `None` → `{position_type}` | 方向白名單 |
+| `direction` | `TradeDirection` | `LONG` | 方向白名單：`LONG`／`SHORT`／`BOTH` |
+| `allow_day_trade` | `bool` | `False` | 能否當沖；推導執行順序與放空管道，見下表 |
 | `short_method` | `ShortMethod` | `MARGIN` | 放空管道 |
 | `cost_config` | `Optional[CostConfig]` | `None` → `CostConfig.default(...)` | 成本參數覆寫 |
 | `short_constraint` | `Optional[ShortConstraint]` | `None` → `ShortConstraint()` | 可成交限制（§2.4） |
 | `max_holding_days` | `Optional[int]` | `None` | 留倉放空保險絲 |
-| `bar_execution_order` | `Optional[BarExecutionOrder]` | `None` → 依下表推導 | 執行順序 |
+| `bar_execution_order` | `Optional[BarExecutionOrder]` | `None` → 依下表推導 | 執行順序（進階覆寫） |
 | `day_trade_uncovered_policy` | `DayTradeUncoveredPolicy` | `FORCE_COVER_AT_CLOSE` | §5.1 |
 | `margin_call_policy` | `MarginCallPolicy` | `FORCE_COVER` | §5.2 |
 
 **推導規則（引擎執行）**
 
-| `position_type` | `enable_intraday` | 實際 `short_method` | 預設 `bar_execution_order` |
-|-----------------|-------------------|---------------------|----------------------------|
-| LONG | 任意 | — | `CLOSE_THEN_OPEN` |
-| SHORT | True | 強制 `DAY_TRADE` | `OPEN_THEN_CLOSE` |
-| SHORT | False | 用策略宣告（預設 `MARGIN`） | `CLOSE_THEN_OPEN` |
+| `allow_day_trade` | 空單的實際 `short_method` | 當天開平的證交稅 | 預設 `bar_execution_order` |
+|-------------------|---------------------------|------------------|----------------------------|
+| True | 強制 `DAY_TRADE` | 當沖稅率（多空皆同） | `OPEN_THEN_CLOSE` |
+| False | 用策略宣告（預設 `MARGIN`） | 一般稅率 | `CLOSE_THEN_OPEN` |
+
+執行順序只看 `allow_day_trade`，與方向無關。
 
 策略顯式設定 `bar_execution_order` 時，一律以策略為準。
 
 **方向的責任分工（呼應 §1 原則 2）**
-- `position_type`：只用來推導預設值（執行順序、`short_method`、`allowed_directions`）。
-- `allowed_directions`：`validate_orders` 的白名單；不在名單內的 order 被 warning 剔除。
-- **實際記帳與成本路徑**：一律看 `order.position_type` / `position.position_type`，引擎與 `PositionManager` **不得**回頭讀 `strategy.position_type` 做分支。
-- 要寫市場中性策略，只需 `allowed_directions = {LONG, SHORT}`，引擎不用改（同標的雙向仍禁止，見 §5.5）。
+- `direction`：`validate_orders` 的白名單；不在名單內的 order 被 warning 剔除。
+- **實際記帳與成本路徑**：一律看 `order.position_type` / `position.position_type`，引擎與 `PositionManager` **不得**回頭讀策略的 `direction` 做分支。
+- 要寫市場中性策略，只需 `direction = TradeDirection.BOTH`，引擎不用改（同標的雙向仍禁止，見 §5.5）。
 
 ### 3.5 方向中立機制
 
@@ -432,7 +433,7 @@ snapshot_daily_equity(date, quotes)
 
 **禁止，兩個方向都擋**。`open_position` 若發現同一 `stock_id` 已有反向未平倉部位（先多後空、先空後多皆然）→ `logger.warning` 並拒單；已平倉的部位（`is_closed`）不算佔位。理由：`check_has_position` 與報表層假設單一方向，放寬需要一整套 net position 語意。
 
-這與 §3.4 的 `allowed_directions` 不衝突：策略**可以**同時持有 A 股的多單與 B 股的空單（市場中性），只是**同一檔**不能雙向。
+這與 §3.4 的 `direction = BOTH` 不衝突：策略**可以**同時持有 A 股的多單與 B 股的空單（市場中性），只是**同一檔**不能雙向。
 
 ### 5.6 成交價合理性（前視偏誤防線）
 

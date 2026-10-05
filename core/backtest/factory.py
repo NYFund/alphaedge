@@ -23,7 +23,7 @@ from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
-from core.utils import InstrumentType, Market, PositionType, ShortMethod
+from core.utils import InstrumentType, Market, ShortMethod
 
 """Backtester factory: **回測路徑**唯一一處依（市場, 商品）組合分派的地方"""
 
@@ -271,7 +271,7 @@ def build_tw_futures_backtester(
 def build_cost_config(strategy: BaseStockStrategy) -> CostConfig:
     """
     - Description:
-        依策略宣告推導成本設定：放空且允許當沖時一律走現股當沖沖賣
+        依策略宣告推導成本設定：允許當沖時空單一律走現股當沖沖賣
 
         **放在 factory 而非引擎**：依策略宣告組裝 model 是 factory 的職責，
         放進引擎會讓引擎知道台股的信用交易語意。
@@ -283,9 +283,9 @@ def build_cost_config(strategy: BaseStockStrategy) -> CostConfig:
             本次回測使用的成本參數
     """
 
-    is_day_trade: bool = (
-        strategy.position_type == PositionType.SHORT and strategy.enable_intraday
-    )
+    # 做多的當沖稅率也由這個旗標開啟：平倉時另外比對開平倉是否同一天才減半，
+    # 見 `StockPositionManager.close_long_position()`
+    is_day_trade: bool = strategy.allow_day_trade
     short_method: ShortMethod = (
         ShortMethod.DAY_TRADE if is_day_trade else strategy.short_method
     )
