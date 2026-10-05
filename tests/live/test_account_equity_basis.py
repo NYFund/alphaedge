@@ -436,11 +436,13 @@ def test_undeclared_live_max_holdings_keeps_max_holdings() -> None:
     """沒宣告時不動，既有策略行為不變"""
 
     from core.live.factory import apply_live_max_holdings
-    from core.strategies.stock.trust_momentum_swing_strategy import (
-        TrustMomentumSwingStrategy,
+    from core.strategies.stock.investment_trust_momentum_swing_strategy import (
+        InvestmentTrustMomentumSwingStrategy,
     )
 
-    strategy: TrustMomentumSwingStrategy = TrustMomentumSwingStrategy()
+    strategy: InvestmentTrustMomentumSwingStrategy = (
+        InvestmentTrustMomentumSwingStrategy()
+    )
     before: object = strategy.max_holdings
 
     apply_live_max_holdings(strategy)

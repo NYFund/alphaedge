@@ -150,7 +150,7 @@ def test_stock_ticket_records_what_was_actually_sent() -> None:
 
     ticket: StockOrderTicket = StockOrderTicket(
         client_order_id="r1-0002",
-        strategy_name="ForeignSellShortDayTradeStrategy",
+        strategy_name="ForeignSellingReversalShortStrategy",
         order=StockOrder(stock_id="2330", action=Action.SELL, volume=1),
         order_cond=StockOrderCond.Cash,
         order_lot=StockOrderLot.Common,

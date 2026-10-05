@@ -25,7 +25,7 @@ from frontend.services.report_loader import (
 """
 前端只讀不算：指標與 reporter 落地的 CSV 逐值相同
 
-fixture 是 `tests/fixtures/frontend_report/`——`Foreign-Sell-Short-Day-Trade`
+fixture 是 `tests/fixtures/frontend_report/`——`Foreign-Selling-Reversal-Short`
 那份報表的完整副本，**納入版控**。原本直接指向 `results/`，而該目錄被 `.gitignore`
 忽略，於是 `skipif` 在 CI 必定成立：這一整組測試防的是四個已經發生過的錯，卻從來
 沒有在 CI 跑過一次，而 skip 在輸出裡只是一個 `s`，看起來是綠的。
@@ -248,13 +248,13 @@ def test_only_directories_with_a_report_are_listed(tmp_path: Path) -> None:
 
     from frontend.services.report_loader import list_strategy_dirs
 
-    shutil.copytree(_FIXTURE_DIR, tmp_path / "Foreign-Sell-Short-Day-Trade")
+    shutil.copytree(_FIXTURE_DIR, tmp_path / "Foreign-Selling-Reversal-Short")
     (tmp_path / "live" / "Alpha").mkdir(parents=True)
     (tmp_path / "live" / "Alpha" / "2026-09-21_orders.csv").write_text("x\n")
     (tmp_path / "logs").mkdir()
 
     assert [path.name for path in list_strategy_dirs(tmp_path)] == [
-        "Foreign-Sell-Short-Day-Trade"
+        "Foreign-Selling-Reversal-Short"
     ]
 
 

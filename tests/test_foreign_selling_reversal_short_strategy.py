@@ -9,8 +9,8 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_cost_config
 from core.models import StockAccount, StockOrder, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
-from core.strategies.stock.foreign_sell_short_day_trade_strategy import (
-    ForeignSellShortDayTradeStrategy,
+from core.strategies.stock.foreign_selling_reversal_short_strategy import (
+    ForeignSellingReversalShortStrategy,
 )
 from core.utils import (
     Action,
@@ -137,10 +137,12 @@ def make_strategy(
     t1_volume_lots: int = BASE_VOLUME_LOTS,
     opening_basis: Optional[Dict[str, float]] = None,
     **overrides,
-) -> ForeignSellShortDayTradeStrategy:
+) -> ForeignSellingReversalShortStrategy:
     """建立已接好假資料源與空帳戶的策略；三個門檻的輸入皆可單獨覆寫"""
 
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
     strategy.start_date = DAY_T2
     strategy.end_date = DAY_T
 
@@ -188,7 +190,7 @@ def make_short_position(
 def test_open_signal_all_conditions_met() -> None:
     """三個門檻全過時放空開倉：動作為 SELL、方向為 SHORT、成交價為當日開盤價"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
 
     orders: List[StockOrder] = strategy.check_open_signal([make_quote()])
 
@@ -202,7 +204,7 @@ def test_open_signal_all_conditions_met() -> None:
 def test_open_signal_rejects_insufficient_foreign_sell() -> None:
     """外資賣超未達門檻（999 張 < 1,000 張）不開倉"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(
         net_shares=-999 * Units.LOT
     )
 
@@ -212,7 +214,7 @@ def test_open_signal_rejects_insufficient_foreign_sell() -> None:
 def test_open_signal_rejects_foreign_net_buy() -> None:
     """外資是買超（正值）不開倉——賣超為負值，符號寫反會整組訊號反向"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(
         net_shares=5000 * Units.LOT
     )
 
@@ -222,7 +224,7 @@ def test_open_signal_rejects_foreign_net_buy() -> None:
 def test_open_signal_rejects_insufficient_price_change() -> None:
     """T−1 漲幅未超過門檻（8% 不算「> 8%」）不開倉"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(t1_close=108.0)
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(t1_close=108.0)
 
     assert strategy.check_open_signal([make_quote()]) == []
 
@@ -230,7 +232,7 @@ def test_open_signal_rejects_insufficient_price_change() -> None:
 def test_open_signal_rejects_insufficient_volume() -> None:
     """T−1 成交量未達流動性門檻不開倉"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(t1_volume_lots=999)
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(t1_volume_lots=999)
 
     assert strategy.check_open_signal([make_quote()]) == []
 
@@ -238,7 +240,7 @@ def test_open_signal_rejects_insufficient_volume() -> None:
 def test_open_signal_skips_existing_position() -> None:
     """已持有該股時不重複開倉"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position())
 
     assert strategy.check_open_signal([make_quote()]) == []
@@ -252,7 +254,7 @@ def test_open_signal_uses_trading_days_not_calendar_days() -> None:
     兩張對照表都會查空而靜默不開倉——這正是連假會踩到的坑。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
 
     assert strategy.get_signal_trading_days(DAY_T) == (DAY_T1, DAY_T2)
     assert strategy.check_open_signal([make_quote()]) != []
@@ -261,7 +263,7 @@ def test_open_signal_uses_trading_days_not_calendar_days() -> None:
 def test_open_signal_returns_empty_without_two_prior_trading_days() -> None:
     """回測起始日前不足兩個交易日時不開倉，而不是拿錯日期的資料硬算"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
 
     assert strategy.get_signal_trading_days(DAY_T2) is None
     assert strategy.check_open_signal([make_quote(date=DAY_T2)]) == []
@@ -270,7 +272,7 @@ def test_open_signal_returns_empty_without_two_prior_trading_days() -> None:
 def test_open_signal_ignores_missing_chip_data() -> None:
     """T−1 查無籌碼資料時不開倉（缺資料不等於賣超 0）"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.chip = FakeChipAPI(net_shares_by_date={})
 
     assert strategy.check_open_signal([make_quote()]) == []
@@ -280,7 +282,7 @@ def test_open_signal_ignores_missing_chip_data() -> None:
 def test_below_reference_filter_off_by_default() -> None:
     """預設不過濾平盤下放空：開盤 105 低於 T−1 收盤 110 仍然開倉"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
 
     assert strategy.REJECT_BELOW_REFERENCE_OPEN is False
     assert strategy.check_open_signal([make_quote(open=105.0)]) != []
@@ -289,7 +291,7 @@ def test_below_reference_filter_off_by_default() -> None:
 def test_below_reference_filter_rejects_gap_down_open() -> None:
     """開啟過濾後，開盤價低於 T−1 收盤的標的被排除"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(
         REJECT_BELOW_REFERENCE_OPEN=True
     )
 
@@ -299,7 +301,7 @@ def test_below_reference_filter_rejects_gap_down_open() -> None:
 def test_below_reference_filter_keeps_gap_up_open() -> None:
     """開啟過濾後，開盤價不低於 T−1 收盤的標的仍可放空"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(
         REJECT_BELOW_REFERENCE_OPEN=True
     )
 
@@ -310,7 +312,7 @@ def test_below_reference_filter_keeps_gap_up_open() -> None:
 def test_close_signal_covers_all_short_positions() -> None:
     """回補：動作為 BUY、方向為 SHORT、以當日收盤價近似尾盤、張數與部位相同"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position(volume=3))
 
     orders: List[StockOrder] = strategy.check_close_signal([make_quote()])
@@ -330,7 +332,7 @@ def test_close_signal_covers_position_opened_on_earlier_day() -> None:
     此時平倉訊號必須繼續回補，否則部位會一路留到回測結束。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position(date=DAY_T1))
 
     assert len(strategy.check_close_signal([make_quote()])) == 1
@@ -343,7 +345,7 @@ def test_close_signal_skips_limit_up_locked_bar() -> None:
     照送等於用買不到的漲停價記一筆回補，`limit_up_cover_failed` 會永遠是 0。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position())
 
     # T−1 收盤 110，當日開高低收皆為 121（漲停）
@@ -356,7 +358,7 @@ def test_close_signal_skips_limit_up_locked_bar() -> None:
 def test_close_signal_covers_limit_down_locked_bar() -> None:
     """一價到底但下跌（鎖跌停）照樣回補：買方不缺，補得到"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position())
 
     locked_down: StockQuote = make_quote(open=99.0, close=99.0)
@@ -368,7 +370,7 @@ def test_close_signal_covers_limit_down_locked_bar() -> None:
 def test_close_signal_covers_normal_bar_with_range() -> None:
     """當日有高低區間就不算鎖住，即使收在漲停價也照常回補"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position())
 
     ranged: StockQuote = make_quote(open=115.0, close=121.0)
@@ -386,7 +388,7 @@ def test_limit_up_check_uses_ex_dividend_opening_basis() -> None:
     會照送一張買不到的回補單。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy(
+    strategy: ForeignSellingReversalShortStrategy = make_strategy(
         opening_basis={"2330": 95.0}
     )
     strategy.account.positions.append(make_short_position())
@@ -401,7 +403,7 @@ def test_limit_up_check_uses_ex_dividend_opening_basis() -> None:
 def test_reference_price_falls_back_to_previous_close() -> None:
     """非除權息日沿用 T−1 收盤，不因為覆蓋邏輯而被清空"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
 
     assert strategy.get_reference_price_map(DAY_T)["2330"] == BASE_T1_CLOSE
 
@@ -414,7 +416,7 @@ def test_close_signal_merges_multiple_positions_into_one_order() -> None:
     就吃掉後面那筆的張數，後續訂單再以「持倉不足」警告收場。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position(volume=3))
     second: StockPosition = make_short_position(volume=2)
     second.id = 2
@@ -429,7 +431,7 @@ def test_close_signal_merges_multiple_positions_into_one_order() -> None:
 def test_close_signal_without_position() -> None:
     """沒有部位就沒有平倉單"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
 
     assert strategy.check_close_signal([make_quote()]) == []
 
@@ -437,7 +439,7 @@ def test_close_signal_without_position() -> None:
 def test_stop_loss_signal_not_implemented() -> None:
     """本策略不做停損（理由見 class docstring），固定回傳空列表"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position())
 
     assert strategy.check_stop_loss_signal([make_quote()]) == []
@@ -452,7 +454,9 @@ def test_engine_derives_day_trade_cost_config() -> None:
     故本測試同時是「不要在策略裡設 cost_config」的防護線。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
     config: CostConfig = build_cost_config(strategy)
 
     assert strategy.cost_config is None
@@ -464,7 +468,9 @@ def test_engine_derives_day_trade_cost_config() -> None:
 def test_engine_derives_open_then_close_execution_order() -> None:
     """同一根 bar 內要先開後平，否則當日開的空單當日平不掉"""
 
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
 
     # 推導只讀 `self.strategy`，故以最小替身呼叫，避免為了一個判斷去連資料庫
     engine: SimpleNamespace = SimpleNamespace(strategy=strategy)
@@ -476,7 +482,9 @@ def test_engine_derives_open_then_close_execution_order() -> None:
 def test_fill_config_is_conservative() -> None:
     """成交假設必須實際啟用：滑價與成交量上限都不可留在預設的關閉狀態"""
 
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
 
     assert strategy.fill_config.slippage_bps_buy > 0
     assert strategy.fill_config.slippage_bps_sell > 0
@@ -491,7 +499,9 @@ def test_carry_over_fuses_are_set() -> None:
     那正是放空最致命的尾部風險。沒有上限的話，連續鎖漲停會一路留到回測結束、虧損無界。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
 
     assert strategy.max_holding_days is not None
     assert strategy.max_no_quote_days is not None
@@ -507,7 +517,9 @@ def test_borrow_check_stays_disabled() -> None:
     當日必平的沖賣不吃券源，檢核對本策略沒有約束力，故不開。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = ForeignSellShortDayTradeStrategy()
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
     config: CostConfig = build_cost_config(strategy)
 
     assert strategy.short_constraint is None
@@ -518,7 +530,7 @@ def test_borrow_check_stays_disabled() -> None:
 def test_same_day_position_covers_at_close() -> None:
     """當日開的部位照計畫等到尾盤，以收盤價回補"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position(date=DAY_T))
 
     orders: List[StockOrder] = strategy.check_close_signal([make_quote()])
@@ -536,7 +548,7 @@ def test_carried_over_position_covers_at_open() -> None:
     實測 10 筆留倉部位改用開盤價後合計少賺 267,670。
     """
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position(date=DAY_T1))
 
     # 開高走低：開盤 121（跳空）、收盤 104
@@ -551,7 +563,7 @@ def test_carried_over_position_covers_at_open() -> None:
 def test_carried_over_still_skipped_when_locked() -> None:
     """留倉部位若當日仍鎖漲停，一樣不送單——開盤也買不到"""
 
-    strategy: ForeignSellShortDayTradeStrategy = make_strategy()
+    strategy: ForeignSellingReversalShortStrategy = make_strategy()
     strategy.account.positions.append(make_short_position(date=DAY_T1))
 
     assert strategy.check_close_signal([make_quote(open=121.0, close=121.0)]) == []

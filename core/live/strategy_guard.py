@@ -131,7 +131,7 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
         - 落在**不同段落**時，實際順序由段落先後決定；它必須與
           `bar_execution_order`（策略宣告的，或由方向與當沖旗標推導出來的）一致。
 
-        `ForeignSellShortDayTradeStrategy` 剛好一致（SHORT ＋ 當沖 →
+        `ForeignSellingReversalShortStrategy` 剛好一致（SHORT ＋ 當沖 →
         `OPEN_THEN_CLOSE`，實盤 `open` 在開盤段、`close` 在尾盤段），
         **但那是巧合，不是保證**。
     - Parameters:

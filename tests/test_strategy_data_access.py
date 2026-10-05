@@ -256,7 +256,7 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
     strategies = StrategyLoader.load_strategies()
 
     assert "MomentumStrategy1" not in strategies
-    assert "ForeignSellShortDayTradeStrategy" in strategies, "其餘策略仍要載得到"
+    assert "ForeignSellingReversalShortStrategy" in strategies, "其餘策略仍要載得到"
 
 
 def test_strategy_loader_rejects_duplicate_class_names() -> None:
