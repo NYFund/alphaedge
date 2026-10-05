@@ -29,7 +29,7 @@ def results_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """一個只含測試報表的結果根目錄，並讓前端重新讀取設定"""
 
     root: Path = tmp_path / "results"
-    shutil.copytree(_FIXTURE_DIR, root / "Foreign-Sell-Short-Day-Trade")
+    shutil.copytree(_FIXTURE_DIR, root / "Foreign-Selling-Reversal-Short")
     monkeypatch.setenv("ALPHAEDGE_RESULTS_DIR", str(root))
     # 設定在 import 時就讀環境變數；清掉快取才會以上面的路徑重新載入
     for name in ("config", "frontend.config"):

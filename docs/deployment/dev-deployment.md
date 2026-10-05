@@ -30,8 +30,8 @@ python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB
 
 ```bash
 python -m apps.backtest --strategy MomentumStrategy1                  # 台股做多動能
-python -m apps.backtest --strategy TrustMomentumSwingStrategy        # 台股投信認同強勢股短波段
-python -m apps.backtest --strategy ForeignSellShortDayTradeStrategy   # 台股外資大賣強勢股當沖放空
+python -m apps.backtest --strategy InvestmentTrustMomentumSwingStrategy        # 台股投信認同強勢股短波段
+python -m apps.backtest --strategy ForeignSellingReversalShortStrategy   # 台股外資大賣強勢股當沖放空
 python -m apps.backtest --strategy MomentumFuturesStrategy            # 台指期動能（示範用，非交易邏輯）
 
 # 覆寫回測區間與初始資金（皆選填，不帶時沿用策略預設）

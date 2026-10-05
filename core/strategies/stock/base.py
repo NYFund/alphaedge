@@ -160,7 +160,7 @@ class BaseStockStrategy(BaseStrategy):
         把平倉／停損訊號組成 `StockOrder`
 
         **只做欄位搬運**：平幾張、用什麼價、算在哪個方向，全部由策略在訊號裡
-        決定（`MomentumStrategy1` 平第一筆部位、`ForeignSellShortDayTradeStrategy`
+        決定（`MomentumStrategy1` 平第一筆部位、`ForeignSellingReversalShortStrategy`
         合併同標的所有空單，後者逐筆送單會被 `close_position()` 的 FIFO 吃掉）。
 
         `short_method` 與 `is_day_trade` 不在此填，由 `StockCostModel.enrich_orders()`

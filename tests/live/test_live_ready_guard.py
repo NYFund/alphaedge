@@ -203,7 +203,7 @@ def test_consistent_cross_segment_schedule_passes() -> None:
     """
     宣告 `OPEN_THEN_CLOSE` ＋ open 在開盤段：一致
 
-    `ForeignSellShortDayTradeStrategy` 剛好是這個形狀——**但那是巧合，不是保證**，
+    `ForeignSellingReversalShortStrategy` 剛好是這個形狀——**但那是巧合，不是保證**，
     所以還是要檢查。
     """
 
