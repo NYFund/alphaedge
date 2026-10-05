@@ -32,7 +32,7 @@ MARGIN_CALL_WARN_ONLY = "WARN_ONLY"  # 僅記錄不強制回補
 
 
 class BarExecutionOrder(str, Enum):
-    """單根 K 棒內開平倉的執行順序"""
+    """單根 K 棒內開平倉的執行順序；引擎依策略的 `allow_day_trade` 推導，策略不直接設定"""
 
     CLOSE_THEN_OPEN = BAR_EXECUTION_ORDER_CLOSE_THEN_OPEN
     OPEN_THEN_CLOSE = BAR_EXECUTION_ORDER_OPEN_THEN_CLOSE

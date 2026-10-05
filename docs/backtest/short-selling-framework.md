@@ -213,20 +213,17 @@ class StockCostModel:
 | `cost_config` | `Optional[CostConfig]` | `None` → `CostConfig.default(...)` | 成本參數覆寫 |
 | `short_constraint` | `Optional[ShortConstraint]` | `None` → `ShortConstraint()` | 可成交限制（§2.4） |
 | `max_holding_days` | `Optional[int]` | `None` | 留倉放空保險絲 |
-| `bar_execution_order` | `Optional[BarExecutionOrder]` | `None` → 依下表推導 | 執行順序（進階覆寫） |
 | `day_trade_uncovered_policy` | `DayTradeUncoveredPolicy` | `FORCE_COVER_AT_CLOSE` | §5.1 |
 | `margin_call_policy` | `MarginCallPolicy` | `FORCE_COVER` | §5.2 |
 
 **推導規則（引擎執行）**
 
-| `allow_day_trade` | 空單的實際 `short_method` | 當天開平的證交稅 | 預設 `bar_execution_order` |
+| `allow_day_trade` | 空單的實際 `short_method` | 當天開平的證交稅 | 單根 bar 的執行順序 |
 |-------------------|---------------------------|------------------|----------------------------|
 | True | 強制 `DAY_TRADE` | 當沖稅率（多空皆同） | `OPEN_THEN_CLOSE` |
 | False | 用策略宣告（預設 `MARGIN`） | 一般稅率 | `CLOSE_THEN_OPEN` |
 
-執行順序只看 `allow_day_trade`，與方向無關。
-
-策略顯式設定 `bar_execution_order` 時，一律以策略為準。
+執行順序只看 `allow_day_trade`，與方向無關，策略不能另外指定。
 
 **方向的責任分工（呼應 §1 原則 2）**
 - `direction`：`validate_orders` 的白名單；不在名單內的 order 被 warning 剔除。

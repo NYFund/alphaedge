@@ -1105,8 +1105,7 @@ class LiveTrader:
 
         strategy: BaseStrategy = context.strategy
         execution_order: BarExecutionOrder = order_preprocess.get_execution_order(
-            strategy.bar_execution_order,
-            strategy.allow_day_trade,
+            strategy.allow_day_trade
         )
 
         exit_orders: List[BaseOrder] = self._exit_orders(context, timing, quotes)

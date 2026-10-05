@@ -475,7 +475,6 @@ def test_engine_derives_open_then_close_execution_order() -> None:
     # 推導只讀 `self.strategy`，故以最小替身呼叫，避免為了一個判斷去連資料庫
     engine: SimpleNamespace = SimpleNamespace(strategy=strategy)
 
-    assert strategy.bar_execution_order is None  # 交由引擎推導
     assert Backtester.get_execution_order(engine) == BarExecutionOrder.OPEN_THEN_CLOSE
 
 

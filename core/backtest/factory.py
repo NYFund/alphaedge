@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
@@ -20,7 +20,7 @@ from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.models.fill_config import FillConfig, FuturesFillConfig
 from core.position.futures.position_manager import FuturesPositionManager
 from core.position.stock.position_manager import StockPositionManager
-from core.strategies.base import BaseStrategy
+from core.strategies.base import BaseStrategy, RemovedStrategySettingError
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
 from core.utils import InstrumentType, Market, ShortMethod
@@ -65,7 +65,15 @@ def build_backtester(
     - Raise:
         - InvalidBacktestOverridesError
             覆寫值不合法
+        - RemovedStrategySettingError
+            策略設定了已移除的欄位
     """
+
+    removed: List[str] = strategy.check_removed_settings()
+    if removed:
+        raise RemovedStrategySettingError(
+            f"{type(strategy).__name__} 設定了已移除的欄位：" + "；".join(removed)
+        )
 
     # **必須在建立任何元件之前**：帳戶讀 `init_capital`、資料源與引擎讀起訖日，
     # 晚一步覆寫就會有元件拿到舊值

@@ -8,7 +8,7 @@ from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.config import SHOW_FIGURES_ENV_VAR, resolve_show_figures
 from core.datafeed.base import TradingListCoverageError
-from core.strategies.base import BaseStrategy
+from core.strategies.base import BaseStrategy, RemovedStrategySettingError
 
 from ._common import EXIT_USAGE, _resolve_strategy_or_exit
 
@@ -116,6 +116,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     except InvalidBacktestOverridesError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
+    except RemovedStrategySettingError as exc:
+        # 策略照舊寫法設了已移除的欄位：訊息已寫明改用什麼，不需要 traceback
+        print(str(exc), file=sys.stderr)
+        return 1
     except TradingListCoverageError as exc:
         # 名單缺日或區間早於制度起點：訊息已寫明要改起日或先跑哪個 ETL，不需要 traceback
         print(str(exc), file=sys.stderr)

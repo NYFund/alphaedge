@@ -113,7 +113,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 | 層次 | 由誰決定 | 規則 |
 |------|----------|------|
-| 開倉階段 vs 平倉階段 | `BarExecutionOrder`（策略宣告或引擎推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
+| 開倉階段 vs 平倉階段 | `BarExecutionOrder`（引擎依策略的 `allow_day_trade` 推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
 | 平倉階段內部 | 引擎寫死 | 停損 → 一般平倉；停損執行完會重掃剩餘部位 |
 | 同一階段內的多筆委託 | `sort_orders()`（`core/execution/order_preprocess.py`，引擎經 `Backtester.sort_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
 
