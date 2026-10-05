@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import pandas as pd
 import pytest
@@ -13,6 +13,7 @@ from core.config import (
 )
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession
@@ -58,6 +59,26 @@ def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FuturesPriceUpda
     return futures_price_updater
 
 
+def as_crawl_result(
+    crawl: Callable[..., Optional[pd.DataFrame]],
+) -> Callable[..., CrawlResult]:
+    """
+    把「回原始表或 None」的假 crawler 包成回 `CrawlResult` 的版本
+
+    `None` 視為站方明確查無資料（非交易日）；要模擬被擋的測試直接回 `CrawlResult.failed()`。
+    """
+
+    def wrapped(*args: Any) -> CrawlResult:
+        raw: Any = crawl(*args)
+        if isinstance(raw, CrawlResult):
+            return raw
+        if raw is None or raw.empty:
+            return CrawlResult.no_data("holiday")
+        return CrawlResult.ok(raw)
+
+    return wrapped
+
+
 def day_session_raw() -> pd.DataFrame:
     """TX 日盤一列原始行情（欄位順序同 TAIFEX 頁面）"""
 
@@ -79,6 +100,32 @@ def day_session_raw() -> pd.DataFrame:
                 104881,
                 46077,
                 46088,
+                49651,
+                24962,
+            ]
+        ]
+    )
+
+
+def night_session_raw() -> pd.DataFrame:
+    """可正常清洗的夜盤原始列（15 欄，結算價與未沖銷契約量為 `-`）"""
+
+    return pd.DataFrame(
+        [
+            [
+                "TX",
+                "202609",
+                46002,
+                46142,
+                45766,
+                45993,
+                "▼-10",
+                "▼-0.02%",
+                26057,
+                "-",
+                "-",
+                45983,
+                45993,
                 49651,
                 24962,
             ]
@@ -151,7 +198,7 @@ def test_backfill_ignores_table_progress(
     monkeypatch.setattr(
         updater.crawler,
         "crawl_futures_price",
-        lambda date, product, session: requested.append(date) or None,
+        as_crawl_result(lambda date, product, session: requested.append(date) or None),
     )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     updater.BATCH_RANDOM_DELAY_MIN = 0
@@ -180,7 +227,7 @@ def test_daily_update_still_resumes(
     monkeypatch.setattr(
         updater.crawler,
         "crawl_futures_price",
-        lambda date, product, session: requested.append(date) or None,
+        as_crawl_result(lambda date, product, session: requested.append(date) or None),
     )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
 
@@ -216,7 +263,7 @@ def test_gap_inside_the_table_is_requested_again_on_resume(
     monkeypatch.setattr(
         updater.crawler,
         "crawl_futures_price",
-        lambda date, product, session: requested.append(date) or None,
+        as_crawl_result(lambda date, product, session: requested.append(date) or None),
     )
     monkeypatch.setattr(updater, "get_stock_trading_days", lambda *_: [d1, d2, d3])
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
@@ -249,7 +296,9 @@ def test_empty_day_is_retried_before_being_counted_as_no_data(
             return None
         return pd.DataFrame({"契約": ["TX"]})
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", flaky_crawl)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(flaky_crawl)
+    )
     monkeypatch.setattr(
         updater.cleaner,
         "clean_futures_price",
@@ -286,7 +335,9 @@ def test_aborts_when_product_yields_nothing(
     看起來就像「這幾年一直都是假日」。
     """
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", lambda *_: None)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(lambda *_: None)
+    )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     updater.BATCH_RANDOM_DELAY_MIN = 0
     updater.BATCH_RANDOM_DELAY_MAX = 0
@@ -319,7 +370,9 @@ def test_does_not_abort_when_data_resumes(
             return None
         return day_session_raw() if session == FuturesSession.DAY else None
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", fake_crawl)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(fake_crawl)
+    )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     updater.BATCH_RANDOM_DELAY_MIN = 0
     updater.BATCH_RANDOM_DELAY_MAX = 0
@@ -355,7 +408,9 @@ def test_one_failing_product_does_not_block_the_rest(
             return None
         return day_session_raw() if session == FuturesSession.DAY else None
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", fake_crawl)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(fake_crawl)
+    )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     updater.BATCH_RANDOM_DELAY_MIN = 0
     updater.BATCH_RANDOM_DELAY_MAX = 0
@@ -438,34 +493,16 @@ def test_update_writes_rows_end_to_end(
             ]
         ]
     )
-    night_raw = pd.DataFrame(
-        [
-            [
-                "TX",
-                "202609",
-                46002,
-                46142,
-                45766,
-                45993,
-                "▼-10",
-                "▼-0.02%",
-                26057,
-                "-",
-                "-",
-                45983,
-                45993,
-                49651,
-                24962,
-            ]
-        ]
-    )
+    night_raw: pd.DataFrame = night_session_raw()
 
     def fake_crawl(
         date: datetime.date, product: str, session: FuturesSession
     ) -> Optional[pd.DataFrame]:
         return day_raw.copy() if session == FuturesSession.DAY else night_raw.copy()
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", fake_crawl)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(fake_crawl)
+    )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     updater.BATCH_RANDOM_DELAY_MIN = 0
     updater.BATCH_RANDOM_DELAY_MAX = 0
@@ -496,7 +533,7 @@ def test_start_date_is_clamped_to_listing_date(
     monkeypatch.setattr(
         updater.crawler,
         "crawl_futures_price",
-        lambda date, product, session: requested.append(date) or None,
+        as_crawl_result(lambda date, product, session: requested.append(date) or None),
     )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     updater.BATCH_RANDOM_DELAY_MIN = 0
@@ -546,16 +583,21 @@ def test_night_only_day_is_not_loaded(
     def night_only(
         date: datetime.date, product: str, session: FuturesSession
     ) -> Optional[pd.DataFrame]:
-        return None if session is FuturesSession.DAY else day_session_raw()
+        return None if session is FuturesSession.DAY else night_session_raw()
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", night_only)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(night_only)
+    )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     monkeypatch.setattr(updater, "load_batch", lambda dates: loaded.append(list(dates)))
     updater.BATCH_RANDOM_DELAY_MIN = 0
     updater.BATCH_RANDOM_DELAY_MAX = 0
     updater.EMPTY_PRODUCT_ABORT_THRESHOLD = 99
 
-    updater.update(start_date=DATE, end_date=DATE, products=["TX"], resume=False)
+    # 過去的日子缺日盤＝資料沒更新到，商品記為失敗；台北當天的情況見
+    # `test_night_only_today_is_not_a_failure`
+    with pytest.raises(ProductUpdateError):
+        updater.update(start_date=DATE, end_date=DATE, products=["TX"], resume=False)
 
     assert loaded == []
 
@@ -578,7 +620,9 @@ def test_day_without_night_is_still_loaded(
     ) -> Optional[pd.DataFrame]:
         return day_session_raw() if session is FuturesSession.DAY else None
 
-    monkeypatch.setattr(updater.crawler, "crawl_futures_price", day_only)
+    monkeypatch.setattr(
+        updater.crawler, "crawl_futures_price", as_crawl_result(day_only)
+    )
     monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
     monkeypatch.setattr(updater, "load_batch", lambda dates: loaded.append(list(dates)))
     updater.BATCH_RANDOM_DELAY_MIN = 0
@@ -801,3 +845,104 @@ def test_whole_universe_only_when_top_n_is_none(
     seed_universe(dao_factory, updater, universe)
 
     assert len(updater.resolve_stock_futures_products(None, DATE)) == 50
+
+
+# === 被擋與休市要分開 ===
+def run_single_day(
+    updater: FuturesPriceUpdater,
+    monkeypatch: pytest.MonkeyPatch,
+    crawl: Callable[..., CrawlResult],
+) -> List[List[str]]:
+    """以指定的假 crawler 跑 TX 單日（`DATE`），回傳入庫批次"""
+
+    loaded: List[List[str]] = []
+    monkeypatch.setattr(updater.crawler, "crawl_futures_price", crawl)
+    monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
+    monkeypatch.setattr(updater, "load_batch", lambda dates: loaded.append(list(dates)))
+    updater.BATCH_RANDOM_DELAY_MIN = 0
+    updater.BATCH_RANDOM_DELAY_MAX = 0
+    updater.EMPTY_PRODUCT_ABORT_THRESHOLD = 99
+    updater.update(start_date=DATE, end_date=DATE, products=["TX"], resume=False)
+    return loaded
+
+
+def test_blocked_day_fails_instead_of_passing_as_holiday(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    站方整批回 HTTP 403：重試後仍取不到，商品記為失敗
+
+    舊行為把重試後仍為空的日子一律當成非交易日——2026-10-02 期交所全數回 403，
+    `futures_price` 一筆都沒更新卻列為成功。
+    """
+
+    attempts: List[datetime.date] = []
+
+    def blocked(date: datetime.date, *_: Any) -> CrawlResult:
+        attempts.append(date)
+        return CrawlResult.failed("HTTP 403")
+
+    with pytest.raises(ProductUpdateError) as exc_info:
+        run_single_day(updater, monkeypatch, blocked)
+
+    assert "TX" in exc_info.value.failures
+    # 仍先重試一次：擋流量多半是暫時的（兩個時段 × 兩次）
+    assert len(attempts) == 4
+
+
+def test_empty_page_on_stock_trading_day_fails(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    現貨有開市、期貨卻兩個時段都沒有行情表：被擋流量，不是非交易日
+
+    期交所擋流量時回 HTTP 200 ＋ 沒有行情表的頁面，crawler 只能判成查無資料；
+    以現貨交易日曆才分得出來。
+    """
+
+    monkeypatch.setattr(updater, "get_stock_trading_days", lambda *_: [DATE])
+
+    with pytest.raises(ProductUpdateError):
+        run_single_day(updater, monkeypatch, lambda *_: CrawlResult.no_data("no_table"))
+
+
+def test_holiday_still_passes(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """兩個時段都是站方明確查無資料：非交易日，不入庫也不算失敗"""
+
+    loaded: List[List[str]] = run_single_day(
+        updater, monkeypatch, lambda *_: CrawlResult.no_data("no_table")
+    )
+
+    assert loaded == []
+
+
+def test_night_only_today_is_not_a_failure(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    台北的今天只有夜盤：日盤還沒收盤，不算失敗
+
+    MTX 2026-09-02 的情況——當天 11:15 執行，日盤根本還沒有資料。
+    """
+
+    import core.pipeline.shared.base_updater as base_updater_module
+
+    monkeypatch.setattr(
+        base_updater_module,
+        "now_live",
+        lambda: datetime.datetime.combine(DATE, datetime.time(11, 15)),
+    )
+
+    loaded: List[List[str]] = run_single_day(
+        updater,
+        monkeypatch,
+        as_crawl_result(
+            lambda date, product, session: (
+                None if session is FuturesSession.DAY else night_session_raw()
+            )
+        ),
+    )
+
+    assert loaded == []

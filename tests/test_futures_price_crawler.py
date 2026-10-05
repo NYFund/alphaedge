@@ -1,8 +1,11 @@
 import datetime
+from typing import Any
 
 import pandas as pd
 import pytest
 
+from core.pipeline.shared.base_crawler import CrawlResult
+from core.pipeline.shared.request_utils import FetchResult, FetchStatus, RequestUtils
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
 from core.utils import FuturesSession
 
@@ -162,3 +165,59 @@ def test_quote_table_key_column_matches_real_header() -> None:
     )[0]
 
     assert FuturesPriceCrawler.QUOTE_TABLE_KEY_COLUMN in df.columns
+
+
+# === 查無資料與取不到要分開 ===
+def test_page_without_table_is_no_data() -> None:
+    """非交易日：頁面正常、沒有行情表"""
+
+    result: CrawlResult = FuturesPriceCrawler.parse_quote_page(
+        "<html><body>無資料</body></html>"
+    )
+
+    assert result.is_no_data
+
+
+def test_quote_page_is_ok() -> None:
+    """有行情表時回 `OK`，表在 `data`"""
+
+    result: CrawlResult = FuturesPriceCrawler.parse_quote_page(QUOTE_HTML)
+
+    assert result.is_ok
+    assert "結算價" in result.data.columns
+
+
+def test_parser_error_is_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """解析器本身出錯（缺套件、版面改制）是取不到，不是非交易日"""
+
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise ModuleNotFoundError("lxml")
+
+    monkeypatch.setattr(pd, "read_html", broken)
+
+    assert FuturesPriceCrawler.parse_quote_page(QUOTE_HTML).is_failed
+
+
+def test_http_error_is_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    站方回 HTTP 403：取不到，不是非交易日
+
+    2026-10-02 主機開著 VPN，期交所整批回 403；舊介面把它與查無資料都回 `None`。
+    """
+
+    monkeypatch.setattr(
+        RequestUtils,
+        "fetch",
+        classmethod(
+            lambda cls, url, method="get", **kwargs: FetchResult(
+                status=FetchStatus.HTTP_ERROR, error="HTTP 403"
+            )
+        ),
+    )
+
+    result: CrawlResult = FuturesPriceCrawler().crawl_futures_price(
+        datetime.date(2026, 10, 1), "TX", FuturesSession.DAY
+    )
+
+    assert result.is_failed
+    assert "403" in result.reason
