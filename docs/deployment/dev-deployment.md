@@ -21,7 +21,7 @@ python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB
 
 - 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日。
 - 任一 target 失敗不中斷其餘 target，但整批跑完會以**結束碼 1** 收場；請看 log 尾端的統計行。
-- `futures_stock_price`、`futures_tick` 不含在 `all`／`no_tick` 內，要以 `--target` 明確點名才會跑。
+- `futures_stock_price`、`futures_tick`、`finmind` 不含在 `all`／`no_tick` 內，要以 `--target` 明確點名才會跑。
 - **長跑的 ETL 進行中不要動 `logs/` 與 `data/db/`**。
 
 ## 3) 執行回測

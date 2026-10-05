@@ -64,6 +64,23 @@ def test_explicit_futures_tick_is_still_honoured() -> None:
     assert "futures_tick" in expand_targets({"futures_tick"})
 
 
+def test_finmind_is_paused_from_daily_update() -> None:
+    """
+    FinMind 不在 `all`／`no_tick` 內，點名時仍會跑
+
+    帳號等級拿不到券商分點，每晚必定失敗；留在預設裡只會讓結束碼恆為 1，
+    真正的失敗混在裡面沒人看。
+    """
+
+    from core.pipeline.utils import DataType
+    from tasks.update_db import expand_targets
+
+    finmind: str = DataType.FINMIND.name.lower()
+    assert finmind not in expand_targets({"no_tick"})
+    assert finmind not in expand_targets({"all"})
+    assert finmind in expand_targets({"finmind"})
+
+
 # === delete_price_data 預設不刪 ===
 def make_price_db(tmp_path: Path, dao_factory: Callable[..., BaseDAO]) -> Path:
     """以正式 schema 建一個只有 price 表的暫存 DB"""

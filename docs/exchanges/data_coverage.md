@@ -57,8 +57,8 @@ python -m tasks.update_db --target <targets...>
 ```
 
 不帶 `--target` 時等同 `--target no_tick`。`all`／`no_tick` 兩個捷徑**都不含**
-`futures_stock_price`、`futures_tick`
-（`EXPLICIT_ONLY_DATA_TYPES`），這兩個只在明確點名時才跑；`no_tick` 另外排除 `tick`。
+`futures_stock_price`、`futures_tick`、`finmind`
+（`EXPLICIT_ONLY_DATA_TYPES`），這三個只在明確點名時才跑；`no_tick` 另外排除 `tick`。
 `--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 不受影響）。
 
 各 target 的預設起始（與 `get_update_time_config`／各 updater 行為一致）：

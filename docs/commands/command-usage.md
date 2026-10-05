@@ -31,7 +31,7 @@ A failing target does not stop the others, but the run exits with code 1 at the 
 | `corporate_action` | Non-dividend corporate actions (capital reductions, splits, par-value changes) |
 | `fs` | Financial statements (including the statement of changes in equity, which is queried per stock) |
 | `mrr` | Monthly revenue report |
-| `finmind` | All FinMind datasets (stock info + brokers + broker trading) |
+| `finmind` | All FinMind datasets (stock info + brokers + broker trading). **Not included in `all` or `no_tick`**: the current account level has no access to broker trading, so it would fail every night; run it by name |
 | `stock_info` | FinMind stock info (without warrants) |
 | `stock_info_with_warrant` | FinMind stock info (with warrants) |
 | `broker_info` | FinMind broker info |
@@ -44,7 +44,7 @@ A failing target does not stop the others, but the run exits with code 1 at the 
 | `futures_chip` | Futures chips (institutional investors, large traders, option PCR) |
 | `market_holiday` | Market holiday schedule (TWSE announcement; re-fetches last / this / next year every run, written to `tw_stock.db`). Primary source for the live pre-open trading-day check |
 | `futures_tick` | Futures tick trades (Shioaji → DolphinDB; requires the `[tick]` extra and credentials). **Not included in `all` or `no_tick`**: it has no resume record and re-running writes duplicate rows, so it only runs when named explicitly |
-| `all` | All datasets (including tick; excludes `futures_tick` and `futures_stock_price`) |
+| `all` | All datasets (including tick; excludes `futures_tick`, `futures_stock_price` and `finmind`) |
 | `no_tick` | All datasets except `tick` **and** `futures_tick` (default). Both need Shioaji credentials and the `[tick]` extra; without the exclusion a machine lacking them would exit 1 every night |
 
 ### Single Target Examples

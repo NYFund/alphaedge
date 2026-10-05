@@ -69,7 +69,10 @@ class RiskConfig:
     # === 策略層：批次（存量）===
     # 送出後的預估總曝險（持倉市值 ＋ 在途委託金額）
     total_exposure_ratio: float = 1.00
-    single_symbol_exposure_ratio: float = 0.25  # 單一標的曝險占比
+    # 單一標的曝險占比。**不可小於實盤每檔分到的比例（1 ÷ 持倉檔數）**：
+    # 部位建構器把資金均分給各檔，比例一超過這條上限，每張買單都會被帳戶層截斷，
+    # 下單路徑整個不通卻不報錯。現行最集中的是 3 檔（約 33%），故取 0.35
+    single_symbol_exposure_ratio: float = 0.35
 
     # === 策略層：損益 ===
     daily_loss_ratio: float = 0.03  # 單日已實現＋未實現虧損 → REDUCE_ONLY
