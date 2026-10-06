@@ -255,16 +255,25 @@ def test_market_order_sends_zero_price(mapper: ShioajiOrderMapper) -> None:
     assert converted.price_type == sj.StockPriceType.MKT
 
 
-def test_missing_price_type_raises(mapper: ShioajiOrderMapper) -> None:
+def test_missing_price_type_is_sent_as_limit_for_now(
+    mapper: ShioajiOrderMapper,
+) -> None:
     """
-    價格類型未決定要拋出，**不可預設成限價**
+    價格類型未決定：**暫以限價、照策略給的價格**送出，並寫回委託本身
 
-    策略要的是市價而前處理漏了填值時，預設成限價會送出一張價格正確但語意不同的單，
-    成交與否完全看運氣，而且兩邊都不會報錯。
+    策略的價格類型設定尚未實作，策略產生的委託一律不帶 `price_type`；原本在這裡拋錯，
+    2026-10-06 演練第一次送單時三張買單都沒送到券商。不用市價：尾盤段 13:25 後
+    正落在收盤集合競價，交易所不接受市價單。
     """
 
-    with pytest.raises(ValueError, match="price_type"):
-        mapper.to_shioaji_stock_order(make_stock_order(price_type=None))
+    order: StockOrder = make_stock_order(price_type=None)
+
+    converted: Any = mapper.to_shioaji_stock_order(order)
+
+    assert converted.price_type == sj.StockPriceType.LMT
+    assert converted.price == pytest.approx(order.price)
+    # 寫回委託：送單後的紀錄庫要記實際送出的類型
+    assert order.price_type is StockPriceType.LMT
 
 
 @pytest.mark.parametrize("price, expected_error", [(1100.0, "漲停"), (900.0, "跌停")])
@@ -404,6 +413,21 @@ def test_order_type_is_carried_over(mapper: ShioajiOrderMapper) -> None:
 
 
 # === 期貨 ===
+def test_futures_missing_price_type_is_sent_as_limit_for_now() -> None:
+    """期貨同樣暫以限價送出；市價單在期交所不能搭配 ROD"""
+
+    mapper: ShioajiOrderMapper = ShioajiOrderMapper()
+    order: FuturesOrder = FuturesOrder(
+        product="TX", expiry="202601", action=Action.BUY, volume=1, price=20000.0
+    )
+
+    converted: Any = mapper.to_shioaji_futures_order(order, octype=FuturesOCType.New)
+
+    assert converted.price_type == sj.FuturesPriceType.LMT
+    assert converted.price == pytest.approx(20000.0)
+    assert order.price_type is FuturesPriceType.LMT
+
+
 def test_futures_order_conversion() -> None:
     """期貨委託的基本轉換"""
 

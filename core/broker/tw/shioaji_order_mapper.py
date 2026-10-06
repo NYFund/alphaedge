@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 import shioaji as sj
+from loguru import logger
 
 from core.models import FuturesOrder, StockOrder
 from core.utils import (
@@ -166,7 +167,7 @@ class ShioajiOrderMapper:
                 價格類型未決定、數量單位錯配、委託價超出漲跌停，或委託條件不支援
         """
 
-        price_type: StockPriceType = self._require_price_type(order.price_type, order)
+        price_type: StockPriceType = self._resolve_price_type(order, StockPriceType.LMT)
         order_cond, daytrade_short = self.resolve_stock_order_cond(
             order.position_type, order.short_method, order.action
         )
@@ -241,7 +242,9 @@ class ShioajiOrderMapper:
                 價格類型未決定、數量非正整數，或 `octype` 為 `Auto`
         """
 
-        price_type: FuturesPriceType = self._require_price_type(order.price_type, order)
+        price_type: FuturesPriceType = self._resolve_price_type(
+            order, FuturesPriceType.LMT
+        )
         if octype is FuturesOCType.Auto:
             raise ValueError(
                 "octype 不可為 Auto：它在同時有多空部位或換月時的行為不透明，"
@@ -276,20 +279,38 @@ class ShioajiOrderMapper:
         return {**fields, "account": account}
 
     @staticmethod
-    def _require_price_type(price_type: Optional[Any], order: Any) -> Any:
+    def _resolve_price_type(order: Any, limit: Any) -> Any:
         """
-        價格類型必須已決定
+        - Description:
+            取得委託的價格類型；**未決定時暫以限價、照策略給的價格送出**
 
-        **不預設成限價**：策略要的是市價而前處理漏了填值時，預設成限價會送出一張
-        價格正確但語意不同的單，成交與否完全看運氣，而且兩邊都不會報錯。
+            **臨時做法**：策略如何表達「要成交」或「照價掛單」的設計尚未定案，
+            目前沒有任何前處理會填這個欄位，策略產生的委託一律是 None。原本未決定就拋錯，
+            結果是演練第一次送單時每一張都在這裡失敗、一張也沒送到券商。
+
+            選限價而非市價：尾盤段在 13:25 後送單，正落在收盤集合競價，
+            交易所不接受市價單；期交所也不接受「市價＋ROD」。
+            代價是急漲的標的收盤價常高於策略算訊號時的價格，買單可能不會成交——
+            這正是限價與「要成交」語意不同之處，故每次補值都記 warning，等設計定案後移除。
+
+            補上的值寫回委託本身，送單後的紀錄庫才會是實際送出的類型。
+        - Parameters:
+            - order: Any
+                本專案的委託（股票或期貨）
+            - limit: Any
+                該商品的限價列舉值
+        - Return:
+            - Any
+                價格類型
         """
 
-        if price_type is None:
-            raise ValueError(
-                f"{order.symbol} 的 price_type 尚未決定；"
-                "它應由委託前處理依策略意圖填入（限價或市價），不可預設"
+        if order.price_type is None:
+            logger.warning(
+                f"{order.symbol} 的 price_type 未決定，暫以限價 {order.price} 送出"
+                "（策略的價格類型設定尚未實作）"
             )
-        return price_type
+            order.price_type = limit
+        return order.price_type
 
     @staticmethod
     def _resolve_price(price_type: Any, order: Any) -> float:

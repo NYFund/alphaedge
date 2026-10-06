@@ -308,6 +308,24 @@ def test_place_order_fills_in_broker_ids(broker: ShioajiBroker) -> None:
     assert ticket.updated_at is not None
 
 
+def test_strategy_order_without_price_type_reaches_the_broker(
+    broker: ShioajiBroker, api: FakeApi
+) -> None:
+    """
+    策略產生的委託不帶 `price_type`：暫以限價送到券商，而不是在轉換層失敗
+
+    2026-10-06 演練第一次送單，三張買單都停在這一步、一張也沒送出去。
+    """
+
+    ticket: OrderTicket = make_broker_ticket()
+    ticket.order.price_type = None
+
+    broker.place_order(ticket)
+
+    assert ticket.status is LiveOrderStatus.SUBMITTED
+    assert api.placed[-1][1].price_type == sj.StockPriceType.LMT
+
+
 def test_place_order_consumes_order_budget(
     broker: ShioajiBroker, limiter: RateLimiter
 ) -> None:
@@ -332,7 +350,7 @@ def test_conversion_failure_does_not_consume_budget(broker: ShioajiBroker) -> No
     """
 
     ticket: OrderTicket = make_broker_ticket()
-    ticket.order.price_type = None  # 前處理漏填
+    ticket.order.volume = 0  # 數量不合法，轉換層拋錯
 
     with pytest.raises(ValueError):
         broker.place_order(ticket)
