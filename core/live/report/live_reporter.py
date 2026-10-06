@@ -150,10 +150,10 @@ class LiveReporter:
     def summarize_slippage(self, run_date: datetime.date) -> Dict[str, float]:
         """
         - Description:
-            逐策略彙總當日實際滑價（成交均價 − 委託價，依方向取號）
+            逐策略彙總當日實際滑價（成交均價 − 決策價，依方向取號）
 
             這是之後校正回測成交假設的依據。**不另外開欄位存**：
-            `live_order.price` 與 `live_fill.price` 都已經落地，滑價是它們的差，
+            `live_order.decision_price` 與 `live_fill.price` 都已經落地，滑價是它們的差，
             多存一份就多一個會漂移的地方。
         - Parameters:
             - run_date: datetime.date
@@ -182,14 +182,19 @@ class LiveReporter:
     @staticmethod
     def _slippage(order: Dict[str, Any]) -> Optional[float]:
         """
-        單張委託的滑價；未成交或市價單回 None
+        單張委託的滑價；未成交或沒有比較基準時回 None
 
-        **市價單沒有委託價可比**（送出時價格是 0），把它算進來會得到一個等於
-        成交價的巨大滑價，把整個統計拉歪。
+        **基準是決策價，不是委託價**：執行層會把「要成交」的委託改掛保護價
+        （集合競價買單掛漲停），拿委託價比的話每一張都是一筆大幅有利的假滑價。
+        沒經過執行層的舊紀錄沒有決策價，退回委託價；委託價為 0（市價單）時無從比較，
+        算進來會得到一個等於成交價的巨大滑價，把整個統計拉歪。
         """
 
         filled: int = int(order.get("filled_volume") or 0)
-        order_price: float = float(order.get("price") or 0.0)
+        decision: Any = order.get("decision_price")
+        order_price: float = float(
+            decision if decision is not None else order.get("price") or 0.0
+        )
         fill_price: float = float(order.get("avg_fill_price") or 0.0)
         if filled <= 0 or order_price <= 0 or fill_price <= 0:
             return None

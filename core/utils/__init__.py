@@ -16,6 +16,7 @@ from .constant import (
     BarExecutionOrder,
     Commission,
     DayTradeUncoveredPolicy,
+    ExecutionStyle,
     ExecutionTiming,
     FileEncoding,
     FuturesAdjustMethod,

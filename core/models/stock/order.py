@@ -31,7 +31,7 @@ class StockOrder(BaseOrder):
         order_type: OrderType = OrderType.ROD,  # 委託效期
         timing: Optional[ExecutionTiming] = None,  # 實盤執行時點；回測忽略
         client_order_id: Optional[str] = None,  # 本地委託識別碼；由 OMS 填入
-        price_type: Optional[StockPriceType] = None,  # 價格類型；None 由前處理決定
+        price_type: Optional[StockPriceType] = None,  # 價格類型；None 由執行層決定
         order_lot: StockOrderLot = StockOrderLot.Common,  # 下單單位（整股／零股）
     ) -> None:
         super().__init__(
@@ -55,8 +55,8 @@ class StockOrder(BaseOrder):
         # 價格類型放子類別而不放 `BaseOrder`：期貨多一個 `MKP`（範圍市價），
         # 放在骨架就得用 `str` 混著裝，於是股票訂單也長出一個它送不出去的值。
         #
-        # `None` 表示「由 `order_preprocess` 依策略意圖決定」。需要市價語意時直接
-        # 送 `MKT`，不再一律換算成可成交限價
+        # `None` 表示「由實盤執行層依策略的 `live_execution` 與段落決定」，
+        # 策略不填。回測完全不讀
         self.price_type: Optional[StockPriceType] = price_type
 
         # 下單單位。`Common` 的 `volume` 是張，`IntradayOdd` 是股——

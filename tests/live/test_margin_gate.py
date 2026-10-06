@@ -9,9 +9,9 @@ from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import build_live_trader
 from core.live.risk.margin_gate import MarginGate
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader, StrategyContext, mark_execution
 from core.models import BaseOrder, FuturesOrder
-from core.utils import Action, FuturesPriceType, PositionType
+from core.utils import Action, ExecutionStyle, ExecutionTiming, PositionType
 
 from .conftest import FakeBroker
 from .test_live_factory_and_entry import LiveFuturesStrategy
@@ -156,7 +156,9 @@ def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
 
 
 def futures_order(action: Action) -> FuturesOrder:
-    return FuturesOrder(
+    """與策略鉤子產出的委託同形狀：不帶價格類型，由送單路徑標註後交給執行層"""
+
+    order: FuturesOrder = FuturesOrder(
         product="TX",
         expiry="202610",
         date=NOW,
@@ -164,8 +166,9 @@ def futures_order(action: Action) -> FuturesOrder:
         position_type=PositionType.LONG,
         volume=1,
         price=48000.0,
-        price_type=FuturesPriceType.LMT,
     )
+    mark_execution([order], ExecutionTiming.AT_CLOSE, ExecutionStyle.MARKET)
+    return order
 
 
 def margin_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:

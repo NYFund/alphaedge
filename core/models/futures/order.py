@@ -33,7 +33,7 @@ class FuturesOrder(BaseOrder):
         order_type: OrderType = OrderType.ROD,  # 委託效期
         timing: Optional[ExecutionTiming] = None,  # 實盤執行時點；回測忽略
         client_order_id: Optional[str] = None,  # 本地委託識別碼；由 OMS 填入
-        price_type: Optional[FuturesPriceType] = None,  # 價格類型；None 由前處理決定
+        price_type: Optional[FuturesPriceType] = None,  # 價格類型；None 由執行層決定
     ) -> None:
         super().__init__(
             symbol=f"{product}{expiry}",
@@ -53,8 +53,8 @@ class FuturesOrder(BaseOrder):
 
         # === 實盤執行欄位（回測完全不讀）===
         #
-        # `None` 表示由送單前的處理決定。期貨的值域比股票多一個 `MKP`（範圍市價），
-        # 故型別是 `FuturesPriceType` 而不是共用一個
+        # `None` 表示由實盤執行層決定，策略不填。期貨的值域比股票多一個 `MKP`
+        # （範圍市價），故型別是 `FuturesPriceType` 而不是共用一個
         self.price_type: Optional[FuturesPriceType] = price_type
 
         # **沒有 `octype` 欄位**：開平倉別由 mapper 依 `Action` 與當前持倉推導。

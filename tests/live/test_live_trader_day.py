@@ -2,7 +2,7 @@ import datetime
 import sqlite3
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pytest
 
@@ -13,6 +13,7 @@ from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
 from core.live.datafeed.calendar import TradingCalendarUnavailableError
+from core.live.execution.stock import StockExecutionModel
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO, RiskConfig
@@ -33,12 +34,12 @@ from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
+    ExecutionStyle,
     ExecutionTiming,
     LiveHook,
     LiveOrderStatus,
     PositionType,
     Scale,
-    StockPriceType,
 )
 
 from .conftest import FakeBroker
@@ -128,6 +129,9 @@ class ScriptedStrategy(BaseStrategy):
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
+        # 照價掛單：委託價維持策略給的價，既有斷言不必跟著漲跌停變；
+        # 「要成交」的換算由執行層的專屬測試涵蓋
+        self.live_execution = ExecutionStyle.LIMIT
         self.scale = Scale.DAY
 
     def setup_account(self, account: Any) -> None:
@@ -159,7 +163,6 @@ class ScriptedStrategy(BaseStrategy):
             position_type=PositionType.LONG,
             volume=action.volume,
             price=100.0,
-            price_type=StockPriceType.LMT,
         )
 
 
@@ -176,7 +179,6 @@ def make_order(
         position_type=PositionType.LONG,
         volume=volume,
         price=price,
-        price_type=StockPriceType.LMT,
     )
 
 
@@ -197,6 +199,7 @@ class Harness:
         is_open: bool = True,
         latest_data_date: Optional[datetime.date] = None,
         quota: Optional[float] = None,
+        price_limits: Tuple[Optional[float], Optional[float]] = (110.0, 90.0),
     ) -> None:
         self.dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
         self.dao.ensure_tables()
@@ -257,6 +260,10 @@ class Harness:
                     # 與 `factory._build_context()` 一致；少了它，
                     # 任何需要還原訂單的路徑（帳戶同步、當沖回補）都會靜靜做不了事
                     build_filled_order=build_stock_order,
+                    # 與真實組裝一致地經過執行層；漲跌停由測試指定，不碰券商合約
+                    execution_model=StockExecutionModel(
+                        price_limits=lambda symbol: price_limits
+                    ),
                 )
             )
 

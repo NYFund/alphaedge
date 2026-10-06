@@ -25,9 +25,7 @@ from core.utils import (
     FUTURES_MULTIPLIER,
     Action,
     ExecutionTiming,
-    FuturesPriceType,
     FuturesSession,
-    OrderType,
     PositionType,
 )
 from core.utils.instrument import FuturesUtils
@@ -226,9 +224,9 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
 
             沿用回測 `TwFuturesSettlementModel.roll_positions()` 的兩條規則：
             **只往遠月換**（當家契約不比部位遠就不動）、**週契約不轉**。
-            兩腿都以範圍市價（`MKP`）＋ `IOC` 送出：換月要的是「換過去」，
-            平倉腿沒有立即成交就由券商取消，開倉腿隨之放棄（次日再換）。
-            價格欄位放快照價，只給風控當參考，券商端不看。
+            兩腿都由引擎標成「要成交」，由執行層換成券商委託（連續交易時段為
+            範圍市價＋IOC）：換月要的是「換過去」，平倉腿沒有立即成交就由券商取消，
+            開倉腿隨之放棄（次日再換）。價格欄位放快照價，作為決策價給風控與事後比對。
         - Parameters:
             - positions: Sequence[Any]
                 該策略的部位
@@ -312,8 +310,6 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 position_type=position_type,
                 price=price,
                 volume=position.volume,
-                order_type=OrderType.IOC,
-                price_type=FuturesPriceType.MKP,
             )
 
         return RollPlan(

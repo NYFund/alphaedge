@@ -11,7 +11,7 @@ from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder, ExecutionReport, OrderStatusEvent, OrderTicket
-from core.utils import ExecutionTiming, LiveOrderStatus
+from core.utils import ExecutionStyle, ExecutionTiming, LiveOrderStatus
 
 """
 OrderManager：委託狀態機、送單、回報消化與重啟接管
@@ -708,7 +708,7 @@ class OrderManager:
         )
 
     def _rebuild_order(self, row: Dict[str, Any]) -> Optional[BaseOrder]:
-        """以注入的建構器還原訂單，並補回執行段落（撤單依段落篩選）"""
+        """以注入的建構器還原訂單，並補回執行段落（撤單依段落篩選）與執行方式"""
 
         if self.order_rebuilder is None:
             return None
@@ -725,6 +725,11 @@ class OrderManager:
             order.client_order_id = str(row["client_order_id"])
             if row.get("timing"):
                 order.timing = ExecutionTiming(str(row["timing"]))
+            # 補回執行層的標註：重建後的委託會整列寫回，少了它們決策價就被清成空值
+            if row.get("execution_style"):
+                order.execution_style = ExecutionStyle(str(row["execution_style"]))
+            if row.get("decision_price") is not None:
+                order.decision_price = float(row["decision_price"])
         return order
 
     @staticmethod
@@ -798,6 +803,10 @@ class OrderManager:
                 "order_type": self._enum_value(getattr(order, "order_type", None)),
                 "order_lot": self._enum_value(getattr(order, "order_lot", None)),
                 "timing": self._enum_value(getattr(order, "timing", None)),
+                "execution_style": self._enum_value(
+                    getattr(order, "execution_style", None)
+                ),
+                "decision_price": getattr(order, "decision_price", None),
                 "status": ticket.status.value,
                 "broker_order_id": ticket.broker_order_id,
                 "broker_seqno": ticket.broker_seqno,

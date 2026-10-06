@@ -30,6 +30,13 @@ LIVE_HOOK_CLOSE = "close"  # 平倉訊號
 LIVE_HOOK_STOP_LOSS = "stop_loss"  # 停損訊號
 
 
+# 定義實盤執行方式常量（`live_execution` 的值）
+EXECUTION_STYLE_MARKET = "MARKET"  # 要成交：這筆一定要進出場，價格交給市場決定
+
+
+EXECUTION_STYLE_LIMIT = "LIMIT"  # 照價掛單：只接受策略給的價，沒成交就算了
+
+
 class LiveHook(str, Enum):
     """
     策略鉤子；`live_schedule` 以它宣告「哪個鉤子在哪一段被呼叫」
@@ -59,3 +66,24 @@ class ExecutionTiming(str, Enum):
     AT_OPEN = EXECUTION_TIMING_AT_OPEN
     AT_CLOSE = EXECUTION_TIMING_AT_CLOSE
     IMMEDIATE = EXECUTION_TIMING_IMMEDIATE
+
+
+class ExecutionStyle(str, Enum):
+    """
+    實盤執行方式：策略只表達「要成交」還是「照價掛單」，**不碰券商的價格類型**
+
+    換成券商接受的委託（限價／範圍市價、ROD／IOC、委託價）是執行層的事
+    （`core/live/execution/`），依段落與商品決定。策略直接指定券商列舉值的話，
+    同一支策略換個段落就可能送出交易所不收的組合——集合競價時段不收市價單，
+    期交所不收「市價＋ROD」。
+
+    **`MARKET` 是意圖，不保證送出的是市價單**：執行層會換成帶保護價的委託
+    （集合競價掛漲跌停、連續交易時段加減幅度的限價或期貨的範圍市價），
+    與券商列舉 `StockPriceType.MKT` 分屬不同型別，兩者不可混用。
+
+    **回測忽略此欄位**：回測一律以策略給的價成交，正是 `MARKET` 的假設；
+    `LIMIT` 在回測因此偏樂觀，差異由盤後 parity 量化。
+    """
+
+    MARKET = EXECUTION_STYLE_MARKET
+    LIMIT = EXECUTION_STYLE_LIMIT

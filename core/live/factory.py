@@ -35,6 +35,9 @@ from core.live.datafeed.tw.futures_live_datafeed import (
     split_contract_id,
 )
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
+from core.live.execution.base import BaseExecutionModel
+from core.live.execution.futures import FuturesExecutionModel
+from core.live.execution.stock import StockExecutionModel
 from core.live.notify.base import BaseNotifier, NullNotifier
 from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
@@ -615,6 +618,9 @@ def _build_context(
         schedule: SegmentSchedule = TW_STOCK_SEGMENTS
         build_order: FilledOrderBuilder = build_stock_order
         opening_requirement: Optional[Callable[[BaseOrder], float]] = None
+        execution_model: BaseExecutionModel = StockExecutionModel(
+            price_limits=feed.get_price_limits
+        )
 
     elif market == Market.TW and instrument == InstrumentType.FUTURE:
         futures_account: FuturesAccount = FuturesAccount(
@@ -647,6 +653,7 @@ def _build_context(
         spec = TwFuturesSpec()
         schedule = TW_FUTURES_SEGMENTS
         build_order = _build_futures_order
+        execution_model = FuturesExecutionModel(price_limits=feed.get_price_limits)
 
     else:
         raise UnsupportedMarketError(
@@ -663,6 +670,7 @@ def _build_context(
         calculate_notional=_make_notional_calculator(spec),
         build_filled_order=build_order,
         calculate_opening_requirement=opening_requirement,
+        execution_model=execution_model,
     )
     return (context, schedule)
 

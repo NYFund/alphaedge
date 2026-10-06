@@ -1,7 +1,7 @@
 import datetime
 from typing import Optional
 
-from core.utils import Action, ExecutionTiming, OrderType, PositionType
+from core.utils import Action, ExecutionStyle, ExecutionTiming, OrderType, PositionType
 
 """BaseOrder: 市場與商品皆無關的訂單骨架（識別欄位一律為 symbol）"""
 
@@ -67,3 +67,15 @@ class BaseOrder:
         # 它是「先寫 DB 再送單」能夠恢復的關鍵：程式在 `place_order()` 前後崩潰時，
         # 重啟後靠它到券商端精確比對，才不會因為「不知道送出去了沒」而重送
         self.client_order_id: Optional[str] = client_order_id
+
+        # 實盤執行方式，**由引擎填入，不開放建構子傳入**：一般鉤子沿用策略的
+        # `live_execution`，停損與系統產生的委託（補平、回補、換月）一律 `MARKET`。
+        # 策略能逐單填的話，「停損固定要成交」這條規則就有了後門
+        self.execution_style: Optional[ExecutionStyle] = None
+
+        # 決策價：執行層改寫委託價之前、策略給的價格（`Signal.order_price`）。
+        #
+        # 執行層會把 `price` 換成實際送出的價（例如集合競價的 `MARKET` 買單掛漲停），
+        # 之後就只剩這裡記得策略原本要的價。風控的偏離檢查、盤後的 parity 與
+        # 執行成本都要比對它，而不是比對掛出去的保護價。`None` 代表沒經過執行層
+        self.decision_price: Optional[float] = None
