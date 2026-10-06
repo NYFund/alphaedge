@@ -471,7 +471,9 @@ def build_live_trader(
         LIVE_NOTIFY_CHANNEL, LIVE_NOTIFY_TOKEN, LIVE_NOTIFY_TARGET
     )
     parity_checker: ParityChecker = ParityChecker(
-        resolved_dao, make_daily_backtest_runner(strategies)
+        resolved_dao,
+        make_daily_backtest_runner(strategies),
+        strategy_names=[type(strategy).__name__ for strategy in strategies],
     )
     _record_run(
         resolved_dao,

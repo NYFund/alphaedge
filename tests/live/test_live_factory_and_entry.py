@@ -117,6 +117,19 @@ def test_single_strategy_is_not_a_special_path(dao: LiveTradeDAO) -> None:
     assert trader.allocator.quotas == {"LiveStockStrategy": 1_000_000.0}
 
 
+def test_parity_checks_only_the_strategies_of_this_process(dao: LiveTradeDAO) -> None:
+    """
+    盤後 parity 的比對範圍＝本次載入的策略
+
+    股票線與期貨線各自一個行程、共用同一個紀錄庫；不傳範圍的話，
+    一個行程會替另一個行程的策略記假的未解釋差異。
+    """
+
+    trader: LiveTrader = build([LiveStockStrategy()], dao)
+
+    assert trader.after_close.parity_checker.strategy_names == {"LiveStockStrategy"}
+
+
 def test_singletons_are_shared_across_strategies(dao: LiveTradeDAO) -> None:
     """
     券商與委託管理跨策略共用一份，資料源與帳戶則每支策略各一份

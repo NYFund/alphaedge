@@ -326,6 +326,92 @@ def test_backtest_failure_does_not_pass_silently(
     assert "缺 tw_stock.db" in diffs[0].note
 
 
+def insert_order(dao: LiveTradeDAO, client_order_id: str, strategy_name: str) -> None:
+    """寫一筆當日委託"""
+
+    dao.upsert_order(
+        {
+            "client_order_id": client_order_id,
+            "run_id": "run1",
+            "strategy_name": strategy_name,
+            "symbol": "2330",
+            "action": "Buy",
+            "position_type": "LONG",
+            "price": 1000.0,
+            "volume": 1,
+            "status": "FILLED",
+            "created_at": NOW,
+        }
+    )
+    dao.conn.commit()
+
+
+def test_only_strategies_loaded_in_this_process_are_checked(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    紀錄庫裡另一個行程的策略不比對
+
+    2026-10-06：股票與期貨的盤後段是兩個行程、共用同一個紀錄庫，期貨行程讀到股票策略的委託，
+    跑不出它的回測，記了一筆假的 UNEXPLAINED 並發 CRITICAL。
+    """
+
+    insert_order(dao, "run1-1", "Alpha")
+    insert_order(dao, "run2-1", "Beta")
+
+    def backtest(name: str, date: datetime.date) -> List[BaseOrder]:
+        if name != "Alpha":
+            raise RuntimeError(f"本次執行沒有載入策略 {name}")
+        return [make_backtest_order(volume=1)]
+
+    checker: ParityChecker = ParityChecker(
+        dao, run_backtest=backtest, output_root=tmp_path, strategy_names=["Alpha"]
+    )
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert set(result) == {"Alpha"}
+    assert not (tmp_path / "Beta").exists()
+
+
+def test_other_process_results_are_not_overwritten(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    另一個行程寫好的差異不可被覆寫
+
+    差異以（日期、策略、序號）覆寫；2026-10-06 期貨行程那筆假的第 1 筆蓋掉了股票行程對 1711 的結果。
+    """
+
+    insert_order(dao, "run2-1", "Beta")
+    dao.upsert_parity_diff(
+        {
+            "date": TODAY,
+            "strategy_name": "Beta",
+            "seq": 1,
+            "symbol": "2330",
+            "side": "Buy",
+            "category": "SNAPSHOT_GAP",
+            "live_detail": "股票行程寫的",
+            "backtest_detail": "",
+            "note": "",
+        }
+    )
+    dao.commit()
+
+    checker: ParityChecker = ParityChecker(
+        dao,
+        run_backtest=lambda name, date: [],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+    )
+    checker.check(TODAY)
+
+    rows = dao.conn.execute(
+        "SELECT category, live_detail FROM live_parity_diff WHERE strategy_name = 'Beta'"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [("SNAPSHOT_GAP", "股票行程寫的")]
+
+
 # === 接線：寫好了就要有人呼叫 ===
 class _RecordingNotifier:
     """記下推播內容；只驗「有沒有送出」與等級"""

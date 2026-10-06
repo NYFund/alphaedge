@@ -2,7 +2,7 @@ import csv
 import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
@@ -137,6 +137,7 @@ class ParityChecker:
         dao: LiveTradeDAO,
         run_backtest: Callable[[str, datetime.date], List[BaseOrder]],
         output_root: Path = LIVE_RESULT_DIR_PATH,
+        strategy_names: Optional[Sequence[str]] = None,
     ) -> None:
         """
         - Description:
@@ -150,6 +151,8 @@ class ParityChecker:
                 CSV 輸出根目錄；**預設 `results/live/`，不可指向回測的結果目錄**——
                 那裡是回歸雙線的比對基準，被每日 parity 的單日結果覆蓋掉，
                 `run_regression.sh` 就失去意義了
+            - strategy_names: Optional[Sequence[str]]
+                本次行程載入的策略；只比對這些。`None` 表示比對紀錄庫裡當日有委託的全部策略
         """
 
         self.dao: LiveTradeDAO = dao
@@ -157,6 +160,9 @@ class ParityChecker:
             run_backtest
         )
         self.output_root: Path = output_root
+        self.strategy_names: Optional[Set[str]] = (
+            set(strategy_names) if strategy_names is not None else None
+        )
 
     def check(self, run_date: datetime.date) -> Dict[str, List[ParityDiff]]:
         """
@@ -176,8 +182,18 @@ class ParityChecker:
             run_date
         )
 
+        # **只比對本次行程載入的策略**：股票線與期貨線是兩個行程、共用同一個紀錄庫，
+        # 讀到另一個行程的委託時這裡跑不出它的回測，會記成未解釋並發 CRITICAL；
+        # 而差異是以（日期、策略、序號）覆寫，還會蓋掉另一個行程寫好的正確結果
+        names: Set[str] = {str(row["strategy_name"]) for row in live_orders}
+        if self.strategy_names is not None:
+            skipped: Set[str] = names - self.strategy_names
+            if skipped:
+                logger.debug(f"略過不在本次行程的策略：{sorted(skipped)}")
+            names &= self.strategy_names
+
         result: Dict[str, List[ParityDiff]] = {}
-        for name in sorted({str(row["strategy_name"]) for row in live_orders}):
+        for name in sorted(names):
             diffs: List[ParityDiff] = self._check_strategy(
                 name,
                 run_date,
