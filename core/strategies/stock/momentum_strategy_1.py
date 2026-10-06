@@ -9,7 +9,14 @@ from core.market.tw.market_calendar import MarketCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, ExecutionTiming, LiveHook, PositionType, Scale
+from core.utils import (
+    Action,
+    ExecutionStyle,
+    ExecutionTiming,
+    LiveHook,
+    PositionType,
+    Scale,
+)
 
 
 class MomentumStrategy1(BaseStockStrategy):
@@ -42,6 +49,8 @@ class MomentumStrategy1(BaseStockStrategy):
       平倉只看帳上部位與開倉日，沒有任何逐日累積的內部狀態。
     - 標的池：未宣告 `symbols`，由實盤資料源補上「前一交易日有行情的全部股票」，
       與回測每天的標的池相同。
+    - 執行方式 `MARKET`（要成交）：回測以收盤價成交，實盤由執行層在收盤集合競價
+      買掛漲停、賣掛跌停，成交價仍是競價結果；收盤鎖漲停時可能排不到。
     - 已知差異：13:25 的快照成交量不含收盤集合競價的量，「當日成交量 ≥ 5000 張」
       在實盤比回測稍難達到；價格同樣是快照價而非收盤價。
     """
@@ -87,6 +96,8 @@ class MomentumStrategy1(BaseStockStrategy):
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
+        # 回測假設以收盤價成交，實盤要成交（換算見 class docstring〈實盤執行〉）
+        self.live_execution = ExecutionStyle.MARKET
 
     def setup_account(self, account: StockAccount) -> None:
         """設置虛擬帳戶資訊"""

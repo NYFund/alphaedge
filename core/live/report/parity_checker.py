@@ -9,7 +9,7 @@ from loguru import logger
 from core.config.paths import LIVE_RESULT_DIR_PATH
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.models import BaseOrder
-from core.utils import LiveOrderStatus
+from core.utils import ExecutionStyle, LiveOrderStatus, OrderType
 
 """
 訊號 parity：同一支策略在回測與實盤有沒有送出同一批委託
@@ -17,9 +17,10 @@ from core.utils import LiveOrderStatus
 **這是整份實盤規劃的核心假設，而它不主動比對就看不出來**——策略少送一張單不會有
 任何錯誤訊息，回測績效卻已經失去參考價值。滑價與成本可以事後校正，訊號漂移不行。
 
-比對的是**委託**不是成交：成不成交是市場的事，「這張單有沒有被送出去」才是策略層
+比對的主體是**委託**不是成交：成不成交是市場的事，「這張單有沒有被送出去」才是策略層
 的責任。故兩邊取的都是「通過方向白名單、檔數上限與排序之後、進入成交／送單之前」
-的那一份。
+的那一份。兩邊都送了、實盤卻沒成交的，另外歸到執行差異的類別（見 `CATEGORY_LIMIT_UNFILLED`），
+回測「一律成交」的假設偏離多少，要靠這些類別量出來。
 
 **每一筆差異都必須歸到一個類別**。`UNEXPLAINED` 是唯一會推播 CRITICAL 的類別，
 它的意義是「我們還不知道為什麼」——把已知的制度性差異（快照口徑、跨策略守門、
@@ -38,6 +39,16 @@ CATEGORY_RISK_REJECTED: str = "RISK_REJECTED"
 #      **這一種目前判不出來**：放棄不寫事件也不寫待辦，唯一的痕跡是前一交易日
 #      委託列的 `filled_volume < volume`，而那要往前翻不定長度的歷史
 CATEGORY_UNFILLED: str = "UNFILLED"
+
+# 兩邊都送了同一張單、實盤卻沒有成交（或只成交一部分）。
+# 回測一律以策略給的價成交，實盤要看市場，這是**執行差異**而不是訊號差異，
+# 依執行方式分開計數，累積數據後才能決定回測要不要開始讀執行方式：
+#   - `LIMIT_UNFILLED`：照價掛單（`ExecutionStyle.LIMIT`）沒等到價。回測在這裡偏樂觀。
+#   - `LOCKED_AT_LIMIT`：要成交（`MARKET`）在集合競價掛到漲跌停仍排不到，
+#     代表收盤鎖漲停（買）或鎖跌停（賣）。集合競價的委託效期是 ROD，以此辨識。
+#   - 其餘（連續交易時段的保護價＋IOC 沒成交、沒有執行方式紀錄的舊委託）歸 `UNFILLED`。
+CATEGORY_LIMIT_UNFILLED: str = "LIMIT_UNFILLED"
+CATEGORY_LOCKED_AT_LIMIT: str = "LOCKED_AT_LIMIT"
 
 # `ExecutionTiming` 造成的段落差異。
 # **目前不會有任何一筆落在這一類，而那是刻意的**：開倉與平倉分屬不同段落時，
@@ -388,6 +399,13 @@ def compare(
         )
         if volume_diff is not None:
             diffs.append(volume_diff)
+            continue
+
+        fill_diff: Optional[ParityDiff] = _compare_fill(
+            len(diffs) + 1, symbol, side, live_rows, bt_orders
+        )
+        if fill_diff is not None:
+            diffs.append(fill_diff)
 
     return diffs
 
@@ -455,6 +473,65 @@ def _compare_volume(
         "；".join(summarize(order) for order in bt_orders),
         note=f"數量不同：實盤 {live_volume}、回測 {bt_volume}",
     )
+
+
+# 送出後沒有（完全）成交的狀態。被拒、送單失敗不在內——那是風控或券商的事，
+# 由 `_compare_volume()` 與風控事件歸因；`PENDING_SUBMIT` 代表還不知道送出去了沒
+_UNFILLED_STATUSES: Set[str] = {
+    LiveOrderStatus.SUBMITTED.value,
+    LiveOrderStatus.PARTIALLY_FILLED.value,
+    LiveOrderStatus.CANCELLED.value,
+}
+
+
+def _compare_fill(
+    seq: int,
+    symbol: str,
+    side: str,
+    live_rows: Sequence[Dict[str, Any]],
+    bt_orders: Sequence[BaseOrder],
+) -> Optional[ParityDiff]:
+    """
+    兩邊數量相同時，比實盤有沒有成交；回測那邊一律視為成交
+
+    多張同鍵委託只要有一張沒成交就算一筆差異，類別取第一張沒成交的委託：
+    同一支策略同一個標的同一方向，一天之內的執行方式不會不同。
+    """
+
+    unfilled: List[Dict[str, Any]] = [
+        row
+        for row in live_rows
+        if str(row.get("status")) in _UNFILLED_STATUSES
+        and int(row.get("filled_volume") or 0) < int(row.get("volume") or 0)
+    ]
+    if not unfilled:
+        return None
+
+    filled: int = sum(int(row.get("filled_volume") or 0) for row in live_rows)
+    volume: int = sum(int(row.get("volume") or 0) for row in live_rows)
+    return _make_diff(
+        seq,
+        symbol,
+        side,
+        _unfilled_category(unfilled[0]),
+        "；".join(summarize_row(row) for row in live_rows),
+        "；".join(summarize(order) for order in bt_orders),
+        note=f"實盤成交 {filled}／{volume}，回測以策略給的價全數成交",
+    )
+
+
+def _unfilled_category(row: Dict[str, Any]) -> str:
+    """依執行方式與委託效期判斷沒成交的原因（見 `CATEGORY_LIMIT_UNFILLED`）"""
+
+    style: str = str(row.get("execution_style") or "")
+    if style == ExecutionStyle.LIMIT.value:
+        return CATEGORY_LIMIT_UNFILLED
+    if (
+        style == ExecutionStyle.MARKET.value
+        and str(row.get("order_type") or "") == OrderType.ROD.value
+    ):
+        return CATEGORY_LOCKED_AT_LIMIT
+    return CATEGORY_UNFILLED
 
 
 def _make_diff(

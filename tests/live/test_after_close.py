@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import pytest
@@ -38,6 +38,7 @@ def add_order(
     filled_volume: int = 2,
     avg_fill_price: float = 1000.0,
     status: str = "FILLED",
+    decision_price: Optional[float] = None,
 ) -> None:
     dao.upsert_order(
         {
@@ -53,6 +54,7 @@ def add_order(
             "status": status,
             "filled_volume": filled_volume,
             "avg_fill_price": avg_fill_price,
+            "decision_price": decision_price,
             "custom_field": client_order_id[-6:],
             "created_at": datetime.datetime(2026, 9, 21, 13, 25),
         }
@@ -227,6 +229,19 @@ def test_market_orders_are_excluded_from_slippage(dao: LiveTradeDAO) -> None:
     add_order(dao, "run1-0001", price=0.0, avg_fill_price=1005.0)
 
     assert LiveReporter(dao).summarize_slippage(TODAY) == {}
+
+
+def test_slippage_is_measured_against_the_decision_price(dao: LiveTradeDAO) -> None:
+    """
+    滑價以決策價為基準，不是掛出去的保護價
+
+    集合競價的要成交買單掛漲停（1100），收盤價 1005 成交；拿委託價比會得到
+    −95 的「有利滑價」，實際上是比決策價 1000 多付了 5。
+    """
+
+    add_order(dao, price=1100.0, avg_fill_price=1005.0, decision_price=1000.0)
+
+    assert LiveReporter(dao).summarize_slippage(TODAY)["Alpha"] == pytest.approx(5.0)
 
 
 def test_unfilled_orders_are_excluded_from_slippage(dao: LiveTradeDAO) -> None:

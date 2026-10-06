@@ -17,9 +17,9 @@ from core.live.factory import (
     build_live_trader,
 )
 from core.live.segment import SegmentSchedule, SegmentWindow
-from core.live.trader import LiveTrader
+from core.live.trader import LiveTrader, StrategyContext
 from core.strategies.base import BaseStrategy
-from core.utils import ExecutionTiming, InstrumentType, LiveHook, Market
+from core.utils import ExecutionStyle, ExecutionTiming, InstrumentType, LiveHook, Market
 
 from .conftest import FakeBroker
 
@@ -46,6 +46,7 @@ class LiveStockStrategy(BaseStrategy):
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
+        self.live_execution = ExecutionStyle.MARKET
         self.symbols: List[str] = ["2330"]
 
     def setup_account(self, account: Any) -> None:
@@ -224,6 +225,25 @@ def test_notional_uses_the_instrument_unit(dao: LiveTradeDAO) -> None:
     order: StockOrder = StockOrder(stock_id="2330", volume=2, price=1000.0)
 
     assert trader.contexts[0].notional(order) == pytest.approx(2_000_000.0)
+
+
+def test_each_market_gets_its_own_execution_model(dao: LiveTradeDAO) -> None:
+    """
+    執行層依市場注入，漲跌停走資料源取合約的同一條路徑
+
+    沒注入的策略每一張委託都會在送出前被擋下；注入錯市場的話，
+    期貨會送出股票的保護價限價、股票會送出它沒有的範圍市價。
+    """
+
+    from core.live.execution.futures import FuturesExecutionModel
+    from core.live.execution.stock import StockExecutionModel
+
+    stock: StrategyContext = build([LiveStockStrategy()], dao).contexts[0]
+    futures: StrategyContext = build([LiveFuturesStrategy()], dao).contexts[0]
+
+    assert isinstance(stock.execution_model, StockExecutionModel)
+    assert isinstance(futures.execution_model, FuturesExecutionModel)
+    assert stock.execution_model.get_price_limits("2330") == (None, None)
 
 
 # === 段落時窗 ===

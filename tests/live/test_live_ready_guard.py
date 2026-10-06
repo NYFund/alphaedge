@@ -20,9 +20,11 @@ from core.models import (
 from core.models.base.quote import PreOpenQuoteMixin
 from core.strategies.base import BaseStrategy
 from core.utils import (
+    ExecutionStyle,
     ExecutionTiming,
     LiveHook,
     Scale,
+    StockPriceType,
 )
 
 """
@@ -34,6 +36,7 @@ from core.utils import (
 - `live_schedule` 與 `allow_day_trade` 矛盾 → 交易順序被默默改掉，
   回測與實盤的部位軌跡從當天起就不同。
 - 策略沒宣告 `live_ready` → 作者根本沒確認過它的實盤語意。
+- 策略沒宣告或宣告錯 `live_execution` → 送單時才發現，尾盤段沒有時間補救。
 """
 
 
@@ -48,11 +51,13 @@ class FakeStrategy(BaseStrategy):
         live_ready: bool = True,
         live_schedule: Optional[Dict[str, ExecutionTiming]] = None,
         allow_day_trade: bool = False,
+        live_execution: Optional[object] = ExecutionStyle.MARKET,
     ) -> None:
         super().__init__()
         self.live_ready = live_ready
         self.live_schedule = live_schedule if live_schedule is not None else {}
         self.allow_day_trade = allow_day_trade
+        self.live_execution = live_execution
 
     def setup_account(self, account: object) -> None:
         """測試不需要帳戶"""
@@ -125,6 +130,57 @@ def test_removed_setting_blocks_live_start() -> None:
 
     assert len(problems) == 1
     assert "bar_execution_order" in problems[0]
+
+
+# === live_execution ===
+def test_execution_style_has_no_default() -> None:
+    """不給預設值：要不要成交是策略的決定"""
+
+    class Bare(BaseStrategy):
+        def setup_account(self, account: object) -> None:
+            """測試不需要帳戶"""
+
+    assert Bare().live_execution is None
+
+
+def test_missing_execution_style_is_rejected() -> None:
+    """沒宣告執行方式：啟動就擋，不等到送單時才失敗"""
+
+    problems: List[str] = inspect_strategy(
+        FakeStrategy(live_schedule=BOTH_AT_CLOSE, live_execution=None)
+    )
+
+    assert len(problems) == 1
+    assert "未宣告 live_execution" in problems[0]
+
+
+@pytest.mark.parametrize("wrong", [StockPriceType.MKT, "MARKET"])
+def test_broker_price_type_is_not_an_execution_style(wrong: object) -> None:
+    """
+    券商價格類型與字串都要擋
+
+    `StockPriceType.MKT` 與 `ExecutionStyle.MARKET` 名字相近，但前者在集合競價
+    時段送不出去；寫錯型別在送單前不會有任何錯誤。
+    """
+
+    problems: List[str] = inspect_strategy(
+        FakeStrategy(live_schedule=BOTH_AT_CLOSE, live_execution=wrong)
+    )
+
+    assert len(problems) == 1
+    assert "必須是 ExecutionStyle" in problems[0]
+
+
+@pytest.mark.parametrize("style", list(ExecutionStyle))
+def test_every_execution_style_passes(style: ExecutionStyle) -> None:
+    """兩種執行方式都是合法宣告"""
+
+    assert (
+        inspect_strategy(
+            FakeStrategy(live_schedule=BOTH_AT_CLOSE, live_execution=style)
+        )
+        == []
+    )
 
 
 # === 批次檢查 ===

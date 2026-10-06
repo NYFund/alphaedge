@@ -18,6 +18,7 @@ from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import ExecutionReport, FuturesOrder, FuturesQuote
 from core.utils import (
     Action,
+    ExecutionStyle,
     ExecutionTiming,
     FuturesPriceType,
     FuturesRollRule,
@@ -170,11 +171,10 @@ def test_rolls_on_the_trading_day_before_the_last_trading_day() -> None:
         Action.BUY,
         2,
     )
-    # 範圍市價 ＋ IOC：換月要的是換過去；沒立即成交就由券商取消，開倉腿隨之放棄
+    # 資料源只決定換什麼，不決定怎麼送：價格類型留給執行層（見下方引擎測試）
     for leg in (close, opening):
         assert leg.position_type is PositionType.LONG
-        assert leg.price_type is FuturesPriceType.MKP
-        assert leg.order_type is OrderType.IOC
+        assert leg.price_type is None
 
 
 def test_short_position_rolls_with_buy_then_sell() -> None:
@@ -289,8 +289,6 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
             position_type=PositionType.LONG,
             volume=1,
             price=48000.0,
-            order_type=OrderType.IOC,
-            price_type=FuturesPriceType.MKP,
         )
 
     context.data_feed.plan_rolls = lambda positions, today: [  # type: ignore
@@ -322,6 +320,28 @@ def test_close_leg_fills_then_open_leg_is_sent(dao: LiveTradeDAO) -> None:
     assert trader.execute_rolls(None) == 1
     assert placed_symbols(broker) == ["TX202610", "TX202611"]
     assert roll_events(dao) == []
+
+
+def test_roll_legs_are_sent_as_must_fill_by_the_execution_layer(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    換月兩腿由執行層換成範圍市價＋IOC
+
+    換月要的是「換過去」，屬系統產生的委託，一律要成交；尾盤段在連續交易時段，
+    期貨的要成交就是範圍市價。沒立即成交就由券商取消，開倉腿隨之放棄。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=1.0)
+
+    trader.execute_rolls(None)
+
+    legs: List[Any] = [ticket.order for ticket in broker.tickets.values()]
+    assert [leg.execution_style for leg in legs] == [ExecutionStyle.MARKET] * 2
+    assert [leg.price_type for leg in legs] == [FuturesPriceType.MKP] * 2
+    assert [leg.order_type for leg in legs] == [OrderType.IOC] * 2
+    # 決策價保留快照價：事後比對執行品質要看它
+    assert [leg.decision_price for leg in legs] == [48000.0, 48000.0]
 
 
 def test_unfilled_close_leg_abandons_the_open_leg(dao: LiveTradeDAO) -> None:

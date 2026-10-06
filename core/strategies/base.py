@@ -6,6 +6,7 @@ from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
 from core.portfolio.signal import Signal
 from core.utils import (
+    ExecutionStyle,
     ExecutionTiming,
     InstrumentType,
     Market,
@@ -122,10 +123,19 @@ class BaseStrategy(ABC):
         `live_tag` 是策略代號，**只寫本地紀錄與報表，不送券商**——券商的
         `custom_field` 那 6 個字元讓給委託識別碼的壓縮碼（壓縮碼反查得到策略，
         策略代號卻反查不到是哪一張單），因此它不受 6 字元與英數字的限制。
+
+        `live_execution` 宣告這支策略的委託「要成交」（`MARKET`）還是
+        「照價掛單」（`LIMIT`），開倉與平倉共用一個值。**停損一律視為 `MARKET`**，
+        不受這裡影響：出場不該因為價格掛不到而失敗。換成券商委託（價格類型、
+        委託價、ROD／IOC）由執行層依段落處理，策略不填 `price_type`。
+        回測假設「以收盤價成交」的策略應宣告 `MARKET`。
+        **沒有預設值**：上實盤的策略沒宣告就在啟動時擋下（見 `strategy_guard`），
+        給預設值等於替策略作者決定它要不要成交。
         """
         self.live_ready: bool = False  # 預設不可上實盤
         self.live_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
         self.live_tag: str = ""  # 策略代號（只寫本地）
+        self.live_execution: Optional[ExecutionStyle] = None  # 實盤執行方式
 
         # 實盤專用的資金額度上限；`None` 表示沿用 `init_capital`。
         #

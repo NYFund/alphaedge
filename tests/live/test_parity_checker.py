@@ -1,12 +1,16 @@
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
 from core.live.report.parity_checker import (
     CATEGORY_CAPITAL_EXHAUSTED,
     CATEGORY_CROSS_STRATEGY_BLOCKED,
+    CATEGORY_LIMIT_UNFILLED,
+    CATEGORY_LOCKED_AT_LIMIT,
     CATEGORY_RISK_REJECTED,
     CATEGORY_SNAPSHOT_GAP,
     CATEGORY_UNEXPLAINED,
@@ -255,6 +259,78 @@ def test_rejected_order_explains_the_volume_gap() -> None:
 
 
 # === 落地 ===
+# === 送出但沒成交（執行差異）===
+def unfilled_order(
+    execution_style: Optional[str],
+    order_type: str,
+    status: str = "CANCELLED",
+    filled_volume: int = 0,
+) -> Dict[str, Any]:
+    """兩邊都送了、實盤沒成交的委託"""
+
+    row: Dict[str, Any] = make_live_order(status=status)
+    row.update(
+        {
+            "execution_style": execution_style,
+            "order_type": order_type,
+            "filled_volume": filled_volume,
+        }
+    )
+    return row
+
+
+@pytest.mark.parametrize(
+    "style, order_type, expected",
+    [
+        ("LIMIT", "ROD", CATEGORY_LIMIT_UNFILLED),
+        ("MARKET", "ROD", CATEGORY_LOCKED_AT_LIMIT),
+        ("MARKET", "IOC", CATEGORY_UNFILLED),
+        (None, "ROD", CATEGORY_UNFILLED),
+    ],
+    ids=["limit", "locked-at-limit", "ioc-protection", "legacy-row"],
+)
+def test_unfilled_order_is_classified_by_execution_style(
+    style: Optional[str], order_type: str, expected: str
+) -> None:
+    """
+    兩邊都送了、實盤沒成交：依執行方式分類，不是未解釋
+
+    回測一律以策略給的價成交；照價掛單沒等到價、收盤鎖漲停排不到，
+    都是已知的執行差異，要分開計數才量得出回測偏樂觀多少。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [unfilled_order(style, order_type)], [make_backtest_order()], []
+    )
+
+    assert [diff.category for diff in diffs] == [expected]
+    assert "實盤成交 0／2" in diffs[0].note
+
+
+def test_partial_fill_is_also_an_execution_diff() -> None:
+    """只成交一部分也算：差的那幾張回測照樣成交"""
+
+    diffs: List[ParityDiff] = compare(
+        [unfilled_order("MARKET", "ROD", status="PARTIALLY_FILLED", filled_volume=1)],
+        [make_backtest_order()],
+        [],
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_LOCKED_AT_LIMIT]
+    assert "實盤成交 1／2" in diffs[0].note
+
+
+@pytest.mark.parametrize("status", ["FILLED", "REJECTED", "FAILED"])
+def test_filled_or_rejected_orders_are_not_execution_diffs(status: str) -> None:
+    """成交了沒有差異；被拒或送單失敗不是市場沒成交，由其他類別歸因"""
+
+    row: Dict[str, Any] = unfilled_order(
+        "MARKET", "ROD", status=status, filled_volume=2 if status == "FILLED" else 0
+    )
+
+    assert compare([row], [make_backtest_order()], []) == []
+
+
 def test_check_writes_the_table_and_the_csv(dao: LiveTradeDAO, tmp_path: Path) -> None:
     """差異要同時進 `live_parity_diff` 與 CSV——CSV 是給人看的，表是給查的"""
 

@@ -1,7 +1,7 @@
 import datetime
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
@@ -318,6 +318,56 @@ class BaseLiveDataFeed(BaseDataFeed):
         """
 
         return {}
+
+    def get_price_limits(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
+        """
+        - Description:
+            取得某商品當日的漲跌停（券商合約檔的公告值）
+
+            尾盤段的快照報價不帶漲跌停，執行層與事前風控要另外查合約；
+            與盤前報價走同一條取合約的路徑。取不到的一側回 None，**不自行推算**——
+            除權息日的基準價另行公告，公式推出來的區間會整段偏移。
+        - Parameters:
+            - symbol: str
+                商品代號
+        - Return:
+            - Tuple[Optional[float], Optional[float]]
+                （漲停, 跌停）
+        """
+
+        contract: Optional[Any] = self._resolve_contract(symbol)
+        if contract is None:
+            return (None, None)
+        return (
+            self._as_optional_float(contract, "limit_up"),
+            self._as_optional_float(contract, "limit_down"),
+        )
+
+    def get_reference_price(self, symbol: str) -> Optional[float]:
+        """
+        - Description:
+            取得某商品當日的參考價（券商合約檔的公告值）
+
+            給沒有報價可用的系統委託當決策價，例如開盤段的隔日補平：
+            那時還沒有成交，參考價是唯一的公告價格。取不到回 None，不填 0——
+            0 會被當成一個真實價格，風控與事後比對都會跟著錯。
+        - Parameters:
+            - symbol: str
+                商品代號
+        - Return:
+            - Optional[float]
+                參考價
+        """
+
+        contract: Optional[Any] = self._resolve_contract(symbol)
+        if contract is None:
+            return None
+        return self._as_optional_float(contract, "reference")
+
+    def _resolve_contract(self, symbol: str) -> Optional[Any]:
+        """取得券商合約；預設取不到，能查合約的子類覆寫"""
+
+        return None
 
     @staticmethod
     def _as_optional_float(contract: Any, field: str) -> Optional[float]:

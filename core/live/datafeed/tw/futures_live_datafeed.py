@@ -25,9 +25,7 @@ from core.utils import (
     FUTURES_MULTIPLIER,
     Action,
     ExecutionTiming,
-    FuturesPriceType,
     FuturesSession,
-    OrderType,
     PositionType,
 )
 from core.utils.instrument import FuturesUtils
@@ -226,9 +224,9 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
 
             沿用回測 `TwFuturesSettlementModel.roll_positions()` 的兩條規則：
             **只往遠月換**（當家契約不比部位遠就不動）、**週契約不轉**。
-            兩腿都以範圍市價（`MKP`）＋ `IOC` 送出：換月要的是「換過去」，
-            平倉腿沒有立即成交就由券商取消，開倉腿隨之放棄（次日再換）。
-            價格欄位放快照價，只給風控當參考，券商端不看。
+            兩腿都由引擎標成「要成交」，由執行層換成券商委託（連續交易時段為
+            範圍市價＋IOC）：換月要的是「換過去」，平倉腿沒有立即成交就由券商取消，
+            開倉腿隨之放棄（次日再換）。價格欄位放快照價，作為決策價給風控與事後比對。
         - Parameters:
             - positions: Sequence[Any]
                 該策略的部位
@@ -312,8 +310,6 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 position_type=position_type,
                 price=price,
                 volume=position.volume,
-                order_type=OrderType.IOC,
-                price_type=FuturesPriceType.MKP,
             )
 
         return RollPlan(
@@ -374,8 +370,16 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 logger.warning("盤前取不到期貨參考價，本段落略過此契約")
                 continue
 
-            symbol: str = str(getattr(contract, "symbol", ""))
-            product, expiry = split_contract_id(symbol)
+            # shioaji 1.7 的合約沒有 `symbol`；代號一律經 resolver 由 `root` 與
+            # `delivery_month` 換算，與成交回報、部位查詢同一條規則
+            product, expiry = split_contract_id(self._to_project_symbol(contract))
+            if not expiry:
+                # 沒有代號的報價策略挑不到契約，整段安靜地不開倉；略過並留下紀錄
+                logger.warning(
+                    f"期貨合約 {getattr(contract, 'code', '?')} 換算不出契約代號，"
+                    "本段落略過"
+                )
+                continue
             quotes.append(
                 PreOpenFuturesQuote(
                     product=product,
@@ -391,6 +395,15 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 )
             )
         return quotes
+
+    def _to_project_symbol(self, contract: Any) -> str:
+        """合約 → 專案契約代號（`TX202610`）；換算不出來時為空字串，由呼叫端略過"""
+
+        resolver: Any = getattr(self.broker, "resolver", None)
+        code: str = str(getattr(contract, "code", "") or "")
+        if resolver is None or not code:
+            return ""
+        return str(resolver.to_futures_symbol(code))
 
     def _resolve_contract(self, symbol: str) -> Optional[Any]:
         """

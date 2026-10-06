@@ -4,7 +4,7 @@ from loguru import logger
 
 from core.execution.order_preprocess import get_execution_order
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
+from core.utils import BarExecutionOrder, ExecutionStyle, ExecutionTiming, LiveHook
 
 """
 啟動守門：一支策略要上實盤之前必須通過的檢查
@@ -14,6 +14,8 @@ from core.utils import BarExecutionOrder, ExecutionTiming, LiveHook
 1. **沒宣告 `live_ready`** → 策略作者根本沒確認過它的實盤語意。
 2. **沒宣告 `live_schedule`** → 引擎不知道哪個鉤子該在哪一段呼叫。
 3. **`live_schedule` 與 `allow_day_trade` 矛盾** → 交易順序被默默改掉。
+4. **沒宣告或宣告錯 `live_execution`** → 執行層不知道這些委託要不要成交。
+   放到送單時才發現的話，尾盤段只有幾分鐘可以送單，當天的單就沒了。
 
 第三條最隱蔽，所以講清楚：回測依 `allow_day_trade` 決定同一根 bar 內
 先開後平（當沖）還是先平後開。實盤拆成開盤段與尾盤段之後，**兩個鉤子分屬不同段落時，
@@ -102,7 +104,37 @@ def inspect_strategy(strategy: BaseStrategy) -> List[str]:
         if conflict is not None:
             problems.append(conflict)
 
+    execution_problem: Optional[str] = _check_execution_style(strategy)
+    if execution_problem is not None:
+        problems.append(execution_problem)
+
     return problems
+
+
+def _check_execution_style(strategy: BaseStrategy) -> Optional[str]:
+    """
+    `live_execution` 必須是 `ExecutionStyle` 的成員
+
+    **不給預設值**：要不要成交是策略的決定，替它選一個等於讓回測與實盤的
+    成交假設悄悄分家。**券商的價格類型也要擋**：`StockPriceType.MKT` 與
+    `ExecutionStyle.MARKET` 名字相近，但前者在集合競價時段送不出去，
+    寫錯型別在送單前不會有任何錯誤。
+    """
+
+    style: object = getattr(strategy, "live_execution", None)
+    choices: List[str] = [member.value for member in ExecutionStyle]
+    if style is None:
+        return (
+            f"未宣告 live_execution（可用的是 {choices}）：執行層不知道這些委託"
+            "要成交（MARKET）還是照價掛單（LIMIT）。回測假設以收盤價成交的策略"
+            "應宣告 MARKET"
+        )
+    if not isinstance(style, ExecutionStyle):
+        return (
+            f"live_execution 必須是 ExecutionStyle（{choices}），收到 {style!r}；"
+            "券商的價格類型（限價／市價）由執行層依段落決定，策略不直接指定"
+        )
+    return None
 
 
 def _check_schedule_keys(strategy: BaseStrategy) -> List[str]:

@@ -95,6 +95,9 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.account_sync", 4, "實盤／帳戶同步", False),
     ("core.live.reconciler", 4, "實盤／對帳", False),
     ("core.live.capital_allocator", 4, "實盤／資金額度分配", False),
+    # 執行層：把執行方式換成券商委託。只 import `core.models`／`core.utils`，
+    # 漲跌停由組裝層以資料源注入——它若自己去問券商，就會多一條往券商閘道的取數路徑
+    ("core.live.execution", 4, "實盤／執行層", False),
     # 通知是旁路，**只可 import `core.config`／`core.utils`**：不碰模型也不碰 DAO，
     # 這樣它壞掉也不可能拖垮交易主流程
     ("core.live.notify", 4, "實盤／事件通知", False),

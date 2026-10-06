@@ -153,6 +153,15 @@ def check_volume_cap(volume: int, is_futures: bool, config: RiskConfig) -> RiskD
     return RiskDecision.ok()
 
 
+def decision_price_of(order: BaseOrder) -> Optional[float]:
+    """委託的決策價；沒經過執行層（沒有決策價）時退回委託價"""
+
+    decision: Optional[float] = getattr(order, "decision_price", None)
+    if decision is not None:
+        return decision
+    return getattr(order, "price", None)
+
+
 def check_price_deviation(
     price: Optional[float],
     reference_price: float,
@@ -162,15 +171,17 @@ def check_price_deviation(
 ) -> RiskDecision:
     """
     - Description:
-        委託價偏離檢查
+        決策價偏離檢查
 
-        **市價單沒有價格可檢查**（`price` 為 None 或 0）：改以送單前的基準價
-        做事前檢查，成交後再由盤後流程以實際成交價回頭比對。
-        故這裡對市價單一律放行，並由呼叫端負責事後比對——**在這裡擋不住的東西，
-        不要假裝擋得住**。
+        **檢查的是策略給的決策價，不是送出去的委託價**：執行層會把「要成交」的委託
+        換成保護價（集合競價買單掛漲停），漲 2% 的股票掛漲停就偏離 8%，
+        比對委託價的話每一張要成交的單都會被擋下。這裡防的是策略把價格算錯；
+        保護價由執行層保證夾在漲跌停內。
+
+        價格為 None 或 0 時放行——**在這裡擋不住的東西，不要假裝擋得住**。
     - Parameters:
         - price: Optional[float]
-            委託價；市價單為 None 或 0
+            決策價（`BaseOrder.decision_price`；沒經過執行層時為委託價）
         - reference_price: float
             基準價（盤前用參考價、盤中用最新成交價）
         - config: RiskConfig
@@ -464,7 +475,7 @@ class PreTradeRiskManager:
             ),
             check_volume_cap(order.volume, is_futures, self.config),
             check_price_deviation(
-                getattr(order, "price", None),
+                decision_price_of(order),
                 reference_price,
                 self.config,
                 limit_up,

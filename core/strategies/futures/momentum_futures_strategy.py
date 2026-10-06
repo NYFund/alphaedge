@@ -7,6 +7,7 @@ from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import (
     Action,
+    ExecutionStyle,
     ExecutionTiming,
     LiveHook,
     PositionType,
@@ -40,7 +41,9 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
     - 標的池：未宣告 `symbols`，由實盤資料源補上 `products` 目前掛牌的各月份契約；
       挑哪個月份由 `select_near_month()` 依實盤版的換月規則決定
       （`LAST_TRADING_DAY` 在實盤改為最後交易日前 1 個交易日換月）。
-    - 已知差異：換月比回測早一天；價格是快照價而非收盤價。
+    - 執行方式 `MARKET`（要成交）：尾盤段仍在連續交易時段，執行層送範圍市價＋IOC。
+    - 已知差異：換月比回測早一天；價格是快照價而非收盤價；
+      成交價是 13:30 後的市價，不是收盤價。
     """
 
     DEFAULT_PRODUCTS: List[str] = ["TX"]
@@ -72,6 +75,8 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
+        # 回測假設以收盤價成交，實盤要成交（換算見 class docstring〈實盤執行〉）
+        self.live_execution = ExecutionStyle.MARKET
 
     def setup_account(self, account: FuturesAccount) -> None:
         """設置虛擬帳戶資訊"""

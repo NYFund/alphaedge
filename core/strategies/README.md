@@ -496,9 +496,12 @@ def make_portfolio_constructor(self) -> StockPortfolioConstructor:
 **只有跑實盤才需要**，回測沒有這個概念（回測的單一送出就成交）。
 
 尾盤段的平倉／停損單若到收盤仍未成交，那些部位就變成**預期外的隔夜部位**。
-系統會寫一筆跨日待辦，次日開盤段的第一件事就是把它補平；補平單要用什麼訂單型別、
-什麼價格類型、哪些商品欄位，是市場特性，引擎本體不知道也不該知道，
-所以交給策略自己組：
+系統會寫一筆跨日待辦，次日開盤段的第一件事就是把它補平。
+
+**策略不實作也會補平**：引擎以待辦的標的、方向與數量，用合約參考價當決策價組出補平單，
+標成「要成交」（`ExecutionStyle.MARKET`）交給執行層——開盤集合競價賣掛跌停、買掛漲停。
+策略想自己決定補平方式時才覆寫 `build_cover_order()`；**不必填 `price_type`**，
+價格類型一律由執行層換算：
 
 ```python
 def build_cover_order(self, action: PendingAction) -> StockOrder:
@@ -507,11 +510,10 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
     return StockOrder(
         stock_id=action.symbol,
         date=datetime.date.today(),
-        action=Action.SELL,
+        action=action.action,
         position_type=action.position_type,
         volume=action.volume,
-        price=...,                       # 取得當前報價後決定
-        price_type=StockPriceType.LMT,
+        price=...,                       # 決策價；送出的委託價由執行層決定
     )
 ```
 
@@ -533,8 +535,8 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 > 歸屬帳目前實際持有的量。照原數量送出的話，多出來的部分不是「多平一點」，
 > 是直接**把部位做反**。
 
-> **沒有實作這個方法不會壞掉**，引擎只會記一行 warning 並把待辦留著等人工處理——
-> 但那代表這支策略還沒準備好上實盤。
+> **引擎取不到合約參考價時不送單**，待辦留在 `PENDING` 並推播，等人工處理——
+> 沒有決策價就沒有風控可比的基準，猜一個價格比留著不動更危險。
 
 ## 策略設定參數說明
 
@@ -556,6 +558,19 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 |------|------|------|--------|
 | `init_capital` | `float` | 初始資金（元） | `0` |
 | `max_holdings` | `Optional[int]` | 最大持倉檔數，`None` 表示**無限制**（＝基底預設；每支策略都該自己設一個值） | `None` |
+
+### 實盤設定（回測不讀）
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `live_ready` | `bool` | 策略可上實盤；標 `True` 前要確認內部狀態能由「歷史資料 ＋ 當前部位」重建 | `False` |
+| `live_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫 | `{}` |
+| `live_execution` | `Optional[ExecutionStyle]` | `MARKET`（要成交）或 `LIMIT`（照價掛單），開倉與平倉共用；**停損一律 `MARKET`**。沒宣告時啟動檢查拒絕。回測假設以收盤價成交的策略應宣告 `MARKET` | `None` |
+
+> **不要填 `price_type`，也不要把 `live_execution` 設成 `StockPriceType.MKT`。**
+> 價格類型、委託價與 ROD／IOC 由實盤執行層（`core/live/execution/`）依段落換算：
+> 台股集合競價時段不收市價單，`MARKET` 會換成掛漲停（買）／跌停（賣）的限價單，
+> 成交價仍是競價結果。
 
 ### 回測設定
 

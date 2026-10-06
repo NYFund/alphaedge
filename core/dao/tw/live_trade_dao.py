@@ -168,6 +168,10 @@ class LiveTradeDAO(BaseDAO):
     # 而讀取端必須自己處理「這一列沒有這項資訊」
     ADDED_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
         (LIVE_RUN_TABLE_NAME, "pid", "INTEGER"),
+        # 執行層改寫委託價之前的決策價與執行方式：`price` 記的是實際送出的價
+        # （集合競價買單是漲停價），事後比對執行品質要靠這兩欄
+        (LIVE_ORDER_TABLE_NAME, "execution_style", "TEXT"),
+        (LIVE_ORDER_TABLE_NAME, "decision_price", "REAL"),
     )
 
     def _add_missing_columns(self) -> None:
@@ -224,6 +228,8 @@ class LiveTradeDAO(BaseDAO):
                 order_lot         TEXT,
                 order_cond        TEXT,
                 timing            TEXT,
+                execution_style   TEXT,
+                decision_price    REAL,
                 status            TEXT NOT NULL,
                 broker_order_id   TEXT,
                 broker_seqno      TEXT,

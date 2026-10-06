@@ -26,6 +26,7 @@ from core.live.attribution.resync import (
 )
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
+from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
 from core.live.intraday.session_guard import (
     SessionGuard,
@@ -56,6 +57,7 @@ from core.strategies.base import BaseStrategy
 from core.utils import (
     BarExecutionOrder,
     DayTradeUncoveredPolicy,
+    ExecutionStyle,
     ExecutionTiming,
     LiveHook,
     LiveOrderStatus,
@@ -75,6 +77,11 @@ LiveTrader：實盤引擎本體
 段落的執行順序寫在 `run()` 裡，一步都不能調換：對帳要在送單之前
 （不然是帶著錯誤部位交易）、守門要在批次曝險之前（不然被擋的單還佔著額度）、
 保留資金要在風控之前（不然風控算的是一個拿不到的金額）。
+
+**每張委託送出前都經過執行層**（`StrategyContext.execution_model`）：策略只宣告
+要成交或照價掛單，價格類型、委託價與 ROD／IOC 由執行層依段落換算。
+送單路徑負責標註執行方式——策略鉤子沿用 `live_execution`，停損與系統產生的委託
+（補平、當沖回補、換月）一律 `MARKET`；沒標註的委託在送出前擋下。
 """
 
 
@@ -103,6 +110,9 @@ class StrategyContext:
     # 開一筆倉需要的資金（保證金交易的商品：原始保證金 ＋ 開倉成本）；None 代表
     # 這個市場送單前不做保證金檢查（現股的資金由額度分配與風控管）
     calculate_opening_requirement: Optional[Callable[[BaseOrder], float]] = None
+    # 執行層：把執行方式換成券商委託。換算規則是市場特性（集合競價的時段、
+    # 連續交易時段的保護方式），故由外部注入；未注入時本策略的委託一律不送
+    execution_model: Optional[BaseExecutionModel] = None
 
     @property
     def name(self) -> str:
@@ -644,11 +654,16 @@ class LiveTrader:
                 policy,
                 partial(self._build_cover_order_tracked, context, today, missing_price),
             )
-            orders = [
-                order
-                for order in orders
-                if (today, context.name, order.symbol) not in self._cover_sent
-            ]
+            # 回補是系統產生的出場單，一律要成交；回補時點在逐筆交易時段
+            orders = mark_execution(
+                [
+                    order
+                    for order in orders
+                    if (today, context.name, order.symbol) not in self._cover_sent
+                ],
+                ExecutionTiming.IMMEDIATE,
+                ExecutionStyle.MARKET,
+            )
             failures.extend(
                 f"{context.name} {symbol} 取不到可成交價，無法產生回補單"
                 for symbol in missing_price
@@ -989,6 +1004,12 @@ class LiveTrader:
         """
 
         logger.info(f"[Roll] {context.name}：{plan.reason}")
+        # 換月兩腿是系統產生的委託，一律要成交；只在尾盤段執行
+        mark_execution(
+            [plan.close_order, plan.open_order],
+            ExecutionTiming.AT_CLOSE,
+            ExecutionStyle.MARKET,
+        )
 
         if self.dispatch([(context, plan.close_order)], window):
             self._write_roll_event(
@@ -1129,7 +1150,11 @@ class LiveTrader:
             return []
 
         raw: List[BaseOrder] = context.strategy.check_open_signal(quotes)
-        return self._preprocess(context, raw, stage="open")
+        return mark_execution(
+            self._preprocess(context, raw, stage="open"),
+            timing,
+            context.strategy.live_execution,
+        )
 
     def _exit_orders(
         self,
@@ -1142,6 +1167,9 @@ class LiveTrader:
 
         **停損排在一般平倉之前**，與回測的優先級一致——同一根 bar 內兩者都成立時，
         先停損才符合「保護部位」的語意。
+
+        **停損一律 `MARKET`**，不看策略的 `live_execution`：出場不該因為價格掛不到
+        而失敗。一般平倉沿用策略宣告的執行方式。
         """
 
         if not self.mode_state.allows_close(context.name):
@@ -1149,16 +1177,16 @@ class LiveTrader:
 
         orders: List[BaseOrder] = []
         if resolve_hook_timing(context.strategy, LiveHook.STOP_LOSS) is timing:
-            orders.extend(
-                self._preprocess(
-                    context, context.strategy.check_stop_loss_signal(quotes), "close"
-                )
+            stop_loss: List[BaseOrder] = self._preprocess(
+                context, context.strategy.check_stop_loss_signal(quotes), "close"
             )
+            orders.extend(mark_execution(stop_loss, timing, ExecutionStyle.MARKET))
         if resolve_hook_timing(context.strategy, LiveHook.CLOSE) is timing:
+            close: List[BaseOrder] = self._preprocess(
+                context, context.strategy.check_close_signal(quotes), "close"
+            )
             orders.extend(
-                self._preprocess(
-                    context, context.strategy.check_close_signal(quotes), "close"
-                )
+                mark_execution(close, timing, context.strategy.live_execution)
             )
         return orders
 
@@ -1332,7 +1360,11 @@ class LiveTrader:
     ) -> List[Tuple[StrategyContext, BaseOrder]]:
         """
         - Description:
-            逐單保留資金 → 風控 → 送出，期間持續消化回報
+            逐單保留資金 → 執行層換算 → 風控 → 送出，期間持續消化回報
+
+            **資金保留以決策價計算，在執行層改寫委託價之前**：集合競價的 `MARKET`
+            買單掛漲停，以掛單價保留的話，額度切滿的策略最後一檔一定保留不到。
+            風控收到同一份漲跌停，並以決策價做偏離與漲跌停檢查（見 `RiskManager`）。
         - Parameters:
             - candidates: List[Tuple[StrategyContext, BaseOrder]]
                 通過跨策略檢查的委託
@@ -1364,12 +1396,22 @@ class LiveTrader:
                 unsent.append((context, order))
                 continue
 
+            limits: Optional[Tuple[Optional[float], Optional[float]]] = (
+                self._apply_execution(context, order)
+            )
+            if limits is None:
+                self.allocator.release(context.name, amount)
+                unsent.append((context, order))
+                continue
+
             decision: RiskDecision = self.risk_manager.check(
                 order,
                 context.name,
                 context.strategy.init_capital,
                 amount,
                 reference_price=self._reference_price(order),
+                limit_up=limits[0],
+                limit_down=limits[1],
             )
             if not decision.passed:
                 self.allocator.release(context.name, amount)
@@ -1389,6 +1431,67 @@ class LiveTrader:
             self.drain_once()
 
         return unsent
+
+    def _apply_execution(
+        self, context: StrategyContext, order: BaseOrder
+    ) -> Optional[Tuple[Optional[float], Optional[float]]]:
+        """
+        - Description:
+            交給執行層換成券商委託；換不出來時寫事件並回 None（本張不送）
+
+            **沒有執行模型、沒標註執行方式都擋下**，不退回任何預設：那代表某條送單
+            路徑漏接了執行層，猜一個價格類型等於把漏洞蓋掉——上一次就是這樣，
+            整批委託在券商轉換層才失敗。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - order: BaseOrder
+                待送出的委託（就地改寫價格類型、委託價與委託效期）
+        - Return:
+            - Optional[Tuple[Optional[float], Optional[float]]]
+                換算時用的（漲停, 跌停），要一併交給風控；None 表示本張不送
+        """
+
+        model: Optional[BaseExecutionModel] = context.execution_model
+        if model is None:
+            self._write_execution_event(
+                context, order, "沒有注入執行層，無法決定怎麼送", NotifyLevel.CRITICAL
+            )
+            return None
+
+        limits: Tuple[Optional[float], Optional[float]] = model.get_price_limits(
+            order.symbol
+        )
+        try:
+            model.apply(order, limits)
+        except ExecutionUnavailableError as exc:
+            self._write_execution_event(context, order, str(exc), NotifyLevel.WARN)
+            return None
+        except ValueError as exc:
+            self._write_execution_event(context, order, str(exc), NotifyLevel.CRITICAL)
+            return None
+        return limits
+
+    def _write_execution_event(
+        self,
+        context: StrategyContext,
+        order: BaseOrder,
+        reason: str,
+        severity: NotifyLevel,
+    ) -> None:
+        """執行層換不出委託：寫事件並推播"""
+
+        message: str = f"{order.symbol} 未送出：{reason}"
+        logger.warning(f"[Execution] {context.name}：{message}")
+        self.events.write(
+            category="EXECUTION_UNAVAILABLE",
+            severity=severity,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        self._notify(severity, "委託無法換算", message)
 
     def _check_margin(
         self, gate: MarginGate, context: StrategyContext, order: BaseOrder
@@ -1666,6 +1769,8 @@ class LiveTrader:
             )
             if order is None:
                 continue
+            # 補平是系統產生的出場單，一律要成交；只在開盤段執行
+            mark_execution([order], ExecutionTiming.AT_OPEN, ExecutionStyle.MARKET)
 
             if self.dispatch([(context, order)], None):
                 logger.error(f"補平單未送出，待辦保留：{action.action_id}")
@@ -1765,32 +1870,66 @@ class LiveTrader:
         self, context: StrategyContext, action: PendingAction
     ) -> Optional[BaseOrder]:
         """
-        由待辦組出補平單
+        - Description:
+            由待辦組出補平單：策略有實作 `build_cover_order()` 就用策略的，否則由引擎組
 
-        **交給策略自己組**：訂單型別、價格類型與商品欄位都是市場特性，
-        引擎本體既不知道也不該知道。策略沒有提供組裝方法時記 warning 並略過——
-        那代表這支策略還沒準備好處理跨日補平。
+            **引擎預設組**：補平是系統產生的出場單，價格類型由執行層依 `MARKET` 換算，
+            訂單型別走依市場注入的 `context.build_filled_order`（與當沖回補同一個），
+            引擎本體因此不必知道任何市場特性。只靠策略組的話，沒實作的策略
+            出場殘量會一路留到人工處理——「出場必補」等於沒有執行端。
 
-        **傳的是 `PendingAction` 而不是資料列**：這個參數會落到策略作者手上，
-        傳 dict 等於把紀錄庫的 schema 變成策略層的公開契約——
-        改一個欄位名就會無聲地弄壞每一支策略。
+            決策價取**合約參考價**：開盤段還沒有成交，參考價是唯一的公告價格。
+            取不到就不送，待辦留在 `PENDING`，並推播讓人知道。
+
+            **傳給策略的是 `PendingAction` 而不是資料列**：這個參數會落到策略作者手上，
+            傳 dict 等於把紀錄庫的 schema 變成策略層的公開契約——
+            改一個欄位名就會無聲地弄壞每一支策略。
+        - Parameters:
+            - context: StrategyContext
+                待辦所屬的策略
+            - action: PendingAction
+                待辦（數量已截到目前持有量，`position_type` 已確認有值）
+        - Return:
+            - Optional[BaseOrder]
+                補平單；組不出來時為 None
         """
 
         builder: Optional[Callable[..., BaseOrder]] = getattr(
             context.strategy, "build_cover_order", None
         )
-        if builder is None:
-            logger.warning(
-                f"{context.name} 沒有 build_cover_order()，待辦 "
-                f"{action.action_id} 無法自動補平，需人工處理"
+        if builder is not None:
+            try:
+                return builder(action)
+            except Exception as exc:
+                logger.opt(exception=True).error(f"組補平單失敗：{exc}")
+                return None
+
+        reason: Optional[str] = None
+        reference: Optional[float] = None
+        if context.build_filled_order is None or action.position_type is None:
+            reason = "沒有可用的訂單建構器或部位方向"
+        else:
+            reference = context.data_feed.get_reference_price(action.symbol)
+            if not reference:
+                reason = "取不到合約參考價"
+
+        if reason is not None or reference is None:
+            message: str = (
+                f"待辦 {action.action_id}（{action.symbol}）無法組出補平單：{reason}，"
+                "待辦保留，需人工確認"
             )
+            logger.error(message)
+            self._notify(NotifyLevel.CRITICAL, "補平單無法組出", message)
             return None
 
-        try:
-            return builder(action)
-        except Exception as exc:
-            logger.opt(exception=True).error(f"組補平單失敗：{exc}")
-            return None
+        return context.build_filled_order(
+            action.symbol,
+            self._now(),
+            action.action,
+            action.position_type,
+            float(reference),
+            int(action.volume),
+        )
 
     def _notify(self, level: NotifyLevel, title: str, body: str) -> None:
         """
@@ -2048,11 +2187,16 @@ class LiveTrader:
         """
         風控用的基準價
 
-        取委託價本身：訊號階段算出來的價格就是這張單的意圖，
-        而基準價偏離檢查要擋的是「意圖與市場差太多」。真正的市場基準價要由
+        取決策價：訊號階段算出來的價格就是這張單的意圖，
+        而基準價偏離檢查要擋的是「意圖與市場差太多」。**不可取委託價**——
+        執行層改寫過之後，集合競價的 `MARKET` 買單委託價是漲停價，拿它當基準
+        只會讓偏離檢查擋下每一張要成交的單。真正的市場基準價要由
         資料源在報價上帶過來，目前尚未接上。
         """
 
+        decision: Optional[float] = getattr(order, "decision_price", None)
+        if decision is not None:
+            return float(decision)
         return float(getattr(order, "price", 0.0) or 0.0)
 
     def _halt_strategy(self, context: StrategyContext, reason: str) -> None:
@@ -2101,3 +2245,33 @@ class LiveTrader:
         if window is None:
             return False
         return self._now().time() >= getattr(window, attribute)
+
+
+def mark_execution(
+    orders: List[BaseOrder],
+    timing: ExecutionTiming,
+    style: Optional[ExecutionStyle],
+) -> List[BaseOrder]:
+    """
+    - Description:
+        標註委託的執行段落與執行方式（**就地改寫**），交給執行層換算
+
+        段落以「實際在哪一段送出」為準，蓋掉委託原本的值：執行層依段落決定
+        送集合競價還是連續交易的委託，標錯段落會送出交易所不收的組合。
+        `style` 為 None（策略沒宣告）時照樣寫入，由送單前的檢查擋下並留下紀錄。
+    - Parameters:
+        - orders: List[BaseOrder]
+            委託
+        - timing: ExecutionTiming
+            送出的段落
+        - style: Optional[ExecutionStyle]
+            執行方式
+    - Return:
+        - List[BaseOrder]
+            同一批委託（方便串接）
+    """
+
+    for order in orders:
+        order.timing = timing
+        order.execution_style = style
+    return orders
