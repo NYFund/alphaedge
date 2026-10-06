@@ -308,22 +308,23 @@ def test_place_order_fills_in_broker_ids(broker: ShioajiBroker) -> None:
     assert ticket.updated_at is not None
 
 
-def test_strategy_order_without_price_type_reaches_the_broker(
+def test_order_without_price_type_never_reaches_the_broker(
     broker: ShioajiBroker, api: FakeApi
 ) -> None:
     """
-    策略產生的委託不帶 `price_type`：暫以限價送到券商，而不是在轉換層失敗
+    沒經過執行層的委託在轉換層擋下，不送到券商
 
-    2026-10-06 演練第一次送單，三張買單都停在這一步、一張也沒送出去。
+    價格類型由實盤執行層決定；在這裡預設一個值，會把「某條路徑漏接執行層」蓋掉。
     """
 
     ticket: OrderTicket = make_broker_ticket()
     ticket.order.price_type = None
+    placed_before: int = len(api.placed)
 
-    broker.place_order(ticket)
+    with pytest.raises(ValueError, match="price_type 尚未決定"):
+        broker.place_order(ticket)
 
-    assert ticket.status is LiveOrderStatus.SUBMITTED
-    assert api.placed[-1][1].price_type == sj.StockPriceType.LMT
+    assert len(api.placed) == placed_before
 
 
 def test_place_order_consumes_order_budget(
