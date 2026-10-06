@@ -474,6 +474,55 @@ def test_pending_cover_is_sent_as_must_fill_in_the_opening_auction() -> None:
     assert (order.price, order.order_type) == (90.0, OrderType.ROD)
 
 
+def test_engine_builds_the_pending_cover_when_the_strategy_does_not() -> None:
+    """
+    策略沒實作 `build_cover_order()` 時由引擎組補平單
+
+    只靠策略組的話，沒實作的策略出場殘量會一路留給人工——「出場必補」等於沒有執行端。
+    引擎用待辦的標的、方向、數量，以合約參考價當決策價，交給執行層要成交。
+    """
+
+    class Plain(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Plain", [])
+            self.live_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+            self.build_cover_order = None  # type: ignore[assignment]
+
+    harness: Harness = Harness([Plain()])
+    harness.contexts[0].data_feed.get_reference_price = (  # type: ignore[method-assign]
+        lambda symbol: 100.0
+    )
+    seed_holding(harness, "Plain", 1)
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "Plain",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    (order,) = sent_orders(harness)
+    assert (order.symbol, order.action, order.position_type, order.volume) == (
+        "2330",
+        Action.SELL,
+        PositionType.LONG,
+        1,
+    )
+    assert (order.decision_price, order.price) == (100.0, 90.0)
+    assert harness.dao.get_pending_actions(TODAY) == []
+
+
 def test_day_trade_cover_is_sent_with_a_protection_price() -> None:
     """當沖回補在逐筆交易時段：保護價限價＋IOC"""
 

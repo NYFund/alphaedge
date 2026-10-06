@@ -744,11 +744,14 @@ def test_pending_action_is_covered_next_morning(tmp_path: Path) -> None:
     assert harness.dao.get_pending_actions(TODAY) == []
 
 
-def test_pending_action_without_a_builder_is_left_for_humans(tmp_path: Path) -> None:
+def test_pending_action_without_a_reference_price_is_left_for_humans(
+    tmp_path: Path,
+) -> None:
     """
-    策略沒有提供補平單組裝方法時留給人工，**不猜一張單**
+    策略沒組、引擎也取不到參考價時留給人工，**不猜一個價格**
 
-    猜錯方向的補平單會把部位做反，比留著不動嚴重得多。
+    沒有決策價就沒有風控可比的基準；待辦留在 `PENDING`，由推播通知人工。
+    （測試的資料源沒有合約，參考價一律取不到）
     """
 
     class NoBuilder(ScriptedStrategy):

@@ -370,8 +370,16 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 logger.warning("盤前取不到期貨參考價，本段落略過此契約")
                 continue
 
-            symbol: str = str(getattr(contract, "symbol", ""))
-            product, expiry = split_contract_id(symbol)
+            # shioaji 1.7 的合約沒有 `symbol`；代號一律經 resolver 由 `root` 與
+            # `delivery_month` 換算，與成交回報、部位查詢同一條規則
+            product, expiry = split_contract_id(self._to_project_symbol(contract))
+            if not expiry:
+                # 沒有代號的報價策略挑不到契約，整段安靜地不開倉；略過並留下紀錄
+                logger.warning(
+                    f"期貨合約 {getattr(contract, 'code', '?')} 換算不出契約代號，"
+                    "本段落略過"
+                )
+                continue
             quotes.append(
                 PreOpenFuturesQuote(
                     product=product,
@@ -387,6 +395,15 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                 )
             )
         return quotes
+
+    def _to_project_symbol(self, contract: Any) -> str:
+        """合約 → 專案契約代號（`TX202610`）；換算不出來時為空字串，由呼叫端略過"""
+
+        resolver: Any = getattr(self.broker, "resolver", None)
+        code: str = str(getattr(contract, "code", "") or "")
+        if resolver is None or not code:
+            return ""
+        return str(resolver.to_futures_symbol(code))
 
     def _resolve_contract(self, symbol: str) -> Optional[Any]:
         """

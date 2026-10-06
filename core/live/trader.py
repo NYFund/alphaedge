@@ -1870,32 +1870,66 @@ class LiveTrader:
         self, context: StrategyContext, action: PendingAction
     ) -> Optional[BaseOrder]:
         """
-        由待辦組出補平單
+        - Description:
+            由待辦組出補平單：策略有實作 `build_cover_order()` 就用策略的，否則由引擎組
 
-        **交給策略自己組**：訂單型別、價格類型與商品欄位都是市場特性，
-        引擎本體既不知道也不該知道。策略沒有提供組裝方法時記 warning 並略過——
-        那代表這支策略還沒準備好處理跨日補平。
+            **引擎預設組**：補平是系統產生的出場單，價格類型由執行層依 `MARKET` 換算，
+            訂單型別走依市場注入的 `context.build_filled_order`（與當沖回補同一個），
+            引擎本體因此不必知道任何市場特性。只靠策略組的話，沒實作的策略
+            出場殘量會一路留到人工處理——「出場必補」等於沒有執行端。
 
-        **傳的是 `PendingAction` 而不是資料列**：這個參數會落到策略作者手上，
-        傳 dict 等於把紀錄庫的 schema 變成策略層的公開契約——
-        改一個欄位名就會無聲地弄壞每一支策略。
+            決策價取**合約參考價**：開盤段還沒有成交，參考價是唯一的公告價格。
+            取不到就不送，待辦留在 `PENDING`，並推播讓人知道。
+
+            **傳給策略的是 `PendingAction` 而不是資料列**：這個參數會落到策略作者手上，
+            傳 dict 等於把紀錄庫的 schema 變成策略層的公開契約——
+            改一個欄位名就會無聲地弄壞每一支策略。
+        - Parameters:
+            - context: StrategyContext
+                待辦所屬的策略
+            - action: PendingAction
+                待辦（數量已截到目前持有量，`position_type` 已確認有值）
+        - Return:
+            - Optional[BaseOrder]
+                補平單；組不出來時為 None
         """
 
         builder: Optional[Callable[..., BaseOrder]] = getattr(
             context.strategy, "build_cover_order", None
         )
-        if builder is None:
-            logger.warning(
-                f"{context.name} 沒有 build_cover_order()，待辦 "
-                f"{action.action_id} 無法自動補平，需人工處理"
+        if builder is not None:
+            try:
+                return builder(action)
+            except Exception as exc:
+                logger.opt(exception=True).error(f"組補平單失敗：{exc}")
+                return None
+
+        reason: Optional[str] = None
+        reference: Optional[float] = None
+        if context.build_filled_order is None or action.position_type is None:
+            reason = "沒有可用的訂單建構器或部位方向"
+        else:
+            reference = context.data_feed.get_reference_price(action.symbol)
+            if not reference:
+                reason = "取不到合約參考價"
+
+        if reason is not None or reference is None:
+            message: str = (
+                f"待辦 {action.action_id}（{action.symbol}）無法組出補平單：{reason}，"
+                "待辦保留，需人工確認"
             )
+            logger.error(message)
+            self._notify(NotifyLevel.CRITICAL, "補平單無法組出", message)
             return None
 
-        try:
-            return builder(action)
-        except Exception as exc:
-            logger.opt(exception=True).error(f"組補平單失敗：{exc}")
-            return None
+        return context.build_filled_order(
+            action.symbol,
+            self._now(),
+            action.action,
+            action.position_type,
+            float(reference),
+            int(action.volume),
+        )
 
     def _notify(self, level: NotifyLevel, title: str, body: str) -> None:
         """

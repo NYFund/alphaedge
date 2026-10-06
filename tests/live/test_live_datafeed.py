@@ -553,6 +553,61 @@ def test_feed_without_a_declared_table_refuses_instead_of_guessing() -> None:
         BaseLiveDataFeed.get_latest_data_date(feed)
 
 
+class ShioajiLikeFuturesContract:
+    """
+    仿 shioaji 1.7 的 `FuturesInfo`：**沒有 `symbol`**，只有月份字母碼與 `root`／`delivery_month`
+
+    2026-10-06 模擬環境實測：合約物件沒有 `symbol`，盤前報價因此拿到空的商品與月份。
+    """
+
+    code: str = "TXFJ6"
+    root: str = "TXF"
+    delivery_month: str = "202610"
+    reference: float = 50082.0
+    limit_up: float = 55090.0
+    limit_down: float = 45074.0
+    multiplier: float = 200.0
+
+
+class LetterCodeResolver(RecordingResolver):
+    """把月份字母碼換成專案代號；與真實 resolver 的 `to_futures_symbol()` 同語意"""
+
+    def resolve_index_futures(self, product: str, expiry: str) -> Any:
+        return ShioajiLikeFuturesContract()
+
+    def to_futures_symbol(self, code: str) -> str:
+        return {"TXFJ6": "TX202610"}.get(code, code)
+
+
+def test_futures_pre_open_quote_carries_the_contract_id() -> None:
+    """
+    期貨盤前報價要帶得出契約代號
+
+    沒有代號的報價，策略的 `select_near_month()` 挑不到任何契約，
+    整段安靜地不開倉，不會有任何錯誤訊息。
+    """
+
+    feed: TwFuturesLiveDataFeed = make_futures_feed(LetterCodeResolver())
+
+    (quote,) = feed.get_live_quotes(ExecutionTiming.AT_OPEN, ["TX202610"])
+
+    assert (quote.product, quote.expiry) == ("TX", "202610")
+    assert feed.get_price_limits("TX202610") == (55090.0, 45074.0)
+    assert feed.get_reference_price("TX202610") == 50082.0
+
+
+def test_futures_pre_open_quote_without_a_contract_id_is_skipped() -> None:
+    """換算不出代號就略過該契約，不送出一筆沒有代號的報價"""
+
+    class Unmapped(LetterCodeResolver):
+        def to_futures_symbol(self, code: str) -> str:
+            return code
+
+    feed: TwFuturesLiveDataFeed = make_futures_feed(Unmapped())
+
+    assert feed.get_live_quotes(ExecutionTiming.AT_OPEN, ["TX202610"]) == []
+
+
 def test_futures_close_releases_both_connections() -> None:
     """
     期貨要關**兩條**連線

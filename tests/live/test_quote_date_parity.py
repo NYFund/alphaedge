@@ -254,15 +254,23 @@ def build_pre_open_futures_quotes() -> List[Any]:
 
     from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 
+    # 與 shioaji 1.7 的 `FuturesInfo` 同形狀：沒有 `symbol`，只有月份字母碼
     class Contract:
-        symbol: str = "TX202610"
+        code: str = "TXFJ6"
         reference: float = 24000.0
         limit_up: float = 26400.0
         limit_down: float = 21600.0
         multiplier: int = 200
 
+    class Resolver:
+        def to_futures_symbol(self, code: str) -> str:
+            return {"TXFJ6": "TX202610"}.get(code, code)
+
+    class Broker:
+        resolver: Resolver = Resolver()
+
     feed: TwFuturesLiveDataFeed = TwFuturesLiveDataFeed(
-        broker=None,
+        broker=Broker(),
         calendar_sources=[],
         now_provider=lambda: datetime.datetime(2026, 9, 24, 8, 45),
     )
