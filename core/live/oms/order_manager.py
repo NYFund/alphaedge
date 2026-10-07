@@ -98,6 +98,9 @@ class OrderManager:
             # 成交回報可能比委託確認先到，OMS 以「成交即代表已提交」處理
             LiveOrderStatus.PARTIALLY_FILLED,
             LiveOrderStatus.FILLED,
+            # 撤單回報同樣可能比委託確認先到：送單回應只帶 PendingSubmit，
+            # 確認要等券商另推一筆新單回報（2026-10-07 模擬環境實測）
+            LiveOrderStatus.CANCELLED,
         },
         LiveOrderStatus.SUBMITTED: {
             LiveOrderStatus.PARTIALLY_FILLED,
@@ -130,6 +133,7 @@ class OrderManager:
         on_degrade: Optional[Callable[[str], None]] = None,
         now_provider: Callable[[], datetime.datetime] = now_live,
         order_rebuilder: Optional[OrderRebuilder] = None,
+        strategy_names: Optional[Sequence[str]] = None,
     ) -> None:
         """
         - Description:
@@ -152,6 +156,9 @@ class OrderManager:
                 取得目前時間（台北時區 aware）
             - order_rebuilder: Optional[OrderRebuilder]
                 由紀錄還原原始訂單；None 時重建的委託不帶訂單
+            - strategy_names: Optional[Sequence[str]]
+                本行程載入的策略；重啟接管與日終標記只處理這些策略的委託。
+                `None` 表示紀錄庫裡的全部策略
         """
 
         self.broker: BaseBroker = broker
@@ -173,6 +180,13 @@ class OrderManager:
         self._dedup: ExecutionEventDeduplicator = ExecutionEventDeduplicator()
 
         self.order_rebuilder: Optional[OrderRebuilder] = order_rebuilder
+
+        # 本行程負責的策略。**股票線與期貨線是兩個行程、共用同一個紀錄庫**：
+        # 不限定的話，一個行程啟動時會去接管另一個行程的委託——2026-10-07 期貨尾盤段
+        # 就因為接管到股票線的委託、狀態對不上而整段中止
+        self.strategy_names: Optional[Set[str]] = (
+            set(strategy_names) if strategy_names is not None else None
+        )
 
         # client_order_id → ticket；本行程內的委託索引
         self.tickets: Dict[str, OrderTicket] = {}
@@ -260,10 +274,19 @@ class OrderManager:
         return ticket
 
     def _sync_after_broker(self, ticket: OrderTicket) -> None:
-        """券商回應後把狀態與編號寫回 DB；狀態轉移仍走狀態機"""
+        """
+        券商回應後把狀態與編號寫回 DB；狀態轉移仍走狀態機
+
+        **狀態沒變也要寫**：送單回應可能仍是 PendingSubmit（確認稍後才推），
+        這時狀態機視為無轉移而不落地，券商序號就只留在記憶體——
+        重啟接管與事後核對都要靠紀錄庫裡的序號。
+        """
 
         broker_status: LiveOrderStatus = ticket.status
         ticket.status = LiveOrderStatus.PENDING_SUBMIT
+        if broker_status is LiveOrderStatus.PENDING_SUBMIT:
+            self._persist(ticket)
+            return
         self.transition(ticket, broker_status, reason=ticket.reject_reason)
 
     # === 狀態機 ===
@@ -449,6 +472,13 @@ class OrderManager:
         if ticket is None:
             return
 
+        # 補上送單回應時還沒拿到的券商編號；之後的回報與撤單都靠它對回這張單
+        if event.broker_seqno and not ticket.broker_seqno:
+            ticket.broker_seqno = event.broker_seqno
+        if event.broker_order_id and not ticket.broker_order_id:
+            ticket.broker_order_id = event.broker_order_id
+
+        op_type: str = event.op_type.lower()
         if event.is_failure:
             self.transition(
                 ticket,
@@ -456,8 +486,12 @@ class OrderManager:
                 reason=event.op_msg,
                 op_type=event.op_type,
             )
-        elif event.op_type.lower().startswith("cancel"):
+        elif op_type.startswith("cancel"):
             self.transition(ticket, LiveOrderStatus.CANCELLED, op_type=event.op_type)
+        elif op_type == "new" and ticket.status is LiveOrderStatus.PENDING_SUBMIT:
+            # 新單確認：送單回應只帶 PendingSubmit 時，要靠這一筆才知道券商收下了。
+            # 只從 PENDING_SUBMIT 推進——確認晚於成交或撤單回報到達時不可倒退
+            self.transition(ticket, LiveOrderStatus.SUBMITTED, op_type=event.op_type)
 
     # === 撤單 ===
     def cancel_open_orders(
@@ -563,7 +597,7 @@ class OrderManager:
         """
 
         expired: List[OrderTicket] = []
-        for row in self.dao.get_unfinished_orders(run_date):
+        for row in self._own_rows(self.dao.get_unfinished_orders(run_date)):
             client_order_id: str = str(row["client_order_id"])
             ticket: Optional[OrderTicket] = self.tickets.get(client_order_id)
             if ticket is None:
@@ -604,7 +638,9 @@ class OrderManager:
                 接管後的委託清單
         """
 
-        stored: List[Dict[str, Any]] = self.dao.get_unfinished_orders(run_date)
+        stored: List[Dict[str, Any]] = self._own_rows(
+            self.dao.get_unfinished_orders(run_date)
+        )
         if not stored:
             return []
 
@@ -633,19 +669,25 @@ class OrderManager:
             if matched is None:
                 matched = self._fuzzy_match(row, broker_tickets)
 
-            if matched is None:
-                self.transition(
-                    ticket,
-                    LiveOrderStatus.FAILED,
-                    reason="重啟接管時在券商端查無此單",
-                    op_type="recover",
-                )
-            else:
-                ticket.broker_seqno = matched.broker_seqno
-                ticket.broker_order_id = matched.broker_order_id
-                ticket.filled_volume = matched.filled_volume
-                if matched.status is not ticket.status:
-                    self.transition(ticket, matched.status, op_type="recover")
+            # **單筆矛盾不中止整個接管**：轉移不合法時狀態機已寫 CRITICAL 事件，
+            # 這裡只略過那一筆。讓例外往上拋的話，整個段落在送單之前就中止，
+            # 一筆舊委託的狀態問題會讓當天所有策略都送不出單
+            try:
+                if matched is None:
+                    self.transition(
+                        ticket,
+                        LiveOrderStatus.FAILED,
+                        reason="重啟接管時在券商端查無此單",
+                        op_type="recover",
+                    )
+                else:
+                    ticket.broker_seqno = matched.broker_seqno
+                    ticket.broker_order_id = matched.broker_order_id
+                    ticket.filled_volume = matched.filled_volume
+                    if matched.status is not ticket.status:
+                        self.transition(ticket, matched.status, op_type="recover")
+            except OrderStateError as exc:
+                logger.warning(f"接管時與本地狀態矛盾，已跳過本筆：{exc}")
             recovered.append(ticket)
 
         return recovered
@@ -731,6 +773,13 @@ class OrderManager:
             if row.get("decision_price") is not None:
                 order.decision_price = float(row["decision_price"])
         return order
+
+    def _own_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """只留本行程策略的委託列；未限定策略時原樣回傳"""
+
+        if self.strategy_names is None:
+            return rows
+        return [row for row in rows if row.get("strategy_name") in self.strategy_names]
 
     @staticmethod
     def _parse_time(value: Any) -> Optional[datetime.datetime]:

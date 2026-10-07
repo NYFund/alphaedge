@@ -622,11 +622,51 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
-    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住
+    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：
+    # 收線前的等待 ＋ 收線後收撤單回報的固定秒數，兩段都不看時鐘
     assert slept
-    assert (
-        sum(slept) <= harness.trader.MAX_WAIT_SECONDS + LiveTrader.POLL_INTERVAL_SECONDS
+    assert sum(slept) <= (
+        harness.trader.MAX_WAIT_SECONDS
+        + LiveTrader.CANCEL_REPORT_SECONDS
+        + 2 * LiveTrader.POLL_INTERVAL_SECONDS
     )
+
+
+def test_auction_orders_stay_open_until_the_drain_end() -> None:
+    """
+    正常結束時，未成交的委託要留到收線才撤
+
+    集合競價的 ROD 委託要在場上等撮合（尾盤段 13:30）。2026-10-07 演練中三張買單
+    在送出後一秒就被收尾流程撤掉，收盤集合競價時已不在場上，而段落照樣「正常結束」。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 25),
+        submit_end=datetime.time(13, 29),
+        drain_end=datetime.time(13, 35),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+    harness.broker.fill_ratio = 0.0
+    cancelled_at: List[datetime.datetime] = []
+    original_cancel: Any = harness.broker.cancel_order
+
+    def recording_cancel(ticket: OrderTicket) -> OrderTicket:
+        cancelled_at.append(harness.clock[0])
+        return original_cancel(ticket)
+
+    harness.broker.cancel_order = recording_cancel  # type: ignore[method-assign]
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert len(cancelled_at) == 1
+    assert cancelled_at[0].time() >= window.drain_end
+    # 撤單回報有收回來：本地轉成已撤，不會留到盤後才補標
+    (ticket,) = harness.oms.tickets.values()
+    assert ticket.status is LiveOrderStatus.CANCELLED
 
 
 # === 盤後作業 ===

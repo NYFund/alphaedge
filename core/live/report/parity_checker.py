@@ -476,8 +476,12 @@ def _compare_volume(
 
 
 # 送出後沒有（完全）成交的狀態。被拒、送單失敗不在內——那是風控或券商的事，
-# 由 `_compare_volume()` 與風控事件歸因；`PENDING_SUBMIT` 代表還不知道送出去了沒
+# 由 `_compare_volume()` 與風控事件歸因。
+# **`PENDING_SUBMIT` 也算**：盤後比對時它應該早已被日終標記成已撤，還留著代表
+# 狀態沒跟上券商，但這張單一定沒有成交。不算進來的話，兩邊數量相同就判成
+# 「沒有差異」——2026-10-07 三張被撤掉的單就會這樣在報表上消失
 _UNFILLED_STATUSES: Set[str] = {
+    LiveOrderStatus.PENDING_SUBMIT.value,
     LiveOrderStatus.SUBMITTED.value,
     LiveOrderStatus.PARTIALLY_FILLED.value,
     LiveOrderStatus.CANCELLED.value,

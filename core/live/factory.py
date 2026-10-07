@@ -422,6 +422,7 @@ def build_live_trader(
         dry_run=dry_run,
         on_degrade=risk_manager.on_degrade_event,
         now_provider=now_provider,
+        strategy_names=[type(strategy).__name__ for strategy in strategies],
     )
 
     # === 逐策略元件 ===

@@ -320,6 +320,23 @@ def test_partial_fill_is_also_an_execution_diff() -> None:
     assert "實盤成交 1／2" in diffs[0].note
 
 
+def test_order_stuck_in_pending_submit_is_not_reported_as_clean() -> None:
+    """
+    狀態停在 PENDING_SUBMIT 的委託也是沒成交，不可判成沒有差異
+
+    2026-10-07 演練：三張單被撤掉、本地狀態卻停在 PENDING_SUBMIT；
+    兩邊數量相同，若不看成交量，報表會顯示當天完全一致。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [unfilled_order("MARKET", "ROD", status="PENDING_SUBMIT")],
+        [make_backtest_order()],
+        [],
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_LOCKED_AT_LIMIT]
+
+
 @pytest.mark.parametrize("status", ["FILLED", "REJECTED", "FAILED"])
 def test_filled_or_rejected_orders_are_not_execution_diffs(status: str) -> None:
     """成交了沒有差異；被拒或送單失敗不是市場沒成交，由其他類別歸因"""

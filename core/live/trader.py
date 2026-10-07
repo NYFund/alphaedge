@@ -166,6 +166,10 @@ class LiveTrader:
     # 超過就強制跳出並記 error
     MAX_WAIT_SECONDS: float = 1800.0
 
+    # 收線後撤單，再收撤單回報的時間（秒）。撤單回報通常一秒內就到；
+    # 收不到也不影響正確性——日終由盤後刷新與 `expire_unfinished()` 補標
+    CANCEL_REPORT_SECONDS: float = 5.0
+
     # 盤中迴圈沒有事件時多久跳一次心跳（秒）。斷線偵測與日終回補都掛在心跳上
     INTRADAY_HEARTBEAT_SECONDS: float = 1.0
 
@@ -384,7 +388,7 @@ class LiveTrader:
             error = exc
             raise
         finally:
-            self.finish(window)
+            self.finish(window, aborted=error is not None)
             self.record_finish(error)
 
     def prepare(self) -> None:
@@ -1584,6 +1588,21 @@ class LiveTrader:
             self._sleep(self.POLL_INTERVAL_SECONDS)
             waited += self.POLL_INTERVAL_SECONDS
 
+    def _drain_for(self, seconds: float) -> None:
+        """
+        消化回報一段固定時間；給收線之後才送出的撤單收回報用
+
+        以累計等待秒數計時、不看時鐘，與 `drain_until()` 的保險絲同一個理由：
+        時鐘卡住時仍要能結束。
+        """
+
+        waited: float = 0.0
+        while waited < seconds:
+            if self.drain_once():
+                continue
+            self._sleep(self.POLL_INTERVAL_SECONDS)
+            waited += self.POLL_INTERVAL_SECONDS
+
     def _release_finished(self) -> None:
         """終結的委託釋放保留；**走遍所有已知委託**而不只是本次成交的那幾張"""
 
@@ -1594,18 +1613,35 @@ class LiveTrader:
                 self._reserved_by_order.pop(client_order_id, None)
 
     # === 收尾 ===
-    def finish(self, window: Optional[SegmentWindow]) -> None:
+    def finish(self, window: Optional[SegmentWindow], aborted: bool = False) -> None:
         """
         - Description:
-            段落收尾：撤未成交單、續收回報、寫快照、關連線
+            段落收尾：收回報到收線 → 撤未成交單 → 收撤單回報 → 寫快照、關連線
+
+            **正常結束時先等到收線才撤單**：集合競價段落送出的 ROD 委託要留在場上
+            等撮合（尾盤段 13:30、開盤段 09:00），收線時點排在撮合之後。送完單就撤的話，
+            委託在撮合前就離場，集合競價的單一張都不可能成交，而段落仍會「正常結束」。
+
+            **中止時立刻撤單**：段落是因例外或終止訊號結束的，引擎已經不在可控狀態，
+            留在場上的單沒有人會處理它的回報。撤完仍續收回報到收線。
 
             **撤單之後仍要繼續收回報**：撤單的回應本身也是回報，而剛好在撤單前
             成交的那張單也還沒回來。
+        - Parameters:
+            - window: Optional[SegmentWindow]
+                段落時窗
+            - aborted: bool
+                段落是否因例外或終止訊號結束
         """
 
         try:
-            self.order_manager.cancel_open_orders()
-            self.drain_until(window, "drain_end")
+            if aborted:
+                self.order_manager.cancel_open_orders()
+                self.drain_until(window, "drain_end")
+            else:
+                self.drain_until(window, "drain_end")
+                self.order_manager.cancel_open_orders()
+                self._drain_for(self.CANCEL_REPORT_SECONDS)
             self._release_all_remaining()
             self.write_account_snapshots()
         except Exception as exc:
