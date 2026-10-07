@@ -403,6 +403,14 @@ class ShioajiQuoteStream:
 
         quote_date: datetime.datetime = self._resolve_date(snapshot)
 
+        # 取不到乘數就略過這個契約（與快照無成交價同一種處理）：其他契約照常，
+        # 但不能帶著乘數 0 進到部位建構——那會讓可開口數與 PnL 靜默歸零
+        try:
+            multiplier: int = self.resolve_multiplier(product, contract)
+        except KeyError as exc:
+            logger.error(f"[Quote] {code} {exc}，略過該契約")
+            return None
+
         return FuturesQuote(
             product=product,
             expiry=expiry,
@@ -415,7 +423,7 @@ class ShioajiQuoteStream:
             low=float(getattr(snapshot, "low", 0.0) or 0.0),
             close=close,
             session=self.resolve_session(quote_date),
-            multiplier=self.resolve_multiplier(product, contract),
+            multiplier=multiplier,
         )
 
     @staticmethod
@@ -444,18 +452,15 @@ class ShioajiQuoteStream:
             取契約乘數
 
             指數期貨查 `FUTURES_MULTIPLIER`；查不到時**改用合約的 `multiplier`／`unit`**
-            （股票期貨的乘數會隨除權息調整，寫死必錯）。兩邊都沒有就回 0。
+            （股票期貨的乘數會隨除權息調整，寫死必錯）。兩邊都沒有就拋 `KeyError`。
 
-            〈回測有同名的一份，fallback 政策不同〉
+            〈回測有同名的一份，fallback 不同、查不到時的處理相同〉
 
-            `FuturesQuoteAdapter.resolve_multiplier()` 查不到時**直接 KeyError**。
-            差異的來源是「手上有什麼可退」：本層握有券商合約物件，那上面就有
-            正確的契約單位；回測只有商品代碼，沒有可靠的替代來源。
-
-            **回 0 這件事本身待裁示**：乘數 0 會讓 PnL 全部算成 0，
-            而那不是「呼叫端會發現」——它沒有任何徵兆，與
-            `FuturesPositionManager.get_multiplier()` 明訂的「查不到一律中斷、
-            不退回近似值」相矛盾。改它會動到實盤主流程，未在此處理。
+            `FuturesQuoteAdapter.resolve_multiplier()` 只查登錄表。差異的來源是
+            「手上有什麼可退」：本層握有券商合約物件，那上面就有正確的契約單位；
+            回測只有商品代碼，沒有可靠的替代來源。兩邊查不到都拋 `KeyError`：
+            乘數 0 不是異常值，而是一個看起來正常的數字，會讓可開口數與 PnL
+            靜默歸零（與 `FuturesPositionManager.get_multiplier()` 的原則一致）。
         - Parameters:
             - product: str
                 商品代碼
@@ -463,7 +468,10 @@ class ShioajiQuoteStream:
                 對應的合約
         - Return:
             - int
-                契約乘數；取不到時為 0
+                契約乘數
+        - Raise:
+            - KeyError
+                登錄表與合約都取不到乘數
         """
 
         if product in FUTURES_MULTIPLIER:
@@ -474,8 +482,7 @@ class ShioajiQuoteStream:
             if value:
                 return int(value)
 
-        logger.warning(f"取不到 {product} 的契約乘數，PnL 將無法計算")
-        return 0
+        raise KeyError(f"取不到 {product} 的契約乘數（登錄表與合約欄位皆無）")
 
     # === 工具 ===
     def _resolve_date(self, snapshot: Any) -> datetime.datetime:

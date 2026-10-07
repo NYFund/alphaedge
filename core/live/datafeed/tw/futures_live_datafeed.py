@@ -380,6 +380,12 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                     "本段落略過"
                 )
                 continue
+            # 取不到乘數只略過這個契約；帶著乘數 0 進到部位建構會讓可開口數靜默歸零
+            try:
+                multiplier: int = self._resolve_multiplier(product, contract)
+            except KeyError as exc:
+                logger.error(f"期貨合約 {product}{expiry} {exc}，本段落略過")
+                continue
             quotes.append(
                 PreOpenFuturesQuote(
                     product=product,
@@ -389,7 +395,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                     date=now.date(),
                     reference_price=reference,
                     session=self._resolve_session(now),
-                    multiplier=self._resolve_multiplier(product, contract),
+                    multiplier=multiplier,
                     limit_up=self._as_optional_float(contract, "limit_up"),
                     limit_down=self._as_optional_float(contract, "limit_down"),
                 )
@@ -446,7 +452,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         取契約乘數
 
         指數期貨查登錄表；查不到改用合約的欄位（股期的乘數會隨除權息調整，
-        寫死必錯）。兩邊都沒有回 0——**猜一個值會讓 PnL 靜默偏掉**。
+        寫死必錯）。兩邊都沒有就拋 `KeyError`——**猜一個值或回 0 都會讓
+        可開口數與 PnL 靜默偏掉**，由呼叫端略過該契約。
         """
 
         # 合約的 `symbol` 前綴是 Shioaji 分類（TXF），登錄表的鍵是 TAIFEX 代碼（TX），
@@ -459,8 +466,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         if product in FUTURES_MULTIPLIER:
             return int(FUTURES_MULTIPLIER[product])
 
-        logger.warning(f"取不到 {product} 的契約乘數，PnL 將無法計算")
-        return 0
+        raise KeyError(f"取不到 {product} 的契約乘數（登錄表與合約欄位皆無）")
 
     def close(self) -> None:
         """
