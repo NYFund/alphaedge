@@ -199,10 +199,11 @@ cd /tmp/cisim && env -u API_KEY -u API_SECRET_KEY python -m pytest tests -q -m "
 
 ## 三、打包時會踩到的坑
 
-### 3.1 `core.position` 等目錄沒有 `__init__.py`
+### 3.1 新增套件目錄要補 `__init__.py`
 
-它們靠 PEP 420 namespace package 運作。`[tool.setuptools.packages.find]` 必須設
-`namespaces = true`，否則 editable 安裝後 `core.position.*` 會 import 不到——
+`core/` 底下所有含 `.py` 的目錄都有 `__init__.py`。`[tool.setuptools.packages.find]`
+仍設 `namespaces = true` 當保險：缺 `__init__.py` 的目錄會被當成 PEP 420 namespace package，
+關掉這個選項的話，editable 安裝後該套件會 import 不到——
 而且**不會在安裝時報錯，是執行期才炸**。
 
 ### 3.2 `strategy_lab/` 不在 `packages.find` 裡
