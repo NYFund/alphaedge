@@ -6,8 +6,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from loguru import logger
 
-from core.api.tw.stock_price_api import StockPriceAPI
-from core.backtest.analysis.performance_metrics import (
+from core.analysis.performance_metrics import (
     TRADING_DAYS_PER_YEAR,
     compute_annualized_information_ratio,
     compute_annualized_sharpe,
@@ -18,6 +17,7 @@ from core.backtest.analysis.performance_metrics import (
     compute_profit_factor,
     compute_win_loss_ratio,
 )
+from core.api.tw.stock_price_api import StockPriceAPI
 from core.backtest.report.base import BaseBacktestReporter
 from core.backtest.report.plotting import EquityChartRenderer
 from core.config import resolve_show_figures
@@ -286,7 +286,7 @@ class StockBacktestReporter(BaseBacktestReporter):
             輸出整體績效指標（`<策略>_metrics_summary.csv`）
 
             **不開前端也看得到，且只有一份計算**：Sharpe／Sortino／MDD 一律呼叫
-            `core/backtest/analysis/performance_metrics.py` 的純函式，
+            `core/analysis/performance_metrics.py` 的純函式，
             不在報表與前端各寫一份——兩份實作必然漂移。
 
             **格式是長表**（`Metric`／`Value`／`Note`）：新增指標不必改欄位結構，

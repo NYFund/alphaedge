@@ -57,10 +57,10 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 市場結構（交易日曆、結算日、換月規則）：ETL、回測、實盤、策略都要用同一份。
     # 與 `core.api` 同層——日曆的建構子收 API 物件，放更低會變成反向相依
     ("core.market", 3, "市場結構", False),
-    # 純公式檔，**只相依 `math` 與 `typing`**（見 `analysis/__init__.py` 的說明）：
+    # 純公式檔，**只相依 `math` 與 `typing`**（見 `core/analysis/__init__.py` 的說明）：
     # 它比 `core.utils` 還低，任何人都可以 import 它而不會拉進任何相依。
     # 報表與（日後的）策略都要呼叫同一份公式，故必須擺在所有呼叫端之下
-    ("core.backtest.analysis", 1, "共用層／績效公式", False),
+    ("core.analysis", 1, "共用層／績效公式", False),
     # 部位建構層：回測與實盤共用，**不是**回測概念。只可 import `core.models`／
     # `core.utils`／`core.config`／`core.api`／`core.market`——期貨的部位建構要算
     # 每口保證金，而 `FuturesMarginConfig` 的權威來源在市場結構層（比本層低，屬正常

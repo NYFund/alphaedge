@@ -378,7 +378,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 **長表**），**不開前端也看得到**：勝率、勝敗比、獲利因子、平均 ROI、平均持有天數、
 最大回撤、年化波動度、Sharpe、Sortino、Information Ratio 與權益口徑。
 
-**公式只有一份**，全部在 `analysis/performance_metrics.py`（純函式，只相依 `math`
+**公式只有一份**，全部在 `core/analysis/performance_metrics.py`（純函式，只相依 `math`
 與 `typing`）。前端一律讀這份 CSV、**不自行重算任何一條公式**——同一個指標算在兩個
 地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對（MDD 曾經就有
 reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點同樣共用

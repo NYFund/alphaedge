@@ -239,7 +239,7 @@ core/
 | Signal / Strategy | 產生交易訊號（不直接操作資金帳本） | `BaseStockStrategy`（`self.market = Market.US`） |
 | Execution Simulator | 模擬成交（滑價、手續費、最小交易單位） | `InstrumentSpec` ＋ `FillModel` ＋ `CostModel`；委託前處理（方向白名單、執行順序、持倉檔數上限）在 `core/execution/order_preprocess.py`，回測實盤共用 |
 | Portfolio / Risk | 倉位、現金、風險控制 | `core/portfolio/`（`sizing.py` 部位大小、`construction.py` 組合建構）＋ `core/position/stock/position_manager.py` ＋ `SettlementModel` |
-| Performance / Report | 績效指標與圖表輸出 | `core/backtest/report/reporter.py`、`core/backtest/analysis/` |
+| Performance / Report | 績效指標與圖表輸出 | `core/backtest/report/reporter.py`、`core/analysis/` |
 
 ### 4.2 美股特有設計點
 

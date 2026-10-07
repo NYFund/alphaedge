@@ -51,7 +51,7 @@ class BaseBacktestReporter(ABC):
 
     @abstractmethod
     def generate_metrics_summary(self) -> pd.DataFrame:
-        """整體績效指標（長表；公式一律走 `analysis/performance_metrics.py`）"""
+        """整體績效指標（長表；公式一律走 `core/analysis/performance_metrics.py`）"""
 
         pass
 

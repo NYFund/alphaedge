@@ -184,7 +184,7 @@ sequenceDiagram
 | `core/backtest/report/plotting.py` | `EquityChartRenderer`：只負責畫圖，資料（含權益口徑）一律向報表端取 |
 | `core/backtest/report/reporter.py` | 台股報表：交易明細、多空統計、事件計數、五張圖、benchmark（`0050` 還原價）比較 |
 | `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、對標序列（連續合約優先，查不到退回近月拼接） |
-| `core/backtest/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
+| `core/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
 
 ---
 

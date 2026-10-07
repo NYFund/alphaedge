@@ -178,6 +178,7 @@ graph TB
 | `core/live/`    | 實盤交易：逐段落生命週期、委託管理（OMS）、部位歸屬、對帳、風控與盤後作業               |
 | `core/broker/`  | 券商介接（目前為 Shioaji）：登入、合約解析、委託轉換、回報正規化與行情訂閱              |
 | `core/portfolio/` | 回測與實盤共用的部位建構：訊號、資金切分、開倉組裝、多策略仲裁與訂單規則（方向白名單、持倉上限、單一標的曝險、決定性排序） |
+| `core/analysis/`  | 績效指標的純函式（Sharpe、Sortino、MDD 等）：只相依 `math`，任何一層都能 import；目前由回測報表使用，實盤日報日後沿用同一份 |
 | `core/datafeed/`  | 中立的 `BaseDataFeed` 契約：回測與實盤各自實作，策略的 `setup_apis(feed)` 型別就是它 |
 | `core/market/`    | 市場結構與市場規則（交易日曆、期貨換月、保證金設定、商品規格 `InstrumentSpec`、成本模型 `CostModel`），不屬於任一引擎 |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |

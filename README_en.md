@@ -177,6 +177,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `core/live/`    | Live trading: per-phase lifecycle, order management (OMS), position attribution, reconciliation, risk control and after-close work |
 | `core/broker/`  | Broker integration (currently Shioaji): login, contract resolution, order mapping, report normalization and quote subscription |
 | `core/portfolio/` | Position construction shared by backtest and live: signals, capital sizing, entry assembly, multi-strategy arbitration and order rules (direction whitelist, max holdings, single-symbol exposure, deterministic ordering) |
+| `core/analysis/`  | Pure performance-metric functions (Sharpe, Sortino, MDD, …): depend only on `math`, importable from any layer; used by backtest reports today, and live reports will reuse the same copy |
 | `core/datafeed/`  | The neutral `BaseDataFeed` contract; backtest and live each implement it, and it is the type of a strategy's `setup_apis(feed)` |
 | `core/market/`    | Market structure and rules (trading calendars, futures roll, margin config, `InstrumentSpec`, `CostModel`), owned by neither engine |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |

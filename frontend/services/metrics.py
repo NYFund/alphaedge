@@ -9,7 +9,7 @@ import pandas as pd
 
 **前端不計算任何績效指標**：Sharpe、Sortino、MDD、波動度、獲利因子、勝敗比與
 Information Ratio 一律讀 reporter 落地的 `<策略>_metrics_summary.csv`，
-公式只存在於 `core/backtest/analysis/performance_metrics.py` 一處。
+公式只存在於 `core/analysis/performance_metrics.py` 一處。
 同一個指標算在兩個地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對。
 
 ⚠️ **前端因此完全不 import `core`**：映像的相依面只剩 `frontend/` 自己，
