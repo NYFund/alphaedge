@@ -131,6 +131,16 @@ def test_parity_checks_only_the_strategies_of_this_process(dao: LiveTradeDAO) ->
     assert trader.after_close.parity_checker.strategy_names == {"LiveStockStrategy"}
 
 
+def test_order_manager_only_takes_over_this_process_strategies(
+    dao: LiveTradeDAO,
+) -> None:
+    """委託接管的範圍＝本次載入的策略；與 parity 同一個理由（兩個行程共用紀錄庫）"""
+
+    trader: LiveTrader = build([LiveStockStrategy()], dao)
+
+    assert trader.order_manager.strategy_names == {"LiveStockStrategy"}
+
+
 def test_singletons_are_shared_across_strategies(dao: LiveTradeDAO) -> None:
     """
     券商與委託管理跨策略共用一份，資料源與帳戶則每支策略各一份

@@ -80,6 +80,10 @@ class FakeBroker(BaseBroker):
         # 觀測用
         self.placed_count: int = 0
         self.cancel_requests: List[str] = []
+        # 送單回應是否已帶確認。False 時與模擬環境相同（2026-10-07 實測）：
+        # 回應只到 PendingSubmit，新單確認另外以 `op_type='New'` 的委託回報推來。
+        # 一律回 SUBMITTED 的話，「確認晚到」這條路徑在假券商上永遠測不出來
+        self.ack_on_submit: bool = True
         self.pending_reports: List[Any] = []  # 成交回報與撤單回報
 
     # === 連線 ===
@@ -120,6 +124,10 @@ class FakeBroker(BaseBroker):
         if symbol in self.reject_symbols:
             ticket.status = LiveOrderStatus.REJECTED
             ticket.reject_reason = "FakeBroker: 標的被腳本化為拒單"
+            return ticket
+
+        if not self.ack_on_submit:
+            ticket.status = LiveOrderStatus.PENDING_SUBMIT
             return ticket
 
         ticket.status = LiveOrderStatus.SUBMITTED

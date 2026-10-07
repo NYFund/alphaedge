@@ -385,6 +385,88 @@ def test_unmatched_fill_is_still_recorded(
     )
 
 
+# === 送單回應只到 PendingSubmit（確認晚到）===
+def test_pending_submit_response_still_persists_the_broker_seqno(
+    oms: OrderManager, fake_broker: FakeBroker, dao: LiveTradeDAO
+) -> None:
+    """
+    送單回應只到 PendingSubmit 時，券商序號仍要落地
+
+    狀態沒變，狀態機不寫 DB；2026-10-07 演練三張單因此在紀錄庫裡沒有序號，
+    事後只能登入券商才查得到它們存在。
+    """
+
+    fake_broker.ack_on_submit = False
+    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+
+    row: Any = dao.conn.execute(
+        "SELECT status, broker_seqno FROM live_order WHERE client_order_id = ?",
+        (ticket.client_order_id,),
+    ).fetchone()
+    assert row == ("PENDING_SUBMIT", ticket.broker_seqno)
+
+
+def test_new_order_ack_moves_pending_submit_to_submitted(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    """新單確認回報把委託推到 SUBMITTED"""
+
+    fake_broker.ack_on_submit = False
+    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "", op_type="New", op_code="00"
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.SUBMITTED
+
+
+def test_cancel_report_before_the_ack_is_accepted(
+    oms: OrderManager, fake_broker: FakeBroker, degradations: List[str]
+) -> None:
+    """
+    撤單回報比新單確認先到，照樣轉成已撤
+
+    2026-10-07 演練：三張單停在 PENDING_SUBMIT，撤單回報被判成非法轉移，
+    紀錄庫的狀態與券商從此不一致，另一個行程啟動接管時還因此中止。
+    """
+
+    fake_broker.ack_on_submit = False
+    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "", op_type="Cancel", op_code="00"
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.CANCELLED
+    assert degradations == []
+
+
+def test_late_ack_does_not_move_a_filled_order_back(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    """確認晚於成交到達時不可倒退：已成交的單不會被改回已送出"""
+
+    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    oms.drain_executions()
+    assert ticket.status is LiveOrderStatus.FILLED
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "", op_type="New", op_code="00"
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.FILLED
+
+
 def test_rejection_event_moves_ticket_to_rejected(
     oms: OrderManager, fake_broker: FakeBroker
 ) -> None:
@@ -517,6 +599,60 @@ def test_recover_matches_by_seqno(
 
     assert len(recovered) == 1
     assert recovered[0].broker_seqno == ticket.broker_seqno
+
+
+def test_recover_only_takes_over_this_process_strategies(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    只接管本行程策略的委託
+
+    股票線與期貨線共用一個紀錄庫；2026-10-07 期貨行程啟動時接管到股票線的委託，
+    狀態對不上而整段中止。
+    """
+
+    fake_broker.fill_ratio = 0.0
+    oms.submit(make_order(), "MomentumStrategy1")
+
+    futures_line: OrderManager = OrderManager(
+        fake_broker,
+        dao,
+        "run2",
+        run_index=2,
+        now_provider=lambda: NOW,
+        strategy_names=["MomentumFuturesStrategy"],
+    )
+
+    assert futures_line.recover(TODAY) == []
+    assert futures_line.tickets == {}
+    assert futures_line.expire_unfinished(TODAY) == []
+
+
+def test_recover_skips_a_contradicting_order_instead_of_aborting(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    單筆狀態矛盾只跳過那一筆，不讓整個啟動中止
+
+    讓例外往上拋的話，段落在送單之前就結束，一筆舊委託的問題會讓
+    當天所有策略都送不出單。
+    """
+
+    fake_broker.fill_ratio = 0.0
+    first: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    oms.submit(make_order(symbol="2317"), "MomentumStrategy1")
+    # 券商端回報的狀態比本地紀錄還早（SUBMITTED → PENDING_SUBMIT 是倒退）
+    fake_broker.tickets[first.client_order_id].status = LiveOrderStatus.PENDING_SUBMIT
+
+    fresh: OrderManager = OrderManager(
+        fake_broker, dao, "run2", run_index=2, now_provider=lambda: NOW
+    )
+    recovered: List[OrderTicket] = fresh.recover(TODAY)
+
+    assert len(recovered) == 2
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'ORDER_STATE_INVALID'"
+    ).fetchone() == (1,)
 
 
 def test_recover_marks_unknown_orders_failed_without_resubmitting(
