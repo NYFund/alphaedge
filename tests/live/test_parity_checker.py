@@ -348,6 +348,29 @@ def test_filled_or_rejected_orders_are_not_execution_diffs(status: str) -> None:
     assert compare([row], [make_backtest_order()], []) == []
 
 
+def test_loaded_strategy_without_orders_is_still_compared(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    本行程載入的策略當天一張委託都沒送，照樣比
+
+    只比有委託的策略的話，段落中止、整天沒送單而回測會開倉的那一天完全看不到差異
+    （2026-10-07 期貨尾盤段中止就是這樣）。
+    """
+
+    checker: ParityChecker = ParityChecker(
+        dao,
+        lambda name, day: [make_backtest_order("2330")],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+    )
+
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert [diff.category for diff in result["Alpha"]] == [CATEGORY_UNEXPLAINED]
+    assert result["Alpha"][0].live_detail == "（實盤沒有送出這張單）"
+
+
 def test_recheck_replaces_the_previous_result(
     dao: LiveTradeDAO, tmp_path: Path
 ) -> None:

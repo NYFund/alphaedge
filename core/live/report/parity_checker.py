@@ -193,15 +193,21 @@ class ParityChecker:
             run_date
         )
 
-        # **只比對本次行程載入的策略**：股票線與期貨線是兩個行程、共用同一個紀錄庫，
-        # 讀到另一個行程的委託時這裡跑不出它的回測，會記成未解釋並發 CRITICAL；
-        # 而差異是以（日期、策略、序號）覆寫，還會蓋掉另一個行程寫好的正確結果
-        names: Set[str] = {str(row["strategy_name"]) for row in live_orders}
-        if self.strategy_names is not None:
-            skipped: Set[str] = names - self.strategy_names
+        # **比對範圍＝本次行程載入的策略，不管當天有沒有委託**：
+        # - 不碰別的行程的策略：股票線與期貨線是兩個行程、共用同一個紀錄庫，讀到另一個
+        #   行程的委託時這裡跑不出它的回測，會記成未解釋並發 CRITICAL；差異以
+        #   （日期、策略、序號）覆寫，還會蓋掉另一個行程寫好的正確結果。
+        # - 當天沒送任何單的策略也要比：只比有委託的策略的話，段落中止、整天沒送單
+        #   而回測會開倉的那一天完全看不到差異（2026-10-07 期貨尾盤段就是這樣）。
+        # 未限定（`None`）時退回「當天有委託的策略」，供單元測試沿用
+        traded: Set[str] = {str(row["strategy_name"]) for row in live_orders}
+        if self.strategy_names is None:
+            names: Set[str] = traded
+        else:
+            skipped: Set[str] = traded - self.strategy_names
             if skipped:
                 logger.debug(f"略過不在本次行程的策略：{sorted(skipped)}")
-            names &= self.strategy_names
+            names = set(self.strategy_names)
 
         result: Dict[str, List[ParityDiff]] = {}
         for name in sorted(names):

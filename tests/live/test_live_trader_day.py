@@ -797,7 +797,8 @@ def test_explicit_date_backfill_does_not_need_yesterday(tmp_path: Path) -> None:
 
     harness.trader.run_parity(two_days_ago)
 
-    assert backtest_dates == []  # 那天沒有委託，比對範圍是空的，但沒有被擋下
+    # 沒被新鮮度檢查擋下；那天沒有委託仍照樣比（本行程載入的策略一律比）
+    assert backtest_dates == [two_days_ago]
 
 
 class _AlwaysTradingDay:
