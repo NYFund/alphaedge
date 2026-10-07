@@ -37,7 +37,7 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 
 - `pyproject.toml`：唯一的相依宣告（套件名稱、版本下限、optional extras、Python 版本下限）。
 - `uv.lock`：由 `uv lock` 從 `pyproject.toml` 解析產生，鎖住整棵相依樹（含傳遞相依）。
-  本機、CI（`uv sync --locked`）與 `core/Dockerfile`（`uv sync --frozen`）都從這一份安裝，**要進版控、不要手改**。
+  本機、CI（`uv sync --locked`）與根目錄的 `Dockerfile`（`uv sync --frozen`）都從這一份安裝，**要進版控、不要手改**。
 
 lock 裡的 Flask、ipython、ta、pytest 看似無關，其實是 FinMind 自己宣告的相依，移不掉。
 

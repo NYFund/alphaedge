@@ -44,7 +44,7 @@
 | Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成；回歸雙線零變動。主目錄待 10/1 演練後更新 |
-| Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ⬜ | 排在 Phase2、Phase5 之後，避免 COPY 清單改兩次 |
+| Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ✅ | 2026-10-08 完成，**偏離原規格**：提前到 Phase2-2、Phase5-1 之前做（見該步驟）；CI `docker` job 建置與三項冒煙通過 |
 | Phase5-1 | `core/pipeline/` 搬到頂層並改名 `etl/` | `etl/**`、`tasks/update_db.py`、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；`tasks/update_db.py` 各 target 冒煙；`core` 對 `etl` 的 import 為零；附錄護欄全數涵蓋 `etl/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次。2026-10-01 定案：搬移時一併改名 `etl`，連同日誌桶 `logs/pipeline/` 全部改，範圍見步驟章節 |
 
 ---
@@ -308,7 +308,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 
 ## Phase4：`Dockerfile` 移到專案根目錄
 
-### Phase4-1. `core/Dockerfile` 移到專案根目錄 ⬜
+### Phase4-1. `core/Dockerfile` 移到專案根目錄 ✅
 
 - **目的**：這份 Dockerfile 打包的是 `apps`、`core`、`tasks`（過渡期另有 `run.py`；Phase2 後再加 `strategies`、
   Phase5 後再加 `etl`），也就是整個後端。放在 `core/` 底下會讓人以為它只打包框架。
@@ -320,6 +320,15 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
   `grep -rn "core/Dockerfile" .` 為零。
 - **相依**：排在 Phase2-1 與 Phase5-1 之後，避免 COPY 清單與引用處各改兩次。
   Phase5 長期暫緩的話，可在 Phase2 完成後先做，Phase5-1 再補一行 COPY。
+
+> **✅ 完成紀錄（2026-10-08）**
+> - **偏離原規格**：沒有等 Phase2-2（策略搬家，排在 `實盤下單架構規劃.md` Phase7-1 演練後）與 Phase5-1（⏸）。
+>   Phase2-1 已把 `COPY strategies` 加上，Phase2-2 只搬目錄內容、不改 COPY 清單；Phase5-1 恢復時在根目錄 `Dockerfile` 補一行 `COPY etl`（該步驟做法第 7 點已寫）。
+> - `git mv core/Dockerfile Dockerfile`；引用處：`docker-compose.yml` 兩個 service 的 `dockerfile:` 與一處註解、`.github/workflows/ci.yml`、
+>   `README.md`／`README_en.md`（建置指令＋專案樹新增 `Dockerfile` 一列）、`docs/deployment/prod-deployment.md` 三處、`docs/setup/dev-setup.md`、
+>   `pyproject.toml`、`core/config/settings.py`、`frontend/Dockerfile` 的註解，以及 `Dockerfile` 自己的建置說明。建置指令改為 `docker build -t alphaedge-core .`（根目錄的預設檔名，不必 `-f`）。
+> - 驗證：`grep -rn "core/Dockerfile"` 排除 `backlog/` 為零（`backlog/` 中剩下的是已完成步驟的歷史紀錄，不改寫）；
+>   `docker compose config` 解析出 `dockerfile: Dockerfile`；本機 Docker daemon 未啟動，`docker compose build` 改以 CI 的 `docker` job 代替（同一個 build context 與檔案）。
 
 ---
 
@@ -424,4 +433,4 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 | `pyproject.toml` 的 `[tool.coverage.run] source` | `core`、`strategies` | 覆蓋率報告範圍 |
 | `.github/workflows/ci.yml` 的 `--cov=core` | `core`、`strategies` | 同上（CI 端） |
 | `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`strategies*`、`tasks*`、`tests*` | editable 安裝後可 import |
-| `core/Dockerfile` 的 `COPY` | `run.py`、`core`、`tasks`、`apps`、`strategies` | 映像內容 |
+| 根目錄 `Dockerfile` 的 `COPY` | `core`、`tasks`、`apps`、`strategies` | 映像內容 |

@@ -46,7 +46,7 @@ dependencies = [
 # 開發工具放 dependency group 而不是 extra：`uv sync` 預設就會裝 `dev` 這一組，
 # 加裝其他 extra（`uv sync --extra frontend`）時也不會被移除——extra 的話，沒列在
 # 指令上的會被 `uv sync` 拿掉，漏寫 `--extra dev` 就少了 pytest 與 ruff。
-# 正式映像以 `--no-dev` 排除（見 `core/Dockerfile`）；dev 工具也不會出現在套件 metadata
+# 正式映像以 `--no-dev` 排除（見根目錄的 `Dockerfile`）；dev 工具也不會出現在套件 metadata
 [dependency-groups]
 dev = [
     "pytest>=9.0",

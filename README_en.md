@@ -323,7 +323,7 @@ Open `http://localhost:8501`. After changing code, add `--build` so the images p
 **Step 1: Build the images**
 
 ```bash
-docker build -f core/Dockerfile -t alphaedge-core .
+docker build -t alphaedge-core .
 docker build -f frontend/Dockerfile -t alphaedge-frontend .
 ```
 
@@ -527,6 +527,7 @@ AlphaEdge/
 │   ├── check_overnight_positions.py  # does the simulation env keep overnight positions? (read-only analysis)
 │   ├── launchd/               # macOS scheduling (one launch per phase)
 │   └── manual/                # scripts needing credentials or a database (see its README)
+├── Dockerfile                 # backend image (core, apps, tasks, strategies; shared by backtest, data update and live)
 ├── docker-compose.yml         # compose: core + live (behind a profile, never started by `up`) + frontend + shared results volume
 ├── pyproject.toml             # dependency declaration (single source) and ruff/pytest config
 ├── uv.lock                    # versions resolved by uv (do not edit; run `uv lock` after changing pyproject)
