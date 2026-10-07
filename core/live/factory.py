@@ -162,8 +162,8 @@ def apply_live_max_holdings(strategy: BaseStrategy) -> None:
 
         **寫回實例而不是另開一個讀取點**：sizer、部位建構器與引擎的持倉檢查都讀
         `strategy.max_holdings`，各處改讀別的屬性就得改三個地方，漏一處就會
-        「切資金用 3 檔、擋單用 10 檔」。這份實例只活在實盤行程裡；parity 比對
-        跑回測時會重建一份新的策略實例，不受影響。
+        「切資金用 3 檔、擋單用 10 檔」。只寫進實盤行程的實例與 parity 的當日回測
+        副本（`make_daily_backtest_runner()`），研究回測不經過這裡。
     - Parameters:
         - strategy: BaseStrategy
             實盤載入的策略實例
@@ -824,6 +824,12 @@ def make_daily_backtest_runner(
         **每次呼叫都重建一份策略實例**：實盤那份已經帶著當天的帳戶與持倉，
         拿它跑回測會讓回測從「今天的部位」開始，而比對基準應該是
         「這支策略單獨從零跑這一天會送什麼單」。
+
+        **資金與檔數照實盤的口徑**（`live_capital`、`live_max_holdings`）：parity 量的是
+        訊號有沒有漂移，不是兩邊設定不同。用研究回測的 `init_capital`／`max_holdings`
+        的話，宣告了實盤額度的策略每天都會因為張數與檔數不同而報未解釋差異——
+        `MomentumStrategy1` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
+        2026-10-06 試跑的三筆未解釋差異全是這個原因。
     - Parameters:
         - strategies: Sequence[BaseStrategy]
             本次實盤載入的策略實例；只用來取類別與 `init_capital`
@@ -842,6 +848,7 @@ def make_daily_backtest_runner(
             raise UnsupportedMarketError(f"本次執行沒有載入策略 {strategy_name}")
 
         replica: BaseStrategy = type(blueprint)()
+        apply_live_max_holdings(replica)
 
         # 不寫報表與 backtest log：盤後每天跑一次，寫的話會蓋掉
         # `results/<策略>/` 的研究用回測，並把實盤的 log 一併寫進 backtest log
@@ -849,7 +856,7 @@ def make_daily_backtest_runner(
             replica,
             write_artifacts=False,
             overrides=BacktestOverrides(
-                start=run_date, end=run_date, capital=blueprint.init_capital
+                start=run_date, end=run_date, capital=live_capital(replica)
             ),
         )
         backtester.run()

@@ -690,6 +690,110 @@ def test_after_close_writes_reports(tmp_path: Path) -> None:
     assert summary["reports"]["Alpha/positions"].exists()
 
 
+def test_after_close_does_not_compare_parity(tmp_path: Path) -> None:
+    """
+    盤後不比 parity：當天的日 K 次日才入庫，此時的當日回測一張委託都產生不出來
+
+    2026-10-07 演練：盤後比對把三張實盤開倉單全歸成快照口徑差異，parity 照樣「通過」。
+    """
+
+    from core.live.report.live_reporter import LiveReporter
+
+    called: List[datetime.date] = []
+    harness: Harness = Harness([ScriptedStrategy("Alpha", [make_order()])])
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+    harness.trader.after_close.check_signal_parity = (  # type: ignore[method-assign]
+        lambda run_date: called.append(run_date) or 0
+    )
+
+    harness.trader.run_after_close()
+
+    assert called == []
+
+
+def make_parity_harness(
+    tmp_path: Path, latest_data_date: Optional[datetime.date] = None
+) -> Tuple[Harness, List[datetime.date]]:
+    """接上一個會記錄回測日期的 parity 比對器"""
+
+    from core.live.report.parity_checker import ParityChecker
+
+    harness: Harness = Harness(
+        [ScriptedStrategy("Alpha", [make_order()])], latest_data_date=latest_data_date
+    )
+    backtest_dates: List[datetime.date] = []
+
+    def run_backtest(name: str, run_date: datetime.date) -> List[BaseOrder]:
+        backtest_dates.append(run_date)
+        return []
+
+    harness.trader.after_close.parity_checker = ParityChecker(
+        harness.dao, run_backtest, output_root=tmp_path, strategy_names=["Alpha"]
+    )
+    return (harness, backtest_dates)
+
+
+def test_parity_is_compared_for_the_latest_data_date(tmp_path: Path) -> None:
+    """
+    次日補比：預設比歷史資料最新的那一天（前一交易日）
+
+    紀錄庫裡要有那天的委託，比對範圍才會含這支策略。
+    """
+
+    yesterday: datetime.date = TODAY - datetime.timedelta(days=1)
+    harness, backtest_dates = make_parity_harness(tmp_path, latest_data_date=yesterday)
+    harness.dao.upsert_order(
+        {
+            "client_order_id": "run0-0001",
+            "run_id": "run0",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Buy",
+            "position_type": "LONG",
+            "price": 100.0,
+            "volume": 1,
+            "status": "CANCELLED",
+            "created_at": datetime.datetime.combine(yesterday, datetime.time(13, 25)),
+        }
+    )
+
+    harness.trader.run_parity()
+
+    assert backtest_dates == [yesterday]
+    # 比的是前一交易日那一天，差異寫在那一天名下
+    rows: List[Any] = harness.dao.conn.execute(
+        "SELECT date, symbol FROM live_parity_diff WHERE strategy_name = 'Alpha'"
+    ).fetchall()
+    assert rows == [(yesterday.isoformat(), "2330")]
+    assert harness.contexts[0].data_feed.closed == 1
+
+
+def test_parity_refuses_stale_data(tmp_path: Path) -> None:
+    """資料沒更新到前一交易日就不比：比了只會把實盤的單全判成差異"""
+
+    harness, backtest_dates = make_parity_harness(
+        tmp_path, latest_data_date=TODAY - datetime.timedelta(days=30)
+    )
+
+    with pytest.raises(DataFreshnessError):
+        harness.trader.run_parity()
+
+    assert backtest_dates == []
+
+
+def test_parity_refuses_a_date_without_data(tmp_path: Path) -> None:
+    """指定的日期還沒有日 K 時拒絕，不比一份空的回測"""
+
+    harness, backtest_dates = make_parity_harness(
+        tmp_path, latest_data_date=TODAY - datetime.timedelta(days=1)
+    )
+
+    with pytest.raises(DataFreshnessError, match="沒有"):
+        harness.trader.run_parity(TODAY)
+
+    assert backtest_dates == []
+
+
 def test_unfilled_entry_order_is_abandoned(tmp_path: Path) -> None:
     """
     開倉未成交一律放棄，不追價
