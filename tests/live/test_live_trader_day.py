@@ -665,18 +665,47 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     slept: List[float] = []
     harness.trader._now = lambda: NOW  # 時鐘卡死
     harness.trader._sleep = slept.append
-    harness.trader.MAX_WAIT_SECONDS = 5.0
+    harness.trader.WAIT_GRACE_SECONDS = 5.0
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
-    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：
-    # 收線前的等待 ＋ 收線後收撤單回報的固定秒數，兩段都不看時鐘
+    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：上限是開始等待時
+    # 離收線還有多久（13:26 → 13:35）加寬限；收線後收撤單回報的固定秒數另計，
+    # 兩段都不看時鐘
+    remaining: float = (
+        datetime.datetime.combine(TODAY, window.drain_end) - NOW
+    ).total_seconds()
     assert slept
     assert sum(slept) <= (
-        harness.trader.MAX_WAIT_SECONDS
+        remaining
+        + harness.trader.WAIT_GRACE_SECONDS
         + LiveTrader.CANCEL_REPORT_SECONDS
         + 2 * LiveTrader.POLL_INTERVAL_SECONDS
     )
+
+
+def test_long_window_does_not_hit_the_wait_cap() -> None:
+    """
+    時鐘正常前進時，比固定秒數長的時窗也要等到收線
+
+    股票開盤段 08:30～09:05 共 35 分鐘；保險絲曾寫死 1800 秒，
+    每天在 09:03 左右撞到上限、提早收線並記「請確認系統時鐘」的假警報。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 26),
+        submit_end=datetime.time(13, 27),
+        drain_end=datetime.time(14, 1),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.clock[0].time() >= window.drain_end
 
 
 def test_auction_orders_stay_open_until_the_drain_end() -> None:

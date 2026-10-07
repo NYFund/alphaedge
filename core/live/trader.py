@@ -173,12 +173,14 @@ class LiveTrader:
     # 沒有回報時的輪詢間隔（秒）。太短會空轉吃 CPU，太長會讓撤單與時限判斷變遲鈍
     POLL_INTERVAL_SECONDS: float = 0.5
 
-    # 等待回報的安全上限（秒）。**這條是獨立於時鐘的保險絲**：
-    # 時窗判斷靠 `now_provider()`，而它若因為時鐘卡住、倒退或注入錯誤而不再前進，
-    # 迴圈會永遠轉下去——段落不結束，下一個段落的行程拿不到連線與寫入鎖，
-    # 而存活監控只會看到「開始了但沒有正常結束」。故另外累計實際等過的秒數，
-    # 超過就強制跳出並記 error
-    MAX_WAIT_SECONDS: float = 1800.0
+    # 等待的安全上限＝開始等待時離目標時點還有多久 ＋ 這段寬限（秒）。
+    # **這條是獨立於時鐘的保險絲**：時窗判斷靠 `now_provider()`，而它若因為時鐘卡住、
+    # 倒退或注入錯誤而不再前進，迴圈會永遠轉下去——段落不結束，下一個段落的行程
+    # 拿不到連線與寫入鎖，而存活監控只會看到「開始了但沒有正常結束」。故另外累計
+    # 實際睡過的秒數，超過就強制跳出並記 error。
+    # **上限跟著時窗長度走**：寫死一個秒數的話，比它長的時窗（股票開盤段 35 分鐘）
+    # 會在時鐘完全正常時撞到上限，天天記一條「請確認系統時鐘」的假警報
+    WAIT_GRACE_SECONDS: float = 300.0
 
     # 收線後撤單，再收撤單回報的時間（秒）。撤單回報通常一秒內就到；
     # 收不到也不影響正確性——日終由盤後刷新與 `expire_unfinished()` 補標
@@ -1585,14 +1587,15 @@ class LiveTrader:
             self.drain_once()
             return
 
+        cap: float = self._wait_cap_seconds(getattr(window, attribute))
         waited: float = 0.0
         while not self._past(window, attribute):
             if self.drain_once():
                 continue
 
-            if waited >= self.MAX_WAIT_SECONDS:
+            if waited >= cap:
                 logger.error(
-                    f"等待回報已達安全上限 {self.MAX_WAIT_SECONDS:.0f} 秒仍未到 "
+                    f"等待回報已達安全上限 {cap:.0f} 秒仍未到 "
                     f"{attribute}，強制結束等待；請確認系統時鐘是否正常"
                 )
                 return
@@ -2342,17 +2345,40 @@ class LiveTrader:
         if window is None:
             return
 
+        cap: float = self._wait_cap_seconds(window.submit_start)
         waited: float = 0.0
         while self._now().time() < window.submit_start:
-            if waited >= self.MAX_WAIT_SECONDS:
+            if waited >= cap:
                 logger.error(
-                    f"等待送單時窗已達安全上限 {self.MAX_WAIT_SECONDS:.0f} 秒，"
+                    f"等待送單時窗已達安全上限 {cap:.0f} 秒，"
                     "本段落放棄送單；請確認系統時鐘是否正常"
                 )
                 return
 
             self._sleep(self.POLL_INTERVAL_SECONDS)
             waited += self.POLL_INTERVAL_SECONDS
+
+    def _wait_cap_seconds(self, target: datetime.time) -> float:
+        """
+        - Description:
+            這次等待的安全上限：開始等待時離目標時點的秒數 ＋ 寬限
+
+            只在開始等待時讀一次時鐘。之後時鐘卡住也不影響上限，
+            迴圈仍會在累計睡滿上限後跳出。
+        - Parameters:
+            - target: datetime.time
+                要等到的時點（同一個交易日）
+        - Return:
+            - float
+                上限秒數；目標已過時只剩寬限
+        """
+
+        now: datetime.datetime = self._now()
+        target_at: datetime.datetime = datetime.datetime.combine(
+            now.date(), target, tzinfo=now.tzinfo
+        )
+        remaining: float = (target_at - now).total_seconds()
+        return max(remaining, 0.0) + self.WAIT_GRACE_SECONDS
 
     def _past(self, window: Optional[SegmentWindow], attribute: str) -> bool:
         """目前時刻是否已過時窗上的某個時點"""
