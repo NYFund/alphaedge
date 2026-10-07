@@ -5,7 +5,6 @@ from loguru import logger
 
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.execution.order_preprocess import resolve_close_action
 from core.live.attribution.position_ledger import (
     UNATTRIBUTED_STRATEGY,
     PositionAttributionLedger,
@@ -16,6 +15,7 @@ from core.models import (
     ExecutionReport,
     StockOrder,
 )
+from core.portfolio.order_rules import resolve_close_action
 from core.position.base.position_manager import BasePositionManager
 from core.utils import Action, PositionType
 

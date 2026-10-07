@@ -11,7 +11,6 @@ from core.backtest.models.settlement_model import BaseSettlementModel
 from core.backtest.report.base import BaseBacktestReporter
 from core.config import BACKTEST_RESULT_DIR_PATH
 from core.datafeed.base import BaseDataFeed
-from core.execution import order_preprocess
 from core.market.cost_model import BaseCostModel
 from core.market.instrument_spec import InstrumentSpec
 from core.models import (
@@ -21,6 +20,7 @@ from core.models import (
     BaseQuote,
     BaseTradeRecord,
 )
+from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -186,12 +186,12 @@ class Backtester:
     def get_allowed_directions(self) -> Set[PositionType]:
         """取得允許的訂單方向白名單：由策略的 `direction` 決定"""
 
-        return order_preprocess.get_allowed_directions(self.strategy.direction)
+        return order_rules.get_allowed_directions(self.strategy.direction)
 
     def get_execution_order(self) -> BarExecutionOrder:
-        """單根 bar 的開平倉先後；推導表與理由見 `order_preprocess.get_execution_order()`"""
+        """單根 bar 的開平倉先後；推導表與理由見 `order_rules.get_execution_order()`"""
 
-        return order_preprocess.get_execution_order(self.strategy.allow_day_trade)
+        return order_rules.get_execution_order(self.strategy.allow_day_trade)
 
     # === Order Validation ===
     def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
@@ -208,7 +208,7 @@ class Backtester:
                 通過檢查的訂單
         """
 
-        return order_preprocess.validate_orders(
+        return order_rules.validate_orders(
             orders,
             stage,
             self.get_allowed_directions(),
@@ -222,9 +222,9 @@ class Backtester:
 
     @staticmethod
     def sort_orders(orders: List[BaseOrder]) -> List[BaseOrder]:
-        """同一根 bar 內委託的決定性排序；為什麼要自己排見 `order_preprocess.sort_orders()`"""
+        """同一根 bar 內委託的決定性排序；為什麼要自己排見 `order_rules.sort_orders()`"""
 
-        return order_preprocess.sort_orders(orders)
+        return order_rules.sort_orders(orders)
 
     def validate_fill_price(self, order: BaseOrder, quote: BaseQuote) -> bool:
         """成交價合理性檢查；規則由 FillModel 實作"""
@@ -475,14 +475,14 @@ class Backtester:
         return open_positions
 
     def check_max_holdings(self, order: BaseOrder) -> bool:
-        """持倉檔數硬上限；與 sizer 為何不合併見 `order_preprocess.check_max_holdings()`"""
+        """持倉檔數硬上限；與 sizer 為何不合併見 `order_rules.check_max_holdings()`"""
 
         held_symbols: Set[str] = {
             position.symbol
             for position in self.account.positions
             if not position.is_closed
         }
-        return order_preprocess.check_max_holdings(
+        return order_rules.check_max_holdings(
             order, self.max_holdings, held_symbols, self.event_counts
         )
 

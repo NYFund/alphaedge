@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Sequence
 
 from loguru import logger
 
-from core.execution.order_preprocess import get_execution_order
+from core.portfolio.order_rules import get_execution_order
 from core.strategies.base import BaseStrategy
 from core.utils import BarExecutionOrder, ExecutionStyle, ExecutionTiming, LiveHook
 

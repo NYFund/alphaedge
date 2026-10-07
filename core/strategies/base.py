@@ -64,7 +64,7 @@ class BaseStrategy(ABC):
         self.init_capital: float = 0  # Initial capital
         # 同時可持有的最大檔數；**預設 None ＝ 不限制**。
         #
-        # **不可改成預設 0**：`order_preprocess.check_max_holdings()` 只把 None
+        # **不可改成預設 0**：`order_rules.check_max_holdings()` 只把 None
         # 當成不限制，預設 0 會讓**忘記設定的新策略每一張開倉單都被引擎剔除**，
         # 回測跑完是零筆交易、零錯誤訊息。寧可預設不限制（策略自己的 sizer 仍會
         # 把關），也不要用一個看起來像「還沒設定」的值去無聲地擋掉所有交易。

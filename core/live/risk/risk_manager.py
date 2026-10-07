@@ -9,12 +9,12 @@ from loguru import logger
 from core.config.paths import LIVE_KILL_SWITCH_PATH
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.execution.order_preprocess import exceeds_symbol_exposure
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import BaseOrder
+from core.portfolio.order_rules import exceeds_symbol_exposure
 from core.utils import Action, PositionType
 
 """
@@ -253,7 +253,7 @@ def truncate_batch_by_exposure(
 
     total_cap: float = init_capital * config.total_exposure_ratio
     # 單一標的上限的公式與回測共用；差異（預設值、適用方向、超限行為）
-    # 寫在 `order_preprocess.exceeds_symbol_exposure()` 的 docstring
+    # 寫在 `order_rules.exceeds_symbol_exposure()` 的 docstring
     symbol_ratio: float = config.single_symbol_exposure_ratio
     symbol_cap: float = init_capital * symbol_ratio
 

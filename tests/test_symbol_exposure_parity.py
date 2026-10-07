@@ -4,10 +4,10 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
-from core.execution.order_preprocess import exceeds_symbol_exposure
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, truncate_batch_by_exposure
 from core.models import StockOrder
+from core.portfolio.order_rules import exceeds_symbol_exposure
 from core.utils import Action, PositionType
 
 """

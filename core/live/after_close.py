@@ -7,7 +7,6 @@ from loguru import logger
 
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.execution import order_preprocess
 from core.live.account_sync import AccountSynchronizer
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.notify.base import BaseNotifier, NotifyLevel, notify_safely
@@ -18,6 +17,7 @@ from core.live.report.parity_checker import ParityChecker, ParityDiff
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.trading_mode import TradingModeState
 from core.models import RealizedTradeSnapshot
+from core.portfolio import order_rules
 from core.utils import Action, PositionType, Units
 
 """
@@ -463,14 +463,14 @@ class AfterCloseRunner:
         """
         這張委託是不是出場單
 
-        以持倉方向與買賣別推導，與 `order_preprocess.resolve_close_action()` 同一套
+        以持倉方向與買賣別推導，與 `order_rules.resolve_close_action()` 同一套
         規則——散在多處會漂移，而漂移的後果是開倉單被當成平倉單去補，
         那會憑空建出一個新部位。
         """
 
         position_type: PositionType = PositionType(str(order_row["position_type"]))
         return str(order_row["action"]) == (
-            order_preprocess.resolve_close_action(position_type).value
+            order_rules.resolve_close_action(position_type).value
         )
 
     def _notify(self, level: NotifyLevel, title: str, body: str) -> None:

@@ -22,8 +22,7 @@ graph TB
     end
 
     subgraph shared_layer ["Shared Contracts (one copy for both engines)"]
-        Portfolio["core/portfolio<br/>signal / sizing / construction<br/>aggregation (multi-strategy arbitration)"]
-        Execution["core/execution<br/>pre-submit: direction whitelist<br/>max holdings, exposure, ordering"]
+        Portfolio["core/portfolio<br/>signal / sizing / construction<br/>aggregation (multi-strategy arbitration)<br/>order_rules (direction whitelist, max holdings, exposure, ordering)"]
         DataFeedBase["core/datafeed<br/>BaseDataFeed contract"]
         Market["core/market<br/>calendars / contract roll / margin config<br/>instrument spec / cost model"]
         Managers["core/position<br/>positions & accounting"]
@@ -78,14 +77,13 @@ graph TB
     BacktestApp --> BTFactory
     LiveApp --> LiveFactory
     Strategies --> Portfolio
-    Portfolio --> Execution
     Portfolio --> Models
 
     BTFactory --> Backtester
     BTFactory --> BTModels
     BTFactory --> BTFeed
     Backtester --> Strategies
-    Backtester --> Execution
+    Backtester --> Portfolio
     Backtester --> BTModels
     Backtester --> BTFeed
     Backtester --> Managers
@@ -96,7 +94,7 @@ graph TB
     LiveFactory --> LiveFeed
     LiveFactory --> Broker
     Trader --> Strategies
-    Trader --> Execution
+    Trader --> Portfolio
     Trader --> LiveParts
     Trader --> LiveFeed
     Trader --> Managers
@@ -115,7 +113,6 @@ graph TB
     Managers --> Market
     BTFactory --> Market
     LiveFactory --> Market
-    Execution --> Models
 
     BTFeed --> API
     BTFeed --> Adapters
@@ -139,7 +136,7 @@ graph TB
 
 **Market-specific behavior is pushed down into pluggable models.** `Backtester` is market-agnostic with no subclasses; `InstrumentSpec`, `FillModel`, `CostModel`, `SettlementModel` and `DataFeed` are assembled by `core/backtest/factory.py` from the `market` + `instrument_type` a strategy declares, so adding a (market, instrument) combination never touches `backtester.py`. `core/live/factory.py` does the same job on the live side. `InstrumentSpec` and `CostModel` are market rules (tick size, price limits, fees) shared by both engines, so they live in `core/market/`; `FillModel` and `SettlementModel` are backtest simulation and stay in `core/backtest/models/`.
 
-**The shared-contract layer is the intersection of the two engines**: position construction (`core/portfolio/`), pre-submit processing (`core/execution/`), the data-feed contract (`core/datafeed/`), market structure (`core/market/`) and position accounting (`core/position/`) belong to neither engine; both import them. **Every shared rule is written once** — max holdings and single-symbol exposure, for instance, block the same orders in live as they do in backtest.
+**The shared-contract layer is the intersection of the two engines**: position construction (`core/portfolio/`), the data-feed contract (`core/datafeed/`), market structure (`core/market/`) and position accounting (`core/position/`) belong to neither engine; both import them. **Every shared rule is written once** — max holdings and single-symbol exposure, for instance, block the same orders in live as they do in backtest.
 
 See [Multi-Market Engine](docs/backtest/multi-market-engine.md) and [Module Map](docs/backtest/module-map.md).
 
@@ -179,8 +176,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `core/`         | Core trading domain code (strategies, position bookkeeping, models, adapters, API, data access layer, ETL, backtest engine; outputs land in the top-level `results/`) |
 | `core/live/`    | Live trading: per-phase lifecycle, order management (OMS), position attribution, reconciliation, risk control and after-close work |
 | `core/broker/`  | Broker integration (currently Shioaji): login, contract resolution, order mapping, report normalization and quote subscription |
-| `core/execution/` | Pre-submit processing shared by backtest and live: direction whitelist, max holdings, single-symbol exposure, deterministic ordering |
-| `core/portfolio/` | Position construction shared by backtest and live: signals, capital sizing, entry assembly, multi-strategy arbitration |
+| `core/portfolio/` | Position construction shared by backtest and live: signals, capital sizing, entry assembly, multi-strategy arbitration and order rules (direction whitelist, max holdings, single-symbol exposure, deterministic ordering) |
 | `core/datafeed/`  | The neutral `BaseDataFeed` contract; backtest and live each implement it, and it is the type of a strategy's `setup_apis(feed)` |
 | `core/market/`    | Market structure and rules (trading calendars, futures roll, margin config, `InstrumentSpec`, `CostModel`), owned by neither engine |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |

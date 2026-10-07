@@ -232,7 +232,7 @@ class StockCostModel:
 
 ### 3.5 方向中立機制
 
-前三個是**純函式，住在 `core/execution/order_preprocess.py`**（回測與實盤共用同一份）；
+前三個是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
 `Backtester` 以 `validate_orders()` 薄包裝呼叫，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
 
 ```python

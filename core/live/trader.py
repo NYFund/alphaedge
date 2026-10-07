@@ -9,7 +9,6 @@ from loguru import logger
 from core.broker.base import BaseBroker
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.execution import order_preprocess
 from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
 from core.live.after_close import AfterCloseRunner, TradeCostEstimator
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
@@ -52,6 +51,7 @@ from core.models import (
     OrderTicket,
     PendingAction,
 )
+from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -1129,7 +1129,7 @@ class LiveTrader:
         """依 `get_execution_order()` 決定開平倉先後，與回測一致"""
 
         strategy: BaseStrategy = context.strategy
-        execution_order: BarExecutionOrder = order_preprocess.get_execution_order(
+        execution_order: BarExecutionOrder = order_rules.get_execution_order(
             strategy.allow_day_trade
         )
 
@@ -1199,11 +1199,9 @@ class LiveTrader:
     ) -> List[BaseOrder]:
         """方向白名單 ＋ 持倉檔數上限 ＋ 決定性排序；與回測共用同一份實作"""
 
-        allowed = order_preprocess.get_allowed_directions(context.strategy.direction)
-        valid: List[BaseOrder] = order_preprocess.validate_orders(
-            orders, stage, allowed
-        )
-        sorted_orders: List[BaseOrder] = order_preprocess.sort_orders(valid)
+        allowed = order_rules.get_allowed_directions(context.strategy.direction)
+        valid: List[BaseOrder] = order_rules.validate_orders(orders, stage, allowed)
+        sorted_orders: List[BaseOrder] = order_rules.sort_orders(valid)
 
         # 只擋開倉，與回測一致（`Backtester` 也只在開倉分支呼叫）。
         # **排序之後才截斷**：先排序才知道超額時該留下哪幾張
@@ -1222,7 +1220,7 @@ class LiveTrader:
         都會放行——`max_holdings` 等於沒有設。
 
         已持有或已掛單的標的不佔新名額（加碼），豁免寫在共用的
-        `order_preprocess.check_max_holdings()`，與回測同一份。
+        `order_rules.check_max_holdings()`，與回測同一份。
         """
 
         if context.strategy.max_holdings is None:
@@ -1231,7 +1229,7 @@ class LiveTrader:
         occupied: Set[str] = self._occupied_symbols(context)
         kept: List[BaseOrder] = []
         for order in orders:
-            if not order_preprocess.check_max_holdings(
+            if not order_rules.check_max_holdings(
                 order, context.strategy.max_holdings, occupied
             ):
                 self._write_max_holdings_event(context, order)
@@ -1510,7 +1508,7 @@ class LiveTrader:
 
         if context.calculate_opening_requirement is None:
             return None
-        if order.action is order_preprocess.resolve_close_action(order.position_type):
+        if order.action is order_rules.resolve_close_action(order.position_type):
             return None
 
         try:
