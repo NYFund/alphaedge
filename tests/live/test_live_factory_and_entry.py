@@ -1,4 +1,5 @@
 import datetime
+import json
 import sqlite3
 import subprocess
 import sys
@@ -207,6 +208,22 @@ def test_run_record_carries_audit_fields(dao: LiveTradeDAO) -> None:
     assert row[0]  # 取不到時是 'unknown'，但不能是空的
     assert row[1]
     assert row[2] == 1
+
+
+def test_run_record_carries_the_loaded_strategies(dao: LiveTradeDAO) -> None:
+    """
+    啟動紀錄寫下本次載入的策略
+
+    parity 要知道某支策略當天的段落有沒有正常跑完，才分得出回測多出的開倉單
+    是快照口徑還是實盤根本沒跑到。
+    """
+
+    build([LiveStockStrategy(), AnotherLiveStockStrategy()], dao)
+
+    (raw,) = dao.conn.execute("SELECT strategy_params_json FROM live_run").fetchone()
+    assert json.loads(raw) == {
+        "strategies": ["LiveStockStrategy", "AnotherLiveStockStrategy"]
+    }
 
 
 def test_run_record_carries_the_phase(dao: LiveTradeDAO) -> None:

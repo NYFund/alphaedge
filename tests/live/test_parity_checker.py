@@ -18,6 +18,7 @@ from core.live.report.parity_checker import (
     ParityChecker,
     ParityDiff,
     compare,
+    segments_ran_cleanly,
 )
 from core.models import BaseOrder, StockOrder
 from core.utils import Action, LiveOrderStatus, PositionType
@@ -369,6 +370,80 @@ def test_loaded_strategy_without_orders_is_still_compared(
 
     assert [diff.category for diff in result["Alpha"]] == [CATEGORY_UNEXPLAINED]
     assert result["Alpha"][0].live_detail == "（實盤沒有送出這張單）"
+
+
+# === 回測多出的開倉單（反方向的快照口徑）===
+def clean_run(phase: str = "close", end_reason: str = "正常結束") -> Dict[str, Any]:
+    return {
+        "phase": phase,
+        "end_reason": end_reason,
+        "strategy_params_json": '{"strategies": ["Alpha"]}',
+    }
+
+
+def test_backtest_only_opening_is_a_snapshot_gap_when_the_day_ran_cleanly() -> None:
+    """
+    段落正常、無 CRITICAL 時，回測多出的開倉單歸快照口徑
+
+    收盤價觸發門檻、實盤決策時的快照沒觸發——與「實盤多出開倉單」同一個成因，
+    只是方向相反。2026-10-05 期貨就是這樣（回測買 TX202610 ×2、實盤沒送）。
+    """
+
+    diffs: List[ParityDiff] = compare([], [make_backtest_order()], [], (), True)
+
+    assert [diff.category for diff in diffs] == [CATEGORY_SNAPSHOT_GAP]
+    assert "段落正常結束" in diffs[0].note
+
+
+def test_backtest_only_opening_stays_unexplained_when_the_day_did_not_run_cleanly() -> (
+    None
+):
+    """段落中止或出過 CRITICAL 的日子，實盤沒送單可能是程式出事，不可歸成快照口徑"""
+
+    diffs: List[ParityDiff] = compare([], [make_backtest_order()], [], (), False)
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNEXPLAINED]
+
+
+def test_backtest_only_closing_is_never_a_snapshot_gap() -> None:
+    """平倉依據的是持倉不是門檻；回測多出平倉單不是口徑問題"""
+
+    closing: BaseOrder = make_backtest_order(action=Action.SELL)
+
+    diffs: List[ParityDiff] = compare([], [closing], [], (), True)
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNEXPLAINED]
+
+
+@pytest.mark.parametrize(
+    "runs, events, expected",
+    [
+        ([clean_run()], [], True),
+        ([], [], False),
+        ([clean_run(end_reason="例外中止：OrderStateError")], [], False),
+        ([clean_run(), clean_run("open", "對帳不一致")], [], False),
+        ([clean_run()], [{"severity": "CRITICAL"}], False),
+        ([clean_run()], [{"severity": "WARN"}], True),
+        # 盤後與補比不呼叫策略鉤子，它們正不正常與訊號無關
+        ([clean_run(), clean_run("after_close", "例外中止：X")], [], True),
+        # 2026-10-08 以前的紀錄沒有策略清單：判不出段落屬於誰，不算
+        ([{"phase": "close", "end_reason": "正常結束"}], [], False),
+    ],
+    ids=[
+        "clean",
+        "no-run",
+        "aborted",
+        "one-of-two-bad",
+        "critical-event",
+        "warn-event",
+        "after-close-ignored",
+        "legacy-row",
+    ],
+)
+def test_segments_ran_cleanly(
+    runs: List[Dict[str, Any]], events: List[Dict[str, Any]], expected: bool
+) -> None:
+    assert segments_ran_cleanly("Alpha", runs, events) is expected
 
 
 def test_recheck_replaces_the_previous_result(
