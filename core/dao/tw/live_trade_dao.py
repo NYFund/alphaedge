@@ -703,6 +703,38 @@ class LiveTradeDAO(BaseDAO):
             _to_live_params(volume, lot_id),
         )
 
+    def get_lots_held_at_start(
+        self, strategy_name: str, date: datetime.date
+    ) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            某策略在某交易日**開盤前**仍持有的 lot（依開倉時間排序）
+
+            條件：開倉日早於該日，且尚未平倉或在該日（含）之後才平倉。
+            給 parity 的當日回測當起始部位：從零部位跑的話，實盤當天的平倉單
+            在回測一定沒有對應，平倉日必定報未解釋差異。
+
+            **已知限制**：部分平倉直接扣減 `volume`、不留歷史，該日被部分平倉的 lot
+            會以平倉後的剩餘量計；全部平倉只標 `closed_at`、數量不變，不受影響。
+        - Parameters:
+            - strategy_name: str
+                策略名
+            - date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                lot 清單
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_POSITION_LOT_TABLE_NAME} "
+            "WHERE strategy_name = ? AND volume > 0 AND substr(open_date, 1, 10) < ? "
+            "AND (closed_at IS NULL OR substr(closed_at, 1, 10) >= ?) "
+            "ORDER BY open_date, lot_id",
+            _to_live_params(strategy_name, date, date),
+        ).fetchall()
+        return self._to_dicts(LIVE_POSITION_LOT_TABLE_NAME, rows)
+
     def get_open_lots(
         self, strategy_name: Optional[str] = None, symbol: Optional[str] = None
     ) -> List[Dict[str, Any]]:

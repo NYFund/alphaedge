@@ -320,3 +320,41 @@ def test_diff_catches_positions_missing_on_either_side(
             ),
         ]
     ) == {("2454", "LONG"): (0, 1)}
+
+
+# === 開盤前持倉（parity 當日回測的起始部位）===
+def test_lots_held_at_the_start_of_a_day(dao: LiveTradeDAO) -> None:
+    """
+    開盤前仍持有的 lot：開倉日早於該日，且未平倉或在該日（含）之後才平倉
+
+    當天才開的不算（那是當天的交易）；前一天就平掉的也不算；其他策略的不算。
+    """
+
+    day: datetime.date = datetime.date(2026, 10, 9)
+    rows: List[Tuple[str, str, str, Optional[str]]] = [
+        ("held", "Alpha", "2026-10-08", None),
+        ("closed-today", "Alpha", "2026-10-08", "2026-10-09T13:30:00+08:00"),
+        ("closed-before", "Alpha", "2026-10-07", "2026-10-08T13:30:00+08:00"),
+        ("opened-today", "Alpha", "2026-10-09", None),
+        ("other-strategy", "Beta", "2026-10-08", None),
+    ]
+    for lot_id, strategy, open_date, closed_at in rows:
+        dao.open_lot(
+            {
+                "lot_id": lot_id,
+                "strategy_name": strategy,
+                "symbol": "2330",
+                "direction": "LONG",
+                "volume": 1,
+                "open_date": open_date,
+                "open_price": 100.0,
+                "client_order_id": None,
+                "closed_at": closed_at,
+            }
+        )
+
+    held: List[str] = [
+        str(lot["lot_id"]) for lot in dao.get_lots_held_at_start("Alpha", day)
+    ]
+
+    assert held == ["closed-today", "held"]

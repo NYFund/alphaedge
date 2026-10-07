@@ -63,6 +63,7 @@ from core.models import (
     StockPositionSnapshot,
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
+from core.portfolio.order_rules import resolve_open_action
 from core.position.base.position_manager import BasePositionManager
 from core.position.futures.position_manager import FuturesPositionManager
 from core.position.stock.position_manager import StockPositionManager
@@ -477,7 +478,7 @@ def build_live_trader(
     )
     parity_checker: ParityChecker = ParityChecker(
         resolved_dao,
-        make_daily_backtest_runner(strategies),
+        make_daily_backtest_runner(strategies, resolved_dao.get_lots_held_at_start),
         strategy_names=[type(strategy).__name__ for strategy in strategies],
     )
     _record_run(
@@ -814,6 +815,7 @@ def _make_opening_requirement(
 
 def make_daily_backtest_runner(
     strategies: Sequence[BaseStrategy],
+    held_lots: Optional[Callable[[str, datetime.date], List[Dict[str, Any]]]] = None,
 ) -> Callable[[str, datetime.date], List[BaseOrder]]:
     """
     - Description:
@@ -835,6 +837,16 @@ def make_daily_backtest_runner(
     - Parameters:
         - strategies: Sequence[BaseStrategy]
             本次實盤載入的策略實例；只用來取類別與 `init_capital`
+        **起始部位＝實盤當天開盤前的持倉**（`held_lots`）：從零部位跑的話，回測帳上
+        沒有前一天留下的部位，實盤當天的平倉單在回測一定沒有對應，平倉日必定報
+        未解釋差異——開倉→次日平倉這組驗收永遠過不了。順帶的效果是：開倉沒成交
+        而被放棄的單，實盤沒有部位、回測也從沒有部位出發，次日不會多出平倉單。
+    - Parameters:
+        - strategies: Sequence[BaseStrategy]
+            本次實盤載入的策略實例；只用來取類別與 `init_capital`
+        - held_lots: Optional[Callable[[str, datetime.date], List[Dict[str, Any]]]]
+            `(策略名, 交易日) → 開盤前持有的 lot`（`LiveTradeDAO.get_lots_held_at_start()`）；
+            None 時從零部位跑
     - Return:
         - Callable[[str, datetime.date], List[BaseOrder]]
             `(策略名, 交易日) → 該日回測會送出的委託清單`
@@ -861,10 +873,42 @@ def make_daily_backtest_runner(
                 start=run_date, end=run_date, capital=live_capital(replica)
             ),
         )
+        if held_lots is not None:
+            _seed_positions(backtester, replica, held_lots(strategy_name, run_date))
         backtester.run()
         return [order for _, _, order in backtester.submitted_orders]
 
     return run
+
+
+def _seed_positions(
+    backtester: Backtester, strategy: BaseStrategy, lots: Sequence[Dict[str, Any]]
+) -> None:
+    """
+    把實盤開盤前的持倉放進回測帳戶
+
+    **走開倉的正常路徑**（補值放空管道 → `open_position()`）：直接塞部位物件會略過
+    成本與保證金的扣帳，回測帳上的可用資金就比實盤多，開倉張數跟著不同。
+    訂單型別依市場決定，與帳戶同步共用同一組建構器。
+    """
+
+    builder: FilledOrderBuilder = (
+        _build_futures_order
+        if strategy.instrument_type == InstrumentType.FUTURE
+        else build_stock_order
+    )
+    for lot in lots:
+        position_type: PositionType = PositionType(str(lot["direction"]))
+        order: BaseOrder = builder(
+            str(lot["symbol"]),
+            datetime.date.fromisoformat(str(lot["open_date"])[:10]),
+            resolve_open_action(position_type),
+            position_type,
+            float(lot["open_price"]),
+            int(lot["volume"]),
+        )
+        for enriched in backtester.enrich_orders([order]):
+            backtester.position_manager.open_position(enriched)
 
 
 def _build_futures_order(
