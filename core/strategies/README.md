@@ -95,7 +95,8 @@ core/strategies/
 │   ├── base.py                    # BaseStockStrategy（設定 self.market ＋ self.instrument_type）
 │   ├── momentum_strategy_1.py     # 動能策略 1（日線，LONG 回歸 baseline 的唯一來源）
 │   ├── foreign_selling_reversal_short_strategy.py  # 外資大賣強勢股當沖放空（日線，SHORT）
-│   └── investment_trust_momentum_swing_strategy.py  # 投信認同的強勢股短波段（日線，LONG）
+│   ├── investment_trust_momentum_swing_strategy.py  # 投信認同的強勢股短波段（日線，LONG）
+│   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；目前只有日 K 近似）
 └── futures/                       # 期貨策略
     ├── base.py                    # BaseFuturesStrategy
     └── momentum_futures_strategy.py
