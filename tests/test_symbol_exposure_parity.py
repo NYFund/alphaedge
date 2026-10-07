@@ -104,7 +104,7 @@ def test_live_truncation_agrees_with_the_shared_formula() -> None:
             [ExposureItem(make_order(), amount)],
             existing_exposure=0.0,
             existing_symbol_exposure={},
-            init_capital=INIT_CAPITAL,
+            capital_limit=INIT_CAPITAL,
             config=config,
         )
         was_truncated: bool = bool(truncated)
@@ -130,7 +130,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
         existing_exposure=0.0,
         # 這一檔已經佔掉六成的額度，只剩四成，放不下這張半額度的單
         existing_symbol_exposure={"2330": cap * 0.6},
-        init_capital=INIT_CAPITAL,
+        capital_limit=INIT_CAPITAL,
         config=config,
     )
 

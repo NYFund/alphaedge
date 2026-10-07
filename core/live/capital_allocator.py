@@ -46,7 +46,7 @@ class CapitalAllocator:
             建立分配器
         - Parameters:
             - quotas: Dict[str, float]
-                各策略的額度上限（`init_capital`）
+                各策略的額度上限（`live_capital`；未宣告時為 `init_capital`）
             - dao: Optional[LiveTradeDAO]
                 紀錄庫；額度不足的拒單寫進 `live_risk_event`
             - run_id: str

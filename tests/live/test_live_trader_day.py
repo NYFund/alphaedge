@@ -200,7 +200,12 @@ class Harness:
         latest_data_date: Optional[datetime.date] = None,
         quota: Optional[float] = None,
         price_limits: Tuple[Optional[float], Optional[float]] = (110.0, 90.0),
+        live_capital: Optional[float] = None,
+        risk_config: Optional[RiskConfig] = None,
     ) -> None:
+        # 實盤額度：與組裝層一致，帳戶與額度分配用同一個值（未指定時等於研究本金）
+        capital: float = live_capital if live_capital is not None else CAPITAL
+
         self.dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
         self.dao.ensure_tables()
 
@@ -220,7 +225,7 @@ class Harness:
         )
         self.risk: PreTradeRiskManager = PreTradeRiskManager(
             self.mode_state,
-            RiskConfig(),
+            risk_config or RiskConfig(),
             self.dao,
             "run1",
             kill_switch_path=_MissingPath(),
@@ -228,7 +233,7 @@ class Harness:
         )
         self.allocator: CapitalAllocator = CapitalAllocator(
             {
-                type(s).__name__: quota if quota is not None else CAPITAL
+                type(s).__name__: quota if quota is not None else capital
                 for s in strategies
             },
             self.dao,
@@ -242,7 +247,7 @@ class Harness:
         managers: Dict[str, StockPositionManager] = {}
         self.contexts: List[StrategyContext] = []
         for strategy in strategies:
-            account: StockAccount = StockAccount(init_capital=CAPITAL)
+            account: StockAccount = StockAccount(init_capital=capital)
             manager: StockPositionManager = StockPositionManager(account)
             managers[type(strategy).__name__] = manager
             self.contexts.append(
@@ -548,6 +553,48 @@ def test_risk_rejection_releases_the_reservation() -> None:
 
     assert harness.broker.placed_count == 0
     assert harness.allocator.reserved["Alpha"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "risk_config",
+    [
+        # 只有批次曝險（單一標的 25%）擋得住，逐筆單筆上限 40% 放行
+        RiskConfig(single_order_amount_ratio=0.40, single_symbol_exposure_ratio=0.25),
+        # 只有逐筆單筆上限（25%）擋得住，批次的單一標的上限 40% 放行
+        RiskConfig(single_order_amount_ratio=0.25, single_symbol_exposure_ratio=0.40),
+    ],
+    ids=["batch_exposure", "single_order"],
+)
+@pytest.mark.parametrize(
+    ("live_capital", "placed"),
+    [
+        # 30 萬的單：以實盤額度 100 萬計是 30%，兩組設定都恰好只有一道擋得住
+        (1_000_000.0, 0),
+        # 對照組：實盤額度等於研究本金 1,000 萬時只佔 3%，照常送出
+        (None, 1),
+    ],
+)
+def test_risk_limits_use_live_capital(
+    risk_config: RiskConfig, live_capital: Optional[float], placed: int
+) -> None:
+    """
+    批次曝險與逐筆檢查都以實盤額度為基準，不是研究回測的 `init_capital`
+
+    策略宣告較小的 `live_capital` 時，若仍拿 `init_capital` 當基準，
+    每道上限都會照較大的本金放寬（曾經寬了 2.5 倍）。兩組設定各讓一道上限
+    單獨負責擋單，任一處退回舊基準都會讓那一組的單送出去。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order(volume=3)])
+
+    harness: Harness = Harness(
+        [Alpha()], live_capital=live_capital, risk_config=risk_config
+    )
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == placed
 
 
 def test_kill_switch_blocks_the_whole_segment() -> None:

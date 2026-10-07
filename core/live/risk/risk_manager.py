@@ -68,7 +68,7 @@ class ExposureItem:
 
 # === 純判定：只要「訂單 ＋ 帳戶快照 ＋ 設定」就算得出過或不過 ===
 def check_single_order_amount(
-    amount: float, init_capital: float, config: RiskConfig
+    amount: float, capital_limit: float, config: RiskConfig
 ) -> RiskDecision:
     """
     - Description:
@@ -76,8 +76,8 @@ def check_single_order_amount(
     - Parameters:
         - amount: float
             本筆委託金額（股票：價 × 股數；期貨：保證金 × 口數）
-        - init_capital: float
-            該策略的資金額度上限
+        - capital_limit: float
+            該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
         - config: RiskConfig
             風控設定
     - Return:
@@ -85,18 +85,18 @@ def check_single_order_amount(
             判定結果
     """
 
-    cap: float = init_capital * config.single_order_amount_ratio
+    cap: float = capital_limit * config.single_order_amount_ratio
     if amount > cap:
         return RiskDecision.reject(
             "SINGLE_ORDER_AMOUNT",
             f"單筆委託金額 {amount:,.0f} 超過上限 {cap:,.0f}"
-            f"（額度 {init_capital:,.0f} 的 {config.single_order_amount_ratio:.0%}）",
+            f"（額度 {capital_limit:,.0f} 的 {config.single_order_amount_ratio:.0%}）",
         )
     return RiskDecision.ok()
 
 
 def check_daily_amount(
-    used_amount: float, amount: float, init_capital: float, config: RiskConfig
+    used_amount: float, amount: float, capital_limit: float, config: RiskConfig
 ) -> RiskDecision:
     """
     - Description:
@@ -110,8 +110,8 @@ def check_daily_amount(
             今日已送出的累計委託金額
         - amount: float
             本筆委託金額
-        - init_capital: float
-            該策略的資金額度上限
+        - capital_limit: float
+            該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
         - config: RiskConfig
             風控設定
     - Return:
@@ -119,7 +119,7 @@ def check_daily_amount(
             判定結果
     """
 
-    cap: float = init_capital * config.daily_amount_ratio
+    cap: float = capital_limit * config.daily_amount_ratio
     if used_amount + amount > cap:
         return RiskDecision.reject(
             "DAILY_AMOUNT",
@@ -224,7 +224,7 @@ def truncate_batch_by_exposure(
     items: Sequence[ExposureItem],
     existing_exposure: float,
     existing_symbol_exposure: Dict[str, float],
-    init_capital: float,
+    capital_limit: float,
     config: RiskConfig,
 ) -> Tuple[List[ExposureItem], List[Tuple[ExposureItem, str]]]:
     """
@@ -242,8 +242,8 @@ def truncate_batch_by_exposure(
             送出前的既有曝險（持倉市值 ＋ 在途委託）
         - existing_symbol_exposure: Dict[str, float]
             各標的的既有曝險
-        - init_capital: float
-            該策略的資金額度上限
+        - capital_limit: float
+            該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
         - config: RiskConfig
             風控設定
     - Return:
@@ -251,11 +251,11 @@ def truncate_batch_by_exposure(
             （放行清單, [(被截斷的單, 原因)]）
     """
 
-    total_cap: float = init_capital * config.total_exposure_ratio
+    total_cap: float = capital_limit * config.total_exposure_ratio
     # 單一標的上限的公式與回測共用；差異（預設值、適用方向、超限行為）
     # 寫在 `order_rules.exceeds_symbol_exposure()` 的 docstring
     symbol_ratio: float = config.single_symbol_exposure_ratio
-    symbol_cap: float = init_capital * symbol_ratio
+    symbol_cap: float = capital_limit * symbol_ratio
 
     allowed: List[ExposureItem] = []
     truncated: List[Tuple[ExposureItem, str]] = []
@@ -277,7 +277,7 @@ def truncate_batch_by_exposure(
             )
             continue
         if exceeds_symbol_exposure(
-            per_symbol.get(symbol, 0.0) + item.amount, init_capital, symbol_ratio
+            per_symbol.get(symbol, 0.0) + item.amount, capital_limit, symbol_ratio
         ):
             truncated.append(
                 (
@@ -375,7 +375,7 @@ class PreTradeRiskManager:
         self,
         order: BaseOrder,
         strategy_name: str,
-        init_capital: float,
+        capital_limit: float,
         amount: float,
         reference_price: float = 0.0,
         limit_up: Optional[float] = None,
@@ -393,8 +393,8 @@ class PreTradeRiskManager:
                 待送出的訂單
             - strategy_name: str
                 歸屬策略
-            - init_capital: float
-                該策略的資金額度上限
+            - capital_limit: float
+                該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
             - amount: float
                 本筆委託金額
             - reference_price: float
@@ -415,7 +415,7 @@ class PreTradeRiskManager:
             decision = self._check_limits(
                 order,
                 strategy_name,
-                init_capital,
+                capital_limit,
                 amount,
                 reference_price,
                 limit_up,
@@ -456,7 +456,7 @@ class PreTradeRiskManager:
         self,
         order: BaseOrder,
         strategy_name: str,
-        init_capital: float,
+        capital_limit: float,
         amount: float,
         reference_price: float,
         limit_up: Optional[float],
@@ -466,11 +466,11 @@ class PreTradeRiskManager:
         """金額、數量、價格與頻率"""
 
         for decision in (
-            check_single_order_amount(amount, init_capital, self.config),
+            check_single_order_amount(amount, capital_limit, self.config),
             check_daily_amount(
                 self.daily_amount.get(strategy_name, 0.0),
                 amount,
-                init_capital,
+                capital_limit,
                 self.config,
             ),
             check_volume_cap(order.volume, is_futures, self.config),
@@ -527,7 +527,7 @@ class PreTradeRiskManager:
         self,
         items: Sequence[ExposureItem],
         strategy_name: str,
-        init_capital: float,
+        capital_limit: float,
         existing_exposure: float = 0.0,
         existing_symbol_exposure: Optional[Dict[str, float]] = None,
     ) -> List[ExposureItem]:
@@ -541,8 +541,8 @@ class PreTradeRiskManager:
                 本批委託（順序即優先順序）
             - strategy_name: str
                 歸屬策略
-            - init_capital: float
-                該策略的資金額度上限
+            - capital_limit: float
+                該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
             - existing_exposure: float
                 送出前的既有曝險
             - existing_symbol_exposure: Optional[Dict[str, float]]
@@ -556,7 +556,7 @@ class PreTradeRiskManager:
             items,
             existing_exposure,
             existing_symbol_exposure or {},
-            init_capital,
+            capital_limit,
             self.config,
         )
         for item, reason in truncated:
@@ -569,7 +569,7 @@ class PreTradeRiskManager:
 
     # === 損益與降級 ===
     def check_daily_loss(
-        self, strategy_name: str, loss: float, init_capital: float
+        self, strategy_name: str, loss: float, capital_limit: float
     ) -> bool:
         """
         - Description:
@@ -583,14 +583,14 @@ class PreTradeRiskManager:
                 策略名
             - loss: float
                 虧損金額（正數表示虧損）
-            - init_capital: float
-                該策略的資金額度上限
+            - capital_limit: float
+                該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
         - Return:
             - bool
                 是否觸發降級
         """
 
-        cap: float = init_capital * self.config.daily_loss_ratio
+        cap: float = capital_limit * self.config.daily_loss_ratio
         if loss <= cap:
             return False
 

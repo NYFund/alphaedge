@@ -120,6 +120,20 @@ class StrategyContext:
 
         return type(self.strategy).__name__
 
+    @property
+    def capital_limit(self) -> float:
+        """
+        - Description:
+            本策略的實盤資金額度，風控各道上限的基準
+
+            取帳戶的初始資金：實盤帳戶由組裝層以 `live_capital` 建立，
+            與資金額度分配同一個值。**不可用 `strategy.init_capital`**——
+            那是研究回測的本金，宣告了較小 `live_capital` 的策略會讓每道上限
+            照較大的本金放寬。
+        """
+
+        return float(self.account.init_capital)
+
     def notional(self, order: BaseOrder) -> float:
         """本張委託的金額；未注入換算器時退回「價 × 量」"""
 
@@ -1326,7 +1340,7 @@ class LiveTrader:
                 continue
 
             allowed: List[ExposureItem] = self.risk_manager.check_batch(
-                items, context.name, context.strategy.init_capital
+                items, context.name, context.capital_limit
             )
             kept.extend((context, item.order) for item in allowed)
         return kept
@@ -1409,7 +1423,7 @@ class LiveTrader:
             decision: RiskDecision = self.risk_manager.check(
                 order,
                 context.name,
-                context.strategy.init_capital,
+                context.capital_limit,
                 amount,
                 reference_price=self._reference_price(order),
                 limit_up=limits[0],
@@ -2165,7 +2179,7 @@ class LiveTrader:
 
         for context in self.contexts:
             self.risk_manager.check_daily_loss(
-                context.name, self._strategy_loss(context), context.account.init_capital
+                context.name, self._strategy_loss(context), context.capital_limit
             )
 
         account_loss: Optional[float] = self._account_loss()
