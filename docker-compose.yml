@@ -2,7 +2,7 @@ services:
   core:
     build:
       context: .
-      dockerfile: core/Dockerfile
+      dockerfile: Dockerfile
     container_name: alphaedge-core
     # 映像的 ENTRYPOINT 就是回測入口（`python -m apps.backtest`），這裡只給參數。
     # **不要在這裡設 STRATEGY**：下方 `command` 的 `${STRATEGY:-...}` 是
@@ -27,14 +27,14 @@ services:
     profiles: ["live"]
     build:
       context: .
-      dockerfile: core/Dockerfile
+      dockerfile: Dockerfile
     # 實盤入口寫死在 entrypoint：`run` 後面接的參數會整個取代 `command`，
     # 入口若放在 command，漏寫一次就變成映像預設的回測入口
     entrypoint: ["python", "-m", "apps.live"]
     # 金鑰（API_KEY、SHIOAJI_CA_PASSWORD、通知 token）只從 `.env` 讀，不進映像
     env_file: .env
     environment:
-      # 與 core/Dockerfile 相同；排程與容器兩邊都要是台北時間
+      # 與根目錄的 Dockerfile 相同；排程與容器兩邊都要是台北時間
       TZ: Asia/Taipei
       # 覆寫 `.env` 裡的主機路徑：憑證在容器內一律掛在 /ca
       SHIOAJI_CA_PATH: /ca/${SHIOAJI_CA_FILE:-Sinopac.pfx}

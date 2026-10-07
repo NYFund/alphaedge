@@ -323,7 +323,7 @@ docker compose down
 **步驟 1：建立映像**
 
 ```bash
-docker build -f core/Dockerfile -t alphaedge-core .
+docker build -t alphaedge-core .
 docker build -f frontend/Dockerfile -t alphaedge-frontend .
 ```
 
@@ -524,6 +524,7 @@ AlphaEdge/
 │   ├── check_overnight_positions.py  # 模擬環境是否保留隔夜部位（唯讀分析）
 │   ├── launchd/               # macOS 排程設定（逐段落啟動）
 │   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
+├── Dockerfile                 # 後端映像（core、apps、tasks、strategies；回測、資料更新與實盤共用）
 ├── docker-compose.yml         # compose：core ＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ 共用 results volume
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）
