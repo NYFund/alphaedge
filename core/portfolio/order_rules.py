@@ -181,6 +181,28 @@ def check_max_holdings(
     return False
 
 
+def symbol_exposure_cap(init_capital: float, ratio: Optional[float]) -> Optional[float]:
+    """
+    - Description:
+        單一標的曝險的金額上限；`ratio` 為 `None` 表示不限制
+
+        **「本金 × 比例」只在這裡算**：單筆判定（`exceeds_symbol_exposure()`）與
+        實盤批次截斷（跟累計值比、要印出上限）都從這裡取，兩邊不會各算一份而漂移。
+    - Parameters:
+        - init_capital: float
+            本金（回測是帳戶初始資金，實盤是該策略的額度上限）
+        - ratio: Optional[float]
+            上限比例；`None` 表示不限制
+    - Return:
+        - Optional[float]
+            金額上限；不限制時為 None
+    """
+
+    if ratio is None:
+        return None
+    return init_capital * ratio
+
+
 def exceeds_symbol_exposure(
     position_value: float, init_capital: float, ratio: Optional[float]
 ) -> bool:
@@ -220,9 +242,10 @@ def exceeds_symbol_exposure(
             超過上限為 True
     """
 
-    if ratio is None:
+    cap: Optional[float] = symbol_exposure_cap(init_capital, ratio)
+    if cap is None:
         return False
-    return position_value > init_capital * ratio
+    return position_value > cap
 
 
 def sort_orders(orders: List[BaseOrder]) -> List[BaseOrder]:

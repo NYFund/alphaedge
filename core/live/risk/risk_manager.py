@@ -14,7 +14,7 @@ from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import BaseOrder
-from core.portfolio.order_rules import exceeds_symbol_exposure
+from core.portfolio.order_rules import exceeds_symbol_exposure, symbol_exposure_cap
 from core.utils import Action, PositionType
 
 """
@@ -252,10 +252,10 @@ def truncate_batch_by_exposure(
     """
 
     total_cap: float = capital_limit * config.total_exposure_ratio
-    # 單一標的上限的公式與回測共用；差異（預設值、適用方向、超限行為）
-    # 寫在 `order_rules.exceeds_symbol_exposure()` 的 docstring
+    # 單一標的上限的公式與回測共用（判定與上限金額都由 `order_rules` 算）；
+    # 差異（預設值、適用方向、超限行為）寫在 `exceeds_symbol_exposure()` 的 docstring
     symbol_ratio: float = config.single_symbol_exposure_ratio
-    symbol_cap: float = capital_limit * symbol_ratio
+    symbol_cap: Optional[float] = symbol_exposure_cap(capital_limit, symbol_ratio)
 
     allowed: List[ExposureItem] = []
     truncated: List[Tuple[ExposureItem, str]] = []
