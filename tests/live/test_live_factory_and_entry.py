@@ -20,7 +20,15 @@ from core.live.factory import (
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
 from core.strategies.base import BaseStrategy
-from core.utils import ExecutionStyle, ExecutionTiming, InstrumentType, LiveHook, Market
+from core.utils import (
+    Action,
+    ExecutionStyle,
+    ExecutionTiming,
+    InstrumentType,
+    LiveHook,
+    Market,
+    PositionType,
+)
 
 from .conftest import FakeBroker
 
@@ -313,6 +321,66 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     runner("Sized", datetime.date(2026, 10, 6))
 
     assert captured == {"max_holdings": 3, "capital": 400_000.0}
+
+
+def test_parity_backtest_starts_from_the_live_holdings(
+    dao: LiveTradeDAO, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    parity 的當日回測從實盤開盤前的持倉出發
+
+    從零部位跑的話，實盤當天的平倉單在回測沒有對應，平倉日必定報未解釋差異——
+    開倉→次日平倉這組驗收永遠過不了。這條走 factory 組出來的真正比對器。
+    """
+
+    import core.live.factory as live_factory
+
+    seeded: List[Any] = []
+
+    class StubPositionManager:
+        def open_position(self, order: Any) -> None:
+            seeded.append(order)
+
+    class StubBacktester:
+        submitted_orders: List[Any] = []
+        position_manager: StubPositionManager = StubPositionManager()
+
+        def enrich_orders(self, orders: List[Any]) -> List[Any]:
+            return orders
+
+        def run(self) -> None:
+            # 部位必須在回測開始前就在帳上
+            assert len(seeded) == 1
+
+    monkeypatch.setattr(
+        live_factory, "build_backtester", lambda *args, **kwargs: StubBacktester()
+    )
+    trader: LiveTrader = build([LiveStockStrategy()], dao)
+    dao.open_lot(
+        {
+            "lot_id": "L1",
+            "strategy_name": "LiveStockStrategy",
+            "symbol": "2330",
+            "direction": "LONG",
+            "volume": 2,
+            "open_date": "2026-10-08",
+            "open_price": 1000.0,
+            "client_order_id": None,
+        }
+    )
+
+    trader.after_close.parity_checker.run_backtest(
+        "LiveStockStrategy", datetime.date(2026, 10, 9)
+    )
+
+    (order,) = seeded
+    assert (order.symbol, order.action, order.position_type, order.volume) == (
+        "2330",
+        Action.BUY,
+        PositionType.LONG,
+        2,
+    )
+    assert (order.date, order.price) == (datetime.date(2026, 10, 8), 1000.0)
 
 
 # === 段落時窗 ===
