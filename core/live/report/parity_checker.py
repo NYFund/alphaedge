@@ -76,6 +76,20 @@ CATEGORY_CROSS_STRATEGY_BLOCKED: str = "CROSS_STRATEGY_BLOCKED"
 CATEGORY_CAPITAL_EXHAUSTED: str = "CAPITAL_EXHAUSTED"
 CATEGORY_UNEXPLAINED: str = "UNEXPLAINED"
 
+# 兩邊數量相同、實盤卻送單失敗（`FAILED`）或被券商拒單（`REJECTED`）。
+# 策略做了與回測相同的決定，是執行沒做到；不歸這一類的話，2026-10-06 三張在
+# 轉換層就失敗的單，parity 會判成「完全一致」
+CATEGORY_SEND_FAILED: str = "SEND_FAILED"
+
+# 類別 → 組別。parity 要回答的是三個不同的問題，處理方式完全不同：
+# - 訊號差異：策略在實盤做了不同的決定，要查策略或資料。
+# - 制度性差異：已知的口徑或風控造成，不是錯。
+# - 執行差異：決定相同、執行沒做到，是執行成本。
+# **只寫在這裡、不存進紀錄庫**：組別由類別推得出來，另存一份只會多一個可能對不上的地方
+GROUP_SIGNAL: str = "訊號差異"
+GROUP_STRUCTURAL: str = "制度性差異"
+GROUP_EXECUTION: str = "執行差異"
+
 # 風控與守門寫進 `live_risk_event` 的類別 → parity 類別。
 # **以事件為準而不是猜**：哪一張單被誰擋下來，當下就已經寫進紀錄庫了
 RISK_EVENT_TO_CATEGORY: Dict[str, str] = {
@@ -87,6 +101,42 @@ RISK_EVENT_TO_CATEGORY: Dict[str, str] = {
     "ACCOUNT_DAILY_LOSS": CATEGORY_RISK_REJECTED,
     "DEGRADE": CATEGORY_RISK_REJECTED,
 }
+
+CATEGORY_GROUP: Dict[str, str] = {
+    CATEGORY_UNEXPLAINED: GROUP_SIGNAL,
+    CATEGORY_TIMING: GROUP_SIGNAL,
+    CATEGORY_SNAPSHOT_GAP: GROUP_STRUCTURAL,
+    CATEGORY_RISK_REJECTED: GROUP_STRUCTURAL,
+    CATEGORY_CROSS_STRATEGY_BLOCKED: GROUP_STRUCTURAL,
+    CATEGORY_CAPITAL_EXHAUSTED: GROUP_STRUCTURAL,
+    CATEGORY_UNFILLED: GROUP_EXECUTION,
+    CATEGORY_LIMIT_UNFILLED: GROUP_EXECUTION,
+    CATEGORY_LOCKED_AT_LIMIT: GROUP_EXECUTION,
+    CATEGORY_SEND_FAILED: GROUP_EXECUTION,
+}
+
+
+def count_by_group(diffs: Sequence["ParityDiff"]) -> Dict[str, int]:
+    """
+    - Description:
+        依組別計數；三組一律出現（沒有差異的組別為 0），認不得的類別歸訊號差異
+
+        認不得的類別歸訊號差異而不是丟掉：新增類別卻忘了登記組別時，
+        寧可讓它出現在最需要人看的那一組。
+    - Parameters:
+        - diffs: Sequence[ParityDiff]
+            差異清單
+    - Return:
+        - Dict[str, int]
+            `{組別: 筆數}`
+    """
+
+    counts: Dict[str, int] = {GROUP_SIGNAL: 0, GROUP_STRUCTURAL: 0, GROUP_EXECUTION: 0}
+    for diff in diffs:
+        group: str = CATEGORY_GROUP.get(diff.category, GROUP_SIGNAL)
+        counts[group] += 1
+    return counts
+
 
 PARITY_COLUMNS: List[str] = [
     "seq",
@@ -237,6 +287,10 @@ class ParityChecker:
             )
             result[name] = diffs
             self._persist(name, run_date, diffs)
+            summary: str = "／".join(
+                f"{group} {count}" for group, count in count_by_group(diffs).items()
+            )
+            logger.info(f"[Parity] {name} {run_date}：{summary}")
 
         return result
 
@@ -583,11 +637,16 @@ def _compare_volume(
     )
 
 
-# 送出後沒有（完全）成交的狀態。被拒、送單失敗不在內——那是風控或券商的事，
-# 由 `_compare_volume()` 與風控事件歸因。
+# 送出後沒有（完全）成交的狀態。被拒、送單失敗不在內——它們另歸 `SEND_FAILED`
+# （見上方 `_SEND_FAILED_STATUSES`），數量不同時由 `_compare_volume()` 歸因。
 # **`PENDING_SUBMIT` 也算**：盤後比對時它應該早已被日終標記成已撤，還留著代表
 # 狀態沒跟上券商，但這張單一定沒有成交。不算進來的話，兩邊數量相同就判成
 # 「沒有差異」——2026-10-07 三張被撤掉的單就會這樣在報表上消失
+_SEND_FAILED_STATUSES: Set[str] = {
+    LiveOrderStatus.FAILED.value,
+    LiveOrderStatus.REJECTED.value,
+}
+
 _UNFILLED_STATUSES: Set[str] = {
     LiveOrderStatus.PENDING_SUBMIT.value,
     LiveOrderStatus.SUBMITTED.value,
@@ -604,11 +663,30 @@ def _compare_fill(
     bt_orders: Sequence[BaseOrder],
 ) -> Optional[ParityDiff]:
     """
-    兩邊數量相同時，比實盤有沒有成交；回測那邊一律視為成交
+    兩邊數量相同時，比實盤有沒有送出、有沒有成交；回測那邊一律視為成交
+
+    **送單失敗優先**：委託沒到券商（`FAILED`）或被券商拒單（`REJECTED`），
+    就談不上成交與否，歸 `SEND_FAILED`。
 
     多張同鍵委託只要有一張沒成交就算一筆差異，類別取第一張沒成交的委託：
     同一支策略同一個標的同一方向，一天之內的執行方式不會不同。
     """
+
+    failed: List[Dict[str, Any]] = [
+        row for row in live_rows if str(row.get("status")) in _SEND_FAILED_STATUSES
+    ]
+    if failed:
+        return _make_diff(
+            seq,
+            symbol,
+            side,
+            CATEGORY_SEND_FAILED,
+            "；".join(summarize_row(row) for row in live_rows),
+            "；".join(summarize(order) for order in bt_orders),
+            note="；".join(
+                str(row.get("reject_reason") or row.get("status")) for row in failed
+            ),
+        )
 
     unfilled: List[Dict[str, Any]] = [
         row

@@ -9,15 +9,21 @@ from core.live.after_close import AfterCloseRunner
 from core.live.report.parity_checker import (
     CATEGORY_CAPITAL_EXHAUSTED,
     CATEGORY_CROSS_STRATEGY_BLOCKED,
+    CATEGORY_GROUP,
     CATEGORY_LIMIT_UNFILLED,
     CATEGORY_LOCKED_AT_LIMIT,
     CATEGORY_RISK_REJECTED,
+    CATEGORY_SEND_FAILED,
     CATEGORY_SNAPSHOT_GAP,
     CATEGORY_UNEXPLAINED,
     CATEGORY_UNFILLED,
+    GROUP_EXECUTION,
+    GROUP_SIGNAL,
+    GROUP_STRUCTURAL,
     ParityChecker,
     ParityDiff,
     compare,
+    count_by_group,
     segments_ran_cleanly,
 )
 from core.models import BaseOrder, StockOrder
@@ -338,15 +344,71 @@ def test_order_stuck_in_pending_submit_is_not_reported_as_clean() -> None:
     assert [diff.category for diff in diffs] == [CATEGORY_LOCKED_AT_LIMIT]
 
 
-@pytest.mark.parametrize("status", ["FILLED", "REJECTED", "FAILED"])
-def test_filled_or_rejected_orders_are_not_execution_diffs(status: str) -> None:
-    """成交了沒有差異；被拒或送單失敗不是市場沒成交，由其他類別歸因"""
+def test_filled_order_is_not_a_diff() -> None:
+    """成交了就沒有差異"""
 
-    row: Dict[str, Any] = unfilled_order(
-        "MARKET", "ROD", status=status, filled_volume=2 if status == "FILLED" else 0
-    )
+    row: Dict[str, Any] = unfilled_order("MARKET", "ROD", "FILLED", filled_volume=2)
 
     assert compare([row], [make_backtest_order()], []) == []
+
+
+@pytest.mark.parametrize("status", ["REJECTED", "FAILED"])
+def test_send_failure_with_the_same_volume_is_an_execution_diff(status: str) -> None:
+    """
+    數量與回測相同、但送單失敗或被拒：策略決定相同，是執行沒做到
+
+    2026-10-06 三張單在轉換層就失敗，補比卻判成「完全一致」。
+    """
+
+    row: Dict[str, Any] = unfilled_order("MARKET", "ROD", status=status)
+    row["reject_reason"] = "price_type 尚未決定"
+
+    diffs: List[ParityDiff] = compare([row], [make_backtest_order()], [])
+
+    assert [diff.category for diff in diffs] == [CATEGORY_SEND_FAILED]
+    assert diffs[0].note == "price_type 尚未決定"
+
+
+def test_every_category_belongs_to_a_group() -> None:
+    """
+    每個類別都有組別
+
+    新增類別卻忘了登記的話，它會被計入訊號差異（最需要人看的那一組）；
+    這條讓忘記登記在測試就被抓到，而不是靠計數時的退路。
+    """
+
+    import core.live.report.parity_checker as module
+
+    categories: List[str] = [
+        value
+        for name, value in vars(module).items()
+        if name.startswith("CATEGORY_") and isinstance(value, str)
+    ]
+
+    assert sorted(set(categories) - set(CATEGORY_GROUP)) == []
+
+
+def test_counts_are_split_into_three_groups() -> None:
+    """訊號、制度性、執行三組分開計數；沒有差異的組別也列出 0"""
+
+    def diff(category: str) -> ParityDiff:
+        return ParityDiff(1, "2330", "Buy", category, "", "", "")
+
+    counts: Dict[str, int] = count_by_group(
+        [
+            diff(CATEGORY_UNEXPLAINED),
+            diff(CATEGORY_SNAPSHOT_GAP),
+            diff(CATEGORY_SEND_FAILED),
+            diff(CATEGORY_LOCKED_AT_LIMIT),
+        ]
+    )
+
+    assert counts == {GROUP_SIGNAL: 1, GROUP_STRUCTURAL: 1, GROUP_EXECUTION: 2}
+    assert count_by_group([]) == {
+        GROUP_SIGNAL: 0,
+        GROUP_STRUCTURAL: 0,
+        GROUP_EXECUTION: 0,
+    }
 
 
 def test_loaded_strategy_without_orders_is_still_compared(
