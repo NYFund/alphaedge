@@ -75,7 +75,7 @@ STOCK_ORDER_LOT_INTRADAY_ODD = "IntradayOdd"  # 盤中零股
 
 # 定義股票委託條件常量（現股／融資／融券／借券）
 #
-# **策略不填這個欄位**：它由 `order_preprocess` 依 `position_type` ＋ `short_method`
+# **策略不填這個欄位**：它由 `order_rules` 依 `position_type` ＋ `short_method`
 # ＋ `is_day_trade` 推導，才能保證和回測的成本路徑走同一組假設
 STOCK_ORDER_COND_CASH = "Cash"  # 現股
 

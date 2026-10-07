@@ -57,17 +57,17 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 市場結構（交易日曆、結算日、換月規則）：ETL、回測、實盤、策略都要用同一份。
     # 與 `core.api` 同層——日曆的建構子收 API 物件，放更低會變成反向相依
     ("core.market", 3, "市場結構", False),
-    # 純公式檔，**只相依 `math` 與 `typing`**（見 `analysis/__init__.py` 的說明）：
+    # 純公式檔，**只相依 `math` 與 `typing`**（見 `core/analysis/__init__.py` 的說明）：
     # 它比 `core.utils` 還低，任何人都可以 import 它而不會拉進任何相依。
     # 報表與（日後的）策略都要呼叫同一份公式，故必須擺在所有呼叫端之下
-    ("core.backtest.analysis", 1, "共用層／績效公式", False),
+    ("core.analysis", 1, "共用層／績效公式", False),
     # 部位建構層：回測與實盤共用，**不是**回測概念。只可 import `core.models`／
     # `core.utils`／`core.config`／`core.api`／`core.market`——期貨的部位建構要算
     # 每口保證金，而 `FuturesMarginConfig` 的權威來源在市場結構層（比本層低，屬正常
     # 向下相依）。複製一份到本層會與部位管理層的比率模式漂移，算出的口數開不進去
     ("core.portfolio", 4, "部位建構層", False),
     # 引擎 ↔ 資料源的共用契約：回測與實盤共用，**不是**回測概念
-    # （與 `core.portfolio`、`core.execution` 同一個理由）
+    # （與 `core.portfolio` 同一個理由）
     ("core.datafeed", 4, "資料源契約", False),
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
@@ -76,15 +76,11 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.backtest.backtester", 5, "引擎層／引擎本體", False),
     ("core.backtest.factory", 6, "組裝層", False),
     ("core.backtest", 5, "引擎層（套件本身）", False),
-    # === 實盤（core/broker、core/execution、core/live）===
+    # === 實盤（core/broker、core/live）===
     # 券商閘道層：只可 import `core.config`／`core.utils`／`core.models`。
     # **不可 import `core.api`**——券商層不讀歷史資料，它只負責「把委託送出去、
     # 把回報收回來」。一旦它開始查價格庫，實盤與回測就會各有一套取數路徑
     ("core.broker", 3, "券商閘道層", False),
-    # 回測與實盤共用的委託前處理（方向白名單、max_holdings、排序）。
-    # 刻意只 import `core.utils`／`core.models`，由呼叫端傳入純參數而不收策略物件——
-    # 收了策略就會多一條 `core.execution` → `core.strategies.base` 的同層邊
-    ("core.execution", 4, "共用委託前處理", False),
     # 實盤引擎的元件層，與 `core.backtest.models` 等可插拔 model 同級
     ("core.live.oms", 4, "實盤／委託管理", False),
     ("core.live.risk", 4, "實盤／風控", False),

@@ -24,7 +24,7 @@
 引擎層      core/backtest/backtester.py（市場無關，無子類）
               ├── core/backtest/models/      FillModel、SettlementModel（回測模擬）
               ├── core/market/               InstrumentSpec、CostModel、交易日曆（市場規則，回測與實盤共用）
-              ├── core/execution/            委託前處理（方向白名單、執行順序、持倉上限、排序；回測與實盤共用）
+              ├── core/portfolio/order_rules.py  訂單規則（方向白名單、執行順序、持倉上限、排序；回測與實盤共用）
               ├── core/backtest/datafeed/    資料載入與交易日判定
               ├── core/position/             部位進出與帳務
               └── core/backtest/report/      報表與圖表
@@ -88,7 +88,7 @@ sequenceDiagram
     loop 回測期間的每一天
         BT->>Feed: is_market_open(date)
         BT->>Feed: get_quotes(date, scale)
-        Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionOrder 決定開平倉先後
+        Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionSequence 決定開平倉先後
         BT->>S: check_open_signal(quotes)
         BT->>BT: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()
         BT->>PM: open_position(order)
@@ -109,9 +109,9 @@ sequenceDiagram
 
 | 順序 | 關卡 | 實作位置 | 擋掉時計入 |
 |:----:|------|----------|------------|
-| 1 | 方向白名單（`direction`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/execution/order_preprocess.py` | `rejected_direction` |
+| 1 | 方向白名單（`direction`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/portfolio/order_rules.py` | `rejected_direction` |
 | 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`），之後做決定性排序 | `CostModel.enrich_orders()`、`Backtester.sort_orders()` | —（只補值、排序不擋） |
-| 3 | 持倉檔數硬上限（`max_holdings`） | `Backtester.check_max_holdings()` → `order_preprocess.check_max_holdings()` | `rejected_max_holdings` |
+| 3 | 持倉檔數硬上限（`max_holdings`） | `Backtester.check_max_holdings()` → `order_rules.check_max_holdings()` | `rejected_max_holdings` |
 | 4 | 當日查不到報價（停牌、非股票池） | `Backtester.execute_open_signal()` | `rejected_no_quote` |
 | 5 | 成交價可信度（無成交、OHLC 區間、漲跌停、全日鎖漲跌停；檔位未對齊只警告） | `FillModel.validate()` | `rejected_fill_price`／`rejected_limit_up_locked`／`rejected_limit_down_locked` |
 | 6 | 成交假設（交易所名單、券源、停券、成交量上限、滑價） | `FillModel.fill()`（經 `Backtester.apply_fill_model()`） | `rejected_short_halted`／`rejected_below_reference`／`rejected_not_day_tradable`／`rejected_no_borrow`／`rejected_short_suspended`／`rejected_volume_cap` 等 |
@@ -137,7 +137,7 @@ sequenceDiagram
 | 檔案 | 職責 | 持有的狀態 |
 |------|------|------------|
 | `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts` |
-| `core/execution/order_preprocess.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
+| `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
 | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊（ETF 另用兩段檔位表）、漲跌停區間（槓桿型 ETF 幅度加倍） | 無（純規則） |
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `prev_close`、`intraday_range`、當日名單與券源快照 |
 | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`），**定義在 `core/models/cost_config.py`** |
@@ -184,7 +184,7 @@ sequenceDiagram
 | `core/backtest/report/plotting.py` | `EquityChartRenderer`：只負責畫圖，資料（含權益口徑）一律向報表端取 |
 | `core/backtest/report/reporter.py` | 台股報表：交易明細、多空統計、事件計數、五張圖、benchmark（`0050` 還原價）比較 |
 | `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、對標序列（連續合約優先，查不到退回近月拼接） |
-| `core/backtest/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
+| `core/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
 
 ---
 

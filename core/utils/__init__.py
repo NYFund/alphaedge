@@ -13,7 +13,7 @@ from .constant import (
     SHIOAJI_FUTURES_CATEGORY,
     STOCK_FUTURES_TYPE_BY_CONTRACT_SIZE,
     Action,
-    BarExecutionOrder,
+    BarExecutionSequence,
     Commission,
     DayTradeUncoveredPolicy,
     ExecutionStyle,

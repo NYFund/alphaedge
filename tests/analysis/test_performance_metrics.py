@@ -3,7 +3,7 @@ from typing import List, Optional
 
 import pytest
 
-from core.backtest.analysis.performance_metrics import (
+from core.analysis.performance_metrics import (
     TRADING_DAYS_PER_YEAR,
     compute_annualized_information_ratio,
     compute_annualized_sharpe,

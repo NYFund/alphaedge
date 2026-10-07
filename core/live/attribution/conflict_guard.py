@@ -5,12 +5,12 @@ from loguru import logger
 
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.execution.order_preprocess import resolve_close_action
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder
 from core.portfolio.aggregation import resolve_symbol_conflicts
+from core.portfolio.order_rules import resolve_close_action
 
 """
 跨策略衝突守門：同一標的同時只允許一支策略持有（先搶先贏）

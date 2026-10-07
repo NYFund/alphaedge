@@ -2,9 +2,9 @@ from typing import Dict, List, Optional, Sequence
 
 from loguru import logger
 
-from core.execution.order_preprocess import get_execution_order
+from core.portfolio.order_rules import get_execution_sequence
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionOrder, ExecutionStyle, ExecutionTiming, LiveHook
+from core.utils import BarExecutionSequence, ExecutionStyle, ExecutionTiming, LiveHook
 
 """
 啟動守門：一支策略要上實盤之前必須通過的檢查
@@ -157,7 +157,7 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
         檢查 `live_schedule` 與 `allow_day_trade` 是否矛盾
 
         判準：
-        - 開倉與平倉落在**同一段落**時，順序由 `get_execution_order()` 決定，
+        - 開倉與平倉落在**同一段落**時，順序由 `get_execution_sequence()` 決定，
           與回測完全一致，不必檢查。
         - 落在**不同段落**時，實際順序由段落先後決定：`open` 在前等同當沖，
           `close` 在前等同不當沖；它必須與 `allow_day_trade` 一致。
@@ -182,17 +182,17 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
     if _TIMING_ORDER[open_timing] == _TIMING_ORDER[close_timing]:
         return None
 
-    actual: BarExecutionOrder = (
-        BarExecutionOrder.OPEN_THEN_CLOSE
+    actual: BarExecutionSequence = (
+        BarExecutionSequence.OPEN_THEN_CLOSE
         if _TIMING_ORDER[open_timing] < _TIMING_ORDER[close_timing]
-        else BarExecutionOrder.CLOSE_THEN_OPEN
+        else BarExecutionSequence.CLOSE_THEN_OPEN
     )
-    declared: BarExecutionOrder = get_execution_order(strategy.allow_day_trade)
+    declared: BarExecutionSequence = get_execution_sequence(strategy.allow_day_trade)
 
     if actual is declared:
         return None
 
-    if actual is BarExecutionOrder.OPEN_THEN_CLOSE:
+    if actual is BarExecutionSequence.OPEN_THEN_CLOSE:
         effect: str = "當天開的部位當天就會被檢查要不要平，實盤等同當沖"
     else:
         effect = "當天開的部位要到下一個交易日才會被檢查要不要平，實盤當不了沖"

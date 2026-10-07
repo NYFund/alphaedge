@@ -92,7 +92,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
     # 停券回補日、現金股利、配股 → SettlementModel
     ...
 
-    if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
+    if self.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
         self.execute_open_signal(quotes)
         self.execute_close_signal(quotes)
     else:
@@ -113,21 +113,21 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 | 層次 | 由誰決定 | 規則 |
 |------|----------|------|
-| 開倉階段 vs 平倉階段 | `BarExecutionOrder`（引擎依策略的 `allow_day_trade` 推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
+| 開倉階段 vs 平倉階段 | `BarExecutionSequence`（引擎依策略的 `allow_day_trade` 推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
 | 平倉階段內部 | 引擎寫死 | 停損 → 一般平倉；停損執行完會重掃剩餘部位 |
-| 同一階段內的多筆委託 | `sort_orders()`（`core/execution/order_preprocess.py`，引擎經 `Backtester.sort_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
+| 同一階段內的多筆委託 | `sort_orders()`（`core/portfolio/order_rules.py`，引擎經 `Backtester.sort_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
 
 **為什麼第三層要由引擎自己排**：`check_max_holdings()` 的截斷與 `PositionManager` 的餘額不足檢查，都會讓「先處理誰」直接改變成交結果。而委託的到達順序完全繼承自報價順序，報價又來自 `SELECT * FROM price WHERE date = ?`——這句沒有 `ORDER BY`，實際列順序取決於 SQLite 選到哪個索引。多加一個索引就可能翻掉，且翻掉時不會報錯，只會讓回測結果無聲改變。
 
 排序是**穩定**的，同一標的的多筆委託維持策略給定的先後，分批建倉與部分平倉的意圖不會被打散。
 
-**同標的開平倉並存不做 net 合併。** 同一根 bar 內同一標的同時出現在開倉與平倉訊號時，兩腿分別成交：證交稅只課賣出腿、當沖稅率減半也只認當沖的那一腿，合併成淨額委託會讓兩腿的費用與稅無法各自計算；且平倉腿必須實際成交才會產生 `TradeRecord`，net 掉等於整筆交易在報表上消失。兩腿的先後由 `BarExecutionOrder` 決定，這正是它存在的理由。
+**同標的開平倉並存不做 net 合併。** 同一根 bar 內同一標的同時出現在開倉與平倉訊號時，兩腿分別成交：證交稅只課賣出腿、當沖稅率減半也只認當沖的那一腿，合併成淨額委託會讓兩腿的費用與稅無法各自計算；且平倉腿必須實際成交才會產生 `TradeRecord`，net 掉等於整筆交易在報表上消失。兩腿的先後由 `BarExecutionSequence` 決定，這正是它存在的理由。
 
 **已知限制**：Tick 級別的 `order.date` 只到「日」（`StockQuote.date` 對 tick 也是 `datetime.date`），因此同一 bar 內的 tick 委託無法依成交時間排序，會被壓成依代號排序。要恢復真正的時間序，得讓 `check_*_signal` 回傳帶時間戳的委託事件——屬事件迴圈的範圍，見 [§5.1](#51-事件驅動迴圈長期方向)。
 
 ### 2.3 方向與商品類別是兩條獨立的軸
 
-**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/execution/order_preprocess.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以同名方法薄包裝呼叫。
+**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以同名方法薄包裝呼叫。
 
 [放空回測框架規格](short-selling-framework.md) §1 原則 2「方向來自訂單，策略只做白名單」是本架構的**基礎**。
 
@@ -143,7 +143,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 | | `core/backtest/models/settlement_model/` | 套件：`base.py`（`BaseSettlementModel`）＋ `tw_stock.py`（`TwStockSettlementModel`）／`tw_futures.py`（`TwFuturesSettlementModel`），由 `__init__.py` re-export |
 | 資料源 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
 | 市場結構 | `core/market/tw/market_calendar.py`／`futures_calendar.py`／`futures_roll.py`／`futures_margin_config.py` | 交易日曆、期貨結算日、換月規則、保證金設定；ETL、回測、實盤、策略共用，不屬於回測套件 |
-| 委託前處理 | `core/execution/order_preprocess.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序；回測與實盤共用 |
+| 委託前處理 | `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序；回測與實盤共用 |
 | 資料模型 | `core/models/base/` | `BaseQuote`／`BaseOrder`／`BasePosition`／`BaseTradeRecord`／`BaseAccount`，識別欄位一律 `symbol` |
 | 策略 | `core/strategies/base.py` | `BaseStrategy`，`market` ＋ `instrument_type` 兩欄位為 factory 的分派鍵 |
 | 部位 | `core/position/base/position_manager.py` | FIFO 拆單主幹 ＋ `settle_daily()` 掛點 |

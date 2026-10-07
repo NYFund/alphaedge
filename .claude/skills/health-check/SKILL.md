@@ -41,7 +41,7 @@ git add -A && uvx pre-commit run --all-files   # 必須在 git add 之後，否�
 uv run pytest -m "not slow" -rs
 ```
 
-動到 `core/backtest/`、`core/execution/`、`core/portfolio/`、成本模型或策略時，加跑
+動到 `core/backtest/`、`core/portfolio/`、成本模型或策略時，加跑
 `./scripts/run_regression.sh`（回歸雙線）。
 
 **已經由上面這些工具管住的東西，人工審查一律不報**：格式、import 排序、未使用 import、
@@ -61,7 +61,7 @@ uv run pytest -m "not slow" -rs
 
 ### A. Money path 正確性（最高優先）
 
-範圍：`core/live/`、`core/broker/`、`core/dao/`、`core/execution/`、`core/portfolio/`、
+範圍：`core/live/`、`core/broker/`、`core/dao/`、`core/portfolio/`、
 `core/backtest/models/`（成本）。
 
 - 會算錯金額、下錯方向／數量／價格、重複送單或漏送單。

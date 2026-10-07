@@ -3,12 +3,12 @@ from typing import Dict, List, Optional, Set
 
 import pytest
 
-from core.execution import order_preprocess
 from core.models import BaseOrder, StockOrder
-from core.utils import Action, BarExecutionOrder, PositionType, TradeDirection
+from core.portfolio import order_rules
+from core.utils import Action, BarExecutionSequence, PositionType, TradeDirection
 
 """
-共用委託前處理：回測與實盤唯一的一份
+訂單規則：回測與實盤唯一的一份
 
 這一層是兩邊不漂移的關鍵。方向白名單、`max_holdings`、排序這三件事如果各寫一份，
 **漂移不會報錯**——只會讓實盤少送或多送一張單，而回測績效仍然漂亮。
@@ -50,23 +50,23 @@ def test_allowed_directions_follow_the_declared_direction(
 ) -> None:
     """白名單直接由策略的 `direction` 決定"""
 
-    assert order_preprocess.get_allowed_directions(direction) == expected
+    assert order_rules.get_allowed_directions(direction) == expected
 
 
 # === 單根 bar 的執行順序 ===
 @pytest.mark.parametrize(
     "allow_day_trade, expected",
     [
-        (True, BarExecutionOrder.OPEN_THEN_CLOSE),
-        (False, BarExecutionOrder.CLOSE_THEN_OPEN),
+        (True, BarExecutionSequence.OPEN_THEN_CLOSE),
+        (False, BarExecutionSequence.CLOSE_THEN_OPEN),
     ],
 )
-def test_execution_order_derivation(
-    allow_day_trade: bool, expected: BarExecutionOrder
+def test_execution_sequence_derivation(
+    allow_day_trade: bool, expected: BarExecutionSequence
 ) -> None:
     """當沖先開後平（當天開的部位當天就可能出場），否則先平後開"""
 
-    assert order_preprocess.get_execution_order(allow_day_trade) is expected
+    assert order_rules.get_execution_sequence(allow_day_trade) is expected
 
 
 # === 動作推導 ===
@@ -82,8 +82,8 @@ def test_action_resolution(
 ) -> None:
     """開平倉動作依**訂單方向**推導，不看策略宣告的方向"""
 
-    assert order_preprocess.resolve_open_action(position_type) is open_action
-    assert order_preprocess.resolve_close_action(position_type) is close_action
+    assert order_rules.resolve_open_action(position_type) is open_action
+    assert order_rules.resolve_close_action(position_type) is close_action
 
 
 # === 方向檢查 ===
@@ -101,7 +101,7 @@ def test_orders_outside_the_whitelist_are_rejected_and_counted() -> None:
         make_order(action=Action.SELL, position_type=PositionType.SHORT),
     ]
 
-    valid: List[BaseOrder] = order_preprocess.validate_orders(
+    valid: List[BaseOrder] = order_rules.validate_orders(
         orders, "open", {PositionType.LONG}, counts
     )
 
@@ -113,7 +113,7 @@ def test_wrong_action_for_the_stage_is_rejected() -> None:
     """開倉階段收到平倉動作也要剔除：那通常是策略把兩個鉤子的輸出接反了"""
 
     counts: Dict[str, int] = {}
-    valid: List[BaseOrder] = order_preprocess.validate_orders(
+    valid: List[BaseOrder] = order_rules.validate_orders(
         [make_order(action=Action.SELL)], "open", {PositionType.LONG}, counts
     )
 
@@ -129,10 +129,10 @@ def test_event_count_keys_are_stable() -> None:
     """
 
     counts: Dict[str, int] = {}
-    order_preprocess.validate_orders(
+    order_rules.validate_orders(
         [make_order(action=Action.SELL)], "open", {PositionType.LONG}, counts
     )
-    order_preprocess.check_max_holdings(make_order(), 1, {"2317"}, counts)
+    order_rules.check_max_holdings(make_order(), 1, {"2317"}, counts)
 
     assert set(counts) == {"rejected_direction", "rejected_max_holdings"}
 
@@ -141,8 +141,7 @@ def test_validation_works_without_a_counter() -> None:
     """不提供計數器時照樣運作：實盤那側不一定有回測的事件計數"""
 
     assert (
-        order_preprocess.validate_orders([make_order()], "open", {PositionType.LONG})
-        != []
+        order_rules.validate_orders([make_order()], "open", {PositionType.LONG}) != []
     )
 
 
@@ -151,7 +150,7 @@ def test_none_means_unlimited() -> None:
     """None 表示不限制，與 `EqualWeightSizer` 的語意一致"""
 
     held: Set[str] = {str(index) for index in range(999)}
-    assert order_preprocess.check_max_holdings(make_order(), None, held) is True
+    assert order_rules.check_max_holdings(make_order(), None, held) is True
 
 
 def test_max_holdings_uses_live_position_count() -> None:
@@ -163,10 +162,8 @@ def test_max_holdings_uses_live_position_count() -> None:
     """
 
     four: Set[str] = {"1101", "1102", "1103", "1104"}
-    assert order_preprocess.check_max_holdings(make_order(), 5, four) is True
-    assert (
-        order_preprocess.check_max_holdings(make_order(), 5, four | {"1105"}) is False
-    )
+    assert order_rules.check_max_holdings(make_order(), 5, four) is True
+    assert order_rules.check_max_holdings(make_order(), 5, four | {"1105"}) is False
 
 
 def test_adding_to_a_held_symbol_is_exempt_even_when_full() -> None:
@@ -179,8 +176,8 @@ def test_adding_to_a_held_symbol_is_exempt_even_when_full() -> None:
 
     held: Set[str] = {"2330", "2317"}
 
-    assert order_preprocess.check_max_holdings(make_order("2330"), 2, held) is True
-    assert order_preprocess.check_max_holdings(make_order("2454"), 2, held) is False
+    assert order_rules.check_max_holdings(make_order("2330"), 2, held) is True
+    assert order_rules.check_max_holdings(make_order("2454"), 2, held) is False
 
 
 # === 排序 ===
@@ -199,7 +196,7 @@ def test_sort_is_deterministic_by_date_and_symbol() -> None:
         make_order(symbol="2330"),
     ]
 
-    assert [order.symbol for order in order_preprocess.sort_orders(orders)] == [
+    assert [order.symbol for order in order_rules.sort_orders(orders)] == [
         "2317",
         "2330",
         "2454",
@@ -217,7 +214,7 @@ def test_sort_is_stable_for_the_same_symbol() -> None:
     second: StockOrder = make_order(symbol="2330")
     first.price, second.price = 100.0, 200.0
 
-    ordered: List[BaseOrder] = order_preprocess.sort_orders([first, second])
+    ordered: List[BaseOrder] = order_rules.sort_orders([first, second])
 
     assert [order.price for order in ordered] == [100.0, 200.0]
 
@@ -228,7 +225,7 @@ def test_sort_orders_across_dates() -> None:
     older: StockOrder = make_order(symbol="2454", date=datetime.date(2026, 9, 18))
     newer: StockOrder = make_order(symbol="2317", date=datetime.date(2026, 9, 19))
 
-    assert [order.symbol for order in order_preprocess.sort_orders([newer, older])] == [
+    assert [order.symbol for order in order_rules.sort_orders([newer, older])] == [
         "2454",
         "2317",
     ]
@@ -239,14 +236,14 @@ def test_module_does_not_import_strategy_or_engine() -> None:
     """
     **不可 import 策略或引擎**
 
-    收了策略物件就會多一條 `core.execution` → `core.strategies.base` 的同層邊，
+    收了策略物件就會多一條 `core.portfolio` → `core.strategies.base` 的同層邊，
     而這一層要能被更低層重用。這條由 `check_layer_deps.py` 守著，
     這裡再釘一次是因為它是本模組存在的前提。
     """
 
     source: str = (
         __import__("pathlib")
-        .Path("core/execution/order_preprocess.py")
+        .Path("core/portfolio/order_rules.py")
         .read_text(encoding="utf-8")
     )
 

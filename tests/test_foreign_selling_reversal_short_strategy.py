@@ -14,7 +14,7 @@ from core.strategies.stock.foreign_selling_reversal_short_strategy import (
 )
 from core.utils import (
     Action,
-    BarExecutionOrder,
+    BarExecutionSequence,
     Commission,
     PositionType,
     ShortMethod,
@@ -465,7 +465,7 @@ def test_engine_derives_day_trade_cost_config() -> None:
     assert config.day_trade_tax_rate == float(Commission.DayTradeTaxRate)
 
 
-def test_engine_derives_open_then_close_execution_order() -> None:
+def test_engine_derives_open_then_close_execution_sequence() -> None:
     """同一根 bar 內要先開後平，否則當日開的空單當日平不掉"""
 
     strategy: ForeignSellingReversalShortStrategy = (
@@ -475,7 +475,10 @@ def test_engine_derives_open_then_close_execution_order() -> None:
     # 推導只讀 `self.strategy`，故以最小替身呼叫，避免為了一個判斷去連資料庫
     engine: SimpleNamespace = SimpleNamespace(strategy=strategy)
 
-    assert Backtester.get_execution_order(engine) == BarExecutionOrder.OPEN_THEN_CLOSE
+    assert (
+        Backtester.get_execution_sequence(engine)
+        == BarExecutionSequence.OPEN_THEN_CLOSE
+    )
 
 
 def test_fill_config_is_conservative() -> None:

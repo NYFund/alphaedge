@@ -3,16 +3,23 @@ from typing import Dict, List, Optional, Set
 from loguru import logger
 
 from core.models import BaseOrder
-from core.utils import Action, BarExecutionOrder, PositionType, TradeDirection
+from core.utils import Action, BarExecutionSequence, PositionType, TradeDirection
 
 """
-委託前處理：方向白名單、單根 bar 的執行順序、持倉檔數上限、決定性排序
+訂單規則：方向白名單、單根 bar 的執行順序、持倉檔數上限、單一標的曝險、決定性排序
 
 **這些都是「和撮合無關」的純邏輯**，回測與實盤共用同一份。實盤自己再寫一份的話，
 兩邊會慢慢漂移，而漂移不會有任何錯誤訊息——只會讓實盤少送或多送一張單，
 回測績效仍然漂亮。
 
-函式一律只收純參數，不收策略物件也不收引擎，這樣它們才能被任何一邊呼叫。
+放在部位建構層，因為其中多數是策略宣告的部位限制（方向、`max_holdings`、曝險）；
+業界的 Execution 指「怎麼把委託送進市場」，那是 `core/live/execution/` 的事，不是這裡。
+模組名的 order 指訂單；「先開後平還是先平後開」一律稱 sequence（`BarExecutionSequence`），
+不與訂單混用同一個字。
+
+**只 import `core.utils`／`core.models`**，函式一律只收純參數（`direction`、
+`allow_day_trade`、目前持倉檔數…），**不收策略物件也不收引擎**：收了就會多一條
+往策略契約的同層邊，而部位管理層也要呼叫這裡。
 事件計數由呼叫端傳入 `event_counts`，**key 不可更名**（報表相容）。
 """
 
@@ -32,7 +39,7 @@ def get_allowed_directions(direction: TradeDirection) -> Set[PositionType]:
     return direction.to_position_types()
 
 
-def get_execution_order(allow_day_trade: bool) -> BarExecutionOrder:
+def get_execution_sequence(allow_day_trade: bool) -> BarExecutionSequence:
     """
     - Description:
         決定單根 K 棒內的執行順序：只由策略能否當沖決定，與方向無關
@@ -48,14 +55,14 @@ def get_execution_order(allow_day_trade: bool) -> BarExecutionOrder:
         - allow_day_trade: bool
             策略能否當沖
     - Return:
-        - BarExecutionOrder
+        - BarExecutionSequence
             單根 bar 的開平倉先後
     """
 
     if allow_day_trade:
-        return BarExecutionOrder.OPEN_THEN_CLOSE
+        return BarExecutionSequence.OPEN_THEN_CLOSE
 
-    return BarExecutionOrder.CLOSE_THEN_OPEN
+    return BarExecutionSequence.CLOSE_THEN_OPEN
 
 
 def resolve_open_action(position_type: PositionType) -> Action:

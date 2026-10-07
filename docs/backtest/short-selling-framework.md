@@ -148,7 +148,7 @@ TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計
 | 型別 | 成員 | 用途 |
 |------|------|------|
 | `ShortMethod(str, Enum)` | `DAY_TRADE` / `MARGIN` / `SBL` | 放空管道 |
-| `BarExecutionOrder(str, Enum)` | `CLOSE_THEN_OPEN` / `OPEN_THEN_CLOSE` | 單 bar 內執行順序 |
+| `BarExecutionSequence(str, Enum)` | `CLOSE_THEN_OPEN` / `OPEN_THEN_CLOSE` | 單 bar 內執行順序 |
 | `DayTradeUncoveredPolicy(str, Enum)` | `FORCE_COVER_AT_CLOSE`（預設）/ `CONVERT_TO_MARGIN` / `RAISE` | 當沖日終未回補（§5.1） |
 | `MarginCallPolicy(str, Enum)` | `FORCE_COVER`（預設）/ `WARN_ONLY` | 維持率追繳（§5.2） |
 | `ShortCost(float, Enum)` / `MarginCost(float, Enum)` | 見 §2.3 | 放空與融資費率 |
@@ -232,7 +232,7 @@ class StockCostModel:
 
 ### 3.5 方向中立機制
 
-前三個是**純函式，住在 `core/execution/order_preprocess.py`**（回測與實盤共用同一份）；
+前三個是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
 `Backtester` 以 `validate_orders()` 薄包裝呼叫，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
 
 ```python
@@ -257,7 +257,7 @@ snapshot_daily_equity(...)           # 含未實現損益的逐日權益
 單根 K 棒的流程固定為（`execute_bar()`，日 K 與 Tick 共用）：
 
 ```python
-if order == BarExecutionOrder.OPEN_THEN_CLOSE:
+if order == BarExecutionSequence.OPEN_THEN_CLOSE:
     execute_open_signal(quotes); execute_close_signal(quotes)
 else:
     execute_close_signal(quotes); execute_open_signal(quotes)
@@ -481,7 +481,7 @@ snapshot_daily_equity(date, quotes)
 | `validate_fill_price` | 各框架的 fill model 都限制成交價於 bar range 內 | ✅ 一致 |
 | `round_to_tick` | Lean `SymbolProperties.MinimumPriceVariation` | ✅ 一致 |
 | 方向來自 order（§1 原則 2） | 業界一律 signed quantity（`order(-100)` 即放空），方向屬於部位 | ✅ 一致；若把方向綁在策略層則會偏離 |
-| `BarExecutionOrder` 全域順序旗標 | 業界是 order queue + fill model，無此旗標 | ⚠️ 簡化版，屬過渡設計 |
+| `BarExecutionSequence` 全域順序旗標 | 業界是 order queue + fill model，無此旗標 | ⚠️ 簡化版，屬過渡設計 |
 | 無 T+2 交割 | Lean `DelayedSettlementModel` | ⚠️ 已列已知簡化（§5.7） |
 | `ShortMethod` 三管道（當沖／融券／借券） | 業界無對應 | 台股在地化，合理 |
 

@@ -1203,7 +1203,7 @@ def test_max_holdings_blocks_the_order_beyond_the_cap() -> None:
     """
     `max_holdings` 在實盤也要擋得住
 
-    `check_max_holdings()` 放在共用層 `core/execution/order_preprocess.py`，
+    `check_max_holdings()` 放在共用層 `core/portfolio/order_rules.py`，
     但接上之前只有 `Backtester` 呼叫——**回測會擋掉的開倉單，實盤會送出去**。
     """
 

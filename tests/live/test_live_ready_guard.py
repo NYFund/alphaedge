@@ -227,7 +227,7 @@ def test_verify_passes_for_a_clean_set() -> None:
 # === schedule 與 allow_day_trade 的一致性 ===
 def test_same_segment_needs_no_check() -> None:
     """
-    兩個鉤子在同一段落時順序由 `get_execution_order()` 決定，與回測一致
+    兩個鉤子在同一段落時順序由 `get_execution_sequence()` 決定，與回測一致
 
     這時 `allow_day_trade` 推導的順序照樣生效，沒有矛盾可言。
     """

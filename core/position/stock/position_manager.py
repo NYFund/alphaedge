@@ -3,10 +3,10 @@ from typing import Dict, Optional, Union
 
 from loguru import logger
 
-from core.execution import order_preprocess
 from core.market.tw.cost_model import StockCostModel
 from core.models import StockAccount, StockOrder, StockPosition, StockTradeRecord
 from core.models.cost_config import CostConfig
+from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.utils import Action, PositionType, ShortMethod, TimeUtils
 from core.utils.instrument import StockUtils
@@ -242,12 +242,12 @@ class StockPositionManager(BasePositionManager):
             return None
 
         # 單一標的曝險上限。**公式與實盤共用**
-        # （`order_preprocess.exceeds_symbol_exposure()`），但回測只在 SHORT 分支
+        # （`order_rules.exceeds_symbol_exposure()`），但回測只在 SHORT 分支
         # 取用、超限整筆拒絕，做多不受此限；兩邊口徑的差異寫在該函式的 docstring
         max_ratio: Optional[float] = (
             self.cost_model.config.short_constraint.max_short_exposure_ratio
         )
-        if order_preprocess.exceeds_symbol_exposure(
+        if order_rules.exceeds_symbol_exposure(
             position_value, self.account.init_capital, max_ratio
         ):
             # `max_ratio` 必為非 None（否則上面那個判斷不會成立）

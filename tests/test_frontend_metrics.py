@@ -116,14 +116,14 @@ def test_importing_performance_metrics_stays_cheap() -> None:
     """
     import 共用公式不得拉進 pandas／numpy／shioaji
 
-    `core/backtest/analysis/__init__.py` 一旦在套件層 import 相依 pandas／shioaji 的模組，
-    這條就會紅——那代表前端映像得裝進整個後端才跑得起來。
+    `core/analysis/__init__.py` 一旦在套件層 import 相依 pandas／shioaji 的模組，
+    這條就會紅——那代表這份第 1 層的公式不再是「誰都能 import」。
     以子行程量測，避免被本測試檔自己已經 import 的模組汙染。
     """
 
     script: str = (
         "import sys;"
-        "from core.backtest.analysis.performance_metrics import compute_annualized_sharpe;"
+        "from core.analysis.performance_metrics import compute_annualized_sharpe;"
         "heavy={'pandas','numpy','shioaji','sqlite3','loguru','requests'};"
         "print(','.join(sorted(heavy & {m.split('.')[0] for m in sys.modules})))"
     )

@@ -275,7 +275,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 | 策略（Alpha） | `generate_open_signals()` | 選標的、決定 `sizing_price`（算量價）與 `order_price`（委託價） |
 | 部位建構 | `StockPortfolioConstructor`（`core/portfolio/construction.py`） | 把訊號交給 sizer，再組成訂單 |
 | 部位大小模型 | `EqualWeightSizer`（`core/portfolio/sizing.py`） | 依剩餘名額均分餘額、換算張數 |
-| 引擎 | `order_preprocess.check_max_holdings()`（回測經 `Backtester.check_max_holdings()` 呼叫） | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
+| 引擎 | `order_rules.check_max_holdings()`（回測經 `Backtester.check_max_holdings()` 呼叫） | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
 
 > **sizer 與引擎的 `max_holdings` 檢查刻意不合併。** 兩者回答不同問題：sizer 問
 > 「資金要切成幾份」（訊號階段，張數不足 1 張的候選不佔名額），引擎問「這張單送出去
@@ -378,7 +378,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 **長表**），**不開前端也看得到**：勝率、勝敗比、獲利因子、平均 ROI、平均持有天數、
 最大回撤、年化波動度、Sharpe、Sortino、Information Ratio 與權益口徑。
 
-**公式只有一份**，全部在 `analysis/performance_metrics.py`（純函式，只相依 `math`
+**公式只有一份**，全部在 `core/analysis/performance_metrics.py`（純函式，只相依 `math`
 與 `typing`）。前端一律讀這份 CSV、**不自行重算任何一條公式**——同一個指標算在兩個
 地方，最後一定會出現「報表說 1.2、前端說 0.8」而沒有人知道哪個對（MDD 曾經就有
 reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點同樣共用

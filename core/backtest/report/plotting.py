@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from loguru import logger
 
-from core.backtest.analysis.performance_metrics import compute_drawdown_series
+from core.analysis.performance_metrics import compute_drawdown_series
 
 if TYPE_CHECKING:
     from core.backtest.report.reporter import StockBacktestReporter

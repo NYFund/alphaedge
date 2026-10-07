@@ -22,8 +22,7 @@ graph TB
     end
 
     subgraph shared_layer ["共用契約層（回測與實盤吃同一份）"]
-        Portfolio["core/portfolio<br/>signal／sizing／construction<br/>aggregation（多策略仲裁）"]
-        Execution["core/execution<br/>送單前處理：方向白名單<br/>持倉上限、曝險、決定性排序"]
+        Portfolio["core/portfolio<br/>signal／sizing／construction<br/>aggregation（多策略仲裁）<br/>order_rules（方向白名單、持倉上限、曝險、排序）"]
         DataFeedBase["core/datafeed<br/>BaseDataFeed 契約"]
         Market["core/market<br/>交易日曆／換月／保證金設定<br/>商品規格／成本模型"]
         Managers["core/position<br/>部位與帳務"]
@@ -78,14 +77,13 @@ graph TB
     BacktestApp --> BTFactory
     LiveApp --> LiveFactory
     Strategies --> Portfolio
-    Portfolio --> Execution
     Portfolio --> Models
 
     BTFactory --> Backtester
     BTFactory --> BTModels
     BTFactory --> BTFeed
     Backtester --> Strategies
-    Backtester --> Execution
+    Backtester --> Portfolio
     Backtester --> BTModels
     Backtester --> BTFeed
     Backtester --> Managers
@@ -96,7 +94,7 @@ graph TB
     LiveFactory --> LiveFeed
     LiveFactory --> Broker
     Trader --> Strategies
-    Trader --> Execution
+    Trader --> Portfolio
     Trader --> LiveParts
     Trader --> LiveFeed
     Trader --> Managers
@@ -115,7 +113,6 @@ graph TB
     Managers --> Market
     BTFactory --> Market
     LiveFactory --> Market
-    Execution --> Models
 
     BTFeed --> API
     BTFeed --> Adapters
@@ -139,7 +136,7 @@ graph TB
 
 **市場差異全部下沉為可插拔的 model。** `Backtester` 市場無關、沒有子類；`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel`、`DataFeed` 由 `core/backtest/factory.py` 依策略宣告的 `market` ＋ `instrument_type` 組裝，新增一個（市場, 商品）組合不必改 `backtester.py` 一行。實盤那側由 `core/live/factory.py` 做同一件事。其中 `InstrumentSpec` 與 `CostModel` 是市場規則（跳動點、漲跌停、費率），回測與實盤共用同一份，放在 `core/market/`；`FillModel` 與 `SettlementModel` 是回測模擬，留在 `core/backtest/models/`。
 
-**共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、送單前處理（`core/execution/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/position/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
+**共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/position/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
 
 詳見[多市場回測引擎架構](docs/backtest/multi-market-engine.md)與[模組使用關係](docs/backtest/module-map.md)。
 
@@ -180,8 +177,8 @@ graph TB
 | `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、資料存取層、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
 | `core/live/`    | 實盤交易：逐段落生命週期、委託管理（OMS）、部位歸屬、對帳、風控與盤後作業               |
 | `core/broker/`  | 券商介接（目前為 Shioaji）：登入、合約解析、委託轉換、回報正規化與行情訂閱              |
-| `core/execution/` | 回測與實盤共用的送單前處理：方向白名單、持倉上限、單一標的曝險、決定性排序              |
-| `core/portfolio/` | 回測與實盤共用的部位建構：訊號、資金切分、開倉組裝與多策略仲裁                          |
+| `core/portfolio/` | 回測與實盤共用的部位建構：訊號、資金切分、開倉組裝、多策略仲裁與訂單規則（方向白名單、持倉上限、單一標的曝險、決定性排序） |
+| `core/analysis/`  | 績效指標的純函式（Sharpe、Sortino、MDD 等）：只相依 `math`，任何一層都能 import；目前由回測報表使用，實盤日報日後沿用同一份 |
 | `core/datafeed/`  | 中立的 `BaseDataFeed` 契約：回測與實盤各自實作，策略的 `setup_apis(feed)` 型別就是它 |
 | `core/market/`    | 市場結構與市場規則（交易日曆、期貨換月、保證金設定、商品規格 `InstrumentSpec`、成本模型 `CostModel`），不屬於任一引擎 |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
