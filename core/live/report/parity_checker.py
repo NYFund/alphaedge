@@ -1,5 +1,6 @@
 import csv
 import datetime
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -8,8 +9,15 @@ from loguru import logger
 
 from core.config.paths import LIVE_RESULT_DIR_PATH
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.notify.base import NotifyLevel
 from core.models import BaseOrder
-from core.utils import ExecutionStyle, LiveOrderStatus, OrderType
+from core.utils import (
+    Action,
+    ExecutionStyle,
+    LiveOrderStatus,
+    OrderType,
+    PositionType,
+)
 
 """
 訊號 parity：同一支策略在回測與實盤有沒有送出同一批委託
@@ -29,6 +37,10 @@ from core.utils import ExecutionStyle, LiveOrderStatus, OrderType
 
 # 差異類別。**順序即判定優先級**：一筆差異可能同時符合多條，取第一條命中的
 CATEGORY_SNAPSHOT_GAP: str = "SNAPSHOT_GAP"
+
+# 交易段落：parity 判斷「實盤當天有沒有正常跑到策略」時只看這些，
+# 盤後與補比不呼叫策略鉤子，它們正不正常與訊號無關
+TRADING_PHASES: Set[str] = {"open", "close", "intraday"}
 CATEGORY_RISK_REJECTED: str = "RISK_REJECTED"
 
 # 送出但未成交所造成的差異，成因是「開倉未成交一律放棄、平倉與停損未成交必須補」。
@@ -189,6 +201,7 @@ class ParityChecker:
 
         live_orders: List[Dict[str, Any]] = self.dao.get_orders_by_date(run_date)
         events: List[Dict[str, Any]] = self.dao.get_risk_events_by_date(run_date)
+        runs: List[Dict[str, Any]] = self.dao.get_runs_by_date(run_date)
         resolved: List[Dict[str, Any]] = self.dao.get_pending_actions_resolved_on(
             run_date
         )
@@ -211,12 +224,16 @@ class ParityChecker:
 
         result: Dict[str, List[ParityDiff]] = {}
         for name in sorted(names):
+            own_events: List[Dict[str, Any]] = [
+                event for event in events if event.get("strategy_name") == name
+            ]
             diffs: List[ParityDiff] = self._check_strategy(
                 name,
                 run_date,
                 [row for row in live_orders if row["strategy_name"] == name],
-                [event for event in events if event.get("strategy_name") == name],
+                own_events,
                 [row for row in resolved if row.get("strategy_name") == name],
+                segments_ran_cleanly(name, runs, own_events),
             )
             result[name] = diffs
             self._persist(name, run_date, diffs)
@@ -230,6 +247,7 @@ class ParityChecker:
         live_orders: List[Dict[str, Any]],
         events: List[Dict[str, Any]],
         resolved_actions: Sequence[Dict[str, Any]] = (),
+        ran_cleanly: bool = False,
     ) -> List[ParityDiff]:
         """比對單一策略；回測跑不起來時視為整批未解釋，不是靜靜跳過"""
 
@@ -253,7 +271,9 @@ class ParityChecker:
                 )
             ]
 
-        return compare(live_orders, backtest_orders, events, resolved_actions)
+        return compare(
+            live_orders, backtest_orders, events, resolved_actions, ran_cleanly
+        )
 
     def _persist(
         self, strategy_name: str, run_date: datetime.date, diffs: List[ParityDiff]
@@ -324,6 +344,7 @@ def compare(
     backtest_orders: Sequence[BaseOrder],
     events: Sequence[Dict[str, Any]],
     resolved_actions: Sequence[Dict[str, Any]] = (),
+    ran_cleanly: bool = False,
 ) -> List[ParityDiff]:
     """
     - Description:
@@ -342,6 +363,9 @@ def compare(
         - resolved_actions: Sequence[Dict[str, Any]]
             當日被處理掉的 `live_pending_action` 列；用來歸因「實盤多送出去」的
             那些——次日補平單在回測沒有對應，因為回測前一天就已經平掉了
+        - ran_cleanly: bool
+            這支策略當天的交易段落是否都正常結束、且沒有 CRITICAL 事件
+            （見 `segments_ran_cleanly()`）；決定「回測多出的開倉單」能不能歸給快照口徑
     - Return:
         - List[ParityDiff]
             差異清單；兩邊完全一致時為空
@@ -392,7 +416,17 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            category: str = blocked.get(symbol, CATEGORY_UNEXPLAINED)
+            # 優先序：風控／守門事件 → 快照口徑（反方向）→ 未解釋
+            missing_note: str = ""
+            category: Optional[str] = blocked.get(symbol)
+            if category is None:
+                if ran_cleanly and all(_is_opening_order(o) for o in bt_orders):
+                    category = CATEGORY_SNAPSHOT_GAP
+                    missing_note = (
+                        "回測以收盤價觸發開倉、實盤決策時的快照未觸發；當天段落正常結束"
+                    )
+                else:
+                    category = CATEGORY_UNEXPLAINED
             diffs.append(
                 _make_diff(
                     len(diffs) + 1,
@@ -401,6 +435,7 @@ def compare(
                     category,
                     "（實盤沒有送出這張單）",
                     "；".join(summarize(order) for order in bt_orders),
+                    note=missing_note,
                 )
             )
             continue
@@ -446,6 +481,68 @@ def _is_threshold_gap(live_rows: Sequence[Dict[str, Any]]) -> bool:
     return all(
         str(row.get("position_type", "")) and _is_opening(row) for row in live_rows
     )
+
+
+def segments_ran_cleanly(
+    strategy_name: str,
+    runs: Sequence[Dict[str, Any]],
+    events: Sequence[Dict[str, Any]],
+) -> bool:
+    """
+    - Description:
+        這支策略當天的交易段落是否都有跑、都正常結束，而且沒有 CRITICAL 事件
+
+        回測多出一張開倉單時，只有在這個條件下才能歸給快照口徑：段落中止、
+        整天沒跑或出過 CRITICAL 的日子，實盤沒送單可能是程式出事，
+        歸成快照口徑就把它蓋掉了（2026-10-07 期貨尾盤段中止就是這種日子）。
+
+        **認不出策略的執行紀錄一律不算**：`live_run.strategy_params_json` 在
+        2026-10-08 以前沒有寫入，那些日子判不出段落屬於誰，寧可留在未解釋。
+    - Parameters:
+        - strategy_name: str
+            策略名
+        - runs: Sequence[Dict[str, Any]]
+            當日 `live_run` 的列
+        - events: Sequence[Dict[str, Any]]
+            這支策略當日的 `live_risk_event` 列
+    - Return:
+        - bool
+            段落都正常、且沒有 CRITICAL 事件
+    """
+
+    own: List[Dict[str, Any]] = [
+        run
+        for run in runs
+        if str(run.get("phase")) in TRADING_PHASES
+        and strategy_name in _run_strategies(run)
+    ]
+    if not own:
+        return False
+    if any(str(run.get("end_reason")) != LiveTradeDAO.END_REASON_NORMAL for run in own):
+        return False
+    return not any(
+        str(event.get("severity")) == NotifyLevel.CRITICAL.value for event in events
+    )
+
+
+def _run_strategies(run: Dict[str, Any]) -> Set[str]:
+    """一筆執行紀錄載入的策略；欄位為空或格式不對時回空集合"""
+
+    raw: Any = run.get("strategy_params_json")
+    if not raw:
+        return set()
+    try:
+        return {str(name) for name in json.loads(str(raw)).get("strategies", [])}
+    except (ValueError, AttributeError):
+        return set()
+
+
+def _is_opening_order(order: BaseOrder) -> bool:
+    """回測的這張委託是不是開倉單"""
+
+    return (
+        order.position_type is PositionType.LONG and order.action is Action.BUY
+    ) or (order.position_type is PositionType.SHORT and order.action is Action.SELL)
 
 
 def _is_opening(row: Dict[str, Any]) -> bool:

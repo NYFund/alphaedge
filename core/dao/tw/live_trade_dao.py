@@ -878,6 +878,25 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return self._to_dicts(LIVE_PENDING_ACTION_TABLE_NAME, rows)
 
+    def get_runs_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            某交易日啟動的全部執行紀錄（依啟動時間排序）
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                `live_run` 的列
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_RUN_TABLE_NAME} "
+            "WHERE substr(started_at, 1, 10) = ? ORDER BY started_at",
+            _to_live_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_RUN_TABLE_NAME, rows)
+
     def get_risk_events_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:

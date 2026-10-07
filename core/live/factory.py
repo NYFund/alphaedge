@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -487,6 +488,7 @@ def build_live_trader(
         not isinstance(notifier, NullNotifier),
         now_provider,
         phase,
+        [type(strategy).__name__ for strategy in strategies],
     )
 
     return LiveTrader(
@@ -976,6 +978,7 @@ def _record_run(
     notify_enabled: bool,
     now_provider: Callable[[], datetime.datetime],
     phase: str,
+    strategy_names: Sequence[str] = (),
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -987,6 +990,10 @@ def _record_run(
     `notify_enabled` 同理：**通知缺設定時退化為不推播，但那件事要落地**。
     只記一行 warning 的話，事後回頭查「那天為什麼沒收到告警」會查不到答案——
     而「以為有告警其實沒有」比「知道沒有告警」危險得多。
+
+    **本次載入的策略寫進 `strategy_params_json`**（`{"strategies": [...]}`）：盤後 parity
+    要知道某支策略當天的段落有沒有正常跑完，才分得出「回測多出的開倉單」是快照口徑
+    還是實盤根本沒跑到。這一欄先前從未寫入，2026-10-08 以前的紀錄為 NULL。
     """
 
     if not notify_enabled:
@@ -1008,6 +1015,9 @@ def _record_run(
             "notify_enabled": int(notify_enabled),
             "git_commit": _git_commit(),
             "shioaji_version": _shioaji_version(),
+            "strategy_params_json": json.dumps(
+                {"strategies": list(strategy_names)}, ensure_ascii=False
+            ),
         }
     )
     dao.commit()
