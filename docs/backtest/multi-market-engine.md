@@ -92,7 +92,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
     # 停券回補日、現金股利、配股 → SettlementModel
     ...
 
-    if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
+    if self.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
         self.execute_open_signal(quotes)
         self.execute_close_signal(quotes)
     else:
@@ -113,7 +113,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 | 層次 | 由誰決定 | 規則 |
 |------|----------|------|
-| 開倉階段 vs 平倉階段 | `BarExecutionOrder`（引擎依策略的 `allow_day_trade` 推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
+| 開倉階段 vs 平倉階段 | `BarExecutionSequence`（引擎依策略的 `allow_day_trade` 推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
 | 平倉階段內部 | 引擎寫死 | 停損 → 一般平倉；停損執行完會重掃剩餘部位 |
 | 同一階段內的多筆委託 | `sort_orders()`（`core/portfolio/order_rules.py`，引擎經 `Backtester.sort_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
 
@@ -121,7 +121,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 排序是**穩定**的，同一標的的多筆委託維持策略給定的先後，分批建倉與部分平倉的意圖不會被打散。
 
-**同標的開平倉並存不做 net 合併。** 同一根 bar 內同一標的同時出現在開倉與平倉訊號時，兩腿分別成交：證交稅只課賣出腿、當沖稅率減半也只認當沖的那一腿，合併成淨額委託會讓兩腿的費用與稅無法各自計算；且平倉腿必須實際成交才會產生 `TradeRecord`，net 掉等於整筆交易在報表上消失。兩腿的先後由 `BarExecutionOrder` 決定，這正是它存在的理由。
+**同標的開平倉並存不做 net 合併。** 同一根 bar 內同一標的同時出現在開倉與平倉訊號時，兩腿分別成交：證交稅只課賣出腿、當沖稅率減半也只認當沖的那一腿，合併成淨額委託會讓兩腿的費用與稅無法各自計算；且平倉腿必須實際成交才會產生 `TradeRecord`，net 掉等於整筆交易在報表上消失。兩腿的先後由 `BarExecutionSequence` 決定，這正是它存在的理由。
 
 **已知限制**：Tick 級別的 `order.date` 只到「日」（`StockQuote.date` 對 tick 也是 `datetime.date`），因此同一 bar 內的 tick 委託無法依成交時間排序，會被壓成依代號排序。要恢復真正的時間序，得讓 `check_*_signal` 回傳帶時間戳的委託事件——屬事件迴圈的範圍，見 [§5.1](#51-事件驅動迴圈長期方向)。
 

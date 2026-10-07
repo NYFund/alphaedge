@@ -8,10 +8,10 @@ from enum import Enum
 
 
 # 定義單根 K 棒內的執行順序常量
-BAR_EXECUTION_ORDER_CLOSE_THEN_OPEN = "CLOSE_THEN_OPEN"  # 先平倉再開倉（日頻再平衡）
+BAR_EXECUTION_SEQUENCE_CLOSE_THEN_OPEN = "CLOSE_THEN_OPEN"  # 先平倉再開倉（日頻再平衡）
 
 
-BAR_EXECUTION_ORDER_OPEN_THEN_CLOSE = "OPEN_THEN_CLOSE"  # 先開倉再平倉（當沖）
+BAR_EXECUTION_SEQUENCE_OPEN_THEN_CLOSE = "OPEN_THEN_CLOSE"  # 先開倉再平倉（當沖）
 
 
 # 定義當沖日終未回補的處理政策常量
@@ -31,11 +31,16 @@ MARGIN_CALL_FORCE_COVER = "FORCE_COVER"  # 強制回補（斷頭）
 MARGIN_CALL_WARN_ONLY = "WARN_ONLY"  # 僅記錄不強制回補
 
 
-class BarExecutionOrder(str, Enum):
-    """單根 K 棒內開平倉的執行順序；引擎依策略的 `allow_day_trade` 推導，策略不直接設定"""
+class BarExecutionSequence(str, Enum):
+    """
+    單根 K 棒內開平倉的執行順序；引擎依策略的 `allow_day_trade` 推導，策略不直接設定
 
-    CLOSE_THEN_OPEN = BAR_EXECUTION_ORDER_CLOSE_THEN_OPEN
-    OPEN_THEN_CLOSE = BAR_EXECUTION_ORDER_OPEN_THEN_CLOSE
+    名稱用 sequence 而不用 order：交易系統裡 order 一律指訂單，同一個字兼指順序會讓
+    `order_rules.get_execution_sequence()` 這類呼叫讀起來有兩種意思。
+    """
+
+    CLOSE_THEN_OPEN = BAR_EXECUTION_SEQUENCE_CLOSE_THEN_OPEN
+    OPEN_THEN_CLOSE = BAR_EXECUTION_SEQUENCE_OPEN_THEN_CLOSE
 
 
 class DayTradeUncoveredPolicy(str, Enum):

@@ -55,7 +55,7 @@ from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
-    BarExecutionOrder,
+    BarExecutionSequence,
     DayTradeUncoveredPolicy,
     ExecutionStyle,
     ExecutionTiming,
@@ -1126,17 +1126,17 @@ class LiveTrader:
         timing: ExecutionTiming,
         quotes: List[BaseQuote],
     ) -> List[BaseOrder]:
-        """依 `get_execution_order()` 決定開平倉先後，與回測一致"""
+        """依 `get_execution_sequence()` 決定開平倉先後，與回測一致"""
 
         strategy: BaseStrategy = context.strategy
-        execution_order: BarExecutionOrder = order_rules.get_execution_order(
+        execution_sequence: BarExecutionSequence = order_rules.get_execution_sequence(
             strategy.allow_day_trade
         )
 
         exit_orders: List[BaseOrder] = self._exit_orders(context, timing, quotes)
         entry_orders: List[BaseOrder] = self._entry_orders(context, timing, quotes)
 
-        if execution_order is BarExecutionOrder.OPEN_THEN_CLOSE:
+        if execution_sequence is BarExecutionSequence.OPEN_THEN_CLOSE:
             return entry_orders + exit_orders
         return exit_orders + entry_orders
 

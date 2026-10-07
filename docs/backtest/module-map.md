@@ -88,7 +88,7 @@ sequenceDiagram
     loop 回測期間的每一天
         BT->>Feed: is_market_open(date)
         BT->>Feed: get_quotes(date, scale)
-        Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionOrder 決定開平倉先後
+        Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionSequence 決定開平倉先後
         BT->>S: check_open_signal(quotes)
         BT->>BT: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()
         BT->>PM: open_position(order)

@@ -24,7 +24,7 @@ from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
-    BarExecutionOrder,
+    BarExecutionSequence,
     PositionType,
     Scale,
     TimeUtils,
@@ -188,10 +188,10 @@ class Backtester:
 
         return order_rules.get_allowed_directions(self.strategy.direction)
 
-    def get_execution_order(self) -> BarExecutionOrder:
-        """單根 bar 的開平倉先後；推導表與理由見 `order_rules.get_execution_order()`"""
+    def get_execution_sequence(self) -> BarExecutionSequence:
+        """單根 bar 的開平倉先後；推導表與理由見 `order_rules.get_execution_sequence()`"""
 
-        return order_rules.get_execution_order(self.strategy.allow_day_trade)
+        return order_rules.get_execution_sequence(self.strategy.allow_day_trade)
 
     # === Order Validation ===
     def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
@@ -415,7 +415,7 @@ class Backtester:
         self.settlement.apply_cash_dividends(self.data_feed.get_cash_dividend_map(date))
         self.settlement.apply_share_ratios(self.data_feed.get_share_ratio_map(date))
 
-        if self.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE:
+        if self.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
             self.execute_open_signal(quotes)
             self.execute_close_signal(quotes)
         else:

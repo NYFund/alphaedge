@@ -9,7 +9,7 @@ from core.backtest.models.fill_model import TwStockFillModel
 from core.models import StockOrder, StockPosition, StockQuote, StockTradeRecord
 from core.utils import (
     Action,
-    BarExecutionOrder,
+    BarExecutionSequence,
     MarginCallPolicy,
     PositionType,
     Scale,
@@ -49,7 +49,7 @@ def short_strategy(make_strategy, **overrides):
 
 # === 方向驅動 ===
 @pytest.mark.parametrize("direction", list(TradeDirection))
-def test_execution_order_derivation(
+def test_execution_sequence_derivation(
     make_strategy, make_backtester, direction: TradeDirection
 ) -> None:
     """執行順序只由 allow_day_trade 推導，與方向無關"""
@@ -57,12 +57,12 @@ def test_execution_order_derivation(
     day_trade = make_backtester(
         make_strategy(direction=direction, allow_day_trade=True)
     )
-    assert day_trade.get_execution_order() == BarExecutionOrder.OPEN_THEN_CLOSE
+    assert day_trade.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE
 
     no_day_trade = make_backtester(
         make_strategy(direction=direction, allow_day_trade=False)
     )
-    assert no_day_trade.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
+    assert no_day_trade.get_execution_sequence() == BarExecutionSequence.CLOSE_THEN_OPEN
 
 
 def test_day_trade_is_off_by_default(make_strategy, make_backtester) -> None:
@@ -74,7 +74,7 @@ def test_day_trade_is_off_by_default(make_strategy, make_backtester) -> None:
 
     backtester: Backtester = make_backtester(make_strategy())
 
-    assert backtester.get_execution_order() == BarExecutionOrder.CLOSE_THEN_OPEN
+    assert backtester.get_execution_sequence() == BarExecutionSequence.CLOSE_THEN_OPEN
     assert backtester.get_allowed_directions() == {PositionType.LONG}
 
 

@@ -5,7 +5,7 @@ import pytest
 
 from core.models import BaseOrder, StockOrder
 from core.portfolio import order_rules
-from core.utils import Action, BarExecutionOrder, PositionType, TradeDirection
+from core.utils import Action, BarExecutionSequence, PositionType, TradeDirection
 
 """
 訂單規則：回測與實盤唯一的一份
@@ -57,16 +57,16 @@ def test_allowed_directions_follow_the_declared_direction(
 @pytest.mark.parametrize(
     "allow_day_trade, expected",
     [
-        (True, BarExecutionOrder.OPEN_THEN_CLOSE),
-        (False, BarExecutionOrder.CLOSE_THEN_OPEN),
+        (True, BarExecutionSequence.OPEN_THEN_CLOSE),
+        (False, BarExecutionSequence.CLOSE_THEN_OPEN),
     ],
 )
-def test_execution_order_derivation(
-    allow_day_trade: bool, expected: BarExecutionOrder
+def test_execution_sequence_derivation(
+    allow_day_trade: bool, expected: BarExecutionSequence
 ) -> None:
     """當沖先開後平（當天開的部位當天就可能出場），否則先平後開"""
 
-    assert order_rules.get_execution_order(allow_day_trade) is expected
+    assert order_rules.get_execution_sequence(allow_day_trade) is expected
 
 
 # === 動作推導 ===
