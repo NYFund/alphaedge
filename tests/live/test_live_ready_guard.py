@@ -307,6 +307,82 @@ def test_intraday_hooks_share_one_segment() -> None:
     assert check_schedule_conflicts(strategy) is None
 
 
+def test_stop_loss_after_close_is_detected() -> None:
+    """
+    停損排在比平倉更晚的段落 → 實盤先一般平倉、後停損
+
+    回測的平倉階段固定先停損，實盤順序反過來就會靜默改掉部位軌跡。
+    """
+
+    strategy: FakeStrategy = FakeStrategy(
+        live_schedule={
+            LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            LiveHook.STOP_LOSS.value: ExecutionTiming.AT_CLOSE,
+        },
+    )
+
+    conflict: Optional[str] = check_schedule_conflicts(strategy)
+
+    assert conflict is not None
+    assert "stop_loss" in conflict
+    with pytest.raises(LiveReadinessError, match="stop_loss"):
+        verify_strategies([strategy])
+
+
+@pytest.mark.parametrize(
+    "stop_timing",
+    [ExecutionTiming.AT_OPEN, ExecutionTiming.AT_CLOSE, ExecutionTiming.IMMEDIATE],
+)
+def test_stop_loss_not_later_than_close_passes(stop_timing: ExecutionTiming) -> None:
+    """停損與平倉同段落、或排在更早的段落（含盤中逐筆）都與回測一致"""
+
+    strategy: FakeStrategy = FakeStrategy(
+        live_schedule={
+            LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.STOP_LOSS.value: stop_timing,
+        },
+    )
+
+    assert check_schedule_conflicts(strategy) is None
+
+
+def test_both_conflicts_are_reported_together() -> None:
+    """開平倉順序與停損順序都矛盾時一併列出，不必修一個才看到下一個"""
+
+    strategy: FakeStrategy = FakeStrategy(
+        live_schedule={
+            LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            LiveHook.STOP_LOSS.value: ExecutionTiming.AT_CLOSE,
+        },
+        allow_day_trade=True,
+    )
+
+    conflict: Optional[str] = check_schedule_conflicts(strategy)
+
+    assert conflict is not None
+    assert "實盤當不了沖" in conflict
+    assert "stop_loss" in conflict
+
+
+def test_live_ready_strategies_pass_the_stop_loss_check() -> None:
+    """既有標了 live_ready 的策略都通過停損段落檢查"""
+
+    from core.strategies.strategy_loader import StrategyLoader
+
+    checked: List[str] = []
+    for name, strategy_class in StrategyLoader.load_strategies().items():
+        strategy: BaseStrategy = strategy_class()
+        if not strategy.live_ready:
+            continue
+        checked.append(name)
+        assert check_schedule_conflicts(strategy) is None, name
+
+    assert "MomentumStrategy1" in checked
+
+
 # === 鉤子段落解析 ===
 def test_stop_loss_falls_back_to_close() -> None:
     """
