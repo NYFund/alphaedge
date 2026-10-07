@@ -1,6 +1,7 @@
 import argparse
 import os
 import plistlib
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -36,7 +37,6 @@ _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 
 # 標籤後綴 → (台北時, 台北分, `python` 之後的參數)
 _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
-    "update-db": (8, 0, ["-m", "tasks.update_db"]),
     "stock-open": (
         8,
         30,
@@ -107,6 +107,33 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "MomentumFuturesStrategy",
             "--phase",
             "after_close",
+        ],
+    ),
+}
+
+# 依序執行的多步排程：標籤後綴 → (台北時, 台北分, [各步 `python` 之後的參數])
+#
+# 資料更新排在台北 06:00，跑完**接著**補比前一交易日的訊號 parity：
+# - 補比要用前一交易日的日 K，它在資料更新後才入庫；盤後當下比，回測一張委託都產生不出來。
+# - 接在後面而不排固定時刻：資料更新實測 8 分鐘到近 3 小時不等，固定時刻可能比到還沒入庫的資料。
+#   資料更新失敗時補比照樣執行，由它自己的新鮮度檢查拒絕（退出碼 3），失敗原因才看得到。
+# - 06:00 而不是 08:00：留兩個多小時給 08:30 的開盤段，資料更新拖長時也不會撞上。
+# 股票與期貨各跑一次補比：兩條線的策略不可混在同一個行程（段落時窗不同）
+_CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
+    "update-db": (
+        6,
+        0,
+        [
+            ["-m", "tasks.update_db"],
+            ["-m", "apps.live", "--strategy", "MomentumStrategy1", "--phase", "parity"],
+            [
+                "-m",
+                "apps.live",
+                "--strategy",
+                "MomentumFuturesStrategy",
+                "--phase",
+                "parity",
+            ],
         ],
     ),
 }
@@ -231,6 +258,13 @@ def all_plists(uv_bin: str) -> Dict[str, Dict[str, Any]]:
             calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS),
             uv_bin=uv_bin,
         )
+    for suffix, (hour, minute, steps) in _CHAINED_JOBS.items():
+        plists[suffix] = build_plist(
+            suffix,
+            build_chain_command(uv_bin, steps),
+            calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS),
+            uv_bin=uv_bin,
+        )
     for suffix, (month, day, hour, minute, args) in _ONE_OFF_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
@@ -245,6 +279,31 @@ def all_plists(uv_bin: str) -> Dict[str, Dict[str, Any]]:
         uv_bin=uv_bin,
     )
     return plists
+
+
+def build_chain_command(uv_bin: str, steps: List[List[str]]) -> List[str]:
+    """
+    - Description:
+        把多步指令組成一個 `/bin/sh -c` 排程：**每一步都執行**，結束碼取第一個失敗的
+
+        前一步失敗不中斷後面：資料更新失敗時補比仍要跑，由它的新鮮度檢查留下
+        「為什麼沒比」的紀錄；中斷的話就只剩一個結束碼，看不出補比沒跑。
+    - Parameters:
+        - uv_bin: str
+            uv 執行檔路徑
+        - steps: List[List[str]]
+            各步 `python` 之後的參數
+    - Return:
+        - List[str]
+            `ProgramArguments`
+    """
+
+    lines: List[str] = ["status=0"]
+    for step in steps:
+        command: str = shlex.join([uv_bin, *_UV_RUN_ARGS, *step])
+        lines.append(f'{command}; code=$?; [ "$status" -eq 0 ] && status=$code')
+    lines.append('exit "$status"')
+    return ["/bin/sh", "-c", "\n".join(lines)]
 
 
 def domain() -> str:

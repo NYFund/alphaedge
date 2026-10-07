@@ -1,4 +1,5 @@
 import argparse
+import datetime
 import sys
 from typing import Any, Dict, List, Optional, Type
 
@@ -60,6 +61,9 @@ EXIT_TERMINATED: int = 143
 # 以券商部位重建時寫進 `live_run.phase` 的值；它不是交易段落，存活監控不會等它
 RESYNC_PHASE: str = "resync"
 
+# 次日補比 parity 的段落名；同樣不是交易段落，存活監控不會等它
+PARITY_PHASE: str = "parity"
+
 # `--broker` 的預設值
 DEFAULT_BROKER: str = "shioaji"
 
@@ -98,8 +102,16 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--phase",
-        choices=["open", "close", "after_close", "intraday"],
-        help="執行的段落（--resync-from-broker 時不可指定）",
+        choices=["open", "close", "after_close", "intraday", PARITY_PHASE],
+        help=(
+            "執行的段落（--resync-from-broker 時不可指定）；"
+            "parity 為次日資料更新後補比前一交易日，不連券商、不送單"
+        ),
+    )
+    parser.add_argument(
+        "--date",
+        type=datetime.date.fromisoformat,
+        help="只給 --phase parity 用：要補比的交易日（YYYY-MM-DD），預設為歷史資料最新日",
     )
     parser.add_argument(
         "--broker",
@@ -191,6 +203,9 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         )
         return EXIT_USAGE
 
+    if args.date is not None and args.phase != PARITY_PHASE:
+        print("--date 只能與 --phase parity 併用", file=sys.stderr)
+        return EXIT_USAGE
     if args.broker == "fake" and not args.simulation:
         print("正式環境不可使用 fake 券商", file=sys.stderr)
         return EXIT_USAGE
@@ -261,6 +276,10 @@ def _run_live_phase(
     print(f"實盤啟動：{environment}環境、段落 {args.phase}、策略 {names}")
 
     try:
+        if args.phase == PARITY_PHASE:
+            unexplained: int = trader.run_parity(args.date)
+            print(f"訊號 parity 補比完成：未解釋差異 {unexplained} 筆")
+            return 0
         if args.phase == "after_close":
             # 盤後不送新倉單，走另一條流程：刷新委託、對帳、回填成本、
             # 殘量處理、輸出報表

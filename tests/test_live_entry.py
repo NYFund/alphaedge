@@ -1,13 +1,15 @@
 import argparse
+import datetime
 import importlib
 import os
 import signal
 import subprocess
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 
 import apps.live as live_entry
+from core.live.datafeed.base import DataFreshnessError
 from core.live.risk.trading_mode import TradingMode
 from core.utils import ExecutionTiming
 from tests.entry_sandbox import run_isolated
@@ -40,6 +42,7 @@ def make_live_args() -> argparse.Namespace:
         resync_from_broker=False,
         confirm_resync=False,
         resume_trading=None,
+        date=None,
     )
 
 
@@ -259,6 +262,43 @@ def test_startup_check_failures_exit_with_stale_data(
     code: int = live_entry.run_live(make_live_args(), {"Alpha": object})
 
     assert code == live_entry.EXIT_STALE_DATA
+
+
+def test_date_is_only_for_the_parity_phase() -> None:
+    """`--date` 只給補比用；帶在交易段落上會讓人以為那一段跑的是指定日期"""
+
+    args: argparse.Namespace = make_live_args()
+    args.date = datetime.date(2026, 10, 7)
+
+    assert live_entry.run_live(args, {"Alpha": object}) == live_entry.EXIT_USAGE
+
+
+def test_parity_phase_runs_the_next_day_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--phase parity` 只走補比，不跑任何交易段落；資料沒更新時回 3"""
+
+    class ParityTrader:
+        """補比被呼叫時拋出資料過期"""
+
+        def __init__(self) -> None:
+            self.dates: List[Optional[datetime.date]] = []
+
+        def run_parity(self, run_date: Optional[datetime.date]) -> int:
+            self.dates.append(run_date)
+            raise DataFreshnessError("資料停在 T-30")
+
+        def run(self, timing: Any) -> None:
+            raise AssertionError("補比不可跑交易段落")
+
+    trader: ParityTrader = ParityTrader()
+    monkeypatch.setattr(live_entry, "build_live_trader", lambda *args, **kwargs: trader)
+    args: argparse.Namespace = make_live_args()
+    args.phase = live_entry.PARITY_PHASE
+    args.date = datetime.date(2026, 10, 7)
+
+    assert live_entry.run_live(args, {"Alpha": object}) == live_entry.EXIT_STALE_DATA
+    assert trader.dates == [datetime.date(2026, 10, 7)]
 
 
 class RecordingTrader:

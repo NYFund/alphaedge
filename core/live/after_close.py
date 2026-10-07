@@ -171,15 +171,16 @@ class AfterCloseRunner:
             reports: Dict[str, Path] = self.reporter.write_daily_reports(today)
             slippage: Dict[str, float] = self.reporter.summarize_slippage(today)
 
-            # 6. 訊號 parity：同一支策略在回測與實盤有沒有送出同一批委託。
-            # **排在報表之後**：比對要讀當日委託，而那些在前面幾步已經寫完了
-            unexplained: int = self.check_signal_parity(today)
+            # 訊號 parity **不在這裡比**：當日回測要用當天的日 K，而它要到次日早上
+            # 資料更新後才入庫。在這裡比，回測一張委託都產生不出來，實盤的開倉單
+            # 全被歸成快照口徑差異，parity 每天都「通過」。改由次日資料更新後
+            # 以 `--phase parity` 補比（見 `LiveTrader.run_parity()`）
+            logger.info("訊號 parity 於次日資料更新後補比，盤後不比對")
 
             return {
                 "reports": reports,
                 "pending_actions": remainders,
                 "slippage": slippage,
-                "unexplained_parity": unexplained,
             }
         finally:
             self.broker.close()
@@ -190,7 +191,10 @@ class AfterCloseRunner:
     def check_signal_parity(self, run_date: datetime.date) -> int:
         """
         - Description:
-            比對當日實盤委託與同一天回測會送出的委託
+            比對某一交易日的實盤委託與同一天回測會送出的委託
+
+            **只在該日的日 K 已入庫後呼叫**（次日資料更新後的補比），盤後當下不呼叫——
+            理由見 `run()`。
 
             **未解釋的差異一律推播 CRITICAL**：訊號漂移不會有任何錯誤訊息，
             它只會讓回測績效靜靜失去參考價值。已知的制度性差異（快照口徑、

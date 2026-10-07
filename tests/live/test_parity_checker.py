@@ -348,6 +348,48 @@ def test_filled_or_rejected_orders_are_not_execution_diffs(status: str) -> None:
     assert compare([row], [make_backtest_order()], []) == []
 
 
+def test_recheck_replaces_the_previous_result(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    同一天重比時清掉舊結果，不殘留舊序號
+
+    盤後段與次日補比、手動重跑都可能比同一天；以（日期、策略、序號）upsert
+    只會覆寫前幾筆，差異變少時舊的那幾筆會留在表裡。
+    """
+
+    dao.upsert_order(
+        {
+            "client_order_id": "run1-0001",
+            "run_id": "run1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Buy",
+            "position_type": "LONG",
+            "price": 1000.0,
+            "volume": 2,
+            "status": "FILLED",
+            "filled_volume": 2,
+            "created_at": NOW,
+        }
+    )
+    backtest: List[List[BaseOrder]] = [
+        [make_backtest_order("2317"), make_backtest_order("2454")],
+        [make_backtest_order("2330")],
+    ]
+    checker: ParityChecker = ParityChecker(
+        dao, lambda name, day: backtest.pop(0), output_root=tmp_path
+    )
+
+    checker.check(TODAY)
+    checker.check(TODAY)
+
+    rows: List[Any] = dao.conn.execute(
+        "SELECT COUNT(*) FROM live_parity_diff WHERE strategy_name = 'Alpha'"
+    ).fetchall()
+    assert rows == [(0,)]
+
+
 def test_check_writes_the_table_and_the_csv(dao: LiveTradeDAO, tmp_path: Path) -> None:
     """差異要同時進 `live_parity_diff` 與 CSV——CSV 是給人看的，表是給查的"""
 

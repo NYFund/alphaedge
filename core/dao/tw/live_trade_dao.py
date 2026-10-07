@@ -1036,6 +1036,26 @@ class LiveTradeDAO(BaseDAO):
 
         self._upsert(LIVE_PARITY_DIFF_TABLE_NAME, row, ("date", "strategy_name", "seq"))
 
+    def delete_parity_diffs(self, date: datetime.date, strategy_name: str) -> None:
+        """
+        - Description:
+            刪掉某策略某一天的全部 diff（不 commit，由呼叫端與重寫一起提交）
+
+            重新比對同一天時要先清掉舊結果：差異筆數變少的話，
+            以（日期、策略、序號）upsert 只會覆寫前幾筆，舊的序號會殘留下來。
+        - Parameters:
+            - date: datetime.date
+                交易日
+            - strategy_name: str
+                策略名
+        """
+
+        self.conn.execute(
+            f"DELETE FROM {LIVE_PARITY_DIFF_TABLE_NAME} "
+            "WHERE date = ? AND strategy_name = ?",
+            _to_live_params(date, strategy_name),
+        )
+
     # === 交易 ===
     @contextlib.contextmanager
     def savepoint(self, name: str) -> Iterator[None]:

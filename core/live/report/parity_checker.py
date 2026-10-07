@@ -252,8 +252,13 @@ class ParityChecker:
     def _persist(
         self, strategy_name: str, run_date: datetime.date, diffs: List[ParityDiff]
     ) -> Optional[Path]:
-        """寫入紀錄庫與 CSV；**沒有差異也要寫一份空的 CSV**"""
+        """
+        寫入紀錄庫與 CSV；**沒有差異也要寫一份空的 CSV**
 
+        同一天可能比對不只一次（補比、手動重跑），寫之前先清掉該日該策略的舊結果。
+        """
+
+        self.dao.delete_parity_diffs(run_date, strategy_name)
         for diff in diffs:
             self.dao.upsert_parity_diff(
                 {

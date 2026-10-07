@@ -3,7 +3,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import Any, Dict, List
 
 import pytest
 
@@ -254,6 +254,48 @@ def test_each_market_gets_its_own_execution_model(dao: LiveTradeDAO) -> None:
     assert isinstance(stock.execution_model, StockExecutionModel)
     assert isinstance(futures.execution_model, FuturesExecutionModel)
     assert stock.execution_model.get_price_limits("2330") == (None, None)
+
+
+def test_parity_backtest_uses_the_live_capital_and_holdings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    parity 的當日回測照實盤口徑：`live_capital` 與 `live_max_holdings`
+
+    用研究回測的 `init_capital`／`max_holdings` 的話，宣告了實盤額度的策略每天都會
+    因為張數與檔數不同而報未解釋差異。2026-10-06 試跑：實盤 40 萬切 3 檔、
+    回測 100 萬切 10 檔，三筆未解釋差異全是設定不同，不是訊號漂移。
+    """
+
+    import core.live.factory as live_factory
+
+    captured: Dict[str, Any] = {}
+
+    class StubBacktester:
+        submitted_orders: List[Any] = []
+
+        def run(self) -> None:
+            """不跑真的回測"""
+
+    def fake_build(strategy: Any, write_artifacts: bool, overrides: Any) -> Any:
+        captured["max_holdings"] = strategy.max_holdings
+        captured["capital"] = overrides.capital
+        return StubBacktester()
+
+    monkeypatch.setattr(live_factory, "build_backtester", fake_build)
+
+    class Sized(LiveStockStrategy):
+        def __init__(self) -> None:
+            super().__init__()
+            self.init_capital = 1_000_000.0
+            self.max_holdings = 10
+            self.live_capital = 400_000.0
+            self.live_max_holdings = 3
+
+    runner = live_factory.make_daily_backtest_runner([Sized()])
+    runner("Sized", datetime.date(2026, 10, 6))
+
+    assert captured == {"max_holdings": 3, "capital": 400_000.0}
 
 
 # === 段落時窗 ===

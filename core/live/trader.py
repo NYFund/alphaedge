@@ -25,7 +25,7 @@ from core.live.attribution.resync import (
     plan_resync,
 )
 from core.live.capital_allocator import CapitalAllocator
-from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
+from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError, RollPlan
 from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
 from core.live.intraday.session_guard import (
@@ -1701,6 +1701,67 @@ class LiveTrader:
         self.last_reconcile = self.after_close.last_reconcile
         self.record_finish(None)
         return summary
+
+    def run_parity(self, run_date: Optional[datetime.date] = None) -> int:
+        """
+        - Description:
+            補比某一交易日的訊號 parity；預設為歷史資料最新的那一天（前一交易日）
+
+            **在次日資料更新之後跑**：盤後當下當天的日 K 還沒入庫，當日回測產生不出
+            任何委託，比了也只會把實盤的開倉單全歸成快照口徑差異。
+
+            **不連券商**：比對只讀紀錄庫與歷史資料。交易日判定少了券商合約檔這個佐證，
+            新鮮度檢查只擋得住官方日曆確定的缺漏——寧可漏報，也不要為了比對去登入。
+
+            先做與段落相同的新鮮度檢查：資料沒更新到前一交易日時拋出，
+            不比一份會把開倉單全判成差異的結果。
+        - Parameters:
+            - run_date: Optional[datetime.date]
+                要比對的交易日；None 時取歷史資料最新日。指定時不可晚於資料最新日
+        - Return:
+            - int
+                未解釋差異的筆數
+        - Raise:
+            - DataFreshnessError
+                資料沒有更新到前一交易日，或指定的日期還沒有資料
+        """
+
+        error: Optional[BaseException] = None
+        try:
+            target: datetime.date = self._resolve_parity_date(run_date)
+            logger.info(f"=== 訊號 parity 補比 {target}（run_id={self.run_id}）===")
+            return self.after_close.check_signal_parity(target)
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            for context in self.contexts:
+                context.data_feed.close()
+            self.record_finish(error)
+
+    def _resolve_parity_date(self, run_date: Optional[datetime.date]) -> datetime.date:
+        """
+        補比的交易日：先過新鮮度檢查，再確認那一天的日 K 已經入庫
+
+        各策略的資料源取**最早**的最新日：同一個行程的策略共用一個市場，
+        但只要有一個還沒更新，那一天就不能拿來比。
+        """
+
+        today: datetime.date = self._now().date()
+        latest_dates: List[datetime.date] = []
+        for context in self.contexts:
+            context.data_feed.verify_data_freshness(today)
+            latest: Optional[datetime.date] = context.data_feed.get_latest_data_date()
+            if latest is not None:
+                latest_dates.append(latest)
+
+        available: Optional[datetime.date] = min(latest_dates, default=None)
+        target: Optional[datetime.date] = run_date or available
+        if target is None or available is None or target > available:
+            raise DataFreshnessError(
+                f"歷史資料最新日為 {available}，沒有 {target} 的日 K，無法比對"
+            )
+        return target
 
     def resolve_end_reason(self, error: Optional[BaseException]) -> str:
         """
