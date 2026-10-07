@@ -138,28 +138,13 @@ _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
     ),
 }
 
-# 只跑一次的盤中實測：台北 (月, 日, 時, 分) → pytest 參數
-_ONE_OFF_JOBS: Dict[str, Tuple[int, int, int, int, List[str]]] = {
-    "sim-short-sell": (
-        9,
-        23,
-        9,
-        30,
-        [
-            "-m",
-            "pytest",
-            "tests/live/test_shioaji_sim.py",
-            "-m",
-            "shioaji_sim_order",
-            "-k",
-            "short_sell",
-            "-v",
-            "-s",
-            "-p",
-            "no:randomly",
-        ],
-    ),
-}
+# 只跑一次的盤中實測：標籤後綴 → 台北 (月, 日, 時, 分, `python` 之後的參數)
+#
+# **跑完就要從這裡刪掉**：launchd 的「月／日」排程每年都會重複觸發，留著的話
+# 每次重裝（例如夏令時間切換）都會把它裝回去，明年同一天再跑一次。
+# 2026-09-23 的 `sim-short-sell`（盤中放空實測）已執行完畢並移除。
+# 護欄見 `tests/test_rehearsal_schedule.py`
+_ONE_OFF_JOBS: Dict[str, Tuple[int, int, int, int, List[str]]] = {}
 
 # 排程一律帶 `--no-sync`：`uv run` 預設會先同步環境，`pyproject.toml` 一變動就要重建
 # 套件並連 PyPI 下載 build 相依；排程時段的網路不保證可用，DNS 一失敗段落就在

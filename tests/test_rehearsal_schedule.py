@@ -1,3 +1,4 @@
+import datetime
 import subprocess
 from pathlib import Path
 from typing import List
@@ -5,6 +6,7 @@ from typing import List
 from scripts.launchd.rehearsal_schedule import (
     _CHAINED_JOBS,
     _DAILY_JOBS,
+    _ONE_OFF_JOBS,
     build_chain_command,
 )
 
@@ -72,3 +74,21 @@ def test_chain_exits_zero_when_every_step_succeeds(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0
+
+
+def test_one_off_jobs_are_not_left_in_the_past() -> None:
+    """
+    一次性排程跑完就要刪掉
+
+    launchd 的「月／日」排程每年重複觸發；過期的留在清單裡，每次重裝都會把它裝回去。
+    2026-10-08 重裝時 9/23 的 `sim-short-sell` 就被裝了回來。
+    """
+
+    today: datetime.date = datetime.date.today()
+    expired: List[str] = [
+        suffix
+        for suffix, (month, day, *_) in _ONE_OFF_JOBS.items()
+        if datetime.date(today.year, month, day) < today
+    ]
+
+    assert expired == []
