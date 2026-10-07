@@ -481,18 +481,10 @@ def build_live_trader(
         make_daily_backtest_runner(strategies, resolved_dao.get_lots_held_at_start),
         strategy_names=[type(strategy).__name__ for strategy in strategies],
     )
-    _record_run(
-        resolved_dao,
-        resolved_run_id,
-        simulation,
-        dry_run,
-        not isinstance(notifier, NullNotifier),
-        now_provider,
-        phase,
-        [type(strategy).__name__ for strategy in strategies],
-    )
-
-    return LiveTrader(
+    # 先組好引擎、再寫 `live_run`：組裝過程中任何一步拋錯（例如兩個市場的時窗
+    # 沒有交集）都是設定錯誤，那時不該留下一筆沒有結束時間的執行紀錄——
+    # 下一次啟動會把它當成崩潰，發 CRITICAL 並觸發「以券商為準重建部位」
+    trader: LiveTrader = LiveTrader(
         contexts=contexts,
         broker=resolved_broker,
         order_manager=order_manager,
@@ -525,6 +517,18 @@ def build_live_trader(
         now_provider=now_provider,
         parity_checker=parity_checker,
     )
+    _record_run(
+        resolved_dao,
+        resolved_run_id,
+        simulation,
+        dry_run,
+        not isinstance(notifier, NullNotifier),
+        now_provider,
+        phase,
+        [type(strategy).__name__ for strategy in strategies],
+    )
+
+    return trader
 
 
 def make_order_rebuilder(

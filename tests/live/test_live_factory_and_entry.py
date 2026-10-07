@@ -460,6 +460,26 @@ def test_mixing_markets_with_disjoint_windows_is_refused(dao: LiveTradeDAO) -> N
         build([LiveStockStrategy(), LiveFuturesStrategy()], dao)
 
 
+def test_config_error_leaves_no_unfinished_run(dao: LiveTradeDAO) -> None:
+    """
+    組裝階段的設定錯誤不可留下沒有結束時間的 `live_run`
+
+    曾經先寫 `live_run` 才合併時窗：混帶股票與期貨策略時以結束碼 2 退出，
+    那一列卻沒有 `ended_at`，下一次啟動把它標成 CRASHED、發 CRITICAL，
+    並觸發「以券商為準重建部位」——實際上根本沒連過券商。
+    """
+
+    with pytest.raises(ValueError, match="沒有交集"):
+        build([LiveStockStrategy(), LiveFuturesStrategy()], dao)
+
+    assert dao.conn.execute("SELECT COUNT(*) FROM live_run").fetchone()[0] == 0
+
+    # 接著跑一次合法的組裝：只有這一次的紀錄，沒有前一次留下的殘骸
+    build([LiveStockStrategy()], dao)
+
+    assert dao.conn.execute("SELECT COUNT(*) FROM live_run").fetchone()[0] == 1
+
+
 # === 回測不相依券商 SDK ===
 NO_SDK_PROBE: str = """
 import builtins
