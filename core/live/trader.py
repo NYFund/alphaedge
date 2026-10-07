@@ -1741,7 +1741,12 @@ class LiveTrader:
 
     def _resolve_parity_date(self, run_date: Optional[datetime.date]) -> datetime.date:
         """
-        補比的交易日：先過新鮮度檢查，再確認那一天的日 K 已經入庫
+        補比的交易日：確認那一天的日 K 已經入庫
+
+        **未指定日期時先過新鮮度檢查**：排程補比的對象是前一交易日，資料沒更新到那裡
+        就不比。**指定日期時只要那一天有資料**：回頭補比過去某天時，資料庫只會更新到
+        更早的日子（例如半夜補比前天，昨天的資料清晨才入庫），要求「更新到前一交易日」
+        只會把合法的補比擋掉。
 
         各策略的資料源取**最早**的最新日：同一個行程的策略共用一個市場，
         但只要有一個還沒更新，那一天就不能拿來比。
@@ -1750,7 +1755,8 @@ class LiveTrader:
         today: datetime.date = self._now().date()
         latest_dates: List[datetime.date] = []
         for context in self.contexts:
-            context.data_feed.verify_data_freshness(today)
+            if run_date is None:
+                context.data_feed.verify_data_freshness(today)
             latest: Optional[datetime.date] = context.data_feed.get_latest_data_date()
             if latest is not None:
                 latest_dates.append(latest)
