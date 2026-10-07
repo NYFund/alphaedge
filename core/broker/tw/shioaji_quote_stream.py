@@ -426,7 +426,7 @@ class ShioajiQuoteStream:
 
             日盤 08:45~13:45、夜盤 15:00~次日 05:00。**兩段之間的空檔歸日盤**：
             那段時間沒有行情，判成哪一邊都不影響報價，但歸夜盤會讓
-            13:45 收盤後的快照被記成次一交易日的帳。
+            13:45 收盤後的快照被記成次一交易日的帳（判定見 `FuturesSession.resolve_or_day()`）。
         - Parameters:
             - moment: datetime.datetime
                 報價時刻
@@ -435,10 +435,7 @@ class ShioajiQuoteStream:
                 交易時段
         """
 
-        hour: int = moment.hour
-        if hour >= 15 or hour < 5:
-            return FuturesSession.NIGHT
-        return FuturesSession.DAY
+        return FuturesSession.resolve_or_day(moment)
 
     @staticmethod
     def resolve_multiplier(product: str, contract: Optional[Any] = None) -> int:

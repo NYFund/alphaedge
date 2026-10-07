@@ -438,8 +438,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         那段時間沒有行情，但歸夜盤會讓收盤後的快照被記成次一交易日的帳。
         """
 
-        hour: int = moment.hour
-        return FuturesSession.NIGHT if hour >= 15 or hour < 5 else FuturesSession.DAY
+        return FuturesSession.resolve_or_day(moment)
 
     @staticmethod
     def _resolve_multiplier(product: str, contract: Any) -> int:

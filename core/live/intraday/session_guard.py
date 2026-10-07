@@ -4,7 +4,13 @@ from typing import Callable, List, Optional, Tuple
 from loguru import logger
 
 from core.models import BaseAccount, BaseOrder, BasePosition
-from core.utils import Action, DayTradeUncoveredPolicy, PositionType
+from core.utils import (
+    FUTURES_NIGHT_SESSION_CLOSE,
+    Action,
+    DayTradeUncoveredPolicy,
+    FuturesSession,
+    PositionType,
+)
 
 """
 日終強制動作：當沖回補與期貨夜盤的日期歸屬
@@ -20,10 +26,6 @@ from core.utils import Action, DayTradeUncoveredPolicy, PositionType
 # 現股當沖的回補時點。**不等到 13:30**：收盤前最後幾分鐘流動性會變差，
 # 而回補單送不出去的代價是違約交割
 DAY_TRADE_COVER_TIME: datetime.time = datetime.time(13, 20)
-
-# TAIFEX 夜盤 15:00 開盤、次日 05:00 收盤
-NIGHT_SESSION_START_HOUR: int = 15
-NIGHT_SESSION_END_HOUR: int = 5
 
 
 def resolve_live_policy(
@@ -81,9 +83,7 @@ def is_night_session(moment: datetime.datetime) -> bool:
     那段時間沒有行情，但歸夜盤會讓收盤後的動作被記成次一交易日的帳。
     """
 
-    return (
-        moment.hour >= NIGHT_SESSION_START_HOUR or moment.hour < NIGHT_SESSION_END_HOUR
-    )
+    return FuturesSession.resolve_or_day(moment) is FuturesSession.NIGHT
 
 
 def session_open_date(moment: datetime.datetime) -> datetime.date:
@@ -94,7 +94,7 @@ def session_open_date(moment: datetime.datetime) -> datetime.date:
     同一段；取當下的日曆日會把它算成新的一段。
     """
 
-    if moment.hour < NIGHT_SESSION_END_HOUR:
+    if moment.time() <= FUTURES_NIGHT_SESSION_CLOSE:
         return moment.date() - datetime.timedelta(days=1)
     return moment.date()
 

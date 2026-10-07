@@ -1,5 +1,6 @@
+import datetime
 from enum import Enum
-from typing import Dict
+from typing import Dict, Optional
 
 """
 期貨商品常量：商品代碼、乘數、跳動點、時段、調整方式與換月規則
@@ -21,6 +22,14 @@ FUTURES_SESSION_NIGHT = "night"  # 盤後交易時段 15:00–次日 05:00
 # 整併後的單一序列。**這個值不會出現在資料表裡**，
 # 它是報價層才有的組合結果：前一交易日的夜盤 ＋ 當日日盤合成一根 bar
 FUTURES_SESSION_COMBINED = "combined"
+
+# 定義台期貨交易時段的起訖（TAIFEX 現行制度）
+# **全庫只在這裡寫一次**：市場結構（`FuturesCalendar`）、券商行情、實盤資料源與
+# 日終日期歸屬都從這裡取。券商閘道層不可 import 市場結構層，故放在最底層的常數
+FUTURES_DAY_SESSION_OPEN: datetime.time = datetime.time(8, 45)
+FUTURES_DAY_SESSION_CLOSE: datetime.time = datetime.time(13, 45)
+FUTURES_NIGHT_SESSION_OPEN: datetime.time = datetime.time(15, 0)
+FUTURES_NIGHT_SESSION_CLOSE: datetime.time = datetime.time(5, 0)  # 次一曆日
 
 
 # 定義連續合約的價格調整方式
@@ -329,3 +338,45 @@ class FuturesSession(str, Enum):
         """
 
         return (cls.DAY, cls.NIGHT)
+
+    @classmethod
+    def resolve(cls, moment: datetime.datetime) -> Optional["FuturesSession"]:
+        """
+        - Description:
+            判斷某個時間點屬於哪個交易時段；非交易時間（13:45~15:00、05:00~08:45）為 None
+
+            **凌晨 05:00（含）之前算夜盤**：凌晨 03:00 成交的那一筆，
+            屬於前一天開始的那一段夜盤。收盤時點本身算在該時段內。
+        - Parameters:
+            - moment: datetime.datetime
+                時間點
+        - Return:
+            - Optional[FuturesSession]
+                所屬時段；非交易時間為 None
+        """
+
+        clock: datetime.time = moment.time()
+        if FUTURES_DAY_SESSION_OPEN <= clock <= FUTURES_DAY_SESSION_CLOSE:
+            return cls.DAY
+        if clock >= FUTURES_NIGHT_SESSION_OPEN or clock <= FUTURES_NIGHT_SESSION_CLOSE:
+            return cls.NIGHT
+        return None
+
+    @classmethod
+    def resolve_or_day(cls, moment: datetime.datetime) -> "FuturesSession":
+        """
+        - Description:
+            同 `resolve()`，但**非交易時間歸日盤**
+
+            實盤的報價與日終動作一定要落在某一段：空檔沒有行情，判成哪一邊都不影響報價，
+            但歸夜盤會讓 13:45 收盤後的快照與動作被記成次一交易日的帳。
+            ETL 與回測要分辨「不在交易時間」時用 `resolve()`。
+        - Parameters:
+            - moment: datetime.datetime
+                時間點
+        - Return:
+            - FuturesSession
+                所屬時段；非交易時間為 `DAY`
+        """
+
+        return cls.resolve(moment) or cls.DAY
