@@ -781,6 +781,34 @@ def test_parity_refuses_stale_data(tmp_path: Path) -> None:
     assert backtest_dates == []
 
 
+def test_explicit_date_backfill_does_not_need_yesterday(tmp_path: Path) -> None:
+    """
+    指定日期補比時，只要那一天有資料，不要求資料更新到前一交易日
+
+    2026-10-08 00:30 補比 10/6：資料只到 10/6（10/7 清晨才入庫），
+    新鮮度檢查把這個合法的補比擋了下來。
+    """
+
+    two_days_ago: datetime.date = TODAY - datetime.timedelta(days=2)
+    harness, backtest_dates = make_parity_harness(
+        tmp_path, latest_data_date=two_days_ago
+    )
+    harness.contexts[0].data_feed.calendar_sources = [_AlwaysTradingDay()]
+
+    harness.trader.run_parity(two_days_ago)
+
+    assert backtest_dates == []  # 那天沒有委託，比對範圍是空的，但沒有被擋下
+
+
+class _AlwaysTradingDay:
+    """每一天都確定是交易日；讓新鮮度檢查一定判得出缺漏"""
+
+    name: str = "always"
+
+    def is_trading_day(self, date: datetime.date) -> Optional[bool]:
+        return True
+
+
 def test_parity_refuses_a_date_without_data(tmp_path: Path) -> None:
     """指定的日期還沒有日 K 時拒絕，不比一份空的回測"""
 
