@@ -68,6 +68,26 @@ def test_config_caps_cover_every_field() -> None:
     assert {field.name for field in fields(RiskConfig)} == set(RISK_LIMIT_CAPS)
 
 
+def test_every_threshold_is_enforced_somewhere() -> None:
+    """
+    每個門檻都要有執行端：`RiskManager` 真的拿它去比
+
+    曾經有一個 `account_exposure_ratio` 寫著「帳戶總曝險上限」，全庫卻沒有任何地方讀它，
+    唯一被讀到的地方是上限驗證——設多少都不擋單，也沒有任何警告。
+    """
+
+    source: str = (
+        Path(__file__).resolve().parents[2] / "core/live/risk/risk_manager.py"
+    ).read_text(encoding="utf-8")
+    unenforced: List[str] = [
+        field.name
+        for field in dataclasses.fields(RiskConfig)
+        if f"config.{field.name}" not in source
+    ]
+
+    assert not unenforced, f"RiskConfig 有欄位沒有執行端：{unenforced}"
+
+
 def test_config_rejects_values_above_the_cap() -> None:
     """超過上限的設定在建立時就拋出，不等到盤中第一次拒單才發現"""
 

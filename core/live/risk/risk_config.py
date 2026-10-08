@@ -9,16 +9,25 @@ RiskConfig：風控門檻
 
 比率一律相對於**該策略的實盤資金額度**（`live_capital`；未宣告時為 `init_capital`），
 不是研究回測的 `init_capital`——兩者可以不同，拿錯基準時四道上限會跟著放寬或收緊。
-帳戶層的幾條則相對於帳戶權益。
+帳戶層的單日虧損則相對於帳戶權益；帳戶總曝險沒有對應欄位（見 `CAPITAL_SAFETY_RATIO`）。
 """
 
 
-# 資金額度的安全係數：Σ 各策略額度不得超過帳戶總權益 × 它。
+# 資金額度的安全係數：Σ 各策略額度不得超過帳戶總權益 × 它（`CapitalAllocator.verify_quota()`）。
 #
-# **與 `RiskConfig.account_exposure_ratio` 是同一個值**，故只定義一次——
-# 定義兩次必然漂移。**不放 `core/config/schema.py`**：那個檔是資料庫結構
-# （分庫檔名、表名），擺一個營運參數進去會讓「改門檻」與「改 schema」
-# 混在同一個檔案的變更歷史裡。
+# **帳戶總曝險沒有另一道檢查，是由兩道既有的上限間接保證**：
+#   1. 啟動時 Σ 各策略額度 ≤ 總權益 × 本係數（權益已扣掉接管的無歸屬部位）；
+#   2. 送單前每支策略的曝險 ≤ 自己的額度 × `RiskConfig.total_exposure_ratio`（≤ 1）。
+# 兩者相乘，帳戶總曝險 ≤ 總權益 × 本係數。曾有一個 `RiskConfig.account_exposure_ratio`
+# 欄位寫著「帳戶總曝險上限」，卻沒有任何執行端，設多少都不擋單，已移除。
+#
+# **這個間接保證的空隙**（要補時在送單前即時查券商權益再擋）：
+#   - 權益只在啟動時比一次，盤中虧損讓權益縮水不會重算；
+#   - 模擬環境略過額度總量檢查（模擬帳務是假的，現金恆為 0）；
+#   - 啟動之後才出現、程式不知道的部位（例如盤中手動下單）不在任何一支策略的曝險裡。
+#
+# **不放 `core/config/schema.py`**：那個檔是資料庫結構（分庫檔名、表名），
+# 擺一個營運參數進去會讓「改門檻」與「改 schema」混在同一個檔案的變更歷史裡。
 CAPITAL_SAFETY_RATIO: float = 0.95
 
 
@@ -40,7 +49,6 @@ RISK_LIMIT_CAPS: Dict[str, Union[int, float]] = {
     "single_symbol_exposure_ratio": 0.50,
     "daily_loss_ratio": 0.10,
     "account_daily_loss_ratio": 0.10,
-    "account_exposure_ratio": 1.00,
 }
 
 
@@ -83,8 +91,7 @@ class RiskConfig:
 
     # === 帳戶層 ===
     account_daily_loss_ratio: float = 0.03  # 帳戶當日虧損 → 全體 REDUCE_ONLY
-    # 帳戶總曝險上限；與 `CapitalAllocator` 的安全係數同一個值
-    account_exposure_ratio: float = CAPITAL_SAFETY_RATIO
+    # 帳戶總曝險沒有對應欄位：由額度總量與各策略的總曝險上限間接保證（見 `CAPITAL_SAFETY_RATIO`）
 
     def __post_init__(self) -> None:
         """建立時就驗證，不等到盤中第一次拒單才發現門檻設錯"""
