@@ -200,6 +200,7 @@ graph TB
 | [開發部署](docs/deployment/dev-deployment.md)      | 本機更新資料、執行回測、檢視結果的日常流程      |
 | [正式環境部署](docs/deployment/prod-deployment.md) | Docker 映像建置、容器執行與角色切分             |
 | [實盤部署與排程](docs/deployment/live-deployment.md) | 實盤逐段落啟動、容器與 cron 排程、停止與退出碼 |
+| [實盤執行層](docs/live/execution-layer.md) | 策略的執行方式（`MARKET`／`LIMIT`）如何依時段換成券商委託、決策價、parity 歸類與已知限制 |
 | [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
 | [指令教學](docs/commands/command-usage.zh-TW.md)   | `update_db` target 對照與完整執行範例           |
 | [策略開發指南](core/strategies/README.md)          | 本專案策略實作方式                              |
@@ -512,6 +513,7 @@ AlphaEdge/
 │   ├── pipeline/              # ETL 入庫約定、權益變動表、公司行動
 │   ├── setup/                 # 開發環境設定
 │   ├── deployment/            # 開發與正式環境部署
+│   ├── live/                  # 實盤執行層（執行方式如何換成券商委託）
 │   ├── exchanges/             # 資料覆蓋範圍
 │   └── commands/              # 指令教學（中文／英文）
 ├── scripts/                   # 護欄檢查與一次性工具
