@@ -199,6 +199,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Dev Deployment](docs/deployment/dev-deployment.md)     | Day-to-day local flow: update data, run a backtest, view results |
 | [Prod Deployment](docs/deployment/prod-deployment.md)   | Building Docker images, running containers, role separation   |
 | [Live Deployment](docs/deployment/live-deployment.md)   | Per-phase live runs, container and cron scheduling, stop and exit codes |
+| [Live Execution Layer](docs/live/execution-layer.md) | How a strategy's execution style (`MARKET`/`LIMIT`) becomes a broker order per session; decision price, parity categories, known limits |
 | [Data Coverage](docs/exchanges/data_coverage.md)        | Data sources, API mapping, start dates and price adjustment   |
 | [Command Usage](docs/commands/command-usage.md)         | Full `update_db` target reference and runnable examples       |
 | [Strategy Development Guide](core/strategies/README.md) | How to implement strategies in this project                   |
@@ -515,6 +516,7 @@ AlphaEdge/
 │   ├── pipeline/              # ETL ingestion contract, equity change, corporate actions
 │   ├── setup/                 # dev environment setup
 │   ├── deployment/            # dev and prod deployment
+│   ├── live/                  # live execution layer (how execution styles become broker orders)
 │   ├── exchanges/             # data coverage
 │   └── commands/              # command usage (zh-TW / en)
 ├── scripts/                   # guardrail checks and one-off tools
