@@ -29,7 +29,7 @@
    目錄與檔名可用環境變數 `ALPHAEDGE_CA_DIR`、`SHIOAJI_CA_FILE` 改（compose 讀，程式不讀）。
 3. 策略要標 `live_ready = True`、宣告 `live_schedule` 與 `live_execution`（`ExecutionStyle.MARKET` 要成交／`LIMIT` 照價掛單），否則啟動檢查會拒絕。
    價格類型、委託價與 ROD／IOC 由實盤執行層依段落換算，策略不填：台股集合競價段落的 `MARKET` 買掛漲停、賣掛跌停，
-   盤中為決策價 ±2% 的保護價限價＋IOC；期貨的段落都在連續交易時段，`MARKET` 一律範圍市價＋IOC。停損與系統委託（補平、當沖回補、換月）固定 `MARKET`。
+   盤中為決策價 ±2% 的保護價限價＋IOC；期貨的段落都在連續交易時段，`MARKET` 一律範圍市價＋IOC。停損與系統委託（補平、當沖回補、換月）固定 `MARKET`。設計理由與已知限制見[實盤執行層](../live/execution-layer.md)。
    實盤的資金額度與持倉檔數可與回測分開設定：`live_capital`（`None` 時沿用 `init_capital`）與
    `live_max_holdings`（`None` 時沿用 `max_holdings`），**兩者要成對調整**——只調小資金而檔數不動，
    等權切分後每檔資金可能不足一張，訊號會被整批捨成 0 張。回測不讀這兩個屬性。
