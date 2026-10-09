@@ -38,7 +38,6 @@ from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.tw.updaters.futures_stock_universe_updater import (
     FuturesStockUniverseUpdater,
 )
-from core.pipeline.tw.updaters.futures_tick_updater import FuturesTickUpdater
 from core.pipeline.tw.updaters.market_holiday_updater import MarketHolidayUpdater
 from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
     MonthlyRevenueReportUpdater,
@@ -100,8 +99,6 @@ Target 對照表
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
   futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
                               **不含在 all／no_tick 內**，只在此處點名才會跑）
-  futures_tick                台期貨逐筆成交（Shioaji → DolphinDB；需 [dolphindb] 相依與金鑰；
-                              **不含在 all／no_tick 內**：重跑會重複寫入，只在點名時跑）
   fs                          財報 (Financial Statement)
   mrr                         月營收報表 (Monthly Revenue Report)
   finmind                     全部 FinMind（台股總覽 + 證券商 + 券商分點；
@@ -110,8 +107,8 @@ Target 對照表
   stock_info_with_warrant     FinMind 台股總覽（含權證）
   broker_info                 FinMind 證券商資訊
   broker_trading              FinMind 券商分點統計
-  all                         全部資料（含 tick；不含 futures_tick、futures_stock_price 與 finmind）
-  no_tick                     全部資料（不含 tick、futures_tick、futures_stock_price 與 finmind，預設）
+  all                         全部資料（含 tick；不含 futures_stock_price 與 finmind）
+  no_tick                     全部資料（不含 tick、futures_stock_price 與 finmind，預設）
 
 ================================================================================
 使用範例
@@ -125,8 +122,8 @@ Target 對照表
 """
 
 
-# 需要 Shioaji 金鑰與 tick 選用相依（`[tick]`／`[dolphindb]`）的 target；`no_tick` 一律排除這些
-TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
+# 需要 Shioaji 金鑰與 `[tick]` 選用相依（外加執行中的 TimescaleDB）的 target；`no_tick` 一律排除
+TICK_DATA_TYPES: Set[DataType] = {DataType.TICK}
 
 # 只在 `--target` 明確點名時才跑的 target；`all` 與 `no_tick` 兩個集合捷徑一律排除
 #
@@ -136,18 +133,12 @@ TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 # 這種量級的回補必須是人明確要求的動作，不能被 `python -m apps.update_db`
 # 的預設值一腳踩進去，更不能卡住排在它後面的 futures_chip、fs、mrr 等 target
 #
-# 期貨 tick 同樣只能點名：它沒有續跑依據（逐日逐契約爬、沒有已爬紀錄），
-# DolphinDB 表又是 `keepDuplicates=ALL`、loader 每次重放整個目錄——每跑一次
-# 近月契約就重抓並多寫一份，成交量被放大 N 倍，每個候選日還先耗一次
-# `api.usage()` 配額。在加上「契約 × 日」的載入紀錄之前，不能讓 `all` 帶到它
-#
 # FinMind 暫停每日更新：現行帳號等級（register）沒有券商分點的資料集權限，
 # 每晚都在第一個組合就中止、以結束碼 1 收場。恆紅的 target 會讓真正的失敗混在裡面
 # 沒人看；其餘兩份（台股總覽、證券商資訊）幾乎不變，也沒有每日依賴它們的程式。
 # 帳號升級後從這裡移除即可恢復
 EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
     DataType.FUTURES_STOCK_PRICE,
-    DataType.FUTURES_TICK,
     DataType.FINMIND,
 }
 
@@ -175,11 +166,8 @@ def expand_targets(targets: Set[str]) -> Set[str]:
             dt.name.lower() for dt in DataType if dt not in EXPLICIT_ONLY_DATA_TYPES
         )
 
-    # no_tick = 所有資料類型 − **所有** tick（包含 finmind）
-    #
-    # **`futures_tick` 也要排除**：只排除 `DataType.TICK` 的話，預設的
-    # `python -m apps.update_db` 會去跑期貨 tick——那需要 Shioaji 金鑰與
-    # `[dolphindb]` 選用相依，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了。
+    # no_tick = 所有資料類型 − tick（預設值）：tick 需要 Shioaji 金鑰、`[tick]` 選用相依
+    # 與執行中的 TimescaleDB，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了
     if "no_tick" in expanded:
         expanded.update(
             dt.name.lower()
@@ -553,23 +541,6 @@ def main() -> None:
                 )
             finally:
                 stock_futures_updater.close()
-
-    if DataType.FUTURES_TICK.name.lower() in targets:
-        with target_guard("futures_tick", failed_targets):
-            # **要爬哪些契約由日線行情表決定**，不是自己推近月＋次月；
-            # 預設只爬近月（期貨的量集中在近月，遠月同樣佔配額卻沒幾筆）
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FUTURES_PRICE,
-                from_date=from_date,
-            )
-            futures_tick_updater: FuturesTickUpdater = FuturesTickUpdater()
-            try:
-                futures_tick_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                futures_tick_updater.logout()
 
     if DataType.FUTURES_CHIP.name.lower() in targets:
         with target_guard("futures_chip", failed_targets):

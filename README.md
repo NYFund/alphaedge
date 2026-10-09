@@ -358,7 +358,7 @@ cp .env.example .env
 
 | 變數 | 用途 | 什麼時候需要 |
 | ---- | ---- | ------------ |
-| `DDB_PATH`、`DDB_HOST`、`DDB_PORT`、`DDB_USER`、`DDB_PASSWORD` | DolphinDB 連線 | 存取 tick 資料、跑 tick 回測 |
+| `TICK_DATABASE_URL` | 台股 tick 的 TimescaleDB 連線（開 Docker Desktop 後 `docker compose up -d postgres`） | 存取 tick 資料、跑 tick 回測、tick 更新 |
 | `API_KEY`、`API_SECRET_KEY` | 永豐 Shioaji API | 爬 tick 資料 |
 | `FINMIND_API_TOKEN` | FinMind API | 更新 FinMind 資料（台股總覽、證券商、券商分點） |
 | `SHIOAJI_CA_PATH`、`SHIOAJI_CA_PASSWORD`、`SHIOAJI_PERSON_ID` | Shioaji 下單憑證 | 實盤正式環境下單 |
@@ -375,14 +375,12 @@ cp .env.example .env
 uv sync               # 相依 + 專案本身 + 開發工具
 ```
 
-其他選用相依：`frontend` Streamlit 介面、`tick` 台股 tick 的 TimescaleDB 驅動（`psycopg`、`connectorx`）、
-`dolphindb` 舊的 DolphinDB tick 儲存、
+其他選用相依：`frontend` Streamlit 介面、`tick` 台股 tick 的 TimescaleDB 驅動（`psycopg`、`connectorx`、`pyarrow`）、
 `lab` `strategy_lab` 的報告輸出與美股／匯率資料（`python-docx`、`yfinance`）；
 回測與 ETL 主流程不需要它們。
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**：沒列在指令上的 extra 會被移除（開發工具不受影響）。
-要同時保留多組 extra 時一起列出，例如 `uv sync --extra frontend --extra lab`。
-**不要用 `uv sync --all-extras`**：它會裝進 `dolphindb`，而 `import dolphindb` 會把自己的套件目錄塞進 `sys.path`、蓋過 `frontend/config.py`，前端與其測試就 import 失敗；`dolphindb` 只在真的要跑 DolphinDB 路徑時單獨裝。
+要同時保留多組 extra 時一起列出，例如 `uv sync --extra frontend --extra lab --extra tick`，或用 `uv sync --all-extras`。
 
 **Lint、格式與測試**
 

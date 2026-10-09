@@ -359,7 +359,7 @@ cp .env.example .env
 
 | Variable | Purpose | Needed when |
 | -------- | ------- | ----------- |
-| `DDB_PATH`, `DDB_HOST`, `DDB_PORT`, `DDB_USER`, `DDB_PASSWORD` | DolphinDB connection | Accessing tick data, running tick backtests |
+| `TICK_DATABASE_URL` | TimescaleDB connection for TW stock ticks (start Docker Desktop, then `docker compose up -d postgres`) | Accessing tick data, running tick backtests, updating ticks |
 | `API_KEY`, `API_SECRET_KEY` | Sinopac Shioaji API | Crawling tick data |
 | `FINMIND_API_TOKEN` | FinMind API | Updating FinMind data (stock overview, brokers, broker branches) |
 | `SHIOAJI_CA_PATH`, `SHIOAJI_CA_PASSWORD`, `SHIOAJI_PERSON_ID` | Shioaji order-signing certificate | Live trading in production |
@@ -376,14 +376,12 @@ The dev tools (pytest, pytest-timeout, pytest-cov, ruff) are the `dev` dependenc
 uv sync               # dependencies + the project + dev tools
 ```
 
-Other optional extras: `frontend` (Streamlit UI), `tick` (TimescaleDB drivers for TW stock ticks: `psycopg`, `connectorx`),
-`dolphindb` (legacy DolphinDB tick storage),
+Other optional extras: `frontend` (Streamlit UI), `tick` (TimescaleDB drivers for TW stock ticks: `psycopg`, `connectorx`, `pyarrow`),
 `lab` (`strategy_lab` report output and U.S./FX data: `python-docx`, `yfinance`);
 the backtest and ETL paths run without them.
 
 **`uv sync` makes the environment match exactly what you ask for**: extras not listed on the command are removed (the dev tools are not affected).
-To keep several extras, list them together, e.g. `uv sync --extra frontend --extra lab`.
-**Do not use `uv sync --all-extras`**: it installs `dolphindb`, and `import dolphindb` inserts its own package directory into `sys.path`, shadowing `frontend/config.py` so the frontend and its tests fail to import. Install `dolphindb` on its own only when you actually run the DolphinDB path.
+To keep several extras, list them together, e.g. `uv sync --extra frontend --extra lab --extra tick`, or use `uv sync --all-extras`.
 
 **Lint, format and tests**
 

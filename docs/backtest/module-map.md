@@ -165,7 +165,7 @@ sequenceDiagram
 |------|------|
 | `core/api/base.py` | `BaseDataAPI`：`owns_conn` 決定 `close()` 是否真的關連線（共用連線由 `DataFeed` 負責關）；`build_column_map()` 為具名查詢的共用底座。**API 不寫 SQL**：持有連線、以 `conn=` 建自己的 DAO |
 | `core/api/tw/stock_price_api.py` | 日 K 查詢（`get`／`get_range`／`get_stock_price` ＋ 具名查詢） |
-| `core/api/tw/stock_tick_api.py` | 逐筆成交（DolphinDB） |
+| `core/api/tw/stock_tick_api.py` | 逐筆成交（TimescaleDB，經 `core/dao/tw/stock_tick_dao.py` 以 ConnectorX 讀取） |
 | `core/api/tw/stock_chip_api.py`／`stock_margin_api.py` | 三大法人籌碼、融資融券餘額 |
 | `core/api/tw/monthly_revenue_report_api.py`／`financial_statement_api.py` | 月營收、財報 |
 | `core/api/tw/stock_dividend_api.py` | 除權息（現金股利、配股率、除權息日的開盤競價基準） |

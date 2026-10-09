@@ -12,7 +12,7 @@ load_dotenv()
 爬取範圍、預設區間與外部服務設定
 
 與 `paths`／`schema` 的差別：這裡的每一個值都是**可調的營運參數**
-（要抓哪些商品、從哪一年開始、連哪一台 DolphinDB／TimescaleDB），
+（要抓哪些商品、從哪一年開始、連哪一台 TimescaleDB），
 不是系統的結構。改這裡不會動到任何路徑或資料表定義。
 """
 
@@ -166,36 +166,6 @@ FINMIND_BROKER_TRADING_START_DATE: datetime.date = datetime.date(2021, 6, 30)
 
 
 # -----------------------------------------------------------------------
-# === DolphinDB server setting ===
-# -----------------------------------------------------------------------
-#
-def get_int_env(name: str, default: int = 0) -> int:
-    """
-    讀取整數型環境變數；無法轉型時退回預設值
-
-    **不可直接 `int(os.getenv(...))`**：環境變數被設成任何非數字字串
-    （含誤植的空白或註解）都會在 **import 期**拋 ValueError，
-    而這個模組被全專案 import，等於整個程式無法啟動且錯誤訊息與設定無關。
-    """
-
-    raw: Optional[str] = os.getenv(name)
-    if not raw:
-        return default
-
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-DDB_PATH: str | None = os.getenv("DDB_PATH")
-DDB_HOST: str | None = os.getenv("DDB_HOST")
-DDB_PORT: int = get_int_env("DDB_PORT")
-DDB_USER: str | None = os.getenv("DDB_USER")
-DDB_PASSWORD: str | None = os.getenv("DDB_PASSWORD")
-
-
-# -----------------------------------------------------------------------
 # === TimescaleDB（台股 tick） ===
 # -----------------------------------------------------------------------
 #
@@ -245,7 +215,7 @@ API_SECRET_KEY: str | None = os.getenv("API_SECRET_KEY")
 # 缺值時為 `None` 而不在 import 期拋出：`core.config` 是全專案的共用入口，
 # 沒有憑證的機器（CI、只跑回測的開發機）連 import 都會失敗，
 # 錯誤訊息還與憑證無關。真正要下單的地方呼叫 `require_shioaji_ca()`
-# （理由同 `schema.require_tick_db_path()`）
+# （理由同 `require_tick_database_url()`）
 SHIOAJI_CA_PATH: Optional[str] = os.getenv("SHIOAJI_CA_PATH")
 SHIOAJI_CA_PASSWORD: Optional[str] = os.getenv("SHIOAJI_CA_PASSWORD")
 

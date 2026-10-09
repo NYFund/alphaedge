@@ -42,18 +42,17 @@ updater 負責串起流程與決定要處理哪些日期。
 | `FinancialStatementUpdater`（equity_change） | **每 100 檔** ＋ 收到中止訊號時 | **差集**（表內已有 ＋ `SeasonProgressStore`） | `INSERT OR IGNORE` | `DataLoadError`（整段跑完才拋） |
 | `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinMindUpdater`（台股總覽、含權證、證券商資訊） | 每張表一次 | 無（現況快照，每次整份重抓） | `INSERT OR REPLACE`（同鍵以最新快照覆蓋；快照裡已沒有的舊列保留） | `DataLoadError` |
-| `StockTickUpdater` | 全部跑完 | 固定起日 ＋ `tick_metadata.json` | **無**（`keepDuplicates=ALL`） | `DataLoadError` |
+| `StockTickUpdater` | 每個「股票 × 交易日」一個交易 | 固定起日 ＋ `stock_tick_load_log`（不晚於已入庫最後一天就跳過） | **整天刪除後重寫**（沒有唯一鍵，見下方〈台股 tick〉） | `DataLoadError` |
 | `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1，**加上**表內最早與最新之間、現貨有開市卻沒有行情的日子（日曆取自 `tw_stock.db` 的 `price` 表，2013 年前偵測不到） | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesStockUniverseUpdater` | 一次（單次請求） | 當日快照是否已入庫 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品最新 `date` +1；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesMarginUpdater` | 一次（單次請求） | 主鍵 `(effective_date, product)` 相同即略過 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesContinuousUpdater` | 每組（商品, 換月規則）寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
 | `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1，**加上**表內最早與最新之間、期貨有交易卻沒有籌碼的月份（交易日取自 `futures_price_daily`） | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
-| `FuturesTickUpdater` | 全部跑完 | 以日線行情表決定契約、預設只爬近月 | **無**（DolphinDB `keepDuplicates=ALL`，寫入路徑尚未實測） | `DataLoadError` |
 | `MarketHolidayUpdater` | 每年度寫完 | 逐年度重抓前一年、今年與明年（**先刪後寫**，站方更正公告時舊列才不會留著） | `INSERT OR IGNORE`（先刪該年度） | `DataLoadError`（全部年度跑完才拋） |
 
 **未分批的幾個並非疏漏**：dividend／mrr／fs 的量級是十餘年 × 數十個年月或年季，
-單次執行以分鐘計，中斷重跑的成本可接受。tick 走 DolphinDB，語意與 SQLite 組不同。
+單次執行以分鐘計，中斷重跑的成本可接受。tick 寫 TimescaleDB，語意與 SQLite 組不同（見〈台股 tick〉）。
 
 ### Resume 為什麼是「差集」而不是 `MAX(date) + 1`
 
@@ -137,9 +136,39 @@ quota 耗盡瞬間多個在途組合要重試。**真正能縮短回補時間的
 被既有商品的進度擋住而整段歷史都補不到。`FuturesStockUniverseUpdater` 則沒有回補
 區間——來源是一張當下的完整清單，一次請求就結束，故「resume」退化成「今天抓過沒有」。
 
-**`StockTickUpdater` 是唯一沒有重載防護的**：DolphinDB 建表時
-`keepDuplicates=ALL` 是 tick 語意的刻意選擇（同一時間戳可以有多筆成交），
-代價是同一批 CSV 重複 load 會產生重複 tick，需由入庫流程自行把關。
+### 台股 tick（TimescaleDB）
+
+**存放**：TimescaleDB（PostgreSQL extension，跑在 docker compose 的 `postgres` service）的 `stock_tick` hypertable，
+SQL 與連線全在 `core/dao/tw/stock_tick_dao.py`／`core/dao/timescale.py`。
+
+| 設計 | 選擇 | 理由 |
+|------|------|------|
+| 表名 | `stock_tick` | 和日頻資料日後共用同一個 PostgreSQL，台股表一律補 `stock_` 前綴 |
+| 時間型別 | `TIMESTAMP`（無時區）、精度 microsecond | 資料本身是台北當地時間、沒有時區；用 `TIMESTAMPTZ` 的話 ConnectorX 讀出來是 UTC，比日期會差 8 小時 |
+| 價格型別 | `DOUBLE PRECISION` | float32 會把 `33.55` 讀成 `33.549999…`；`NUMERIC` 讀進 pandas 變 `Decimal`、不能向量化 |
+| `seq` 欄 | 同一股票、同一交易日內的原始列序 | `(stock_id, time)` 不唯一（同一瞬間撮合出多筆成交，約 4% 的列），要有 `seq` 排序才可重現；讀取時不回傳 |
+| 主鍵 | **不設** | 完全相同的重複列也是真實成交，沒有自然唯一鍵；冪等由「整天刪除後重寫＋`stock_tick_load_log`」保證 |
+| chunk | 7 天、從 1970-01-01（週四）起算 | 1 天一個 chunk 會多出上千個、planning 成本偏高；單日查詢靠壓縮 batch 的時間範圍跳過無關資料 |
+| 壓縮 | `segmentby = stock_id`、`orderby = time, seq`；policy 壓 14 天前的 chunk | 實測約 12 倍；最近兩週保持未壓縮，重跑最近幾天時不用先解壓 |
+
+**寫入**（`StockTickLoader`）：CSV 正規化成固定欄位（歷史存檔的 `ts`、沒有 `stock_id`、欄序不一、`105.0`、毫秒時間都在這裡處理），
+依規則排除後，每個「股票 × 交易日」一個交易：刪掉當天舊資料 → `COPY` 寫入 → 在 `stock_tick_load_log` 登記
+`source_rows`（來源列數）與 `row_count`（寫入列數）。排除規則：
+
+- `close = 0` 的全零列、`volume < 0` 的列（來源端的壞列）。
+- **興櫃時期**：當天 `price` 表沒有這檔就整天排除（興櫃以「股」為單位、交易到 15:00 後，混進來成交量差上千倍）。
+- `price` 表**整天**沒資料時不是排除而是失敗：代表日 K 還沒更新，照興櫃排除並登記成已載入的話，那天就再也不會補。
+
+**續跑**：`StockTickUpdater` 只爬「晚於已入庫最後一天」的日期。前提是寫入不留洞：
+某檔某天爬取失敗時只寫失敗日之前的日子，下次從失敗日接著爬（crawler 失敗一律拋 `ConnectionError`，不可回「沒資料」）。
+
+**讀取**（`StockTickAPI`）：ConnectorX 以 Arrow 回傳再轉 pandas（直接回 pandas 的路徑用到 pandas 已棄用的內部 API），
+欄位、dtype 與排序固定：`get_ordered_ticks()` 依 `time, stock_id, seq`，同一時間跨股票的順序固定，回測才可重現。
+
+**歷史匯入**：`scripts/manual/manual_tick_history_import.py` 依 chunk 切檔、逐 chunk 載入並壓縮，跑完做完整性比對；預設只列計畫。
+
+**和 DolphinDB 版的語意差異**（目前沒有 `Scale.TICK` 策略、也沒有 tick 回測基準，不影響既有回歸）：
+價格由 float32 改成 float64；同一時間戳記跨股票的順序由不確定改成固定。
 
 ---
 

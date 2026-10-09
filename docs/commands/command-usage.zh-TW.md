@@ -41,9 +41,8 @@
 | `futures_margin`          | 台期貨保證金（變動序列，寫入 `tw_futures.db`） |
 | `futures_chip`            | 台期貨籌碼（三大法人、大額交易人、選擇權 PCR） |
 | `market_holiday`          | 市場開休市日期（TWSE 公告；每次重抓去年／今年／明年，寫入 `tw_stock.db`）。實盤盤前判定交易日的主來源 |
-| `futures_tick`            | 台期貨逐筆成交（Shioaji → DolphinDB；需 `[dolphindb]` 相依與金鑰）。**不含在 `all`／`no_tick` 內**：沒有續跑紀錄、重跑會重複寫入，只在明確點名時才跑 |
-| `all`                     | 全部資料（含 tick；不含 `futures_tick`、`futures_stock_price` 與 `finmind`） |
-| `no_tick`                 | 全部資料（不含 `tick` **與** `futures_tick`，預設）。兩者都需要 Shioaji 金鑰與 tick 的選用相依（`[tick]`／`[dolphindb]`），不排除的話，沒有金鑰的機器每晚都會以結束碼 1 收場 |
+| `all`                     | 全部資料（含 tick；不含 `futures_stock_price` 與 `finmind`） |
+| `no_tick`                 | 全部資料（不含 `tick`，預設）。tick 需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB，不排除的話，沒有這些的機器每晚都會以結束碼 1 收場 |
 
 ### 單一 target 範例
 

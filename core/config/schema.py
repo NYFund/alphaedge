@@ -1,9 +1,7 @@
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 from .paths import DATABASE_DIR_PATH, get_static_resolved_path
-from .settings import DDB_PATH
 
 """資料庫結構：分庫檔名、完整路徑與資料表名稱"""
 
@@ -14,44 +12,10 @@ from .settings import DDB_PATH
 # 常數名與檔名皆帶市場軸（TW_）：`core/database/` 是按市場分庫，
 # 美股進來時會是 us_stock.db，泛用的檔名（stock.db）會失去指向
 TW_STOCK_DB_NAME: str = "tw_stock.db"
-TICK_DB_NAME: str = "tickDB"
 
 TW_STOCK_DB_PATH: Path = get_static_resolved_path(
     base_dir=DATABASE_DIR_PATH, dir_name=TW_STOCK_DB_NAME
 )
-# **`DDB_PATH` 沒設定時不可拼成 `"NonetickDB"`**：
-# 那是一個看起來像路徑的字串，DolphinDB 會拿它去建一個名字很怪的資料庫，
-# 或是查一個永遠不存在的路徑，錯誤訊息完全指不到真正的原因。
-#
-# 但也**不能在 import 時就 raise**——`core.config` 是全專案的共用入口，
-# 沒有 DolphinDB 的機器（CI、容器、只跑回測的開發機）連 import 都會失敗。
-# 故缺值時為 `None`，真正要用的地方呼叫 `require_tick_db_path()`。
-#
-# `DDB_PATH` 取自 `settings`，不在這裡再讀一次環境變數：兩處各讀一次時，
-# 「路徑到底從哪來」要查兩個地方，日後改其中一處（例如加預設值）就會分岔
-TICK_DB_PATH: Optional[str] = f"{DDB_PATH}{TICK_DB_NAME}" if DDB_PATH else None
-
-
-def require_tick_db_path() -> str:
-    """
-    - Description:
-        取得 tick DB 路徑；`DDB_PATH` 未設定時當場拋出
-    - Return:
-        - str
-            DolphinDB 的資料庫路徑
-    - Raise:
-        - RuntimeError
-            `.env` 缺少 `DDB_PATH`
-    """
-
-    if TICK_DB_PATH is None:
-        raise RuntimeError(
-            "環境變數 DDB_PATH 未設定，無法決定 tick DB 路徑；"
-            "請在 .env 補上（例如 DDB_PATH=dfs://）"
-        )
-    return TICK_DB_PATH
-
-
 # 期貨與股票分庫：合約碼（contract_id）與 stock_id 語意不同，混在同一個 DB
 # 會讓「這張表的主鍵到底是什麼」失去單一答案
 TW_FUTURES_DB_NAME: str = "tw_futures.db"
@@ -91,15 +55,10 @@ DIVIDEND_TABLE_NAME: str = "dividend"
 # 收盤價」（恆 < 1），而減資的倍率是**大於 1** 的（價格上調），塞進同一欄會讓所有
 # 既有讀取端的假設反向。表名不叫 `stock_split`：分割只有 6 筆、減資有 600 多筆
 CORPORATE_ACTION_TABLE_NAME: str = "corporate_action"
-TICK_TABLE_NAME: str = "tick"
 # 台股 tick 的 TimescaleDB 資料表（與日頻資料共用同一個 PostgreSQL，故補 `stock_` 前綴）。
 # `load_log` 以「股票 × 交易日」記錄寫入的列數，是續跑與完整性比對的依據
 STOCK_TICK_TABLE_NAME: str = "stock_tick"
 STOCK_TICK_LOAD_LOG_TABLE_NAME: str = "stock_tick_load_log"
-# 期貨 tick **與股票分表**：主鍵不同（期貨要 product ＋ expiry ＋
-# session 才能定位一筆成交，股票只要 stock_id），且期貨有夜盤。
-# 兩者塞同一張表會讓分割鍵（partition key）失去意義，查詢一律掃全表
-FUTURES_TICK_TABLE_NAME: str = "futures_tick"
 MONTHLY_REVENUE_TABLE_NAME: str = "monthly_revenue"
 BALANCE_SHEET_TABLE_NAME: str = "balance_sheet"
 COMPREHENSIVE_INCOME_TABLE_NAME: str = "comprehensive_income"

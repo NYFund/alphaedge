@@ -67,10 +67,6 @@ frontend = ["streamlit>=1.49"]  # frontend/ 的 Streamlit 介面（1.49 起才�
 # pyarrow：ConnectorX 以 Arrow 回傳再轉 pandas——它直接產生 pandas 的路徑用的是
 # pandas 已棄用的內部 API（`make_block`），pandas 拿掉那天整條讀取路徑就壞
 tick = ["psycopg[binary]>=3.2", "connectorx>=0.4", "pyarrow>=18"]
-# dolphindb：舊的 DolphinDB 路徑（台股 tick 換掉之前、期貨 tick）。**刻意不和 tick 放一起**：
-# `import dolphindb` 會把它自己的套件目錄塞進 `sys.path`，裡面的 `config.py` 會蓋過
-# `frontend/config.py`，裝了它整個前端測試就 import 失敗
-dolphindb = ["dolphindb>=3.0"]
 lab = [
     "python-docx>=1.2",  # strategy_lab/ 的報告輸出
     # 美股與匯率日線，**只有 `strategy_lab/strategies/tsmc_overnight_signal/` 用到**。
@@ -132,9 +128,9 @@ ignore = [
     # --- 例外處理：只量化不修，數量記在各條的行尾註解 ---
     # 數量過大會讓 CI 永遠紅燈，故先 ignore 並逐條記錄；
     # 不可因為「讓 CI 變綠」就當成永久豁免
-    "BLE001",  # blind-except，75 處
+    "BLE001",  # blind-except，68 處
     "TRY003",  # 例外訊息長度，與 §2.1 中文訊息衝突
-    "TRY300",  # try-consider-else，16 處
+    "TRY300",  # try-consider-else，14 處
     "TRY301",  # raise-within-try，7 處
     "TRY201",  # verbose-raise，2 處
     "TRY004",  # type-check-without-type-error，2 處

@@ -193,9 +193,6 @@ FUTURES_CONTINUOUS_DOWNLOADS_PATH: Path = get_static_resolved_path(
 FUTURES_UNIVERSE_DOWNLOADS_PATH: Path = get_static_resolved_path(
     base_dir=TW_FUTURES_DOWNLOADS_PATH, dir_name="universe"
 )
-FUTURES_TICK_DOWNLOADS_PATH: Path = get_static_resolved_path(
-    base_dir=TW_FUTURES_DOWNLOADS_PATH, dir_name="tick"
-)
 FUTURES_MARGIN_DOWNLOADS_PATH: Path = get_static_resolved_path(
     base_dir=TW_FUTURES_DOWNLOADS_PATH, dir_name="margin"
 )
@@ -227,12 +224,6 @@ MONTHLY_REVENUE_REPORT_META_DIR_PATH: Path = get_static_resolved_path(
 # 與上面相反：這些是「爬到哪了」的執行期狀態，重跑會被覆寫，不進版控
 DOWNLOADS_METADATA_DIR_PATH: Path = get_static_resolved_path(
     base_dir=TW_STOCK_DOWNLOADS_PATH, dir_name="meta"
-)
-TICK_METADATA_DIR_PATH: Path = get_static_resolved_path(
-    base_dir=DOWNLOADS_METADATA_DIR_PATH, dir_name="tick"
-)
-TICK_METADATA_PATH: Path = get_static_resolved_path(
-    base_dir=TICK_METADATA_DIR_PATH, dir_name="tick_metadata.json"
 )
 BROKER_TRADING_METADATA_DIR_PATH: Path = get_static_resolved_path(
     base_dir=DOWNLOADS_METADATA_DIR_PATH, dir_name="broker_trading"

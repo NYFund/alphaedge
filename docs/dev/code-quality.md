@@ -34,7 +34,7 @@ pytest                              # 全部（需 data/db/tw_stock.db）
 
 ### optional extras
 
-`dolphindb`（tick）、`streamlit`（frontend）、`python-docx`／`yfinance`（lab）**刻意不放進主
+`psycopg`／`connectorx`／`pyarrow`（tick）、`streamlit`（frontend）、`python-docx`／`yfinance`（lab）**刻意不放進主
 `dependencies`**：回測與 ETL 主流程不需要它們。
 需要時以 `uv sync --extra tick` 等方式個別安裝；開發工具是預設會裝的 `dev` dependency group，加裝 extra 時不會被移除。
 

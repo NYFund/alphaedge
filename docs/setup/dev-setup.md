@@ -8,7 +8,7 @@
 - [uv](https://docs.astral.sh/uv/)（`brew install uv` 或 `curl -LsSf https://astral.sh/uv/install.sh | sh`）。
   uv 會依 `.python-version` 自動取得對應的 Python，本機沒有 3.12 也能建環境
 - Git
-- （選用）DolphinDB：若要使用 tick 相關 API/更新
+- （選用）Docker Desktop：台股 tick 存在 TimescaleDB（`docker compose up -d postgres`），要用 tick 相關 API／更新時才需要
 
 ## 1) 建立環境並安裝套件
 
@@ -23,11 +23,11 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 
 開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `pyproject.toml` 的 `[dependency-groups].dev`，
 `uv sync` 預設就會裝，正式映像以 `--no-dev` 排除。其他選用相依（預設不裝，主流程不需要）：
-`frontend` Streamlit 介面、`tick` 台股 tick 的 TimescaleDB 驅動（`psycopg`、`connectorx`）、`dolphindb` 舊的 DolphinDB tick 儲存、
+`frontend` Streamlit 介面、`tick` 台股 tick 的 TimescaleDB 驅動（`psycopg`、`connectorx`、`pyarrow`）、
 `lab` `strategy_lab` 的報告輸出與美股／匯率資料（`python-docx`、`yfinance`）。
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**，沒列在指令上的 extra 會被移除（`dev` group 不受影響）。
-要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab`）。**不要用 `uv sync --all-extras`**：它會裝進 `dolphindb`，`import dolphindb` 會把自己的套件目錄塞進 `sys.path`、蓋過 `frontend/config.py`，前端與其測試就 import 失敗。
+要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab --extra tick`），或用 `uv sync --all-extras`。
 **`uv run` 預設也會先做同一個同步**：沒帶 `--no-sync` 的 `uv run ...` 會把環境拉回「不含任何 extra」，
 裝過 `frontend`／`lab` 的環境跑完一次就被拔掉。已建好環境後一律用 `uv run --no-sync ...`
 （排程同理，見 [實盤部署與排程](../deployment/live-deployment.md)）。
@@ -63,7 +63,7 @@ cp .env.example .env
 
 請依需求填寫 `.env`：
 
-- DolphinDB（tick 需要）：`DDB_PATH`、`DDB_HOST`、`DDB_PORT`、`DDB_USER`、`DDB_PASSWORD`
+- TimescaleDB（tick 需要）：`TICK_DATABASE_URL`（本機為 `postgresql://alphaedge:alphaedge@localhost:5432/alphaedge`；帳密由 `POSTGRES_*` 決定，見 `.env.example`）
 - Shioaji：`API_KEY`、`API_SECRET_KEY`
 - FinMind：`FINMIND_API_TOKEN`
 - （選填）多組 Shioaji 帳號輪替：`API_KEY_1`~`API_KEY_4`、`API_SECRET_KEY_1`~`API_SECRET_KEY_4`（`core/config/settings.py` 的 `NUM_API`）

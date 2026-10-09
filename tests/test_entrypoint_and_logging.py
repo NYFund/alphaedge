@@ -10,21 +10,20 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 """
 入口與日誌的四個坑，共通點是**平常不會有人發現**
 
-1. 預設 `no_tick` 仍包含 `futures_tick`，沒有 Shioaji 金鑰的機器每晚紅燈；
-   `all` 也不可帶到它（重跑會重複寫入）。
+1. 預設 `no_tick` 若帶到 tick，沒有 Shioaji 金鑰與 TimescaleDB 的機器每晚紅燈。
 2. `delete_price_data` 沒有預覽也沒有確認，打錯日期就少一整天行情。
-3. `.env` 缺 `DDB_PATH` 時路徑被拼成 `"NonetickDB"`。
+3. `.env` 缺 `TICK_DATABASE_URL` 時錯誤訊息指不到原因。
 4. `logs/api/` 每天長約 100 MB。
 """
 
 
 # === target 捷徑的展開 ===
-def test_no_tick_excludes_futures_tick() -> None:
+def test_no_tick_excludes_tick() -> None:
     """
-    預設的 `python -m apps.update_db` 不可去跑期貨 tick
+    預設的 `python -m apps.update_db` 不可去跑 tick
 
-    那需要 Shioaji 金鑰與 `[dolphindb]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
-    久了就沒人在看那個紅燈了。
+    那需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB，沒有的機器
+    每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了。
     """
 
     from apps.update_db import expand_targets
@@ -32,36 +31,22 @@ def test_no_tick_excludes_futures_tick() -> None:
 
     expanded: Set[str] = expand_targets({"no_tick"})
 
-    assert DataType.FUTURES_TICK.name.lower() not in expanded
     assert DataType.TICK.name.lower() not in expanded
     # 其餘 target 一個都不能少
     assert DataType.PRICE.name.lower() in expanded
     assert DataType.FUTURES_PRICE.name.lower() in expanded
 
 
-def test_all_excludes_futures_tick_until_it_can_resume() -> None:
-    """
-    `--target all` 不含期貨 tick：它每跑一次就重複寫入一份
-
-    沒有續跑依據、DolphinDB 表允許重複、loader 每次重放整個目錄，
-    成交量會隨執行次數被放大。現貨 tick 仍在 `all` 內。
-    """
+def test_all_includes_stock_tick() -> None:
+    """`--target all` 含台股 tick；期貨 tick 已整套移除，不再是可選的 target"""
 
     from apps.update_db import expand_targets
     from core.pipeline.utils import DataType
 
     expanded: Set[str] = expand_targets({"all"})
 
-    assert DataType.FUTURES_TICK.name.lower() not in expanded
     assert DataType.TICK.name.lower() in expanded
-
-
-def test_explicit_futures_tick_is_still_honoured() -> None:
-    """明確點名的 target 一定保留：暫停的是捷徑，不是這個功能"""
-
-    from apps.update_db import expand_targets
-
-    assert "futures_tick" in expand_targets({"futures_tick"})
+    assert "futures_tick" not in {dt.name.lower() for dt in DataType}
 
 
 def test_finmind_is_paused_from_daily_update() -> None:
@@ -165,35 +150,6 @@ def test_delete_price_data_parser_has_the_two_flags() -> None:
 
     assert '"--apply"' in source
     assert '"--yes"' in source
-
-
-# === DDB_PATH 缺值要當場拋出 ===
-def test_require_tick_db_path_raises_when_unset(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """
-    缺 `DDB_PATH` 時不可拼出 `"NonetickDB"`
-
-    那是一個看起來像路徑的字串，DolphinDB 會拿它去查一個永遠不存在的位置，
-    錯誤訊息完全指不到真正的原因。
-    """
-
-    import core.config.schema as schema
-
-    monkeypatch.setattr(schema, "TICK_DB_PATH", None)
-
-    with pytest.raises(RuntimeError, match="DDB_PATH"):
-        schema.require_tick_db_path()
-
-
-def test_tick_db_path_is_none_rather_than_none_string() -> None:
-    """設定值缺漏時是 None，不是字面上的 'None...' 字串"""
-
-    import core.config.schema as schema
-
-    assert schema.TICK_DB_PATH is None or not str(schema.TICK_DB_PATH).startswith(
-        "None"
-    )
 
 
 # === TICK_DATABASE_URL 缺值要當場拋出 ===

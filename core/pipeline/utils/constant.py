@@ -35,8 +35,6 @@ class DataType(str, Enum):
     FUTURES_CHIP = "FUTURES_CHIP"
     # 股票期貨行情：商品清單來自標的池而非字面值常數
     FUTURES_STOCK_PRICE = "FUTURES_STOCK_PRICE"
-    # 期貨逐筆成交（Shioaji → DolphinDB）；需要 `[dolphindb]` 選用相依與 Shioaji 金鑰
-    FUTURES_TICK = "FUTURES_TICK"
     # 市場開休市日期（TWSE 公告，一年一次請求）；實盤盤前判定交易日的主來源
     MARKET_HOLIDAY = "MARKET_HOLIDAY"
 

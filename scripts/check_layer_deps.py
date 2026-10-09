@@ -538,7 +538,7 @@ _PURE_TRANSFORM_DIRS: Tuple[str, ...] = ("core/adapters",)
 _PURE_TRANSFORM_FORBIDDEN: Tuple[str, ...] = ("core.api", "core.dao", "sqlite3")
 
 # psycopg／connectorx 是台股 tick 的 TimescaleDB 驅動（寫入／讀取），連線入口在
-# `core/dao/timescale.py`；dolphindb 不列，它在換掉之前仍散在舊的 tick 程式裡
+# `core/dao/timescale.py`
 _DB_DRIVER_MODULES: Set[str] = {"sqlite3", "psycopg", "connectorx"}
 _PIPELINE_PACKAGE: str = "core.pipeline"
 _PIPELINE_DIR: str = "core/pipeline"

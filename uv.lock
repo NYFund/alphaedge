@@ -154,9 +154,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-dolphindb = [
-    { name = "dolphindb" },
-]
 frontend = [
     { name = "streamlit" },
 ]
@@ -182,7 +179,6 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "connectorx", marker = "extra == 'tick'", specifier = ">=0.4" },
-    { name = "dolphindb", marker = "extra == 'dolphindb'", specifier = ">=3.0" },
     { name = "fake-useragent", specifier = ">=2.2" },
     { name = "finmind", specifier = ">=1.9" },
     { name = "html5lib", specifier = ">=1.1" },
@@ -202,7 +198,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.67" },
     { name = "yfinance", marker = "extra == 'lab'", specifier = ">=1.3" },
 ]
-provides-extras = ["frontend", "tick", "dolphindb", "lab"]
+provides-extras = ["frontend", "tick", "lab"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -632,30 +628,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dolphindb"
-version = "3.0.6.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "future" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "pydantic" },
-]
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/e1/4bc60e08f5bf541f3dea3d6fec7008562c71143036abb766345a77f21d78/dolphindb-3.0.6.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:391de5e67779d41a4e0b70b67f0ac9a5c63ca6158773791b5dfe733c1b8a43c1", size = 2284265, upload-time = "2026-08-11T07:44:47.9Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/55/70256165271487469fc632f2cbaec402b80294a084e2037310556e5a198d/dolphindb-3.0.6.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:225d019662dff0f73a6cc13dec62dc591d4d7a49a1e1dbed994c009e7173928c", size = 2054165, upload-time = "2026-08-11T07:44:50.295Z" },
-    { url = "https://files.pythonhosted.org/packages/96/fa/16151cf023edf29c32516658d90709882bf813c2226ab8b54c0c88f56389/dolphindb-3.0.6.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:6b7c569b08588056b6999f7f678a26b00a5b0ccc1ff0e4ee0861cecd8b996222", size = 4388789, upload-time = "2026-08-11T07:44:53.018Z" },
-    { url = "https://files.pythonhosted.org/packages/cb/09/d5ece3c9a6801be168207b2e4039d9945a5c7af25bc468e5c3b7e8abd838/dolphindb-3.0.6.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:87c4e3b788a34abf775873c4369528dd89eaff7ced7293bd4f2087f86fe0a75d", size = 4199692, upload-time = "2026-08-11T07:44:56.129Z" },
-    { url = "https://files.pythonhosted.org/packages/83/7b/02e4b6ae18fd1baf8fe7faeb29793c660598cc4d8b40ceba39cbe7a2748a/dolphindb-3.0.6.0-cp312-cp312-win_amd64.whl", hash = "sha256:fc670d04990526512e32ed8b63c83ef20c23a2e0fb28d1b75f69406740671cb0", size = 2025917, upload-time = "2026-08-11T07:44:58.417Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/95/57f70a55106caef4cfbe0d1de3bb81bc4ed86bd0a339f06ca2c6b9cd2718/dolphindb-3.0.6.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:0c86882d78fb581a068925d9594997c6369ee19fcd0c21f1d6a01591393dd5f2", size = 2257587, upload-time = "2026-08-11T07:45:00.398Z" },
-    { url = "https://files.pythonhosted.org/packages/11/ef/2ef65f67075fcd699358c25af285c9c041741af716c7a5c18794185b31a4/dolphindb-3.0.6.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:991b23b55e20f80010207a6374051738f03df480fea53387ed2ad392dc65a3d3", size = 2030756, upload-time = "2026-08-11T07:45:02.956Z" },
-    { url = "https://files.pythonhosted.org/packages/64/d7/ba3015f4ae9ec8be334cc8c158158012c7c51272a73aa320b2776cd8128a/dolphindb-3.0.6.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:3e8a9bf4ca8c9a16e6085993ae59ef8d78fc7d851b04567bb722dca94f0676f6", size = 4354142, upload-time = "2026-08-11T07:45:06.155Z" },
-    { url = "https://files.pythonhosted.org/packages/a0/65/43c9a4094b554bfa9e711c9d1f1401c5f99b7aee04af251ad068eb432a9d/dolphindb-3.0.6.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:19618e97a2cd66587a80cdcaca0ced15521dc31506d883b0cf83e5ebcc9a889b", size = 4170370, upload-time = "2026-08-11T07:45:08.897Z" },
-    { url = "https://files.pythonhosted.org/packages/42/be/7646fab2ccc7eb3f72ced1ed7a6133a0770eccb9621509da4e05569004c0/dolphindb-3.0.6.0-cp313-cp313-win_amd64.whl", hash = "sha256:cd068a960fdb05fe956162df011ad05126830634e4cd6dbbaa888172348c8b5e", size = 2000635, upload-time = "2026-08-11T07:45:10.992Z" },
-]
-
-[[package]]
 name = "executing"
 version = "2.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -811,15 +783,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/89/76/c615883b7b521ead2944bb3480398cbb07e12b7b4e4d073d3752eb721558/frozenlist-1.8.0-cp314-cp314t-win_amd64.whl", hash = "sha256:06be8f67f39c8b1dc671f5d83aaefd3358ae5cdcf8314552c57e7ed3e6475bdd", size = 49451, upload-time = "2025-10-06T05:37:53.425Z" },
     { url = "https://files.pythonhosted.org/packages/e0/a3/5982da14e113d07b325230f95060e2169f5311b1017ea8af2a29b374c289/frozenlist-1.8.0-cp314-cp314t-win_arm64.whl", hash = "sha256:102e6314ca4da683dca92e3b1355490fed5f313b768500084fbe6371fddfdb79", size = 42507, upload-time = "2025-10-06T05:37:54.513Z" },
     { url = "https://files.pythonhosted.org/packages/9a/9a/e35b4a917281c0b8419d4207f4334c8e8c5dbf4f3f5f9ada73958d937dcc/frozenlist-1.8.0-py3-none-any.whl", hash = "sha256:0c18a16eab41e82c295618a77502e17b195883241c563b00f0aa5106fc4eaa0d", size = 13409, upload-time = "2025-10-06T05:38:16.721Z" },
-]
-
-[[package]]
-name = "future"
-version = "1.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a7/b2/4140c69c6a66432916b26158687e821ba631a4c9273c474343badf84d3ba/future-1.0.0.tar.gz", hash = "sha256:bd2968309307861edae1458a4f8a4f3598c03be43b97521076aebf5d94c07b05", size = 1228490, upload-time = "2024-02-21T11:52:38.461Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/da/71/ae30dadffc90b9006d77af76b393cb9dfbfc9629f339fc1574a1c52e6806/future-1.0.0-py3-none-any.whl", hash = "sha256:929292d34f5872e70396626ef385ec22355a1fae8ad29e1a734c3e43f9fbc216", size = 491326, upload-time = "2024-02-21T11:52:35.956Z" },
 ]
 
 [[package]]

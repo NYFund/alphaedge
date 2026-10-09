@@ -16,12 +16,12 @@ source .venv/bin/activate
 ```bash
 python -m apps.update_db                          # 全部資料（不含兩種 tick 與只能點名的 target），等同 --target no_tick
 python -m apps.update_db --target chip price      # 只更新指定資料
-python -m apps.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
+python -m apps.update_db --target tick            # 台股 tick（需執行中的 TimescaleDB 與 Shioaji 金鑰）
 ```
 
 - 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日。
 - 任一 target 失敗不中斷其餘 target，但整批跑完會以**結束碼 1** 收場；請看 log 尾端的統計行。
-- `futures_stock_price`、`futures_tick`、`finmind` 不含在 `all`／`no_tick` 內，要以 `--target` 明確點名才會跑。
+- `futures_stock_price`、`finmind` 不含在 `all`／`no_tick` 內，要以 `--target` 明確點名才會跑。
 - **長跑的 ETL 進行中不要動 `logs/` 與 `data/db/`**。
 
 ## 3) 執行回測

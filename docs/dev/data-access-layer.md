@@ -53,8 +53,7 @@ import 它們會被分層檢查判成反向相依；`core.models` 同層，會�
 | `MarketHolidayDAO` | `market_holiday` | `tw_stock.db` |
 | `LiveTradeDAO` | 實盤紀錄各表（`live_run`／`live_order`／`live_fill`／`live_position_lot` 等），自行開連線時走 `connect_live_trading()` | `tw_trading.db` |
 
-**tick 不在此列**：台股與期貨 tick 仍走 DolphinDB，改用 TimescaleDB 的規劃見
-[台股tick改用TimescaleDB](../../backlog/台股tick改用TimescaleDB.md)，其連線層同樣放在 `core/dao/`。
+**台股 tick 不在此表**：它存在 TimescaleDB，由 `core/dao/tw/stock_tick_dao.py` 的 `StockTickDAO` 管理（`stock_tick` hypertable 與 `stock_tick_load_log`），連線入口是 `core/dao/timescale.py`。寫入走 psycopg 的 `COPY`、讀取走 ConnectorX；它不繼承 `BaseDAO`（後者綁 SQLite），但遵守同一個 `owns_conn` 慣例。期貨 tick 已整套移除。
 
 ---
 
@@ -73,7 +72,7 @@ import 它們會被分層檢查判成反向相依；`core.models` 同層，會�
 
 **一次執行中同一個 DB 只開一條連線**：舊版 updater 與 loader 各開一條到同一個 DB，
 updater 那條從不關閉，兩條連線還會互搶寫入鎖（券商分點曾得先 commit loader 那條才查得動）。
-`apps/update_db.py` 的每個 SQLite target 一律 `try/finally: updater.close()`（tick 走 DolphinDB，另以 `logout()` 收尾）。
+`apps/update_db.py` 的每個 SQLite target 一律 `try/finally: updater.close()`（tick 寫 TimescaleDB，Shioaji 連線由 updater 結束時自行登出）。
 
 **唯讀連線**（`connect_sqlite(path, read_only=True)`）用在只讀的場合：不會與背景 ETL 搶寫入鎖，
 檔案不存在時也不會被 `sqlite3.connect()` 默默建出一個空 DB。

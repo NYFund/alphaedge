@@ -9,8 +9,8 @@
 
 | 面向 | 現況 |
 |------|------|
-| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 股期）、連續合約（3 種調整 × 3 種換月）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池；逐筆成交走 DolphinDB |
-| 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price`／`futures_tick` |
+| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 股期）、連續合約（3 種調整 × 3 種換月）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池；**沒有逐筆成交**（期貨 tick 已裁示不做，原 DolphinDB 程式已移除） |
+| 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price` |
 | 回測 | 與台股**共用同一支引擎**：`(TW, FUTURE)` 的 model 組（規格／成交／成本／結算／資料源）由 `core/backtest/factory.py` 注入 |
 | 期貨語意 | 逐日盯市、保證金查表與追繳、換月轉倉、日夜盤整併、期交稅與跳動點滑價 |
 | 策略 | `MomentumFuturesStrategy`（示範），`python -m apps.backtest --strategy MomentumFuturesStrategy` |
@@ -71,11 +71,10 @@ python -m apps.update_db --target futures_stock_price     # 股期行情（標�
 python -m apps.update_db --target futures_continuous      # 由日行情整段重建連續合約（不連網路）
 python -m apps.update_db --target futures_margin          # 保證金變動序列
 python -m apps.update_db --target futures_chip            # 三大法人、大額交易人、PCR
-python -m apps.update_db --target futures_tick            # 逐筆成交（需 [dolphindb] 相依、Shioaji 金鑰、DolphinDB）
 ```
 
 - `futures_price` 已被 `--target all` 與 `no_tick` 涵蓋；日常更新以**商品為單位**從表內該商品的最新日接續。
-  `futures_stock_price` 與 `futures_tick` 則**兩個捷徑都不含**（`EXPLICIT_ONLY_DATA_TYPES`），只在明確點名時才跑。
+  `futures_stock_price` 則**兩個捷徑都不含**（`EXPLICIT_ONLY_DATA_TYPES`），只在明確點名時才跑。
 - **往前擴張回補區間不能用日常指令**：resume 會從表內最新日接續，整段歷史補不到而只顯示「已是最新」。
   要以明確區間呼叫 `FuturesPriceUpdater.update(start_date=..., end_date=..., resume=False)`。
 - **新商品的回補起點要用它的上市日**（`FUTURES_PRODUCT_LISTING_DATES`），不可沿用 `DEFAULT_FUTURES_START_DATE`：
@@ -310,7 +309,6 @@ python -m apps.update_db --target futures_tick            # 逐筆成交（需 [
 | 項目 | 影響 | 解除條件 |
 |------|------|----------|
 | 股票期貨只有三檔試跑行情 | 程式面已可開倉（乘數由 DataFeed 逐日解析、保證金走比例表），但沒有行情就跑不出有意義的回測；契約單位也只回溯到 2026-08-29 的首份標的池快照 | 回補股期行情，見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S4 |
-| **DolphinDB 的期貨 tick 寫入路徑未實測** | `--target futures_tick` 的爬取與清洗已驗證，入庫未驗證；無連線時保留中繼檔並記 warning | 啟動 DolphinDB server ＋ `uv sync --extra dolphindb`，跑一天確認 |
 | 期貨 Tick 級別回測未實作 | `TwFuturesDataFeed.get_quotes()` 對 Tick 回空 list 並記 warning | 出現日內期貨策略需求 |
 | 保證金 2020-03 之前沒有資料 | 行情自 2015 起，但更早的期間只能用 `ratio()` 近似（TX 實測跨年份誤差 +143% ~ −38%），可開口數與追繳門檻失真 | 真的要回測 2015~2019 時，人工登錄 TX 家族該期間的 16 則調整公告（掃描影像；MTX 依乘數等比例推得），並以下一則公告的「調整前」逐筆鏈式驗證、2020-03 首則的「調整前」當終點錨點。**不採 OCR**：`477000` 讀成 `47700` 不會報錯 |
 | 價差部位保證金未模擬 | 同商品跨月份部位兩腿各繳全額，高估保證金、低估可開口數（保守；同契約雙向持倉已直接拒單） | 出現價差／對沖策略需求時，先確認 TAIFEX 價差保證金的收取語意（單邊全額／專屬金額／比例），再決定併入 `futures_margin_history` 或另立一張表 |

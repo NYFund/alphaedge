@@ -37,7 +37,7 @@ ENV_SCAN_PATHS: List[str] = [
 ]
 
 # 以字面值當第一個參數讀環境變數的函式：標準函式庫與專案內的兩個包裝
-ENV_READER_NAMES: Set[str] = {"getenv", "get_env_path", "get_int_env"}
+ENV_READER_NAMES: Set[str] = {"getenv", "get_env_path"}
 
 # 範本有列、但程式不直接讀的鍵（鍵 → 理由）。
 # **這些是 `docker compose` 解析設定檔時替換的內插變數**，程式一行都不讀：
@@ -79,7 +79,7 @@ def collect_env_keys_read_by_code() -> Set[str]:
         以 AST 找出程式會讀的環境變數鍵名
 
         認得四種寫法：
-        1. `os.getenv("X")`、`get_env_path("X", ...)`、`get_int_env("X")`
+        1. `os.getenv("X")`、`get_env_path("X", ...)`
         2. `os.environ.get("X")`
         3. `os.environ["X"]`
         4. 名稱以 `_ENV_VAR` 結尾的字串常數（例如前端的 `RESULTS_ENV_VAR`），
@@ -181,7 +181,6 @@ def test_env_scanner_recognizes_every_reader_form() -> None:
 
     assert {
         "FINMIND_API_TOKEN",  # os.getenv
-        "DDB_PORT",  # get_int_env
         "ALPHAEDGE_DATA_DIR",  # get_env_path
         "ALPHAEDGE_SHOW_FIGURES",  # 帶型別標註的 *_ENV_VAR 常數
         "ALPHAEDGE_BACKTEST_RESULTS",  # 不帶型別標註的 *_ENV_VAR 常數
