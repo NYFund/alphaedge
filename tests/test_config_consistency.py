@@ -40,13 +40,16 @@ ENV_SCAN_PATHS: List[str] = [
 ENV_READER_NAMES: Set[str] = {"getenv", "get_env_path", "get_int_env"}
 
 # 範本有列、但程式不直接讀的鍵（鍵 → 理由）。
-# **這三個是 `docker compose` 解析設定檔時替換的內插變數**，程式一行都不讀：
+# **這些是 `docker compose` 解析設定檔時替換的內插變數**，程式一行都不讀：
 # compose 自己認得 `.env`，所以列在範本裡才不必每次在指令前加一串環境變數。
 # 不列的話它們就完全沒有文件——`docker-compose.yml` 裡只看得到 `${X:-預設值}`
 ENV_EXAMPLE_ONLY_KEYS: Dict[str, str] = {
     "STRATEGY": "docker-compose 的 `core` service 啟動參數（`--strategy`）",
     "ALPHAEDGE_CA_DIR": "docker-compose 的 `live` service 掛進容器的 CA 目錄",
     "SHIOAJI_CA_FILE": "docker-compose 的 `live` service 使用的憑證檔名",
+    "POSTGRES_USER": "docker-compose 的 `postgres` service 建庫帳號",
+    "POSTGRES_PASSWORD": "docker-compose 的 `postgres` service 建庫密碼",
+    "POSTGRES_DB": "docker-compose 的 `postgres` service 資料庫名稱",
 }
 
 # 範本裡「鍵=值」的行，選填鍵以 `# KEY=` 的註解形式列出，一併計入

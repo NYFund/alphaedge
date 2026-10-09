@@ -62,7 +62,10 @@ dev = [
 # 以下三組刻意不放進主 dependencies：專案的回測與 ETL 主流程不需要它們，
 # 硬列進去只會讓每個環境（含 Docker 映像）都變重。需要時以 `uv sync --extra <名稱>` 加裝
 frontend = ["streamlit>=1.49"]  # frontend/ 的 Streamlit 介面（1.49 起才有 width="stretch"）
-tick = ["dolphindb>=3.0"]  # Tick 級資料的 DolphinDB 儲存（loader 內為惰性 import）
+# tick：台股 tick 改存 TimescaleDB——寫入用 psycopg 3 的 COPY、讀取用 ConnectorX
+# （直接產生 DataFrame，比 pd.read_sql 快數十倍）。兩者只在 `core/dao/` 內惰性 import。
+# dolphindb 暫留：台股 tick 的舊路徑與期貨 tick 在換掉之前仍要用它
+tick = ["dolphindb>=3.0", "psycopg[binary]>=3.2", "connectorx>=0.4"]
 lab = [
     "python-docx>=1.2",  # strategy_lab/ 的報告輸出
     # 美股與匯率日線，**只有 `strategy_lab/strategies/tsmc_overnight_signal/` 用到**。

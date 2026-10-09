@@ -1,6 +1,6 @@
 import sqlite3
 from pathlib import Path
-from typing import Callable, List, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 import pytest
 
@@ -194,6 +194,26 @@ def test_tick_db_path_is_none_rather_than_none_string() -> None:
     assert schema.TICK_DB_PATH is None or not str(schema.TICK_DB_PATH).startswith(
         "None"
     )
+
+
+# === TICK_DATABASE_URL 缺值要當場拋出 ===
+@pytest.mark.parametrize("missing", [None, ""])
+def test_require_tick_database_url_raises_when_unset(
+    monkeypatch: pytest.MonkeyPatch, missing: Optional[str]
+) -> None:
+    """
+    缺 `TICK_DATABASE_URL`（含取消註解卻留空）時要以設定名稱報錯
+
+    不擋的話空字串會一路傳到 psycopg／ConnectorX，錯誤訊息只會說連不上 socket，
+    看不出是 `.env` 沒填。
+    """
+
+    import core.config.settings as settings
+
+    monkeypatch.setattr(settings, "TICK_DATABASE_URL", missing)
+
+    with pytest.raises(RuntimeError, match="TICK_DATABASE_URL"):
+        settings.require_tick_database_url()
 
 
 # === api 桶的檔案 sink 只留 WARNING ===

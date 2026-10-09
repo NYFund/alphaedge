@@ -12,7 +12,7 @@ load_dotenv()
 爬取範圍、預設區間與外部服務設定
 
 與 `paths`／`schema` 的差別：這裡的每一個值都是**可調的營運參數**
-（要抓哪些商品、從哪一年開始、連哪一台 DolphinDB），
+（要抓哪些商品、從哪一年開始、連哪一台 DolphinDB／TimescaleDB），
 不是系統的結構。改這裡不會動到任何路徑或資料表定義。
 """
 
@@ -193,6 +193,41 @@ DDB_HOST: str | None = os.getenv("DDB_HOST")
 DDB_PORT: int = get_int_env("DDB_PORT")
 DDB_USER: str | None = os.getenv("DDB_USER")
 DDB_PASSWORD: str | None = os.getenv("DDB_PASSWORD")
+
+
+# -----------------------------------------------------------------------
+# === TimescaleDB（台股 tick） ===
+# -----------------------------------------------------------------------
+#
+# 格式為 `postgresql://user:pass@host:5432/dbname`；docker compose 的 `core` 容器內
+# 會覆寫成以 service 名稱 `postgres` 為主機的版本。
+#
+# **刻意不用 `DATABASE_URL`**：那個鍵留給日頻資料遷移到 PostgreSQL，屆時「設了就切換」。
+# 若 tick 先借用它，使用者為了 tick 設定之後，日頻資料會在還沒遷移時就被切走。
+#
+# 缺值時為 `None` 而不在 import 期拋出，理由同 `require_shioaji_ca()`
+TICK_DATABASE_URL: Optional[str] = os.getenv("TICK_DATABASE_URL")
+
+
+def require_tick_database_url() -> str:
+    """
+    - Description:
+        取得台股 tick 的 TimescaleDB 連線字串；未設定時當場拋出
+    - Return:
+        - str
+            `postgresql://` 開頭的連線字串
+    - Raise:
+        - RuntimeError
+            `.env` 缺少 `TICK_DATABASE_URL`
+    """
+
+    if not TICK_DATABASE_URL:
+        raise RuntimeError(
+            "環境變數 TICK_DATABASE_URL 未設定，無法連線台股 tick 的 TimescaleDB；"
+            "請在 .env 補上（例如 postgresql://alphaedge:alphaedge@localhost:5432/alphaedge），"
+            "並以 docker compose up -d postgres 啟動資料庫"
+        )
+    return TICK_DATABASE_URL
 
 
 # -----------------------------------------------------------------------

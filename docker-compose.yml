@@ -1,3 +1,7 @@
+# 專案名稱寫死：不寫的話 compose 取目錄名，git worktree 裡啟動會變成另一個專案，
+# named volume 也跟著分家——同一台機器上出現兩份 TimescaleDB 資料
+name: alphaedge
+
 services:
   core:
     build:
@@ -18,6 +22,39 @@ services:
       # 不該寫到本機的資料庫（背景 ETL 可能正在寫同一個檔）
       - ./data:/app/data:ro
       - ./logs:/app/logs
+    environment:
+      # 容器內連 TimescaleDB 要用 service 名稱，不是 `.env` 給本機用的 localhost；
+      # 在這裡覆寫，使用者不必為了容器另改 `.env`
+      TICK_DATABASE_URL: postgresql://${POSTGRES_USER:-alphaedge}:${POSTGRES_PASSWORD:-alphaedge}@postgres:5432/${POSTGRES_DB:-alphaedge}
+    # tick 級回測讀 TimescaleDB；等它可以連線再啟動，免得回測一開跑就連不上
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # 台股 tick 的 TimescaleDB（PostgreSQL extension）。只給回測與資料更新用：
+  # `live` 不讀 tick，所以不相依它。service 取名 `postgres` 而不是 `timescaledb`，
+  # 是因為 TimescaleDB 映像本身就是完整的 PostgreSQL，日頻資料日後遷移時沿用同一個 service
+  postgres:
+    # 鎖定明確版本，不用 latest：升級 extension 要跑 ALTER EXTENSION，不能被 pull 默默換掉。
+    # **不可換成 `-oss` 結尾的 tag**：那是只含 Apache 授權功能的版本，沒有壓縮
+    image: timescale/timescaledb:2.29.2-pg17
+    container_name: alphaedge-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-alphaedge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alphaedge}
+      POSTGRES_DB: ${POSTGRES_DB:-alphaedge}
+    ports:
+      - "5432:5432"
+    volumes:
+      # named volume 而不是 bind mount：Docker Desktop on Mac 的 bind mount 走檔案共享，
+      # 大量寫入非常慢
+      - alphaedge_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # 實盤：**不常駐**，由主機排程逐段落啟動（見 docs/deployment/live-deployment.md）：
   #   docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStrategy --phase open
@@ -75,3 +112,4 @@ services:
 
 volumes:
   alphaedge_results:
+  alphaedge_pgdata:
