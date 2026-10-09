@@ -551,3 +551,96 @@ def test_datafeed_returns_one_quote_per_tick(loaded_api: StockTickAPI) -> None:
     assert len(quotes) == 5
     assert all(isinstance(q.tick_quote.time, datetime.datetime) for q in quotes)
     assert [q.close for q in quotes] == [40.0, 800.0, 801.0, 40.5, 802.0]
+
+
+# === 端到端：歷史匯入腳本 ===
+def test_history_import_script_end_to_end(
+    dao: StockTickDAO, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    歷史匯入：跨兩個 chunk 的樣本依 chunk 切檔、載入、壓縮、比對全數通過；
+    `--resume` 重跑不重複寫入；列計畫不寫入；DB 少一列時比對失敗
+    """
+
+    import sys
+
+    from core.dao.tw.stock_price_dao import StockPriceDAO
+    from scripts.manual import manual_tick_history_import as importer
+
+    header: str = "volume,bid_volume,ask_price,tick_type,bid_price,ts,close,ask_volume"
+    source: Path = tmp_path / "source"
+    source.mkdir()
+    (source / "2330.csv").write_text(
+        "\n".join(
+            [
+                header,
+                "1,1,800,1,799,2024-05-08 09:00:01.000000,800,1",
+                "0,0,0,0,0,2024-05-08 09:00:02.000000,0,0",  # 全零列，排除
+                "2,1,801,2,800,2024-05-10 09:00:01.123,801,1",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # 興櫃：price 表沒有這檔，整天排除但仍要登記
+    (source / "1563.csv").write_text(
+        header + "\n1000,1,50,1,49,2024-05-08 09:00:01.000000,50,1\n", encoding="utf-8"
+    )
+    price_db: Path = tmp_path / "price.db"
+    price_dao: StockPriceDAO = StockPriceDAO(db_path=price_db)
+    price_dao.create_table()
+    price_dao.conn.executemany(
+        'INSERT INTO price ("date", stock_id, "證券名稱", "成交股數") VALUES (?, ?, ?, ?)',
+        [
+            ("2024-05-08", "2330", "台積電", 1000),
+            ("2024-05-10", "2330", "台積電", 2000),
+        ],
+    )
+    price_dao.conn.commit()
+    price_dao.close()
+    work: Path = tmp_path / "work"
+    base_argv: List[str] = [
+        "manual_tick_history_import",
+        "--source-dir",
+        str(source),
+        "--work-dir",
+        str(work),
+        "--schema",
+        dao.schema,
+        "--price-db",
+        str(price_db),
+    ]
+
+    def run(*extra: str) -> None:
+        monkeypatch.setattr(sys, "argv", [*base_argv, *extra])
+        importer.main()
+
+    run()  # 列計畫
+    assert _load_log(dao) == []
+
+    run("--apply")
+
+    assert _load_log(dao) == [
+        ("1563", datetime.date(2024, 5, 8), 1, 0, "1563.csv"),
+        ("2330", datetime.date(2024, 5, 8), 2, 1, "2330.csv"),
+        ("2330", datetime.date(2024, 5, 10), 1, 1, "2330.csv"),
+    ]
+    chunks = dao.get_chunk_ranges()
+    assert [(start.date(), compressed) for start, _, compressed in chunks] == [
+        (datetime.date(2024, 5, 2), True),
+        (datetime.date(2024, 5, 9), True),
+    ]
+    assert not [p for p in work.iterdir() if p.is_dir()]
+    assert dao.is_compression_policy_scheduled()
+
+    run("--apply", "--resume")
+    assert len(_stored(dao)) == 2
+
+    with dao.conn.transaction():
+        dao.conn.execute(
+            f'DELETE FROM "{dao.schema}".stock_tick WHERE time >= %s',
+            (datetime.datetime(2024, 5, 10),),
+        )
+    with pytest.raises(SystemExit) as excinfo:
+        run("--verify-only")
+    assert excinfo.value.code == 1

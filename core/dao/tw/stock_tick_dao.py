@@ -451,6 +451,60 @@ class StockTickDAO:
             ).fetchall()
         return len(rows)
 
+    def decompress_chunks_between(
+        self, start: datetime.datetime, end: datetime.datetime
+    ) -> int:
+        """
+        - Description:
+            解壓與 `[start, end)` 重疊的已壓縮 chunk；重灌已壓縮的區間前呼叫
+
+            寫入壓縮 chunk 雖然可行，但每一列都要走壓縮資料的 DML，十億列級的重灌會慢很多；
+            先解壓、寫完再壓回去比較快。
+        - Parameters:
+            - start: datetime.datetime
+                區間起點（含）
+            - end: datetime.datetime
+                區間終點（不含）
+        - Return:
+            - int
+                處理的 chunk 數（含原本就沒壓縮、被略過的）
+        """
+
+        with self.conn.transaction():
+            rows: List[Tuple[Any, ...]] = self.conn.execute(
+                "SELECT decompress_chunk(c, if_compressed => TRUE) "
+                "FROM show_chunks(%s, older_than => %s, newer_than => %s) c",
+                (self._regclass(self.TABLE_NAME), end, start),
+            ).fetchall()
+        return len(rows)
+
+    def get_chunk_ranges(
+        self,
+    ) -> List[Tuple[datetime.datetime, datetime.datetime, bool]]:
+        """
+        - Description:
+            目前所有 chunk 的 `(起點, 終點, 是否已壓縮)`，依起點排序；匯入腳本據此核對 chunk 邊界
+        - Return:
+            - List[Tuple[datetime.datetime, datetime.datetime, bool]]
+                chunk 範圍與壓縮狀態
+        """
+
+        with self.conn.transaction():
+            rows: List[Tuple[Any, ...]] = self.conn.execute(
+                """
+                SELECT range_start, range_end, is_compressed
+                FROM timescaledb_information.chunks
+                WHERE hypertable_schema = %s AND hypertable_name = %s
+                ORDER BY range_start
+                """,
+                (self.schema, self.TABLE_NAME),
+            ).fetchall()
+        # `TIMESTAMP` 欄的 chunk 範圍以 UTC 的 timestamptz 呈現，去掉時區才和資料的時間同一基準
+        return [
+            (start.replace(tzinfo=None), end.replace(tzinfo=None), compressed)
+            for start, end, compressed in rows
+        ]
+
     # === 內部 ===
     def _copy_rows(self, day_df: pd.DataFrame) -> None:
         """
