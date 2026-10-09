@@ -22,6 +22,7 @@ from core.utils import (
     TradeDirection,
 )
 from core.utils.instrument import StockUtils
+from core.utils.time import TimeUtils
 
 
 class IntradayMomentumStrategy(BaseStockStrategy):
@@ -62,8 +63,9 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     - 開倉與停損在盤中逐筆段落（`IMMEDIATE`）呼叫，每次只拿到一檔的一筆報價（`Scale.TICK`）：
       - 進場：**現價**相對平盤價漲幅 ≥ 門檻、當日累計量 ≥ 門檻、在當沖名單內，以現價為決策價買進；
         同一檔一天只進場一次（送出就算，沒成交也不再追）。
-      - 停損：當天進場的部位，現價跌到停損價以下即賣出；送出後部位仍在（IOC 沒成交）時，
-        隔 `STOP_LOSS_RETRY_SECONDS` 秒再送一次，不追價。
+      - 停損：當天進場的部位，現價跌到停損價以下即賣出，**同一檔一天只送一次**。
+        策略看不到在途的委託：成交回報晚到時部位還在帳上，重送會在原單成交後再賣一次、
+        變成意外的當日空單；IOC 沒成交時部位留到隔天開盤出場，不追價。
       - 逐筆不需要 K 棒路徑假設：盤中的先後順序就是報價到達的順序。
     - 隔天開盤出場在開盤段（`AT_OPEN`）呼叫：盤前沒有開盤價，以參考價為決策價，
       執行層換成開盤集合競價掛跌停＋ROD，成交價即開盤價。
@@ -88,10 +90,9 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     MAX_VOLUME_SHARE: float = 0.1  # 單筆訂單不超過當日成交量的比例
 
     # 實盤參數
-    LIVE_UNIVERSE_SIZE: int = (
-        200  # 盤前篩選的標的數上限（檔）；等於券商單一連線的逐筆訂閱上限
-    )
-    STOP_LOSS_RETRY_SECONDS: int = 30  # 停損送出後部位仍在時，再送一次的間隔（秒）
+    # 盤前篩選的標的數上限（檔）。券商單一連線的逐筆訂閱上限是 200，留 10 檔給前一天
+    # 買進、今天掉出池外的持有標的（引擎一律替持有標的訂閱，見 `LiveTrader.quote_symbols()`）
+    LIVE_UNIVERSE_SIZE: int = 190
 
     # 交易日清單往回多抓的曆日數；與日曆的最大回看天數對齊，
     # 否則第一根 bar 在清單裡查不到前一交易日、退回逐日查資料庫
@@ -151,7 +152,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         # 由「帳上已有部位就不進場」擋住已成交的那些
         self.live_trading_date: Optional[datetime.date] = None
         self.live_entered: Set[str] = set()
-        self.stop_loss_sent_at: Dict[str, datetime.datetime] = {}
+        self.stop_loss_sent: Set[str] = set()
 
     def setup_account(self, account: StockAccount) -> None:
         """設置虛擬帳戶資訊"""
@@ -281,9 +282,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     def to_date(value: Union[datetime.date, datetime.datetime]) -> datetime.date:
         """逐筆報價與盤中成交的日期帶時刻，日 K 與重建的部位只有日期；比較前一律轉成日期"""
 
-        if isinstance(value, datetime.datetime):
-            return value.date()
-        return value
+        return TimeUtils.to_date(value)
 
     def get_live_symbols(self, latest_date: datetime.date) -> Optional[List[str]]:
         """
@@ -320,6 +319,11 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         candidates.sort(key=lambda stock_id: volumes[stock_id], reverse=True)
         return sorted(candidates[: self.LIVE_UNIVERSE_SIZE])
 
+    def count_held_symbols(self) -> int:
+        """帳上有部位的標的數（同一檔多筆部位算一檔，與持倉檔數上限的口徑相同）"""
+
+        return len({position.symbol for position in self.account.get_positions()})
+
     def reset_live_state(self, date: datetime.date) -> None:
         """逐筆狀態換日：前一天的進場與停損紀錄不得延續到今天"""
 
@@ -328,7 +332,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
         self.live_trading_date = date
         self.live_entered = set()
-        self.stop_loss_sent_at = {}
+        self.stop_loss_sent = set()
 
     def is_stop_loss_hit(self, stock_quote: StockQuote, stop_price: float) -> bool:
         """
@@ -452,8 +456,12 @@ class IntradayMomentumStrategy(BaseStockStrategy):
             if day_trade_list is None or stock_id not in day_trade_list.day_tradable:
                 continue
 
-            # 送出就算進場過：之後每一筆報價都還在門檻之上，不擋的話會逐筆重送，
-            # 被持倉上限擋下時也會逐筆寫風控事件
+            # 名額已滿時不送、也不記成進場過：之後有部位停損出場騰出名額，
+            # 這一檔若仍在門檻之上還能進場（與回測「有名額才開倉」一致）
+            if self.count_held_symbols() >= self.max_holdings:
+                continue
+
+            # 送出就算進場過：之後每一筆報價都還在門檻之上，不擋的話會逐筆重送
             self.live_entered.add(stock_id)
             logger.info(
                 f"股票 {stock_id} 盤中現價 {stock_quote.close} 觸及 {trigger_price}"
@@ -596,15 +604,12 @@ class IntradayMomentumStrategy(BaseStockStrategy):
             if stock_quote.close > stop_price:
                 continue
 
-            # 部位要等成交回報才會消失：剛送出的停損還在路上時，下一筆報價不可再送一張
-            sent_at: Optional[datetime.datetime] = self.stop_loss_sent_at.get(stock_id)
-            if (
-                sent_at is not None
-                and (now - sent_at).total_seconds() < self.STOP_LOSS_RETRY_SECONDS
-            ):
+            # 部位要等成交回報才會消失，而策略看不到在途的委託：回報晚到時重送，
+            # 兩張都成交就賣超、變成當日空單。故一天只送一次，沒成交留到隔天開盤出場
+            if stock_id in self.stop_loss_sent:
                 continue
 
-            self.stop_loss_sent_at[stock_id] = now
+            self.stop_loss_sent.add(stock_id)
             logger.warning(
                 f"股票 {stock_id} 進場當天現價 {stock_quote.close} 跌到 {stop_price}，停損"
             )

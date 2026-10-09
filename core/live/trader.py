@@ -2,7 +2,17 @@ import datetime
 import time
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from loguru import logger
 
@@ -357,6 +367,8 @@ class LiveTrader:
         self._cover_attempts: Dict[datetime.date, int] = {}
         # 每檔最後一筆報價；回補單取價用
         self._last_quotes: Dict[str, BaseQuote] = {}
+        # 盤中段落各策略的標的池集合（`run_intraday()` 開始時建立）
+        self._declared_symbols: Dict[str, FrozenSet[str]] = {}
 
     # === 主流程 ===
     def run(self, timing: ExecutionTiming) -> None:
@@ -585,6 +597,10 @@ class LiveTrader:
             on_heartbeat=self._on_heartbeat,
         )
 
+        # 開盤段與尾盤段是另外的行程、共用同一個帳號：時窗開始前不連上場，
+        # 否則兩個行程同時在場上，各自都會收到對方的委託回報
+        self._wait_until_submit_window(window)
+
         symbols: List[str] = sorted(
             {
                 symbol
@@ -592,6 +608,10 @@ class LiveTrader:
                 for symbol in self.quote_symbols(context)
             }
         )
+        # 逐筆派送每一筆都要判斷「這檔是不是這支策略的」；標的池在段落內不變，先建成集合
+        self._declared_symbols = {
+            context.name: frozenset(context.symbols) for context in self.contexts
+        }
         self.broker.route_events(loop.submit_quote, loop.submit_execution)
         if symbols:
             self.broker.subscribe_quotes(symbols)
@@ -818,7 +838,13 @@ class LiveTrader:
         for context in self.contexts:
             if not getattr(context.strategy, "is_tick_triggered", False):
                 continue
-            if quote.symbol not in self.quote_symbols(context):
+            # 標的池查集合；池外的只認帳上持有的（與訂閱範圍 `quote_symbols()` 相同）
+            declared: FrozenSet[str] = self._declared_symbols.get(
+                context.name, frozenset(context.symbols)
+            )
+            if quote.symbol not in declared and not context.account.check_has_position(
+                quote.symbol
+            ):
                 continue
             self._submit_one_quote(context, quote)
 

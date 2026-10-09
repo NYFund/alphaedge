@@ -524,19 +524,24 @@ class ShioajiBroker(BaseBroker):
         return list(self.quote_stream.get_stock_snapshots(contracts))
 
     def subscribe_quotes(self, symbols: List[str]) -> None:
-        """訂閱股票逐筆行情"""
+        """
+        訂閱股票逐筆行情（只訂成交，不訂委買賣）
+
+        委買賣目前沒有消費者，一併訂閱只會讓每一檔佔兩個訂閱名額——券商若把兩種行情
+        分開計數，200 檔的標的池就會變成 400 個訂閱而在盤中段落啟動時被拒。
+        """
 
         self._require_ready()
         self.quote_stream.subscribe(
-            list(self.resolver.resolve_stocks(symbols).values())
+            list(self.resolver.resolve_stocks(symbols).values()), with_bidask=False
         )
 
     def unsubscribe_quotes(self, symbols: List[str]) -> None:
-        """取消訂閱"""
+        """取消訂閱（與訂閱對稱，只有成交）"""
 
         self._require_ready()
         self.quote_stream.unsubscribe(
-            list(self.resolver.resolve_stocks(symbols).values())
+            list(self.resolver.resolve_stocks(symbols).values()), with_bidask=False
         )
 
     # === 委託狀態轉換 ===

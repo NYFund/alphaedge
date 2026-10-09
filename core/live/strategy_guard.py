@@ -29,7 +29,11 @@ class LiveReadinessError(RuntimeError):
     """策略未通過上實盤前的檢查"""
 
 
-# 段落的時間先後。`IMMEDIATE` 是盤中逐筆，沒有段落之分，故所有鉤子都在同一格
+# 段落的時間先後。`IMMEDIATE` 刻意與開盤段同一格，不排在開盤與尾盤之間：
+# 盤中段落實際落在 09:05～13:18（開盤段之後），但「開倉在盤中、隔天開盤平倉」這類
+# 策略的平倉只處理前一天以前的部位、停損只處理當天的部位，兩者動的部位不重疊，
+# 排成不同格會被誤判成順序矛盾。代價是：真的讓同一批部位同時經過盤中鉤子與開盤段的
+# 策略，這裡檢查不出先後，要由策略自己保證兩個鉤子處理的部位不重疊
 _TIMING_ORDER: Dict[ExecutionTiming, int] = {
     ExecutionTiming.AT_OPEN: 0,
     ExecutionTiming.AT_CLOSE: 1,

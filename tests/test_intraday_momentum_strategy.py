@@ -477,11 +477,12 @@ def test_tick_entry_needs_the_day_trade_list() -> None:
     assert "2330" not in strategy.live_entered
 
 
-def test_tick_stop_loss_uses_the_current_price_and_waits_before_resending() -> None:
+def test_tick_stop_loss_uses_the_current_price_and_is_sent_once_a_day() -> None:
     """
-    當天進場的部位現價跌到停損價即賣出；剛送出的停損還在路上時不重送，隔 30 秒仍在才再送
+    當天進場的部位現價跌到停損價即賣出；同一檔一天只送一次
 
-    盤中成交的部位日期帶時刻，要轉成日期才比得出是不是當天進場。
+    策略看不到在途的委託：成交回報晚到時部位還在帳上，重送會在原單成交後再賣一次、
+    變成當日空單。盤中成交的部位日期帶時刻，要轉成日期才比得出是不是當天進場。
     """
 
     strategy: IntradayMomentumStrategy = make_strategy()
@@ -489,15 +490,34 @@ def test_tick_stop_loss_uses_the_current_price_and_waits_before_resending() -> N
 
     above = strategy.generate_stop_loss_signals([make_tick(108.0, at(10, 0))])
     hit = strategy.generate_stop_loss_signals([make_tick(STOP_PRICE, at(10, 1))])
-    too_soon = strategy.generate_stop_loss_signals([make_tick(107.0, at(10, 1, 10))])
-    retry = strategy.generate_stop_loss_signals([make_tick(107.0, at(10, 1, 31))])
+    later = strategy.generate_stop_loss_signals([make_tick(106.0, at(11, 30))])
 
     assert above == []
     assert len(hit) == 1
     assert hit[0].order_price == STOP_PRICE
     assert hit[0].volume == 2
-    assert too_soon == []
-    assert len(retry) == 1
+    assert later == []
+
+
+def test_tick_entry_waits_for_a_free_slot_without_burning_the_day() -> None:
+    """
+    持倉檔數已滿時不進場，也不記成進場過：之後騰出名額、仍在門檻之上就能進
+
+    記成進場過的話，這一檔當天就再也進不去，回測卻會買——parity 漂移而 log 看不出原因。
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.max_holdings = 1
+    other: StockPosition = make_position(date=at(9, 30))
+    other.symbol = "2317"
+    strategy.account.positions.append(other)
+
+    full = strategy.generate_open_signals([make_tick(109.5, at(10, 0))])
+    strategy.account.positions.clear()
+    freed = strategy.generate_open_signals([make_tick(109.5, at(10, 30))])
+
+    assert full == []
+    assert len(freed) == 1
 
 
 def test_tick_stop_loss_ignores_positions_from_earlier_days() -> None:

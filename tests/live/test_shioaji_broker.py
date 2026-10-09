@@ -668,3 +668,21 @@ def test_recovered_order_can_be_cancelled_by_a_new_broker(
     assert recovered[0].custom_field == submitted.custom_field
     assert recovered[0].broker_seqno == "000001"
     assert len(api.cancelled) == 1
+
+
+def test_stock_subscription_is_tick_only(broker: ShioajiBroker, api: FakeApi) -> None:
+    """
+    股票只訂成交、不訂委買賣
+
+    委買賣沒有消費者；一併訂閱會讓每一檔佔兩個名額，券商若分開計數，
+    200 檔的盤中標的池在啟動時就會超過上限而整段中止。
+    """
+
+    calls: List[Any] = []
+    api.subscribe = lambda contract, quote_type, version: calls.append(  # type: ignore
+        (contract.code, quote_type)
+    )
+
+    broker.subscribe_quotes(["2330"])
+
+    assert calls == [("2330", sj.QuoteType.Tick)]
