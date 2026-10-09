@@ -40,9 +40,9 @@
 | Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
 | Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ✅ | 2026-09-30 完成：新增 E'''' 項（專屬 AST 掃描，偏離原規劃的分層規則寫法）；突變驗證紅→綠；2 條單元測試 |
 | Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`core/Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ✅ | 2026-10-01 完成；八項護欄以暫時檔逐一觸發皆轉紅；`test_strategy_data_access.py` 的假綠燈先行修掉 |
-| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ⬜ | 避開 `實盤下單架構規劃.md` Phase7-1 演練時段；與 `實盤下單架構規劃.md` Phase7-10（`MomentumStrategy1` 改名）同一批施作，先搬家再改名；`test_strategy_data_access.py` 不改會變假綠燈 |
-| Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ⬜ | 相依 Phase2-2 |
-| Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ⬜ | 相依 Phase2-3 |
+| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | 🔄 | **2026-10-09 已在 `feature/post-rehearsal` 實作（`bd7662a`），待 `實盤下單架構規劃.md` Phase7-1 演練結束後合併、重啟常駐行程**；與 `實盤下單架構規劃.md` Phase7-10 同一批（先搬家再改名，已依序完成） |
+| Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | 🔄 | **2026-10-09 已在 `feature/post-rehearsal` 實作（`ed29b46`），待演練後合併**；分層登記改為契約，另加「`core/strategies/` 只放契約」的專屬檢查 |
+| Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | 🔄 | **2026-10-09 已在 `feature/post-rehearsal` 實作（`91445c1`），待演練後合併** |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成；回歸雙線零變動。主目錄待 10/1 演練後更新 |
 | Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ✅ | 2026-10-08 完成，**偏離原規格**：提前到 Phase2-2、Phase5-1 之前做（見該步驟）；CI `docker` job 建置與三項冒煙通過 |
 | Phase5-1 | `core/pipeline/` 搬到頂層並改名 `etl/` | `etl/**`、`tasks/update_db.py`、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；`tasks/update_db.py` 各 target 冒煙；`core` 對 `etl` 的 import 為零；附錄護欄全數涵蓋 `etl/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次。2026-10-01 定案：搬移時一併改名 `etl`，連同日誌桶 `logs/pipeline/` 全部改，範圍見步驟章節 |
@@ -205,7 +205,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 >   根目錄 `import strategies` 解析到頂層那份；`pytest` 2480 passed；`check_layer_deps.py` 0；`check_doc_paths.py` 0。
 >   **映像內 import 未在本機驗證**（Docker daemon 未啟動），由 CI 新增的那一步把關。
 
-### Phase2-2. 具體策略與 `StrategyLoader` 搬到 `strategies/` ⬜
+### Phase2-2. 具體策略與 `StrategyLoader` 搬到 `strategies/` 🔄
 
 - **目的**：把具體策略從框架中移出，這是本份文件的主體。
 - **做法**：
@@ -237,7 +237,14 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
      分開做要重裝兩次排程、跑兩次回歸。也不在演練期間先搬沒演練的三支——具體策略會分散在兩處、
      `StrategyLoader` 要同時掃兩個位置，多出一段過渡狀態。
 
-### Phase2-3. `core/strategies/` 收斂成只剩契約 ⬜
+> **🔄 實作紀錄（2026-10-09，`feature/post-rehearsal` 的 `bd7662a`）**
+> - 五支具體策略以 `git mv` 搬到 `strategies/{stock,futures}/`（含 2026-10-08 新增的 `intraday_momentum_strategy.py`）；`strategy_loader.py` → `strategies/loader.py`，掃描目標改為頂層套件，載入的類別集合與改前相同。
+> - **做法外的發現**：日誌桶以模組名前綴分流，backtest 桶只認 `core.strategies`——搬家後策略的記錄會靜靜落進 pipeline 桶。已在 `LogManager.BUCKET_PREFIXES` 加上 `strategies`。
+> - 呼叫端：`apps/`、`scripts/manual/`、29 個測試；仍在規劃中的 backlog 由 `check_doc_paths.py` 抓到 7 處舊路徑，一併改。
+> - 驗證：回歸雙線通過；全套 2,761 passed、分層 0 違規；在搬過去的策略寫入欄位字面值，`test_strategy_data_access.py` 轉紅。
+> - 剩：演練結束後合併、重啟常駐行程（與 `實盤下單架構規劃.md` Phase7-10 的紀錄庫改名、launchd 重裝同一次）。
+
+### Phase2-3. `core/strategies/` 收斂成只剩契約 🔄
 
 - **目的**：搬完之後，`core/strategies/` 的分層登記仍把 `core.strategies` 整包當成第 7 層
   策略層，要改成只剩契約的第 4 層。
@@ -252,7 +259,13 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
   分層或門面檢查要紅。
 - **相依**：Phase2-2。
 
-### Phase2-4. 策略相關文件與規則入口同步 ⬜
+> **🔄 實作紀錄（2026-10-09，`feature/post-rehearsal` 的 `ed29b46`）**
+> - `("core.strategies", 7, "策略層")` 改為 `("core.strategies", 4, "策略契約（套件門面）", True)`。
+> - **偏離原規格（加嚴）**：原本的驗證「在 `core/strategies/stock/` 放一支具體策略，分層或門面檢查要紅」光靠改分層等級做不到——具體策略 import 的都是同層或更低層，
+>   放回去照樣零違規。新增 `check_strategy_contract_only()`：`core/strategies/` 只准有契約與門面六個檔，實測放一支具體策略時腳本以結束碼 1 失敗。
+> - 契約套件、股票門面與期貨基底的說明改為「具體策略在頂層 `strategies/`」。
+
+### Phase2-4. 策略相關文件與規則入口同步 🔄
 
 - **目的**：寫策略的入口文件全部指向新位置，否則下一支策略會照舊文件寫回 `core/`。
 - **做法**：更新以下檔案中的策略路徑：
@@ -269,6 +282,12 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 - **產出**：上述文件。
 - **驗證方式**：`check_doc_paths.py` 通過；`grep -rn "core/strategies/\(stock\|futures\)/[a-z_]*strategy" --include=*.md .` 為零。
 - **相依**：Phase2-3。
+
+> **🔄 實作紀錄（2026-10-09，`feature/post-rehearsal` 的 `91445c1`）**
+> - 做法 1～6 全數完成：skill（含 frontmatter）、Cursor 規則的 `description`、`CLAUDE.md`、`strategy_lab/`、`strategies/README.md`（由 `core/strategies/` 搬來）、README 中英、`docs/` 與兩份規劃中的 backlog。
+> - **做法外的發現（假綠燈）**：`tests/test_module_docs.py` 對 `core/strategies/{stock,futures}/` 的豁免在搬家後只剩兩個 `base.py` 可豁免，反而放過了契約；
+>   已移除豁免，「策略檔要有 class docstring」改掃頂層 `strategies/` 並先確認掃得到檔案。
+> - 驗證：`check_doc_paths.py` 0 錯；非 backlog 的 `core/strategies/(stock|futures)/*strategy` 引用為零（backlog 歷史紀錄保留原路徑）。
 
 ---
 
@@ -415,22 +434,22 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
 以下護欄以**寫死的目錄清單**決定掃描範圍（2026-09-26 以 grep 盤點）。任何新的頂層套件
 （本份的 `strategies/`、`etl/`，以及 `回測與實盤入口拆分及架構收斂.md` 的 `apps/`）
 都要逐一判斷是否加入。**不加入時要在該處註解寫明理由**，不要只是漏掉。
-`apps/` 已於 2026-09-30（`回測與實盤入口拆分及架構收斂.md` Phase1-1）逐項判斷完畢：覆蓋率兩處刻意不加，其餘全數加入。
+`apps/` 已於 2026-09-30（`回測與實盤入口拆分及架構收斂.md` Phase1-1）逐項判斷完畢：覆蓋率兩處刻意不加，其餘全數加入。`tasks/` 已於 2026-10-09 併入 `apps/`（同一份文件的 Phase1-8），下表範圍已移除它。
 
 | 位置 | 目前範圍 | 守的是什麼 |
 |------|----------|------------|
-| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
+| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
 | `scripts/check_layer_deps.py` 的 `_NON_CORE_TOPS` | 同上加 `run` | `core/` 不得 import 的頂層套件 |
-| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`strategies`、`tasks` | `sqlite3` 只能出現在 `core/dao/` |
-| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`strategy_lab` 等 | 文件路徑與符號引用 |
-| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
-| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`strategies`、`tasks`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
-| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`strategies`、`tasks`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
-| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`strategies`、`tasks`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
-| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`strategies`、`tasks`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
-| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`strategies`、`tasks`、`scripts` | 暫存檔有清理 |
+| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`strategies` | `sqlite3` 只能出現在 `core/dao/` |
+| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`strategy_lab` 等 | 文件路徑與符號引用 |
+| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
+| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`strategies`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
+| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`strategies`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
+| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`strategies`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
+| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`strategies`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
+| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`strategies`、`scripts` | 暫存檔有清理 |
 | `tests/test_strategy_data_access.py` 的 `STRATEGY_DIRS` | `core/strategies`、`strategies` | 策略不得寫資料庫欄位字面值；自我檢查改為「載入器找得到的每支策略都在掃描範圍內」（2026-10-01），搬家不再有假綠燈 |
 | `pyproject.toml` 的 `[tool.coverage.run] source` | `core`、`strategies` | 覆蓋率報告範圍 |
 | `.github/workflows/ci.yml` 的 `--cov=core` | `core`、`strategies` | 同上（CI 端） |
-| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`strategies*`、`tasks*`、`tests*` | editable 安裝後可 import |
-| 根目錄 `Dockerfile` 的 `COPY` | `core`、`tasks`、`apps`、`strategies` | 映像內容 |
+| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`strategies*`、`tests*` | editable 安裝後可 import |
+| 根目錄 `Dockerfile` 的 `COPY` | `core`、`apps`、`strategies` | 映像內容 |

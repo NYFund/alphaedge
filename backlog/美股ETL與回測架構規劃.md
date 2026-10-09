@@ -40,7 +40,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | Phase1-1 | 建立 `us/` 目錄骨架與 provider 介面 | `core/pipeline/us/`（含 `providers/base.py`）、`core/api/us/` | 骨架可 import；`scripts/check_layer_deps.py` 通過；假 provider 可通過介面測試 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；策略**不**開 `us/` 目錄，見 §二 |
 | Phase1-2 | `us_universe` ＋ `us_price_daily` ETL（差集續跑、冪等寫入） | `core/pipeline/us/*`、`core/dao/us/`（`us_universe`／`us_price_daily` 的 DAO）、`core/api/us/{price,universe}_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py` 的 `DataType` | 中斷後可續跑；重跑不產生重複資料；統計行格式與台股一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-1；須符合 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈新增或修改 updater 的檢查表〉與 [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 DAO） |
-| Phase1-3 | 美股日線動能策略跑通回測 | `core/strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/market_calendar.py`、`core/adapters/us/`、`core/backtest/models/`（美股 spec／fill／`settlement_model/us_stock.py`）、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
+| Phase1-3 | 美股日線動能策略跑通回測 | `strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/market_calendar.py`、`core/adapters/us/`、`core/backtest/models/`（美股 spec／fill／`settlement_model/us_stock.py`）、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
 | Phase2-1 | `us_corporate_actions` ＋ raw/adjusted 回測切換 | `core/pipeline/us/*`、`core/backtest/datafeed/us/stock_datafeed.py` | 同一策略在兩種模式下結果可解釋 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-3；`BaseDataFeed` 在中立的 `core/datafeed/base.py`（回測與實盤共用同一份契約） |
 | Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/market/us/cost_model.py` | 費用計算有單元測試 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-3；繼承既有 `BaseCostModel` |
 | Phase2-3 | 資料品質檢核與異常告警 | `core/pipeline/us/*` | 缺洞天數、成交量異常可被偵測 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2 |
@@ -315,7 +315,7 @@ core/
      把交易單位參數化（預設維持 `Units.LOT`，台股回歸不變），或新增美股 sizer；美股策略在 `__init__` 覆寫 `self.sizer`
      （`BaseStockStrategy` 固定建 `EqualWeightSizer()`）。`StockPortfolioConstructor` 說明寫「台股開倉」，一併改成市場中立。
   5. `core/backtest/factory.py`：加 `(Market.US, InstrumentType.STOCK)` 分支。
-  6. `core/strategies/stock/momentum_us_strategy.py`：日線動能策略，`self.market = Market.US`。
+  6. `strategies/stock/momentum_us_strategy.py`：日線動能策略，`self.market = Market.US`。
      `BaseStockStrategy` 會帶入台股 API，是否需要另一支不帶台股 API 的美股基底，動工時決定。
   回測報表沿用 `core/backtest/report/reporter.py`，先完成可比較的資產曲線與交易明細。
 - **產出**：上述各檔（含 `core/portfolio/sizing.py`、`core/market/us/market_calendar.py`）。
