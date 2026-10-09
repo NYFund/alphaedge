@@ -4,7 +4,7 @@
 
 - **背景／問題**：台股 tick 目前的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 tick 級回測現在**沒有可用的資料源**。
   **2026-10-09 使用者把完整歷史 CSV 補回 `data/downloads/tw_stock/tick/`**（1,856 檔、56 GB、2020-04-01～2024-05-10、約 10.6 億列），並確認**這批就是要入庫的全部資料**；
-  原本那 541 檔（2024-05-13～05-15）已不存在，資料庫的歷史會止於 2024-05-10。全量盤點結果見〈CSV 樣式〉與 Phase4-1 的盤點紀錄。
+  **Google 雲端仍保有同一份**（2026-10-09 使用者確認），本機這份不是唯一備份。原本那 541 檔（2024-05-13～05-15）已不存在，資料庫的歷史會止於 2024-05-10。全量盤點結果見〈CSV 樣式〉與 Phase4-1 的盤點紀錄。
 - **目標**：落地目標改成 TimescaleDB（PostgreSQL extension）：
   - 寫入路徑改用 `COPY`，以「股票 × 交易日」為單位做到冪等寫入。
   - 讀取路徑改用 ConnectorX 直接產生 pandas DataFrame。
@@ -40,7 +40,7 @@
 >   `tick_metadata.json` 一直都在：1,920 檔、最後日期分布與 2026-09-16 相同；其中 93 檔沒有對應的 CSV（含 `2603`、`2609`），另有 30 檔 CSV 不在 metadata 裡。
 > - **`StockTickAPI.__init__` 沒有呼叫 `super().__init__()`**：`conn`／`owns_conn` 都不存在，原規劃「`setup()` 先呼叫 `super().setup()`」照做會 `AttributeError`，Phase3-1 已改寫做法。
 > - **compose 已有三個 service**（`core`、`live`、`frontend`），新增的 `postgres` 要讓 `core` 連得到；容器內的 `TICK_DATABASE_URL` 主機名是 `postgres` 而不是 `localhost`（Phase0-1、Phase0-2）。
-> - **`stock_tick_loader.py` 已不在 F401 例外清單**，Phase5-2 要移除的例外剩兩個。盲捕 23 處 2026-10-09 以 ruff 現查，各檔處數與 2026-10-01 相同。
+> - **`stock_tick_loader.py` 已不在 F401 例外清單**；另外兩個 F401 例外與台股 tick 四檔的 18 處盲捕已於 2026-10-09 在 Phase2-2 處理（剩 4 處刻意保留），期貨 tick 的 5 處仍待 Phase5-2。
 > - **與 `core目錄邊界收斂.md` Phase5-1 的先後**：該步驟把 `core/pipeline/` 搬到頂層 `etl/`，目前暫緩到本文件與 `PostgreSQL遷移計畫.md` 涉及 pipeline 的步驟完成。
 >   本文件的 `core/pipeline/...` 路徑以施作當下為準；若那一步先做，全文路徑要跟著換成 `etl/...`。
 > - **與盤中動能策略的關係**：`盤中動能策略.md` S2 的日 K 近似（成交量、停損先後）要靠逐筆資料校準；但宣告 `is_tick_triggered` 的策略跑 `Scale.TICK`
@@ -57,13 +57,13 @@
 | Phase1-2 | 建表：`stock_tick` hypertable 與 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py` | 建表函式重跑兩次不報錯；`timescaledb_information.hypertables` 查得到 | ✅ | **✅ 2026-10-09**：`StockTickDAO.create_tables()` 重跑不報錯、hypertable 與欄位型別符合 DDL；**loader 的 `create_db()` 改寫併入 Phase2-1（偏離原規格）**。 相依 Phase1-1；schema 詳見〈資料表設計〉 |
 | Phase1-3 | 設定壓縮與壓縮 policy | `core/dao/tw/stock_tick_dao.py` | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ✅ | **✅ 2026-10-09**：壓縮 policy job 存在；`pause／resume` 切換 `scheduled`；`compress_chunks_before()` 壓縮後列數不變。整合測試 6 條（`tests/test_stock_tick_timescale.py`）。 相依 Phase1-2 |
 | Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等＋兩種 CSV 格式正規化） | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變；歷史格式與 cleaner 格式各一份樣本都能入庫 | ✅ | **✅ 2026-10-09**（`feature/tick-timescaledb`）：單元測試 15 條（替身 DAO，不需 DB）＋整合測試 4 條，三處突變皆轉紅；**全量乾跑 1,856 檔（只正規化與排除、不寫 DB）0 錯誤**，排除數與盤點對得上（見步驟詳述）。 相依 Phase1-2；**2026-10-09 依全量盤點擴充**：要讀歷史格式（`ts`、無 `stock_id`、欄序不一）並套用 Phase4-1 的排除規則 |
-| Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1；**一併收窄 `stock_tick_{updater,utils,cleaner,crawler}.py` 的 18 處盲捕**（2026-10-01 由 `暫緩工作彙整.md` S13 移入，見〈附：併入的盲捕收斂〉） |
-| Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-1、Phase1-2 |
-| Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
+| Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ✅ | **✅ 2026-10-09**（`feature/tick-timescaledb`）：續跑改查 `load_log`；**另修「爬取失敗被當成沒成交」**（crawler 改拋 `ConnectionError`、失敗日之後先不寫），見步驟詳述；盲捕 18 → 4（刻意保留）。單元測試 17 條、六處突變皆轉紅；端到端：三天入庫、刪一檔最後一天、重跑只重爬那一筆。 相依 Phase2-1；**一併收窄 `stock_tick_{updater,utils,cleaner,crawler}.py` 的 18 處盲捕**（2026-10-01 由 `暫緩工作彙整.md` S13 移入，見〈附：併入的盲捕收斂〉） |
+| Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ✅ | **✅ 2026-10-09**：ConnectorX 以 Arrow 回傳再轉 pandas（偏離原規格的 `return_type="pandas"`，見步驟詳述）；讀取契約整合測試 5 條、不需 DB 的驗證測試 8 條，五處突變皆轉紅。 相依 Phase1-1、Phase1-2 |
+| Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ✅ | **✅ 2026-10-09**：DolphinDB 字樣全數改掉；驗證改以 DataFeed `get_quotes()` 直接比對 TickQuote 數（偏離原規格，見步驟詳述）。 相依 Phase3-1 |
 | Phase4-1 | 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 | 本文件（盤點紀錄） | 盤點紀錄涵蓋 5 項；兩項裁示已記錄；搬移後檔數 1,856、總大小不變 | ✅ | **✅ 2026-10-09**：全量盤點寫入盤點紀錄；使用者採用兩項建議；歷史已搬到 `data/tick_history/`（1,856 檔、56 GB）。 **無相依，可最先做**；**2026-10-09 全量盤點已寫入盤點紀錄；兩項裁示（採用建議）與搬移到 `data/tick_history/` 同日完成** |
 | Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1、Phase4-1；**只用抽樣**，全量入庫走 Phase4-3 且需使用者要求（見〈範圍界線〉） |
 | Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
-| Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ⬜ | 相依 Phase2-2、Phase3-1 |
+| Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | 🔄 | **🔄 2026-10-09**：`test_api_public_interfaces.py`、`test_strategy_data_access.py` 已改；`test_stock_tick_timescale.py` 已建（16 條）並另有三個不需 DB 的測試檔；**剩 `test_entrypoint_and_logging.py` 兩條 `TICK_DB_PATH` 測試，隨 Phase5-2 移除常數時一起改**。 相依 Phase2-2、Phase3-1 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
 
@@ -424,7 +424,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **實作紀錄（2026-10-09）**：
   - **寫入改用 `COPY ... FROM STDIN (FORMAT csv)` 整塊送出**（偏離原規格的 `write_row()`）：歷史匯入是十億列級，逐列往返會主導總耗時；pandas 組 CSV 文字在 C 層完成。
   - 例外隔離只收 `ValueError`、`OSError` 與 `core/dao/timescale.py` 的 `tick_db_error_types()`（DAO 以外不 import psycopg 也能精準捕捉），不盲捕。
-  - 指定 `dir_path` 時拒絕 `remove_files`：歷史存檔是唯一的原始資料。
+  - 指定 `dir_path` 時拒絕 `remove_files`：歷史存檔是原始資料，不該被入庫流程順手刪掉。
   - 判斷上市櫃交易日用新增的 `StockPriceDAO.get_stock_trading_days()`。
   - **全量乾跑**（`data/tick_history/` 1,856 檔，只跑正規化與排除、不寫 DB）：0 個檔案失敗、0 個失敗日；
     原始 1,061,227,084 列 → 寫入 **1,050,896,400 列**；排除興櫃 10,322,770 列（與盤點完全一致）、全零 7,901 列、負量 13 列
@@ -434,7 +434,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **偏離原規格（2026-10-09）**：原規劃「格式差異在匯入腳本轉換、不改 loader 的欄位契約」。全量盤點後改為 loader 直接讀兩種格式並套用排除規則：歷史匯入（Phase4-3）、抽樣試點（Phase4-2）與日常更新才會是同一套規則，完整性比對的口徑也才一致。
 - **相依**：Phase1-2；排除規則相依 Phase4-1 的裁示。
 
-### Phase2-2. updater 續跑依據改為 `stock_tick_load_log` ⬜
+### Phase2-2. updater 續跑依據改為 `stock_tick_load_log` ✅
 
 - **目的**：`tick_metadata.json` 的日期是從 CSV 掃出來的，入庫失敗時也會前進，改成以資料庫實際寫入的紀錄為準。
 - **做法**：
@@ -453,13 +453,24 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 模組說明字串（`"""台股 tick 的 DolphinDB 與 metadata 工具"""`）與 class docstring 同步更新。
 - **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`。
 - **驗證方式**：以 Phase4-2 的 3 天樣本（2024-05-08～05-10）入庫後，手動刪掉某檔股票最後一天的 `load_log` 與資料，對同一段日期跑 `update()`（**crawler 一律用替身**，不對外連線、也不對正式資料表跑真實更新，見〈範圍界線〉），只有那檔股票被重爬。
+- **實作紀錄（2026-10-09）**：
+  - `StockTickDAO` 新增 `get_loaded_last_dates()`、`get_latest_trade_date()`、`get_source_rows()`；`check_date_crawled()` 改吃整次更新只查一次的結果。
+  - 刪 CSV 的判斷放在 `StockTickLoader.is_fully_loaded()`（loader 才知道兩種 CSV 格式），只比對每日列數。
+  - **另修一個續跑漏洞**（原規格沒寫到）：crawler 原本把 Shioaji 的任何錯誤吞成 `None`，updater 當成「這天沒成交」；
+    加上「不晚於已入庫最後一天就跳過」，那天就永遠補不回來。改成 crawler 拋 `ConnectionError`，
+    updater 遇到失敗日**只寫失敗日之前的日子**、該檔計為失敗（整次更新以 `DataLoadError` 收場），下次從失敗日接著爬。
+    代號不在合約表（已下市）仍回 `None`、算沒資料。
+  - **`scripts/manual/manual_tick_updater.py` 提前在本步驟刪除**（原排 Phase5-2）：它靠 mock DolphinDB 才不寫 DB，updater 改連 TimescaleDB 後一跑就會寫進正式表。
+  - 盲捕的突變測試放在新檔 `tests/test_stock_tick_updater.py`（偏離原規格的 `test_pipeline_error_narrowing.py`：tick 更新流程的測試集中一處比較好找）。
+    `pyproject.toml` 的 `BLE001`／`TRY300`／`TRY201` 處數註記回寫為 75／16／2。
+  - 驗證改在暫存 schema 以端到端整合測試完成（`test_updater_resumes_from_load_log`），不用 Phase4-2 的真實樣本：測試資料可控，也不碰 `public`。
 - **相依**：Phase2-1。
 
 ---
 
 ## Phase 3：讀取路徑
 
-### Phase3-1. 改寫 `StockTickAPI` 讀取路徑 ⬜
+### Phase3-1. 改寫 `StockTickAPI` 讀取路徑 ✅
 
 - **目的**：讓回測用的查詢在 TimescaleDB 上跑得快，並符合〈讀取介面契約〉。
 - **做法**：
@@ -486,9 +497,15 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **不採用 `pd.read_sql`**：它是逐列轉成 Python 物件，百萬列級查詢要慢上數十倍，這是換 TimescaleDB 後最容易踩到的效能陷阱。
 - **產出**：`core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py`。
 - **驗證方式**：`pytest tests/test_api_public_interfaces.py -k tick` 通過；Phase5-1 的整合測試驗證三個查詢的排序與 dtype；Phase4-2 記錄查詢耗時。
+- **實作紀錄（2026-10-09）**：
+  - **ConnectorX 改用 `return_type="arrow"` 再 `.to_pandas()`**（偏離原規格）：直接回 pandas 的路徑用到 pandas 已棄用的內部 API `make_block`，
+    實測每次查詢都發 `Pandas4Warning`，pandas 拿掉它那天整條讀取路徑就壞；`[tick]` extra 因此補上 `pyarrow`。
+  - 空結果回傳**同欄位、同 dtype 的空表**（`empty` 仍為 True），比原本的 `pd.DataFrame()` 多帶欄位，呼叫端不受影響。
+  - `StockTickAPI(dao=...)` 可注入 DAO（整合測試指向暫存 schema）；`connect_tick_db()` 連不上時轉成 `ConnectionError`，訊息說明要開 Docker Desktop 並 `docker compose up -d postgres`。
+  - schema 名稱在 `StockTickDAO` 建構時驗證（會嵌進 ConnectorX 的 SQL）。
 - **相依**：Phase1-1、Phase1-2。
 
-### Phase3-2. DataFeed／Adapter 文字與連線生命週期收尾 ⬜
+### Phase3-2. DataFeed／Adapter 文字與連線生命週期收尾 ✅
 
 - **目的**：清掉回測層對 DolphinDB 的描述。行為不變。
 - **做法**：
@@ -500,6 +517,10 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **產出**：上列檔案。
 - **驗證方式**：寫一支只在測試裡用的 `Scale.TICK` 最小策略，對 Phase4-2 的 3 天樣本跑一次回測，不報錯，而且 `get_quotes()` 每天回傳的 `TickQuote` 數量等於當天的 DB 列數。
   這支策略**定義在測試檔裡、不放 `strategies/`**（放進去會被策略載入器收錄），而且**不可宣告 `is_tick_triggered`**——逐筆觸發的策略跑 `Scale.TICK` 回測會被引擎以 `IntradayScaleMismatchError` 拒絕（`tests/backtest/test_intraday_contract.py` 也只允許 `IntradayMomentumStrategy` 宣告它）。
+- **實作紀錄（2026-10-09）**：驗證改成在暫存 schema 寫入資料後，直接以 `TwStockDataFeed.get_quotes(date, Scale.TICK)` 比對
+  TickQuote 數與 DB 列數、並確認 `tick_quote.time` 是 `datetime`（偏離原規格的「最小策略跑完整回測」：完整回測還要日 K 的 SQLite，
+  worktree 沒有 `data/db`；DataFeed 到 adapter 這一段才是本步驟要驗的）。
+  README 兩語版與 `core/backtest/README.md` 的 TICK 列已一併改成 `[tick]` 相依與 TimescaleDB 啟動方式（原屬 Phase5-3）。
 - **相依**：Phase3-1。
 
 ---
@@ -508,7 +529,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 ### Phase4-1. 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 ✅
 
-- **目的**：先弄清楚要入庫的資料長什麼樣子，Phase2-1 的解析和 Phase4-3 的匯入才不會做白工；並把唯一一份歷史搬到 updater 碰不到的地方。
+- **目的**：先弄清楚要入庫的資料長什麼樣子，Phase2-1 的解析和 Phase4-3 的匯入才不會做白工；並把歷史搬到 updater 碰不到的地方。
 - **背景**：原規劃從 Google 雲端下載歷史 CSV 再盤點。2026-10-09 使用者已把完整歷史補回 `data/downloads/tw_stock/tick/`，並確認那批就是要入庫的全部資料，所以改成盤點本機這批，不再下載。
 - **做法**：
   1. 全量盤點（2026-10-09 已完成，結果見下方盤點紀錄與〈CSV 樣式〉）。
@@ -587,7 +608,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 ## Phase 5：測試與收斂
 
-### Phase5-1. 測試改寫與新增 ⬜
+### Phase5-1. 測試改寫與新增 🔄
 
 - **目的**：讓 CI 在沒有 TimescaleDB 的機器上照常通過，有 DB 的機器上能驗證真實行為。
 - **做法**：
@@ -614,8 +635,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     - `.env.example` 的 DolphinDB 區塊
     - `data/downloads/tw_stock/meta/tick/tick_metadata.json`（以及 backup）
     - `scripts/manual/manual_init_tick_metadata.py`
-    - `pyproject.toml` 裡 `stock_tick_utils.py`／`scripts/manual/manual_tick_updater.py` 的 F401 例外（後者若 Phase5-2 決定保留該腳本且不再 import `dolphindb`，例外同樣移除）；`stock_tick_loader.py` 已不在例外清單（2026-10-09 實查）
-  - `scripts/manual/manual_tick_updater.py`／`manual_tick_crawler.py`：逐支判斷改寫或刪除。
+    - ~~`pyproject.toml` 裡 `stock_tick_utils.py`／`scripts/manual/manual_tick_updater.py` 的 F401 例外~~：**2026-10-09 已於 Phase2-2 移除**（兩支都不再 import `dolphindb`）
+  - `scripts/manual/manual_tick_crawler.py`：判斷改寫或刪除。`manual_tick_updater.py` **2026-10-09 已於 Phase2-2 刪除**：它靠 mock DolphinDB 才不寫 DB，updater 改連 TimescaleDB 後一跑就會寫進正式表。
   - `apps/update_db.py` 說明文字中的 `futures_tick（Shioaji → DolphinDB…）` 依下方裁示結果更新。
   - **需使用者裁示：期貨 tick 的 DolphinDB 程式怎麼處理**（`futures_tick_crawler.py`／`cleaner`／`updater`／`loader`、`DDB_PATH`、`dolphindb` extra）：
     - **選項 A（建議）**：一併刪除。期貨 tick 已裁示不做（2026-09-15），這些程式沒有落地目標；日後要做時，比照本文件另立 backlog 改寫成 TimescaleDB 的 `futures_tick` 表。`apps/update_db.py` 的 `futures_tick` target 與 `DataType.FUTURES_TICK` 一併移除，`tests/test_futures_tick.py` 與 `test_entrypoint_and_logging.py` 的兩個相關測試跟著調整。
@@ -630,7 +651,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **設定**：`core/config/settings.py`（`TICK_UPDATE_START_DATE`、`DDB_*`、tick 爬蟲多帳號 `API_KEYS`）、`core/config/schema.py`（`TICK_DB_*`、`require_tick_db_path()`、`TICK_TABLE_NAME`、`FUTURES_TICK_TABLE_NAME`）、`core/config/__init__.py`、`core/pipeline/utils/constant.py`、`pyproject.toml`（`dolphindb` extra 與 per-file-ignores）、`.env.example`。
   - **測試**：`tests/test_futures_tick.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_strategy_data_access.py`、`tests/test_api_public_interfaces.py`、`tests/test_config_consistency.py` 的 tick 相關段落；`tests/backtest/test_intraday_contract.py` 的註解「TICK 回測要 DolphinDB」改成要 TimescaleDB（測試邏輯不變）。
   - **文件**：清單統一維護在 Phase5-3，這裡不重列。
-  - **本機資料**（不在版控）：Phase4-1 搬移後的歷史 CSV（1,856 檔）、`tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**歷史 CSV 是唯一一份原始資料，本步驟不刪**（只刪 `tick_metadata.json`）；全量匯入並比對通過後要不要刪，由使用者決定。
+  - **本機資料**（不在版控）：Phase4-1 搬移後的歷史 CSV（1,856 檔）、`tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**歷史 CSV 本步驟不刪**（只刪 `tick_metadata.json`）；全量匯入並比對通過後，本機那份要刪、壓縮封存或保留由使用者決定（Google 雲端另有一份）。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core apps scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
 - **相依**：Phase4-3（確認新儲存資料完整後才刪對照）、Phase5-1。
@@ -670,17 +691,17 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 | 檔案 | 處數（2026-10-01 現查；2026-10-09 複查相同） | 在哪一步處理 |
 |------|:--:|------|
-| `core/pipeline/tw/updaters/stock_tick_updater.py` | 10 | Phase2-2（續跑依據改寫） |
-| `core/pipeline/tw/utils/stock_tick_utils.py` | 4 | Phase2-2 |
-| `core/pipeline/tw/cleaners/stock_tick_cleaner.py` | 3 | Phase2-2（沒有步驟會改寫它，但它在同一條更新流程上，用 Phase2-2 的樣本資料模擬一併驗證） |
-| `core/pipeline/tw/crawlers/stock_tick_crawler.py` | 1 | Phase2-2（同上） |
+| `core/pipeline/tw/updaters/stock_tick_updater.py` | 10 | Phase2-2（續跑依據改寫）。**✅ 2026-10-09：剩 4 處刻意保留**（Shioaji 用量查詢 2 處與登出：Shioaji 1.7 沒有公開的例外型別；thread 邊界），理由就地寫在註解 |
+| `core/pipeline/tw/utils/stock_tick_utils.py` | 4 | Phase2-2。**✅ 2026-10-09：歸零**（隨 metadata 函式移除） |
+| `core/pipeline/tw/cleaners/stock_tick_cleaner.py` | 3 | Phase2-2。**✅ 2026-10-09：歸零**（收窄為 `KeyError`／`ValueError`／`OSError`／`TypeError` 的組合） |
+| `core/pipeline/tw/crawlers/stock_tick_crawler.py` | 1 | Phase2-2。**✅ 2026-10-09：改成轉拋 `ConnectionError`**（不再被 ruff 計為盲捕；原本回 None 會讓失敗日被當成沒成交） |
 | `core/pipeline/tw/loaders/futures_tick_loader.py` | 3 | Phase5-2：期貨 tick 程式若裁示刪除，這幾處隨檔案消失；若保留，在同一步收窄 |
 | `core/pipeline/tw/updaters/futures_tick_updater.py` | 1 | Phase5-2（同上） |
 | `core/pipeline/tw/crawlers/futures_tick_crawler.py` | 1 | Phase5-2（同上） |
 
 - **判準**沿用 `暫緩工作彙整.md` S13 的做法：只收「該重試的外部失敗」（傳輸用 `OSError`、解析用
   `BaseDataCrawler.HTML_PARSE_ERRORS`、DAO 用 `DBError`），**逐項隔離迴圈不收窄**，理由就地寫在註解裡。
-- **驗證**：每處收窄各配一個突變測試，併入 `tests/test_pipeline_error_narrowing.py`；處數以
+- **驗證**：每處收窄各配一個突變測試（台股 tick 四檔的放在 `tests/test_stock_tick_updater.py`，見 Phase2-2）；處數以
   `uv run ruff check core/pipeline --select BLE001 --statistics` 現查，`tests/test_quality_ratchet.py` 擋住數量回升。
 
 ## 風險與對策
@@ -694,7 +715,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 | 時區錯位 | 用 `TIMESTAMPTZ` 時，ConnectorX 會回傳 UTC | schema 固定用 `TIMESTAMP`；整合測試驗證 `time` 為 naive 且等於 CSV 原值 |
 | 歷史 CSV 格式不一致 | 歷史格式與 cleaner 格式不同（欄名、欄序、毫秒時間、浮點字串），2026-10-09 已全量盤點 | Phase2-1 的 loader 正規化兩種格式，並以手寫樣本的單元測試涵蓋每一種差異 |
 | 興櫃時期混入 | 173 檔有興櫃時期的資料（約 1,032 萬列），以「股」為單位、交易到 15:00 後，混進去成交量會差上千倍 | 依 Phase4-1 裁示的規則，以 `price` 表判斷並整天排除；`price` 表整天缺資料時該日失敗而不是排除 |
-| 歷史 CSV 被覆寫或刪除 | 歷史放在 tick updater 的工作目錄 `data/downloads/tw_stock/tick/`：`--target tick`（`all` 也含 tick）會整檔覆寫爬到的股票；Phase2-2 之後的 updater 會在入庫後刪 CSV。這是唯一一份原始資料 | 2026-10-09 已搬到 `data/tick_history/`（Phase4-1）；開發用的 worktree 一律以 `--source-dir` 明確指向新位置，不改 `ALPHAEDGE_DATA_DIR` 去指主目錄的 `data/` |
+| 歷史 CSV 被覆寫或刪除 | 歷史放在 tick updater 的工作目錄 `data/downloads/tw_stock/tick/`：`--target tick`（`all` 也含 tick）會整檔覆寫爬到的股票；Phase2-2 之後的 updater 會在入庫後刪 CSV（Google 雲端另有一份，但重新下載 56 GB 很費事） | 2026-10-09 已搬到 `data/tick_history/`（Phase4-1）；開發用的 worktree 一律以 `--source-dir` 明確指向新位置，不改 `ALPHAEDGE_DATA_DIR` 去指主目錄的 `data/` |
 | `core/pipeline/` 搬家 | `core目錄邊界收斂.md` Phase5-1 會把它搬到頂層 `etl/` | 該步驟暫緩到本文件完成；若先做，本文件路徑跟著換，分層與 F401 例外的路徑一併檢查 |
 | 與 PostgreSQL 遷移計畫衝突 | 兩份工作都要動 compose、driver、`core/dao/` 的連線入口 | service 名稱、目錄、環境變數鍵已在本文件預先對齊（Phase0-1、Phase0-2、Phase1-1），先做的建立、後做的沿用 |
 
