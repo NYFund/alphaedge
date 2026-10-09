@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple, Type
 
 from core.config.settings import require_tick_database_url
 
@@ -79,3 +79,24 @@ def get_connectorx_uri() -> str:
         raise ModuleNotFoundError(f"找不到 connectorx：{_MISSING_EXTRA_HINT}") from e
 
     return get_tick_database_url()
+
+
+def tick_db_error_types() -> Tuple[Type[BaseException], ...]:
+    """
+    - Description:
+        TimescaleDB 寫入／查詢可能拋出的錯誤型別，給 DAO 以外的逐檔隔離 `except` 用
+
+        `core/dao/` 以外不可 import psycopg（分層檢查會擋），又要能精準捕捉資料庫錯誤、
+        而不是盲捕 `Exception`，所以由這裡回傳型別。沒裝選用相依時回傳空 tuple：
+        連線那一步就已經失敗，不會走到需要捕捉資料庫錯誤的地方。
+    - Return:
+        - Tuple[Type[BaseException], ...]
+            可直接放進 `except (...)` 的錯誤型別
+    """
+
+    try:
+        import psycopg
+    except ModuleNotFoundError:
+        return ()
+
+    return (psycopg.Error,)

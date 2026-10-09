@@ -3,6 +3,7 @@ import os
 import uuid
 from typing import Iterator, List, Tuple
 
+import pandas as pd
 import pytest
 
 """
@@ -161,3 +162,150 @@ def test_shared_connection_is_not_closed_by_dao(dao: StockTickDAO) -> None:
     borrower.close()
 
     assert not dao.conn.closed
+
+
+# === 寫入（replace_day） ===
+TRADE_DATE: datetime.date = datetime.date(2024, 5, 8)
+
+
+def _day_frame(rows: List[Tuple]) -> pd.DataFrame:
+    """以 (time, seq, close, volume, bid_price) 組出 `replace_day()` 要的當日資料"""
+
+    return pd.DataFrame(
+        [
+            {
+                "stock_id": "2330",
+                "time": pd.Timestamp(t),
+                "seq": seq,
+                "close": close,
+                "volume": volume,
+                "bid_price": bid_price,
+                "bid_volume": 2,
+                "ask_price": close,
+                "ask_volume": 3,
+                "tick_type": 1,
+            }
+            for t, seq, close, volume, bid_price in rows
+        ]
+    )
+
+
+def _stored(dao: StockTickDAO) -> List[Tuple]:
+    """目前存著的 (time, seq, close, volume, bid_price)，依 time、seq 排序"""
+
+    with dao.conn.transaction():
+        return dao.conn.execute(
+            f"SELECT time, seq, close, volume, bid_price "
+            f'FROM "{dao.schema}".stock_tick ORDER BY time, seq'
+        ).fetchall()
+
+
+def _load_log(dao: StockTickDAO) -> List[Tuple]:
+    """目前的 load_log：(stock_id, trade_date, source_rows, row_count, source_file)"""
+
+    with dao.conn.transaction():
+        return dao.conn.execute(
+            f"SELECT stock_id, trade_date, source_rows, row_count, source_file "
+            f'FROM "{dao.schema}".stock_tick_load_log ORDER BY stock_id, trade_date'
+        ).fetchall()
+
+
+def test_replace_day_is_idempotent_and_values_round_trip(dao: StockTickDAO) -> None:
+    """
+    同一天寫兩次列數不變；microsecond 時間、2 位小數價格、bid 為 0 都原樣存回
+    """
+
+    day: pd.DataFrame = _day_frame(
+        [
+            ("2024-05-08 09:00:01.123456", 0, 6.56, 1, 0.0),
+            ("2024-05-08 09:00:01.123456", 1, 6.56, 5, 6.55),
+        ]
+    )
+
+    assert dao.replace_day("2330", TRADE_DATE, day, 3, "2330.csv") == 2
+    assert dao.replace_day("2330", TRADE_DATE, day, 3, "2330.csv") == 2
+
+    assert _stored(dao) == [
+        (datetime.datetime(2024, 5, 8, 9, 0, 1, 123456), 0, 6.56, 1, 0.0),
+        (datetime.datetime(2024, 5, 8, 9, 0, 1, 123456), 1, 6.56, 5, 6.55),
+    ]
+    assert _load_log(dao) == [("2330", TRADE_DATE, 3, 2, "2330.csv")]
+
+
+def test_replace_day_replaces_old_rows_completely(dao: StockTickDAO) -> None:
+    """同一天以較少列的新資料重寫時，舊列要全部消失；別天的資料不受影響"""
+
+    dao.replace_day(
+        "2330",
+        TRADE_DATE,
+        _day_frame(
+            [
+                ("2024-05-08 09:00:01", 0, 800.0, 1, 799.0),
+                ("2024-05-08 13:30:00", 1, 801.0, 9, 800.0),
+            ]
+        ),
+        2,
+        "old.csv",
+    )
+    dao.replace_day(
+        "2330",
+        datetime.date(2024, 5, 9),
+        _day_frame([("2024-05-09 09:00:01", 0, 805.0, 1, 804.0)]),
+        1,
+        "old.csv",
+    )
+
+    dao.replace_day(
+        "2330",
+        TRADE_DATE,
+        _day_frame([("2024-05-08 09:00:05", 0, 802.0, 2, 801.0)]),
+        1,
+        "new.csv",
+    )
+
+    assert _stored(dao) == [
+        (datetime.datetime(2024, 5, 8, 9, 0, 5), 0, 802.0, 2, 801.0),
+        (datetime.datetime(2024, 5, 9, 9, 0, 1), 0, 805.0, 1, 804.0),
+    ]
+    assert _load_log(dao)[0] == ("2330", TRADE_DATE, 1, 1, "new.csv")
+
+
+def test_replace_day_with_empty_frame_logs_zero_rows(dao: StockTickDAO) -> None:
+    """整天被排除的日子：清掉舊資料、登記 `row_count = 0`"""
+
+    dao.replace_day(
+        "2330",
+        TRADE_DATE,
+        _day_frame([("2024-05-08 09:00:01", 0, 800.0, 1, 799.0)]),
+        1,
+        "old.csv",
+    )
+
+    written: int = dao.replace_day(
+        "2330",
+        TRADE_DATE,
+        _day_frame([]).reindex(columns=StockTickDAO.WRITE_COLUMNS),
+        7,
+        "new.csv",
+    )
+
+    assert written == 0
+    assert _stored(dao) == []
+    assert _load_log(dao) == [("2330", TRADE_DATE, 7, 0, "new.csv")]
+
+
+def test_create_tables_rerun_after_compression(dao: StockTickDAO) -> None:
+    """已有壓縮 chunk 時重跑建表（loader 每次啟動都會跑）不報錯、資料不變"""
+
+    dao.replace_day(
+        "2330",
+        TRADE_DATE,
+        _day_frame([("2024-05-08 09:00:01", 0, 800.0, 1, 799.0)]),
+        1,
+        "2330.csv",
+    )
+    dao.compress_chunks_before(datetime.date(2024, 5, 20))
+
+    dao.create_tables()
+
+    assert len(_stored(dao)) == 1

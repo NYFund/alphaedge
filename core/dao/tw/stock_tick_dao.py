@@ -1,7 +1,9 @@
 import datetime
+import io
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
+import pandas as pd
 from loguru import logger
 
 from core.config.schema import STOCK_TICK_LOAD_LOG_TABLE_NAME, STOCK_TICK_TABLE_NAME
@@ -53,6 +55,20 @@ class StockTickDAO:
     # 壓縮 policy 只壓 14 天前的 chunk：每日更新寫入的最近兩個 chunk 保持未壓縮，
     # 重跑最近幾天時不用先解壓
     COMPRESS_AFTER: datetime.timedelta = datetime.timedelta(days=14)
+
+    # 寫入的欄位與順序（含 `seq`）；讀取介面回傳的欄位不含 `seq`
+    WRITE_COLUMNS: Tuple[str, ...] = (
+        "stock_id",
+        "time",
+        "seq",
+        "close",
+        "volume",
+        "bid_price",
+        "bid_volume",
+        "ask_price",
+        "ask_volume",
+        "tick_type",
+    )
 
     def __init__(
         self,
@@ -177,6 +193,69 @@ class StockTickDAO:
             ).fetchone()
         return row is not None and row[0] is not None
 
+    # === 寫入 ===
+    def replace_day(
+        self,
+        stock_id: str,
+        trade_date: datetime.date,
+        day_df: pd.DataFrame,
+        source_rows: int,
+        source_file: str,
+    ) -> int:
+        """
+        - Description:
+            以「刪除後重寫」寫入一檔股票一個交易日的 tick，並登記 `load_log`；三件事同一個交易
+
+            **冪等靠整天重寫而不是唯一鍵**：同一瞬間的多筆成交（連所有欄位都相同）是真實資料，
+            沒有自然唯一鍵可以 `ON CONFLICT`；而來源 CSV 是整段覆寫產生的，同一天再出現時
+            應該以新檔為準。整天被規則排除的日子也要登記（`row_count = 0`），續跑時才不會重做。
+        - Parameters:
+            - stock_id: str
+                股票代號
+            - trade_date: datetime.date
+                交易日
+            - day_df: pd.DataFrame
+                已正規化、已排除的當日資料，欄位需含 `WRITE_COLUMNS`；可以是空表
+            - source_rows: int
+                來源 CSV 當天排除前的列數
+            - source_file: str
+                來源檔名，出問題時回溯用
+        - Return:
+            - int
+                寫入的列數
+        """
+
+        sql: ModuleType = _psycopg_sql()
+        day_start: datetime.datetime = datetime.datetime.combine(
+            trade_date, datetime.time()
+        )
+        day_end: datetime.datetime = day_start + datetime.timedelta(days=1)
+
+        with self.conn.transaction():
+            self.conn.execute(
+                sql.SQL(
+                    "DELETE FROM {} WHERE stock_id = %s AND time >= %s AND time < %s"
+                ).format(self._identifier(self.TABLE_NAME)),
+                (stock_id, day_start, day_end),
+            )
+            if not day_df.empty:
+                self._copy_rows(day_df)
+            self.conn.execute(
+                sql.SQL(
+                    """
+                    INSERT INTO {} (stock_id, trade_date, source_rows, row_count, source_file)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (stock_id, trade_date) DO UPDATE SET
+                        source_rows = EXCLUDED.source_rows,
+                        row_count   = EXCLUDED.row_count,
+                        source_file = EXCLUDED.source_file,
+                        loaded_at   = now()
+                    """
+                ).format(self._identifier(self.LOAD_LOG_TABLE_NAME)),
+                (stock_id, trade_date, source_rows, len(day_df), source_file),
+            )
+        return len(day_df)
+
     # === 壓縮 ===
     def pause_compression_policy(self) -> None:
         """
@@ -230,6 +309,33 @@ class StockTickDAO:
         return len(rows)
 
     # === 內部 ===
+    def _copy_rows(self, day_df: pd.DataFrame) -> None:
+        """
+        以 `COPY ... FROM STDIN (FORMAT csv)` 整塊寫入（呼叫端負責交易）
+
+        **不逐列 `write_row()`**：歷史匯入是十億列級，逐列由 Python 送出的往返成本會主導總耗時；
+        先在 pandas 組成 CSV 文字再一次送出，轉換在 C 層完成。
+        時間固定輸出到 microsecond，價格已在正規化時四捨五入到 2 位小數。
+        """
+
+        sql: ModuleType = _psycopg_sql()
+        buffer: io.StringIO = io.StringIO()
+        day_df.loc[:, list(self.WRITE_COLUMNS)].to_csv(
+            buffer,
+            index=False,
+            header=False,
+            date_format="%Y-%m-%d %H:%M:%S.%f",
+        )
+        copy_sql: psycopg.sql.Composed = sql.SQL(
+            "COPY {} ({}) FROM STDIN (FORMAT csv)"
+        ).format(
+            self._identifier(self.TABLE_NAME),
+            sql.SQL(", ").join(sql.Identifier(c) for c in self.WRITE_COLUMNS),
+        )
+        with self.conn.cursor() as cursor:
+            with cursor.copy(copy_sql) as copy:
+                copy.write(buffer.getvalue())
+
     def _identifier(self, table_name: str) -> "psycopg.sql.Composed":
         """帶 schema 的表名（SQL identifier）"""
 

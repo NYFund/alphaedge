@@ -442,8 +442,8 @@ def test_finmind_broker_trading_dataframe_path_raises(tmp_path: Path) -> None:
 
 # === 期貨線的「壞檔 → DataLoadError」===
 # 台股線（price／margin／finmind）已在上面涵蓋，期貨線原本一條都沒有。
-# **tick 線不在此列**：`stock_tick_loader.add_to_db()` 根本沒呼叫 `finish_load()`，
-# 它的失敗語意屬另一條路徑（缺口回補，不在本檔範圍）
+# **台股 tick 線不在此列**：它的壞檔與「日 K 未更新」兩種失敗由
+# `tests/test_stock_tick_loader.py` 以替身 DAO 涵蓋（不需要 TimescaleDB）
 def test_futures_price_loader_raises_on_broken_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,288 +1,355 @@
-import shutil
-import time
+import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
+import pandas as pd
 from loguru import logger
 
-try:
-    import dolphindb as ddb
-except ModuleNotFoundError:
-    logger.info("Warning: dolphindb module is not installed")
-
-from core.config import (
-    DDB_HOST,
-    DDB_PASSWORD,
-    DDB_PATH,
-    DDB_PORT,
-    DDB_USER,
-    TICK_DB_NAME,
-    TICK_DB_PATH,
-    TICK_DOWNLOADS_PATH,
-    TICK_TABLE_NAME,
-    require_tick_db_path,
-)
+from core.config import TICK_DOWNLOADS_PATH, TW_STOCK_DB_PATH
+from core.dao.timescale import tick_db_error_types
+from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.dao.tw.stock_tick_dao import StockTickDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
-from core.pipeline.utils.exceptions import DataLoadError
 
 """
-台股 Tick Loader（DolphinDB）
+台股 Tick Loader（TimescaleDB）
 
-逐筆成交的量級遠大於日線，故不走 SQLite 而寫進 DolphinDB 的 `tickDB`：
-資料庫依日期 VALUE ＋ 依代號 HASH 分割，表以 `keepDuplicates=ALL` 建立——
-同一個時間戳可能有多筆成交，去重會直接丟掉真實的成交筆數。
+把 `{stock_id}.csv` 正規化、依規則排除後，以「股票 × 交易日」為單位寫進 `stock_tick`，
+並在 `stock_tick_load_log` 登記來源列數與寫入列數。SQL 全在 `StockTickDAO`，本檔不碰驅動。
 
-CSV 由 DolphinDB 端的 `loadTextEx` 直接讀檔匯入，不經 Python 轉手。
+**讀得懂兩種 CSV**：
+- cleaner 格式（每日更新產生）：`stock_id,time,close,...`，欄序固定。
+- 歷史格式（2020-04～2024-05 的存檔）：時間欄叫 `ts`、沒有 `stock_id` 欄（代號只在檔名）、
+  8 個欄位有 31 種排列、部分檔案的整數寫成 `105.0`、興櫃時期的時間只到 millisecond。
+正規化與排除都在這裡做，日常更新與歷史匯入才會是同一套規則、同一個對帳口徑。
+
+**排除規則**（各規則的列數記進 log，`source_rows - row_count` 就是排除的列數）：
+- `close = 0` 的整列全零資料、`volume < 0` 的資料——兩者都是來源端的壞列。
+- **興櫃時期**：當天 `price` 表沒有這檔股票就整天排除。興櫃以「股」為單位、交易到 15:00 之後，
+  混進來成交量會差上千倍；`price` 只收上市櫃，是唯一可靠的判準（時間精度不是：
+  有些檔案的興櫃時期已經是 microsecond 格式）。
+- **`price` 表整天都沒有資料時不是排除，是失敗**：那代表日 K 還沒更新，不是興櫃。
+  若照興櫃排除並登記成已載入，這一天之後就再也不會補。
 """
+
+# 正規化後的欄位與順序；與 cleaner 輸出一致
+TICK_COLUMNS: Tuple[str, ...] = (
+    "stock_id",
+    "time",
+    "close",
+    "volume",
+    "bid_price",
+    "bid_volume",
+    "ask_price",
+    "ask_volume",
+    "tick_type",
+)
+PRICE_COLUMNS: Tuple[str, ...] = ("close", "bid_price", "ask_price")
+INT_COLUMNS: Tuple[str, ...] = ("volume", "bid_volume", "ask_volume", "tick_type")
+
+# 歷史格式的時間欄名
+HISTORY_TIME_COLUMN: str = "ts"
+
+# 價格的小數位數：台股最小跳動 0.01，多出來的位數是浮點誤差（`6.5600000000000005`）
+PRICE_DECIMALS: int = 2
+
+# 排除規則的名稱（log 與統計用）
+EXCLUDE_ZERO_CLOSE: str = "zero_close"
+EXCLUDE_NEGATIVE_VOLUME: str = "negative_volume"
+EXCLUDE_NOT_LISTED: str = "not_listed"
+
+
+def normalize_tick_frame(raw: pd.DataFrame, stock_id: str) -> pd.DataFrame:
+    """
+    - Description:
+        把 cleaner 格式或歷史格式的原始資料轉成 `TICK_COLUMNS` 的固定欄位與型別
+
+        **一律依欄名取欄**：歷史格式的欄序每檔不一。任何一格轉不過去就整檔失敗，
+        不默默丟列——丟掉的列會讓 `source_rows` 對不上，卻沒有任何規則可以解釋。
+    - Parameters:
+        - raw: pd.DataFrame
+            以字串讀入的原始 CSV（`dtype=str`）
+        - stock_id: str
+            股票代號（檔名）；歷史格式沒有 `stock_id` 欄時用它補上
+    - Return:
+        - pd.DataFrame
+            `TICK_COLUMNS` 欄位：`stock_id` 為 str、`time` 為 `datetime64`（naive）、
+            價格為四捨五入到 2 位的 float、量與 `tick_type` 為 int64；列序與原始檔相同
+    - Raise:
+        - ValueError
+            缺欄、時間無法解析、數值無法轉換或整數欄帶小數
+    """
+
+    df: pd.DataFrame = raw
+    if "time" not in df.columns and HISTORY_TIME_COLUMN in df.columns:
+        df = df.rename(columns={HISTORY_TIME_COLUMN: "time"})
+    if "stock_id" not in df.columns:
+        df = df.assign(stock_id=stock_id)
+
+    missing: List[str] = [column for column in TICK_COLUMNS if column not in df.columns]
+    if missing:
+        raise ValueError(f"{stock_id}：缺少欄位 {missing}（現有 {list(raw.columns)}）")
+
+    normalized: pd.DataFrame = pd.DataFrame(
+        {
+            "stock_id": df["stock_id"].astype(str),
+            # ISO8601：microsecond（26 字元）與 millisecond（23 字元）都吃得下
+            "time": pd.to_datetime(df["time"], format="ISO8601"),
+        }
+    )
+    for column in PRICE_COLUMNS:
+        normalized[column] = pd.to_numeric(df[column]).round(PRICE_DECIMALS)
+    for column in INT_COLUMNS:
+        # 先轉 float 再轉 int：部分歷史檔把整數寫成 `105.0`
+        values: pd.Series = pd.to_numeric(df[column])
+        fractional: pd.Series = values != values.round()
+        if values.isna().any() or fractional.any():
+            raise ValueError(f"{stock_id}：{column} 有空值或非整數")
+        normalized[column] = values.astype("int64")
+
+    return normalized.loc[:, list(TICK_COLUMNS)]
+
+
+def add_trade_date_and_seq(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    - Description:
+        補上 `trade_date` 與 `seq`（同一股票、同一交易日內的原始列序，從 0 起算）
+
+        **必須在排除之前算**：`seq` 記的是原始檔的列序，排除後留下的缺號正好可以
+        回頭對照 CSV。同一天內的原始列序不一定依時間排序（盤後列可能排在收盤列前面），
+        `seq` 只用來讓同一時間戳記的多筆成交有可重現的順序。
+    - Parameters:
+        - df: pd.DataFrame
+            `normalize_tick_frame()` 的結果
+    - Return:
+        - pd.DataFrame
+            多了 `trade_date`（`datetime.date`）與 `seq`（int64）的新表
+    """
+
+    result: pd.DataFrame = df.assign(trade_date=df["time"].dt.date)
+    result["seq"] = result.groupby(["stock_id", "trade_date"]).cumcount()
+    return result
+
+
+def filter_tick_rows(
+    df: pd.DataFrame,
+    listed_days: Set[datetime.date],
+    trading_days: Set[datetime.date],
+) -> Tuple[pd.DataFrame, Dict[str, int], List[datetime.date]]:
+    """
+    - Description:
+        依排除規則過濾一檔股票的資料（規則見模組說明）
+    - Parameters:
+        - df: pd.DataFrame
+            `add_trade_date_and_seq()` 的結果（單一股票）
+        - listed_days: Set[datetime.date]
+            這檔股票在 `price` 表有日 K 的日子
+        - trading_days: Set[datetime.date]
+            `price` 表有任何資料的日子（交易日曆）
+    - Return:
+        - Tuple[pd.DataFrame, Dict[str, int], List[datetime.date]]
+            留下的列（不含失敗日）、各規則排除的列數、失敗日（`price` 表整天沒資料，已排序）
+    """
+
+    trade_dates: pd.Series = df["trade_date"]
+    failed_mask: pd.Series = ~trade_dates.isin(trading_days)
+    failed_days: List[datetime.date] = sorted(set(trade_dates[failed_mask]))
+
+    candidate: pd.DataFrame = df[~failed_mask]
+    not_listed: pd.Series = ~candidate["trade_date"].isin(listed_days)
+    zero_close: pd.Series = ~not_listed & (candidate["close"] == 0)
+    negative_volume: pd.Series = ~not_listed & ~zero_close & (candidate["volume"] < 0)
+
+    stats: Dict[str, int] = {
+        EXCLUDE_NOT_LISTED: int(not_listed.sum()),
+        EXCLUDE_ZERO_CLOSE: int(zero_close.sum()),
+        EXCLUDE_NEGATIVE_VOLUME: int(negative_volume.sum()),
+    }
+    kept: pd.DataFrame = candidate[~(not_listed | zero_close | negative_volume)]
+    return kept, stats, failed_days
 
 
 class StockTickLoader(BaseDataLoader):
-    """Stock Tick Loader"""
+    """
+    - Description:
+        台股 tick 入庫：CSV → 正規化 → 排除 → 逐日「刪除後重寫」進 TimescaleDB
+    """
 
-    DEFAULT_TICK_DB_START_TIME: str = "2020.03.01"
-    DEFAULT_TICK_DB_END_TIME: str = "2030.12.31"
-    TICK_DB_HASH_PARTITIONS: int = 25
-    CONNECT_MAX_RETRIES: int = 3
-    CONNECT_RETRY_DELAY: float = 1.0
+    SOURCE: str = "tick"
 
-    def __init__(self) -> None:
-        """建立股票 tick loader，連線 DolphinDB 並確保 Tick DB 存在"""
-
-        # **不呼叫 `super().__init__()`**：本 loader 收的是連線或多個 DAO，
-        # 與基底「單一 DAO」的建構骨架不同形，連線與建表一律自理
-        # DolphinDB Session
-        self.session: Optional[ddb.session] = None
-        self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Loader"""
-
-        # Connect Database
-        self.connect()
-
-        # Ensure Database Table Exists
-        self.create_missing_tables()
-
-        # 檢查資料庫是否存在，並設定 TSDB Cache Engine
-        if self.session.existsDatabase(TICK_DB_PATH):
-            logger.info("Database exists!")
-
-            # 設定 TSDB Cache Engine 大小（Unit: GB），須小於 maxMemSize 的 0.75 倍
-            script: str = """
-            memSize = 2
-            setTSDBCacheEngineSize(memSize)
-            print("TSDBCacheEngineSize: " + string(getTSDBCacheEngineSize() / pow(1024, 3)) + "GB")
-            """
-            self.session.run(script)
-        else:
-            logger.info("Database doesn't exist!")
-            self.create_db()
-
-    def connect(
+    def __init__(
         self,
-        max_retries: Optional[int] = None,
-        retry_delay: Optional[float] = None,
+        dao: Optional[StockTickDAO] = None,
+        price_dao: Optional[StockPriceDAO] = None,
     ) -> None:
         """
         - Description:
-            連線 DolphinDB（含重試）；重試次數用盡仍失敗就往外拋
+            建立 loader；兩個 DAO 都可由呼叫端傳入共用，未傳就自行建立並在 `disconnect()` 關閉
         - Parameters:
-            - max_retries: Optional[int]
-                最大重試次數；None 時採用 `CONNECT_MAX_RETRIES`
-            - retry_delay: Optional[float]
-                每次重試之間的等待秒數；None 時採用 `CONNECT_RETRY_DELAY`
+            - dao: Optional[StockTickDAO]
+                tick 的 TimescaleDB DAO
+            - price_dao: Optional[StockPriceDAO]
+                判斷上市櫃交易日用的日 K DAO（唯讀）
         """
 
-        # `DDB_PATH` 沒設定時會拼出 `"NonetickDB"` 這種看起來像路徑的字串，
-        # 錯誤訊息完全指不到真正的原因；在連線之前就攔下來
-        require_tick_db_path()
+        self.price_dao: Optional[StockPriceDAO] = price_dao
+        self.owns_price_dao: bool = price_dao is None
+        super().__init__(dao)
 
-        _max_retries: int = (
-            max_retries if max_retries is not None else self.CONNECT_MAX_RETRIES
-        )
-        _retry_delay: float = (
-            retry_delay if retry_delay is not None else self.CONNECT_RETRY_DELAY
-        )
+    def price_db_path(self) -> Path:
+        """日 K 資料庫路徑；寫成方法讓測試在呼叫當下改寫模組常數（理由見 `db_path()`）"""
 
-        for attempt in range(1, _max_retries + 1):
-            try:
-                self.session: ddb.session = ddb.session()
-                self.session.connect(DDB_HOST, DDB_PORT, DDB_USER, DDB_PASSWORD)
-                logger.info("Successfully connected to DolphinDB")
-                return
-            except Exception as e:
-                if attempt < _max_retries:
-                    logger.warning(
-                        f"Connection attempt {attempt}/{_max_retries} failed: {e}. "
-                        f"Retrying in {_retry_delay} seconds..."
-                    )
-                    time.sleep(_retry_delay)
-                else:
-                    logger.error(
-                        f"Failed to connect to DolphinDB after {_max_retries} attempts: {e}"
-                    )
-                    raise
+        return TW_STOCK_DB_PATH
+
+    def downloads_path(self) -> Optional[Path]:
+        """tick updater 的工作目錄"""
+
+        return TICK_DOWNLOADS_PATH
+
+    def connect(self) -> None:
+        """建立（或沿用）tick DAO 與日 K DAO"""
+
+        if self.dao is None:
+            self.dao = StockTickDAO()
+            self.owns_dao = True
+        self.conn = self.dao.conn
+
+        if self.price_dao is None:
+            self.price_dao = StockPriceDAO(db_path=self.price_db_path(), read_only=True)
+            self.owns_price_dao = True
 
     def disconnect(self) -> None:
-        """Disconnect the Database"""
+        """關閉自己建立的 DAO；共用的由建立者關閉"""
 
-        self.session.close()
+        if self.owns_price_dao and self.price_dao is not None:
+            self.price_dao.close()
+            self.price_dao = None
+        super().disconnect()
 
     def create_db(self) -> None:
-        """創建 dolphinDB"""
+        """建立 `stock_tick` hypertable、壓縮設定與 `load_log`（可重跑）"""
 
-        start_time: str = self.DEFAULT_TICK_DB_START_TIME
-        end_time: str = self.DEFAULT_TICK_DB_END_TIME
-
-        if self.session.existsDatabase(TICK_DB_PATH):
-            logger.info("Database exists!")
-        else:
-            logger.info("Database doesn't exist!\nCreating a database...")
-            script: str = f"""
-            create database "{DDB_PATH}{TICK_DB_NAME}"
-            partitioned by VALUE({start_time}..{end_time}), HASH([SYMBOL, {self.TICK_DB_HASH_PARTITIONS}])
-            engine='TSDB'
-            create table "{DDB_PATH}{TICK_DB_NAME}"."{TICK_TABLE_NAME}"(
-                stock_id SYMBOL
-                time NANOTIMESTAMP
-                close FLOAT
-                volume INT
-                bid_price FLOAT
-                bid_volume INT
-                ask_price FLOAT
-                ask_volume INT
-                tick_type INT
-            )
-            partitioned by time, stock_id,
-            sortColumns=[`stock_id, `time],
-            keepDuplicates=ALL
-            """
-            try:
-                self.session.run(script)
-            except Exception as e:
-                # 建不出資料庫時後續每一次寫入都會失敗，沒有繼續下去的意義
-                logger.error(f"Tick dolphinDB create unsuccessfully!\n{e}")
-                raise DataLoadError("tick", ["<create_db>"], succeeded=0) from e
-
-            if self.session.existsDatabase(TICK_DB_PATH):
-                logger.info("Tick dolphinDB create successfully!")
-            else:
-                logger.error("Tick dolphinDB create unsuccessfully!")
-                raise DataLoadError("tick", ["<create_db>"], succeeded=0)
+        self.dao.create_tables()
 
     def create_missing_tables(self) -> None:
-        """確保 Tick DB 存在，否則建立"""
-
-        if not self.session.existsDatabase(TICK_DB_PATH):
-            logger.info("Tick DB not found. Creating...")
-            self.create_db()
-
-    def add_to_db(self, remove_files: bool = False) -> None:
-        """將資料夾中的所有 CSV 檔存入 tick 的 DolphinDB 中"""
-
-        # Ensure Database Table Exists
-        self.create_missing_tables()
-
-        self.append_all_csv_to_dolphinDB(TICK_DOWNLOADS_PATH)
-        if remove_files:
-            shutil.rmtree(TICK_DOWNLOADS_PATH)
-
-    def append_csv_to_dolphinDB(self, csv_path: Path) -> None:
-        """將單一 CSV 資料添加到已建立的 DolphinDB 資料表"""
-
-        # Ensure Database Table Exists
-        self.create_missing_tables()
-
-        script: str = f"""
-        db = database("{TICK_DB_PATH}")
-        schemaTable = table(
-            ["stock_id", "time", "close", "volume", "bid_price", "bid_volume", "ask_price", "ask_volume", "tick_type"] as columnName,
-            ["SYMBOL", "NANOTIMESTAMP", "FLOAT", "INT", "FLOAT", "INT", "FLOAT", "INT", "INT"] as columnType
-        )
-        loadTextEx(
-            dbHandle=db,
-            tableName="{TICK_TABLE_NAME}",
-            partitionColumns=["time", "stock_id"],
-            filename="{str(csv_path)}",
-            delimiter=",",
-            schema=schemaTable,
-            containHeader=true
-        )
         """
-        try:
-            self.session.run(script)
-            logger.info("The csv file successfully save into database and table!")
+        確保資料表存在
 
-        except Exception as e:
-            # **等級不可降回 `info`**：降級之後 DolphinDB 寫入失敗與正常訊息
-            # 在 log 裡完全一樣，一整天的 tick 沒進去也不會有人知道
-            logger.error(f"The csv file fail to save into database and table!\n{e}")
-            raise DataLoadError("tick", [csv_path.name], succeeded=0) from e
+        直接重跑 `create_tables()` 而不先查存在與否：每一句都是 `IF NOT EXISTS`，
+        表已存在、甚至已有壓縮 chunk 時重跑都不會改到資料；只查 `stock_tick`
+        反而會漏掉「hypertable 在、`load_log` 不在」這種半套狀態。
+        """
 
-    def append_all_csv_to_dolphinDB(self, dir_path: Path) -> None:
-        """將資料夾內所有 CSV 檔案附加到已建立的 DolphinDB 資料表"""
+        self.create_db()
 
-        # Ensure Database Table Exists
-        self.create_missing_tables()
+    def load_csv(self, csv_path: Path) -> int:
+        """
+        - Description:
+            載入一個 CSV（一檔股票、任意天數）；逐日一個交易
+        - Parameters:
+            - csv_path: Path
+                CSV 路徑；檔名（不含副檔名）即股票代號
+        - Return:
+            - int
+                寫入的總列數
+        - Raise:
+            - ValueError
+                格式錯誤（整檔不寫），或有交易日在 `price` 表整天沒資料
+                （其餘日子已寫入，失敗日沒有 `load_log`、下次會重做）
+        """
 
-        # 路徑一律轉成 posix 形式：Windows 的反斜線在 DolphinDB 腳本裡會被當成跳脫字元
-        csv_files: List[str] = [str(csv.as_posix()) for csv in dir_path.glob("*.csv")]
-        logger.info(f"* Total csv files: {len(csv_files)}")
+        stock_id: str = csv_path.stem
+        # 全部以字串讀入：代號的前導 0 要留著，數值的轉換與檢查統一在正規化做。
+        # `keep_default_na=False`：空格保持空字串，轉數值時報錯，而不是默默變成 NaN
+        raw: pd.DataFrame = pd.read_csv(csv_path, dtype=str, keep_default_na=False)
+        if raw.empty:
+            logger.warning(f"[tick] {csv_path.name} 沒有資料列，略過")
+            return 0
 
-        script: str = f"""
-        db = database("{TICK_DB_PATH}")
-        schemaTable = table(
-            ["stock_id", "time", "close", "volume", "bid_price", "bid_volume", "ask_price", "ask_volume", "tick_type"] as columnName,
-            ["SYMBOL", "NANOTIMESTAMP", "FLOAT", "INT", "FLOAT", "INT", "FLOAT", "INT", "INT"] as columnType
+        df: pd.DataFrame = add_trade_date_and_seq(normalize_tick_frame(raw, stock_id))
+        source_rows: pd.Series = df.groupby("trade_date").size()
+        first_day: datetime.date = source_rows.index.min()
+        last_day: datetime.date = source_rows.index.max()
+
+        listed_days: Set[datetime.date] = self.price_dao.get_stock_trading_days(
+            stock_id, first_day, last_day
         )
+        trading_days: Set[datetime.date] = set(
+            self.price_dao.get_trading_days(first_day, last_day)
+        )
+        kept, stats, failed_days = filter_tick_rows(df, listed_days, trading_days)
 
-        total_csv = {len(csv_files)}
-        csv_cnt = 0
-
-        for (csv_path in {csv_files}) {{
-            loadTextEx(
-                dbHandle=db,
-                tableName="{TICK_TABLE_NAME}",
-                partitionColumns=["time", "stock_id"],
-                filename=csv_path,
-                delimiter=",",
-                schema=schemaTable,
-                containHeader=true
+        kept_by_day: Dict[datetime.date, pd.DataFrame] = {
+            trade_date: rows for trade_date, rows in kept.groupby("trade_date")
+        }
+        empty_day: pd.DataFrame = kept.iloc[0:0]
+        written: int = 0
+        for trade_date, rows in source_rows.items():
+            if trade_date in failed_days:
+                continue
+            written += self.dao.replace_day(
+                stock_id,
+                trade_date,
+                kept_by_day.get(trade_date, empty_day),
+                int(rows),
+                csv_path.name,
             )
-            csv_cnt += 1
-            print("* Status: " + string(csv_cnt) + "/" + string(total_csv))
-        }}
+
+        excluded: Dict[str, int] = {rule: n for rule, n in stats.items() if n}
+        logger.info(
+            f"[tick] {csv_path.name}：{len(source_rows) - len(failed_days)} 天、"
+            f"寫入 {written:,} 列" + (f"、排除 {excluded}" if excluded else "")
+        )
+        if failed_days:
+            raise ValueError(
+                f"{csv_path.name}：{len(failed_days)} 個交易日在 price 表整天沒有資料，"
+                f"未寫入（日 K 可能還沒更新）：{failed_days[:5]}"
+            )
+        return written
+
+    def add_to_db(
+        self, remove_files: bool = False, dir_path: Optional[Path] = None
+    ) -> None:
         """
-        try:
-            self.session.run(script)
-            logger.info("All csv files successfully save into database and table!")
-
-        except Exception as e:
-            # 整批一次送進 DolphinDB，失敗時無從得知是哪幾檔，故把整批列為失敗
-            logger.error(f"All csv files fail to save into database and table!\n{e}")
-            raise DataLoadError("tick", csv_files, succeeded=0) from e
-
-    def clear_all_cache(self) -> None:
-        """清除 Cache Data"""
-
-        script: str = """
-        clearAllCache()
+        - Description:
+            逐檔載入資料夾內的 CSV；單檔失敗不中斷整批，全部跑完由 `finish_load()` 彙報
+        - Parameters:
+            - remove_files: bool
+                全部成功後刪除來源資料夾；只允許用在 updater 的工作目錄
+            - dir_path: Optional[Path]
+                來源資料夾；None 取 updater 的工作目錄。抽樣試點與歷史匯入指定其他資料夾
+        - Raise:
+            - ValueError
+                對指定的資料夾要求刪檔（歷史存檔是唯一的原始資料，不可順手刪掉）
+            - DataLoadError
+                有任何檔案失敗
         """
-        self.session.run(script)
 
-    def delete_dolphinDB(self, db_path: Path) -> None:
-        """刪除資料庫"""
+        if remove_files and dir_path is not None:
+            raise ValueError(
+                "remove_files 只能用在 updater 的工作目錄，不可刪除指定的資料夾"
+            )
 
-        logger.info("Start deleting database...")
+        source_dir: Path = dir_path if dir_path is not None else self.downloads_path()
+        csv_files: List[Path] = sorted(source_dir.glob("*.csv"))
+        logger.info(f"[tick] {source_dir}：{len(csv_files)} 個 CSV")
 
-        script: str = f"""
-        if (existsDatabase("{str(db_path)}")) {{
-            dropDatabase("{str(db_path)}")
-        }}
-        """
-        self.session.run(script)
+        self.create_missing_tables()
+        succeeded: int = 0
+        failed_files: List[str] = []
+        for csv_path in csv_files:
+            # 逐檔隔離：一個壞檔不擋其他檔；只收格式、讀檔與資料庫錯誤，其他錯誤照常往外拋
+            try:
+                self.load_csv(csv_path)
+                succeeded += 1
+            except (ValueError, OSError, *tick_db_error_types()) as error:
+                logger.error(f"[tick] {csv_path.name} 入庫失敗：{error}")
+                failed_files.append(csv_path.name)
 
-        if self.session.existsDatabase(str(db_path)):
-            logger.info("Delete database unsuccessfully!")
-        else:
-            logger.info("Delete database successfully!")
+        self.finish_load(
+            source=self.SOURCE,
+            succeeded=succeeded,
+            failed_files=failed_files,
+            remove_files=remove_files,
+            downloads_path=source_dir,
+        )
