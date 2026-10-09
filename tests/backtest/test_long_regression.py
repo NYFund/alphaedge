@@ -22,7 +22,7 @@ pytestmark = pytest.mark.slow
 def test_long_regression_snapshot() -> None:
     """重跑 MomentumStrategy1 並與 baseline 逐筆比對"""
 
-    from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
     from tests.backtest.make_baseline import BASELINE_END_DATE, BASELINE_START_DATE
 
     baseline_path: Path = SNAPSHOT_DIR / BASELINE_FILE_NAME

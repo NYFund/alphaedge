@@ -12,8 +12,8 @@ from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 from core.models import BrokerAccountSnapshot
 from core.portfolio.aggregation import check_quota_against_equity
 from core.strategies.base import BaseStrategy
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
 """
 額度檢查會不會通過？——連模擬環境唯讀核對

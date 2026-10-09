@@ -92,7 +92,7 @@ mkdir -p data/db data/downloads logs results
 # 注意：取具體實作一律用完整模組路徑。core/backtest/__init__.py 與 core/strategies/__init__.py
 # 刻意不做套件層 eager import（會造成循環 import），故 `from core.backtest import
 # Backtester` 會失敗
-python -c "from core.backtest.backtester import Backtester; from core.strategies.strategy_loader import StrategyLoader; print('OK')"
+python -c "from core.backtest.backtester import Backtester; from strategies.loader import StrategyLoader; print('OK')"
 
 # 顯示回測／實盤入口參數
 python -m apps.backtest --help

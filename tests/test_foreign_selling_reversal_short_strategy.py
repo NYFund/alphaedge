@@ -9,9 +9,6 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_cost_config
 from core.models import StockAccount, StockOrder, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
-from core.strategies.stock.foreign_selling_reversal_short_strategy import (
-    ForeignSellingReversalShortStrategy,
-)
 from core.utils import (
     Action,
     BarExecutionSequence,
@@ -19,6 +16,9 @@ from core.utils import (
     PositionType,
     ShortMethod,
     Units,
+)
+from strategies.stock.foreign_selling_reversal_short_strategy import (
+    ForeignSellingReversalShortStrategy,
 )
 from tests.conftest import build_stock_quote
 

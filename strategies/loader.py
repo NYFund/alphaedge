@@ -8,11 +8,11 @@ from typing import Dict, List, Type
 
 from loguru import logger
 
-import core.strategies as strategies_pkg
+import strategies as strategies_pkg
 from core.strategies.base import BaseStrategy
 
 """
-StrategyLoader: 自動載入 core/strategies/ 下所有市場的策略類別
+StrategyLoader: 自動載入頂層 `strategies/` 下所有商品類別的具體策略
 
 **單一模組壞掉不該讓所有策略都跑不了**：`import_module()` 一路往外拋的話，
 任何一支策略有 import 錯誤、或在 module level 做了會炸的事，入口的 `--strategy`
@@ -36,10 +36,10 @@ class StrategyLoader:
     def load_strategies() -> Dict[str, Type[BaseStrategy]]:
         """
         - Description:
-            掃描 `core/strategies/` 下的所有商品類別子套件並載入其中的策略
+            掃描 `strategies/` 下的所有商品類別子套件並載入其中的策略
 
             **逐一掃描所有子套件，不寫死商品類別**：新增一個商品類別
-            （如 `core/strategies/futures/`）因此不需要修改本檔案。
+            （如 `strategies/futures/`）因此不需要修改本檔案。
         - Return:
             - Dict[str, Type[BaseStrategy]]
                 類別名稱 → 策略類別

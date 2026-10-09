@@ -257,7 +257,7 @@ def test_backtest_bucket_only_accepts_backtest_records() -> None:
     accept = LogManager.build_bucket_filter(Path("logs/backtest"))
 
     assert accept(make_record("core.backtest.backtester"))
-    assert accept(make_record("core.strategies.stock.momentum_strategy_1"))
+    assert accept(make_record("strategies.stock.momentum_strategy_1"))
     assert not accept(make_record("core.pipeline.tw.updaters.stock_price_updater"))
 
 

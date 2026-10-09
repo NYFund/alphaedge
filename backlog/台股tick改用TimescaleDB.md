@@ -395,7 +395,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **做法**：
   - `core/backtest/datafeed/tw/stock_datafeed.py`：class docstring 的「DolphinDB 的 Tick」改成「TimescaleDB 的 Tick」，`setup()` 的 docstring 同步修改。
   - `core/api/base.py` 的 `close()` docstring 中「非 SQLite 的資料源（如 DolphinDB）自行覆寫」改成 TimescaleDB。
-  - `core/strategies/stock/foreign_selling_reversal_short_strategy.py` 的註解「tick 資料在 DolphinDB」改掉。
+  - `strategies/stock/foreign_selling_reversal_short_strategy.py` 的註解「tick 資料在 DolphinDB」改掉。
   - `StockQuoteAdapter.from_tick_rows()`／`from_tick_row()` 不用改，但要確認 `TickQuote(time=row.time)` 可以接受 `datetime64[ns]` 經 `itertuples()` 取出的 `pd.Timestamp`。
   - `core/api/__init__.py`、`core/api/tw/__init__.py` 的模組說明字串「不做 eager import 是因為 `stock_tick_api` 相依 DolphinDB」改成相依選用套件 `psycopg`／`connectorx`（經 `core/dao/tw/stock_tick_dao.py`）；若 DAO 改成在函式內惰性 import、這條理由已不成立，就依實際情況改寫說明，不要留下 DolphinDB 字樣。
 - **產出**：上列檔案。

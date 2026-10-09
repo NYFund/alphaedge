@@ -57,6 +57,8 @@ class LogManager:
         "backtest": (
             "core.backtest",
             "core.strategies",
+            # 具體策略在頂層 `strategies/`（框架只留契約）；少了這條，策略的記錄會落進 pipeline 桶
+            "strategies",
             "core.position",
             "core.models",
             "core.adapters",

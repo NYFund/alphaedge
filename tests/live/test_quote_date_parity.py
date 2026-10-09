@@ -9,7 +9,7 @@ from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.models import BaseOrder, FuturesQuote, StockQuote
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
 """
 報價日期的型別在回測與實盤必須一致

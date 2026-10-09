@@ -846,7 +846,7 @@ python -m apps.live --strategy MomentumStrategy1 --phase open
 
 ## 完整範例
 
-參考 `core/strategies/stock/momentum_strategy_1.py` 查看完整的策略實作範例。該範例展示了：
+參考 `strategies/stock/momentum_strategy_1.py` 查看完整的策略實作範例。該範例展示了：
 
 - 如何設定策略參數
 - 如何實作開倉、平倉、停損邏輯

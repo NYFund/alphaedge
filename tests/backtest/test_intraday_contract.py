@@ -5,8 +5,8 @@ import pytest
 from core.backtest.backtester import Backtester, IntradayScaleMismatchError
 from core.backtest.factory import build_backtester
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
 from core.utils import Scale
+from strategies.loader import StrategyLoader
 
 """
 盤中逐筆策略的契約守門

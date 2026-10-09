@@ -7,8 +7,8 @@ import pandas as pd
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 from core.utils import TimeUtils
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
 """產生 LONG 策略的回歸 baseline：放空框架動程式碼前的第一步"""
 

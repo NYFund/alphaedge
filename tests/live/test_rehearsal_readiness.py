@@ -15,8 +15,8 @@ from core.live.strategy_guard import inspect_strategy
 from core.live.trader import LiveTrader
 from core.market.tw.market_calendar import MarketCalendar
 from core.models.stock.trading_list import DayTradeListSnapshot
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
 from .conftest import FakeBroker
 from .test_live_factory_and_entry import LiveStockStrategy

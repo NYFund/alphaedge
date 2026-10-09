@@ -271,7 +271,7 @@ def test_strategy_and_settlement_share_the_roll_config() -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -293,7 +293,7 @@ def test_strategy_and_settlement_share_the_roll_config() -> None:
 def test_strategy_picks_the_contract_by_the_same_rule() -> None:
     """策略挑合約走的是同一個 `FuturesRollPlanner`，不是永遠取最近月"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -314,7 +314,7 @@ def test_strategy_picks_the_contract_by_the_same_rule() -> None:
 def test_without_calendar_falls_back_to_nearest_month() -> None:
     """尚未注入日曆時退回「取最近到期月」，即最單純的近月政策"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 

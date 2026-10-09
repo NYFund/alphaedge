@@ -8,8 +8,8 @@ from core.broker.tw.quote_replay import replay_quotes
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.models import BaseQuote, StockPosition
 from core.portfolio.signal import Signal
-from core.strategies.stock.intraday_momentum_strategy import IntradayMomentumStrategy
 from core.utils import Action, PositionType
+from strategies.stock.intraday_momentum_strategy import IntradayMomentumStrategy
 from tests.test_intraday_momentum_strategy import STOP_PRICE, make_strategy
 
 """

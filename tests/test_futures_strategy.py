@@ -8,9 +8,9 @@ from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesQuote
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.strategy_loader import StrategyLoader
 from core.utils import Action, FuturesSession, InstrumentType, Market, PositionType
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.loader import StrategyLoader
 from tests.conftest import build_futures_quote
 
 """

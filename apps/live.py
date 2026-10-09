@@ -11,8 +11,8 @@ from core.live.risk.trading_mode import TradingMode
 from core.live.termination import LiveTerminated, raise_on_sigterm
 from core.live.trader import LiveTrader
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
 from core.utils import ExecutionTiming
+from strategies.loader import StrategyLoader
 
 from ._common import EXIT_USAGE, _report_unknown_strategies
 

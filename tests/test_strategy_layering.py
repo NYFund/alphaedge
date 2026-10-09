@@ -19,10 +19,10 @@ from core.portfolio.construction import (
 )
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 from core.utils import Action, PositionType
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 from tests.conftest import (
     build_futures_quote,
     build_stock_quote,

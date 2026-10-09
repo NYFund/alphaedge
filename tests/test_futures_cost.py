@@ -350,7 +350,7 @@ def test_base_fill_config_is_rejected_for_futures() -> None:
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
     from core.models.fill_config import FillConfig
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -372,7 +372,7 @@ def test_futures_fill_config_is_accepted(fill_config) -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -395,7 +395,7 @@ def test_strategy_cost_config_flows_into_the_backtester() -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -419,7 +419,7 @@ def test_default_strategy_uses_real_rates() -> None:
     零成本是驗證接線用的口徑（`FuturesCostConfig.free()`），不該是預設。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 

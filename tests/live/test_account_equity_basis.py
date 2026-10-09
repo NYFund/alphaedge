@@ -6,7 +6,7 @@ import pytest
 from core.live.factory import live_capital
 from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
 """
 策略可用的資金基準
@@ -380,7 +380,7 @@ def test_changing_live_capital_leaves_backtest_capital_alone() -> None:
 def test_base_strategies_default_to_no_override() -> None:
     """預設 `None`：沒有人宣告時，實盤與回測用同一個數字"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -436,7 +436,7 @@ def test_undeclared_live_max_holdings_keeps_max_holdings() -> None:
     """沒宣告時不動，既有策略行為不變"""
 
     from core.live.factory import apply_live_max_holdings
-    from core.strategies.stock.investment_trust_momentum_swing_strategy import (
+    from strategies.stock.investment_trust_momentum_swing_strategy import (
         InvestmentTrustMomentumSwingStrategy,
     )
 

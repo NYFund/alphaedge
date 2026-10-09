@@ -370,7 +370,7 @@ def test_both_conflicts_are_reported_together() -> None:
 def test_live_ready_strategies_pass_the_stop_loss_check() -> None:
     """既有標了 live_ready 的策略都通過停損段落檢查"""
 
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     checked: List[str] = []
     for name, strategy_class in StrategyLoader.load_strategies().items():

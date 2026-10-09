@@ -7,9 +7,9 @@ from typing import Dict, List, Type
 import pytest
 from loguru import logger
 
-import core.strategies.strategy_loader as loader_module
+import strategies.loader as loader_module
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
+from strategies.loader import StrategyLoader
 
 """
 `StrategyLoader.load()`：只載入指定的策略
@@ -31,7 +31,7 @@ _EXPLODING_SOURCE: str = (
 
 # 繼承既有具體策略：不必在測試裡重寫一整組抽象方法，類別仍「定義在該模組內」
 _GOOD_SOURCE: str = (
-    "from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1\n"
+    "from strategies.stock.momentum_strategy_1 import MomentumStrategy1\n"
     "\n"
     "\n"
     "class GoodStrategy(MomentumStrategy1):\n"

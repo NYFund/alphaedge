@@ -9,8 +9,8 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.config import TW_STOCK_DB_PATH
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 from tests.entry_sandbox import run_isolated
 
 """

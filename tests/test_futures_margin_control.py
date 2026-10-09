@@ -170,7 +170,7 @@ def test_affordable_lots_change_across_an_adjustment() -> None:
     同一筆資金在 265,000／口 時開得起 3 口，調到 292,000／口 之後只剩 2 口。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -200,7 +200,7 @@ def test_floating_profit_supports_more_lots() -> None:
     期貨的損益逐日結算進帳戶，賺到的錢當天就能用來開新倉。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -401,7 +401,7 @@ def test_datafeed_injects_the_margin_api_into_the_shared_config(
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -435,7 +435,7 @@ def test_ratio_mode_is_not_injected(isolated_futures_db: Path) -> None:
     """明確宣告比率近似時不注入 API——否則使用者的降級表態會被無聲推翻"""
 
     from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 

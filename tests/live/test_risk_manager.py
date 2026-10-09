@@ -291,7 +291,7 @@ def test_live_holdings_fit_within_single_symbol_cap() -> None:
     """
 
     from core.strategies.stock.base import BaseStockStrategy
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     config: RiskConfig = RiskConfig()
     # 兩條上限都要容得下一檔的完整份額：單一標的管存量、單筆管一張單

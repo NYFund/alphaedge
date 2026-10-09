@@ -56,7 +56,7 @@ def test_every_loaded_strategy_is_scanned() -> None:
 
     import inspect
 
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     scanned: Set[Path] = set(strategy_source_files())
     loaded: List[Path] = [
@@ -192,8 +192,8 @@ def test_momentum_strategy_rejects_tick_scale() -> None:
 
     import pytest
 
-    from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
     from core.utils import Scale
+    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
     strategy: MomentumStrategy1 = MomentumStrategy1()
     strategy.scale = Scale.TICK
@@ -242,7 +242,7 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
 
     import importlib
 
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     original = importlib.import_module
 
@@ -271,7 +271,7 @@ def test_strategy_loader_rejects_duplicate_class_names() -> None:
     import pytest
 
     from core.strategies.base import BaseStrategy
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     def make_module(module_name: str):
         module = types.ModuleType(module_name)
@@ -317,8 +317,8 @@ def test_momentum_skips_stocks_without_a_valid_previous_close() -> None:
     import pandas as pd
 
     from core.models import StockQuote
-    from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
     from core.utils import Scale
+    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
     date: datetime.date = datetime.date(2024, 6, 6)
     strategy: MomentumStrategy1 = MomentumStrategy1()
