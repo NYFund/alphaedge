@@ -62,10 +62,10 @@
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ✅ | **✅ 2026-10-09**：DolphinDB 字樣全數改掉；驗證改以 DataFeed `get_quotes()` 直接比對 TickQuote 數（偏離原規格，見步驟詳述）。 相依 Phase3-1 |
 | Phase4-1 | 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 | 本文件（盤點紀錄） | 盤點紀錄涵蓋 5 項；兩項裁示已記錄；搬移後檔數 1,856、總大小不變 | ✅ | **✅ 2026-10-09**：全量盤點寫入盤點紀錄；使用者採用兩項建議；歷史已搬到 `data/tick_history/`（1,856 檔、56 GB）。 **無相依，可最先做**；**2026-10-09 全量盤點已寫入盤點紀錄；兩項裁示（採用建議）與搬移到 `data/tick_history/` 同日完成** |
 | Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ✅ | **✅ 2026-10-09**：19 檔 × 3 天寫入 `public` 後量測、量完清空；寫入約 8.9 萬列／秒（全量約 3.3 小時）、壓縮約 12 倍（全量約 14 GB）、全市場單日查詢換算約 1.2～1.4 秒（門檻 10 秒）；**發現 chunk 邊界是週四，Phase4-3 要依 chunk 切**。 相依 Phase1-3、Phase2-1、Phase3-1、Phase4-1；**只用抽樣**，全量入庫走 Phase4-3 且需使用者要求（見〈範圍界線〉） |
-| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
-| Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | 🔄 | **🔄 2026-10-09**：`test_api_public_interfaces.py`、`test_strategy_data_access.py` 已改；`test_stock_tick_timescale.py` 已建（16 條）並另有三個不需 DB 的測試檔；**剩 `test_entrypoint_and_logging.py` 兩條 `TICK_DB_PATH` 測試，隨 Phase5-2 移除常數時一起改**。 相依 Phase2-2、Phase3-1 |
-| Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
-| Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
+| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | 🔄 | **🔄 2026-10-09**：腳本完成並以端到端測試驗證（`feature/tick-timescaledb`）；**尚未執行，等使用者指令**（推估寫入約 3.2 小時）。 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
+| Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ✅ | **✅ 2026-10-09**：最後兩條 `TICK_DB_PATH` 測試隨 Phase5-2 移除常數一併刪除；tick 相關測試共 7 個檔（3 個需 DB、4 個不需）。
+| Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ✅ | **✅ 2026-10-09**（選項 A）：台股與期貨 tick 的 DolphinDB 程式、設定、extra 全數移除；本機的 `tick_metadata.json` 與期貨 tick CSV 留到合併部署時刪。 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
+| Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ✅ | **✅ 2026-10-09**：16 份文件改完，etl-ingestion 新增 tick 小節（含 schema 設計理由）。 相依 Phase5-2 |
 
 ---
 
@@ -601,7 +601,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 清空方式：`TRUNCATE public.stock_tick`、`TRUNCATE public.stock_tick_load_log`（chunk 一併刪除），壓縮 policy 恢復啟用；兩張空表保留。
 - **相依**：Phase1-3、Phase2-1、Phase3-1、Phase4-1（樣本從搬移後的位置取）。
 
-### Phase4-3. 歷史 CSV 全量匯入與完整性比對 ⬜
+### Phase4-3. 歷史 CSV 全量匯入與完整性比對 🔄
 
 - **目的**：把 Phase4-1 盤點的歷史資料全部搬進 TimescaleDB。
 - **執行時機**：**腳本可以先寫好，真正跑匯入要等使用者要求**（2026-09-18 裁示，與 Phase4-2 同一條）。
@@ -624,13 +624,25 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   2. 抽樣 20 個「股票 × 交易日」，`get_stock_ticks()` 的結果與正規化、排除後的 CSV 逐列比對（`time`、價格、量）完全相同。
   3. 抽樣 5 個交易日，每日成交量加總 ≈ `price` 表當日成交股數 ÷ 1000（盤後零股與定價交易會造成小幅落差，差距記進匯入紀錄）。
   4. 全部 chunk 除了最近 14 天之外都已壓縮。
+- **實作紀錄（2026-10-09，`feature/tick-timescaledb`）**：腳本完成，**尚未執行**（等使用者指令）。
+  - **預設只列計畫**（來源檔數與大小、工作目錄空間、推估耗時、資料庫現況），不建表、不寫入；`--apply` 才匯入，`--verify-only` 只比對。
+    對真實資料列計畫：1,856 檔、57.9 GB、推估約 10.2 億列、寫入約 3.2 小時（不含切檔與比對）。
+  - **切檔改成一次掃完**：每檔依 chunk 範圍切到 `data/tick_import_work/<chunk 起日>/<代號>.csv`（原格式不動），
+    同時記下每個「股票 × 交易日」的來源列數；峰值暫存約等於來源大小（58 GB），成功的 chunk 逐一刪除。
+  - 依 chunk 邊界逐 chunk 載入 → `compress_chunks_before(chunk 終日)`；重灌已壓縮的 chunk 先 `decompress_chunks_between()`；
+    每個 chunk 寫完核對資料庫實際的 chunk 範圍和切檔一致，不一致當場中止。
+  - 比對 4 項照本步驟驗證方式實作；成交量對照只報告不判定（盤後零股與定價交易會有落差），其餘有不符時結束碼 1。
+  - 端到端測試（暫存 schema）：列計畫不寫入、跨兩個 chunk 匯入並壓縮、比對通過、`--resume` 不重複、刪掉一列後比對失敗。
+  - **執行方式**（在 `feature/tick-timescaledb` 合併後的主目錄，或在 worktree 以 `--source-dir`／`--price-db`／`--work-dir` 指向主目錄的 `data/`）：
+    先開 Docker Desktop 並 `docker compose up -d postgres`，再
+    `TICK_DATABASE_URL=... uv run --no-sync python -m scripts.manual.manual_tick_history_import --apply`；中斷後加 `--resume` 重跑。
 - **相依**：Phase4-1、Phase4-2。
 
 ---
 
 ## Phase 5：測試與收斂
 
-### Phase5-1. 測試改寫與新增 🔄
+### Phase5-1. 測試改寫與新增 ✅
 
 - **目的**：讓 CI 在沒有 TimescaleDB 的機器上照常通過，有 DB 的機器上能驗證真實行為。
 - **做法**：
@@ -647,7 +659,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **驗證方式**：未設 `TICK_DATABASE_URL` 時 `pytest` 全數通過（新測試被 skip）；設定後 `pytest tests/test_stock_tick_timescale.py` 全數通過。
 - **相依**：Phase2-2、Phase3-1。
 
-### Phase5-2. 移除台股 tick 的 DolphinDB 程式與設定 ⬜
+### Phase5-2. 移除台股 tick 的 DolphinDB 程式與設定 ✅
 
 - **目的**：兩套儲存不長期並存。
 - **做法**：
@@ -676,9 +688,19 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **本機資料**（不在版控）：Phase4-1 搬移後的歷史 CSV（1,856 檔）、`tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**歷史 CSV 本步驟不刪**（只刪 `tick_metadata.json`）；全量匯入並比對通過後，本機那份要刪、壓縮封存或保留由使用者決定（Google 雲端另有一份）。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core apps scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
+- **實作紀錄（2026-10-09，`feature/tick-timescaledb`，選項 A）**：
+  - **偏離原規格：沒有等 Phase4-3 執行完才刪**。原本相依 Phase4-3 是為了「新儲存資料完整後才刪對照」，
+    但 DolphinDB 主機早已停用、裡面沒有可對照的資料；完整性改以歷史 CSV 本身對帳（Phase4-3 的比對）。
+  - 期貨 tick 四支程式與測試、`futures_tick` target 與 `DataType.FUTURES_TICK`、`DDB_*` 設定與只剩它在用的 `get_int_env()`、
+    `TICK_DB_*`／`require_tick_db_path()`／`TICK_TABLE_NAME`／`FUTURES_TICK_TABLE_NAME`、`FUTURES_TICK_DOWNLOADS_PATH` 與 tick metadata 路徑、
+    `.env.example` 的 DolphinDB 區塊、`[dolphindb]` extra、`manual_init_tick_metadata.py` 全數移除；
+    `manual_tick_updater.py` 與兩個 F401 例外已在 Phase2-2 移除；`manual_tick_crawler.py` 沒有 DolphinDB 相依，保留。
+  - `grep -rn "dolphindb\|DDB_\|tick_metadata" core apps scripts .env.example` 只剩三處說明「`load_log` 取代了 `tick_metadata.json`」的註解，沒有程式相依。
+  - **本機資料留到合併部署時再刪**：主目錄的 `data/downloads/tw_stock/meta/tick/tick_metadata.json`（含 backup）與 `data/downloads/tw_futures/tick/` 的 1 個 CSV。
+    主目錄在合併前仍跑舊程式，先刪沒有好處。
 - **相依**：Phase4-3（確認新儲存資料完整後才刪對照）、Phase5-1。
 
-### Phase5-3. 更新文件 ⬜
+### Phase5-3. 更新文件 ✅
 
 - **目的**：現行說明文件不再描述 DolphinDB。
 - **做法**：更新下列文件中 tick 儲存、環境建立、`.env` 設定的段落：
@@ -702,6 +724,10 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   新的 schema 設計理由（〈資料表設計〉的決策表）寫進 `docs/pipeline/etl-ingestion.md` 的 tick 小節；進度表與量測紀錄不搬過去。
 - **產出**：上列文件。
 - **驗證方式**：`grep -rni "dolphin" README.md README_en.md docs core/backtest/README.md strategies/README.md strategy_lab/README.md scripts/manual/README.md` 只剩裁示保留的期貨部分；依 `docs/setup/dev-setup.md` 從零啟動 TimescaleDB 並跑通 Phase4-2 的查詢。
+- **實作紀錄（2026-10-09）**：清單上的文件全數改完（`docs/dev/naming-axes.md`、`docs/backtest/module-map.md` 等），
+  另補 `docs/deployment/dev-deployment.md`；`docs/pipeline/etl-ingestion.md` 新增〈台股 tick（TimescaleDB）〉，收錄〈資料表設計〉的決策理由、
+  寫入與排除規則、續跑、讀取與歷史匯入。`dolphindb` 移除後 `uv sync --all-extras` 恢復可用，README 與 dev-setup 一併改回。
+  驗證：`grep -rni dolphin` 只剩 etl-ingestion 的〈與 DolphinDB 版的語意差異〉與期貨平台文件的「已移除」說明。
 - **相依**：Phase5-2。
 
 ---
