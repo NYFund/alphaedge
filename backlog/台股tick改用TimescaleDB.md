@@ -2,12 +2,14 @@
 
 ## Abstract
 
-- **背景／問題**：台股 tick 目前的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 tick 級回測現在**沒有可用的資料源**。完整歷史 CSV 備份在使用者的 Google 雲端；本機只殘留 541 檔（2024-05-13～05-15），當作測試素材（2026-10-09 曾被清空，使用者表示會補回，見 Phase4-2）。
+- **背景／問題**：台股 tick 目前的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 tick 級回測現在**沒有可用的資料源**。
+  **2026-10-09 使用者把完整歷史 CSV 補回 `data/downloads/tw_stock/tick/`**（1,856 檔、56 GB、2020-04-01～2024-05-10、約 10.6 億列），並確認**這批就是要入庫的全部資料**；
+  原本那 541 檔（2024-05-13～05-15）已不存在，資料庫的歷史會止於 2024-05-10。全量盤點結果見〈CSV 樣式〉與 Phase4-1 的盤點紀錄。
 - **目標**：落地目標改成 TimescaleDB（PostgreSQL extension）：
   - 寫入路徑改用 `COPY`，以「股票 × 交易日」為單位做到冪等寫入。
   - 讀取路徑改用 ConnectorX 直接產生 pandas DataFrame。
   - `StockTickAPI` 的公開方法與回傳欄位不變，`StockDataFeed`／`StockQuoteAdapter`／策略都不用改。
-  - 把雲端上的歷史 CSV 一次匯入並壓縮。
+  - 把上述歷史 CSV 一次匯入並壓縮。
 - **範圍界線**：
   - **不做期貨 tick**：2026-09-15 已裁示不做，`futures_tick_*` 的 DolphinDB 程式原樣保留，去留見 Phase5-2 的裁示。
   - **DolphinDB 殘留的完整清單**（程式、設定、測試、文件、本機資料）見 Phase5-2，2026-09-17 由健檢第五輪的盤點搬進本文件，2026-09-25 依現行程式補齊漏列項目；施作時以那份為主，但動手前仍要跑一次 Phase5-2／Phase5-3 的 `grep` 驗證指令確認沒有新增的殘留。
@@ -15,11 +17,11 @@
   - **不改**爬蟲（`StockTickCrawler`）與清洗邏輯（`StockTickCleaner` 的欄位格式），也不改 tick 回測引擎的成交語意。
   - **不做** tick 回補續跑到今天。回補要不要做、做多少是另一個決策，本文件只保證 updater 在新儲存上可以續跑。
   - **實作完成後不自動把資料寫進正式資料庫**（2026-09-18 使用者裁示）。以下三件事都**等使用者明確下指令才執行**，程式與腳本寫好、以抽樣或測試 schema 驗證過即為該步驟完成：
-    1. `data/downloads/tw_stock/tick/` 的 541 檔全量入庫——那個資料夾只是**測試素材**，開發過程一律只取少量抽樣（Phase4-2）。
-    2. 雲端歷史 CSV 的全量匯入（Phase4-3）。
-    3. 跑 `python -m apps.update_db --target tick`——它會實際爬取並寫入正式資料表（Phase2-2 的驗證改以替身取代 crawler）。
+    1. 歷史 CSV 的全量匯入（Phase4-3）。開發過程一律只取少量抽樣（Phase4-2）。
+    2. 跑 `python -m apps.update_db --target tick`——它會實際爬取並寫入正式資料表（Phase2-2 的驗證改以替身取代 crawler）。
+  - **不修補歷史資料本身**：盤點發現的異常列（興櫃時期、全零列、負成交量等）只依 Phase4-1 裁示的規則在入庫時排除並計數，不回頭改 CSV。
 - **驗收標準**：
-  1. 雲端歷史 CSV 全數入庫，每個「股票 × 交易日」的列數與 CSV 一致。**這一條要等使用者要求全量匯入後才驗**；在那之前，前四個 Phase 的驗收以抽樣樣本為準。
+  1. 歷史 CSV 全數入庫，每個「股票 × 交易日」的 DB 列數＝CSV 列數－依規則排除的列數。**這一條要等使用者要求全量匯入後才驗**；在那之前，前四個 Phase 的驗收以抽樣樣本為準。
   2. `StockTickAPI` 四個公開方法在 TimescaleDB 上回傳相同欄位；Mac 本機查一天全市場 `get_ordered_ticks()` 的耗時已記錄，並符合 Phase4-2 定下的門檻。
   3. `python -m apps.update_db --target tick` 可寫入 TimescaleDB，重跑同一區間不產生重複列。**這一條以替身或測試 schema 驗證**；真的對正式資料表跑更新要等使用者指令。
   4. 台股 tick 相關程式不再 import `dolphindb`，`pytest` 全數通過。
@@ -33,8 +35,9 @@
 > **依現行架構複查（2026-10-09）**：全文的路徑、處數與交叉引用已依現況核對並更新，重點如下（細節寫在各步驟）：
 > - **入口與策略位置**：`tasks/` 併入 `apps/`（資料更新改為 `python -m apps.update_db`），策略撰寫指南改在 `strategies/README.md`，
 >   具體策略在頂層 `strategies/`（`回測與實盤入口拆分及架構收斂.md` Phase1-8、`core目錄邊界收斂.md` Phase2-2～2-4，目前在 `feature/post-rehearsal`、演練結束後合併）。
-> - **本機測試素材**：`data/downloads/tw_stock/tick/` 2026-10-09 曾被清空，使用者表示會把 541 檔補回原位；Phase4-2 動工前先確認檔數（見該步驟）。
->   `tick_metadata.json` 一直都在：1,920 檔、最後日期分布與 2026-09-16 相同。
+> - **本機資料（2026-10-09 補回後全量盤點）**：`data/downloads/tw_stock/tick/` 現在放的是**完整歷史**，不是原本的 541 檔樣本，格式也不同（`ts` 欄、沒有 `stock_id` 欄、欄位順序每檔不一）。
+>   **這個資料夾也是 tick updater 的工作目錄**：`--target tick`（`all` 也含 tick）爬到的股票會**整檔覆寫** `{stock_id}.csv`，歷史就沒了（見〈風險與對策〉）。動工前先把歷史搬離這個資料夾（Phase4-1）。
+>   `tick_metadata.json` 一直都在：1,920 檔、最後日期分布與 2026-09-16 相同；其中 93 檔沒有對應的 CSV（含 `2603`、`2609`），另有 30 檔 CSV 不在 metadata 裡。
 > - **`StockTickAPI.__init__` 沒有呼叫 `super().__init__()`**：`conn`／`owns_conn` 都不存在，原規劃「`setup()` 先呼叫 `super().setup()`」照做會 `AttributeError`，Phase3-1 已改寫做法。
 > - **compose 已有三個 service**（`core`、`live`、`frontend`），新增的 `postgres` 要讓 `core` 連得到；容器內的 `TICK_DATABASE_URL` 主機名是 `postgres` 而不是 `localhost`（Phase0-1、Phase0-2）。
 > - **`stock_tick_loader.py` 已不在 F401 例外清單**，Phase5-2 要移除的例外剩兩個。盲捕 23 處 2026-10-09 以 ruff 現查，各檔處數與 2026-10-01 相同。
@@ -53,13 +56,13 @@
 | Phase1-1 | 在 `core/dao/` 建立 TimescaleDB 連線入口 | `core/dao/timescale.py`、`scripts/check_layer_deps.py` | `python scripts/check_layer_deps.py` 通過；`SELECT 1` 可執行 | ⬜ | 相依 Phase0-2、Phase0-3；與 `core/dao/connection.py` 同目錄，PostgreSQL遷移計畫 Phase1-1 在隔壁擴充 |
 | Phase1-2 | 建表：`stock_tick` hypertable 與 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py` | 建表函式重跑兩次不報錯；`timescaledb_information.hypertables` 查得到 | ⬜ | 相依 Phase1-1；schema 詳見〈資料表設計〉 |
 | Phase1-3 | 設定壓縮與壓縮 policy | `core/dao/tw/stock_tick_dao.py` | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ⬜ | 相依 Phase1-2 |
-| Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等） | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變 | ⬜ | 相依 Phase1-2 |
+| Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等＋兩種 CSV 格式正規化） | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變；歷史格式與 cleaner 格式各一份樣本都能入庫 | ⬜ | 相依 Phase1-2；**2026-10-09 依全量盤點擴充**：要讀歷史格式（`ts`、無 `stock_id`、欄序不一）並套用 Phase4-1 的排除規則 |
 | Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1；**一併收窄 `stock_tick_{updater,utils,cleaner,crawler}.py` 的 18 處盲捕**（2026-10-01 由 `暫緩工作彙整.md` S13 移入，見〈附：併入的盲捕收斂〉） |
 | Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-1、Phase1-2 |
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
-| Phase4-1 | 盤點 Google 雲端的歷史 CSV | 本文件（盤點紀錄） | 檔案佈局、日期範圍、總列數、欄位格式差異寫入本文件 | ⬜ | **無相依，可最先做**；結果可能改變 Phase2-1 的 CSV 解析 |
-| Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1；**只用抽樣，541 檔全量入庫需使用者要求**（見〈範圍界線〉）；動工前確認本機 541 檔已補回 |
-| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」的 DB 列數＝CSV 列數＝`load_log.row_count` | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
+| Phase4-1 | 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 | 本文件（盤點紀錄） | 盤點紀錄涵蓋 5 項；兩項裁示已記錄；搬移後檔數 1,856、總大小不變 | ⬜ | **無相依，可最先做**；**2026-10-09 全量盤點已寫入盤點紀錄**，剩使用者兩項裁示（排除規則、搬移位置）與搬移本身 |
+| Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1、Phase4-1；**只用抽樣**，全量入庫走 Phase4-3 且需使用者要求（見〈範圍界線〉） |
+| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ⬜ | 相依 Phase2-2、Phase3-1 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ⬜ | 相依 Phase5-2 |
@@ -116,25 +119,58 @@ StockTickUpdater.update()
 
 `tick_metadata.json` 記的是「每檔股票最後的日期」，但這個日期**是從 CSV 掃出來的，不是從資料庫查出來的**。所以只要入庫失敗但 CSV 還在，metadata 照樣會前進，下次就會跳過這些日期。現況 1,920 檔中：1,379 檔停在 2024-05-10、540 檔停在 2024-05-15、1 檔停在 2024-05-14。
 
-### CSV 樣式（本機 541 檔實測，2026-09-16）
+### CSV 樣式（2026-10-09 全量盤點）
 
-```csv
-stock_id,time,close,volume,bid_price,bid_volume,ask_price,ask_volume,tick_type
-3605,2024-05-13 09:00:19.577032,42.0,80,41.9,1,42.0,21,1
-```
+**有兩種格式，loader 兩種都要讀**（Phase2-1）：
+
+1. **歷史格式**：本機全部 1,856 檔都是這種，也是要入庫的全部資料。
+
+   ```csv
+   ts,close,volume,bid_price,bid_volume,ask_price,ask_volume,tick_type
+   2020-04-01 09:00:06.042130,39.5,105,39.5,31,39.55,7,0
+   ```
+
+   - **沒有 `stock_id` 欄**，股票代號只在檔名（`1101.csv`）；時間欄叫 `ts`。
+   - **欄位順序每檔不一**：8 個欄名的集合都相同，但共有 31 種排列（最常見的 `ts,close,volume,...` 只有 614 檔）。**一律依欄名讀，不可依位置**。
+   - 8 檔把整數寫成浮點字串（`105.0`、`tick_type` 為 `1.0`），共 26,335,568 列。
+2. **cleaner 格式**：`StockTickCleaner` 現行的輸出，往後每日更新產生的是這種（2026-09-16 以 541 檔實測，那批檔案已不存在）。
+
+   ```csv
+   stock_id,time,close,volume,bid_price,bid_volume,ask_price,ask_volume,tick_type
+   3605,2024-05-13 09:00:19.577032,42.0,80,41.9,1,42.0,21,1
+   ```
+
+歷史格式的實測值域（1,856 檔全掃，無空值、`ts` 全部可解析）：
 
 | 欄位 | 實測值域 | 備註 |
 |------|----------|------|
-| `stock_id` | 全為 4 位數字字串 | 樣本不含 ETF；全市場有 `00878` 這類 5～6 碼、前導 0 的代號，**讀 CSV 一定要指定 `dtype=str`** |
-| `time` | `YYYY-MM-DD HH:MM:SS.ffffff`，固定 26 字元；時段 09:00:00～14:31:05 | 無時區，為台北當地時間；精度到 microsecond（cleaner 刻意補齊）；13:30 之後的是盤後資料 |
-| `close` | 3.24～2980.0，最多 2 位小數 | 無空值 |
-| `volume` | 1～10,000 | 單位：張；無 0 |
-| `bid_price`／`ask_price` | 0～2980.0；約 0.9% 為 0 | **0 表示該側無委託**（例如鎖漲跌停），不是缺值 |
-| `bid_volume`／`ask_volume` | 0～82,814 | |
+| 檔名代號 | 全為 4 位數字 | 不含 ETF；仍要以字串保存（全市場有 `00878` 這類前導 0 代號，cleaner 格式讀 CSV 時一定要 `dtype=str`） |
+| `ts` | 26 字元（microsecond）1,051,746,343 列；**23 字元（millisecond）9,480,741 列** | 毫秒格式只出現在 113 檔、而且全在興櫃時期（見下方〈興櫃時期〉）；無時區，為台北當地時間 |
+| 時段 | 09:00:00～16:55:00 | 13:30 之後 1,731,924 列（盤後定價等）；另有 2 列 `00:00:00` |
+| `close` | 0～5,490 | **23,215 列為 0**（621 檔，整列全零，屬壞資料）；107,203 列帶浮點誤差（`6.5600000000000005`），要四捨五入到 2 位小數 |
+| `volume` | −1,232～1,713,000 | **14 列為負值**（14 檔，全在 2022-01-26 14:17～14:20）；72,314 列為 0；超過 2 萬的 33,982 列主要是興櫃時期以「股」為單位的資料 |
+| `bid_price`／`ask_price` | 0～5,495；約 2.8% 為 0 | 0 表示該側無委託（例如鎖漲跌停），不是缺值；兩側同時為 0 的 29,922,092 列 |
+| `bid_volume`／`ask_volume` | 0～6,912,897 | 百萬級的極端值同樣出在興櫃時期 |
 | `tick_type` | 0／1／2 | `{1: 外盤, 2: 內盤, 0: 無法判定}` |
 
-- 總列數 957,262（05-13：327,090、05-14：279,942、05-15：350,230），CSV 約 58 bytes／列。
-- **`(stock_id, time)` 不唯一**：17,451 列（1.8%）與其他列共用同一個時間戳記，屬於同一瞬間撮合出的多筆成交；其中 32 列連所有欄位都完全相同。所以這兩欄不能當主鍵，也不能用 `DISTINCT` 去重，否則成交量會少算。
+- **總列數 1,061,227,084**，1,856 檔、56 GB（約 57 bytes／列）；最大 `2303.csv` 16,530,473 列（1.05 GB），最小 `6902.csv` 1,435 列。
+- **交易日 1,001 天（2020-04-01～2024-05-10），與 `price` 表同期間的交易日逐日一致**，沒有整天缺漏；1,849 檔的最後一天是 2024-05-10。
+- 每日列數最少 551,783（2023-01-16）、中位數 997,013、最多 2,770,526；每天有 1,699～1,850 檔有成交；「股票 × 交易日」共 1,781,133 組。
+- **同一天內的列不保證依時間排序**：1,652 檔共 991,457 處時間倒退，例如 14:30:00 的盤後列排在 13:30:00 的收盤列之前（2021-08-03）；跨日則完全依序。所以 `seq` 記原始列序，讀取一律 `ORDER BY time, seq`。
+- **`(股票, ts)` 不唯一**：45,992,118 列（4.3%）與其他列共用時間戳記，屬於同一瞬間撮合的多筆成交；整列完全相同的有 1,424,359 列，主要集中在興櫃時期（`6770.csv` 一檔就有 529,484 列）。這兩欄不能當主鍵，也不能用 `DISTINCT` 去重。
+
+#### 興櫃時期
+
+**173 檔、62,264 個「股票 × 交易日」、10,322,770 列（約 1.0%）在 `price` 表找不到對應**，逐檔對照都是上市櫃之前的興櫃時期，例如：
+
+| 檔案 | tick 涵蓋 | `price` 表起日 |
+|------|-----------|----------------|
+| `6770.csv` | 毫秒格式 2020-12-09～2021-12-03，之後微秒格式 | 2021-12-06（上市日） |
+| `6821.csv` | 2021-04-20 起（微秒格式） | 2023-05-22 |
+| `1563.csv` | 全段毫秒格式 | 2024-05-13（tick 迄日之後才上市櫃） |
+
+- 興櫃以「股」為單位、交易到 15:00 之後，和上市櫃的「張」、13:30 收盤**語意不同**，混進去會讓成交量差上千倍。
+- **不能只靠格式判斷**：113 檔的興櫃時期是毫秒格式，另外 60 檔的興櫃時期已經是微秒格式。可靠的判準是「當天 `price` 表有沒有這檔」。
 
 ---
 
@@ -173,7 +209,8 @@ CREATE INDEX IF NOT EXISTS stock_tick_stock_id_time_idx
 CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     stock_id    TEXT        NOT NULL,
     trade_date  DATE        NOT NULL,
-    row_count   INTEGER     NOT NULL,             -- 本次寫入的列數，供完整性比對
+    source_rows INTEGER     NOT NULL,             -- 來源 CSV 當天的原始列數
+    row_count   INTEGER     NOT NULL,             -- 實際寫入的列數；與 source_rows 的差＝依規則排除的列數
     source_file TEXT        NOT NULL,             -- 來源 CSV 檔名，出問題時可回溯
     loaded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (stock_id, trade_date)
@@ -193,15 +230,17 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 | `bid/ask` 為 0 | 照存 0，不轉 `NULL` | 和現行語意一致（`TickQuote` 預設 0.0），使用端不用多處理 `NaN` |
 | `seq` 欄 | 新增 | ① 同一時間戳記有多筆成交，要有 `seq` 才能得到可重現的排序；② 完整性比對時可以逐列對照 CSV |
 | 主鍵／唯一鍵 | **不設**，冪等由「刪除後重寫＋`load_log`」保證 | hypertable 的唯一索引一定要含 `time`；`(stock_id, time, seq)` 雖然可以當唯一鍵，但每筆寫入都要檢查唯一性，歷史匯入會明顯變慢，寫入壓縮 chunk 時還要先解壓。寫入單位本來就是「股票 × 交易日」，整段刪除後重寫已經足夠 |
-| chunk 間隔 | 7 天 | 推估 2020-04～2024-05 約 1,000 個交易日：1 天一個 chunk 會產生約 1,500 個 chunk（含非交易日），planning 成本偏高；7 天約 220 個。每天查詢靠壓縮 batch 的 min/max `time` 跳過不相關資料，不需要 chunk 剛好切在一天。Phase4-2 量測後可再調整 |
+| chunk 間隔 | 7 天 | 實測 2020-04～2024-05 共 1,001 個交易日：1 天一個 chunk 會產生約 1,500 個 chunk（含非交易日），planning 成本偏高；7 天約 220 個。每天查詢靠壓縮 batch 的 min/max `time` 跳過不相關資料，不需要 chunk 剛好切在一天。Phase4-2 量測後可再調整 |
 | 壓縮 | `segmentby = stock_id`、`orderby = time, seq` | 按股票查詢時可以直接定位 segment；同一 segment 內依時間排序，delta 編碼壓縮率高 |
 | `load_log` 粒度 | 股票 × 交易日 | 取代 `tick_metadata.json` 的「每檔最後日期」，還能逐日核對列數；主鍵天然防止重複登記 |
+| `load_log` 記兩個列數 | `source_rows` 與 `row_count` | 入庫時會依規則排除壞列與興櫃時期（Phase4-1 裁示），只記寫入列數就無法和 CSV 對帳；兩者的差就是排除的列數 |
+| 異常列 | 入庫時依規則排除，不改 CSV | 原始檔保持原樣才能重跑、重新比對；排除規則寫在 loader，日常更新與歷史匯入共用同一套 |
 
-### 容量推估（Phase4-1／Phase4-2 實測後回填）
+### 容量推估（列數 2026-10-09 實測；壓縮後大小待 Phase4-2 回填）
 
-- 本機樣本 540 檔平均每天約 32 萬列。全市場約 1,900 檔，但成交集中在熱門股，**推估每天 100～200 萬列**。
-- 2020-04～2024-05 約 1,000 個交易日 → **推估總計 10～20 億列**。
-- 未壓縮每列約 80 bytes（含 tuple header）→ 80～160 GB；TimescaleDB 對這類資料的壓縮率通常在 10 倍以上 → **推估壓縮後 5～15 GB**。
+- **實測總列數 1,061,227,084**，平均每天 106 萬列；扣掉興櫃時期約 10.5 億列。
+- 未壓縮每列約 80 bytes（含 tuple header）→ **約 85 GB**；TimescaleDB 對這類資料的壓縮率通常在 10 倍以上 → **推估壓縮後 5～10 GB**（Phase4-2 實測後回填）。
+- chunk 間隔 7 天約 530 萬列／chunk。
 - 未壓縮的量會超過 Docker Desktop 預設的磁碟上限，所以 Phase4-3 必須「匯入一週、壓縮一週」，控制峰值用量。
 
 ---
@@ -339,20 +378,28 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 ## Phase 2：寫入路徑
 
-### Phase2-1. 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等） ⬜
+### Phase2-1. 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等＋兩種 CSV 格式正規化） ⬜
 
 - **目的**：取代 `loadTextEx`，並補上 DolphinDB 版缺少的兩件事：DB 層冪等，以及逐檔回報失敗。
 - **做法**：
   - `add_to_db(remove_files: bool = False, dir_path: Optional[Path] = None) -> None`：`dir_path` 預設 `TICK_DOWNLOADS_PATH`，讓 Phase4-3 可以指定其他資料夾。逐檔呼叫 `load_csv()`，單檔失敗不中斷整批，最後呼叫 `BaseDataLoader.finish_load()` 彙報結果。現行 tick 線沒有呼叫 `finish_load()`（`tests/test_loader_failure_reporting.py` 特別註明這個例外），改寫後要補上。
   - `load_csv(csv_path: Path) -> int`：
-    1. `pd.read_csv(csv_path, dtype={"stock_id": str}, parse_dates=["time"])`，檢查 9 個欄位齊全。
-    2. 加上 `trade_date = time.dt.date`，依原始列序算出 `seq = groupby(["stock_id", "trade_date"]).cumcount()`。
-    3. **一個交易日一個 transaction**，逐日交給 `StockTickDAO.replace_day(stock_id, trade_date, day_df, source_file) -> int`；以下 SQL 全在 DAO 內，loader 不 import `psycopg`：
+    1. **正規化成 cleaner 格式**（純函式 `normalize_tick_frame(raw: pd.DataFrame, stock_id: str) -> pd.DataFrame`，可單獨測試）：
+       - 全部欄位先以字串讀入（`dtype=str`），**依欄名取欄、不依位置**（歷史格式有 31 種欄序）。
+       - 有 `ts` 沒有 `time` 時改名為 `time`；沒有 `stock_id` 欄時以檔名補上（歷史格式）。檢查 9 個欄位齊全，缺欄整檔失敗。
+       - `time` 以 `pd.to_datetime(..., format="ISO8601")` 解析，26 字元與 23 字元（millisecond）都要吃得下。
+       - 量與 `tick_type` 先轉 float 再轉 int（8 檔寫成 `105.0`）；價格 `round(2)`（去掉 `6.5600000000000005` 這類浮點誤差）。
+    2. 加上 `trade_date = time.dt.date`，**在排除之前**依原始列序算出 `seq = groupby("trade_date").cumcount()`（同一天內原始列序不一定依時間排序，`seq` 保留原貌；排除後 `seq` 會有缺號，逐列對照 CSV 時反而能直接定位）。
+    3. **依 Phase4-1 裁示的規則排除**，各規則排除的列數記進 log（純函式 `filter_tick_rows()`，可單獨測試）：
+       - `close = 0` 的全零列、`volume < 0` 的列。
+       - **興櫃時期**：當天 `price` 表沒有這檔股票的列，整天排除。由 loader 經 `core/dao/tw/stock_price_dao.py` 一次查出檔案涵蓋期間「每個交易日有哪些股票」，不逐日查。
+       - **`price` 表整天都沒有資料時不可排除**，而是該日失敗、不寫 `load_log`。否則日常更新若 tick 比 `price` 先跑，會把整天當成興櫃排除並登記為已載入，之後再也不會補。
+    4. **一個交易日一個 transaction**，逐日交給 `StockTickDAO.replace_day(stock_id, trade_date, day_df, source_rows, source_file) -> int`（`source_rows` 為該日排除前的列數；整天被排除的日子也要登記，`row_count = 0`，續跑時才不會重做）；以下 SQL 全在 DAO 內，loader 不 import `psycopg`：
        - `DELETE FROM stock_tick WHERE stock_id = %s AND time >= %s AND time < %s`（該日 00:00 到隔天 00:00）
        - 用 `cursor.copy("COPY stock_tick (stock_id, time, seq, close, volume, bid_price, bid_volume, ask_price, ask_volume, tick_type) FROM STDIN")` 以 `write_row()` 寫入
-       - `INSERT INTO stock_tick_load_log ... ON CONFLICT (stock_id, trade_date) DO UPDATE SET row_count = EXCLUDED.row_count, source_file = EXCLUDED.source_file, loaded_at = now()`
+       - `INSERT INTO stock_tick_load_log ... ON CONFLICT (stock_id, trade_date) DO UPDATE SET source_rows = EXCLUDED.source_rows, row_count = EXCLUDED.row_count, source_file = EXCLUDED.source_file, loaded_at = now()`
        - `COMMIT`
-    4. 回傳寫入的總列數。
+    5. 回傳寫入的總列數。
   - **寫入速度**：`write_row()` 逐列由 Python 送出，每日更新（百萬列級）夠用；歷史匯入是十億列級，Phase4-2 要記錄每秒寫入列數，
     推估全量匯入耗時。太慢時改成先把當日資料（含 `seq`）組成 CSV 文字，再以 `copy.write()` 整塊送出，省掉逐列的 Python 往返。
   - **為什麼選「刪除後重寫」而不是 `ON CONFLICT DO NOTHING`**：完全相同的重複列本來就是合法資料（實測 32 列），沒有自然唯一鍵可以用；而且 CSV 是「整段區間覆寫」產生的，同一天再出現時應該以新檔為準。
@@ -361,10 +408,13 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 移除 `append_csv_to_dolphinDB`／`append_all_csv_to_dolphinDB`／`clear_all_cache`／`delete_dolphinDB`。
 - **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`。
 - **驗證方式**：新增整合測試（見 Phase5-1）：
-  1. 同一份 CSV 載入兩次，`stock_tick` 列數不變，`load_log.row_count` 與 CSV 一致。
+  1. 同一份 CSV 載入兩次，`stock_tick` 列數不變，`load_log.source_rows` 與 CSV 一致。
   2. 載入一份內容較少的同日 CSV，舊列被完整取代。
   3. 一個欄位損壞的 CSV 會讓 `finish_load()` 拋出 `DataLoadError`，其他檔案照常入庫。
-- **相依**：Phase1-2。
+  4. 歷史格式（欄序打亂、無 `stock_id`、`105.0`、毫秒時間）與 cleaner 格式各一份手寫樣本，正規化後內容相同。
+  5. 排除規則：全零列、負量列、`price` 表當天沒有該股的日子都被排除且 `row_count` 少掉對應列數；`price` 表整天缺資料時該日失敗、`load_log` 沒有紀錄。
+- **偏離原規格（2026-10-09）**：原規劃「格式差異在匯入腳本轉換、不改 loader 的欄位契約」。全量盤點後改為 loader 直接讀兩種格式並套用排除規則：歷史匯入（Phase4-3）、抽樣試點（Phase4-2）與日常更新才會是同一套規則，完整性比對的口徑也才一致。
+- **相依**：Phase1-2；排除規則相依 Phase4-1 的裁示。
 
 ### Phase2-2. updater 續跑依據改為 `stock_tick_load_log` ⬜
 
@@ -376,7 +426,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     - `get_table_latest_date()` 改由 DAO 查 `max(trade_date)`。
     - update 開頭查一次，傳給各 thread，**不要每檔股票查一次 DB**。
   - `StockTickUpdater.update()`：
-    - 開頭那段「比對 metadata 刪 CSV」改成：CSV 裡每個交易日在 `load_log` 都有紀錄、且 `row_count` 一致，才刪除（`load_log` 的查詢同樣由 `StockTickDAO` 提供）。
+    - 開頭那段「比對 metadata 刪 CSV」改成：CSV 裡每個交易日在 `load_log` 都有紀錄、且 `source_rows` 與 CSV 當日列數一致，才刪除（`load_log` 的查詢同樣由 `StockTickDAO` 提供）。
     - 結尾的 `update_tick_metadata_from_csv()` 移除。
     - `setup()` 裡的 `StockTickUtils.generate_tick_metadata_backup()` 呼叫一併移除（該函式本步驟刪除，留著會在建構時就 `AttributeError`）。
     - 模組說明「資料庫目前的涵蓋範圍以 `tick_metadata.json` 為準」改成以 `stock_tick_load_log` 為準。
@@ -384,7 +434,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `scripts/manual/manual_init_tick_metadata.py` 失去用途，在 Phase5-2 刪除。
   - 模組說明字串（`"""台股 tick 的 DolphinDB 與 metadata 工具"""`）與 class docstring 同步更新。
 - **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py`。
-- **驗證方式**：以 Phase4-2 的 3 天樣本入庫後，手動刪掉某檔股票最後一天的 `load_log` 與資料，對 2024-05-13～05-15 跑 `update()`（**crawler 一律用替身**，不對外連線、也不對正式資料表跑真實更新，見〈範圍界線〉），只有那檔股票被重爬。
+- **驗證方式**：以 Phase4-2 的 3 天樣本（2024-05-08～05-10）入庫後，手動刪掉某檔股票最後一天的 `load_log` 與資料，對同一段日期跑 `update()`（**crawler 一律用替身**，不對外連線、也不對正式資料表跑真實更新，見〈範圍界線〉），只有那檔股票被重爬。
 - **相依**：Phase2-1。
 
 ---
@@ -438,63 +488,79 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 
 ## Phase 4：歷史資料遷移
 
-### Phase4-1. 盤點 Google 雲端的歷史 CSV ⬜
+### Phase4-1. 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 ⬜
 
-- **目的**：現在只知道雲端上「有全部的 tick CSV」，但不知道檔案怎麼切、欄位是否和現行 cleaner 輸出一致。先盤點，Phase2-1 的解析和 Phase4-3 的匯入才不會做白工。
+- **目的**：先弄清楚要入庫的資料長什麼樣子，Phase2-1 的解析和 Phase4-3 的匯入才不會做白工；並把唯一一份歷史搬到 updater 碰不到的地方。
+- **背景**：原規劃從 Google 雲端下載歷史 CSV 再盤點。2026-10-09 使用者已把完整歷史補回 `data/downloads/tw_stock/tick/`，並確認那批就是要入庫的全部資料，所以改成盤點本機這批，不再下載。
 - **做法**：
-  - 下載到**本機非同步資料夾**（建議 `~/tick_history/`），不要放在 Google 雲端的串流資料夾，也不要放在專案的 `data/` 底下，避免雲端占位檔和 git 誤加。
-  - 盤點下列項目，寫進本步驟末尾的「盤點紀錄」：
-    1. 檔案佈局：一檔股票一個檔，還是一天一個檔？是否分年份資料夾？是否壓縮？
-    2. 日期範圍：最早、最晚交易日，以及是否有整段缺漏。
-    3. 欄位格式：是否都是 9 欄、相同欄名；`time` 精度是否全部是 26 字元（早期資料可能沒補到 microsecond）；`stock_id` 前導 0 是否保留。
-    4. 總檔數、總大小、抽樣 5 天的全市場每日列數，用來回填〈容量推估〉。
-    5. 和 DolphinDB 的差異：`tick_metadata.json` 顯示 1,379 檔停在 2024-05-10，確認雲端資料是否涵蓋到這個日期。
-  - 格式和現行 cleaner 輸出不一致時，在匯入腳本加上轉換，**不改 loader 的欄位契約**。
-- **產出**：本文件的盤點紀錄。
-- **驗證方式**：盤點紀錄涵蓋上述 5 項。
+  1. 全量盤點（2026-10-09 已完成，結果見下方盤點紀錄與〈CSV 樣式〉）。
+  2. **請使用者裁示兩件事**（見下方〈待裁示〉），結果寫回本步驟。
+  3. **把歷史搬離 `data/downloads/tw_stock/tick/`**：那是 tick updater 的工作目錄，`--target tick`（`all` 也含 tick）爬到的股票會整檔覆寫 `{stock_id}.csv`；Phase2-2 之後的 updater 還會在入庫成功後刪 CSV。
+     搬到同一顆磁碟的位置用 `mv` 是瞬間完成、不會複製 56 GB；搬完之後 `data/downloads/tw_stock/tick/` 留空，給 updater 用。
+- **盤點紀錄（2026-10-09，以 pyarrow 逐檔全掃 1,856 檔）**：
+  1. **檔案佈局**：一檔股票一個檔（`{4 位代號}.csv`），沒有分年份資料夾、沒有壓縮；8 個欄名都相同、但有 31 種欄序（〈CSV 樣式〉）。
+  2. **日期範圍**：2020-04-01～2024-05-10，1,001 個交易日，與 `price` 表同期間的交易日逐日一致，沒有整天缺漏。
+  3. **欄位格式**：時間欄是 `ts` 不是 `time`；沒有 `stock_id` 欄；`ts` 有 26 字元與 23 字元兩種；8 檔整數寫成浮點字串。和 cleaner 格式的差異全部由 Phase2-1 的正規化處理。
+  4. **總量**：1,061,227,084 列、56 GB；每日列數中位數 997,013（已回填〈容量推估〉）。
+  5. **和 `tick_metadata.json` 的差異**：metadata 記 1,920 檔，**其中 93 檔沒有對應的 CSV**（含 `2603`、`2609` 這類大型股；90 檔在 metadata 停在 2024-05-10、3 檔停在 05-15），另有 30 檔 CSV 不在 metadata 裡。
+     原本 541 檔的 2024-05-13～05-15 已不存在，資料庫的歷史止於 2024-05-10。
+- **待裁示**（使用者決定前，Phase2-1 的排除規則與 Phase4-2 都不動工）：
+  1. **排除規則**。建議：
+     - **排除興櫃時期**：「股票 × 交易日」在 `price` 表沒有資料就整天排除（10,322,770 列、約 1.0%；理由見〈CSV 樣式〉的〈興櫃時期〉）。
+     - **排除全零列**（`close = 0`，23,215 列）與**負成交量列**（14 列）。
+     - **保留**：13:30 之後的盤後列（現行 cleaner 也保留）、整列完全相同的重複列（同一瞬間的多筆成交，見〈設計決策〉）、bid／ask 為 0 的列。
+  2. **搬移位置**。建議 `data/tick_history/`：同一顆磁碟、`mv` 瞬間完成；`data/` 已在 `.gitignore`，不會被誤加；也不在任何 updater 的路徑上。
+     原規劃的 `~/tick_history/` 也可以，差別只在要不要和專案資料放一起。
+- **產出**：本文件的盤點紀錄與裁示紀錄；歷史 CSV 的新位置。
+- **驗證方式**：盤點紀錄涵蓋上述 5 項；兩項裁示已記錄；搬移後新位置檔數 1,856、`du` 大小不變，`data/downloads/tw_stock/tick/` 沒有歷史檔。
 - **相依**：無，可最先做。
 
 ### Phase4-2. 試點：本機抽樣檔案入庫與效能量測 ⬜
 
 - **目的**：在全量匯入前驗證 schema 與冪等性，量測壓縮率和查詢速度，決定 chunk 間隔要不要調整。
-- **`data/downloads/tw_stock/tick/` 只當測試素材**（2026-09-18 使用者裁示）：本步驟**只取抽樣**，不要對 541 檔全跑一次。整個資料夾入庫要等使用者明確要求，屆時再依本步驟的做法擴大重跑一次即可。
-- **動工前先確認樣本在**：`ls data/downloads/tw_stock/tick/*.csv | wc -l` 應為 541，且最早、最晚日期為 2024-05-13、2024-05-15（2026-10-09 曾被清空，使用者表示會補回）。
-  不在的話先請使用者補回；真的補不回來，才改從 Phase4-1 下載的雲端 CSV 取**同一段日期**的約 20 檔，量測結果才能和〈CSV 樣式〉的實測對照。
+- **只取抽樣**（2026-09-18 使用者裁示）：全量入庫走 Phase4-3，而且要等使用者明確要求。
+- **樣本**：從 Phase4-1 搬移後的歷史位置取**約 20 檔 × 最後 3 個交易日（2024-05-08～05-10）**。這 3 天的全市場列數已由盤點得知（1,262,189／1,169,462／1,213,752），換算倍數有確定的分母。
 - **做法**：
   0. **先 `pause_compression_policy()`**（見 Phase1-3）：樣本是 2024 年的資料，policy 一跑就會壓縮，步驟 2 會量不到壓縮前的大小與查詢耗時。量測結束後再 `resume_compression_policy()`。
-  1. 從 `data/downloads/tw_stock/tick/` 取**約 20 檔**（涵蓋成交量大小不同的股票，例如 `2330`、`1101`、`9958` 與幾檔冷門股），複製到暫存目錄後以 `add_to_db(dir_path=...)` 入庫，記錄耗時與樣本列數。
-     - `add_to_db()` 的 `dir_path` 參數（Phase2-1）就是為了這件事：**不要**直接對 `TICK_DOWNLOADS_PATH` 整個資料夾跑。
+  1. 挑約 20 檔（涵蓋成交量大小不同的股票，例如 `2330`、`2303`、`1101`、`9958` 與幾檔冷門股，**至少一檔有興櫃時期**、一檔是浮點字串格式），以一次性小腳本截出這 3 天、**原格式不動**地另存到暫存目錄，
+     再以 `add_to_db(dir_path=...)` 入庫，記錄耗時與樣本列數。
+     - `add_to_db()` 的 `dir_path` 參數（Phase2-1）就是為了這件事：**不要**直接對整個歷史資料夾跑。
+     - 截出來的樣本是歷史格式，順便驗證 Phase2-1 的正規化；排除規則在這 3 天不一定觸發，由 Phase2-1 的單元測試保證。
   2. 記錄壓縮前大小：`hypertable_size('stock_tick')`，以及入庫的每秒寫入列數（推估全量匯入耗時，見 Phase2-1〈寫入速度〉）。
-  3. `compress_chunks_before(datetime.date(2024, 5, 16))` 之後，記錄 `hypertable_compression_stats('stock_tick')`。
+  3. `compress_chunks_before(datetime.date(2024, 5, 11))` 之後，記錄 `hypertable_compression_stats('stock_tick')`。
   4. 分別在**壓縮前**與**壓縮後**，各量 3 次：
      - `StockTickAPI().get_ordered_ticks(d, d)`（三天各一次）
      - `get_stock_ticks("2330", d, d)`
   5. 把量測值依「全市場每日列數 ÷ **樣本**每日列數」換算成全市場的推估耗時。
-     - **換算基準要寫進量測紀錄**：樣本只有 20 檔時，倍數會拉到 50～100 倍，換算誤差比 541 檔大。門檻踩線（8～12 秒）時不要直接下結論，改為向使用者說明並請求擴大樣本。
+     - **換算基準要寫進量測紀錄**：樣本只有 20 檔時倍數會拉到 50～100 倍，換算誤差不小。門檻踩線（8～12 秒）時不要直接下結論，改為向使用者說明並請求擴大樣本。
 - **門檻**：換算後全市場單日 `get_ordered_ticks()` **≤ 10 秒**，以 1,000 個交易日的回測來說約 3 小時。超過時依序檢查：
   - 是否誤用 `SELECT *`
   - `ORDER BY` 能否由壓縮的 `orderby` 直接提供
   - 改用 ConnectorX 的 `return_type="arrow"` 再轉 pandas
 - **產出**：本步驟末尾的「量測紀錄」表（含樣本檔數、樣本列數與換算倍數）。
-- **驗證方式**：量測紀錄填寫完整；**抽樣**檔案的 DB 列數與其 CSV 列數一致（全市場總列數 957,262 留到全量入庫時才對得上）。
-- **相依**：Phase1-3、Phase2-1、Phase3-1。
+- **驗證方式**：量測紀錄填寫完整；**抽樣**檔案每個「股票 × 交易日」的 `load_log.source_rows` 與樣本 CSV 列數一致、DB 列數＝`row_count`。
+- **相依**：Phase1-3、Phase2-1、Phase3-1、Phase4-1（樣本從搬移後的位置取）。
 
 ### Phase4-3. 歷史 CSV 全量匯入與完整性比對 ⬜
 
-- **目的**：把雲端的歷史資料全部搬進 TimescaleDB。
-- **執行時機**：**腳本可以先寫好，真正跑匯入要等使用者要求**（2026-09-18 裁示，與 Phase4-2 同一條）。本機 `data/downloads/tw_stock/tick/` 的 541 檔若要全量入庫，也走這支腳本（`--source-dir` 指過去），同樣等要求。
+- **目的**：把 Phase4-1 盤點的歷史資料全部搬進 TimescaleDB。
+- **執行時機**：**腳本可以先寫好，真正跑匯入要等使用者要求**（2026-09-18 裁示，與 Phase4-2 同一條）。
+- **規模（2026-10-09 實測）**：1,856 檔、10.6 億列、1,001 個交易日（約 214 週）。Phase4-2 量到每秒寫入列數後，先估總耗時再請使用者決定何時跑。
 - **做法**：新增 `scripts/manual/manual_tick_history_import.py`：
-  - 參數：`--source-dir`、`--start-date`、`--end-date`、`--resume`。
+  - 參數：`--source-dir`（預設 Phase4-1 搬移後的位置）、`--start-date`、`--end-date`、`--resume`。
   - **開始前 `pause_compression_policy()`，結束（含中斷）時 `resume_compression_policy()`**（`try/finally`）：policy 會在匯入途中壓縮還沒載完的週（見 Phase1-3）。
   - **逐週處理**：載入一週 → `compress_chunks_before(該週結束)` → 在 log 記錄進度 → 下一週。峰值磁碟用量只會多出一週的未壓縮資料。
+    歷史檔是「一檔股票一個檔、涵蓋四年」，逐週處理代表每一週都要從 1,856 個檔各取出該週的列：不要每週重讀整個檔（最大的 `2303.csv` 有 1 GB），
+    先把每個檔依週切成暫存檔（一次掃完全部），或改成依 `ts` 前綴串流切分，實作時二擇一並記錄峰值暫存空間。
   - `--resume`：以 `stock_tick_load_log` 判斷已完成的「股票 × 交易日」並跳過，可以隨時中斷後重跑。
   - 要重灌已壓縮的週時，先 `decompress_chunk` 再呼叫 `load_csv()`。
-  - Phase4-1 若發現格式差異，在這支腳本內轉成 cleaner 的輸出格式後再交給 loader。
+  - **格式正規化與排除規則都在 loader**（Phase2-1），腳本不另做轉換，日常更新與歷史匯入才是同一套規則。
   - 用 `from loguru import logger` 輸出進度，檔名 `tick_history_import.log`。
 - **產出**：`scripts/manual/manual_tick_history_import.py`、本步驟末尾的「匯入紀錄」。
 - **驗證方式**：
-  1. 每個「股票 × 交易日」：CSV 列數 ＝ `SELECT count(*) FROM stock_tick WHERE ...` ＝ `load_log.row_count`。腳本最後跑一次全量比對，列出不一致的組合（應為 0 筆）。
-  2. 抽樣 20 個「股票 × 交易日」，`get_stock_ticks()` 的結果與 CSV 逐列比對（`time`、價格、量）完全相同。
+  1. 每個「股票 × 交易日」：CSV 列數＝`load_log.source_rows`，`SELECT count(*) FROM stock_tick WHERE ...`＝`load_log.row_count`。腳本最後跑一次全量比對，列出不一致的組合（應為 0 筆），並彙總各排除規則的列數，與 Phase4-1 盤點紀錄的數字對照。
+     全部「股票 × 交易日」應為盤點的 1,781,133 組（含整天被排除、`row_count = 0` 的組合）。
+  2. 抽樣 20 個「股票 × 交易日」，`get_stock_ticks()` 的結果與正規化、排除後的 CSV 逐列比對（`time`、價格、量）完全相同。
   3. 抽樣 5 個交易日，每日成交量加總 ≈ `price` 表當日成交股數 ÷ 1000（盤後零股與定價交易會造成小幅落差，差距記進匯入紀錄）。
   4. 全部 chunk 除了最近 14 天之外都已壓縮。
 - **相依**：Phase4-1、Phase4-2。
@@ -514,7 +580,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
     - 模組層級 `pytest.mark.skipif(not os.getenv("TICK_DATABASE_URL"), ...)`。
     - 每個測試建立獨立的 schema（`CREATE SCHEMA test_<uuid>`），結束時 `DROP SCHEMA ... CASCADE`，**不碰正式的 `stock_tick`**。
       `search_path` 要設成 `test_<uuid>, public`，**不可只有測試 schema**：`create_hypertable()` 等函式屬於 extension、裝在 `public`，只指向測試 schema 的話建表當場失敗。
-    - 涵蓋 Phase2-1 的 3 個冪等／失敗情境、〈讀取介面契約〉的排序與 dtype、同時間戳記多筆成交的 `seq` 排序、`bid_price = 0` 原樣保存。
+    - 涵蓋 Phase2-1 驗證方式的 5 個情境（冪等、取代、失敗彙報、兩種格式正規化、排除規則）、〈讀取介面契約〉的排序與 dtype、同時間戳記多筆成交的 `seq` 排序、`bid_price = 0` 原樣保存。
     - 測試資料用手寫的小 DataFrame，不讀 `data/downloads/`。
 - **產出**：上列測試檔。
 - **驗證方式**：未設 `TICK_DATABASE_URL` 時 `pytest` 全數通過（新測試被 skip）；設定後 `pytest tests/test_stock_tick_timescale.py` 全數通過。
@@ -546,7 +612,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **設定**：`core/config/settings.py`（`TICK_UPDATE_START_DATE`、`DDB_*`、tick 爬蟲多帳號 `API_KEYS`）、`core/config/schema.py`（`TICK_DB_*`、`require_tick_db_path()`、`TICK_TABLE_NAME`、`FUTURES_TICK_TABLE_NAME`）、`core/config/__init__.py`、`core/pipeline/utils/constant.py`、`pyproject.toml`（`tick` extra 與 per-file-ignores）、`.env.example`。
   - **測試**：`tests/test_futures_tick.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_strategy_data_access.py`、`tests/test_api_public_interfaces.py`、`tests/test_config_consistency.py` 的 tick 相關段落；`tests/backtest/test_intraday_contract.py` 的註解「TICK 回測要 DolphinDB」改成要 TimescaleDB（測試邏輯不變）。
   - **文件**：清單統一維護在 Phase5-3，這裡不重列。
-  - **本機資料**（不在版控）：`data/downloads/tw_stock/tick/` 541 個 CSV 與 `tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**這 541 個 CSV 是目前唯一的本機測試素材，不刪**（本步驟只刪 `tick_metadata.json`）；它們要不要入庫見〈範圍界線〉。
+  - **本機資料**（不在版控）：Phase4-1 搬移後的歷史 CSV（1,856 檔）、`tick_metadata.json`、`data/downloads/tw_futures/tick/` 1 個 CSV。**歷史 CSV 是唯一一份原始資料，本步驟不刪**（只刪 `tick_metadata.json`）；全量匯入並比對通過後要不要刪，由使用者決定。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core apps scripts .env.example` 只剩裁示保留的期貨部分（選項 A 時應為 0 筆）；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
 - **相依**：Phase4-3（確認新儲存資料完整後才刪對照）、Phase5-1。
@@ -608,8 +674,9 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 | 磁碟寫滿 | 未壓縮的全量資料推估 80～160 GB | Docker Desktop 磁碟上限調到 ≥ 150 GB；匯入逐週壓縮 |
 | 壓縮 policy 在匯入中途壓縮歷史資料 | policy 以「現在」往回算，2020～2024 的 chunk 全部符合條件，背景 job 會壓縮還在載入的週 | 試點與匯入期間停用 policy、結束後恢復（Phase1-3 的 `pause_／resume_compression_policy()`） |
 | 時區錯位 | 用 `TIMESTAMPTZ` 時，ConnectorX 會回傳 UTC | schema 固定用 `TIMESTAMP`；整合測試驗證 `time` 為 naive 且等於 CSV 原值 |
-| 雲端 CSV 格式不一致 | 早期資料可能與現行 cleaner 輸出不同 | Phase4-1 先盤點，差異在匯入腳本轉換 |
-| 本機測試素材遺失 | 541 檔是唯一的本機測試素材，2026-10-09 曾被清空 | Phase4-2 動工前先確認檔數；補不回來時改從 Phase4-1 下載的雲端 CSV 取同一段日期。整合測試（Phase5-1）只用手寫的小 DataFrame，不受影響 |
+| 歷史 CSV 格式不一致 | 歷史格式與 cleaner 格式不同（欄名、欄序、毫秒時間、浮點字串），2026-10-09 已全量盤點 | Phase2-1 的 loader 正規化兩種格式，並以手寫樣本的單元測試涵蓋每一種差異 |
+| 興櫃時期混入 | 173 檔有興櫃時期的資料（約 1,032 萬列），以「股」為單位、交易到 15:00 後，混進去成交量會差上千倍 | 依 Phase4-1 裁示的規則，以 `price` 表判斷並整天排除；`price` 表整天缺資料時該日失敗而不是排除 |
+| 歷史 CSV 被覆寫或刪除 | 歷史放在 tick updater 的工作目錄 `data/downloads/tw_stock/tick/`：`--target tick`（`all` 也含 tick）會整檔覆寫爬到的股票；Phase2-2 之後的 updater 會在入庫後刪 CSV。這是唯一一份原始資料 | Phase4-1 先搬到 updater 碰不到的位置；開發用的 worktree 一律以 `--source-dir` 明確指向新位置，不改 `ALPHAEDGE_DATA_DIR` 去指主目錄的 `data/` |
 | `core/pipeline/` 搬家 | `core目錄邊界收斂.md` Phase5-1 會把它搬到頂層 `etl/` | 該步驟暫緩到本文件完成；若先做，本文件路徑跟著換，分層與 F401 例外的路徑一併檢查 |
 | 與 PostgreSQL 遷移計畫衝突 | 兩份工作都要動 compose、driver、`core/dao/` 的連線入口 | service 名稱、目錄、環境變數鍵已在本文件預先對齊（Phase0-1、Phase0-2、Phase1-1），先做的建立、後做的沿用 |
 
