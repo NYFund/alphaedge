@@ -50,7 +50,7 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| Phase0-1 | `docker-compose.yml` 新增 TimescaleDB service | `docker-compose.yml`、`.env.example` | `psql` 連線後 `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'` 有值 | ✅ | **✅ 2026-10-09**（`feature/tick-timescaledb`）：`2.29.2-pg17`，extension 2.29.2、license `timescale`；compose 寫死專案名稱，worktree 與主目錄共用 volume。 與 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase0-1 共用同一個 service；Docker Desktop 磁碟上限要先調大 |
+| Phase0-1 | `docker-compose.yml` 新增 TimescaleDB service | `docker-compose.yml`、`.env.example` | `psql` 連線後 `SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'` 有值 | ✅ | **✅ 2026-10-09**（`feature/tick-timescaledb`）：`2.29.2-pg17`，extension 2.29.2、license `timescale`；compose 寫死專案名稱，worktree 與主目錄共用 volume。 與 [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase0-1 共用同一個 service；Docker 磁碟上限 2026-10-09 實查已足夠（見〈容量推估〉） |
 | Phase0-2 | 新增 `TICK_DATABASE_URL` 設定 | `core/config/settings.py`、`.env.example`、`tests/test_config_consistency.py` | `pytest tests/test_config_consistency.py` 通過 | ✅ | **✅ 2026-10-09**：`require_tick_database_url()` 對未設定與空字串都拋出（新測試 2 條）；`test_config_consistency.py` 通過。 刻意不用 `DATABASE_URL`，理由見步驟詳述 |
 | Phase0-3 | `[tick]` 選用相依改為 `psycopg`＋`connectorx` | `pyproject.toml`、`uv.lock` | `uv sync --extra tick` 後可 import 兩者 | ✅ | **✅ 2026-10-09**：psycopg 3.3.6、connectorx 0.4.6；**`dolphindb` 拆成獨立的 `[dolphindb]` extra（偏離原規格）**，原因是它污染 `sys.path` 弄壞前端測試。 `dolphindb` 的去留在 Phase5-2 裁示，本步驟先不移除 |
 | Phase1-1 | 在 `core/dao/` 建立 TimescaleDB 連線入口 | `core/dao/timescale.py`、`scripts/check_layer_deps.py` | `python scripts/check_layer_deps.py` 通過；`SELECT 1` 可執行 | ✅ | **✅ 2026-10-09**：`core/dao/timescale.py`；`SELECT 1` 與 ConnectorX 讀取實連成功；驅動檢查擴充並有突變驗證的測試。 相依 Phase0-2、Phase0-3；與 `core/dao/connection.py` 同目錄，PostgreSQL遷移計畫 Phase1-1 在隔壁擴充 |
@@ -61,7 +61,7 @@
 | Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ✅ | **✅ 2026-10-09**：ConnectorX 以 Arrow 回傳再轉 pandas（偏離原規格的 `return_type="pandas"`，見步驟詳述）；讀取契約整合測試 5 條、不需 DB 的驗證測試 8 條，五處突變皆轉紅。 相依 Phase1-1、Phase1-2 |
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ✅ | **✅ 2026-10-09**：DolphinDB 字樣全數改掉；驗證改以 DataFeed `get_quotes()` 直接比對 TickQuote 數（偏離原規格，見步驟詳述）。 相依 Phase3-1 |
 | Phase4-1 | 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 | 本文件（盤點紀錄） | 盤點紀錄涵蓋 5 項；兩項裁示已記錄；搬移後檔數 1,856、總大小不變 | ✅ | **✅ 2026-10-09**：全量盤點寫入盤點紀錄；使用者採用兩項建議；歷史已搬到 `data/tick_history/`（1,856 檔、56 GB）。 **無相依，可最先做**；**2026-10-09 全量盤點已寫入盤點紀錄；兩項裁示（採用建議）與搬移到 `data/tick_history/` 同日完成** |
-| Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1、Phase4-1；**只用抽樣**，全量入庫走 Phase4-3 且需使用者要求（見〈範圍界線〉） |
+| Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ✅ | **✅ 2026-10-09**：19 檔 × 3 天寫入 `public` 後量測、量完清空；寫入約 8.9 萬列／秒（全量約 3.3 小時）、壓縮約 12 倍（全量約 14 GB）、全市場單日查詢換算約 1.2～1.4 秒（門檻 10 秒）；**發現 chunk 邊界是週四，Phase4-3 要依 chunk 切**。 相依 Phase1-3、Phase2-1、Phase3-1、Phase4-1；**只用抽樣**，全量入庫走 Phase4-3 且需使用者要求（見〈範圍界線〉） |
 | Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | ⬜ | 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | 🔄 | **🔄 2026-10-09**：`test_api_public_interfaces.py`、`test_strategy_data_access.py` 已改；`test_stock_tick_timescale.py` 已建（16 條）並另有三個不需 DB 的測試檔；**剩 `test_entrypoint_and_logging.py` 兩條 `TICK_DB_PATH` 測試，隨 Phase5-2 移除常數時一起改**。 相依 Phase2-2、Phase3-1 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ⬜ | 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
@@ -236,12 +236,13 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 | `load_log` 記兩個列數 | `source_rows` 與 `row_count` | 入庫時會依規則排除壞列與興櫃時期（Phase4-1 裁示），只記寫入列數就無法和 CSV 對帳；兩者的差就是排除的列數 |
 | 異常列 | 入庫時依規則排除，不改 CSV | 原始檔保持原樣才能重跑、重新比對；排除規則寫在 loader，日常更新與歷史匯入共用同一套 |
 
-### 容量推估（列數 2026-10-09 實測；壓縮後大小待 Phase4-2 回填）
+### 容量推估（列數與每列大小皆為 2026-10-09 實測）
 
-- **實測總列數 1,061,227,084**，平均每天 106 萬列；扣掉興櫃時期約 10.5 億列。
-- 未壓縮每列約 80 bytes（含 tuple header）→ **約 85 GB**；TimescaleDB 對這類資料的壓縮率通常在 10 倍以上 → **推估壓縮後 5～10 GB**（Phase4-2 實測後回填）。
-- chunk 間隔 7 天約 530 萬列／chunk。
-- 未壓縮的量會超過 Docker Desktop 預設的磁碟上限，所以 Phase4-3 必須「匯入一週、壓縮一週」，控制峰值用量。
+- **實測總列數 1,061,227,084**，平均每天 106 萬列；排除後寫入 **1,050,896,400 列**（Phase2-1 全量乾跑）。
+- **未壓縮每列約 167 bytes**（Phase4-2 實測：資料約 104 bytes＋`(stock_id, time)` 索引約 62 bytes）→ 若全部不壓縮約 **175 GB**，比原推估的 85 GB 多一倍，多出來的主要是索引。
+- **壓縮後每列約 13.6 bytes**（壓縮率約 12 倍，壓縮後索引幾乎不佔空間）→ **全量壓縮後推估約 14 GB**。
+- chunk 間隔 7 天約 530 萬列／chunk，未壓縮約 0.9 GB。Phase4-3「載入一個 chunk、壓縮一個 chunk」時峰值只多出約 1 GB。
+- Docker Desktop 的磁碟上限：`Docker.raw` 的上限目前是 926 GB（2026-10-09 實查），14 GB 加上 1 GB 峰值遠低於此，**不必再調**。
 
 ---
 
@@ -276,7 +277,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - compose 現有 `core`（回測與資料更新，`./data` 唯讀掛載）、`live`（實盤）、`frontend` 三個 service。tick 只給回測與資料更新用，**`core` 加 `depends_on: postgres`（`condition: service_healthy`）**；`live` 不讀 tick、不必相依。
   - `.env.example` 補上述三個鍵。
   - service 名稱用 `postgres` 而不是 `timescaledb`：[PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) Phase0-1 會沿用同一個 service，TimescaleDB image 本身就是完整的 PostgreSQL。
-  - **Docker Desktop 的 Disk usage limit 要調到 ≥ 150 GB**（Settings → Resources），避免 Phase4-3 匯入途中寫滿磁碟。**這件事在全量匯入前做即可**：抽樣試點（Phase4-2）只有幾十 MB，不必為它先調。
+  - ~~Docker Desktop 的 Disk usage limit 要調到 ≥ 150 GB~~：**2026-10-09 實查上限已是 926 GB**，而 Phase4-2 實測全量壓縮後約 14 GB、逐 chunk 壓縮的峰值只多約 1 GB，不必調（見〈容量推估〉）。
 - **2026-09-18 裁示：維持 Docker，不走本機安裝。** 曾評估以 Homebrew 直接裝 `postgresql@17` ＋ `timescale/tap` 的 `timescaledb`（程式面完全不受影響——Phase0-2 之後只認 `TICK_DATABASE_URL`，只有本步驟會變）。本機路線的好處是原生 I/O、沒有 Docker Desktop 的磁碟上限；代價是 brew 只給當下版本、鎖不住 `2.x-pg17`，`brew upgrade` 動到 postgres 時要重跑 `timescaledb-tune`，且 [PostgreSQL遷移計畫](PostgreSQL遷移計畫.md) Phase0-1「沿用同一個 service」的規劃要改寫。**結論是維持 Docker**：全量匯入已改為等使用者要求（見〈範圍界線〉），I/O 的代價在抽樣試點根本不會發生，而版本鎖定與跨計畫共用是現在就受用的。真的要做全量匯入時，可再評估是否改走本機 instance（資料以 `pg_dump` 帶走或重跑匯入腳本即可）。
 - **實作紀錄（2026-10-09，`feature/tick-timescaledb`）**：image 鎖 `timescale/timescaledb:2.29.2-pg17`，實測 extension 2.29.2、`timescaledb.license = timescale`、PostgreSQL 17.11。
   **另加 `name: alphaedge`**（偏離原規格）：compose 預設以目錄名當專案名，在 git worktree 裡啟動會變成另一個專案、另建一份 `pgdata` volume；寫死後 volume 固定為 `alphaedge_alphaedge_pgdata`，主目錄與 worktree 共用同一個資料庫。
@@ -554,7 +555,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **驗證方式**：盤點紀錄涵蓋上述 5 項；兩項裁示已記錄；搬移後新位置檔數 1,856、`du` 大小不變，`data/downloads/tw_stock/tick/` 沒有歷史檔。
 - **相依**：無，可最先做。
 
-### Phase4-2. 試點：本機抽樣檔案入庫與效能量測 ⬜
+### Phase4-2. 試點：本機抽樣檔案入庫與效能量測 ✅
 
 - **目的**：在全量匯入前驗證 schema 與冪等性，量測壓縮率和查詢速度，決定 chunk 間隔要不要調整。
 - **只取抽樣**（2026-09-18 使用者裁示）：全量入庫走 Phase4-3，而且要等使用者明確要求。
@@ -578,6 +579,26 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 改用 ConnectorX 的 `return_type="arrow"` 再轉 pandas
 - **產出**：本步驟末尾的「量測紀錄」表（含樣本檔數、樣本列數與換算倍數）。
 - **驗證方式**：量測紀錄填寫完整；**抽樣**檔案每個「股票 × 交易日」的 `load_log.source_rows` 與樣本 CSV 列數一致、DB 列數＝`row_count`。
+- **量測紀錄（2026-10-09，寫入 `public.stock_tick`，量完已清空）**：
+  - **樣本**：19 檔 × 2024-05-08～05-10，依當期成交筆數分位挑選（`2618` 最多 54,801 筆、`6655`／`1203` 最少 5 筆），含 `2330`、`2303`（浮點字串格式）、`1101`、`9958`，以及兩檔興櫃（`1294`、`1563`）。
+    原格式截出 155,688 列 → 寫入 **152,826 列**，排除的 2,862 列正好是兩檔興櫃；57 組「股票 × 交易日」的 `source_rows` 與 CSV、DB 列數與 `row_count` **全數一致**。
+  - **寫入速度**：DB 寫入（`replace_day()` 本身）**約 12.8 萬列／秒**；含讀 CSV、正規化、查日 K 的整體 **約 8.9 萬列／秒**。
+    → 全量 10.5 億列推估 **約 3.3 小時**（不含 Phase4-3 依 chunk 切檔與逐 chunk 壓縮的時間）。
+  - **大小**：未壓縮那個 chunk（41,412 列）6.9 MB → 壓縮後 0.57 MB，**約 12 倍**；換算見〈容量推估〉。壓縮一個 chunk 0.03 秒。
+  - **查詢耗時**（各 3 次取中位數；`get_ordered_ticks` 換算全市場＝樣本耗時 × 全市場列數 ÷ 樣本列數）：
+
+    | 交易日 | 樣本列數 | 倍數 | 壓縮前 | 壓縮後 | 換算全市場 | `get_stock_ticks("2330")` |
+    |--------|---------:|-----:|-------:|-------:|-----------:|--------------------------:|
+    | 2024-05-08 | 41,412 | 30.5 | 0.046 s | 0.046 s | **約 1.4 s** | 0.017 s |
+    | 2024-05-09 | 50,755 | 23.0 | 0.054 s | 0.053 s | **約 1.2 s** | 0.016 s |
+    | 2024-05-10 | 60,659 | 20.0 | 0.064 s | 0.063 s | **約 1.3 s** | 0.019 s |
+
+    **遠低於 10 秒門檻**（約 1,000 個交易日的 tick 回測，查詢合計約 20～25 分鐘），不必擴大樣本或改寫查詢。
+    5/9、5/10 那一欄「壓縮後」其實沒壓到，原因見下一點；5/8 壓縮前後幾乎相同，壓縮不拖慢查詢。
+  - **chunk 邊界不是週一**：TimescaleDB 的 7 天 chunk 從 1970-01-01（週四）起算，本次兩個 chunk 是 05-02～05-09、05-09～05-16。
+    `compress_chunks_before(2024-05-11)` 只會壓**整個範圍都早於該日**的 chunk，所以只壓了一個。
+    **Phase4-3 的「逐週」要改成依 chunk 邊界（週四到週三）**，否則每一輪都會留一個沒壓的 chunk，下一輪又要往壓縮過的 chunk 寫。
+  - 清空方式：`TRUNCATE public.stock_tick`、`TRUNCATE public.stock_tick_load_log`（chunk 一併刪除），壓縮 policy 恢復啟用；兩張空表保留。
 - **相依**：Phase1-3、Phase2-1、Phase3-1、Phase4-1（樣本從搬移後的位置取）。
 
 ### Phase4-3. 歷史 CSV 全量匯入與完整性比對 ⬜
@@ -588,7 +609,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **做法**：新增 `scripts/manual/manual_tick_history_import.py`：
   - 參數：`--source-dir`（預設 Phase4-1 搬移後的位置）、`--start-date`、`--end-date`、`--resume`。
   - **開始前 `pause_compression_policy()`，結束（含中斷）時 `resume_compression_policy()`**（`try/finally`）：policy 會在匯入途中壓縮還沒載完的週（見 Phase1-3）。
-  - **逐週處理**：載入一週 → `compress_chunks_before(該週結束)` → 在 log 記錄進度 → 下一週。峰值磁碟用量只會多出一週的未壓縮資料。
+  - **逐 chunk 處理**：載入一個 chunk 的範圍 → `compress_chunks_before(chunk 結束日)` → 在 log 記錄進度 → 下一個。峰值磁碟用量只多出一個 chunk 的未壓縮資料（約 1 GB）。
+    **範圍要對齊 chunk 邊界（週四到週三，從 1970-01-01 起算的 7 天）**，不是日曆週：Phase4-2 實測 `compress_chunks_before()` 只壓整段都早於該日的 chunk。
     歷史檔是「一檔股票一個檔、涵蓋四年」，逐週處理代表每一週都要從 1,856 個檔各取出該週的列：不要每週重讀整個檔（最大的 `2303.csv` 有 1 GB），
     先把每個檔依週切成暫存檔（一次掃完全部），或改成依 `ts` 前綴串流切分，實作時二擇一並記錄峰值暫存空間。
   - `--resume`：以 `stock_tick_load_log` 判斷已完成的「股票 × 交易日」並跳過，可以隨時中斷後重跑。
@@ -710,7 +732,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 |------|------|------|
 | 讀取效能不如 DolphinDB | 用 `pd.read_sql` 或 `SELECT *` 會慢數十倍 | 讀取固定走 ConnectorX 並明列欄位；Phase4-2 設門檻，量過才全量匯入 |
 | 回測結果與 DolphinDB 版不同 | ① 價格由 float32 改成 float64；② 同一時間戳記跨股票的順序由不確定改成固定 | 目前沒有 `Scale.TICK` 策略，也沒有 tick 回測的回歸基準，不影響既有回歸；在 `docs/pipeline/etl-ingestion.md` 記下這兩點語意 |
-| 磁碟寫滿 | 未壓縮的全量資料推估 80～160 GB | Docker Desktop 磁碟上限調到 ≥ 150 GB；匯入逐週壓縮 |
+| 磁碟寫滿 | Phase4-2 實測：全部不壓縮約 175 GB，壓縮後約 14 GB | 匯入逐 chunk 壓縮，峰值只多約 1 GB；Docker 磁碟上限 926 GB（2026-10-09 實查）不必調 |
 | 壓縮 policy 在匯入中途壓縮歷史資料 | policy 以「現在」往回算，2020～2024 的 chunk 全部符合條件，背景 job 會壓縮還在載入的週 | 試點與匯入期間停用 policy、結束後恢復（Phase1-3 的 `pause_／resume_compression_policy()`） |
 | 時區錯位 | 用 `TIMESTAMPTZ` 時，ConnectorX 會回傳 UTC | schema 固定用 `TIMESTAMP`；整合測試驗證 `time` 為 naive 且等於 CSV 原值 |
 | 歷史 CSV 格式不一致 | 歷史格式與 cleaner 格式不同（欄名、欄序、毫秒時間、浮點字串），2026-10-09 已全量盤點 | Phase2-1 的 loader 正規化兩種格式，並以手寫樣本的單元測試涵蓋每一種差異 |
