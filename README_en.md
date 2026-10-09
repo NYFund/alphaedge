@@ -199,6 +199,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Prod Deployment](docs/deployment/prod-deployment.md)   | Building Docker images, running containers, role separation   |
 | [Live Deployment](docs/deployment/live-deployment.md)   | Per-phase live runs, container and cron scheduling, stop and exit codes |
 | [Live Execution Layer](docs/live/execution-layer.md) | How a strategy's execution style (`MARKET`/`LIMIT`) becomes a broker order per session; decision price, parity categories, known limits |
+| [Production Launch Checklist (Stock)](docs/live/production-checklist-stock.md) | Tick-off list before the stock line first connects to production: credentials, risk and capital, alerts and monitoring, day-one dry run, stock-specific items (in Chinese) |
 | [Data Coverage](docs/exchanges/data_coverage.md)        | Data sources, API mapping, start dates and price adjustment   |
 | [Command Usage](docs/commands/command-usage.md)         | Full `update_db` target reference and runnable examples       |
 | [Strategy Development Guide](strategies/README.md) | How to implement strategies in this project                   |
