@@ -55,7 +55,7 @@
 | Phase1-3 | 設定壓縮與壓縮 policy | `core/dao/tw/stock_tick_dao.py` | `timescaledb_information.jobs` 有 compression job；手動 `compress_chunk` 成功 | ⬜ | 相依 Phase1-2 |
 | Phase2-1 | 改寫 `StockTickLoader` 寫入路徑（`COPY`＋冪等） | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py` | 新增的整合測試：同一份 CSV 載入兩次，列數不變 | ⬜ | 相依 Phase1-2 |
 | Phase2-2 | updater 續跑依據由 `tick_metadata.json` 改為 `stock_tick_load_log` | `core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/updaters/stock_tick_updater.py`、`core/pipeline/tw/utils/stock_tick_utils.py` | 以樣本資料模擬中斷後重跑，只爬缺的日期 | ⬜ | 相依 Phase2-1；**一併收窄 `stock_tick_{updater,utils,cleaner,crawler}.py` 的 18 處盲捕**（2026-10-01 由 `暫緩工作彙整.md` S13 移入，見〈附：併入的盲捕收斂〉） |
-| Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-2 |
+| Phase3-1 | 改寫 `StockTickAPI` 讀取路徑 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 四個方法的欄位、dtype、排序符合〈讀取介面契約〉；`tests/test_api_public_interfaces.py` 通過 | ⬜ | 相依 Phase1-1、Phase1-2 |
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ⬜ | 相依 Phase3-1 |
 | Phase4-1 | 盤點 Google 雲端的歷史 CSV | 本文件（盤點紀錄） | 檔案佈局、日期範圍、總列數、欄位格式差異寫入本文件 | ⬜ | **無相依，可最先做**；結果可能改變 Phase2-1 的 CSV 解析 |
 | Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ⬜ | 相依 Phase1-3、Phase2-1、Phase3-1；**只用抽樣，541 檔全量入庫需使用者要求**（見〈範圍界線〉）；動工前確認本機 541 檔已補回 |
@@ -267,6 +267,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 這兩個套件只在 `core/dao/timescale.py`、`core/dao/tw/stock_tick_dao.py` 內惰性 import（分層檢查只允許資料庫驅動出現在 `core/dao/`），比照現行 `dolphindb` 的寫法加註解；`[tool.ruff.lint.per-file-ignores]` 若需要 F401 例外，改指向這兩支 DAO 模組，舊的 tick 例外到 Phase5-2 再移除。
 - **產出**：`pyproject.toml`、`uv.lock`。
 - **驗證方式**：`uv sync --extra tick` 後，`python -c "import psycopg, connectorx"` 成功。
+  **主目錄要連同既有的 extra 一起裝**：`uv sync --extra frontend --extra lab --extra tick`。只寫 `--extra tick` 會把 `frontend`／`lab` 拔掉；
+  不帶 `--no-sync` 的 `uv run` 也會 exact sync 而拔掉沒列的 extra。
 - **相依**：無。
 
 ---
@@ -300,7 +302,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `StockTickDAO` **不繼承 `BaseDAO`**：`BaseDAO` 綁 `sqlite3.Connection`。它自行持有 `connect_tick_db()` 的連線與 `get_connectorx_uri()`，連線所有權沿用 `owns_conn` 慣例。
   - `StockTickLoader.create_db()` 只呼叫 `StockTickDAO.create_tables()`，loader 本身不寫 SQL、不 import `psycopg`。
   - 全部用 `IF NOT EXISTS`／`if_not_exists => TRUE`，重跑不報錯。
-  - 移除 `DEFAULT_TICK_DB_START_TIME`／`DEFAULT_TICK_DB_END_TIME`／`TICK_DB_HASH_PARTITIONS`：hypertable 會自動長出 chunk，不需要預先宣告日期範圍。這也順便解決 DolphinDB 分區只開到 2030-12-31 的隱藏上限。
+  - 移除 `StockTickLoader` 的類別常數 `DEFAULT_TICK_DB_START_TIME`／`DEFAULT_TICK_DB_END_TIME`／`TICK_DB_HASH_PARTITIONS`：hypertable 會自動長出 chunk，不需要預先宣告日期範圍。這也順便解決 DolphinDB 分區只開到 2030-12-31 的隱藏上限。
   - 移除 `setup()` 裡的 `setTSDBCacheEngineSize`，那是 DolphinDB 專用設定。
 - **產出**：`core/dao/tw/stock_tick_dao.py`、`core/pipeline/tw/loaders/stock_tick_loader.py`、`core/config/schema.py`、`core/config/__init__.py`。
 - **驗證方式**：連續呼叫 `create_db()` 兩次不報錯；`SELECT hypertable_name FROM timescaledb_information.hypertables` 回傳 `stock_tick`；`\d stock_tick` 的欄位型別與 DDL 一致。
@@ -369,6 +371,8 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `StockTickUpdater.update()`：
     - 開頭那段「比對 metadata 刪 CSV」改成：CSV 裡每個交易日在 `load_log` 都有紀錄、且 `row_count` 一致，才刪除（`load_log` 的查詢同樣由 `StockTickDAO` 提供）。
     - 結尾的 `update_tick_metadata_from_csv()` 移除。
+    - `setup()` 裡的 `StockTickUtils.generate_tick_metadata_backup()` 呼叫一併移除（該函式本步驟刪除，留著會在建構時就 `AttributeError`）。
+    - 模組說明「資料庫目前的涵蓋範圍以 `tick_metadata.json` 為準」改成以 `stock_tick_load_log` 為準。
   - `generate_tick_metadata_backup()`、`update_tick_metadata_from_csv()`、`load_tick_metadata_stocks()`、`scan_tick_downloads_folder()` 移除。`tick_metadata.json` 檔案本身留到 Phase5-2 再刪，作為對照。
   - `scripts/manual/manual_init_tick_metadata.py` 失去用途，在 Phase5-2 刪除。
   - 模組說明字串（`"""台股 tick 的 DolphinDB 與 metadata 工具"""`）與 class docstring 同步更新。
