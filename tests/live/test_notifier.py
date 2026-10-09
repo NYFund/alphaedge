@@ -445,6 +445,60 @@ def test_stale_run_is_detected() -> None:
     assert "沒有結束紀錄" in statuses[0].problem
 
 
+def test_intraday_phase_is_not_stale_while_the_market_is_open() -> None:
+    """
+    盤中段落本來就從 09:06 跑到 13:19，中午還沒結束是正常的
+
+    沿用 90 分鐘的通用上限的話，它每天 10:36 起都會被誤報成「跑到一半死掉」。
+    """
+
+    noon: datetime.datetime = datetime.datetime(2026, 9, 21, 12, 0)
+    statuses: List[PhaseStatus] = check_phases(
+        [
+            make_row(
+                "intraday",
+                started_at="2026-09-21 09:06:00",
+                ended_at=None,
+                end_reason=None,
+            )
+        ],
+        {"intraday": datetime.time(9, 6)},
+        noon,
+        grace_minutes=15,
+    )
+
+    assert statuses[0].is_healthy is True
+
+
+def test_intraday_phase_still_running_after_its_limit_is_reported() -> None:
+    """超過盤中段落自己的上限仍沒有結束紀錄，照樣判定掛住"""
+
+    late: datetime.datetime = datetime.datetime(2026, 9, 21, 14, 0)
+    statuses: List[PhaseStatus] = check_phases(
+        [
+            make_row(
+                "intraday",
+                started_at="2026-09-21 09:06:00",
+                ended_at=None,
+                end_reason=None,
+            )
+        ],
+        {"intraday": datetime.time(9, 6)},
+        late,
+        grace_minutes=15,
+    )
+
+    assert "沒有結束紀錄" in statuses[0].problem
+
+
+def test_default_table_watches_the_intraday_phase() -> None:
+    """預設段落表要包含盤中段落：它掛掉的話，當天的進場與停損全部停擺"""
+
+    from scripts.live_watchdog import DEFAULT_EXPECTED_PHASES
+
+    assert DEFAULT_EXPECTED_PHASES["intraday"] == datetime.time(9, 6)
+
+
 def test_abnormal_end_reason_is_reported() -> None:
     """非正常結束（對帳不一致、kill switch）同樣要推播"""
 

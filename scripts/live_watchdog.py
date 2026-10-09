@@ -47,6 +47,7 @@ from core.live.notify.factory import build_notifier
 # 而且段落要先做完對帳才會寫紀錄
 DEFAULT_EXPECTED_PHASES: Dict[str, datetime.time] = {
     "open": datetime.time(8, 30),
+    "intraday": datetime.time(9, 6),
     "close": datetime.time(13, 20),
     "after_close": datetime.time(14, 30),
 }
@@ -56,6 +57,11 @@ GRACE_MINUTES: int = 15
 
 # 有開始紀錄但超過這麼久還沒有結束時間，就判定「跑到一半死掉」
 STALE_RUN_MINUTES: int = 90
+
+# 本來就要跑很久的段落另訂上限。盤中段落 09:06 開始、13:19 收線（約 253 分鐘）：
+# 沿用 90 分鐘的話，它每天 10:36 起都會被誤報成「跑到一半死掉」，
+# 然後這個監控就會被靜音
+PHASE_STALE_MINUTES: Dict[str, int] = {"intraday": 270}
 
 # 退出碼：0 正常、1 有異常（已推播）、2 連紀錄庫都開不了
 EXIT_OK: int = 0
@@ -193,7 +199,7 @@ def check_phases(
 
         if not ended_at:
             elapsed: float = _minutes_since(started_at, now)
-            if elapsed > STALE_RUN_MINUTES:
+            if elapsed > PHASE_STALE_MINUTES.get(phase, STALE_RUN_MINUTES):
                 problem = (
                     f"{phase} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
                     "（跑到一半死掉，或卡在等待回報）"
