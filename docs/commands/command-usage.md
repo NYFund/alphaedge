@@ -200,15 +200,15 @@ target or move the start date). Results are written to `results/<StrategyName>/`
 
 ```bash
 # simulation environment (default), stock open phase
-python -m apps.live --strategy MomentumStrategy1 --phase open
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
 # run the full flow without sending orders
-python -m apps.live --strategy MomentumStrategy1 --phase close --dry-run
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase close --dry-run
 # production: both flags are required
-python -m apps.live --strategy MomentumStrategy1 --phase open --production --confirm-production
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open --production --confirm-production
 # manually restore the trading mode (account level when no strategy is named); never schedule this
-python -m apps.live --strategy MomentumStrategy1 --phase open --resume-trading
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open --resume-trading
 # rebuild the attribution ledger from broker positions: plan only first, then rerun with --confirm-resync; no --phase
-python -m apps.live --strategy MomentumStrategy1 --resync-from-broker
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-broker
 ```
 
 | Flag | Description |

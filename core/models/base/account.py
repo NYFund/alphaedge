@@ -57,7 +57,7 @@ class BaseAccount:
         取得庫存**商品檔數**（同一檔加碼多次只算一檔）
 
         `max_holdings` 的語意一律是「檔數」。**不可改回部位筆數**：允許加碼的
-        策略（例如 `MomentumStrategy1`）同一檔加碼兩次就會佔掉兩個名額，
+        策略（例如 `VolumeBreakoutMomentumStrategy`）同一檔加碼兩次就會佔掉兩個名額，
         實際持有檔數比設定少。
         """
 

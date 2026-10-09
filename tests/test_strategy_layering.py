@@ -22,7 +22,9 @@ from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 from tests.conftest import (
     build_futures_quote,
     build_stock_quote,
@@ -185,7 +187,7 @@ def test_futures_base_open_path_builds_orders() -> None:
 def test_stock_constructor_reads_max_holdings_set_after_init() -> None:
     """`max_holdings` 是 `super().__init__()` 之後才填的，建構器必須讀到新值"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
 
     strategy.max_holdings = 1
     assert strategy.make_portfolio_constructor().max_holdings == 1
@@ -215,7 +217,8 @@ def test_constructor_types_match_market() -> None:
     """兩個市場各自拿到對應的建構器"""
 
     assert isinstance(
-        MomentumStrategy1().make_portfolio_constructor(), StockPortfolioConstructor
+        VolumeBreakoutMomentumStrategy().make_portfolio_constructor(),
+        StockPortfolioConstructor,
     )
     assert isinstance(
         MomentumFuturesStrategy().make_portfolio_constructor(),
@@ -249,7 +252,7 @@ def test_strategy_without_signal_hook_raises_clearly() -> None:
 
 # === 平倉／停損：不經過 portfolio 層 ===
 class LayeredClose(LayeredMomentum):
-    """平倉訊號取自持倉的示範策略（對應 `MomentumStrategy1` 的 SELL 分支）"""
+    """平倉訊號取自持倉的示範策略（對應 `VolumeBreakoutMomentumStrategy` 的 SELL 分支）"""
 
     def generate_close_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
         """平掉每檔的第一筆部位，價格用 cur_price——與改寫前同一組欄位"""

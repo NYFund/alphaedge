@@ -20,15 +20,17 @@ pytestmark = pytest.mark.slow
     not Path(TW_STOCK_DB_PATH).exists(), reason="需要 tw_stock.db 才能重跑 LONG 回歸"
 )
 def test_long_regression_snapshot() -> None:
-    """重跑 MomentumStrategy1 並與 baseline 逐筆比對"""
+    """重跑 VolumeBreakoutMomentumStrategy 並與 baseline 逐筆比對"""
 
-    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+    from strategies.stock.volume_breakout_momentum_strategy import (
+        VolumeBreakoutMomentumStrategy,
+    )
     from tests.backtest.make_baseline import BASELINE_END_DATE, BASELINE_START_DATE
 
     baseline_path: Path = SNAPSHOT_DIR / BASELINE_FILE_NAME
     assert baseline_path.exists(), "baseline 不存在，請先執行 make_baseline.py"
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.start_date = BASELINE_START_DATE
     strategy.end_date = BASELINE_END_DATE
 

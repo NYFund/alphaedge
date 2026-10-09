@@ -24,7 +24,7 @@ StrategyLoader: 自動載入頂層 `strategies/` 下所有商品類別的具體�
 **入口只載入指定的策略**（`load()`）：全掃描會 import 每一個策略模組，
 正式環境的實盤行程也就會執行研究中策略的 module-level 程式碼。`load()` 先以 AST
 讀檔找出類別定義在哪個模組（只解析、不執行），再只 import 那幾個模組。
-類別名與檔名之間沒有可靠的對應（`MomentumStrategy1` 在 `momentum_strategy_1.py`），
+類別名與檔名之間沒有可靠的對應（`VolumeBreakoutMomentumStrategy` 在 `volume_breakout_momentum_strategy.py`），
 所以不靠命名慣例推算。
 """
 

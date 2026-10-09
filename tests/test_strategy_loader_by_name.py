@@ -31,10 +31,10 @@ _EXPLODING_SOURCE: str = (
 
 # 繼承既有具體策略：不必在測試裡重寫一整組抽象方法，類別仍「定義在該模組內」
 _GOOD_SOURCE: str = (
-    "from strategies.stock.momentum_strategy_1 import MomentumStrategy1\n"
+    "from strategies.stock.volume_breakout_momentum_strategy import VolumeBreakoutMomentumStrategy\n"
     "\n"
     "\n"
-    "class GoodStrategy(MomentumStrategy1):\n"
+    "class GoodStrategy(VolumeBreakoutMomentumStrategy):\n"
     '    """可實例化的策略"""\n'
 )
 

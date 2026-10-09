@@ -93,7 +93,7 @@ core/strategies/
 ├── stock/                         # 股票策略
 │   ├── __init__.py
 │   ├── base.py                    # BaseStockStrategy（設定 self.market ＋ self.instrument_type）
-│   ├── momentum_strategy_1.py     # 動能策略 1（日線，LONG 回歸 baseline 的唯一來源）
+│   ├── volume_breakout_momentum_strategy.py     # 量能突破動能策略（日線，LONG 回歸 baseline 的唯一來源）
 │   ├── foreign_selling_reversal_short_strategy.py  # 外資大賣強勢股當沖放空（日線，SHORT）
 │   ├── investment_trust_momentum_swing_strategy.py  # 投信認同的強勢股短波段（日線，LONG）
 │   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；目前只有日 K 近似）
@@ -112,7 +112,7 @@ core/portfolio/                    # 部位建構層（回測與實盤共用，�
 > 所以美股策略日後會放進 `stock/` 而不是新開 `us/`（見
 > [命名軸線](../../docs/dev/naming-axes.md)〈落地位置〉）。
 
-> **策略是可以刪的。** 動能策略 2~5（`MomentumStrategy1` 的 Tick 級別、均線動能、開盤進出等變形）與 `OvernightLeadEventStrategy`（2330 隔夜訊號）都已刪除：前者維護成本高於價值，後者的特徵與目標在時序上對不齊（美股盤在台北時間當日清晨才收，那段跳空在進場時已經發生完畢），研究端的探索仍留在 `strategy_lab/strategies/tsmc_overnight_signal/`。`MomentumStrategy1` 是 LONG 回歸 baseline 的唯一來源，不可刪。
+> **策略是可以刪的。** 動能策略 2~5（`VolumeBreakoutMomentumStrategy` 的 Tick 級別、均線動能、開盤進出等變形）與 `OvernightLeadEventStrategy`（2330 隔夜訊號）都已刪除：前者維護成本高於價值，後者的特徵與目標在時序上對不齊（美股盤在台北時間當日清晨才收，那段跳空在進場時已經發生完畢），研究端的探索仍留在 `strategy_lab/strategies/tsmc_overnight_signal/`。`VolumeBreakoutMomentumStrategy` 是 LONG 回歸 baseline 的唯一來源，不可刪。
 
 ## 如何撰寫新策略
 
@@ -793,8 +793,8 @@ AlphaEdge 使用 `StrategyLoader` 自動載入策略。它以 `pkgutil.iter_modu
 執行回測時，使用策略的**類別名稱**（Class Name）來指定策略：
 
 ```bash
-# 如果策略類別名稱是 MomentumStrategy1，則使用 "MomentumStrategy1"
-python -m apps.backtest --strategy MomentumStrategy1
+# 如果策略類別名稱是 VolumeBreakoutMomentumStrategy，則使用 "VolumeBreakoutMomentumStrategy"
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 ## 使用策略進行回測
@@ -813,11 +813,11 @@ python -m apps.backtest --strategy <StrategyName>
 ### 使用範例
 
 ```bash
-# 執行回測，使用名為 "MomentumStrategy1" 的策略（動能 1 日線）
-python -m apps.backtest --strategy MomentumStrategy1
+# 執行回測，使用名為 "VolumeBreakoutMomentumStrategy" 的策略（動能 1 日線）
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 
 # 執行實盤（必須指定段落；目前只在模擬環境演練過）
-python -m apps.live --strategy MomentumStrategy1 --phase open
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
 ```
 
 ### 回測結果
@@ -825,7 +825,7 @@ python -m apps.live --strategy MomentumStrategy1 --phase open
 回測完成後，結果會儲存在 `results/<策略>/` 目錄（檔名一律以同一個名稱為前綴）。
 
 ⚠️ **`<策略>` 是 `strategy.strategy_name`，不是類別名**——上面 `--strategy` 吃的是類別名
-（`MomentumStrategy1`），而輸出目錄用的是 `strategy_name`（`Momentum-1`），兩者可以不同。
+（`VolumeBreakoutMomentumStrategy`），而輸出目錄用的是 `strategy_name`（`Volume-Breakout-Momentum`），兩者可以不同。
 以下的 `<策略>` 一律指後者：
 
 1. **報表 CSV**:
@@ -846,7 +846,7 @@ python -m apps.live --strategy MomentumStrategy1 --phase open
 
 ## 完整範例
 
-參考 `strategies/stock/momentum_strategy_1.py` 查看完整的策略實作範例。該範例展示了：
+參考 `strategies/stock/volume_breakout_momentum_strategy.py` 查看完整的策略實作範例。該範例展示了：
 
 - 如何設定策略參數
 - 如何實作開倉、平倉、停損邏輯

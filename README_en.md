@@ -277,7 +277,7 @@ alternatively prefix commands with `uv run --no-sync`, e.g. `uv run --no-sync py
 **Step 2: Run a backtest**
 
 ```bash
-python -m apps.backtest --strategy MomentumStrategy1
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 - `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
@@ -300,7 +300,7 @@ Open `http://localhost:8501`. Leave the frontend running and use another termina
 One command builds and starts two containers: `core` runs one backtest and exits, `frontend` keeps serving the page.
 
 ```bash
-# Build images and start (default strategy: MomentumStrategy1)
+# Build images and start (default strategy: VolumeBreakoutMomentumStrategy)
 docker compose up --build
 
 # Use a different strategy
@@ -333,7 +333,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 docker run --rm \
   -v "$(pwd)/data:/app/data:ro" \
   -v "$(pwd)/results:/app/results" \
-  alphaedge-core --strategy MomentumStrategy1
+  alphaedge-core --strategy VolumeBreakoutMomentumStrategy
 ```
 
 The image has no database, so mount the host `data/` read-only; results are written back to the host

@@ -191,15 +191,15 @@ python -m apps.backtest --strategy <StrategyClassName> --start 2024-01-01 --end 
 
 ```bash
 # 模擬環境（預設）跑台股開盤段
-python -m apps.live --strategy MomentumStrategy1 --phase open
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
 # 走完整流程但不送出委託
-python -m apps.live --strategy MomentumStrategy1 --phase close --dry-run
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase close --dry-run
 # 正式環境：兩個旗標缺一不可
-python -m apps.live --strategy MomentumStrategy1 --phase open --production --confirm-production
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open --production --confirm-production
 # 人工恢復交易模式（不給策略名時恢復帳戶層）；不要放進排程
-python -m apps.live --strategy MomentumStrategy1 --phase open --resume-trading
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open --resume-trading
 # 以券商部位重建歸屬帳：先只列計畫，確認後加 --confirm-resync 再跑一次；不可帶 --phase
-python -m apps.live --strategy MomentumStrategy1 --resync-from-broker
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-broker
 ```
 
 | 旗標 | 說明 |

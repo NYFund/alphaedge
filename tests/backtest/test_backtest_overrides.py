@@ -10,7 +10,9 @@ from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.config import TW_STOCK_DB_PATH
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 from tests.entry_sandbox import run_isolated
 
 """
@@ -25,7 +27,7 @@ from tests.entry_sandbox import run_isolated
 def test_partial_override_keeps_the_other_defaults() -> None:
     """只給起日時，迄日與資金沿用策略預設"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     default_end: datetime.date = strategy.end_date
     default_capital: float = strategy.init_capital
 
@@ -43,7 +45,7 @@ def test_start_after_the_default_end_is_refused() -> None:
     逐欄驗證（只看 start 自己合不合法）會放過這種組合。
     """
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     later_than_end: datetime.date = strategy.end_date + datetime.timedelta(days=1)
 
     with pytest.raises(InvalidBacktestOverridesError, match="晚於迄日"):
@@ -53,7 +55,7 @@ def test_start_after_the_default_end_is_refused() -> None:
 def test_refused_override_leaves_the_strategy_untouched() -> None:
     """驗證不過時策略維持原狀，不可以只改了一半"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     before: tuple = (strategy.start_date, strategy.end_date, strategy.init_capital)
 
     with pytest.raises(InvalidBacktestOverridesError):
@@ -69,7 +71,7 @@ def test_refused_override_leaves_the_strategy_untouched() -> None:
 @pytest.mark.parametrize(
     ("strategy_cls", "too_early"),
     [
-        (MomentumStrategy1, datetime.date(2012, 12, 31)),
+        (VolumeBreakoutMomentumStrategy, datetime.date(2012, 12, 31)),
         (MomentumFuturesStrategy, datetime.date(2014, 12, 31)),
     ],
     ids=["stock-before-2013", "futures-before-2015"],
@@ -88,7 +90,7 @@ def test_non_positive_capital_is_refused(capital: float) -> None:
     """資金為 0 或負數時帳戶一開始就無法下單"""
 
     with pytest.raises(InvalidBacktestOverridesError, match="初始資金"):
-        BacktestOverrides(capital=capital).apply_to(MomentumStrategy1())
+        BacktestOverrides(capital=capital).apply_to(VolumeBreakoutMomentumStrategy())
 
 
 # === 組裝出來的元件拿到新值 ===
@@ -106,7 +108,7 @@ def no_data_setup(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize(
     "strategy_cls",
-    [MomentumStrategy1, MomentumFuturesStrategy],
+    [VolumeBreakoutMomentumStrategy, MomentumFuturesStrategy],
     ids=["stock", "futures"],
 )
 def test_components_are_built_with_the_overridden_values(
@@ -132,7 +134,7 @@ def test_components_are_built_with_the_overridden_values(
 def test_no_overrides_keeps_the_strategy_defaults(no_data_setup: None) -> None:
     """不帶覆寫時與原本完全相同（回歸雙線的前提）"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     defaults: tuple = (strategy.start_date, strategy.end_date, strategy.init_capital)
 
     backtester: Backtester = build_backtester(strategy, write_artifacts=False)
@@ -159,7 +161,7 @@ def test_invalid_overrides_exit_with_usage_error(flags: List[str]) -> None:
     """不合法的覆寫是用法錯誤（退出碼 2），在跑任何回測之前就結束"""
 
     result: subprocess.CompletedProcess = run_isolated(
-        ["-m", "apps.backtest", "--strategy", "MomentumStrategy1", *flags]
+        ["-m", "apps.backtest", "--strategy", "VolumeBreakoutMomentumStrategy", *flags]
     )
 
     assert result.returncode == 2
@@ -176,7 +178,7 @@ def test_trades_fall_inside_the_overridden_range() -> None:
     start: datetime.date = datetime.date(2024, 3, 1)
     end: datetime.date = datetime.date(2024, 4, 30)
     backtester: Backtester = build_backtester(
-        MomentumStrategy1(),
+        VolumeBreakoutMomentumStrategy(),
         write_artifacts=False,
         overrides=BacktestOverrides(start=start, end=end),
     )

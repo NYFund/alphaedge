@@ -53,7 +53,7 @@ docker run --rm \
   -v "$(pwd)/results:/app/results" \
   -v "$(pwd)/logs:/app/logs" \
   --env-file .env \
-  alphaedge-core --strategy MomentumStrategy1
+  alphaedge-core --strategy VolumeBreakoutMomentumStrategy
 ```
 
 映像的 `ENTRYPOINT` 是 `python -m apps.backtest`（`CMD` 預設 `--help`），`docker run` 映像名稱之後的參數直接交給回測入口。
@@ -94,7 +94,7 @@ STRATEGY=MomentumFuturesStrategy docker compose up core   # 換策略
 
 | 服務 | 掛載 | 說明 |
 |------|------|------|
-| `core` | `./data` → `/app/data`（唯讀）、`./logs` → `/app/logs`、具名 volume `alphaedge_results` → `/app/results` | 跑一場回測就結束；策略由 `STRATEGY` 決定（compose 解析設定檔時替換，可寫在命令列前綴或 `.env`，不設時為 `MomentumStrategy1`） |
+| `core` | `./data` → `/app/data`（唯讀）、`./logs` → `/app/logs`、具名 volume `alphaedge_results` → `/app/results` | 跑一場回測就結束；策略由 `STRATEGY` 決定（compose 解析設定檔時替換，可寫在命令列前綴或 `.env`，不設時為 `VolumeBreakoutMomentumStrategy`） |
 | `frontend` | 具名 volume `alphaedge_results` → `/results` | 開 `http://localhost:8501` |
 
 回測結果放在**具名 volume** 而非主機的 `results/`，要在主機上看 CSV 請改用第 3、4 節的 `docker run`。

@@ -316,7 +316,7 @@ def test_live_holdings_fit_within_single_symbol_cap() -> None:
             f"超過單一標的或單筆上限 {cap:.0%}，每張買單都會被擋下"
         )
 
-    assert "MomentumStrategy1" in checked
+    assert "VolumeBreakoutMomentumStrategy" in checked
 
 
 def test_existing_exposure_is_counted(dao_factory: object = None) -> None:

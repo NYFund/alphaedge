@@ -128,7 +128,7 @@ def test_order_is_persisted_before_it_reaches_the_broker(
     fake_broker.drop_connection_after = 0
 
     with pytest.raises(ConnectionError):
-        oms.submit(make_order(), "MomentumStrategy1")
+        oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     rows: List[Dict[str, Any]] = dao.get_unfinished_orders(TODAY)
     persisted: Any = dao.conn.execute(
@@ -151,7 +151,7 @@ def test_failed_submit_is_not_retried(
     fake_broker.drop_connection_after = 0
 
     with pytest.raises(ConnectionError):
-        oms.submit(make_order(), "MomentumStrategy1")
+        oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     assert fake_broker.placed_count == 1
 
@@ -161,7 +161,7 @@ def test_successful_submit_records_broker_ids(
 ) -> None:
     """送出成功後要回填券商編號與狀態"""
 
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     assert ticket.status is LiveOrderStatus.SUBMITTED
     assert ticket.broker_seqno is not None
@@ -170,7 +170,7 @@ def test_successful_submit_records_broker_ids(
         "SELECT strategy_name, custom_field, status FROM live_order"
     ).fetchone()
     assert row == (
-        "MomentumStrategy1",
+        "VolumeBreakoutMomentumStrategy",
         oms.compress(ticket.client_order_id),
         "SUBMITTED",
     )
@@ -188,7 +188,7 @@ def test_dry_run_never_reaches_the_broker(
     oms: OrderManager = OrderManager(
         fake_broker, dao, "run1", run_index=1, dry_run=True, now_provider=lambda: NOW
     )
-    oms.submit(make_order(), "MomentumStrategy1")
+    oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     assert fake_broker.placed_count == 0
     assert dao.conn.execute("SELECT dry_run FROM live_order").fetchone()[0] == 1
@@ -274,7 +274,7 @@ def test_transition_history_is_append_only(
 ) -> None:
     """轉移歷史逐筆累加，是事後重建時序的唯一依據"""
 
-    oms.submit(make_order(), "MomentumStrategy1")
+    oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
     rows: List[Any] = dao.conn.execute(
         "SELECT seq, to_status FROM live_order_event ORDER BY seq"
     ).fetchall()
@@ -289,7 +289,9 @@ def test_fills_update_the_ticket_and_are_persisted(
     """成交要更新委託並寫進 `live_fill`"""
 
     fake_broker.fill_ratio = 0.5
-    ticket: OrderTicket = oms.submit(make_order(volume=4), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(
+        make_order(volume=4), "VolumeBreakoutMomentumStrategy"
+    )
 
     fills: List[ExecutionReport] = oms.drain_executions()
 
@@ -308,7 +310,9 @@ def test_duplicate_fills_are_ignored(
     重複記一筆成交等於帳上多了一個不存在的部位。
     """
 
-    ticket: OrderTicket = oms.submit(make_order(volume=2), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(
+        make_order(volume=2), "VolumeBreakoutMomentumStrategy"
+    )
     report: ExecutionReport = ExecutionReport(
         broker_seqno=ticket.broker_seqno or "",
         broker_trade_id="T999",
@@ -339,7 +343,9 @@ def test_average_fill_price_is_volume_weighted(
     """
 
     fake_broker.fill_ratio = 0.0
-    ticket: OrderTicket = oms.submit(make_order(volume=3), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(
+        make_order(volume=3), "VolumeBreakoutMomentumStrategy"
+    )
     for trade_id, price, volume in [("T1", 1000.0, 1), ("T2", 1006.0, 2)]:
         fake_broker.execution_queue.put(
             ExecutionReport(
@@ -397,7 +403,7 @@ def test_pending_submit_response_still_persists_the_broker_seqno(
     """
 
     fake_broker.ack_on_submit = False
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     row: Any = dao.conn.execute(
         "SELECT status, broker_seqno FROM live_order WHERE client_order_id = ?",
@@ -412,7 +418,7 @@ def test_new_order_ack_moves_pending_submit_to_submitted(
     """新單確認回報把委託推到 SUBMITTED"""
 
     fake_broker.ack_on_submit = False
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     fake_broker.execution_queue.put(
         OrderStatusEvent(
@@ -435,7 +441,7 @@ def test_cancel_report_before_the_ack_is_accepted(
     """
 
     fake_broker.ack_on_submit = False
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     fake_broker.execution_queue.put(
         OrderStatusEvent(
@@ -453,7 +459,7 @@ def test_late_ack_does_not_move_a_filled_order_back(
 ) -> None:
     """確認晚於成交到達時不可倒退：已成交的單不會被改回已送出"""
 
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
     oms.drain_executions()
     assert ticket.status is LiveOrderStatus.FILLED
 
@@ -473,7 +479,7 @@ def test_rejection_event_moves_ticket_to_rejected(
     """券商的失敗回報要反映成拒單"""
 
     fake_broker.fill_ratio = 0.0
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     fake_broker.execution_queue.put(
         OrderStatusEvent(
@@ -500,7 +506,7 @@ def test_contradictory_event_does_not_drop_the_rest_of_the_queue(
     """
 
     fake_broker.fill_ratio = 1.0
-    filled: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    filled: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
     oms.drain_executions()
 
     # 已成交的單又收到拒單事件（矛盾），後面接一筆正常成交
@@ -512,7 +518,9 @@ def test_contradictory_event_does_not_drop_the_rest_of_the_queue(
             op_msg="不該發生",
         )
     )
-    other: OrderTicket = oms.submit(make_order(symbol="2317"), "MomentumStrategy1")
+    other: OrderTicket = oms.submit(
+        make_order(symbol="2317"), "VolumeBreakoutMomentumStrategy"
+    )
     fills: List[ExecutionReport] = oms.drain_executions()
 
     assert filled.status is LiveOrderStatus.FILLED  # 矛盾的那筆沒有改到它
@@ -533,7 +541,7 @@ def test_cancel_skips_terminal_orders(
     """已終結的委託不送撤單請求"""
 
     fake_broker.fill_ratio = 1.0
-    oms.submit(make_order(), "MomentumStrategy1")
+    oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
     oms.drain_executions()
 
     assert oms.cancel_open_orders() == []
@@ -546,8 +554,8 @@ def test_cancel_filters_by_timing(oms: OrderManager, fake_broker: FakeBroker) ->
     fake_broker.fill_ratio = 0.0
     open_order: StockOrder = make_order()
     open_order.timing = ExecutionTiming.AT_OPEN
-    oms.submit(open_order, "MomentumStrategy1")
-    oms.submit(make_order(symbol="2317"), "MomentumStrategy1")  # AT_CLOSE
+    oms.submit(open_order, "VolumeBreakoutMomentumStrategy")
+    oms.submit(make_order(symbol="2317"), "VolumeBreakoutMomentumStrategy")  # AT_CLOSE
 
     cancelled: List[OrderTicket] = oms.cancel_open_orders(ExecutionTiming.AT_CLOSE)
 
@@ -564,8 +572,8 @@ def test_cancel_failure_does_not_stop_the_rest(
     """
 
     fake_broker.fill_ratio = 0.0
-    oms.submit(make_order(), "MomentumStrategy1")
-    oms.submit(make_order(symbol="2317"), "MomentumStrategy1")
+    oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+    oms.submit(make_order(symbol="2317"), "VolumeBreakoutMomentumStrategy")
 
     original: Callable[..., Any] = fake_broker.cancel_order
     calls: List[int] = []
@@ -590,7 +598,7 @@ def test_recover_matches_by_seqno(
     """有券商序號的委託直接對應"""
 
     fake_broker.fill_ratio = 0.0
-    ticket: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     fresh: OrderManager = OrderManager(
         fake_broker, dao, "run2", run_index=2, now_provider=lambda: NOW
@@ -612,7 +620,7 @@ def test_recover_only_takes_over_this_process_strategies(
     """
 
     fake_broker.fill_ratio = 0.0
-    oms.submit(make_order(), "MomentumStrategy1")
+    oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
 
     futures_line: OrderManager = OrderManager(
         fake_broker,
@@ -639,8 +647,8 @@ def test_recover_skips_a_contradicting_order_instead_of_aborting(
     """
 
     fake_broker.fill_ratio = 0.0
-    first: OrderTicket = oms.submit(make_order(), "MomentumStrategy1")
-    oms.submit(make_order(symbol="2317"), "MomentumStrategy1")
+    first: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+    oms.submit(make_order(symbol="2317"), "VolumeBreakoutMomentumStrategy")
     # 券商端回報的狀態比本地紀錄還早（SUBMITTED → PENDING_SUBMIT 是倒退）
     fake_broker.tickets[first.client_order_id].status = LiveOrderStatus.PENDING_SUBMIT
 
@@ -668,7 +676,7 @@ def test_recover_marks_unknown_orders_failed_without_resubmitting(
         {
             "client_order_id": "run1-0009",
             "run_id": "run1",
-            "strategy_name": "MomentumStrategy1",
+            "strategy_name": "VolumeBreakoutMomentumStrategy",
             "symbol": "2330",
             "action": "Buy",
             "position_type": "LONG",
@@ -695,14 +703,16 @@ def test_ambiguous_fuzzy_match_degrades_instead_of_guessing(
     """模糊比對到多筆時**不猜**，一律標成 `FAILED` 並降級（理由見模組說明）"""
 
     fake_broker.fill_ratio = 0.0
-    oms.submit(make_order(), "MomentumStrategy1")
-    oms.submit(make_order(), "MomentumStrategy1")  # 同標的同價量，刻意製造歧義
+    oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+    oms.submit(
+        make_order(), "VolumeBreakoutMomentumStrategy"
+    )  # 同標的同價量，刻意製造歧義
 
     dao.upsert_order(
         {
             "client_order_id": "run1-0009",
             "run_id": "run1",
-            "strategy_name": "MomentumStrategy1",
+            "strategy_name": "VolumeBreakoutMomentumStrategy",
             "symbol": "2330",
             "action": "Buy",
             "position_type": "LONG",

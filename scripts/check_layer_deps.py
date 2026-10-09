@@ -106,7 +106,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.after_close", 5, "實盤／盤後作業", False),
     ("core.live.factory", 6, "組裝層", False),
     # 策略「契約」（抽象基底與其套件門面）是引擎、factory、報表都要認得的介面，
-    # 與可插拔 model 同層；具體策略（momentum_strategy_1 等）才是策略層。
+    # 與可插拔 model 同層；具體策略（volume_breakout_momentum_strategy 等）才是策略層。
     # 引擎若 import 到任何具體策略，仍會被列為反向相依
     ("core.strategies.base", 4, "策略契約", False),
     ("core.strategies.stock.base", 4, "策略契約", False),

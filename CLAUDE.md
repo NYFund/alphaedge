@@ -76,9 +76,9 @@
 4. 策略類別的 class docstring 用條列描述交易邏輯，區塊固定為「買進條件 / 賣出條件 / 停損條件」，並註明未實作的部分：
 
    ```python
-   class MomentumStrategy1(BaseStockStrategy):
+   class VolumeBreakoutMomentumStrategy(BaseStockStrategy):
        """
-       動能策略 1（日線）
+       量能突破動能策略（日線）
 
        買進條件（全部滿足）：
        - 當日收盤相對「前一交易日」收盤漲幅 ≥ 門檻（預設 9%）
@@ -144,7 +144,7 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 | 函式 / 變數 | `snake_case`；查詢類前綴 `get_`、設定類 `setup_`、**Alpha 層產生訊號 `generate_*_signals`**、引擎契約 `check_*_signal`（由基底提供，策略不實作）、計算 `calculate_` | `get_stock_price()`、`generate_open_signals()` |
 | 模組私有 | 前綴底線 | `_drop_explained()`、`_PROJECT_ROOT` |
 | 常數 | `UPPER_SNAKE_CASE`，策略參數放 class 層級常數並附中文單位註解 | `MIN_VOLUME_LOTS: int = 5000  # 最小成交量（張）` |
-| 策略類別 | 類別名即策略識別名稱，需與入口 `--strategy` 的值對應 | `MomentumStrategy1` |
+| 策略類別 | 類別名即策略識別名稱，需與入口 `--strategy` 的值對應 | `VolumeBreakoutMomentumStrategy` |
 
 ### 2.7 常數與 Enum
 

@@ -16,7 +16,9 @@ from core.live.trader import LiveTrader
 from core.market.tw.market_calendar import MarketCalendar
 from core.models.stock.trading_list import DayTradeListSnapshot
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 
 from .conftest import FakeBroker
 from .test_live_factory_and_entry import LiveStockStrategy
@@ -28,7 +30,7 @@ from .test_live_factory_and_entry import LiveStockStrategy
 
 1. 實盤只抓 `context.symbols` 的報價，而全市場掃描型的策略沒有宣告標的池——
    拿不到任何報價，永遠不會有訊號。
-2. `MomentumStrategy1` 的「前一交易日」查的是依回測區間預建的清單；實盤日期超出清單時，
+2. `VolumeBreakoutMomentumStrategy` 的「前一交易日」查的是依回測區間預建的清單；實盤日期超出清單時，
    平移會落到清單最後一天（一年多前），拿那天的收盤當「昨收」算漲幅。
 """
 
@@ -45,7 +47,9 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # === 策略本身 ===
-@pytest.mark.parametrize("strategy_class", [MomentumStrategy1, MomentumFuturesStrategy])
+@pytest.mark.parametrize(
+    "strategy_class", [VolumeBreakoutMomentumStrategy, MomentumFuturesStrategy]
+)
 def test_rehearsal_strategies_pass_the_live_readiness_check(
     strategy_class: Any,
 ) -> None:
@@ -59,7 +63,7 @@ def test_previous_trading_date_beyond_the_prebuilt_list_asks_the_database(
 ) -> None:
     """清單依回測區間預建；實盤日期超出清單時要回頭查資料庫，不可平移到清單最後一天"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.trading_days = [datetime.date(2025, 5, 29), datetime.date(2025, 5, 30)]
     asked: List[datetime.date] = []
 

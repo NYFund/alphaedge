@@ -278,7 +278,7 @@ uv sync
 **步驟 2：執行回測**
 
 ```bash
-python -m apps.backtest --strategy MomentumStrategy1
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 - `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
@@ -301,7 +301,7 @@ streamlit run frontend/app.py
 一個指令建好並啟動兩個容器：`core` 跑完一次回測就結束，`frontend` 會持續提供網頁。
 
 ```bash
-# 建立映像並啟動（預設策略為 MomentumStrategy1）
+# 建立映像並啟動（預設策略為 VolumeBreakoutMomentumStrategy）
 docker compose up --build
 
 # 換成其他策略
@@ -333,7 +333,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 docker run --rm \
   -v "$(pwd)/data:/app/data:ro" \
   -v "$(pwd)/results:/app/results" \
-  alphaedge-core --strategy MomentumStrategy1
+  alphaedge-core --strategy VolumeBreakoutMomentumStrategy
 ```
 
 映像不含資料庫，所以要唯讀掛入本機 `data/`；結果寫回本機 `results/`，否則容器結束時會跟著消失。

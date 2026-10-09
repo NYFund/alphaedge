@@ -59,7 +59,7 @@ def add_snapshot(
     source: str,
     symbol: str,
     volume: int,
-    strategy_name: str = "MomentumStrategy1",
+    strategy_name: str = "VolumeBreakoutMomentumStrategy",
     direction: str = "LONG",
 ) -> None:
     """寫一列部位快照"""
@@ -164,7 +164,7 @@ def test_locally_closed_positions_are_not_counted_as_wiped(
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             "lot-1",
-            "MomentumStrategy1",
+            "VolumeBreakoutMomentumStrategy",
             "2330",
             "LONG",
             5,

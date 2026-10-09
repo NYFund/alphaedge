@@ -37,7 +37,7 @@ _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 
 # 股票開盤段與盤後段的策略：`IntradayMomentumStrategy` 隔天開盤出場在開盤段，
 # 盤後對帳與快照也要涵蓋它；盤中進場與停損由 `stock-intraday` 另一個行程負責
-_STOCK_STRATEGIES: str = "MomentumStrategy1,IntradayMomentumStrategy"
+_STOCK_STRATEGIES: str = "VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy"
 
 # 標籤後綴 → (台北時, 台北分, `python` 之後的參數)
 _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
@@ -86,7 +86,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            "VolumeBreakoutMomentumStrategy",
             "--phase",
             "close",
         ],
@@ -143,7 +143,14 @@ _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
         0,
         [
             ["-m", "apps.update_db"],
-            ["-m", "apps.live", "--strategy", "MomentumStrategy1", "--phase", "parity"],
+            [
+                "-m",
+                "apps.live",
+                "--strategy",
+                "VolumeBreakoutMomentumStrategy",
+                "--phase",
+                "parity",
+            ],
             [
                 "-m",
                 "apps.live",

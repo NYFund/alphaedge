@@ -380,7 +380,7 @@ def test_live_ready_strategies_pass_the_stop_loss_check() -> None:
         checked.append(name)
         assert check_schedule_conflicts(strategy) is None, name
 
-    assert "MomentumStrategy1" in checked
+    assert "VolumeBreakoutMomentumStrategy" in checked
 
 
 # === 鉤子段落解析 ===

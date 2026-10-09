@@ -36,7 +36,9 @@ def skip_dataset_loading(monkeypatch: pytest.MonkeyPatch) -> None:
 def make_strategy(is_tick_triggered: bool, scale: str) -> BaseStrategy:
     """取一支真實策略再改旗標；不自造假策略，避免與真實基底漂移"""
 
-    strategy: BaseStrategy = StrategyLoader.load_strategies()["MomentumStrategy1"]()
+    strategy: BaseStrategy = StrategyLoader.load_strategies()[
+        "VolumeBreakoutMomentumStrategy"
+    ]()
     strategy.is_tick_triggered = is_tick_triggered
     strategy.scale = scale
     strategy.start_date = datetime.date(2024, 1, 2)

@@ -13,7 +13,9 @@ from core.models import BrokerAccountSnapshot
 from core.portfolio.aggregation import check_quota_against_equity
 from core.strategies.base import BaseStrategy
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 
 """
 額度檢查會不會通過？——連模擬環境唯讀核對
@@ -57,7 +59,7 @@ def build_quotas(which: str) -> Dict[str, float]:
 
     strategies: List[BaseStrategy] = []
     if which in ("stock", "both"):
-        strategies.append(MomentumStrategy1())
+        strategies.append(VolumeBreakoutMomentumStrategy())
     if which in ("futures", "both"):
         strategies.append(MomentumFuturesStrategy())
 

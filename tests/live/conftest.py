@@ -283,7 +283,7 @@ def make_ticket() -> Callable[..., OrderTicket]:
         action: Action = Action.BUY,
         volume: int = 2,
         price: float = 1000.0,
-        strategy_name: str = "MomentumStrategy1",
+        strategy_name: str = "VolumeBreakoutMomentumStrategy",
     ) -> OrderTicket:
         return OrderTicket(
             client_order_id=f"run1-{next(counter):04d}",

@@ -26,7 +26,7 @@ class Signal:
     - `order_price` 是要送出去的委託價，每個訊號都有。
     - `sizing_price` 只給開倉算量用，期貨（走保證金）與平倉（數量取自持倉）都是 None。
 
-    以 `MomentumStrategy1` 的開倉為例，算量用 `quote.close`、下單價用 `quote.cur_price`。
+    以 `VolumeBreakoutMomentumStrategy` 的開倉為例，算量用 `quote.close`、下單價用 `quote.cur_price`。
     兩者在現行資料源恰好同值（`Scale.DAY` 與 `Scale.TICK` 都讓 `cur_price` 等於
     `close`），但那是**資料源的實作巧合，不是型別契約**——`BaseQuote` 的
     `cur_price` 與 `close` 是兩個獨立欄位。合併成一欄的話，哪天資料源讓兩者分家，

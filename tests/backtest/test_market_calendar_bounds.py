@@ -274,9 +274,14 @@ def test_strategy_prefetch_window_matches_the_calendar_bound() -> None:
     等於把「交易日集合一次建立」的優化悄悄關掉——綁住的是策略這一邊。
     """
 
-    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+    from strategies.stock.volume_breakout_momentum_strategy import (
+        VolumeBreakoutMomentumStrategy,
+    )
 
-    assert MomentumStrategy1.CALENDAR_LOOKBACK_DAYS >= MarketCalendar.MAX_LOOKBACK_DAYS
+    assert (
+        VolumeBreakoutMomentumStrategy.CALENDAR_LOOKBACK_DAYS
+        >= MarketCalendar.MAX_LOOKBACK_DAYS
+    )
 
 
 def test_datafeed_setup_survives_a_strategy_without_dates() -> None:

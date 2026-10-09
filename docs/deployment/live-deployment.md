@@ -46,7 +46,7 @@
 
 ```bash
 docker compose --profile live build live
-docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase open
+docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStrategy --phase open
 ```
 
 | 設定 | 為什麼 |
@@ -90,11 +90,11 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 ```cron
 CRON_TZ=Asia/Taipei
 0  8 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db
-30 8 * * 1-5  ... run --rm live --strategy MomentumStrategy1 --phase open
+30 8 * * 1-5  ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
-20 13 * * 1-5 ... run --rm live --strategy MomentumStrategy1 --phase close
+20 13 * * 1-5 ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase close
 28 13 * * 1-5 ... run --rm live --strategy MomentumFuturesStrategy --phase close
-30 14 * * 1-5 ... run --rm live --strategy MomentumStrategy1 --phase after_close
+30 14 * * 1-5 ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase after_close
 35 14 * * 1-5 ... run --rm live --strategy MomentumFuturesStrategy --phase after_close
 */5 8-14 * * 1-5 cd /path/to/AlphaEdge && uv run --no-sync python -m scripts.live_watchdog
 ```

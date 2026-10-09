@@ -212,7 +212,7 @@ def make_broker_ticket(volume: int = 2, price: float = 1000.0) -> OrderTicket:
     return OrderTicket(
         client_order_id="run1-0001",
         custom_field="010001",
-        strategy_name="MomentumStrategy1",
+        strategy_name="VolumeBreakoutMomentumStrategy",
         order=StockOrder(
             stock_id="2330",
             action=Action.BUY,

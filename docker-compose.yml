@@ -9,7 +9,7 @@ services:
     # compose **解析設定檔時**由 shell 環境或 `.env` 替換的，與容器的
     # `environment` 無關。寫在 environment 裡不會改變啟動參數，只會讓人以為改了。
     # 要換策略：`STRATEGY=XXX docker compose up core`，或寫進 `.env`
-    command: ["--strategy", "${STRATEGY:-MomentumStrategy1}"]
+    command: ["--strategy", "${STRATEGY:-VolumeBreakoutMomentumStrategy}"]
     volumes:
       - alphaedge_results:/app/results
       # 回測要讀 `data/db/tw_stock.db`。映像裡沒有資料庫，不掛就會在
@@ -20,7 +20,7 @@ services:
       - ./logs:/app/logs
 
   # 實盤：**不常駐**，由主機排程逐段落啟動（見 docs/deployment/live-deployment.md）：
-  #   docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase open
+  #   docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStrategy --phase open
   # `profiles` 讓 `docker compose up` 不會順手把它帶起來——實盤只能被明確啟動。
   # 正式環境要另外帶 `--production --confirm-production`，刻意不寫進這裡
   live:

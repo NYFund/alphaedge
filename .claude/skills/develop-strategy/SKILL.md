@@ -18,6 +18,6 @@ when_to_use: 使用者想要新增一支新策略、修改既有策略的開倉/
    - **資料取用**：不要直接對 raw `DataFrame` 取中文欄位（`"收盤價"`、`"成交股數"`），一律走 `core/api/` 的具名查詢方法（`get_close_map()`／`get_volume_lots_map()`／`get_close_series()`／`get_trust_net_shares_map()`）。`tests/test_strategy_data_access.py` 會擋下違規。
    - **部位大小**：開倉訊號**不決定張數**，只在訊號裡給 `sizing_price`；張數由 `core/portfolio/` 的等權切分換算（見 README〈部位大小由 portfolio 層決定〉）。要換配置演算法時覆寫 `make_portfolio_constructor()`，不要在策略裡自己算「可開檔數 ÷ 餘額 ÷ 張數」。`max_holdings` 另有引擎側硬上限，超額開倉單會被剔除並計數。
 4. 若使用者的需求涉及尚未在 README 涵蓋的資料源或功能，先確認是否該複用既有 API／管理器慣例；期貨相關以 `docs/futures/tw-futures-platform.md` 為準，美股相關參考 `backlog/美股ETL與回測架構規劃.md`。
-5. 完成後提醒使用者可用 `python -m apps.backtest --strategy <ClassName>` 執行回測，結果會落在 `results/<strategy_name>/`——資料夾名稱取自策略的 `self.strategy_name`（例如 `Momentum-1`），不是類別名稱。
+5. 完成後提醒使用者可用 `python -m apps.backtest --strategy <ClassName>` 執行回測，結果會落在 `results/<strategy_name>/`——資料夾名稱取自策略的 `self.strategy_name`（例如 `Volume-Breakout-Momentum`），不是類別名稱。
 
 不要向使用者要求先手動貼上 README 內容——這份文件的讀取是本 skill 的第一步，自動完成。

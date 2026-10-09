@@ -35,7 +35,10 @@ def test_update_db_runs_at_taipei_six_and_is_followed_by_parity() -> None:
         for step in steps[1:]
         if step[step.index("--phase") + 1] == "parity"
     ]
-    assert parity_strategies == ["MomentumStrategy1", "MomentumFuturesStrategy"]
+    assert parity_strategies == [
+        "VolumeBreakoutMomentumStrategy",
+        "MomentumFuturesStrategy",
+    ]
     # 不可同時留著舊的單步資料更新：兩個排程會在不同時刻各跑一次
     assert "update-db" not in _DAILY_JOBS
 

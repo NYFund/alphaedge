@@ -848,7 +848,7 @@ def make_daily_backtest_runner(
         **資金與檔數照實盤的口徑**（`live_capital`、`live_max_holdings`）：parity 量的是
         訊號有沒有漂移，不是兩邊設定不同。用研究回測的 `init_capital`／`max_holdings`
         的話，宣告了實盤額度的策略每天都會因為張數與檔數不同而報未解釋差異——
-        `MomentumStrategy1` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
+        `VolumeBreakoutMomentumStrategy` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
         2026-10-06 試跑的三筆未解釋差異全是這個原因。
     - Parameters:
         - strategies: Sequence[BaseStrategy]

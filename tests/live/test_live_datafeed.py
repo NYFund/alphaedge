@@ -353,7 +353,7 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
 
     少建一個的話，用到它的策略會在 `setup_apis()` 當場 `AttributeError`，
     而那個訊息只會說「物件沒有某個屬性」，完全看不出是實盤資料源漏建了。
-    這正是 `MomentumStrategy1` 撞到的——它取 `feed.mrr`，而實盤那邊沒建。
+    這正是 `VolumeBreakoutMomentumStrategy` 撞到的——它取 `feed.mrr`，而實盤那邊沒建。
 
     `tick` 不比對：那是盤中（Scale.TICK）才要的，實盤資料源還沒建它。
     `short_sale_list`／`day_trade_list` 不比對：那是回測成交模型用來模擬交易所擋單的

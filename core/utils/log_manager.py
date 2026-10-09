@@ -192,7 +192,7 @@ class LogManager:
                 Logging level
 
         Example:
-            LogManager.setup_backtest_logger("momentum_strategy_1")
+            LogManager.setup_backtest_logger("volume_breakout_momentum_strategy")
         """
 
         log_file: str = f"{strategy_name}.log"

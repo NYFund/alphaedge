@@ -141,7 +141,7 @@ def test_adding_to_the_same_symbol_uses_one_slot(
     同一檔加碼兩次只佔一個名額
 
     `max_holdings` 的語意在 `BaseStrategy` 與各策略 docstring 都寫「檔數」，
-    舊實作回傳的卻是部位筆數：允許加碼的策略（例如 `MomentumStrategy1`）
+    舊實作回傳的卻是部位筆數：允許加碼的策略（例如 `VolumeBreakoutMomentumStrategy`）
     同一檔加碼兩次就佔掉兩個名額，實際持有檔數比設定少。
     """
 

@@ -47,7 +47,7 @@ def test_unknown_strategy_reports_on_stderr_with_available_list() -> None:
     assert "not found" in result.stderr
     assert "not found" not in result.stdout
     assert "Available strategies:" in result.stderr
-    assert "MomentumStrategy1" in result.stderr
+    assert "VolumeBreakoutMomentumStrategy" in result.stderr
 
 
 def test_missing_strategy_argument_is_a_usage_error() -> None:
@@ -79,7 +79,7 @@ def test_live_flags_are_rejected_by_the_parser(flags: List[str]) -> None:
     """
 
     result: subprocess.CompletedProcess = run_backtest_entry(
-        "--strategy", "MomentumStrategy1", *flags
+        "--strategy", "VolumeBreakoutMomentumStrategy", *flags
     )
 
     assert result.returncode == EXIT_USAGE_ERROR
@@ -100,7 +100,7 @@ def test_show_and_no_show_are_mutually_exclusive() -> None:
     """兩個互斥旗標同時出現是用法錯誤"""
 
     result: subprocess.CompletedProcess = run_backtest_entry(
-        "--strategy", "MomentumStrategy1", "--show", "--no-show"
+        "--strategy", "VolumeBreakoutMomentumStrategy", "--show", "--no-show"
     )
 
     assert result.returncode == EXIT_USAGE_ERROR

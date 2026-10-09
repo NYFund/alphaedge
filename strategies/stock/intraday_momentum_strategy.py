@@ -142,7 +142,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
             LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
         }
         self.live_execution = ExecutionStyle.MARKET
-        # 模擬環境的額度與檔數比照 `MomentumStrategy1`；正式環境要在上線前重新決定
+        # 模擬環境的額度與檔數比照 `VolumeBreakoutMomentumStrategy`；正式環境要在上線前重新決定
         self.live_capital = 400000.0
         self.live_max_holdings = 3
 

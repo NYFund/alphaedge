@@ -193,9 +193,11 @@ def test_momentum_strategy_rejects_tick_scale() -> None:
     import pytest
 
     from core.utils import Scale
-    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+    from strategies.stock.volume_breakout_momentum_strategy import (
+        VolumeBreakoutMomentumStrategy,
+    )
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.scale = Scale.TICK
 
     class _Feed:
@@ -247,7 +249,7 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
     original = importlib.import_module
 
     def explode_on_one(name: str, *args, **kwargs):
-        if name.endswith("momentum_strategy_1"):
+        if name.endswith("volume_breakout_momentum_strategy"):
             raise ImportError("boom")
         return original(name, *args, **kwargs)
 
@@ -255,7 +257,7 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
 
     strategies = StrategyLoader.load_strategies()
 
-    assert "MomentumStrategy1" not in strategies
+    assert "VolumeBreakoutMomentumStrategy" not in strategies
     assert "ForeignSellingReversalShortStrategy" in strategies, "其餘策略仍要載得到"
 
 
@@ -318,10 +320,12 @@ def test_momentum_skips_stocks_without_a_valid_previous_close() -> None:
 
     from core.models import StockQuote
     from core.utils import Scale
-    from strategies.stock.momentum_strategy_1 import MomentumStrategy1
+    from strategies.stock.volume_breakout_momentum_strategy import (
+        VolumeBreakoutMomentumStrategy,
+    )
 
     date: datetime.date = datetime.date(2024, 6, 6)
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.max_holdings = 10
     strategy.trading_days = [datetime.date(2024, 6, 5), date]
 
