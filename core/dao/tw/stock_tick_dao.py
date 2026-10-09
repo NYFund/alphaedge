@@ -1,7 +1,7 @@
 import datetime
 import io
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -255,6 +255,62 @@ class StockTickDAO:
                 (stock_id, trade_date, source_rows, len(day_df), source_file),
             )
         return len(day_df)
+
+    # === load_log 查詢 ===
+    def get_loaded_last_dates(self) -> Dict[str, datetime.date]:
+        """
+        - Description:
+            每檔股票在 `load_log` 登記過的最後一個交易日；updater 據此跳過已載入的日期
+
+            以資料庫實際寫入的紀錄為準：原本的 `tick_metadata.json` 是從 CSV 掃出來的，
+            入庫失敗時也會前進，下次就會跳過還沒進資料庫的日子。
+        - Return:
+            - Dict[str, datetime.date]
+                股票代號 → 最後交易日；從未載入過的股票不在其中
+        """
+
+        sql: ModuleType = _psycopg_sql()
+        with self.conn.transaction():
+            rows: List[Tuple[Any, ...]] = self.conn.execute(
+                sql.SQL(
+                    "SELECT stock_id, max(trade_date) FROM {} GROUP BY stock_id"
+                ).format(self._identifier(self.LOAD_LOG_TABLE_NAME))
+            ).fetchall()
+        return {stock_id: last_date for stock_id, last_date in rows}
+
+    def get_latest_trade_date(self) -> Optional[datetime.date]:
+        """`load_log` 裡最新的交易日；還沒有任何紀錄時為 None"""
+
+        sql: ModuleType = _psycopg_sql()
+        with self.conn.transaction():
+            row: Optional[Tuple[Any, ...]] = self.conn.execute(
+                sql.SQL("SELECT max(trade_date) FROM {}").format(
+                    self._identifier(self.LOAD_LOG_TABLE_NAME)
+                )
+            ).fetchone()
+        return row[0] if row else None
+
+    def get_source_rows(self, stock_id: str) -> Dict[datetime.date, int]:
+        """
+        - Description:
+            某檔股票每個已登記交易日的來源列數；判斷 CSV 是否已完整入庫用
+        - Parameters:
+            - stock_id: str
+                股票代號
+        - Return:
+            - Dict[datetime.date, int]
+                交易日 → `source_rows`
+        """
+
+        sql: ModuleType = _psycopg_sql()
+        with self.conn.transaction():
+            rows: List[Tuple[Any, ...]] = self.conn.execute(
+                sql.SQL(
+                    "SELECT trade_date, source_rows FROM {} WHERE stock_id = %s"
+                ).format(self._identifier(self.LOAD_LOG_TABLE_NAME)),
+                (stock_id,),
+            ).fetchall()
+        return {trade_date: source_rows for trade_date, source_rows in rows}
 
     # === 壓縮 ===
     def pause_compression_policy(self) -> None:

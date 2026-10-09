@@ -307,6 +307,38 @@ class StockTickLoader(BaseDataLoader):
             )
         return written
 
+    def is_fully_loaded(self, csv_path: Path) -> bool:
+        """
+        - Description:
+            CSV 裡的每個交易日都已登記在 `load_log`、且來源列數一致
+
+            updater 開工前據此刪掉已入庫的 CSV。**只比對列數、不比對內容**：
+            同一天的檔案內容若有變，列數幾乎必然跟著變；真的只是值不同的話，
+            留著它也只是下次再寫一次（刪除後重寫是冪等的），不會掉資料。
+        - Parameters:
+            - csv_path: Path
+                CSV 路徑；檔名即股票代號
+        - Return:
+            - bool
+                全部交易日都已入庫時為 True；空檔、有任何一天沒登記或列數不同時為 False
+        """
+
+        time_columns: Set[str] = {"time", HISTORY_TIME_COLUMN}
+        # 只讀時間欄：單檔動輒數十萬列，整份讀進來純屬浪費
+        times: pd.DataFrame = pd.read_csv(
+            csv_path, usecols=lambda column: column in time_columns, dtype=str
+        )
+        if times.empty or times.shape[1] != 1:
+            return False
+
+        days: pd.Series = times.iloc[:, 0].str.slice(0, 10)
+        csv_rows: Dict[datetime.date, int] = {
+            datetime.date.fromisoformat(day): int(count)
+            for day, count in days.value_counts().items()
+        }
+        loaded_rows: Dict[datetime.date, int] = self.dao.get_source_rows(csv_path.stem)
+        return all(loaded_rows.get(day) == count for day, count in csv_rows.items())
+
     def add_to_db(
         self, remove_files: bool = False, dir_path: Optional[Path] = None
     ) -> None:

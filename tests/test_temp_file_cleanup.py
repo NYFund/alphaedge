@@ -64,7 +64,6 @@ def test_temp_file_cleanup_catches_only_filesystem_errors() -> None:
     targets: Tuple[Tuple[str, str], ...] = (
         ("core/pipeline/tw/cleaners/stock_tick_cleaner.py", "unlink"),
         ("core/pipeline/tw/cleaners/stock_tick_cleaner.py", "close"),
-        ("core/pipeline/tw/utils/stock_tick_utils.py", "unlink"),
     )
 
     for relative_path, call_name in targets:

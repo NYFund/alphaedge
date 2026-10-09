@@ -100,11 +100,10 @@ ruff check . --select B006,B904             # 看逐處位置
 | 對象 | 規則 | 理由 |
 |------|------|------|
 | `__init__.py` | `F401` | 套件的 re-export 門面，import 就是對外介面 |
-| `core/pipeline/tw/utils/stock_tick_utils.py`、`scripts/manual/manual_tick_updater.py` | `F401` | `dolphindb` 是選用相依，該處 import 是「可用性探測」 |
 | `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法（24 處）的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
 
-per-file-ignores 同樣不能長期失明：`scripts/manual/*` 原本豁免的 `E402` 與 `stock_tick_loader.py`
-的 `F401` 都在歸零後移除。`tests/test_config_consistency.py` 會檢查每一條 per-file-ignores
+per-file-ignores 同樣不能長期失明：`scripts/manual/*` 原本豁免的 `E402`、`stock_tick_loader.py`
+的 `F401` 都在歸零後移除；`stock_tick_utils.py` 與 `manual_tick_updater.py` 的 `F401` 也隨台股 tick 改用 TimescaleDB 移除。`tests/test_config_consistency.py` 會檢查每一條 per-file-ignores
 指向的路徑還存在、且規則仍確實被觸發，過期的那條會讓測試紅。
 
 **`ANN201`／`ANN204` 在 `select` 內**，`core/`／`strategies/`／`frontend/`／`apps/` 兩條都生效：

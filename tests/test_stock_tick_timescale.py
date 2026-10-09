@@ -1,6 +1,7 @@
 import datetime
 import os
 import uuid
+from pathlib import Path
 from typing import Iterator, List, Tuple
 
 import pandas as pd
@@ -309,3 +310,103 @@ def test_create_tables_rerun_after_compression(dao: StockTickDAO) -> None:
     dao.create_tables()
 
     assert len(_stored(dao)) == 1
+
+
+# === 端到端：updater 依 load_log 續跑 ===
+def test_updater_resumes_from_load_log(
+    dao: StockTickDAO, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    三天入庫後刪掉某檔最後一天的紀錄與資料，再跑一次 `update()`：只有那一檔的那一天被重爬
+
+    crawler 用替身（不連 Shioaji），日 K 用記憶體 SQLite；寫入的是暫存 schema。
+    """
+
+    import sqlite3
+    from types import SimpleNamespace
+
+    from core.dao.tw.stock_price_dao import StockPriceDAO
+    from core.pipeline.tw.cleaners.stock_tick_cleaner import StockTickCleaner
+    from core.pipeline.tw.loaders import stock_tick_loader as loader_module
+    from core.pipeline.tw.loaders.stock_tick_loader import StockTickLoader
+    from core.pipeline.tw.updaters.stock_tick_updater import StockTickUpdater
+
+    days: List[datetime.date] = [
+        datetime.date(2024, 5, 8),
+        datetime.date(2024, 5, 9),
+        datetime.date(2024, 5, 10),
+    ]
+    stocks: List[str] = ["1101", "2330"]
+
+    price_dao: StockPriceDAO = StockPriceDAO(conn=sqlite3.connect(":memory:"))
+    price_dao.create_table()
+    price_dao.conn.executemany(
+        'INSERT INTO price ("date", stock_id, "證券名稱") VALUES (?, ?, ?)',
+        [(day.isoformat(), stock, stock) for day in days for stock in stocks],
+    )
+    monkeypatch.setattr(loader_module, "TICK_DOWNLOADS_PATH", tmp_path)
+
+    crawled: List[Tuple[str, datetime.date]] = []
+
+    class Crawler:
+        """記錄每次爬取，回一筆 Shioaji 格式的 tick"""
+
+        def crawl_stock_tick(
+            self, api: object, date: datetime.date, code: str
+        ) -> pd.DataFrame:
+            crawled.append((code, date))
+            return pd.DataFrame(
+                {
+                    "ts": [pd.Timestamp(f"{date} 09:00:01.123456")],
+                    "close": [800.0],
+                    "volume": [1],
+                    "bid_price": [799.0],
+                    "bid_volume": [2],
+                    "ask_price": [800.0],
+                    "ask_volume": [3],
+                    "tick_type": [1],
+                }
+            )
+
+    cleaner: StockTickCleaner = StockTickCleaner.__new__(StockTickCleaner)
+    cleaner.tick_dir = tmp_path
+    updater: StockTickUpdater = StockTickUpdater.__new__(StockTickUpdater)
+    updater.crawler = Crawler()
+    updater.cleaner = cleaner
+    updater.loader = StockTickLoader(dao=dao, price_dao=price_dao)
+    updater.tick_dir = tmp_path
+    updater.sessions = []
+    updater.api_list = [
+        SimpleNamespace(usage=lambda: SimpleNamespace(remaining_bytes=10**12))
+    ]
+    updater.num_threads = 1
+    updater.all_stock_list = stocks
+    updater.loaded_last_dates = {}
+
+    updater.update(days[0], days[-1])
+    assert sorted(crawled) == sorted((s, d) for s in stocks for d in days)
+    assert len(_load_log(dao)) == 6
+
+    with dao.conn.transaction():
+        dao.conn.execute(
+            f'DELETE FROM "{dao.schema}".stock_tick_load_log '
+            "WHERE stock_id = '2330' AND trade_date = %s",
+            (days[-1],),
+        )
+        dao.conn.execute(
+            f'DELETE FROM "{dao.schema}".stock_tick '
+            "WHERE stock_id = '2330' AND time >= %s",
+            (datetime.datetime(2024, 5, 10),),
+        )
+    crawled.clear()
+
+    updater.update(days[0], days[-1])
+
+    assert crawled == [("2330", days[-1])]
+    assert len(_load_log(dao)) == 6
+    with dao.conn.transaction():
+        count: int = dao.conn.execute(
+            f'SELECT count(*) FROM "{dao.schema}".stock_tick'
+        ).fetchone()[0]
+    assert count == 6
+    price_dao.conn.close()
