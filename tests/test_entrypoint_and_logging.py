@@ -49,6 +49,26 @@ def test_all_includes_stock_tick() -> None:
     assert "futures_tick" not in {dt.name.lower() for dt in DataType}
 
 
+def test_targets_that_read_price_run_after_price() -> None:
+    """
+    以 `price` 表當日曆的 target 必須排在 PRICE 之後執行
+
+    price 還沒更新到今天時：CHIP／MARGIN 今天不會被請求（永遠落後一天）；
+    TICK 會把今天當成日 K 未更新而計為失敗（`--target all` 收盤後必紅）。
+    執行順序就是 `main()` 裡各區塊的先後，所以直接比原始碼位置。
+    """
+
+    source: str = Path("apps/update_db.py").read_text(encoding="utf-8")
+
+    def position(data_type: str) -> int:
+        marker: str = f"if DataType.{data_type}.name.lower() in targets:"
+        assert marker in source, f"找不到 {data_type} 的執行區塊"
+        return source.index(marker)
+
+    for dependent in ("CHIP", "MARGIN", "TICK"):
+        assert position("PRICE") < position(dependent), f"{dependent} 排在 PRICE 之前"
+
+
 def test_finmind_is_paused_from_daily_update() -> None:
     """
     FinMind 不在 `all`／`no_tick` 內，點名時仍會跑

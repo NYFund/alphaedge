@@ -384,17 +384,6 @@ def main() -> None:
 
     targets = expand_targets(targets)
 
-    if DataType.TICK.name.lower() in targets:
-        with target_guard("tick", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.TICK,
-                from_date=from_date,
-            )
-            stock_tick_updater: StockTickUpdater = StockTickUpdater()
-            stock_tick_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
-
     # **PRICE 必須排在 CHIP／MARGIN 之前**：那兩個以 `price` 表的交易日為
     # 日曆，price 還沒更新到今天的話，它們今天就不會被請求——結果是永遠
     # 落後一天。`DatePlanner.extend_calendar_tail()` 是第二層保險，
@@ -413,6 +402,20 @@ def main() -> None:
                 )
             finally:
                 stock_price_updater.close()
+
+    # **TICK 必須排在 PRICE 之後**：tick 入庫以 `price` 表判斷「這天這檔是不是上市櫃」，
+    # `price` 表整天沒資料的日子會被當成日 K 還沒更新而計為失敗。tick 先跑的話，
+    # `--target all` 收盤後跑當天的 tick 一律失敗
+    if DataType.TICK.name.lower() in targets:
+        with target_guard("tick", failed_targets):
+            time_config: Dict[str, datetime.date | int] = get_update_time_config(
+                data_type=DataType.TICK,
+                from_date=from_date,
+            )
+            stock_tick_updater: StockTickUpdater = StockTickUpdater()
+            stock_tick_updater.update(
+                start_date=time_config["start_date"], end_date=time_config["end_date"]
+            )
 
     if DataType.CHIP.name.lower() in targets:
         with target_guard("chip", failed_targets):
