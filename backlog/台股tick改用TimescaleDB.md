@@ -231,6 +231,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **目的**：提供本機可重現的 TimescaleDB。放在 Mac 本機，回測讀取就不用走網路。
 - **做法**：
   - 新增 service `postgres`，image 用 `timescale/timescaledb`，**實作時鎖定 `2.x-pg17` 的明確版本**，不要用 `latest`。`by_range()` 需要 TimescaleDB 2.13 以上。
+  - **不可選 `-oss` 結尾的 tag**：那是只含 Apache 授權功能的版本，**沒有壓縮**（Phase1-3 的 `compress`、壓縮 policy 都屬 Timescale License）。驗證時一併確認 `SHOW timescaledb.license` 為 `timescale`。
   - 使用 named volume `alphaedge_pgdata`。**不要 bind mount 到專案目錄**：Docker Desktop on Mac 的 bind mount 走檔案共享，大量寫入時非常慢，而且專案目錄以前放在同步資料夾吃過虧。
   - 加上 `healthcheck`（`pg_isready`）、port `5432:5432`，帳密從 `.env` 的 `POSTGRES_USER`／`POSTGRES_PASSWORD`／`POSTGRES_DB=alphaedge` 讀取。
   - compose 現有 `core`（回測與資料更新，`./data` 唯讀掛載）、`live`（實盤）、`frontend` 三個 service。tick 只給回測與資料更新用，**`core` 加 `depends_on: postgres`（`condition: service_healthy`）**；`live` 不讀 tick、不必相依。
@@ -323,9 +324,15 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   ```
 
   - 14 天讓每日更新寫入的最近兩個 chunk 保持未壓縮，重跑最近幾天時不用先解壓。
+  - **policy 以「現在」往回算 14 天，歷史資料（2020～2024）全部符合條件**：背景 job 一跑就會壓縮它們，不分是否還在匯入。
+    抽樣試點（Phase4-2）與歷史匯入（Phase4-3）期間要先停用這個 job，否則試點量不到「壓縮前」，匯入中的那一週也會被壓縮，
+    之後同一週的寫入都要走壓縮 chunk 的 DML（慢很多），「載入一週、壓縮一週」的設計就失效了。
+    `StockTickDAO` 一併提供 `pause_compression_policy()`／`resume_compression_policy()`（以 `alter_job(<job_id>, scheduled => false／true)`，
+    job_id 由 `timescaledb_information.jobs` 依 `hypertable_name = 'stock_tick'` 查出）。
   - 另外在 `StockTickDAO` 提供 `compress_chunks_before(older_than: datetime.date) -> int`，包一層 `SELECT compress_chunk(c, if_not_compressed => TRUE) FROM show_chunks('stock_tick', older_than => ...) c`，給 Phase4-3 的匯入腳本逐週呼叫（腳本經 loader 或直接建 DAO 呼叫，不自己寫 SQL）。
 - **產出**：`core/dao/tw/stock_tick_dao.py`。
-- **驗證方式**：`SELECT * FROM timescaledb_information.jobs WHERE hypertable_name = 'stock_tick'` 有 compression job；寫入樣本後呼叫 `compress_chunks_before()`，`chunk_compression_stats('stock_tick')` 顯示已壓縮。
+- **驗證方式**：`SELECT * FROM timescaledb_information.jobs WHERE hypertable_name = 'stock_tick'` 有 compression job；寫入樣本後呼叫 `compress_chunks_before()`，`chunk_compression_stats('stock_tick')` 顯示已壓縮；
+  `pause_compression_policy()` 之後該 job 的 `scheduled` 為 false，`resume_compression_policy()` 後恢復 true。
 - **相依**：Phase1-2。
 
 ---
@@ -454,6 +461,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **動工前先確認樣本在**：`ls data/downloads/tw_stock/tick/*.csv | wc -l` 應為 541，且最早、最晚日期為 2024-05-13、2024-05-15（2026-10-09 曾被清空，使用者表示會補回）。
   不在的話先請使用者補回；真的補不回來，才改從 Phase4-1 下載的雲端 CSV 取**同一段日期**的約 20 檔，量測結果才能和〈CSV 樣式〉的實測對照。
 - **做法**：
+  0. **先 `pause_compression_policy()`**（見 Phase1-3）：樣本是 2024 年的資料，policy 一跑就會壓縮，步驟 2 會量不到壓縮前的大小與查詢耗時。量測結束後再 `resume_compression_policy()`。
   1. 從 `data/downloads/tw_stock/tick/` 取**約 20 檔**（涵蓋成交量大小不同的股票，例如 `2330`、`1101`、`9958` 與幾檔冷門股），複製到暫存目錄後以 `add_to_db(dir_path=...)` 入庫，記錄耗時與樣本列數。
      - `add_to_db()` 的 `dir_path` 參數（Phase2-1）就是為了這件事：**不要**直接對 `TICK_DOWNLOADS_PATH` 整個資料夾跑。
   2. 記錄壓縮前大小：`hypertable_size('stock_tick')`，以及入庫的每秒寫入列數（推估全量匯入耗時，見 Phase2-1〈寫入速度〉）。
@@ -477,6 +485,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **執行時機**：**腳本可以先寫好，真正跑匯入要等使用者要求**（2026-09-18 裁示，與 Phase4-2 同一條）。本機 `data/downloads/tw_stock/tick/` 的 541 檔若要全量入庫，也走這支腳本（`--source-dir` 指過去），同樣等要求。
 - **做法**：新增 `scripts/manual/manual_tick_history_import.py`：
   - 參數：`--source-dir`、`--start-date`、`--end-date`、`--resume`。
+  - **開始前 `pause_compression_policy()`，結束（含中斷）時 `resume_compression_policy()`**（`try/finally`）：policy 會在匯入途中壓縮還沒載完的週（見 Phase1-3）。
   - **逐週處理**：載入一週 → `compress_chunks_before(該週結束)` → 在 log 記錄進度 → 下一週。峰值磁碟用量只會多出一週的未壓縮資料。
   - `--resume`：以 `stock_tick_load_log` 判斷已完成的「股票 × 交易日」並跳過，可以隨時中斷後重跑。
   - 要重灌已壓縮的週時，先 `decompress_chunk` 再呼叫 `load_csv()`。
@@ -597,6 +606,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 | 讀取效能不如 DolphinDB | 用 `pd.read_sql` 或 `SELECT *` 會慢數十倍 | 讀取固定走 ConnectorX 並明列欄位；Phase4-2 設門檻，量過才全量匯入 |
 | 回測結果與 DolphinDB 版不同 | ① 價格由 float32 改成 float64；② 同一時間戳記跨股票的順序由不確定改成固定 | 目前沒有 `Scale.TICK` 策略，也沒有 tick 回測的回歸基準，不影響既有回歸；在 `docs/pipeline/etl-ingestion.md` 記下這兩點語意 |
 | 磁碟寫滿 | 未壓縮的全量資料推估 80～160 GB | Docker Desktop 磁碟上限調到 ≥ 150 GB；匯入逐週壓縮 |
+| 壓縮 policy 在匯入中途壓縮歷史資料 | policy 以「現在」往回算，2020～2024 的 chunk 全部符合條件，背景 job 會壓縮還在載入的週 | 試點與匯入期間停用 policy、結束後恢復（Phase1-3 的 `pause_／resume_compression_policy()`） |
 | 時區錯位 | 用 `TIMESTAMPTZ` 時，ConnectorX 會回傳 UTC | schema 固定用 `TIMESTAMP`；整合測試驗證 `time` 為 naive 且等於 CSV 原值 |
 | 雲端 CSV 格式不一致 | 早期資料可能與現行 cleaner 輸出不同 | Phase4-1 先盤點，差異在匯入腳本轉換 |
 | 本機測試素材遺失 | 541 檔是唯一的本機測試素材，2026-10-09 曾被清空 | Phase4-2 動工前先確認檔數；補不回來時改從 Phase4-1 下載的雲端 CSV 取同一段日期。整合測試（Phase5-1）只用手寫的小 DataFrame，不受影響 |
