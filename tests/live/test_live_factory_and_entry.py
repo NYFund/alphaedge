@@ -4,7 +4,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -16,6 +16,7 @@ from core.live.factory import (
     UnsupportedMarketError,
     _merge_schedules,
     build_live_trader,
+    make_closing_limit_lookup,
 )
 from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
@@ -523,3 +524,49 @@ def test_factory_imports_without_the_broker_sdk() -> None:
         f"沒裝 shioaji 就 import 不了 core.live.factory：\n{result.stderr[-2000:]}"
     )
     assert "OK" in result.stdout
+
+
+class FakePriceAPI:
+    """假的價格 API：10/7 收盤當前收、10/8 當日收盤；記錄被開啟幾次"""
+
+    opened: int = 0
+
+    def __enter__(self) -> "FakePriceAPI":
+        FakePriceAPI.opened += 1
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def get_trading_days(
+        self, start: datetime.date, end: datetime.date
+    ) -> List[datetime.date]:
+        return [datetime.date(2026, 10, 6), datetime.date(2026, 10, 7)]
+
+    def get_close_map(self, date: datetime.date) -> Dict[str, Any]:
+        if date == datetime.date(2026, 10, 7):
+            return {"2305": 58.9, "4157": 8.55, "9999": 10.0}
+        return {"2305": 64.7, "4157": 9.33, "9999": float("nan")}
+
+
+def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
+    """
+    收盤查詢以前一交易日收盤算漲跌停，同一天只開一次資料庫
+
+    數字取自 2026-10-08 演練：2305 收在漲停 64.7（鎖住），4157 漲停 9.40、收 9.33（沒鎖住）。
+    無成交日的收盤是 NaN，要當成查不到，不可拿 NaN 去比。
+    """
+
+    FakePriceAPI.opened = 0
+    lookup = make_closing_limit_lookup(api_factory=FakePriceAPI)
+    day: datetime.date = datetime.date(2026, 10, 8)
+
+    locked: Optional[Tuple[float, float]] = lookup("2305", "Buy", day)
+    open_gap: Optional[Tuple[float, float]] = lookup("4157", "Buy", day)
+
+    assert locked == (64.7, 64.7)
+    assert open_gap == (9.33, 9.4)
+    assert lookup("4157", "Sell", day) == (9.33, 7.7)
+    assert lookup("9999", "Buy", day) is None
+    assert lookup("0000", "Buy", day) is None
+    assert FakePriceAPI.opened == 1
