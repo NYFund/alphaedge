@@ -35,6 +35,10 @@ _LABEL_PREFIX: str = "com.alphaedge.live."
 # 台北時間的交易日（週一～五）
 _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 
+# 股票開盤段與盤後段的策略：`IntradayMomentumStrategy` 隔天開盤出場在開盤段，
+# 盤後對帳與快照也要涵蓋它；盤中進場與停損由 `stock-intraday` 另一個行程負責
+_STOCK_STRATEGIES: str = "MomentumStrategy1,IntradayMomentumStrategy"
+
 # 標籤後綴 → (台北時, 台北分, `python` 之後的參數)
 _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
     "stock-open": (
@@ -44,9 +48,23 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "open",
+        ],
+    ),
+    # 盤中逐筆：開盤段 09:05 收線後才啟動，13:19 收線、早於 13:20 的尾盤段——
+    # 同一個帳號的委託回報會推給每一條連線，不讓兩個行程同時在場上
+    "stock-intraday": (
+        9,
+        6,
+        [
+            "-m",
+            "apps.live",
+            "--strategy",
+            "IntradayMomentumStrategy",
+            "--phase",
+            "intraday",
         ],
     ),
     "futures-open": (
@@ -92,7 +110,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "after_close",
         ],

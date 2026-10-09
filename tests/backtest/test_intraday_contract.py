@@ -45,10 +45,17 @@ def make_strategy(is_tick_triggered: bool, scale: str) -> BaseStrategy:
 
 
 def test_default_strategy_is_not_intraday() -> None:
-    """**預設關閉**：既有策略一支都不該因為新增這個旗標而改變行為"""
+    """
+    **預設關閉**：只有明確宣告為盤中逐筆的策略才開
+
+    新增策略時忘了關、或既有策略被誤改成逐筆，這裡會多出一支而轉紅。
+    """
 
     registry = StrategyLoader.load_strategies()
-    assert all(cls().is_tick_triggered is False for cls in registry.values())
+    tick_triggered = {
+        name for name, cls in registry.items() if cls().is_tick_triggered is True
+    }
+    assert tick_triggered == {"IntradayMomentumStrategy"}
 
 
 def test_intraday_strategy_refuses_tick_backtest() -> None:

@@ -586,7 +586,11 @@ class LiveTrader:
         )
 
         symbols: List[str] = sorted(
-            {symbol for context in self.contexts for symbol in context.symbols}
+            {
+                symbol
+                for context in self.contexts
+                for symbol in self.quote_symbols(context)
+            }
         )
         self.broker.route_events(loop.submit_quote, loop.submit_execution)
         if symbols:
@@ -814,7 +818,7 @@ class LiveTrader:
         for context in self.contexts:
             if not getattr(context.strategy, "is_tick_triggered", False):
                 continue
-            if quote.symbol not in context.symbols:
+            if quote.symbol not in self.quote_symbols(context):
                 continue
             self._submit_one_quote(context, quote)
 
@@ -1101,6 +1105,29 @@ class LiveTrader:
         self._notify(severity, "換月", text)
 
     # === 訊號 ===
+    @staticmethod
+    def quote_symbols(context: StrategyContext) -> List[str]:
+        """
+        - Description:
+            這支策略要拿報價的標的：宣告的標的池，加上帳上持有、卻不在池裡的標的
+
+            **持有的標的一定要拿得到報價**：標的池可能每天重新篩選（盤中策略受訂閱上限
+            所限，只看前 N 檔），昨天買的那一檔今天掉出池外的話，平倉與停損鉤子
+            永遠看不到它，部位就一直留在帳上，而且不會有任何錯誤。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+        - Return:
+            - List[str]
+                標的池在前、池外的持有標的依代號排序附在後面
+        """
+
+        declared: List[str] = list(context.symbols)
+        held: Set[str] = {
+            position.symbol for position in context.account.get_positions()
+        } - set(declared)
+        return declared + sorted(held)
+
     def collect_orders(
         self, context: StrategyContext, timing: ExecutionTiming
     ) -> List[Tuple[StrategyContext, BaseOrder]]:
@@ -1127,7 +1154,7 @@ class LiveTrader:
 
         try:
             quotes: List[BaseQuote] = context.data_feed.get_live_quotes(
-                timing, context.symbols
+                timing, self.quote_symbols(context)
             )
             orders: List[BaseOrder] = self._invoke_hooks(context, timing, quotes)
         except Exception as exc:

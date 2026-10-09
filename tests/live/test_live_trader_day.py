@@ -28,6 +28,7 @@ from core.models import (
     PendingAction,
     StockAccount,
     StockOrder,
+    StockPosition,
     StockQuote,
 )
 from core.position.stock.position_manager import StockPositionManager
@@ -1505,3 +1506,89 @@ def test_failed_finish_record_does_not_mask_the_real_error() -> None:
 
     with pytest.raises(ConnectionError):
         harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+
+def test_held_symbols_outside_the_universe_still_get_quotes() -> None:
+    """
+    帳上持有、卻不在標的池的標的照樣拿報價
+
+    盤中策略每天重新篩選標的池（受逐筆訂閱上限），昨天買的那一檔今天掉出池外的話，
+    平倉鉤子永遠看不到它，部位就一直留在帳上而沒有任何錯誤。
+    """
+
+    harness: Harness = Harness([ScriptedStrategy("Alpha")])
+    context: StrategyContext = harness.contexts[0]
+    context.account.positions.append(
+        StockPosition(
+            id=1,
+            stock_id="2317",
+            position_type=PositionType.LONG,
+            date=NOW.date(),
+            price=100.0,
+            volume=1,
+        )
+    )
+    requested: List[List[str]] = []
+
+    def recording(timing: ExecutionTiming, symbols: Sequence[str]) -> List[BaseQuote]:
+        requested.append(list(symbols))
+        return []
+
+    context.data_feed.get_live_quotes = recording  # type: ignore
+
+    harness.trader.collect_orders(context, ExecutionTiming.AT_CLOSE)
+
+    assert requested == [["2330", "2317"]]
+
+
+def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
+    """
+    盤中逐筆：池外持有標的的報價也要餵給策略
+
+    只訂閱、不派送的話，報價到了卻在派送那一層被「不在標的池」擋掉，
+    停損鉤子一樣看不到它。
+    """
+
+    received: List[str] = []
+
+    class Watcher(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha")
+            self.is_tick_triggered = True
+            self.live_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
+                LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
+            }
+
+        def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+            received.extend(quote.symbol for quote in quotes)
+            return []
+
+    harness: Harness = Harness([Watcher()])
+    harness.trader.prepare()
+    harness.contexts[0].account.positions.append(
+        StockPosition(
+            id=1,
+            stock_id="2317",
+            position_type=PositionType.LONG,
+            date=NOW.date(),
+            price=100.0,
+            volume=1,
+        )
+    )
+
+    harness.trader._on_intraday_quote(
+        StockQuote(
+            stock_id="2317",
+            scale=Scale.TICK,
+            date=NOW,
+            cur_price=100.0,
+            volume=1,
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+        )
+    )
+
+    assert received == ["2317"]

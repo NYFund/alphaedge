@@ -100,6 +100,10 @@ from core.utils import (
 # 成交價不是收盤價，與回測「以收盤價成交」的假設對不上，而且看起來完全正常。
 # 13:29 停止送單讓委託進得了收盤集合競價；**13:35 才收線**，因為收盤集合競價的
 # 成交回報要 13:30 之後才會進來——送完單就收線會讓當日成交明細出現一段空窗。
+#
+# 盤中逐筆段落**夾在開盤段收線（09:05）與尾盤段啟動（13:20）之間**：同一個帳號的
+# 委託回報會推給每一條連線，兩個行程同時在場上時，各自都會收到對方的回報。
+# 代價是 09:00～09:05 與 13:19 之後的盤中觸發看不到。
 TW_STOCK_SEGMENTS: SegmentSchedule = {
     ExecutionTiming.AT_OPEN: SegmentWindow(
         submit_start=datetime.time(8, 30),
@@ -110,6 +114,11 @@ TW_STOCK_SEGMENTS: SegmentSchedule = {
         submit_start=datetime.time(13, 25),
         submit_end=datetime.time(13, 29),
         drain_end=datetime.time(13, 35),
+    ),
+    ExecutionTiming.IMMEDIATE: SegmentWindow(
+        submit_start=datetime.time(9, 5),
+        submit_end=datetime.time(13, 18),
+        drain_end=datetime.time(13, 19),
     ),
 }
 

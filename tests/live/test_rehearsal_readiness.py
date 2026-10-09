@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, List, Optional
 
 import pandas as pd
 import pytest
@@ -14,6 +14,7 @@ from core.live.factory import build_live_trader
 from core.live.strategy_guard import inspect_strategy
 from core.live.trader import LiveTrader
 from core.market.tw.market_calendar import MarketCalendar
+from core.models.stock.trading_list import DayTradeListSnapshot
 from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 
@@ -89,11 +90,94 @@ def test_stock_feed_fills_the_previous_day_universe() -> None:
     feed.price = SimpleNamespace(
         get=lambda date: pd.DataFrame({"stock_id": ["2330", "2317", "2330"]})
     )
-    strategy: Any = SimpleNamespace(symbols=[])
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=lambda latest: None)
 
     feed.fill_default_universe(strategy)
 
     assert strategy.symbols == ["2317", "2330"]
+
+
+def test_stock_feed_uses_the_strategy_screen_with_the_latest_data_date() -> None:
+    """
+    策略有盤前篩選時用它的結果，並把資料最新日傳進去
+
+    盤中策略受逐筆訂閱上限所限，不能沿用全市場；日期由資料源給而不是策略自己取今天
+    （美東主機的台北早上，`date.today()` 是前一天）。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    feed.get_latest_data_date = lambda: datetime.date(2026, 10, 8)  # type: ignore
+    feed.price = SimpleNamespace(get=lambda date: pd.DataFrame({"stock_id": ["2330"]}))
+    received: List[datetime.date] = []
+
+    def screen(latest: datetime.date) -> List[str]:
+        received.append(latest)
+        return ["2305", "2340"]
+
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=screen)
+
+    feed.fill_default_universe(strategy)
+
+    assert strategy.symbols == ["2305", "2340"]
+    assert received == [datetime.date(2026, 10, 8)]
+
+
+def test_stock_feed_does_not_swallow_a_broken_strategy_screen() -> None:
+    """篩選寫錯要在啟動時當場失敗；吞成警告的話，盤中整天沒有標的而沒人發現"""
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    feed.get_latest_data_date = lambda: datetime.date(2026, 10, 8)  # type: ignore
+    feed.price = SimpleNamespace(get=lambda date: pd.DataFrame({"stock_id": ["2330"]}))
+
+    def broken(latest: datetime.date) -> List[str]:
+        raise KeyError("成交量")
+
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=broken)
+
+    with pytest.raises(KeyError):
+        feed.fill_default_universe(strategy)
+
+
+class FakeDayTradeListAPI:
+    """假的當沖名單 API：只有 10/7 入庫；記錄查詢次數"""
+
+    def __init__(self) -> None:
+        self.calls: int = 0
+
+    def get_snapshot(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:
+        self.calls += 1
+        if date == datetime.date(2026, 10, 7):
+            return DayTradeListSnapshot(day_tradable=frozenset({"2330"}))
+        return None
+
+    def get_covered_dates(
+        self, start: datetime.date, end: datetime.date
+    ) -> List[datetime.date]:
+        return [datetime.date(2026, 10, 6), datetime.date(2026, 10, 7)]
+
+
+def test_live_day_trade_list_falls_back_to_the_latest_list() -> None:
+    """
+    當日名單收盤後才入庫，盤中沿用最近一份；同一天只查一次
+
+    回 None 的話，依名單決定進場的策略會整天不進場而沒有任何錯誤。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    api: FakeDayTradeListAPI = FakeDayTradeListAPI()
+    feed.day_trade_list = api  # type: ignore
+
+    first: Optional[DayTradeListSnapshot] = feed.get_day_trade_list(
+        datetime.date(2026, 10, 8)
+    )
+    calls_after_first: int = api.calls
+    second: Optional[DayTradeListSnapshot] = feed.get_day_trade_list(
+        datetime.date(2026, 10, 8)
+    )
+
+    assert first is not None and first.day_tradable == frozenset({"2330"})
+    assert second is first
+    assert api.calls == calls_after_first
 
 
 def test_stock_feed_keeps_a_declared_universe() -> None:
