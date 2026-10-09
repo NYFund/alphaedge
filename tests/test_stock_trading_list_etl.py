@@ -514,7 +514,7 @@ def test_daily_update_includes_both_lists() -> None:
     之後的日子，就會因名單缺日而拒絕執行。
     """
 
-    from tasks.update_db import expand_targets
+    from apps.update_db import expand_targets
 
     for shortcut in ("no_tick", "all"):
         targets = expand_targets({shortcut})

@@ -21,14 +21,14 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 # === target 捷徑的展開 ===
 def test_no_tick_excludes_futures_tick() -> None:
     """
-    預設的 `python -m tasks.update_db` 不可去跑期貨 tick
+    預設的 `python -m apps.update_db` 不可去跑期貨 tick
 
     那需要 Shioaji 金鑰與 `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
     久了就沒人在看那個紅燈了。
     """
 
+    from apps.update_db import expand_targets
     from core.pipeline.utils import DataType
-    from tasks.update_db import expand_targets
 
     expanded: Set[str] = expand_targets({"no_tick"})
 
@@ -47,8 +47,8 @@ def test_all_excludes_futures_tick_until_it_can_resume() -> None:
     成交量會隨執行次數被放大。現貨 tick 仍在 `all` 內。
     """
 
+    from apps.update_db import expand_targets
     from core.pipeline.utils import DataType
-    from tasks.update_db import expand_targets
 
     expanded: Set[str] = expand_targets({"all"})
 
@@ -59,7 +59,7 @@ def test_all_excludes_futures_tick_until_it_can_resume() -> None:
 def test_explicit_futures_tick_is_still_honoured() -> None:
     """明確點名的 target 一定保留：暫停的是捷徑，不是這個功能"""
 
-    from tasks.update_db import expand_targets
+    from apps.update_db import expand_targets
 
     assert "futures_tick" in expand_targets({"futures_tick"})
 
@@ -72,8 +72,8 @@ def test_finmind_is_paused_from_daily_update() -> None:
     真正的失敗混在裡面沒人看。
     """
 
+    from apps.update_db import expand_targets
     from core.pipeline.utils import DataType
-    from tasks.update_db import expand_targets
 
     finmind: str = DataType.FINMIND.name.lower()
     assert finmind not in expand_targets({"no_tick"})
@@ -108,7 +108,7 @@ def test_delete_price_data_defaults_to_preview(
 ) -> None:
     """沒有 --apply 時一列都不能刪"""
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     db_path: Path = make_price_db(tmp_path, dao_factory)
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(db_path))
@@ -125,7 +125,7 @@ def test_delete_price_data_requires_confirmation(
 ) -> None:
     """--apply 但沒有 --yes 且無法互動時不可刪除"""
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     db_path: Path = make_price_db(tmp_path, dao_factory)
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(db_path))
@@ -143,7 +143,7 @@ def test_delete_price_data_applies_with_yes(
 ) -> None:
     """--apply --yes 才真的刪，且只刪指定那天"""
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     db_path: Path = make_price_db(tmp_path, dao_factory)
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(db_path))
@@ -159,7 +159,7 @@ def test_delete_price_data_applies_with_yes(
 def test_delete_price_data_parser_has_the_two_flags() -> None:
     """`--apply` 與 `--yes` 必須存在，否則使用說明會與行為不符"""
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     source: str = Path(module.__file__).read_text(encoding="utf-8")
 
@@ -274,7 +274,7 @@ def test_pipeline_bucket_is_the_complement() -> None:
     accept = LogManager.build_bucket_filter(Path("logs/pipeline"))
 
     assert accept(make_record("core.pipeline.tw.updaters.stock_price_updater"))
-    assert accept(make_record("tasks.update_db"))
+    assert accept(make_record("apps.update_db"))
     assert accept(make_record("some.brand.new.package")), "沒被認領的要落進 pipeline"
     assert not accept(make_record("core.api.tw.stock_price_api"))
 
@@ -343,7 +343,6 @@ _GUARDED_PACKAGES: Tuple[str, ...] = (
     "core",
     "apps",
     "strategies",
-    "tasks",
     "scripts",
     "strategy_lab",
 )
@@ -437,7 +436,7 @@ def test_delete_price_data_reports_failure_on_bad_date(
     就 return，行程照樣以 0 結束，排程端完全看不出來。
     """
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     monkeypatch.setattr(
         module, "TW_STOCK_DB_PATH", str(make_price_db(tmp_path, dao_factory))
@@ -456,7 +455,7 @@ def test_delete_price_data_reports_failure_when_db_is_missing(
     之後所有查詢都回空表，看起來像「資料還沒更新」。
     """
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     missing: Path = tmp_path / "nope" / "tw_stock.db"
     monkeypatch.setattr(module, "TW_STOCK_DB_PATH", str(missing))
@@ -470,7 +469,7 @@ def test_delete_price_data_reports_success_on_preview(
 ) -> None:
     """預覽模式與「本來就沒有這天」都算成功，排程不該因此變紅"""
 
-    import tasks.delete_price_data as module
+    import apps.delete_price_data as module
 
     monkeypatch.setattr(
         module, "TW_STOCK_DB_PATH", str(make_price_db(tmp_path, dao_factory))

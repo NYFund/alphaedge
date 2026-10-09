@@ -2,13 +2,13 @@
 
 > This is the English translation of [`command-usage.zh-TW.md`](command-usage.zh-TW.md); edit the Chinese version first, then sync this one.
 
-This document collects common runtime commands: data updates (`tasks.update_db`), data maintenance, backtesting (`apps.backtest`), and live trading (`apps.live`).
+This document collects common runtime commands: data updates (`apps.update_db`), data maintenance, backtesting (`apps.backtest`), and live trading (`apps.live`).
 
-## Data Update: `python -m tasks.update_db`
+## Data Update: `python -m apps.update_db`
 
 ### Overview
 
-`tasks.update_db` is the entrypoint of the data update pipeline. Use `--target` to choose one or more update targets.
+`apps.update_db` is the entrypoint of the data update pipeline. Use `--target` to choose one or more update targets.
 If `--target` is omitted, the default is `no_tick` (all datasets except **both** tick targets and the explicit-only targets).
 A failing target does not stop the others, but the run exits with code 1 at the end; it also removes rotated `logs/api/` files older than 7 days on the way out.
 
@@ -51,53 +51,53 @@ A failing target does not stop the others, but the run exits with code 1 at the 
 
 ```bash
 # tick-by-tick trades
-python -m tasks.update_db --target tick
+python -m apps.update_db --target tick
 
 # institutional chip data
-python -m tasks.update_db --target chip
+python -m apps.update_db --target chip
 
 # closing prices
-python -m tasks.update_db --target price
+python -m apps.update_db --target price
 
 # margin trading balances
-python -m tasks.update_db --target margin
+python -m apps.update_db --target margin
 
 # ex-dividend / ex-rights table (TWSE for listed, TPEx for OTC; full history)
-python -m tasks.update_db --target dividend
+python -m apps.update_db --target dividend
 
 # non-dividend corporate actions (scans the whole range every run: events are announced after the fact)
-python -m tasks.update_db --target corporate_action
+python -m apps.update_db --target corporate_action
 
 # financial statements
 # The statement of changes in equity (equity_change) is queried per stock: one year-quarter is
 # about 2,000 requests. Re-running only fills the difference set (stocks already in the table
 # and stocks confirmed to have no data are skipped). Data shape and known limits:
 # docs/pipeline/equity-change.md
-python -m tasks.update_db --target fs
+python -m apps.update_db --target fs
 
 # monthly revenue report
-python -m tasks.update_db --target mrr
+python -m apps.update_db --target mrr
 
 # all FinMind datasets
-python -m tasks.update_db --target finmind
+python -m apps.update_db --target finmind
 
 # FinMind stock info (without warrants)
-python -m tasks.update_db --target stock_info
+python -m apps.update_db --target stock_info
 
 # FinMind stock info (with warrants)
-python -m tasks.update_db --target stock_info_with_warrant
+python -m apps.update_db --target stock_info_with_warrant
 
 # FinMind broker info
-python -m tasks.update_db --target broker_info
+python -m apps.update_db --target broker_info
 
 # FinMind broker trading stats
-python -m tasks.update_db --target broker_trading
+python -m apps.update_db --target broker_trading
 
 # TAIFEX daily futures quotes (written to tw_futures.db, not tw_stock.db)
 # One product per query and day/night sessions are queried separately, so
 # requests = products × 2 × trading days. The first backfill of TX alone from
 # DEFAULT_FUTURES_START_DATE (2015-01-01) is about 6,100 requests.
-python -m tasks.update_db --target futures_price
+python -m apps.update_db --target futures_price
 
 # stock futures universe (written to tw_futures.db)
 # The whole list is one GET; re-running on the same day does not create a second snapshot.
@@ -105,27 +105,27 @@ python -m tasks.update_db --target futures_price
 # snapshots — update daily, the sparser the snapshots the larger the date error.
 # Downstream code must get the product list from
 # FuturesStockUniverseUpdater.get_active_products(), never a hand-written list.
-python -m tasks.update_db --target futures_stock_universe
+python -m apps.update_db --target futures_stock_universe
 
 # short-sale-below-reference list and cash day-trading list (already part of all / no_tick; this runs them alone)
 # A backfill from the start is about 3,200 trading days × two requests per day — hours at the current throttle
-python -m tasks.update_db --target short_sale_list day_trade_list
+python -m apps.update_db --target short_sale_list day_trade_list
 
 # market holiday schedule (written to the market_holiday table in tw_stock.db)
 # One request per year; every run re-fetches last, this and next year and replaces each year whole.
 # Next year's schedule is usually published in December; until then that year is logged as
 # "not yet announced" and skipped, which is normal. Live trading refuses to start on a date whose
 # year is not loaded (unless another source can answer).
-python -m tasks.update_db --target market_holiday
+python -m apps.update_db --target market_holiday
 
 # all datasets (including tick)
-python -m tasks.update_db --target all
+python -m apps.update_db --target all
 
 # all datasets except tick (same as default)
-python -m tasks.update_db --target no_tick
+python -m apps.update_db --target no_tick
 
 # default behavior (same as no_tick)
-python -m tasks.update_db
+python -m apps.update_db
 ```
 
 For the other futures targets (continuous contracts, margin, chip, tick) and their
@@ -134,15 +134,15 @@ backfill caveats, see [TW Futures Platform](../futures/tw-futures-platform.md), 
 ### Multi-Target Examples
 
 ```bash
-python -m tasks.update_db --target chip price
-python -m tasks.update_db --target chip price tick
-python -m tasks.update_db --target stock_info broker_trading
+python -m apps.update_db --target chip price
+python -m apps.update_db --target chip price tick
+python -m apps.update_db --target stock_info broker_trading
 ```
 
 ### `--from`: pull the start date earlier
 
 ```bash
-python -m tasks.update_db --target price --from 2013-01-01
+python -m apps.update_db --target price --from 2013-01-01
 ```
 
 **Rarely needed**: candidate dates are the difference set "calendar − already in
@@ -150,30 +150,30 @@ table − confirmed no data", so gaps in the middle are backfilled automatically
 Use `--from` only to start earlier than the default. It affects date-based targets
 only; `fs` / `mrr` (year-quarter, year-month) are unaffected.
 
-## Deleting one day of price data: `python -m tasks.delete_price_data`
+## Deleting one day of price data: `python -m apps.delete_price_data`
 
 **Previews by default** — one wrong date drops a whole day of quotes for
 thousands of stocks, recoverable only by re-running the ETL.
 
 ```bash
 # Report the row count only, no write
-python -m tasks.delete_price_data --date 2025-07-13
+python -m apps.delete_price_data --date 2025-07-13
 
 # Actually delete; asks you to type the full date to confirm
-python -m tasks.delete_price_data --date 2025-07-13 --apply
+python -m apps.delete_price_data --date 2025-07-13 --apply
 
 # For schedulers: skip the interactive confirmation
-python -m tasks.delete_price_data --date 2025-07-13 --apply --yes
+python -m apps.delete_price_data --date 2025-07-13 --apply --yes
 ```
 
 A non-interactive environment (no tty) without `--yes` refuses to run.
 
-## Cleaning rotated logs: `python -m tasks.clean_logs`
+## Cleaning rotated logs: `python -m apps.clean_logs`
 
 ```bash
-python -m tasks.clean_logs                     # preview (no deletion)
-python -m tasks.clean_logs --apply             # delete, keeping 30 days by default
-python -m tasks.clean_logs --apply --bucket api --days 7
+python -m apps.clean_logs                     # preview (no deletion)
+python -m apps.clean_logs --apply             # delete, keeping 30 days by default
+python -m apps.clean_logs --apply --bucket api --days 7
 ```
 
 Only rotated files (timestamped names) are removed; active `xxx.log` files are kept.

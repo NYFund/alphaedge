@@ -241,7 +241,7 @@ df = fs.get(table_name="<your_fs_table>", year=2024, season=1)
 ```
 
 > 不同財報（資產負債表、損益表、現金流量表）會落在不同的 SQLite 表，
-> 實際表名請以 `tasks/` 內的更新腳本或 `core/config/schema.py` 為準。
+> 實際表名請以 `core/config/schema.py` 為準。
 
 ### MarketCalendar — 交易日工具
 
@@ -342,11 +342,11 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 
 | 資料種類       | 後端           | 提供 API                      | 來源 / 更新                                |
 | -------------- | -------------- | ----------------------------- | ------------------------------------------ |
-| 日線價量       | SQLite         | `StockPriceAPI`               | `tasks/` 內的爬蟲；表名見 `core/config/schema.py` |
+| 日線價量       | SQLite         | `StockPriceAPI`               | `core/pipeline/` 內的爬蟲；表名見 `core/config/schema.py` |
 | 逐筆 Tick      | DolphinDB      | `StockTickAPI`                | Shioaji / 第三方；需另起 DDB 服務          |
-| 三大法人籌碼   | SQLite         | `StockChipAPI`                | `tasks/` 內的爬蟲                          |
-| 月營收         | SQLite         | `MonthlyRevenueReportAPI`     | `tasks/` 內的爬蟲                          |
-| 財報           | SQLite         | `FinancialStatementAPI`       | `tasks/` 內的爬蟲                          |
+| 三大法人籌碼   | SQLite         | `StockChipAPI`                | `core/pipeline/` 內的爬蟲                  |
+| 月營收         | SQLite         | `MonthlyRevenueReportAPI`     | `core/pipeline/` 內的爬蟲                  |
+| 財報           | SQLite         | `FinancialStatementAPI`       | `core/pipeline/` 內的爬蟲                  |
 | 海外 ADR / FX  | yfinance       | 直接 `import yfinance as yf`  | 即時抓取（無本地表）                       |
 | 交易日／前一日 | 視 API 而定   | `MarketCalendar`              | 透過 `StockPriceAPI` 推算                 |
 
@@ -375,7 +375,7 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 先建立主題資料夾 `strategy_lab/data_analysis/<your_topic>/`，把腳本存成 `run.py` 或 `analysis.py`，就能在專案根目錄跑。
 
 > **執行一律用 `-m`**（例如 `.venv/bin/python -m strategy_lab.data_analysis.<your_topic>.run`）。
-> `strategy_lab` 不在 `pyproject` 的 `packages.find` 裡（只裝 `core*`／`tasks*`／`tests*`），
+> `strategy_lab` 不在 `pyproject` 的 `packages.find` 裡（只裝 `core*`／`apps*`／`strategies*`／`tests*`），
 > 直接跑檔案路徑時 `sys.path[0]` 是腳本自己的目錄，`import strategy_lab.…` 會失敗。
 > 舊版靠每支腳本開頭的 `sys.path.insert` 硬塞，那會遮蔽「沒安裝就跑」的 import
 > 錯誤（已清除）。

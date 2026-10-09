@@ -76,7 +76,7 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 
 | 時間 | 指令 | 說明 |
 |------|------|------|
-| 08:00 | `uv run --no-sync python -m tasks.update_db` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它 |
+| 08:00 | `uv run --no-sync python -m apps.update_db` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它 |
 | 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59） |
 | 08:40 | `... run --rm live --strategy <期貨策略> --phase open` | 期貨開盤段（送單時窗 08:45～08:59） |
 | 13:20 | `... run --rm live --strategy <股票策略> --phase close` | 台股尾盤段；程式會等到 13:25 才送單 |
@@ -89,7 +89,7 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  8 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m tasks.update_db
+0  8 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db
 30 8 * * 1-5  ... run --rm live --strategy MomentumStrategy1 --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
 20 13 * * 1-5 ... run --rm live --strategy MomentumStrategy1 --phase close

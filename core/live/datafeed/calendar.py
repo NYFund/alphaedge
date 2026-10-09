@@ -21,7 +21,7 @@ from core.api.tw.market_holiday_api import MarketHolidayAPI
    與我們以為的不同，那時繼續跑只是在賭。
 
 **主來源是官方開休市日曆**（`OfficialHolidayCalendarSource`，TWSE 公告落地成
-`market_holiday` 表，`python -m tasks.update_db --target market_holiday`）。它只替
+`market_holiday` 表，`python -m apps.update_db --target market_holiday`）。它只替
 已入庫的年度作答；年度未入庫時回 `None`，交由其他來源——平日就只剩券商合約檔。
 
 ⚠️ **官方日曆與券商合約檔可能衝突**：休市日若券商因系統作業更新了合約檔，
@@ -189,7 +189,7 @@ def resolve_trading_day(
             f"沒有任何來源判定得出 {date} 是否為交易日（已詢問 "
             f"{[name for name, _ in answers]}）。**不預設為開市**——"
             "休市日照常跑完整套流程會送單被退、對帳全是差異，然後推播一整天的告警。"
-            "請執行 `python -m tasks.update_db --target market_holiday` 補上官方"
+            "請執行 `python -m apps.update_db --target market_holiday` 補上官方"
             "開休市日曆，或確認券商合約檔取得正常"
         )
 

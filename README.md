@@ -13,7 +13,7 @@ graph TB
     subgraph entry ["入口層"]
         BacktestApp["apps/backtest.py<br/>python -m apps.backtest"]
         LiveApp["apps/live.py<br/>python -m apps.live"]
-        Tasks["tasks/update_db.py"]
+        Tasks["apps/update_db.py"]
     end
 
     subgraph strategy_layer ["策略層（Alpha）"]
@@ -182,7 +182,6 @@ graph TB
 | `core/datafeed/`  | 中立的 `BaseDataFeed` 契約：回測與實盤各自實作，策略的 `setup_apis(feed)` 型別就是它 |
 | `core/market/`    | 市場結構與市場規則（交易日曆、期貨換月、保證金設定、商品規格 `InstrumentSpec`、成本模型 `CostModel`），不屬於任一引擎 |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
-| `tasks/`        | 資料維護與資料庫更新腳本                                              |
 | `tests/`        | 單元／整合測試、回測回歸線（`tests/backtest/`）與實盤測試（`tests/live/`，以 fake 券商閘道跑） |
 | `scripts/`      | 護欄檢查（分層相依、文件路徑、API 孤兒方法）、回歸腳本與人工執行腳本   |
 | `docs/`         | 使用與架構說明文件（安裝、指令、部署、資料、回測與 ETL 設計）          |
@@ -271,7 +270,7 @@ uv sync
 .venv\Scripts\activate
 ```
 
-專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`tasks`／`tests`。
+專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`apps`／`strategies`／`tests`。
 之後每開一個新的終端機都要先啟用虛擬環境（要離開時執行 `deactivate`）；
 不想啟用時，也可以在指令前加 `uv run --no-sync`，例如 `uv run --no-sync python -m apps.backtest ...`
 （不帶 `--no-sync` 的 `uv run` 會先把環境同步成預設相依，順手移除另外裝的 `frontend`／`lab` extra）。
@@ -416,7 +415,7 @@ CI 沒有該檔，只能在本機跑。**
 完整 target 對照表與單一/組合範例請見：[指令教學](docs/commands/command-usage.zh-TW.md)。
 
 ```bash
-python -m tasks.update_db --target no_tick
+python -m apps.update_db --target no_tick
 ```
 
 ### 執行回測
@@ -503,7 +502,6 @@ AlphaEdge/
 │   └── __init__.py
 ├── strategies/                # 具體策略的頂層套件（stock／futures，目前為空白門面；策略契約留在 core/strategies/，相依只能 strategies → core）
 ├── strategy_lab/              # 策略研究工作區（strategies/ / data_analysis/ / notebooks/ / ideas/）
-├── tasks/                     # 資料更新與維運入口（update_db、delete_price_data、clean_logs）
 ├── tests/                     # 測試套件（`backtest/` 引擎與回歸線、`live/` 實盤、`execution/`、`portfolio/` 共用契約層；`temp/`、`database/`、`downloads/` 為執行期產物）
 ├── backlog/                   # 內部規劃筆記
 ├── docs/                      # 專案文件
@@ -526,7 +524,7 @@ AlphaEdge/
 │   ├── check_overnight_positions.py  # 模擬環境是否保留隔夜部位（唯讀分析）
 │   ├── launchd/               # macOS 排程設定（逐段落啟動）
 │   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
-├── Dockerfile                 # 後端映像（core、apps、tasks、strategies；回測、資料更新與實盤共用）
+├── Dockerfile                 # 後端映像（core、apps、strategies；回測、資料更新與實盤共用）
 ├── docker-compose.yml         # compose：core ＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ 共用 results volume
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）

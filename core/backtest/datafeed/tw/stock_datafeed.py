@@ -332,7 +332,7 @@ class TwStockDataFeed(BaseDataFeed):
                 raise TradingListCoverageError(
                     f"{label}在回測區間內缺 {len(missing)} 個交易日（{preview}"
                     f"{'…' if len(missing) > 5 else ''}）；請先執行 "
-                    f"`python -m tasks.update_db --target {target} --from {missing[0]}`"
+                    f"`python -m apps.update_db --target {target} --from {missing[0]}`"
                 )
 
     def get_force_cover_symbols(self, date: datetime.date) -> Set[str]:

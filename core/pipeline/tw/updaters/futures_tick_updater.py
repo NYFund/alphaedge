@@ -65,7 +65,7 @@ class FuturesTickUpdater(BaseDataUpdater):
         """
         登入 Shioaji（可多組金鑰）
 
-        **登入放在 `update()` 而不是 `__init__()`**：本類會被 `tasks/update_db.py`
+        **登入放在 `update()` 而不是 `__init__()`**：本類會被 `apps/update_db.py`
         import，建構時就登入會讓每一次跑其他 target 都白白連一次券商。
         """
 

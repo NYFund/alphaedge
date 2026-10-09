@@ -199,7 +199,7 @@ class BaseLiveDataFeed(BaseDataFeed):
 
         if latest is None:
             raise DataFreshnessError(
-                "歷史資料表是空的，無法啟動；請先跑 `python -m tasks.update_db`"
+                "歷史資料表是空的，無法啟動；請先跑 `python -m apps.update_db`"
             )
 
         if latest >= current:
@@ -212,7 +212,7 @@ class BaseLiveDataFeed(BaseDataFeed):
         if gap > self.MAX_DATA_GAP_DAYS:
             raise DataFreshnessError(
                 f"歷史資料最新日 {latest} 距今 {gap} 個曆日，超過容許的 "
-                f"{self.MAX_DATA_GAP_DAYS} 天；請先跑 `python -m tasks.update_db`"
+                f"{self.MAX_DATA_GAP_DAYS} 天；請先跑 `python -m apps.update_db`"
             )
 
         missing: List[datetime.date] = self._definite_trading_days_between(
@@ -221,7 +221,7 @@ class BaseLiveDataFeed(BaseDataFeed):
         if missing:
             raise DataFreshnessError(
                 f"歷史資料最新日是 {latest}，但 {missing} 確定是交易日而資料缺漏；"
-                "請先跑 `python -m tasks.update_db`"
+                "請先跑 `python -m apps.update_db`"
             )
 
         logger.info(f"歷史資料新鮮度檢查通過：最新日 {latest}，今天 {current}")

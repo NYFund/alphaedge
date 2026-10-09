@@ -218,7 +218,7 @@ def test_update_db_exits_non_zero_when_a_target_fails(
     這是 2026-08-16 事故的核心：舊行為是結束碼 0 ＋ `✅ Database Update Completed`。
     """
 
-    import tasks.update_db as update_db
+    import apps.update_db as update_db
 
     class ExplodingUpdater:
         """模擬 loader 拋出 DataLoadError 的 updater"""
@@ -240,7 +240,7 @@ def test_update_db_exits_non_zero_when_a_target_fails(
 def test_target_guard_isolates_failure() -> None:
     """一個 target 失敗不得中斷其餘 target——否則是拿可用性換可見度"""
 
-    from tasks.update_db import target_guard
+    from apps.update_db import target_guard
 
     failed: List[str] = []
 

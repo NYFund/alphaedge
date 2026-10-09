@@ -29,7 +29,7 @@ def test_update_db_runs_at_taipei_six_and_is_followed_by_parity() -> None:
     hour, minute, steps = _CHAINED_JOBS["update-db"]
 
     assert (hour, minute) == (6, 0)
-    assert steps[0] == ["-m", "tasks.update_db"]
+    assert steps[0] == ["-m", "apps.update_db"]
     parity_strategies: List[str] = [
         step[step.index("--strategy") + 1]
         for step in steps[1:]

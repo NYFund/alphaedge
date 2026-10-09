@@ -1,12 +1,12 @@
 # 指令教學
 
-本文件整理常用執行指令，包含資料更新（`tasks.update_db`）、資料維護、回測（`apps.backtest`）與實盤（`apps.live`）。
+本文件整理常用執行指令，包含資料更新（`apps.update_db`）、資料維護、回測（`apps.backtest`）與實盤（`apps.live`）。
 
-## 資料更新：`python -m tasks.update_db`
+## 資料更新：`python -m apps.update_db`
 
 ### 功能說明
 
-`tasks.update_db` 是資料更新系統入口，透過 `--target` 指定要更新的資料類型，可單一或多選。
+`apps.update_db` 是資料更新系統入口，透過 `--target` 指定要更新的資料類型，可單一或多選。
 未指定 `--target` 時，預設為 `no_tick`（更新全部資料，但不含**兩種** tick 與只能點名的 target）。
 任一 target 失敗不會中斷其餘 target，但整批跑完會以結束碼 1 收場；收尾會自動清掉 7 天以前的 `logs/api/` 輪替檔。
 
@@ -49,76 +49,76 @@
 
 ```bash
 # 逐筆成交
-python -m tasks.update_db --target tick
+python -m apps.update_db --target tick
 
 # 三大法人籌碼
-python -m tasks.update_db --target chip
+python -m apps.update_db --target chip
 
 # 收盤價
-python -m tasks.update_db --target price
+python -m apps.update_db --target price
 
 # 信用交易（融資融券餘額）
-python -m tasks.update_db --target margin
+python -m apps.update_db --target margin
 
 # 除權除息計算結果表（上市走證交所、上櫃走櫃買中心，皆為全歷史）
-python -m tasks.update_db --target dividend
+python -m apps.update_db --target dividend
 
 # 非除權息的公司行動（每次掃整個區間：這類事件是事後公告）
-python -m tasks.update_db --target corporate_action
+python -m apps.update_db --target corporate_action
 
 # 財報
 # 權益變動表（equity_change）是逐檔查詢：一個年季約 2,000 次請求。
 # 重跑只補差集（已入庫與已確認沒資料的公司都不會重打）。
 # 資料形狀與已知限制見 docs/pipeline/equity-change.md
-python -m tasks.update_db --target fs
+python -m apps.update_db --target fs
 
 # 月營收報表
-python -m tasks.update_db --target mrr
+python -m apps.update_db --target mrr
 
 # 全部 FinMind（台股總覽 + 證券商 + 券商分點）
-python -m tasks.update_db --target finmind
+python -m apps.update_db --target finmind
 
 # FinMind 台股總覽（不含權證）
-python -m tasks.update_db --target stock_info
+python -m apps.update_db --target stock_info
 
 # FinMind 台股總覽（含權證）
-python -m tasks.update_db --target stock_info_with_warrant
+python -m apps.update_db --target stock_info_with_warrant
 
 # FinMind 證券商資訊
-python -m tasks.update_db --target broker_info
+python -m apps.update_db --target broker_info
 
 # FinMind 券商分點統計
-python -m tasks.update_db --target broker_trading
+python -m apps.update_db --target broker_trading
 
 # 台期貨每日行情（寫入 tw_futures.db，非 tw_stock.db）
 # 一次只能查一個商品、日盤與夜盤要分開查，故請求數 = 商品數 × 2 × 交易日數；
 # 起點為 DEFAULT_FUTURES_START_DATE（2015-01-01），單檔 TX 首次回補約 6,100 次請求。
-python -m tasks.update_db --target futures_price
+python -m apps.update_db --target futures_price
 
 # 股票期貨標的池（寫入 tw_futures.db）
 # 整份清單一次 GET 就結束，同一天重跑不會產生第二份快照。
 # 來源沒有掛牌日／下市日欄位，兩者由快照序列差分推得，故建議每日更新——
 # 快照愈稀疏，推出來的日期誤差愈大。
 # 下游要取商品清單一律用 FuturesStockUniverseUpdater.get_active_products()，不要另外手寫清單。
-python -m tasks.update_db --target futures_stock_universe
+python -m apps.update_db --target futures_stock_universe
 
 # 平盤下得融（借）券賣出名單、現股當沖名單（每日更新已含在 all／no_tick 內，這裡是單獨補跑）
 # 從起點回補約 3,200 個交易日 × 每日兩個請求，以現行節流要數小時
-python -m tasks.update_db --target short_sale_list day_trade_list
+python -m apps.update_db --target short_sale_list day_trade_list
 
 # 市場開休市日期（寫入 tw_stock.db 的 market_holiday 表）
 # 一年一次請求，每次重抓去年、今年、明年並整年替換。明年的公告通常 12 月才出來，
 # 那之前明年會被記為「尚未公告」跳過，屬正常；實盤查到未入庫年度的日期會拒絕啟動。
-python -m tasks.update_db --target market_holiday
+python -m apps.update_db --target market_holiday
 
 # 全部資料（含 tick）
-python -m tasks.update_db --target all
+python -m apps.update_db --target all
 
 # 全部資料（不含 tick，等同預設）
-python -m tasks.update_db --target no_tick
+python -m apps.update_db --target no_tick
 
 # 預設（等同 no_tick）
-python -m tasks.update_db
+python -m apps.update_db
 ```
 
 期貨的其他 target（連續合約、保證金、籌碼、tick）與回補注意事項見 [台期貨平台](../futures/tw-futures-platform.md)〈指令〉。
@@ -126,15 +126,15 @@ python -m tasks.update_db
 ### 多個 target 組合範例
 
 ```bash
-python -m tasks.update_db --target chip price
-python -m tasks.update_db --target chip price tick
-python -m tasks.update_db --target stock_info broker_trading
+python -m apps.update_db --target chip price
+python -m apps.update_db --target chip price tick
+python -m apps.update_db --target stock_info broker_trading
 ```
 
 ### `--from`：把起日往前拉
 
 ```bash
-python -m tasks.update_db --target price --from 2013-01-01
+python -m apps.update_db --target price --from 2013-01-01
 ```
 
 **平常不需要用**：updater 的候選日期是「日曆 − 表內已有 − 已確認沒有資料」的
@@ -142,30 +142,30 @@ python -m tasks.update_db --target price --from 2013-01-01
 `--from` 是給「要把起點拉到比預設更早」的情境用的，只影響以**日期**為單位的
 target；`fs`／`mrr` 這種以年季／年月為單位的不受影響。
 
-## 刪除單日行情：`python -m tasks.delete_price_data`
+## 刪除單日行情：`python -m apps.delete_price_data`
 
 **預設只預覽不刪除**——打錯一個日期就少掉一整天、上千檔的收盤行情，
 而且要重跑 ETL 才補得回來。
 
 ```bash
 # 只報告會刪幾筆，不寫入
-python -m tasks.delete_price_data --date 2025-07-13
+python -m apps.delete_price_data --date 2025-07-13
 
 # 實際刪除；會要求輸入完整日期做確認
-python -m tasks.delete_price_data --date 2025-07-13 --apply
+python -m apps.delete_price_data --date 2025-07-13 --apply
 
 # 排程用：跳過互動確認
-python -m tasks.delete_price_data --date 2025-07-13 --apply --yes
+python -m apps.delete_price_data --date 2025-07-13 --apply --yes
 ```
 
 非互動環境（無 tty）若沒有 `--yes` 一律拒絕執行，不會默默刪掉。
 
-## 清理已輪替的日誌：`python -m tasks.clean_logs`
+## 清理已輪替的日誌：`python -m apps.clean_logs`
 
 ```bash
-python -m tasks.clean_logs                     # 預覽（不刪）
-python -m tasks.clean_logs --apply             # 實際刪除，預設保留 30 天
-python -m tasks.clean_logs --apply --bucket api --days 7
+python -m apps.clean_logs                     # 預覽（不刪）
+python -m apps.clean_logs --apply             # 實際刪除，預設保留 30 天
+python -m apps.clean_logs --apply --bucket api --days 7
 ```
 
 只刪檔名帶時間戳的已輪替檔，使用中的 `xxx.log` 一律保留。

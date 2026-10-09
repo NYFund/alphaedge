@@ -53,7 +53,7 @@
 資料更新統一入口：
 
 ```bash
-python -m tasks.update_db --target <targets...>
+python -m apps.update_db --target <targets...>
 ```
 
 不帶 `--target` 時等同 `--target no_tick`。`all`／`no_tick` 兩個捷徑**都不含**

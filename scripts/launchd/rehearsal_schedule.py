@@ -142,7 +142,7 @@ _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
         6,
         0,
         [
-            ["-m", "tasks.update_db"],
+            ["-m", "apps.update_db"],
             ["-m", "apps.live", "--strategy", "MomentumStrategy1", "--phase", "parity"],
             [
                 "-m",

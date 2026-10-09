@@ -11,7 +11,7 @@
 相依**單向由上往下**，同層之間不互相 import。違反時 `scripts/check_layer_deps.py` 會以非零狀態碼結束（CI 有跑）。
 
 ```
-入口層      apps/backtest.py ── apps/live.py ── tasks/update_db.py
+入口層      apps/backtest.py ── apps/live.py ── apps/update_db.py
               │
 策略層      core/strategies/、strategies/  ← 宣告 market，是 factory 的分派鍵
             （Alpha：generate_*_signals() → List[Signal]）
@@ -256,8 +256,8 @@ sequenceDiagram
    `tests/test_strategy_data_access.py` 會在策略層出現欄位字面值時失敗——這類錯誤是**靜默**的（換資料源後策略會安靜地不開倉，報表上只表現為訊號變少）。
 4. **`core/utils/instrument.py` 只 import `core/utils/constant/`。** `StockUtils` 已不再相依 `MarketCalendar`，因此任何層都能引用它；不要再讓它 import `core/market/` 或 `core/api/`——`MarketCalendar` 相依 `StockPriceAPI`，`core/api/` 一旦反過來用 `StockUtils` 就會循環。
 5. **回歸雙線不經過 reporter。** `tests/backtest/make_baseline.py` 直接從 `account.trade_records` 組 `DataFrame`，改壞報表欄位兩條線都一樣綠——動 `reporter.py` 時要靠 `test_reporting.py` 與 `test_reporter_timeline.py`。
-6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`tasks/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
-7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`tasks/`、`scripts/`、`tests/` 不受限。
+6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`apps/`、`strategies/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
+7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`apps/`、`scripts/`、`tests/` 不受限。
 8. **回測以外不可 import 回測內部零件**（`core/backtest/models`／`datafeed`／`report`）。實盤與策略要用的市場規則已在 `core/market/`、設定類別在 `core/models/`；由 `check_layer_deps.py` 的 E''''' 項強制，`tests/` 不受限。
 9. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
 10. **任何動到 `core/backtest/`、`core/position/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**

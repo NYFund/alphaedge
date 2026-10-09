@@ -2,7 +2,7 @@
 
 本專案以「分角色容器化」部署：
 
-- 根目錄的 `Dockerfile`：回測、資料更新與實盤共用的映像（內含 `core/`、`apps/`、`tasks/`、`strategies/`；預設入口為回測）
+- 根目錄的 `Dockerfile`：回測、資料更新與實盤共用的映像（內含 `core/`、`apps/`、`strategies/`；預設入口為回測）
 - `frontend/Dockerfile`：前端（Streamlit，相依列在 `frontend/requirements.txt`）
 
 容器映像**不含資料庫**，資料一律由主機掛入。
@@ -41,7 +41,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 
 - `.env`（可由 `.env.example` 複製）
 - `data/db/`（`tw_stock.db`、`tw_futures.db`）
-- `data/downloads/`（只有要在容器內跑 `tasks.update_db` 時才需要）
+- `data/downloads/`（只有要在容器內跑 `apps.update_db` 時才需要）
 - `results/`
 
 ## 3) 執行 core 容器（回測）
@@ -67,7 +67,7 @@ docker run --rm \
   -v "$(pwd)/logs:/app/logs" \
   --env-file .env \
   --entrypoint python \
-  alphaedge-core -m tasks.update_db --target price
+  alphaedge-core -m apps.update_db --target price
 ```
 
 ## 4) 執行前端容器（選用）
@@ -101,7 +101,7 @@ STRATEGY=MomentumFuturesStrategy docker compose up core   # 換策略
 
 ## 6) 建議的正式環境切分
 
-- **資料更新節點**：定時執行 `python -m tasks.update_db ...`
+- **資料更新節點**：定時執行 `python -m apps.update_db ...`
 - **回測節點**：執行 `python -m apps.backtest --strategy ...`，唯讀掛載資料庫
 - **展示節點**：掛載唯讀的 `results` 給前端
 

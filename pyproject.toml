@@ -9,7 +9,7 @@ description = "台股量化研究平台：資料 ETL、回測引擎與策略開�
 requires-python = ">=3.12"
 
 # 只列「程式碼實際 import 的套件」，傳遞相依交給 uv 解析。
-# 清單由 AST 掃描 core/、tasks/、frontend/、tests/、strategy_lab/ 的 import 產出，
+# 清單由 AST 掃描 core/、apps/、strategies/、frontend/、tests/、strategy_lab/ 的 import 產出，
 # 版本下限取當前實測可用的版本；鎖定的精確版本見 uv.lock（改了這裡要重新 `uv lock`）。
 dependencies = [
     "FinMind>=1.9",
@@ -75,7 +75,7 @@ lab = [
 # 所有含 .py 的套件目錄都有 __init__.py；namespaces 仍保留 true：日後新增目錄忘了補
 # __init__.py 時，關掉它會讓 editable 安裝後該套件 import 不到，而且是執行期才炸
 namespaces = true
-include = ["core*", "apps*", "strategies*", "tasks*", "tests*"]
+include = ["core*", "apps*", "strategies*", "tests*"]
 exclude = [
     # 測試 fixture 目錄：會被 namespace 掃描當成套件，實際上不含任何 .py。
     # `core.*` 的產物排除項已於執行期產物重整後全數刪除——那些目錄不在 core/ 底下了
@@ -167,7 +167,7 @@ ignore = [
 # 被 monkeypatch 過的 loader」或 `(物件, 路徑)` 的 tuple，標註要嘛得把類別
 # 從函式內部的 import 搬到檔頭（那會讓 monkeypatch 失效），要嘛只能寫成
 # `Any`——兩者都比不標更糟。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None`；
-# 生產程式碼（`core/`、`apps/`、`tasks/`、`frontend/`）兩條都生效
+# 生產程式碼（`core/`、`apps/`、`frontend/`）兩條都生效
 "tests/*" = ["ANN201"]
 
 # dolphindb 是選用相依（見 [project.optional-dependencies] 的 tick），
@@ -190,7 +190,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-# 量函式庫與具體策略。入口層（`apps/`、`tasks/`）刻意不列：它們只做參數解析與
+# 量函式庫與具體策略。入口層（`apps/`）刻意不列：它們只做參數解析與
 # 退出碼翻譯，實盤入口的測試又多以子行程執行，子行程不會被計入，量出來的數字沒有參考價值
 source = ["core", "strategies"]
 omit = [

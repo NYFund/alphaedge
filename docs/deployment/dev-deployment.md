@@ -14,9 +14,9 @@ source .venv/bin/activate
 ## 2) 更新資料庫
 
 ```bash
-python -m tasks.update_db                          # 全部資料（不含兩種 tick 與只能點名的 target），等同 --target no_tick
-python -m tasks.update_db --target chip price      # 只更新指定資料
-python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
+python -m apps.update_db                          # 全部資料（不含兩種 tick 與只能點名的 target），等同 --target no_tick
+python -m apps.update_db --target chip price      # 只更新指定資料
+python -m apps.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
 ```
 
 - 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日。
@@ -86,8 +86,8 @@ docker compose up -d frontend # 常駐 Web，只讀 volume 裡已落地的 CSV
 
 ```bash
 # 刪除指定日期的 price 資料（預設只預覽，加 --apply 才刪）
-python -m tasks.delete_price_data --date 2025-07-13
+python -m apps.delete_price_data --date 2025-07-13
 
 # 清理已輪替的日誌（預設只預覽）
-python -m tasks.clean_logs
+python -m apps.clean_logs
 ```

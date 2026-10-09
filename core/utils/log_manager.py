@@ -21,7 +21,7 @@ loguru 的 file sink 只在達到 `rotation` 條件時才重開檔案。目錄�
 刪掉時（例如長時間回補途中有人 `rm -rf logs`），handler 會繼續寫進一個
 **已 unlink 的 inode**——程序照跑、資料照寫、`ERROR` 數 0，但日誌從此不可見。
 
-**防線要放進 sink 本身**才涵蓋得到所有路徑（`tasks/clean_logs.py` 只保護它自己
+**防線要放進 sink 本身**才涵蓋得到所有路徑（`apps/clean_logs.py` 只保護它自己
 那條）：`watch=True` 讓下一筆記錄重新建立檔案，含缺少的父目錄。
 已經寫進舊 inode 的內容救不回來，這個參數保證的是「之後不再繼續消失」。
 """

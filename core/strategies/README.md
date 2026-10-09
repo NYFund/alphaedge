@@ -940,7 +940,7 @@ python -m apps.backtest --strategy SimpleStrategy
 - 策略檔案必須放在 `core/strategies/<商品類別>/` 目錄下（本範例是現貨，故為 `stock/`）
 - 策略類別名稱會作為策略識別名稱
 - 確保所有必須的方法都已實作
-- 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
+- 回測前請確認資料庫中有所需的資料（使用 `python -m apps.update_db` 更新資料）
 
 
 ---

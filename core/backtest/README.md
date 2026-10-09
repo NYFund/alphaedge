@@ -452,7 +452,7 @@ python -m apps.live --strategy MomentumStrategy1 --phase open
 - `--strategy` 吃的是**類別名稱**（例如 `MomentumStrategy1`）
 - 策略由 `strategy_loader` 逐一掃描 `core/strategies/` 底下的商品類別子目錄
   （`stock/`、`futures/`）載入，新增商品類別不需要改程式
-- 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
+- 回測前請確認資料庫中有所需的資料（使用 `python -m apps.update_db` 更新資料）
 - 回測結果會儲存在 `results/<策略>/` 目錄，其中 `<策略>` 是 **`strategy.strategy_name`**（例如 `Momentum-1`），**與 `--strategy` 吃的類別名不同**
 
 ## 相關文檔

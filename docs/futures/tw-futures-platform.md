@@ -65,13 +65,13 @@ crawler 到 loader 之間的暫存，不是資料真相來源。理由：唯一�
 ### 2.3 指令
 
 ```bash
-python -m tasks.update_db --target futures_price           # 指數期貨日行情（FUTURES_TARGET_PRODUCTS）
-python -m tasks.update_db --target futures_stock_universe  # 股期標的池當日快照
-python -m tasks.update_db --target futures_stock_price     # 股期行情（標的池流動性前 N 檔）
-python -m tasks.update_db --target futures_continuous      # 由日行情整段重建連續合約（不連網路）
-python -m tasks.update_db --target futures_margin          # 保證金變動序列
-python -m tasks.update_db --target futures_chip            # 三大法人、大額交易人、PCR
-python -m tasks.update_db --target futures_tick            # 逐筆成交（需 [tick] 相依、Shioaji 金鑰、DolphinDB）
+python -m apps.update_db --target futures_price           # 指數期貨日行情（FUTURES_TARGET_PRODUCTS）
+python -m apps.update_db --target futures_stock_universe  # 股期標的池當日快照
+python -m apps.update_db --target futures_stock_price     # 股期行情（標的池流動性前 N 檔）
+python -m apps.update_db --target futures_continuous      # 由日行情整段重建連續合約（不連網路）
+python -m apps.update_db --target futures_margin          # 保證金變動序列
+python -m apps.update_db --target futures_chip            # 三大法人、大額交易人、PCR
+python -m apps.update_db --target futures_tick            # 逐筆成交（需 [tick] 相依、Shioaji 金鑰、DolphinDB）
 ```
 
 - `futures_price` 已被 `--target all` 與 `no_tick` 涵蓋；日常更新以**商品為單位**從表內該商品的最新日接續。

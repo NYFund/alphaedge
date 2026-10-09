@@ -13,7 +13,7 @@ graph TB
     subgraph entry ["Entry Layer"]
         BacktestApp["apps/backtest.py<br/>python -m apps.backtest"]
         LiveApp["apps/live.py<br/>python -m apps.live"]
-        Tasks["tasks/update_db.py"]
+        Tasks["apps/update_db.py"]
     end
 
     subgraph strategy_layer ["Strategy Layer (Alpha)"]
@@ -181,7 +181,6 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `core/datafeed/`  | The neutral `BaseDataFeed` contract; backtest and live each implement it, and it is the type of a strategy's `setup_apis(feed)` |
 | `core/market/`    | Market structure and rules (trading calendars, futures roll, margin config, `InstrumentSpec`, `CostModel`), owned by neither engine |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
-| `tasks/`        | Data maintenance and database update scripts                                                                                    |
 | `tests/`        | Unit/integration tests, backtest regression lines (`tests/backtest/`) and live-trading tests (`tests/live/`, run against a fake broker gateway) |
 | `scripts/`      | Guardrail checks (layer deps, doc paths, orphan API methods), regression script and manual scripts                              |
 | `docs/`         | Usage and architecture docs (setup, commands, deployment, data, backtest and ETL design)                                       |
@@ -270,7 +269,7 @@ uv sync
 .venv\Scripts\activate
 ```
 
-The project is installed into `.venv` in editable mode, so `core` / `tasks` / `tests` are importable
+The project is installed into `.venv` in editable mode, so `core` / `apps` / `strategies` / `tests` are importable
 from any directory. Activate the virtualenv in every new terminal (run `deactivate` to leave it);
 alternatively prefix commands with `uv run --no-sync`, e.g. `uv run --no-sync python -m apps.backtest ...`
 (plain `uv run` first syncs the environment to the default dependencies, removing any `frontend` / `lab` extras you installed).
@@ -419,7 +418,7 @@ it declares no `needs:`, so it starts alongside the list above rather than after
 For full target reference and single/multi-target examples, see [Command Usage](docs/commands/command-usage.md).
 
 ```bash
-python -m tasks.update_db --target no_tick
+python -m apps.update_db --target no_tick
 ```
 
 ### Run backtest
@@ -506,7 +505,6 @@ AlphaEdge/
 │   └── __init__.py
 ├── strategies/                # top-level package for concrete strategies (stock / futures; empty facade for now — strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
 ├── strategy_lab/              # research workspace (strategies/ / data_analysis/ / notebooks/ / ideas/)
-├── tasks/                     # data update and maintenance entrypoints (update_db, delete_price_data, clean_logs)
 ├── tests/                     # test suites (`backtest/` engine and regression lines, `live/` live trading, `execution/` and `portfolio/` shared contracts; `temp/`, `database/`, `downloads/` are runtime artifacts)
 ├── backlog/                   # internal planning notes
 ├── docs/                      # project docs
@@ -529,7 +527,7 @@ AlphaEdge/
 │   ├── check_overnight_positions.py  # does the simulation env keep overnight positions? (read-only analysis)
 │   ├── launchd/               # macOS scheduling (one launch per phase)
 │   └── manual/                # scripts needing credentials or a database (see its README)
-├── Dockerfile                 # backend image (core, apps, tasks, strategies; shared by backtest, data update and live)
+├── Dockerfile                 # backend image (core, apps, strategies; shared by backtest, data update and live)
 ├── docker-compose.yml         # compose: core + live (behind a profile, never started by `up`) + frontend + shared results volume
 ├── pyproject.toml             # dependency declaration (single source) and ruff/pytest config
 ├── uv.lock                    # versions resolved by uv (do not edit; run `uv lock` after changing pyproject)
