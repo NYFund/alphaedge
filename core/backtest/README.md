@@ -21,7 +21,7 @@ AlphaEdge 的回測系統提供策略回測與績效分析。支援哪些市場�
 | 級別 | 資料來源 | 適用商品 | 說明 |
 | ---- | -------- | -------- | ---- |
 | `Scale.DAY` | 台股：`StockPriceAPI` 日線；台期貨：`tw_futures.db` 日行情 | 台股、台期貨 | 預設值；範例見 `strategies/stock/volume_breakout_momentum_strategy.py` |
-| `Scale.TICK` | `StockTickAPI` 逐筆成交（DolphinDB） | 僅台股 | 需 `[dolphindb]` 相依與 DolphinDB；期貨 Tick 回測未實作，`TwFuturesDataFeed` 會回空報價 |
+| `Scale.TICK` | `StockTickAPI` 逐筆成交（TimescaleDB） | 僅台股 | 需 `[tick]` 相依與執行中的 TimescaleDB（開 Docker Desktop 後 `docker compose up -d postgres`）；期貨 Tick 回測未實作，`TwFuturesDataFeed` 會回空報價 |
 
 在策略中設定回測級別：
 

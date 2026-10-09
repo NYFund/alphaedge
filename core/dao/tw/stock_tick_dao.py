@@ -1,13 +1,14 @@
 import datetime
 import io
+import re
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from core.config.schema import STOCK_TICK_LOAD_LOG_TABLE_NAME, STOCK_TICK_TABLE_NAME
-from core.dao.timescale import connect_tick_db
+from core.dao.timescale import connect_tick_db, get_connectorx_uri
 
 if TYPE_CHECKING:
     import psycopg
@@ -56,7 +57,20 @@ class StockTickDAO:
     # 重跑最近幾天時不用先解壓
     COMPRESS_AFTER: datetime.timedelta = datetime.timedelta(days=14)
 
-    # 寫入的欄位與順序（含 `seq`）；讀取介面回傳的欄位不含 `seq`
+    # 讀取介面回傳的欄位、順序與 dtype；`seq` 只用來排序，不回傳
+    READ_DTYPES: Dict[str, str] = {
+        "stock_id": "object",
+        "time": "datetime64[ns]",
+        "close": "float64",
+        "volume": "int64",
+        "bid_price": "float64",
+        "bid_volume": "int64",
+        "ask_price": "float64",
+        "ask_volume": "int64",
+        "tick_type": "int64",
+    }
+
+    # 寫入的欄位與順序（含 `seq`）
     WRITE_COLUMNS: Tuple[str, ...] = (
         "stock_id",
         "time",
@@ -85,6 +99,10 @@ class StockTickDAO:
             - schema: str
                 資料表所在的 schema；正式資料用 `public`，整合測試用暫存 schema
         """
+
+        # ConnectorX 不支援參數佔位符，schema 名稱會直接嵌進 SQL，只接受一般識別字
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", schema):
+            raise ValueError(f"schema 名稱不合法：{schema!r}")
 
         self.owns_conn: bool = conn is None
         self.conn: psycopg.Connection = conn if conn is not None else connect_tick_db()
@@ -311,6 +329,75 @@ class StockTickDAO:
                 (stock_id,),
             ).fetchall()
         return {trade_date: source_rows for trade_date, source_rows in rows}
+
+    # === 讀取 ===
+    def query_ticks(
+        self,
+        start_date: datetime.date,
+        end_date: datetime.date,
+        order_by: Tuple[str, ...],
+        stock_id: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        - Description:
+            以 ConnectorX 讀取區間內的 tick，直接組成 DataFrame
+
+            **不用 `pd.read_sql`**：它逐列轉成 Python 物件，一天全市場百萬列時慢上數十倍。
+            **ConnectorX 不支援參數佔位符**，值只能嵌進 SQL：日期由 `datetime.date` 格式化、
+            `stock_id` 先驗證只含英數字、排序欄位只接受讀取欄位與 `seq`，三者都不是任意字串。
+            只選讀取欄位、不用 `SELECT *`：壓縮 chunk 依欄位解壓，多選一欄就多解一欄。
+        - Parameters:
+            - start_date: datetime.date
+                起日（含）
+            - end_date: datetime.date
+                迄日（含）；以「隔天 00:00 之前」的半開區間查詢
+            - order_by: Tuple[str, ...]
+                排序欄位
+            - stock_id: Optional[str]
+                只取某檔股票；None 取全市場
+        - Return:
+            - pd.DataFrame
+                `READ_DTYPES` 的欄位與 dtype；沒有資料時是同欄位的空表
+        - Raise:
+            - ValueError
+                `stock_id` 或排序欄位不合法
+        """
+
+        allowed_order: Set[str] = set(self.READ_DTYPES) | {"seq"}
+        if not order_by or any(column not in allowed_order for column in order_by):
+            raise ValueError(f"排序欄位不合法：{order_by}")
+        if stock_id is not None and not stock_id.isalnum():
+            raise ValueError(f"stock_id 不合法：{stock_id!r}")
+
+        conditions: List[str] = [
+            f"time >= '{start_date.isoformat()}'",
+            f"time < '{(end_date + datetime.timedelta(days=1)).isoformat()}'",
+        ]
+        if stock_id is not None:
+            conditions.append(f"stock_id = '{stock_id}'")
+        query: str = (
+            f"SELECT {', '.join(self.READ_DTYPES)} "
+            f"FROM {self._regclass(self.TABLE_NAME)} "
+            f"WHERE {' AND '.join(conditions)} "
+            f"ORDER BY {', '.join(order_by)}"
+        )
+
+        # 先取 URI：沒裝 connectorx 時由它拋出附安裝方式的錯誤
+        uri: str = get_connectorx_uri()
+        import connectorx as cx
+
+        # 走 Arrow 再轉 pandas：ConnectorX 直接產生 pandas 的路徑用的是 pandas 已棄用的
+        # 內部 API（`make_block`），pandas 拿掉它那天這條讀取路徑就壞
+        ticks: pd.DataFrame = cx.read_sql(uri, query, return_type="arrow").to_pandas()
+        # 強制轉 dtype：空表與非空表的欄位型別一致，`SMALLINT`／`INTEGER` 也統一成 int64
+        if ticks.empty:
+            return pd.DataFrame(
+                {
+                    column: pd.Series(dtype=dtype)
+                    for column, dtype in self.READ_DTYPES.items()
+                }
+            )
+        return ticks.astype(self.READ_DTYPES)
 
     # === 壓縮 ===
     def pause_compression_policy(self) -> None:

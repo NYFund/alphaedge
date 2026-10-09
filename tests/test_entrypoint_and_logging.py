@@ -230,12 +230,17 @@ def test_api_log_file_level_is_warning() -> None:
 
 
 def test_every_api_module_uses_the_shared_level() -> None:
-    """自己掛 api 桶檔案 sink 的 API 模組都要用同一份常數，不可各自寫死"""
+    """
+    掛 api 桶檔案 sink 的模組都要用同一份常數，不可各自寫死
 
-    api_dir: Path = Path("core/api/tw")
+    掃整個 `core/api/`（含 `base.py`）：各 API 現在都經基底的 `LOG_FILE_NAME` 掛 sink，
+    只掃子目錄的話清單會是空的，這條就變成永遠不檢查任何東西。
+    """
+
+    api_dir: Path = Path("core/api")
     modules: List[Path] = [
         path
-        for path in sorted(api_dir.glob("*.py"))
+        for path in sorted(api_dir.rglob("*.py"))
         if "API_LOGS_DIR_PATH" in path.read_text(encoding="utf-8")
     ]
 

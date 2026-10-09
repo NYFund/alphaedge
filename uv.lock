@@ -167,6 +167,7 @@ lab = [
 tick = [
     { name = "connectorx" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "pyarrow" },
 ]
 
 [package.dev-dependencies]
@@ -191,6 +192,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.0" },
     { name = "plotly", specifier = ">=6.7" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'tick'", specifier = ">=3.2" },
+    { name = "pyarrow", marker = "extra == 'tick'", specifier = ">=18" },
     { name = "python-dateutil", specifier = ">=2.9" },
     { name = "python-docx", marker = "extra == 'lab'", specifier = ">=1.2" },
     { name = "python-dotenv", specifier = ">=1.2" },

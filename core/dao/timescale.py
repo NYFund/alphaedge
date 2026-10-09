@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 # 沒裝選用相依時的提示；放在模組層級，寫入與讀取兩個入口共用同一句
 _MISSING_EXTRA_HINT: str = "請以 `uv sync --extra tick` 安裝台股 tick 的選用相依"
 
+# 連不上資料庫時的提示：TimescaleDB 跑在 Docker 裡，沒開 Docker Desktop 就連不上
+_NOT_RUNNING_HINT: str = (
+    "連不上台股 tick 的 TimescaleDB：請確認 Docker Desktop 已開啟，"
+    "並在專案目錄執行 `docker compose up -d postgres`"
+)
+
 
 def get_tick_database_url() -> str:
     """取得 TimescaleDB 連線字串；`TICK_DATABASE_URL` 未設定時當場拋出"""
@@ -46,6 +52,8 @@ def connect_tick_db(autocommit: bool = False) -> "psycopg.Connection":
             未安裝 `[tick]` 選用相依
         - RuntimeError
             `TICK_DATABASE_URL` 未設定
+        - ConnectionError
+            連不上資料庫（最常見的原因是 Docker Desktop 沒開）
     """
 
     try:
@@ -53,7 +61,12 @@ def connect_tick_db(autocommit: bool = False) -> "psycopg.Connection":
     except ModuleNotFoundError as e:
         raise ModuleNotFoundError(f"找不到 psycopg：{_MISSING_EXTRA_HINT}") from e
 
-    return psycopg.connect(get_tick_database_url(), autocommit=autocommit)
+    try:
+        return psycopg.connect(get_tick_database_url(), autocommit=autocommit)
+    except psycopg.OperationalError as e:
+        # psycopg 的原始訊息只會說 connection refused，看不出要先開 Docker；
+        # 轉成 `ConnectionError` 並附上啟動方式，原始訊息照樣保留在後面
+        raise ConnectionError(f"{_NOT_RUNNING_HINT}（{e}）") from e
 
 
 def get_connectorx_uri() -> str:

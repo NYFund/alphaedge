@@ -31,7 +31,7 @@ from core.utils import Scale
 
 
 class TwStockDataFeed(BaseDataFeed):
-    """台股資料源：SQLite 的日 K 與籌碼、DolphinDB 的 Tick"""
+    """台股資料源：SQLite 的日 K 與籌碼、TimescaleDB 的 Tick"""
 
     # 融券最後回補日 = 除權息交易日往前推 4 個營業日。
     #
@@ -88,7 +88,7 @@ class TwStockDataFeed(BaseDataFeed):
         self.trading_days: Optional[Set[datetime.date]] = None
 
     def setup(self, strategy: BaseStrategy) -> None:
-        """從資料庫載入資料；Tick 級別才建立 DolphinDB 連線"""
+        """從資料庫載入資料；Tick 級別才建立 TimescaleDB 連線"""
 
         self.conn = connect_sqlite(TW_STOCK_DB_PATH)
         self.start_date = strategy.start_date

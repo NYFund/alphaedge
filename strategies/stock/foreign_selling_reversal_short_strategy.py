@@ -65,7 +65,7 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
     Sharpe 1.93）**不是穩健結論**，以下五項全部是**樂觀方向**的偏差或穩定性疑慮：
 
     1. **當日部位的回補價以收盤價近似尾盤**。`Scale.DAY` 沒有真正的尾盤價，落差未量化；
-       要量化必須升級 `Scale.TICK`（tick 資料在 DolphinDB，非 `tw_stock.db`）。
+       要量化必須升級 `Scale.TICK`（tick 資料在 TimescaleDB，非 `tw_stock.db`）。
        被迫留倉的部位則以開盤價回補（見 `get_cover_price()`）。
     2. **未排除處置股／非當沖標的**。兩者都沒有資料源（見 `REJECT_BELOW_REFERENCE_OPEN`
        的說明），實際可交易的機會數會少於 1,096 筆。

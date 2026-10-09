@@ -4,110 +4,96 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
-try:
-    import dolphindb as ddb
-except ModuleNotFoundError:
-    print("Warning: dolphindb module is not installed")
-
 from core.api.base import BaseDataAPI
-from core.config import (
-    API_LOG_FILE_LEVEL,
-    API_LOGS_DIR_PATH,
-    DDB_HOST,
-    DDB_PASSWORD,
-    DDB_PORT,
-    DDB_USER,
-    TICK_DB_PATH,
-    TICK_TABLE_NAME,
-    require_tick_db_path,
-)
-from core.utils.log_manager import LogManager
+from core.dao.tw.stock_tick_dao import StockTickDAO
 
-"""Tick data API: query DolphinDB tick data"""
+"""
+台股 tick API：查詢 TimescaleDB 的 `stock_tick`
+
+查詢一律經 `StockTickDAO`（讀取走 ConnectorX）；回傳欄位、dtype 與排序是固定契約，
+`StockQuoteAdapter` 依賴它們。`seq` 只用來讓同一時間戳記的多筆成交有固定順序，不回傳。
+"""
 
 
 class StockTickAPI(BaseDataAPI):
-    """Tick data API"""
+    """
+    - Description:
+        台股逐筆成交查詢
 
-    def __init__(self) -> None:
-        self.default_stock_id: str = "2330"
-        self.query_start_date: str = "2024.05.10"
-        self.query_end_date: str = "2024.05.10"
+        回傳欄位固定為 `stock_id, time, close, volume, bid_price, bid_volume,
+        ask_price, ask_volume, tick_type`；`time` 是不帶時區的台北當地時間。
+        日期區間兩端都包含（以「迄日隔天 00:00 之前」的半開區間查詢）。
+    """
 
-        self.session: Optional[ddb.session] = None
+    LOG_FILE_NAME: str = "stock_tick_api.log"
 
-        self.setup()
+    def __init__(self, dao: Optional[StockTickDAO] = None) -> None:
+        """
+        - Description:
+            建立 API；連不上資料庫或還沒建表時當場拋出，不讓回測跑完才發現整段沒有報價
+        - Parameters:
+            - dao: Optional[StockTickDAO]
+                共用的 tick DAO（整合測試用來指向暫存 schema）；
+                未指定時自行建立並在 `close()` 關閉
+        """
+
+        self.dao: Optional[StockTickDAO] = dao
+        self.owns_dao: bool = dao is None
+        # 不傳 SQLite 連線：`DEFAULT_DB_PATH` 為 None，基底不會開 SQLite
+        super().__init__()
 
     def setup(self) -> None:
-        """Set Up the Config of Data API"""
+        """建立 tick DAO 並確認資料表存在"""
 
-        # `DDB_PATH` 沒設定時會拼出 `"NonetickDB"` 這種看似路徑的字串，
-        # 讓錯誤訊息指不到真正的原因；在連線之前就攔下來
-        require_tick_db_path()
+        super().setup()
 
-        self.session: ddb.session = ddb.session()
-        self.session.connect(DDB_HOST, DDB_PORT, DDB_USER, DDB_PASSWORD)
+        if self.dao is None:
+            self.dao = StockTickDAO()
+        if not self.dao.table_exists():
+            message: str = (
+                f"TimescaleDB 裡沒有 {self.dao.schema}.{StockTickDAO.TABLE_NAME}："
+                "tick 尚未匯入，無法做 tick 級回測"
+            )
+            logger.error(message)
+            raise RuntimeError(message)
 
-        if self.session.existsDatabase(TICK_DB_PATH):
-            logger.info("* Database exists!")
+    def close(self) -> None:
+        """
+        關閉自己建立的 DAO
 
-            # TSDBCacheEngineSize 設為 2GB（須小於 maxMemSize * 0.75）
-            script: str = """
-            memSize = 2
-            setTSDBCacheEngineSize(memSize)
-            print("TSDBCacheEngineSize: " + string(getTSDBCacheEngineSize() / pow(1024, 3)) + "GB")
-            """
-            self.session.run(script)
-        else:
-            print("* Database doesn't exist!")
+        讀取走 ConnectorX，每次查詢自行開關連線；常駐的只有 DAO 用來確認建表的 psycopg 連線
+        """
 
-        LogManager.setup_logger(
-            "stock_tick_api.log",
-            log_dir=API_LOGS_DIR_PATH,
-            level=API_LOG_FILE_LEVEL,
-        )
+        if self.owns_dao and self.dao is not None:
+            self.dao.close()
+            self.dao = None
+        super().close()
 
     def get(
         self,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> pd.DataFrame:
-        """取得所有個股各自排序好 tick 資料（個股沒有混在一起排序）"""
+        """取得區間內全市場的 tick，依股票、時間排序（同一檔的 tick 連在一起）"""
 
         if start_date > end_date:
             return pd.DataFrame()
-
-        start_date_str: str = start_date.strftime("%Y.%m.%d")
-        end_date_str: str = (end_date + datetime.timedelta(days=1)).strftime("%Y.%m.%d")
-        script: str = f"""
-        db = database("{TICK_DB_PATH}")
-        table = loadTable(db, "{TICK_TABLE_NAME}")
-        select * from table
-        where time between nanotimestamp({start_date_str}):nanotimestamp({end_date_str})
-        """
-        tick: pd.DataFrame = self.session.run(script)
-        return tick
+        return self.dao.query_ticks(start_date, end_date, ("stock_id", "time", "seq"))
 
     def get_ordered_ticks(
         self,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> pd.DataFrame:
-        """取得排序好的 tick 資料（所有個股混在一起以時間排序，模擬市場盤中情形）"""
+        """
+        取得區間內全市場的 tick，所有股票混在一起依時間排序（模擬盤中的成交順序）
+
+        同一時間戳記跨股票的順序以代號固定下來，回測才可重現。
+        """
 
         if start_date > end_date:
             return pd.DataFrame()
-
-        start_date_str: str = start_date.strftime("%Y.%m.%d")
-        end_date_str: str = (end_date + datetime.timedelta(days=1)).strftime("%Y.%m.%d")
-        script: str = f"""
-        db = database("{TICK_DB_PATH}")
-        table = loadTable(db, "{TICK_TABLE_NAME}")
-        select * from table
-        where time between nanotimestamp({start_date_str}):nanotimestamp({end_date_str}) order by time
-        """
-        tick: pd.DataFrame = self.session.run(script)
-        return tick
+        return self.dao.query_ticks(start_date, end_date, ("time", "stock_id", "seq"))
 
     def get_stock_ticks(
         self,
@@ -115,21 +101,13 @@ class StockTickAPI(BaseDataAPI):
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> pd.DataFrame:
-        """取得個股 tick 資料"""
+        """取得個股區間內的 tick，依時間排序"""
 
         if start_date > end_date:
             return pd.DataFrame()
-
-        start_date_str: str = start_date.strftime("%Y.%m.%d")
-        end_date_str: str = (end_date + datetime.timedelta(days=1)).strftime("%Y.%m.%d")
-        script: str = f"""
-        db = database("{TICK_DB_PATH}")
-        table = loadTable(db, "{TICK_TABLE_NAME}")
-        select * from table
-        where stock_id=`{stock_id} and time between nanotimestamp({start_date_str}):nanotimestamp({end_date_str})
-        """
-        tick: pd.DataFrame = self.session.run(script)
-        return tick
+        return self.dao.query_ticks(
+            start_date, end_date, ("time", "seq"), stock_id=stock_id
+        )
 
     def get_last_tick(
         self,

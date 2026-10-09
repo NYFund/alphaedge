@@ -2,7 +2,7 @@ import datetime
 import os
 import uuid
 from pathlib import Path
-from typing import Iterator, List, Tuple
+from typing import Dict, Iterator, List, Tuple
 
 import pandas as pd
 import pytest
@@ -26,6 +26,7 @@ pytestmark = pytest.mark.skipif(
 
 psycopg = pytest.importorskip("psycopg")
 
+from core.api.tw.stock_tick_api import StockTickAPI  # noqa: E402
 from core.dao.tw.stock_tick_dao import StockTickDAO  # noqa: E402
 
 
@@ -410,3 +411,143 @@ def test_updater_resumes_from_load_log(
         ).fetchone()[0]
     assert count == 6
     price_dao.conn.close()
+
+
+# === 讀取（StockTickAPI） ===
+def _tick(stock_id: str, t: str, seq: int, close: float) -> Dict:
+    """一列寫入用的 tick"""
+
+    return {
+        "stock_id": stock_id,
+        "time": pd.Timestamp(t),
+        "seq": seq,
+        "close": close,
+        "volume": 1,
+        "bid_price": close,
+        "bid_volume": 2,
+        "ask_price": close,
+        "ask_volume": 3,
+        "tick_type": 1,
+    }
+
+
+@pytest.fixture
+def loaded_api(dao: StockTickDAO) -> Iterator[StockTickAPI]:
+    """寫好兩檔股票三天資料的 API（同一時間戳記有多筆、跨日邊界各一筆）"""
+
+    rows: List[Dict] = [
+        # 5/8：2330 同一瞬間兩筆（seq 0、1），1101 與 2330 同時間戳記
+        _tick("2330", "2024-05-08 09:00:01", 0, 800.0),
+        _tick("2330", "2024-05-08 09:00:01", 1, 801.0),
+        _tick("1101", "2024-05-08 09:00:01", 0, 40.0),
+        # 夾在 2330 兩段之間：依時間排與依股票排的結果才會不同
+        _tick("1101", "2024-05-08 09:00:05", 1, 40.5),
+        _tick("2330", "2024-05-08 23:59:59.999999", 2, 802.0),
+        # 5/9 00:00:00 整：屬於 5/9，查 5/8 時不可被包進來
+        _tick("2330", "2024-05-09 00:00:00", 0, 803.0),
+        _tick("1101", "2024-05-09 09:00:02", 0, 41.0),
+    ]
+    frame: pd.DataFrame = pd.DataFrame(rows)
+    for (stock_id, day), group in frame.groupby(
+        [frame["stock_id"], frame["time"].dt.date]
+    ):
+        dao.replace_day(stock_id, day, group, len(group), "fixture.csv")
+
+    api: StockTickAPI = StockTickAPI(dao=dao)
+    yield api
+    api.close()
+
+
+def test_get_ordered_ticks_orders_by_time_then_stock_then_seq(
+    loaded_api: StockTickAPI,
+) -> None:
+    """同一時間戳記跨股票以代號、同股以 seq 固定順序；日期區間是半開的"""
+
+    day: datetime.date = datetime.date(2024, 5, 8)
+
+    ticks: pd.DataFrame = loaded_api.get_ordered_ticks(day, day)
+
+    assert list(ticks.columns) == [
+        "stock_id",
+        "time",
+        "close",
+        "volume",
+        "bid_price",
+        "bid_volume",
+        "ask_price",
+        "ask_volume",
+        "tick_type",
+    ]
+    assert list(zip(ticks["stock_id"], ticks["close"])) == [
+        ("1101", 40.0),
+        ("2330", 800.0),
+        ("2330", 801.0),
+        ("1101", 40.5),
+        ("2330", 802.0),
+    ]
+    assert str(ticks["time"].dtype) == "datetime64[ns]"
+    assert ticks["time"].dt.tz is None
+    assert str(ticks["volume"].dtype) == "int64"
+    assert str(ticks["tick_type"].dtype) == "int64"
+
+
+def test_get_groups_by_stock_and_get_stock_ticks_filters(
+    loaded_api: StockTickAPI,
+) -> None:
+    """`get()` 依股票再依時間排序；`get_stock_ticks()` 只回該檔；`get_last_tick()` 取最後一筆"""
+
+    start: datetime.date = datetime.date(2024, 5, 8)
+    end: datetime.date = datetime.date(2024, 5, 9)
+
+    all_ticks: pd.DataFrame = loaded_api.get(start, end)
+    stock_ticks: pd.DataFrame = loaded_api.get_stock_ticks("2330", start, end)
+    last: pd.DataFrame = loaded_api.get_last_tick("2330", start)
+
+    assert all_ticks["stock_id"].tolist() == ["1101"] * 3 + ["2330"] * 4
+    assert stock_ticks["close"].tolist() == [800.0, 801.0, 802.0, 803.0]
+    assert last["close"].tolist() == [802.0]
+
+
+def test_empty_result_keeps_columns_and_dtypes(loaded_api: StockTickAPI) -> None:
+    """沒有資料的日子回空表，但欄位與 dtype 和有資料時相同"""
+
+    day: datetime.date = datetime.date(2024, 5, 10)
+
+    empty: pd.DataFrame = loaded_api.get_ordered_ticks(day, day)
+
+    assert empty.empty
+    assert str(empty["time"].dtype) == "datetime64[ns]"
+    assert str(empty["volume"].dtype) == "int64"
+
+
+def test_api_refuses_when_table_missing(dao: StockTickDAO) -> None:
+    """還沒建表時建立 API 就拋出，不讓回測跑完才發現整段沒有報價"""
+
+    with dao.conn.transaction():
+        dao.conn.execute(f'CREATE SCHEMA "{dao.schema}_empty"')
+    empty_dao: StockTickDAO = StockTickDAO(conn=dao.conn, schema=f"{dao.schema}_empty")
+    try:
+        with pytest.raises(RuntimeError, match="尚未匯入"):
+            StockTickAPI(dao=empty_dao)
+    finally:
+        with dao.conn.transaction():
+            dao.conn.execute(f'DROP SCHEMA "{dao.schema}_empty" CASCADE')
+
+
+def test_datafeed_returns_one_quote_per_tick(loaded_api: StockTickAPI) -> None:
+    """
+    回測 DataFeed 以 `get_ordered_ticks()` 取報價：每天的 TickQuote 數＝資料庫列數，
+    `time` 經 `itertuples()` 取出後仍是 `datetime`
+    """
+
+    from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
+    from core.utils.constant import Scale
+
+    feed: TwStockDataFeed = TwStockDataFeed()
+    feed.tick = loaded_api
+
+    quotes = feed.get_quotes(datetime.date(2024, 5, 8), Scale.TICK)
+
+    assert len(quotes) == 5
+    assert all(isinstance(q.tick_quote.time, datetime.datetime) for q in quotes)
+    assert [q.close for q in quotes] == [40.0, 800.0, 801.0, 40.5, 802.0]
