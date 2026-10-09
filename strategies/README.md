@@ -57,14 +57,14 @@ AlphaEdge 的策略系統採用物件導向設計，台股策略一律繼承 `Ba
 - **分層由型別與目錄承載**: 策略只做 Alpha（選標的、定方向、給價），
   部位大小交給 `core/portfolio/`；兩層之間的介面是 `Signal`
 - **統一的介面**: 所有策略都實作相同的方法，確保一致性
-- **自動載入機制**: `StrategyLoader` 自動掃描 `core/strategies/` 下的**所有市場子套件**
+- **自動載入機制**: `StrategyLoader`（`strategies/loader.py`）自動掃描頂層 `strategies/` 下的**所有商品類別子套件**
 - **完整的資料存取**: 資料 API 由引擎的 `DataFeed` 統一建立，策略只需宣告要用哪幾個
 - **市場由策略自己宣告**: `self.market` 是 `core/backtest/factory.py` 組裝 model 組合的分派鍵，CLI 不需要 `--market`
 - **靈活的回測設定**: 支援 `Scale.DAY` 與 `Scale.TICK` 兩種級別
 
 > 引擎如何依 `market` 組裝、單根 bar 的執行順序、訂單要通過哪幾道關卡，見
-> [多市場回測引擎架構](../../docs/backtest/multi-market-engine.md) 與
-> [模組使用關係](../../docs/backtest/module-map.md)。
+> [多市場回測引擎架構](../docs/backtest/multi-market-engine.md) 與
+> [模組使用關係](../docs/backtest/module-map.md)。
 
 **策略與引擎之間的分工**：
 
@@ -80,25 +80,33 @@ AlphaEdge 的策略系統採用物件導向設計，台股策略一律繼承 `Ba
 
 > **期貨策略**繼承 `BaseFuturesStrategy`（`core/strategies/futures/base.py`）。本文件以台股為主，
 > 期貨策略與股票策略的差異（一天有多個到期月、口數由保證金決定、日夜盤是兩筆行情、沒有券源限制）見
-> [台期貨平台](../../docs/futures/tw-futures-platform.md)〈四、策略〉。
+> [台期貨平台](../docs/futures/tw-futures-platform.md)〈四、策略〉。
 
 ### 目錄結構
 
 ```
-core/strategies/
+core/strategies/                   # 策略契約（只放抽象基底；具體策略放回這裡會被分層檢查擋下）
 ├── __init__.py                    # 刻意不做套件層 eager import（避免循環 import）
-├── README.md                      # 本文件
 ├── base.py                        # BaseStrategy：市場與商品皆無關的策略骨架
-├── strategy_loader.py             # 策略自動載入器（掃描所有子套件）
+├── stock/
+│   ├── __init__.py
+│   └── base.py                    # BaseStockStrategy（設定 self.market ＋ self.instrument_type）
+└── futures/
+    ├── __init__.py
+    └── base.py                    # BaseFuturesStrategy
+
+strategies/                        # 具體策略（相依只能 strategies → core）
+├── __init__.py                    # 門面一律空白，不 import 任何策略
+├── README.md                      # 本文件
+├── loader.py                      # 策略自動載入器（掃描所有商品類別子套件）
 ├── stock/                         # 股票策略
 │   ├── __init__.py
-│   ├── base.py                    # BaseStockStrategy（設定 self.market ＋ self.instrument_type）
 │   ├── volume_breakout_momentum_strategy.py     # 量能突破動能策略（日線，LONG 回歸 baseline 的唯一來源）
 │   ├── foreign_selling_reversal_short_strategy.py  # 外資大賣強勢股當沖放空（日線，SHORT）
 │   ├── investment_trust_momentum_swing_strategy.py  # 投信認同的強勢股短波段（日線，LONG）
-│   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；目前只有日 K 近似）
+│   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；回測為日 K 近似、實盤逐筆）
 └── futures/                       # 期貨策略
-    ├── base.py                    # BaseFuturesStrategy
+    ├── __init__.py
     └── momentum_futures_strategy.py
 
 core/portfolio/                    # 部位建構層（回測與實盤共用，不屬於任一市場）
@@ -110,7 +118,7 @@ core/portfolio/                    # 部位建構層（回測與實盤共用，�
 > **子目錄承載的是「商品類別」（軸 B），不是市場。** 市場由 `self.market` 宣告、
 > 由 `core/backtest/factory.py` 的 `(market, instrument_type)` 分派鍵表達，
 > 所以美股策略日後會放進 `stock/` 而不是新開 `us/`（見
-> [命名軸線](../../docs/dev/naming-axes.md)〈落地位置〉）。
+> [命名軸線](../docs/dev/naming-axes.md)〈落地位置〉）。
 
 > **策略是可以刪的。** 動能策略 2~5（`VolumeBreakoutMomentumStrategy` 的 Tick 級別、均線動能、開盤進出等變形）與 `OvernightLeadEventStrategy`（2330 隔夜訊號）都已刪除：前者維護成本高於價值，後者的特徵與目標在時序上對不齊（美股盤在台北時間當日清晨才收，那段跳空在進場時已經發生完畢），研究端的探索仍留在 `strategy_lab/strategies/tsmc_overnight_signal/`。`VolumeBreakoutMomentumStrategy` 是 LONG 回歸 baseline 的唯一來源，不可刪。
 
@@ -118,7 +126,7 @@ core/portfolio/                    # 部位建構層（回測與實盤共用，�
 
 ### 步驟 1: 建立策略檔案
 
-在 `core/strategies/stock/` 目錄下建立新的 Python 檔案，例如 `my_strategy.py`。
+在 `strategies/stock/` 目錄下建立新的 Python 檔案，例如 `my_strategy.py`。
 
 ### 步驟 2: 繼承 BaseStockStrategy
 
@@ -233,7 +241,7 @@ def setup_apis(self, feed: BaseDataFeed) -> None:
 **說明**:
 - 根據 `self.scale` 決定要取用哪些 API；目前支援 `Scale.DAY` 與 `Scale.TICK` 兩種
 - **不要在 `__init__` 內呼叫 `setup_apis()`**：它由 `Backtester.load_datasets()` 在建立 `DataFeed` 之後呼叫
-- **不要自行 `StockPriceAPI()`**：那會讓單次回測開出多條互不相干的資料連線（見 [多市場回測引擎架構](../../docs/backtest/multi-market-engine.md)）
+- **不要自行 `StockPriceAPI()`**：那會讓單次回測開出多條互不相干的資料連線（見 [多市場回測引擎架構](../docs/backtest/multi-market-engine.md)）
 
 ### 3. generate_open_signals()
 
@@ -322,7 +330,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 >
 > 策略層**不得直接對 raw `DataFrame` 取資料庫欄位字面值**（`"收盤價"`、`"成交股數"`、
 > `"投信買賣超"` 等），一律走 `core/api/` 的具名查詢方法。
-> `tests/test_strategy_data_access.py` 會掃描 `core/strategies/` 全部原始碼並在 CI 擋下違規，
+> `tests/test_strategy_data_access.py` 會掃描 `core/strategies/` 與 `strategies/` 全部原始碼並在 CI 擋下違規，
 > 例外清單刻意留空。詳見〈[資料 API 使用方式](#資料-api-使用方式)〉。
 >
 > **算漲跌幅時務必用 `self.get_signal_close_map()` 搭配 `quote.signal_close`**：
@@ -450,7 +458,7 @@ def generate_stop_loss_signals(self, stock_quotes: List[StockQuote]) -> List[Sig
 
 | 層 | 檔案 | 回答什麼 |
 |----|------|----------|
-| Alpha | `core/strategies/` | 買哪些、什麼方向、什麼價 |
+| Alpha | `strategies/`（契約在 `core/strategies/`） | 買哪些、什麼方向、什麼價 |
 | Portfolio | `core/portfolio/construction.py` | 各買幾張／幾口 |
 | Portfolio | `core/portfolio/sizing.py` | 資金怎麼切（等權、日後可換） |
 
@@ -641,7 +649,7 @@ class MyDayTradeLongStrategy(BaseStockStrategy):
 > 不會被靜默忽略。
 
 同一根 bar 內多筆委託的處理順序（決定性排序）與同標的開平倉並存的規則，
-見[多市場回測引擎架構 §2.2.1 單根 bar 的委託順序](../../docs/backtest/multi-market-engine.md#221-單根-bar-的委託順序)。
+見[多市場回測引擎架構 §2.2.1 單根 bar 的委託順序](../docs/backtest/multi-market-engine.md#221-單根-bar-的委託順序)。
 
 ## 資料 API 使用方式
 
@@ -650,12 +658,12 @@ class MyDayTradeLongStrategy(BaseStockStrategy):
 > **⚠️ 策略層一律使用「具名查詢方法」，不要自己拆 `DataFrame` 欄位**
 >
 > 回傳 `DataFrame` 的方法（`get()`／`get_range()`／`get_stock_price()`）保留給
-> `strategy_lab/` 的研究用途。在 `core/strategies/` 底下寫策略時，**禁止**出現
+> `strategy_lab/` 的研究用途。在 `strategies/` 底下寫策略時，**禁止**出現
 > `df["收盤價"]`、`df["成交股數"]`、`df["投信買賣超"]` 這類資料庫欄位字面值。
 >
 > 原因是失效模式**靜默**：欄位一旦更名，策略會走進既有的 `continue` 分支而安靜地不開倉，
 > 回測報表上只表現為「訊號變少」，極難察覺。`tests/test_strategy_data_access.py`
-> 會掃描 `core/strategies/` 全部原始碼並在 CI 擋下，例外清單刻意留空。
+> 會掃描 `core/strategies/` 與 `strategies/` 全部原始碼並在 CI 擋下，例外清單刻意留空。
 
 ### StockPriceAPI - 日線價格資料
 
@@ -780,11 +788,11 @@ fs = self.fs.get(table_name="balance_sheet", year=2024, season=1)
 
 ## 策略載入機制
 
-AlphaEdge 使用 `StrategyLoader` 自動載入策略。它以 `pkgutil.iter_modules` 走過 `core/strategies/` 底下**所有子套件**（`stock/` 與 `futures/`），找出**非抽象的 `BaseStrategy` 子類**——期貨策略就是靠同一條路徑載入的。
+AlphaEdge 使用 `StrategyLoader` 自動載入策略。它以 `pkgutil.iter_modules` 走過頂層 `strategies/` 底下**所有子套件**（`stock/` 與 `futures/`），找出**非抽象的 `BaseStrategy` 子類**——期貨策略就是靠同一條路徑載入的。
 
 ### 自動載入規則
 
-1. **檔案位置**: 策略檔案必須放在 `core/strategies/<商品類別>/` 目錄下（台股現貨放 `stock/`、期貨放 `futures/`）
+1. **檔案位置**: 策略檔案必須放在 `strategies/<商品類別>/` 目錄下（台股現貨放 `stock/`、期貨放 `futures/`）
 2. **類別命名**: 策略類別名稱會作為策略識別名稱
 3. **繼承要求**: 必須繼承 `BaseStockStrategy` 且不能是 `BaseStockStrategy` 本身
 
@@ -842,7 +850,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
    - `<策略>_everyday_equity_change.png` - 每日權益變化圖
 3. **日誌檔案** - 落在 `logs/backtest/`
 
-各檔案由哪個方法產生，見[模組使用關係 §4](../../docs/backtest/module-map.md)。
+各檔案由哪個方法產生，見[模組使用關係 §4](../docs/backtest/module-map.md)。
 
 ## 完整範例
 
@@ -928,7 +936,7 @@ class SimpleStrategy(BaseStockStrategy):
         return []
 ```
 
-將此檔案儲存為 `core/strategies/stock/simple_strategy.py`，即可使用以下指令執行回測：
+將此檔案儲存為 `strategies/stock/simple_strategy.py`，即可使用以下指令執行回測：
 
 ```bash
 python -m apps.backtest --strategy SimpleStrategy
@@ -937,7 +945,7 @@ python -m apps.backtest --strategy SimpleStrategy
 ---
 
 **注意事項**:
-- 策略檔案必須放在 `core/strategies/<商品類別>/` 目錄下（本範例是現貨，故為 `stock/`）
+- 策略檔案必須放在 `strategies/<商品類別>/` 目錄下（本範例是現貨，故為 `stock/`）
 - 策略類別名稱會作為策略識別名稱
 - 確保所有必須的方法都已實作
 - 回測前請確認資料庫中有所需的資料（使用 `python -m apps.update_db` 更新資料）
@@ -950,7 +958,7 @@ python -m apps.backtest --strategy SimpleStrategy
 回測框架支援放空（`PositionType.SHORT`），涵蓋**現股當沖沖賣**與**留倉（融券／借券）**兩種型態。
 成本模型、保證金、借券費、維持率追繳與強制回補全部由引擎處理，策略只需要宣告方向並回傳正確的訂單。
 
-完整規格見 [`docs/backtest/short-selling-framework.md`](../../docs/backtest/short-selling-framework.md)。
+完整規格見 [`docs/backtest/short-selling-framework.md`](../docs/backtest/short-selling-framework.md)。
 
 ### 放空策略的設定欄位
 

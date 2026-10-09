@@ -4,14 +4,14 @@
 **分析資料、思考交易策略、做小型實驗、寫筆記** 的地方。
 
 > **這裡不負責「跑正式回測」**。AlphaEdge 已經在 `core/` 提供一套完整的策略框架與回測器（`Backtester`、`StockBacktestReporter`、`StrategyLoader`），
-> 想跑正式回測請把策略放到 `core/strategies/stock/`（股票）或 `core/strategies/futures/`（期貨），然後執行：
+> 想跑正式回測請把策略放到 `strategies/stock/`（股票）或 `strategies/futures/`（期貨），然後執行：
 >
 > ```bash
 > .venv/bin/python -m apps.backtest --strategy <StrategyName>
 > ```
 >
 > `strategy_lab/` 是它的 **上游**：把想法、資料分析、研究筆記都在這裡完成，
-> 成熟後再「**搬到 `core/strategies/stock/` 或 `core/strategies/futures/`**」就能直接接上正式框架。
+> 成熟後再「**搬到 `strategies/stock/` 或 `strategies/futures/`**」就能直接接上正式框架。
 
 ---
 
@@ -97,7 +97,7 @@ strategy_lab/
 ## 研究工作流（從想法到上線）
 
 ```
-ideas/           data_analysis/      strategies/<name>/      core/strategies/{stock,futures}/<name>.py
+ideas/           data_analysis/      strategies/<name>/      strategies/{stock,futures}/<name>.py
   │                  │                     │                            │
   ▼                  ▼                     ▼                            ▼
 寫一段假設     EDA、相關性、IC    寫完整 pipeline，產圖表        繼承 BaseStockStrategy
@@ -120,7 +120,7 @@ ideas/           data_analysis/      strategies/<name>/      core/strategies/{st
 
 > 這裡是**研究用法**：直接建立 API 物件、拿 `DataFrame` 自己處理欄位。搬進 `core/strategies/`
 > 寫正式策略時規則相反——API 由引擎的 `DataFeed` 建立，策略只能用具名查詢方法（`get_close_map()` 等），
-> 見 [策略撰寫指南](../core/strategies/README.md)〈資料 API 使用方式〉。
+> 見 [策略撰寫指南](../strategies/README.md)〈資料 API 使用方式〉。
 
 ### StockPriceAPI — 日線價格資料 (SQLite)
 
@@ -478,7 +478,7 @@ print(realistic_pnl(600.0, 620.0, 5))
 
 當 `strategy_lab/strategies/<name>/` 的研究結論穩定後，按以下步驟「**搬家**」：
 
-1. 在 `core/strategies/stock/` 建立 `<your_strategy>.py` 繼承 `BaseStockStrategy`；期貨策略則放 `core/strategies/futures/` 並繼承 `BaseFuturesStrategy`。
+1. 在 `strategies/stock/` 建立 `<your_strategy>.py` 繼承 `BaseStockStrategy`；期貨策略則放 `strategies/futures/` 並繼承 `BaseFuturesStrategy`。
 2. 把研究階段的訊號邏輯抽成 `_build_signals()`，
    並實作框架要求的 5 個 method：
    `setup_account / setup_apis / generate_open_signals / generate_close_signals / generate_stop_loss_signals`。
@@ -494,8 +494,8 @@ print(realistic_pnl(600.0, 620.0, 5))
    <策略>_metrics_summary.csv` 等標準報表（**檔名一律帶策略名前綴**，共 5 份 CSV ＋ 5 張圖；
    完整清單見 [回測引擎說明](../core/backtest/README.md#回測結果)）。
 
-> 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`core/strategies/README.md`](../core/strategies/README.md)。
-> 現成的範例是 `core/strategies/stock/` 與 `core/strategies/futures/` 底下的策略檔。
+> 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`strategies/README.md`](../strategies/README.md)。
+> 現成的範例是 `strategies/stock/` 與 `strategies/futures/` 底下的策略檔。
 >
 > **搬進 `core/` 的成品可能會被刪掉**：`tsmc_overnight_signal` 的成品策略就在 2026-09-17
 > 因結論為否定而移除。研究資料夾要能獨立成立，不要把結論只寫在成品策略的 docstring 裡。

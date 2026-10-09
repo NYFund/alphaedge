@@ -3,7 +3,7 @@
 每一個策略研究主題一個 `snake_case` 子資料夾（與 `ideas/`、`data_analysis/`、`notebooks/` 命名對齊）。**結構不強制**，但要能「**一鍵重現所有圖表與績效**」。
 
 > 提醒：這裡是 R&D，**不是**正式回測。
-> 正式回測請看 [`core/strategies/README.md`](../../core/strategies/README.md)，並用：
+> 正式回測請看 [`strategies/README.md`](../../strategies/README.md)，並用：
 >
 > ```bash
 > .venv/bin/python -m apps.backtest --strategy <StrategyName>
@@ -100,7 +100,7 @@ strategies/<your_topic>/
 
 ## 「我覺得這策略 OK 了」之後怎麼做？
 
-把訊號邏輯複寫進 `core/strategies/stock/<your_name>.py`（期貨策略放 `core/strategies/futures/`），
+把訊號邏輯複寫進 `strategies/stock/<your_name>.py`（期貨策略放 `strategies/futures/`），
 繼承 `BaseStockStrategy`，實作以下 5 個 method：
 
 - `setup_account` / `setup_apis`
@@ -109,7 +109,7 @@ strategies/<your_topic>/
 `check_*_signal` 由基底提供、**不要覆寫**（覆寫會讓基底實作靜默失效）；
 開倉張數由 `core/portfolio/` 換算，不必寫 `calculate_position_size`。
 
-詳細寫法 → [`core/strategies/README.md`](../../core/strategies/README.md)
+詳細寫法 → [`strategies/README.md`](../../strategies/README.md)
 （含完整範本與每個 method 的範例）。
 
 完成後執行：

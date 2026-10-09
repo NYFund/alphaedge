@@ -3,7 +3,7 @@
 > 本文件描述實盤送單路徑上「**決定怎麼送**」這一層的現行設計：策略宣告什麼、執行層怎麼換算、
 > 系統自己產生的委託怎麼處理、與風控和 parity 的關係，以及已知限制。
 > 實盤怎麼部署與排程見 [實盤部署與排程](../deployment/live-deployment.md)；策略的實盤設定欄位見
-> [策略撰寫指南](../../core/strategies/README.md)〈實盤設定〉。
+> [策略撰寫指南](../../strategies/README.md)〈實盤設定〉。
 
 ---
 
@@ -23,7 +23,7 @@
 
 | 層 | 位置 | 回答什麼 |
 |----|------|----------|
-| 策略 | `core/strategies/` | 買賣什麼、方向、決策價；**要不要一定成交**（`live_execution`） |
+| 策略 | `strategies/`（契約在 `core/strategies/`） | 買賣什麼、方向、決策價；**要不要一定成交**（`live_execution`） |
 | 執行層 | `core/live/execution/` | 價格類型、送出的委託價、ROD／IOC |
 | 券商轉換層 | `core/broker/tw/shioaji_order_mapper.py` | 只做機械轉換成 Shioaji 物件；價格類型未決定就拋錯，不補值 |
 

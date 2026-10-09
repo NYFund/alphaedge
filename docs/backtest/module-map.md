@@ -37,9 +37,8 @@
 共用層      core/utils/（enum、路徑、時間、日誌、StockUtils）
 ```
 
-**頂層 `strategies/` 套件**是具體策略日後的落點（相依只能 `strategies` → `core`，`core/` 反向 import 會被
-`check_layer_deps.py` 擋下）；目前只有空的 `stock/`、`futures/` 門面，`StrategyLoader` 也還只掃描
-`core/strategies/`，具體策略仍放在 `core/strategies/{stock,futures}/`。
+**頂層 `strategies/` 套件**放具體策略與策略載入器（相依只能 `strategies` → `core`，`core/` 反向 import 會被
+`check_layer_deps.py` 擋下）；`core/strategies/` 只留契約（抽象基底與門面），具體策略放回去也會被同一支檢查擋下。
 
 **引擎不認識任何市場**：`grep "Stock" core/backtest/backtester.py` 為 0。市場語意全部在 `factory.py` 組裝時注入。
 
@@ -47,7 +46,7 @@
 
 | 層 | 檔案 | 回答什麼 | 不回答什麼 |
 |----|------|----------|-----------|
-| Alpha | `core/strategies/` | 買哪些、什麼方向、什麼價 | 各買幾張 |
+| Alpha | `strategies/`（契約在 `core/strategies/`） | 買哪些、什麼方向、什麼價 | 各買幾張 |
 | Portfolio | `core/portfolio/construction.py` | 開倉各買幾張／幾口 | 選哪些標的 |
 | Portfolio | `core/portfolio/sizing.py` | 資金怎麼切（可替換） | 用哪個參考價 |
 
@@ -128,7 +127,7 @@ sequenceDiagram
 |------|------|----------|
 | `apps/backtest.py` | CLI 解析（`--strategy`、`--start`／`--end`／`--capital`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
 | `apps/_common.py` | 兩個入口共用的策略名解析：只載入指定策略，找不到時才全掃描列出可用策略並以退出碼 2 結束 | `apps/backtest.py`、`apps/live.py` |
-| `strategies/loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描 `core/strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
+| `strategies/loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描頂層 `strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
 | `core/backtest/overrides.py` | `BacktestOverrides`：命令列的回測區間與初始資金覆寫，在組裝任何元件之前套用到策略 | `apps/backtest.py`、實盤 parity |
 | `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `apps/backtest.py`、`core/live/factory.py`、測試 |
 
@@ -300,5 +299,5 @@ sequenceDiagram
 
 - [多市場回測引擎架構](multi-market-engine.md)——設計決策與已知簡化
 - [放空回測框架規格](short-selling-framework.md)——方向驅動的記帳原則
-- [策略開發指南](../../core/strategies/README.md)——策略怎麼寫
+- [策略開發指南](../../strategies/README.md)——策略怎麼寫
 - [資料存取層（DAO）](../dev/data-access-layer.md)——連線所有權、交易與錯誤語意

@@ -504,7 +504,7 @@ snapshot_daily_equity(date, quotes)
 
 **時間軸的重要約定**：`StockTradeRecord` 的 `buy_*` / `sell_*` 以「動作」對應（SHORT 的 `sell_*` 是**開倉**），因此**報表時間軸一律使用 `exit_date`，不可用 `sell_date`**，否則 3 月放空、5 月回補的交易會被畫在 3 月。`entry_date`／`entry_price`／`exit_date`／`exit_price` 是實體欄位而非 property——reporter 以 `pd.DataFrame` 組報表，property 取值會被繞過。
 
-**策略撰寫指南**：`core/strategies/README.md` 的放空策略章節（設定欄位表、訊號方向對照、完整範例）。
+**策略撰寫指南**：`strategies/README.md` 的放空策略章節（設定欄位表、訊號方向對照、完整範例）。
 
 **費率資料來源**（2026-07 查核，引用前請重新確認是否變動）
 

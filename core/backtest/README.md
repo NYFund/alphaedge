@@ -457,5 +457,5 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
 
 ## 相關文檔
 
-- [策略開發指南](../strategies/README.md)
+- [策略開發指南](../../strategies/README.md)
 - [專案 README](../../README.md)

@@ -17,8 +17,8 @@ graph TB
     end
 
     subgraph strategy_layer ["策略層（Alpha）"]
-        Strategies["core/strategies<br/>（宣告 market ＋ instrument_type<br/>generate_*_signals → Signal）"]
-        Loader["strategy_loader.py"]
+        Strategies["strategies（契約在 core/strategies）<br/>（宣告 market ＋ instrument_type<br/>generate_*_signals → Signal）"]
+        Loader["strategies/loader.py"]
     end
 
     subgraph shared_layer ["共用契約層（回測與實盤吃同一份）"]
@@ -185,7 +185,7 @@ graph TB
 | `tests/`        | 單元／整合測試、回測回歸線（`tests/backtest/`）與實盤測試（`tests/live/`，以 fake 券商閘道跑） |
 | `scripts/`      | 護欄檢查（分層相依、文件路徑、API 孤兒方法）、回歸腳本與人工執行腳本   |
 | `docs/`         | 使用與架構說明文件（安裝、指令、部署、資料、回測與 ETL 設計）          |
-| `strategies/`   | 具體策略的頂層套件（目前為空白門面，策略仍在 `core/strategies/{stock,futures}/`，之後逐步搬入）；相依只能 `strategies` → `core` |
+| `strategies/`   | 具體策略（`stock/`、`futures/`）與策略載入器；策略契約（抽象基底）留在 `core/strategies/`；相依只能 `strategies` → `core` |
 | `strategy_lab/` | 策略研究工作區，依概念分為 `strategies/`、`data_analysis/`、`notebooks/`、`ideas/`；見 `strategy_lab/README.md` |
 | `backlog/`      | 內部規劃與待辦筆記                                                    |
 
@@ -202,7 +202,7 @@ graph TB
 | [實盤執行層](docs/live/execution-layer.md) | 策略的執行方式（`MARKET`／`LIMIT`）如何依時段換成券商委託、決策價、parity 歸類與已知限制 |
 | [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
 | [指令教學](docs/commands/command-usage.zh-TW.md)   | `update_db` target 對照與完整執行範例           |
-| [策略開發指南](core/strategies/README.md)          | 本專案策略實作方式                              |
+| [策略開發指南](strategies/README.md)          | 本專案策略實作方式                              |
 | [多市場回測引擎架構](docs/backtest/multi-market-engine.md) | 單一引擎 ＋ 五個可插拔 model 的設計與已知簡化 |
 | [模組使用關係](docs/backtest/module-map.md)        | 回測路徑上誰呼叫誰、逐檔案職責與輸出檔案        |
 | [放空回測框架規格](docs/backtest/short-selling-framework.md) | 方向驅動的記帳、成本、維持率追繳與強制回補 |
@@ -281,7 +281,7 @@ uv sync
 python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
-- `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
+- `--strategy` 填策略類別名稱，現有策略在 `strategies/stock/` 與 `strategies/futures/`。
 - 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--show` 在瀏覽器開圖。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
@@ -432,11 +432,10 @@ python -m apps.backtest --strategy <StrategyClassName>
 ```text
 AlphaEdge/
 ├── core/                    # 交易領域模組
-│   ├── strategies/            # 策略實作
+│   ├── strategies/            # 策略契約（只放抽象基底；具體策略在頂層 strategies/）
 │   │   ├── base.py            # BaseStrategy（市場無關）
-│   │   ├── strategy_loader.py # 自動掃描所有商品類別子套件（stock／futures）
-│   │   ├── stock/             # BaseStockStrategy ＋ 各支台股策略
-│   │   └── futures/           # BaseFuturesStrategy 與台期貨策略
+│   │   ├── stock/             # BaseStockStrategy
+│   │   └── futures/           # BaseFuturesStrategy
 │   ├── api/                   # 資料查詢介面與業務規則（不寫 SQL，以 conn= 建 DAO）
 │   ├── dao/                   # 資料存取層：SQL、連線與交易只寫在這裡
 │   │   ├── base.py            # BaseDAO：owns_conn、table_exists、savepoint、寫入方法
@@ -500,7 +499,7 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend 容器映像
 │   ├── README.md              # frontend 使用說明
 │   └── __init__.py
-├── strategies/                # 具體策略的頂層套件（stock／futures，目前為空白門面；策略契約留在 core/strategies/，相依只能 strategies → core）
+├── strategies/                # 具體策略與策略載入器（stock／futures；策略契約留在 core/strategies/，相依只能 strategies → core）
 ├── strategy_lab/              # 策略研究工作區（strategies/ / data_analysis/ / notebooks/ / ideas/）
 ├── tests/                     # 測試套件（`backtest/` 引擎與回歸線、`live/` 實盤、`execution/`、`portfolio/` 共用契約層；`temp/`、`database/`、`downloads/` 為執行期產物）
 ├── backlog/                   # 內部規劃筆記

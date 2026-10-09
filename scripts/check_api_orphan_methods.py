@@ -7,7 +7,7 @@ from typing import Dict, List, Set, Tuple
 """
 `core/api/` 無主公開介面檢查：以 AST 掃出公開方法，逐一比對全 repo 的呼叫點
 
-`core/api/` 是**策略作者的公開介面**（見 `core/strategies/README.md`），
+`core/api/` 是**策略作者的公開介面**（見 `strategies/README.md`），
 「`core/` 內部零呼叫」對它們是正常狀態——所以判準不是「有沒有人呼叫」，
 而是「有沒有東西盯著它」：**零呼叫且零測試**才算無主。
 

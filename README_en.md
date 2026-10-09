@@ -17,8 +17,8 @@ graph TB
     end
 
     subgraph strategy_layer ["Strategy Layer (Alpha)"]
-        Strategies["core/strategies<br/>(declares market + instrument_type<br/>generate_*_signals → Signal)"]
-        Loader["strategy_loader.py"]
+        Strategies["strategies (contracts in core/strategies)<br/>(declares market + instrument_type<br/>generate_*_signals → Signal)"]
+        Loader["strategies/loader.py"]
     end
 
     subgraph shared_layer ["Shared Contracts (one copy for both engines)"]
@@ -184,7 +184,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `tests/`        | Unit/integration tests, backtest regression lines (`tests/backtest/`) and live-trading tests (`tests/live/`, run against a fake broker gateway) |
 | `scripts/`      | Guardrail checks (layer deps, doc paths, orphan API methods), regression script and manual scripts                              |
 | `docs/`         | Usage and architecture docs (setup, commands, deployment, data, backtest and ETL design)                                       |
-| `strategies/`   | Top-level package for concrete strategies (empty facade for now; strategies still live in `core/strategies/{stock,futures}/` and will move in gradually); dependencies only flow `strategies` → `core` |
+| `strategies/`   | Concrete strategies (`stock/`, `futures/`) and the strategy loader; strategy contracts (abstract bases) stay in `core/strategies/`; dependencies only flow `strategies` → `core` |
 | `strategy_lab/` | Research workspace organized by concept (`strategies/`, `data_analysis/`, `notebooks/`, `ideas/`); see `strategy_lab/README.md` |
 | `backlog/`      | Internal notes and future work items                                                                                            |
 
@@ -201,7 +201,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Live Execution Layer](docs/live/execution-layer.md) | How a strategy's execution style (`MARKET`/`LIMIT`) becomes a broker order per session; decision price, parity categories, known limits |
 | [Data Coverage](docs/exchanges/data_coverage.md)        | Data sources, API mapping, start dates and price adjustment   |
 | [Command Usage](docs/commands/command-usage.md)         | Full `update_db` target reference and runnable examples       |
-| [Strategy Development Guide](core/strategies/README.md) | How to implement strategies in this project                   |
+| [Strategy Development Guide](strategies/README.md) | How to implement strategies in this project                   |
 | [Multi-Market Engine](docs/backtest/multi-market-engine.md) | Backtest engine architecture: one engine, five pluggable models |
 | [Module Map](docs/backtest/module-map.md)               | Who calls whom on the backtest path, per-file responsibilities |
 | [Short-Selling Framework](docs/backtest/short-selling-framework.md) | Direction-driven accounting, costs, margin call, forced cover |
@@ -280,7 +280,7 @@ alternatively prefix commands with `uv run --no-sync`, e.g. `uv run --no-sync py
 python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
-- `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
+- `--strategy` takes a strategy class name; existing strategies live in `strategies/stock/` and `strategies/futures/`.
 - Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--show` opens charts in a browser. Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
@@ -435,11 +435,10 @@ python -m apps.backtest --strategy <StrategyClassName>
 ```text
 AlphaEdge/
 ├── core/                    # trading domain modules
-│   ├── strategies/            # strategy implementations
+│   ├── strategies/            # strategy contracts (abstract bases only; concrete strategies live in top-level strategies/)
 │   │   ├── base.py            # BaseStrategy (market-agnostic)
-│   │   ├── strategy_loader.py # auto-scans every instrument-type sub-package (stock / futures)
-│   │   ├── stock/             # BaseStockStrategy + concrete stock strategies
-│   │   └── futures/           # BaseFuturesStrategy + TW futures strategies
+│   │   ├── stock/             # BaseStockStrategy
+│   │   └── futures/           # BaseFuturesStrategy
 │   ├── api/                   # query interfaces and business rules (no SQL; builds DAOs with conn=)
 │   ├── dao/                   # data access layer: SQL, connections and transactions live only here
 │   │   ├── base.py            # BaseDAO: owns_conn, table_exists, savepoint, write methods
@@ -503,7 +502,7 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend container image
 │   ├── README.md              # frontend usage notes
 │   └── __init__.py
-├── strategies/                # top-level package for concrete strategies (stock / futures; empty facade for now — strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
+├── strategies/                # concrete strategies and the strategy loader (stock / futures; strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
 ├── strategy_lab/              # research workspace (strategies/ / data_analysis/ / notebooks/ / ideas/)
 ├── tests/                     # test suites (`backtest/` engine and regression lines, `live/` live trading, `execution/` and `portfolio/` shared contracts; `temp/`, `database/`, `downloads/` are runtime artifacts)
 ├── backlog/                   # internal planning notes

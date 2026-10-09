@@ -237,7 +237,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 9. `core/market/<market>/`：實作該組合的 `InstrumentSpec`／`CostModel`（命名帶市場前綴，如 `TwStockSpec`，繼承 `core/market/` 根目錄的抽象基底）；`core/backtest/models/fill_model.py`：實作 `FillModel`；`SettlementModel` 在 `settlement_model/` 套件內新增 `<market>_<instrument>.py`（如 `us_stock.py`），並在其 `__init__.py` 登記 re-export。
 10. `core/backtest/factory.py`：`build_backtester()` 加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支，並新增對應的 `build_<market>_<instrument>_backtester()`。要上實盤時，`core/live/factory.py` 以同一組分派鍵另有一份，也要加分支。
 
-**既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`apps/backtest.py` 皆為 0 行——`StrategyLoader` 會自動掃描 `core/strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
+**既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`apps/backtest.py` 皆為 0 行——`StrategyLoader` 會自動掃描頂層 `strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
 
 新增市場時還要注意兩處**會跑得動但數字錯**的地方：
 

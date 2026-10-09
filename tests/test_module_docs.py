@@ -4,6 +4,11 @@ from typing import List, Tuple
 
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
 _CORE: pathlib.Path = _PROJECT_ROOT / "core"
+# 具體策略的商品類別目錄（框架只留契約，具體策略在頂層 `strategies/`）
+_STRATEGY_DIRS: Tuple[pathlib.Path, ...] = (
+    _PROJECT_ROOT / "strategies" / "stock",
+    _PROJECT_ROOT / "strategies" / "futures",
+)
 
 """
 `core/` 每個模組都要有模組層級說明
@@ -16,8 +21,9 @@ _CORE: pathlib.Path = _PROJECT_ROOT / "core"
 **import 區塊之後的裸字串**（`core/api/`、`core/models/`、`core/pipeline/` 一律用後者）。
 兩種都算，故判準是「模組層級有沒有任何獨立的字串運算式」而不是 `ast.get_docstring()`。
 
-策略檔是明示例外：它們的交易邏輯寫在 class docstring（買進／賣出／停損三個區塊），
-再加一份模組說明只會變成兩處各說一次。
+具體策略不在 `core/`（在頂層 `strategies/`），規則也不同：交易邏輯寫在 class docstring
+（買進／賣出／停損三個區塊），再加一份模組說明只會變成兩處各說一次，故另一條測試只要求
+class docstring。
 """
 
 
@@ -32,15 +38,20 @@ def _module_level_string(tree: ast.Module) -> bool:
     )
 
 
-def _class_docstring_only_files() -> Tuple[str, ...]:
+def _iter_strategy_files() -> List[pathlib.Path]:
     """
-    交易邏輯寫在 class docstring 的策略檔
+    具體策略檔（交易邏輯寫在 class docstring）
 
     **以目錄判斷而不是列檔名**：列檔名的話，新增一支策略就要回來改這份清單，
     而漏改的表現是測試紅——那會讓人乾脆把整條規則放寬。
     """
 
-    return ("core/strategies/stock/", "core/strategies/futures/")
+    return sorted(
+        path
+        for directory in _STRATEGY_DIRS
+        for path in directory.glob("*.py")
+        if path.name != "__init__.py"
+    )
 
 
 def _iter_modules() -> List[pathlib.Path]:
@@ -72,13 +83,10 @@ def test_every_module_has_a_module_level_description() -> None:
     最大一支 658 行，猜錯的代價是改錯地方。
     """
 
-    exempt: Tuple[str, ...] = _class_docstring_only_files()
     missing: List[str] = []
 
     for path in _iter_modules():
         rel: str = str(path.relative_to(_PROJECT_ROOT))
-        if any(rel.startswith(prefix) for prefix in exempt):
-            continue
         if not _module_level_string(ast.parse(path.read_text(encoding="utf-8"))):
             missing.append(rel)
 
@@ -87,22 +95,22 @@ def test_every_module_has_a_module_level_description() -> None:
     )
 
 
-def test_exempt_strategy_files_still_document_themselves() -> None:
+def test_strategy_files_document_themselves() -> None:
     """
-    豁免的策略檔要有 class docstring
+    具體策略檔要有 class docstring
 
-    否則「豁免」等於完全沒有說明——交易邏輯是最需要寫清楚的那一類。
+    不要求模組說明，不等於可以完全沒有說明——交易邏輯是最需要寫清楚的那一類。
+    **先確認掃得到策略檔**：目錄搬走之後掃到空清單，這條會無條件通過。
     """
 
-    exempt: Tuple[str, ...] = _class_docstring_only_files()
+    strategy_files: List[pathlib.Path] = _iter_strategy_files()
+    assert len(strategy_files) >= 3, (
+        f"只掃到 {len(strategy_files)} 支策略，目錄可能已改"
+    )
+
     undocumented: List[str] = []
-
-    for path in _iter_modules():
+    for path in strategy_files:
         rel: str = str(path.relative_to(_PROJECT_ROOT))
-        if path.name == "__init__.py" or not any(
-            rel.startswith(prefix) for prefix in exempt
-        ):
-            continue
         tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
         classes: List[ast.ClassDef] = [
             node for node in tree.body if isinstance(node, ast.ClassDef)

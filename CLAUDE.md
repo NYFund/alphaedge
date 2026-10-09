@@ -15,7 +15,7 @@
 | Skill | 觸發時機 | 對應 Cursor Rule |
 |-------|----------|------------------|
 | [`manage-backlog`](.claude/skills/manage-backlog/SKILL.md) | 新增／更新 `backlog/**` 文件與 `index.md` | `.cursor/skills/manage-backlog/SKILL.md` |
-| [`develop-strategy`](.claude/skills/develop-strategy/SKILL.md) | 新增／修改 `core/strategies/{stock,futures}/` 策略 | `.cursor/rules/strategy-development-sdd.mdc` |
+| [`develop-strategy`](.claude/skills/develop-strategy/SKILL.md) | 新增／修改 `strategies/{stock,futures}/` 策略 | `.cursor/rules/strategy-development-sdd.mdc` |
 | [`commit-push-merge`](.claude/skills/commit-push-merge/SKILL.md) | 使用者要求「commit + push + merge」 | `.cursor/skills/commit-push-merge/SKILL.md`、`.cursor/rules/commit-message-zh.mdc` |
 | [`health-check`](.claude/skills/health-check/SKILL.md) | 使用者要求健檢（`diff`：每段工作後；`milestone`：里程碑才做全專案） | `.cursor/skills/health-check/SKILL.md` |
 
