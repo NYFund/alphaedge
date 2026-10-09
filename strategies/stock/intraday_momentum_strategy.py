@@ -21,6 +21,7 @@ from core.utils import (
     Scale,
     TradeDirection,
 )
+from core.utils.instrument import StockUtils
 
 
 class IntradayMomentumStrategy(BaseStockStrategy):
@@ -68,7 +69,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
       執行層換成開盤集合競價掛跌停＋ROD，成交價即開盤價。
     - 執行方式 `MARKET`（要成交）：盤中由執行層換成決策價加保護價的限價＋IOC，沒成交即作廢。
     - 標的池：券商單一連線的逐筆訂閱上限 200 檔，盤前由 `get_live_symbols()` 篩選
-      「最近一個交易日在當沖名單內、成交量最大的前 `LIVE_UNIVERSE_SIZE` 檔」。
+      「最近一個交易日在當沖名單內的一般股票（排除 ETF 與權證）中，成交量最大的前 `LIVE_UNIVERSE_SIZE` 檔」。
       **前一天冷門、當天才爆量的股票會漏掉**，這是與日 K 回測（全市場）最大的差異。
     - 當沖名單：當天那一份收盤後才入庫，盤中沿用最近一份（見實盤資料源的 `get_day_trade_list()`）。
     - 時區：逐筆報價與盤中成交的日期都帶時刻（`datetime`），比較開倉日前一律轉成日期。
@@ -287,11 +288,14 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     def get_live_symbols(self, latest_date: datetime.date) -> Optional[List[str]]:
         """
         - Description:
-            盤前篩選逐筆訂閱的標的：最近一個交易日在當沖名單內、成交量最大的前
-            `LIVE_UNIVERSE_SIZE` 檔
+            盤前篩選逐筆訂閱的標的：最近一個交易日在當沖名單內的一般股票中，
+            成交量最大的前 `LIVE_UNIVERSE_SIZE` 檔
 
             不在當沖名單的標的本來就不進場，先排除才不會浪費訂閱名額；
             以前一天的成交量排序是「當天會不會爆量」最便宜的代理指標。
+            **只留一般股票**（`StockUtils.filter_common_stocks()`，排除 ETF 與權證）：
+            與回測的報價轉換同一份過濾，回測本來就看不到 ETF；成交量大的 ETF 幾乎不會漲 9%，
+            留著只會佔掉訂閱名額。
         - Parameters:
             - latest_date: datetime.date
                 歷史資料最新的交易日
@@ -309,7 +313,9 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
         volumes: Dict[str, int] = self.price.get_volume_lots_map(latest_date)
         candidates: List[str] = [
-            stock_id for stock_id in volumes if stock_id in day_trade_list.day_tradable
+            stock_id
+            for stock_id in StockUtils.filter_common_stocks(list(volumes))
+            if stock_id in day_trade_list.day_tradable
         ]
         candidates.sort(key=lambda stock_id: volumes[stock_id], reverse=True)
         return sorted(candidates[: self.LIVE_UNIVERSE_SIZE])

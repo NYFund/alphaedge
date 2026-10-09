@@ -136,7 +136,9 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
 # - 接在後面而不排固定時刻：資料更新實測 8 分鐘到近 3 小時不等，固定時刻可能比到還沒入庫的資料。
 #   資料更新失敗時補比照樣執行，由它自己的新鮮度檢查拒絕（退出碼 3），失敗原因才看得到。
 # - 06:00 而不是 08:00：留兩個多小時給 08:30 的開盤段，資料更新拖長時也不會撞上。
-# 股票與期貨各跑一次補比：兩條線的策略不可混在同一個行程（段落時窗不同）
+# 股票與期貨各跑一次補比：兩條線的策略不可混在同一個行程（段落時窗不同）。
+# 盤中動能策略另跑一次：它的段落（逐筆＋開盤段）與尾盤策略不同，混在同一行程會因時窗無交集而拒絕。
+# 它的當日回測是日 K 近似、實盤是逐筆，**差異是預期中的**（使用者裁示先直接比，有不一樣再檢討原因）
 _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
     "update-db": (
         6,
@@ -148,6 +150,14 @@ _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
                 "apps.live",
                 "--strategy",
                 "VolumeBreakoutMomentumStrategy",
+                "--phase",
+                "parity",
+            ],
+            [
+                "-m",
+                "apps.live",
+                "--strategy",
+                "IntradayMomentumStrategy",
                 "--phase",
                 "parity",
             ],

@@ -531,10 +531,15 @@ def test_close_signal_uses_the_reference_price_before_the_open() -> None:
 
 
 def test_live_symbols_are_the_most_traded_day_tradable_stocks() -> None:
-    """盤前篩選：只留當沖名單內的標的，依前一交易日成交量取前 N 檔"""
+    """
+    盤前篩選：只留當沖名單內的一般股票，依前一交易日成交量取前 N 檔
+
+    ETF（`0050`）與權證（6 碼）就算量最大、也在當沖名單內，仍要排除——
+    回測的報價轉換本來就濾掉它們，而且幾乎不會漲 9%，只會佔掉訂閱名額。
+    """
 
     strategy: IntradayMomentumStrategy = make_strategy(
-        day_tradable=["2330", "2317", "2454"]
+        day_tradable=["2330", "2317", "2454", "0050", "030001"]
     )
     strategy.LIVE_UNIVERSE_SIZE = 2
     strategy.price.get_volume_lots_map = lambda date: {  # type: ignore
@@ -542,6 +547,8 @@ def test_live_symbols_are_the_most_traded_day_tradable_stocks() -> None:
         "2317": 5000,
         "2454": 20000,
         "9999": 90000,
+        "0050": 99000,
+        "030001": 95000,
     }
 
     assert strategy.get_live_symbols(DAY_T) == ["2330", "2454"]
