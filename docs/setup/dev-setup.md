@@ -23,11 +23,11 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 
 開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `pyproject.toml` 的 `[dependency-groups].dev`，
 `uv sync` 預設就會裝，正式映像以 `--no-dev` 排除。其他選用相依（預設不裝，主流程不需要）：
-`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、
+`frontend` Streamlit 介面、`tick` 台股 tick 的 TimescaleDB 驅動（`psycopg`、`connectorx`）、`dolphindb` 舊的 DolphinDB tick 儲存、
 `lab` `strategy_lab` 的報告輸出與美股／匯率資料（`python-docx`、`yfinance`）。
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**，沒列在指令上的 extra 會被移除（`dev` group 不受影響）。
-要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab`），或用 `uv sync --all-extras`。
+要同時使用多組 extra 時一起列出（`uv sync --extra frontend --extra lab`）。**不要用 `uv sync --all-extras`**：它會裝進 `dolphindb`，`import dolphindb` 會把自己的套件目錄塞進 `sys.path`、蓋過 `frontend/config.py`，前端與其測試就 import 失敗。
 **`uv run` 預設也會先做同一個同步**：沒帶 `--no-sync` 的 `uv run ...` 會把環境拉回「不含任何 extra」，
 裝過 `frontend`／`lab` 的環境跑完一次就被拔掉。已建好環境後一律用 `uv run --no-sync ...`
 （排程同理，見 [實盤部署與排程](../deployment/live-deployment.md)）。

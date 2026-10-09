@@ -40,7 +40,7 @@ from core.utils.constant import FileEncoding
 而且每次查詢都得先過濾「這是股票還是期貨」。
 
 ⚠️ **本檔的寫入路徑尚未於本機實測**：DolphinDB server 未啟動
-（`localhost:8848` 連線被拒），`dolphindb` 套件也未安裝（屬 `[tick]` 選用相依）。
+（`localhost:8848` 連線被拒），`dolphindb` 套件也未安裝（屬 `[dolphindb]` 選用相依）。
 結構完全比照已在生產跑過的 `StockTickLoader`，但**在真的跑起來之前不要當成
 已驗證**。
 """
@@ -105,7 +105,7 @@ class FuturesTickLoader(BaseDataLoader):
                 return
             except NameError:
                 logger.warning(
-                    "[Futures Tick] dolphindb 套件未安裝（選用相依 `[tick]`），"
+                    "[Futures Tick] dolphindb 套件未安裝（選用相依 `[dolphindb]`），"
                     "本次不寫入資料庫"
                 )
                 return

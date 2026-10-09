@@ -92,6 +92,10 @@ DIVIDEND_TABLE_NAME: str = "dividend"
 # 既有讀取端的假設反向。表名不叫 `stock_split`：分割只有 6 筆、減資有 600 多筆
 CORPORATE_ACTION_TABLE_NAME: str = "corporate_action"
 TICK_TABLE_NAME: str = "tick"
+# 台股 tick 的 TimescaleDB 資料表（與日頻資料共用同一個 PostgreSQL，故補 `stock_` 前綴）。
+# `load_log` 以「股票 × 交易日」記錄寫入的列數，是續跑與完整性比對的依據
+STOCK_TICK_TABLE_NAME: str = "stock_tick"
+STOCK_TICK_LOAD_LOG_TABLE_NAME: str = "stock_tick_load_log"
 # 期貨 tick **與股票分表**：主鍵不同（期貨要 product ＋ expiry ＋
 # session 才能定位一筆成交，股票只要 stock_id），且期貨有夜盤。
 # 兩者塞同一張表會讓分割鍵（partition key）失去意義，查詢一律掃全表

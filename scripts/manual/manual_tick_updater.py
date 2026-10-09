@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 
 # **必須在 import StockTickUpdater 之前處理**：它在 import 時就會拉 dolphindb，
-# 沒裝 `[tick]` 選用相依的機器會直接 ImportError，連爬取與清洗都試不了。
+# 沒裝 `[dolphindb]` 選用相依的機器會直接 ImportError，連爬取與清洗都試不了。
 # 塞一個 mock 進 sys.modules 讓寫入路徑變成空操作，本腳本本來也不寫 DB
 try:
     import dolphindb as ddb

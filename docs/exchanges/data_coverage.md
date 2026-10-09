@@ -87,7 +87,7 @@ python -m apps.update_db --target <targets...>
 | `futures_margin` | 快照更新（現行一覽表），沒調整時不新增列 |
 | `futures_chip` | 各表最新日 +1（盤後公布，盤中跑到「無資料」屬正常） |
 | `market_holiday` | 無區間；固定抓去年／今年／明年，每年整年替換；尚未公告的年度跳過 |
-| `futures_tick` | 2015-01-01；需 `[tick]` 相依與 Shioaji 金鑰，DolphinDB 寫入路徑未實測 |
+| `futures_tick` | 2015-01-01；需 `[dolphindb]` 相依與 Shioaji 金鑰，DolphinDB 寫入路徑未實測 |
 
 完整參數與範例見 [指令教學](../commands/command-usage.zh-TW.md)。
 

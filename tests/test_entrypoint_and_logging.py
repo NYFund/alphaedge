@@ -23,7 +23,7 @@ def test_no_tick_excludes_futures_tick() -> None:
     """
     預設的 `python -m apps.update_db` 不可去跑期貨 tick
 
-    那需要 Shioaji 金鑰與 `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
+    那需要 Shioaji 金鑰與 `[dolphindb]` 選用相依，沒有的機器每晚都以結束碼 1 收場，
     久了就沒人在看那個紅燈了。
     """
 

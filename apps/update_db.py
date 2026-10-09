@@ -100,7 +100,7 @@ Target 對照表
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
   futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
                               **不含在 all／no_tick 內**，只在此處點名才會跑）
-  futures_tick                台期貨逐筆成交（Shioaji → DolphinDB；需 [tick] 相依與金鑰；
+  futures_tick                台期貨逐筆成交（Shioaji → DolphinDB；需 [dolphindb] 相依與金鑰；
                               **不含在 all／no_tick 內**：重跑會重複寫入，只在點名時跑）
   fs                          財報 (Financial Statement)
   mrr                         月營收報表 (Monthly Revenue Report)
@@ -125,7 +125,7 @@ Target 對照表
 """
 
 
-# 需要 Shioaji 金鑰與 `[tick]` 選用相依的 target；`no_tick` 一律排除這些
+# 需要 Shioaji 金鑰與 tick 選用相依（`[tick]`／`[dolphindb]`）的 target；`no_tick` 一律排除這些
 TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 
 # 只在 `--target` 明確點名時才跑的 target；`all` 與 `no_tick` 兩個集合捷徑一律排除
@@ -158,7 +158,7 @@ def expand_targets(targets: Set[str]) -> Set[str]:
         把 `all`／`no_tick` 兩個集合捷徑展開成實際的 target
 
         `EXPLICIT_ONLY_DATA_TYPES` 兩個捷徑都不含，只有明確點名才會跑；
-        `no_tick` 另外排除所有需要 Shioaji 金鑰與 `[tick]` 相依的 target。
+        `no_tick` 另外排除所有需要 Shioaji 金鑰與 tick 選用相依的 target。
     - Parameters:
         - targets: Set[str]
             命令列給的 target（可含捷徑）
@@ -179,7 +179,7 @@ def expand_targets(targets: Set[str]) -> Set[str]:
     #
     # **`futures_tick` 也要排除**：只排除 `DataType.TICK` 的話，預設的
     # `python -m apps.update_db` 會去跑期貨 tick——那需要 Shioaji 金鑰與
-    # `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了。
+    # `[dolphindb]` 選用相依，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了。
     if "no_tick" in expanded:
         expanded.update(
             dt.name.lower()

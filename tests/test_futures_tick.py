@@ -208,7 +208,7 @@ def test_loader_degrades_without_dolphindb(monkeypatch: pytest.MonkeyPatch) -> N
     """
     **沒有 DolphinDB 也不能整個壞掉**
 
-    期貨 tick 是選用功能（`[tick]` 相依），只跑日線回測的機器與 CI 都沒有它。
+    期貨 tick 是選用功能（`[dolphindb]` 相依），只跑日線回測的機器與 CI 都沒有它。
     此時應保留中繼檔並記 warning，而不是拋錯中止。
 
     **`TICK_DB_PATH` 由測試自己設**：它是「設定」而不是「DolphinDB 在不在」，缺值本來就該

@@ -154,6 +154,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+dolphindb = [
+    { name = "dolphindb" },
+]
 frontend = [
     { name = "streamlit" },
 ]
@@ -163,7 +166,6 @@ lab = [
 ]
 tick = [
     { name = "connectorx" },
-    { name = "dolphindb" },
     { name = "psycopg", extra = ["binary"] },
 ]
 
@@ -179,7 +181,7 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "connectorx", marker = "extra == 'tick'", specifier = ">=0.4" },
-    { name = "dolphindb", marker = "extra == 'tick'", specifier = ">=3.0" },
+    { name = "dolphindb", marker = "extra == 'dolphindb'", specifier = ">=3.0" },
     { name = "fake-useragent", specifier = ">=2.2" },
     { name = "finmind", specifier = ">=1.9" },
     { name = "html5lib", specifier = ">=1.1" },
@@ -198,7 +200,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.67" },
     { name = "yfinance", marker = "extra == 'lab'", specifier = ">=1.3" },
 ]
-provides-extras = ["frontend", "tick", "lab"]
+provides-extras = ["frontend", "tick", "dolphindb", "lab"]
 
 [package.metadata.requires-dev]
 dev = [

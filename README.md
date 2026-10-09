@@ -149,7 +149,7 @@ graph TB
 
 | 市場 × 商品 | 狀態 | 範圍與資料區間 | K 棒級別 | 方向 | 策略基底 |
 | ----------- | ---- | -------------- | -------- | ---- | -------- |
-| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-10-02（最新交易日 2,393 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-30<br>交易所平盤下融（借）券名單（2013-09-23 起）與現股當沖名單（2014-01-06 起），涵蓋全部交易日並每日更新 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[tick]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
+| 台股（`TW` × `STOCK`） | ✅ 支援 | `tw_stock.db` 內的標的：行情 2013-01-02～2026-10-02（最新交易日 2,393 檔）<br>訊號預設用還原價，除權息與公司行動資料同樣自 2013-01 起<br>融資融券、法人籌碼 2013-01-02～2026-09-30<br>交易所平盤下融（借）券名單（2013-09-23 起）與現股當沖名單（2014-01-06 起），涵蓋全部交易日並每日更新 | `DAY`、`TICK`（tick 存在 DolphinDB，不在 `data/db`，需 `[dolphindb]` 相依） | **LONG**：現金全額買進（不支援融資），留倉或當沖<br>**SHORT**：`DAY_TRADE` 現股當沖沖賣、`MARGIN` 融券留倉（預設）、`SBL` 借券留倉；含借券費、維持率追繳、除權息強制回補<br>跨標的可多空並存，同一檔雙向持倉拒單 | `BaseStockStrategy` |
 | 台指數期貨（`TW` × `FUTURE`） | ✅ 支援 | TX、MTX、TMF、TE、ZEF、TF、ZFF；自動換月<br>**日盤行情**（`DAY`）：TX／MTX／TE／TF 2015-01-05 起（回補起點），ZEF 2021-06-28、ZFF 2021-12-06、TMF 2024-07-29 起（上市日）；各商品皆更新至 2026-09-30<br>**夜盤行情**（`NIGHT`／`COMBINED`）：TX／MTX 2017-05-16、TE 2018-11-20、ZEF 2021-06-29、TMF 2024-07-30 起；**TF／ZFF 只有 2025-06-24 起**<br>**保證金**（查表模式）：TX／MTX 2020-03-13、TE／TF 2020-07-22、ZEF 2021-08-12、ZFF 2022-01-26、TMF 2024-08-09 起 | 僅 `DAY` | **LONG／SHORT**：同一套保證金交易、逐日盯市與追繳，沒有券源與借券費<br>跨契約可多空並存，同一契約雙向持倉拒單 | `BaseFuturesStrategy` |
 | 股票期貨／ETF 期貨 | ⚠️ 程式可跑，缺行情 | **資料**：標的池 320 檔（個股 249、小型個股 47、ETF 21、小型 ETF 3），標的池快照 2026-08-29～09-30 共 8 份；行情只有 CDF、NYF（2026-08-27～08-28）與 EEF（2026-08-27 日盤）三檔試跑資料，**不足以跑出有意義的回測**（回補待辦見 [暫緩工作彙整](backlog/暫緩工作彙整.md) S4）<br>**程式面已接通**：乘數由 DataFeed 的 `resolve_multiplier()` 逐日查標的池的契約單位；保證金先查金額表（ETF 期貨 NYF 在此，2020-07-22 起），個股期貨改走比例表（`標的股價 × 契約單位 × 適用比例`，標的股價跨庫取自 `tw_stock.db`）<br>**其餘限制**：契約單位只回溯到 2026-08-29 的首份快照，更早的除權息調整查不到 | 僅 `DAY` | 同台指數期貨 | `BaseFuturesStrategy` |
 | 美股、選擇權 | ❌ 未支援 | `Market.US`、`InstrumentType.OPTION` 只有定義，factory 遇到會拋 `ValueError` | — | — | — |
@@ -375,12 +375,14 @@ cp .env.example .env
 uv sync               # 相依 + 專案本身 + 開發工具
 ```
 
-其他選用相依：`frontend` Streamlit 介面、`tick` DolphinDB tick 儲存、
+其他選用相依：`frontend` Streamlit 介面、`tick` 台股 tick 的 TimescaleDB 驅動（`psycopg`、`connectorx`）、
+`dolphindb` 舊的 DolphinDB tick 儲存、
 `lab` `strategy_lab` 的報告輸出與美股／匯率資料（`python-docx`、`yfinance`）；
 回測與 ETL 主流程不需要它們。
 
 **`uv sync` 會把環境同步成「剛好」指定的內容**：沒列在指令上的 extra 會被移除（開發工具不受影響）。
-要同時保留多組 extra 時一起列出，例如 `uv sync --extra frontend --extra lab`，或用 `uv sync --all-extras`。
+要同時保留多組 extra 時一起列出，例如 `uv sync --extra frontend --extra lab`。
+**不要用 `uv sync --all-extras`**：它會裝進 `dolphindb`，而 `import dolphindb` 會把自己的套件目錄塞進 `sys.path`、蓋過 `frontend/config.py`，前端與其測試就 import 失敗；`dolphindb` 只在真的要跑 DolphinDB 路徑時單獨裝。
 
 **Lint、格式與測試**
 
