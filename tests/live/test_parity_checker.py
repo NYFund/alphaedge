@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -20,6 +20,7 @@ from core.live.report.parity_checker import (
     GROUP_EXECUTION,
     GROUP_SIGNAL,
     GROUP_STRUCTURAL,
+    ClosingLimitLookup,
     ParityChecker,
     ParityDiff,
     compare,
@@ -286,6 +287,18 @@ def unfilled_order(
     return row
 
 
+def closing_at(close: float, limit: float) -> ClosingLimitLookup:
+    """假的收盤查詢：任何標的都回同一組（收盤價, 漲跌停價）"""
+
+    def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
+        return (close, limit)
+
+    return lookup
+
+
+LOCKED: ClosingLimitLookup = closing_at(1100.0, 1100.0)
+
+
 @pytest.mark.parametrize(
     "style, order_type, expected",
     [
@@ -307,11 +320,112 @@ def test_unfilled_order_is_classified_by_execution_style(
     """
 
     diffs: List[ParityDiff] = compare(
-        [unfilled_order(style, order_type)], [make_backtest_order()], []
+        [unfilled_order(style, order_type)],
+        [make_backtest_order()],
+        [],
+        closing_limit=LOCKED,
     )
 
     assert [diff.category for diff in diffs] == [expected]
     assert "實盤成交 0／2" in diffs[0].note
+
+
+def test_auction_order_is_not_locked_when_the_close_is_below_the_limit() -> None:
+    """
+    集合競價掛漲停沒成交、收盤卻沒鎖漲停：歸 `UNFILLED` 並寫出兩個價
+
+    2026-10-08 演練的 4157：漲停 9.40、收盤 9.33，14 張買單在真實市場會以 9.33 成交，
+    卻因為只看委託屬性被歸成「鎖漲停」，模擬環境不撮合集合競價的跡象就被蓋掉了。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [unfilled_order("MARKET", "ROD")],
+        [make_backtest_order()],
+        [],
+        closing_limit=closing_at(9.33, 9.4),
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNFILLED]
+    assert "收盤 9.33 未鎖漲停（漲停 9.4）" in diffs[0].note
+
+
+def test_sell_auction_order_reports_the_limit_down() -> None:
+    """賣單比的是跌停，說明也要寫跌停"""
+
+    row: Dict[str, Any] = unfilled_order("MARKET", "ROD")
+    row["action"] = "Sell"
+    order: BaseOrder = make_backtest_order()
+    order.action = Action.SELL
+
+    diffs: List[ParityDiff] = compare(
+        [row], [order], [], closing_limit=closing_at(91.0, 90.0)
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNFILLED]
+    assert "未鎖跌停（跌停 90.0）" in diffs[0].note
+
+
+def test_auction_order_without_closing_data_is_not_guessed_as_locked() -> None:
+    """查不到收盤（或沒有注入查詢）時不猜鎖住，歸 `UNFILLED` 並寫明無法確認"""
+
+    def missing(symbol: str, side: str) -> Optional[Tuple[float, float]]:
+        return None
+
+    for lookup in (missing, None):
+        diffs: List[ParityDiff] = compare(
+            [unfilled_order("MARKET", "ROD")],
+            [make_backtest_order()],
+            [],
+            closing_limit=lookup,
+        )
+
+        assert [diff.category for diff in diffs] == [CATEGORY_UNFILLED]
+        assert "無法確認收盤是否鎖住" in diffs[0].note
+
+
+def test_checker_passes_the_trading_day_to_the_closing_lookup(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """比對器把交易日帶給收盤查詢；查詢判定鎖住才歸 `LOCKED_AT_LIMIT`"""
+
+    calls: List[Tuple[str, str, datetime.date]] = []
+
+    def closing_limit(
+        symbol: str, side: str, run_date: datetime.date
+    ) -> Optional[Tuple[float, float]]:
+        calls.append((symbol, side, run_date))
+        return (1100.0, 1100.0)
+
+    dao.upsert_order(
+        {
+            "client_order_id": "run1-1",
+            "run_id": "run1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Buy",
+            "position_type": "LONG",
+            "price": 1100.0,
+            "volume": 1,
+            "order_type": "ROD",
+            "execution_style": "MARKET",
+            "status": "CANCELLED",
+            "filled_volume": 0,
+            "created_at": NOW,
+        }
+    )
+    dao.conn.commit()
+    checker: ParityChecker = ParityChecker(
+        dao,
+        run_backtest=lambda name, day: [make_backtest_order(volume=1)],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+        closing_limit=closing_limit,
+    )
+
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert [diff.category for diff in result["Alpha"]] == [CATEGORY_LOCKED_AT_LIMIT]
+    assert calls == [("2330", "Buy", TODAY)]
 
 
 def test_partial_fill_is_also_an_execution_diff() -> None:
@@ -321,6 +435,7 @@ def test_partial_fill_is_also_an_execution_diff() -> None:
         [unfilled_order("MARKET", "ROD", status="PARTIALLY_FILLED", filled_volume=1)],
         [make_backtest_order()],
         [],
+        closing_limit=LOCKED,
     )
 
     assert [diff.category for diff in diffs] == [CATEGORY_LOCKED_AT_LIMIT]
@@ -339,6 +454,7 @@ def test_order_stuck_in_pending_submit_is_not_reported_as_clean() -> None:
         [unfilled_order("MARKET", "ROD", status="PENDING_SUBMIT")],
         [make_backtest_order()],
         [],
+        closing_limit=LOCKED,
     )
 
     assert [diff.category for diff in diffs] == [CATEGORY_LOCKED_AT_LIMIT]

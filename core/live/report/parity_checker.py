@@ -1,6 +1,7 @@
 import csv
 import datetime
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
@@ -57,8 +58,11 @@ CATEGORY_UNFILLED: str = "UNFILLED"
 # 依執行方式分開計數，累積數據後才能決定回測要不要開始讀執行方式：
 #   - `LIMIT_UNFILLED`：照價掛單（`ExecutionStyle.LIMIT`）沒等到價。回測在這裡偏樂觀。
 #   - `LOCKED_AT_LIMIT`：要成交（`MARKET`）在集合競價掛到漲跌停仍排不到，
-#     代表收盤鎖漲停（買）或鎖跌停（賣）。集合競價的委託效期是 ROD，以此辨識。
-#   - 其餘（連續交易時段的保護價＋IOC 沒成交、沒有執行方式紀錄的舊委託）歸 `UNFILLED`。
+#     而且**當日收盤價確實等於漲停（買）或跌停（賣）**。集合競價的委託效期是 ROD，以此辨識；
+#     只看委託屬性不夠——收盤沒鎖住卻沒成交（例如模擬環境不撮合集合競價），
+#     原因完全不同，混進這一類就再也看不出來。
+#   - 其餘（連續交易時段的保護價＋IOC 沒成交、集合競價但收盤沒鎖住或查不到收盤、
+#     沒有執行方式紀錄的舊委託）歸 `UNFILLED`，`note` 寫出收盤價與漲跌停價。
 CATEGORY_LIMIT_UNFILLED: str = "LIMIT_UNFILLED"
 CATEGORY_LOCKED_AT_LIMIT: str = "LOCKED_AT_LIMIT"
 
@@ -80,6 +84,10 @@ CATEGORY_UNEXPLAINED: str = "UNEXPLAINED"
 # 策略做了與回測相同的決定，是執行沒做到；不歸這一類的話，2026-10-06 三張在
 # 轉換層就失敗的單，parity 會判成「完全一致」
 CATEGORY_SEND_FAILED: str = "SEND_FAILED"
+
+# `(標的, 買賣別) → (當日收盤價, 該方向的漲跌停價)`；查不到時回 None。
+# 買單比漲停、賣單比跌停，由提供者依買賣別決定
+ClosingLimitLookup = Callable[[str, str], Optional[Tuple[float, float]]]
 
 # 類別 → 組別。parity 要回答的是三個不同的問題，處理方式完全不同：
 # - 訊號差異：策略在實盤做了不同的決定，要查策略或資料。
@@ -211,6 +219,9 @@ class ParityChecker:
         run_backtest: Callable[[str, datetime.date], List[BaseOrder]],
         output_root: Path = LIVE_RESULT_DIR_PATH,
         strategy_names: Optional[Sequence[str]] = None,
+        closing_limit: Optional[
+            Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
+        ] = None,
     ) -> None:
         """
         - Description:
@@ -226,6 +237,9 @@ class ParityChecker:
                 `run_regression.sh` 就失去意義了
             - strategy_names: Optional[Sequence[str]]
                 本次行程載入的策略；只比對這些。`None` 表示比對紀錄庫裡當日有委託的全部策略
+            - closing_limit: Optional[Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]]
+                `(標的, 買賣別, 交易日) → (收盤價, 漲跌停價)`；判斷集合競價沒成交是不是
+                收盤鎖住。`None` 時一律查不到，集合競價沒成交歸 `UNFILLED`
         """
 
         self.dao: LiveTradeDAO = dao
@@ -236,6 +250,9 @@ class ParityChecker:
         self.strategy_names: Optional[Set[str]] = (
             set(strategy_names) if strategy_names is not None else None
         )
+        self.closing_limit: Optional[
+            Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
+        ] = closing_limit
 
     def check(self, run_date: datetime.date) -> Dict[str, List[ParityDiff]]:
         """
@@ -325,8 +342,22 @@ class ParityChecker:
                 )
             ]
 
+        lookup: Optional[ClosingLimitLookup] = None
+        if self.closing_limit is not None:
+            closing_limit: Callable[
+                [str, str, datetime.date], Optional[Tuple[float, float]]
+            ] = self.closing_limit
+
+            def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
+                return closing_limit(symbol, side, run_date)
+
         return compare(
-            live_orders, backtest_orders, events, resolved_actions, ran_cleanly
+            live_orders,
+            backtest_orders,
+            events,
+            resolved_actions,
+            ran_cleanly,
+            closing_limit=lookup,
         )
 
     def _persist(
@@ -399,6 +430,7 @@ def compare(
     events: Sequence[Dict[str, Any]],
     resolved_actions: Sequence[Dict[str, Any]] = (),
     ran_cleanly: bool = False,
+    closing_limit: Optional[ClosingLimitLookup] = None,
 ) -> List[ParityDiff]:
     """
     - Description:
@@ -420,6 +452,8 @@ def compare(
         - ran_cleanly: bool
             這支策略當天的交易段落是否都正常結束、且沒有 CRITICAL 事件
             （見 `segments_ran_cleanly()`）；決定「回測多出的開倉單」能不能歸給快照口徑
+        - closing_limit: Optional[ClosingLimitLookup]
+            `(標的, 買賣別) → (收盤價, 漲跌停價)`；集合競價沒成交時用來確認收盤是否鎖住
     - Return:
         - List[ParityDiff]
             差異清單；兩邊完全一致時為空
@@ -502,7 +536,7 @@ def compare(
             continue
 
         fill_diff: Optional[ParityDiff] = _compare_fill(
-            len(diffs) + 1, symbol, side, live_rows, bt_orders
+            len(diffs) + 1, symbol, side, live_rows, bt_orders, closing_limit
         )
         if fill_diff is not None:
             diffs.append(fill_diff)
@@ -661,6 +695,7 @@ def _compare_fill(
     side: str,
     live_rows: Sequence[Dict[str, Any]],
     bt_orders: Sequence[BaseOrder],
+    closing_limit: Optional[ClosingLimitLookup] = None,
 ) -> Optional[ParityDiff]:
     """
     兩邊數量相同時，比實盤有沒有送出、有沒有成交；回測那邊一律視為成交
@@ -699,29 +734,71 @@ def _compare_fill(
 
     filled: int = sum(int(row.get("filled_volume") or 0) for row in live_rows)
     volume: int = sum(int(row.get("volume") or 0) for row in live_rows)
+    category: str
+    reason: str
+    category, reason = _unfilled_category(unfilled[0], symbol, side, closing_limit)
+    note: str = f"實盤成交 {filled}／{volume}，回測以策略給的價全數成交"
     return _make_diff(
         seq,
         symbol,
         side,
-        _unfilled_category(unfilled[0]),
+        category,
         "；".join(summarize_row(row) for row in live_rows),
         "；".join(summarize(order) for order in bt_orders),
-        note=f"實盤成交 {filled}／{volume}，回測以策略給的價全數成交",
+        note=f"{note}；{reason}" if reason else note,
     )
 
 
-def _unfilled_category(row: Dict[str, Any]) -> str:
-    """依執行方式與委託效期判斷沒成交的原因（見 `CATEGORY_LIMIT_UNFILLED`）"""
+def _unfilled_category(
+    row: Dict[str, Any],
+    symbol: str,
+    side: str,
+    closing_limit: Optional[ClosingLimitLookup] = None,
+) -> Tuple[str, str]:
+    """
+    - Description:
+        依執行方式與委託效期判斷沒成交的原因（見 `CATEGORY_LIMIT_UNFILLED`）
+
+        集合競價的 `MARKET` 委託掛在漲跌停，只有收盤真的鎖在那個價才排不到。
+        **查不到收盤時不猜**：歸 `UNFILLED` 並寫明無法確認，寧可多一筆要人看的，
+        也不要把模擬環境不撮合之類的問題安在「鎖漲停」上。
+    - Parameters:
+        - row: Dict[str, Any]
+            第一張沒成交的 `live_order` 列
+        - symbol: str
+            標的
+        - side: str
+            買賣別（`Buy`／`Sell`）
+        - closing_limit: Optional[ClosingLimitLookup]
+            `(標的, 買賣別) → (收盤價, 漲跌停價)`
+    - Return:
+        - Tuple[str, str]
+            （類別, 附加說明）；說明為空字串時不附加
+    """
 
     style: str = str(row.get("execution_style") or "")
     if style == ExecutionStyle.LIMIT.value:
-        return CATEGORY_LIMIT_UNFILLED
-    if (
+        return (CATEGORY_LIMIT_UNFILLED, "")
+    if not (
         style == ExecutionStyle.MARKET.value
         and str(row.get("order_type") or "") == OrderType.ROD.value
     ):
-        return CATEGORY_LOCKED_AT_LIMIT
-    return CATEGORY_UNFILLED
+        return (CATEGORY_UNFILLED, "")
+
+    found: Optional[Tuple[float, float]] = (
+        closing_limit(symbol, side) if closing_limit is not None else None
+    )
+    if found is None:
+        return (CATEGORY_UNFILLED, "查不到當日收盤或漲跌停價，無法確認收盤是否鎖住")
+
+    close, limit = found
+    if math.isclose(close, limit, abs_tol=1e-6):
+        return (CATEGORY_LOCKED_AT_LIMIT, "")
+    limit_name: str = "漲停" if side == Action.BUY.value else "跌停"
+    return (
+        CATEGORY_UNFILLED,
+        f"收盤 {close} 未鎖{limit_name}（{limit_name} {limit}），集合競價掛{limit_name}卻沒成交",
+    )
 
 
 def _make_diff(
