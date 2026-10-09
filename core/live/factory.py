@@ -1,11 +1,13 @@
 import datetime
 import json
+import math
 import os
 import subprocess
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
+from core.api.tw.stock_price_api import StockPriceAPI
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides
@@ -480,6 +482,7 @@ def build_live_trader(
         resolved_dao,
         make_daily_backtest_runner(strategies, resolved_dao.get_lots_held_at_start),
         strategy_names=[type(strategy).__name__ for strategy in strategies],
+        closing_limit=make_closing_limit_lookup(),
     )
     _record_run(
         resolved_dao,
@@ -879,6 +882,78 @@ def make_daily_backtest_runner(
         return [order for _, _, order in backtester.submitted_orders]
 
     return run
+
+
+def make_closing_limit_lookup(
+    api_factory: Callable[[], StockPriceAPI] = StockPriceAPI,
+) -> Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]:
+    """
+    - Description:
+        產生 parity 用的「當日收盤價與漲跌停價」查詢
+
+        集合競價的 `MARKET` 委託掛在漲跌停卻沒成交時，parity 要確認收盤是不是真的鎖住，
+        才能歸「鎖漲跌停」；收盤沒鎖住卻沒成交是另一回事（例如模擬環境不撮合集合競價）。
+
+        **漲跌停以前一交易日收盤為基準自行計算**（`TwStockSpec.get_price_limits()`）：
+        除權息日的真正基準是開盤競價基準，算出來的漲跌停會偏，該日鎖住的單會被歸到
+        `UNFILLED`、`note` 寫出兩個價——寧可多一筆要人看，不會把沒鎖住的誤判成鎖住。
+
+        **同一天只查一次資料庫**：一天的差異可能有好幾檔，逐檔連線查詢沒有意義。
+    - Parameters:
+        - api_factory: Callable[[], StockPriceAPI]
+            建立價格 API 的函式；測試以此注入假的資料來源
+    - Return:
+        - Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
+            `(標的, 買賣別, 交易日) → (收盤價, 該方向的漲跌停價)`；當日或前一交易日
+            沒有該檔收盤時回 None
+    """
+
+    spec: TwStockSpec = TwStockSpec()
+    cache: Dict[datetime.date, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
+
+    def load(run_date: datetime.date) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        if run_date not in cache:
+            with api_factory() as api:
+                # 往前 30 個曆日足以跨過任何連假
+                days: List[datetime.date] = api.get_trading_days(
+                    run_date - datetime.timedelta(days=30),
+                    run_date - datetime.timedelta(days=1),
+                )
+                closes: Dict[str, Any] = api.get_close_map(run_date)
+                prev_closes: Dict[str, Any] = (
+                    api.get_close_map(days[-1]) if days else {}
+                )
+            cache[run_date] = (closes, prev_closes)
+        return cache[run_date]
+
+    def lookup(
+        symbol: str, side: str, run_date: datetime.date
+    ) -> Optional[Tuple[float, float]]:
+        closes, prev_closes = load(run_date)
+        close: Optional[float] = _positive_price(closes.get(symbol))
+        prev_close: Optional[float] = _positive_price(prev_closes.get(symbol))
+        if close is None or prev_close is None:
+            return None
+
+        limit_down, limit_up = spec.get_price_limits(prev_close, run_date, symbol)
+        limit: Optional[float] = limit_up if side == Action.BUY.value else limit_down
+        if limit is None:
+            return None
+        return (close, float(limit))
+
+    return lookup
+
+
+def _positive_price(value: Any) -> Optional[float]:
+    """價格欄位轉成正數 float；缺值、`NaN`、0 或無法轉換時回 None（無成交日收盤可能是 `NaN`）"""
+
+    try:
+        price: float = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(price) or price <= 0:
+        return None
+    return price
 
 
 def _seed_positions(
