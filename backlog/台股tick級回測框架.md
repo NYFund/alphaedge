@@ -36,7 +36,7 @@
 
 > **與其他文件的關係**
 > - **資料前置**：`台股tick改用TimescaleDB.md`（16/16 完成，程式在 `feature/tick-timescaledb`，要等 `feature/post-rehearsal` 合併後才能進 `main`）。
->   本文件的實作分支要從 `feature/tick-timescaledb` 分出，合併順序跟在它後面。
+>   本文件的實作分支 `feature/tick-backtest`（worktree：`AlphaEdge/worktrees/tick-backtest`）2026-10-10 從 `feature/tick-timescaledb` 分出，合併順序跟在它後面。
 > - **吸收 `滑價模型後續優化.md` S3**（tick 級改用 bid/ask 成交）：Phase3-2 實作的就是它；完成時該步驟一併標記 ✅。
 > - **盤中動能策略的校準**：`盤中動能策略.md` S2 的日 K 近似「不可直接採信」；本文件 Phase5-2 用逐筆重放重跑，結果回饋該文件 S4 的判讀。
 > - **與實盤的 parity**：TICK 回測的段落（盤前、盤中逐筆、尾盤）對照實盤的 `ExecutionTiming`（`AT_OPEN`／`IMMEDIATE`／`AT_CLOSE`），
@@ -51,7 +51,7 @@
 | Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1 |
 | Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ⬜ | 相依 Phase0-1；動到實盤程式，部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後） |
 | Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構） | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表 | ⬜ | 無前置相依；tick 的 Phase3-1 疊在它上面 |
-| Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ⬜ | — |
+| Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`stock_ids` 與 `cum_volume` 完成；累計量定案在 pandas 端算（實測較快，見步驟詳述）；真實資料 200 檔清單一天 0.73 秒 |
 | Phase2-2 | 台股逐筆資料源 `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py`（新，繼承 `StockDataFeed`） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ⬜ | 相依 Phase2-1 |
 | Phase3-1 | `TickSimulator`：一天三段與逐筆迴圈 | `core/backtest/simulator/tick_simulator.py`（新）、`core/backtest/factory.py` | 開盤集合競價、逐筆、收盤集合競價三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ⬜ | 相依 Phase1-1、Phase1-3、Phase1-4、Phase2-2 |
 | Phase3-2 | 逐筆成交模型與在途委託 | `core/backtest/models/fill_model.py`、`core/backtest/simulator/pending_orders.py`（新：`PendingOrderManager`、`PendingOrder`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、IOC 作廢、成交量上限的單元測試 | ⬜ | 相依 Phase3-1；吸收 `滑價模型後續優化.md` S3 |
@@ -185,7 +185,7 @@
   worktree 沒有 `data/db/`，LONG 線會被 skip：要讓它唯讀讀到主目錄的研究庫才算真的跑過。
 - **相依**：無（可與 Phase1-1～Phase2-1 平行）。
 
-### Phase2-1. tick 查詢支援多檔與當日累計量 ⬜
+### Phase2-1. tick 查詢支援多檔與當日累計量 ✅
 
 - **目的**：策略清單模式要一次查「一天 × 數百檔」；實盤報價的 `volume` 是當日累計量，回測要能給出同一個值。
 - **做法**：
@@ -197,6 +197,14 @@
 - **產出**：上列檔案；`tests/test_stock_tick_timescale.py`、`tests/test_stock_tick_api.py` 補測試。
 - **驗證方式**：多檔查詢結果與逐檔查詢合併後相同；`cum_volume` 等於逐筆加總；不合法代號在送出查詢前就被拒絕。
 - **相依**：無（可最先做）。
+- **結果（2026-10-10，`feature/tick-backtest`）**：
+  - **偏離原規格（累計量的算法提前定案）**：原訂兩種算法擇一、等 Phase5-2 量測再決定；實作時直接在真實資料（2024-05-08 全市場 1,256,763 筆）量了兩種：
+    資料庫 window function 查詢 1.99 秒；不帶 window 查詢 0.81 秒＋pandas 依「股票 × 日期」`cumsum` 0.19 秒，兩者結果逐筆相同。採 pandas 端，Phase5-2 不必再比。
+  - 因為累加依結果的列序進行，`query_ticks()` 的排序欄位去掉 `stock_id` 後必須是 `("time", "seq")`，其他排序一律 `ValueError`（現有三個呼叫端都符合）。
+  - DAO 原本的 `stock_id` 參數改成 `stock_ids`（`get_stock_ticks()` 改傳單元素清單），不並存兩個參數；傳成單一字串時 `TypeError`（字串也是 Sequence，會被拆成單一字元）。重複代號在組 SQL 前去重。
+  - 所有讀取介面都多回傳 `cum_volume`；`scripts/manual/manual_tick_history_import.py` 的抽樣比對改成只比原始欄位，`strategy_lab/README.md` 的欄位說明一併更新。
+  - 驗證：`tests/test_stock_tick_api.py`（無資料庫：代號驗證、單一字串、排序限制、空清單不送查詢）與 `tests/test_stock_tick_timescale.py`（暫存 schema：多檔等於逐檔合併、重複與不存在的代號、累計量含當筆／跨股票獨立／隔天歸零）共 33 條全綠；
+    突變「累計量不分日」「空清單照送查詢」各自讓對應測試轉紅。真實資料：成交量前 200 檔一天 827,836 筆 0.73 秒（全市場 0.91 秒），抽 3 檔比對清單查詢、全市場查詢與逐檔查詢逐列相同，當日最後一筆 `cum_volume` 等於成交量加總。
 
 ### Phase2-2. 台股逐筆資料源 `StockTickDataFeed` ⬜
 
