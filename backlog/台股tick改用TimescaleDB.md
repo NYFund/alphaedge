@@ -21,7 +21,7 @@
     2. 跑 `python -m apps.update_db --target tick`——它會實際爬取並寫入正式資料表（Phase2-2 的驗證改以替身取代 crawler）。
   - **不修補歷史資料本身**：盤點發現的異常列（興櫃時期、全零列、負成交量等）只依 Phase4-1 裁示的規則在入庫時排除並計數，不回頭改 CSV。
 - **驗收標準**：
-  1. 歷史 CSV 全數入庫，每個「股票 × 交易日」的 DB 列數＝CSV 列數－依規則排除的列數。**這一條要等使用者要求全量匯入後才驗**；在那之前，前四個 Phase 的驗收以抽樣樣本為準。
+  1. 歷史 CSV 全數入庫，每個「股票 × 交易日」的 DB 列數＝CSV 列數－依規則排除的列數。**2026-10-10 已驗**（Phase4-3 匯入紀錄：1,781,133 組全數相符）。
   2. `StockTickAPI` 四個公開方法在 TimescaleDB 上回傳相同欄位；Mac 本機查一天全市場 `get_ordered_ticks()` 的耗時已記錄，並符合 Phase4-2 定下的門檻。
   3. `python -m apps.update_db --target tick` 可寫入 TimescaleDB，重跑同一區間不產生重複列。**這一條以替身或測試 schema 驗證**；真的對正式資料表跑更新要等使用者指令。
   4. 台股 tick 相關程式不再 import `dolphindb`，`pytest` 全數通過。
@@ -62,7 +62,7 @@
 | Phase3-2 | DataFeed／Adapter 文字與連線生命週期收尾 | `core/backtest/datafeed/tw/stock_datafeed.py`、`core/api/base.py`、`core/api/__init__.py`、`core/api/tw/__init__.py` | tick 級回測跑完後連線有關閉（log 可見） | ✅ | **✅ 2026-10-09**：DolphinDB 字樣全數改掉；驗證改以 DataFeed `get_quotes()` 直接比對 TickQuote 數（偏離原規格，見步驟詳述）。 相依 Phase3-1 |
 | Phase4-1 | 盤點本機歷史 CSV、定案排除規則並搬離 updater 資料夾 | 本文件（盤點紀錄） | 盤點紀錄涵蓋 5 項；兩項裁示已記錄；搬移後檔數 1,856、總大小不變 | ✅ | **✅ 2026-10-09**：全量盤點寫入盤點紀錄；使用者採用兩項建議；歷史已搬到 `data/tick_history/`（1,856 檔、56 GB）。 **無相依，可最先做**；**2026-10-09 全量盤點已寫入盤點紀錄；兩項裁示（採用建議）與搬移到 `data/tick_history/` 同日完成** |
 | Phase4-2 | 試點：本機**抽樣**檔案入庫與效能量測 | 本文件（量測紀錄） | 記錄入庫耗時、壓縮前後大小、單日全市場查詢耗時（以樣本列數換算） | ✅ | **✅ 2026-10-09**：19 檔 × 3 天寫入 `public` 後量測、量完清空；寫入約 8.9 萬列／秒（全量約 3.3 小時）、壓縮約 12 倍（全量約 14 GB）、全市場單日查詢換算約 1.2～1.4 秒（門檻 10 秒）；**發現 chunk 邊界是週四，Phase4-3 要依 chunk 切**。 相依 Phase1-3、Phase2-1、Phase3-1、Phase4-1；**只用抽樣**，全量入庫走 Phase4-3 且需使用者要求（見〈範圍界線〉） |
-| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | 🔄 | **🔄 2026-10-09**：腳本完成並以端到端測試驗證（`feature/tick-timescaledb`）；**尚未執行，等使用者指令**（推估寫入約 3.2 小時）。 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
+| Phase4-3 | 歷史 CSV 全量匯入與完整性比對 | `scripts/manual/manual_tick_history_import.py` | 每個「股票 × 交易日」：`load_log.source_rows`＝CSV 列數、DB 列數＝`load_log.row_count`＝`source_rows`－排除列數 | ✅ | **✅ 2026-10-10**：2026-10-09 使用者下指令後全量匯入（`feature/tick-timescaledb` worktree 指向主目錄 `data/`）；切檔 34 分＋寫入 390 分、213 個 chunk 0 失敗；DB 1,050,896,400 列（＝Phase2-1 乾跑基準）、排除 10,330,684 列，「股票 × 交易日」1,781,133 組，4 項比對全數通過；壓縮後 12 GB；正式資料上全市場單日查詢 0.7～1.5 秒。 相依 Phase4-1、Phase4-2；**腳本可以先寫好，實際執行匯入要等使用者要求** |
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ✅ | **✅ 2026-10-09**：最後兩條 `TICK_DB_PATH` 測試隨 Phase5-2 移除常數一併刪除；tick 相關測試共 7 個檔（3 個需 DB、4 個不需）。
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ✅ | **✅ 2026-10-09**（選項 A）：台股與期貨 tick 的 DolphinDB 程式、設定、extra 全數移除；本機的 `tick_metadata.json` 與期貨 tick CSV 留到合併部署時刪。 相依 Phase4-3、Phase5-1；**期貨 tick 的處理需使用者裁示**；期貨 tick 三檔的 5 處盲捕隨裁示一併處理（見〈附：併入的盲捕收斂〉） |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ✅ | **✅ 2026-10-09**：16 份文件改完，etl-ingestion 新增 tick 小節（含 schema 設計理由）。 相依 Phase5-2 |
@@ -601,7 +601,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - 清空方式：`TRUNCATE public.stock_tick`、`TRUNCATE public.stock_tick_load_log`（chunk 一併刪除），壓縮 policy 恢復啟用；兩張空表保留。
 - **相依**：Phase1-3、Phase2-1、Phase3-1、Phase4-1（樣本從搬移後的位置取）。
 
-### Phase4-3. 歷史 CSV 全量匯入與完整性比對 🔄
+### Phase4-3. 歷史 CSV 全量匯入與完整性比對 ✅
 
 - **目的**：把 Phase4-1 盤點的歷史資料全部搬進 TimescaleDB。
 - **執行時機**：**腳本可以先寫好，真正跑匯入要等使用者要求**（2026-09-18 裁示，與 Phase4-2 同一條）。
@@ -624,7 +624,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   2. 抽樣 20 個「股票 × 交易日」，`get_stock_ticks()` 的結果與正規化、排除後的 CSV 逐列比對（`time`、價格、量）完全相同。
   3. 抽樣 5 個交易日，每日成交量加總 ≈ `price` 表當日成交股數 ÷ 1000（盤後零股與定價交易會造成小幅落差，差距記進匯入紀錄）。
   4. 全部 chunk 除了最近 14 天之外都已壓縮。
-- **實作紀錄（2026-10-09，`feature/tick-timescaledb`）**：腳本完成，**尚未執行**（等使用者指令）。
+- **實作紀錄（2026-10-09，`feature/tick-timescaledb`）**：腳本完成；2026-10-09 使用者下指令執行，結果見下方「匯入紀錄」。
   - **預設只列計畫**（來源檔數與大小、工作目錄空間、推估耗時、資料庫現況），不建表、不寫入；`--apply` 才匯入，`--verify-only` 只比對。
     對真實資料列計畫：1,856 檔、57.9 GB、推估約 10.2 億列、寫入約 3.2 小時（不含切檔與比對）。
   - **切檔改成一次掃完**：每檔依 chunk 範圍切到 `data/tick_import_work/<chunk 起日>/<代號>.csv`（原格式不動），
@@ -636,6 +636,18 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - **執行方式**（在 `feature/tick-timescaledb` 合併後的主目錄，或在 worktree 以 `--source-dir`／`--price-db`／`--work-dir` 指向主目錄的 `data/`）：
     先開 Docker Desktop 並 `docker compose up -d postgres`，再
     `TICK_DATABASE_URL=... uv run --no-sync python -m scripts.manual.manual_tick_history_import --apply`；中斷後加 `--resume` 重跑。
+- **匯入紀錄（2026-10-09 18:19～2026-10-10 01:25，台北時間）**：
+  - 執行方式：在 worktree 以 `--source-dir`／`--price-db`／`--work-dir` 指向主目錄的 `data/tick_history`、`data/db/tw_stock.db`、`data/tick_import_work`，外層包 `caffeinate -i` 避免睡眠。
+  - 耗時：切檔 34 分（1,856 檔，峰值暫存約 58 GB，逐 chunk 刪除，結束後只剩 33 MB 的 `source_counts.csv` 與完成標記）；
+    寫入 390 分、213 個 chunk（2020-03-26～2024-05-16），每 chunk 1,711～1,853 檔、**失敗 0 檔**，log 0 筆 ERROR／WARNING。
+    實際比 Phase4-2 推估的 3.3 小時慢：2021 年後每週列數由約 400 萬增到 500～700 萬，每 chunk 由約 1.3 分拉長到約 1.8～2.1 分。
+  - **比對 1**：來源「股票 × 交易日」1,781,133 組、`load_log` 1,781,133 組；缺登記 0、多登記 0、來源列數不符 0。
+  - **比對 2**：來源 1,061,227,084 列，寫入 **1,050,896,400 列**（排除 10,330,684 列，與 Phase2-1 全量乾跑的基準完全相同）；DB 實際列數與 `row_count` 不符 0 組。
+  - **比對 3**：抽樣 20 組逐列比對，不符 0 組。
+  - **比對 4**（只報告）：抽樣 5 天 tick 成交量加總÷`price` 表 0.9920～0.9960（2021-11-08、2021-12-28、2023-06-07、2023-10-17、2023-12-21），落差符合盤後零股與定價交易的預期。
+  - **比對 5**：chunk 213 個，14 天以前仍未壓縮 0 個；壓縮 policy 已恢復啟用（job 1289）。
+  - 大小：`hypertable_size` 與整個資料庫都約 **12 GB**（Phase4-2 推估 14 GB），資料範圍 2020-04-01～2024-05-10、1,856 檔。
+  - 正式資料上的查詢（三次取中位數）：`get_ordered_ticks()` 全市場單日 2020-04-06 73 萬列 0.66 秒、2022-03-08 114 萬列 1.0 秒、2024-05-08 126 萬列 1.45 秒（門檻 10 秒）；`get_stock_ticks("2330")` 單日約 0.02 秒。
 - **相依**：Phase4-1、Phase4-2。
 
 ---
