@@ -18,6 +18,7 @@
     同一支策略不改程式就能回測與實盤，盤中動能策略可以直接回測。
   - **下單後同一檔的下一筆 tick 才成交**：市價買吃 `ask_price`、賣吃 `bid_price`，限價單等之後的成交價穿越才成交；沒有前視。
   - 標的範圍**兩套都做、回測前自己選**：策略盤前宣告的清單（與實盤盤前篩選一致），或全市場。
+  - **日 K 與 tick 結構對稱**：`Backtester` 只留逐日迴圈與每日前後的共用處理，「一天怎麼跑」交給 `BarSimulator`（日 K）或 `TickSimulator`（逐筆），兩者繼承 `BaseSimulator`、介面相同（〈已定案〉第 8 點）。
 - **範圍界線**：
   - **只做台股**。期貨沒有 tick 資料（`台股tick改用TimescaleDB.md` 的期貨 tick 已裁示不做）。
   - **不做時間切片**（每 N 秒把全市場最新報價打包一次）：2026-10-10 使用者選逐筆。需要橫斷面比較的策略照實盤規則，自己在策略內保存各標的最新報價。
@@ -29,6 +30,7 @@
   2. `IntradayMomentumStrategy` 以 `--scale tick` 在真實資料上跑完一段區間，兩種標的範圍各跑一次，結果與 `盤中動能策略.md` S2 的日 K 近似逐項對照、差異記錄回該文件。
   3. 現有 DAY 策略回歸雙線零變動；宣告只支援 DAY 的策略加 `--scale tick` 時當場報錯。
   4. 效能已量測並記錄：兩種標的範圍各自的「每交易日耗時」與峰值記憶體。
+  5. 日 K 抽成 `BarSimulator` 後回歸雙線零變動。
 
 ---
 
@@ -44,18 +46,19 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| Phase0-1 | 定案介面細節 | 本文件〈已定案〉 | 使用者確認 | ✅ | **✅ 2026-10-10**：七點全數定案（見〈已定案〉），後三點為使用者採用建議 |
+| Phase0-1 | 定案介面細節與命名 | 本文件〈已定案〉 | 使用者確認 | ✅ | **✅ 2026-10-10**：介面七點與架構命名（〈已定案〉第 8 點）全數定案 |
 | Phase1-1 | 策略宣告支援的級別（`supported_scales`）＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ⬜ | 相依 Phase0-1 |
-| Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ⬜ | 相依 Phase0-1；動到實盤程式，部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後） |
 | Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1 |
+| Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ⬜ | 相依 Phase0-1；動到實盤程式，部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後） |
+| Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構） | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表 | ⬜ | 無前置相依；tick 的 Phase3-1 疊在它上面 |
 | Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ⬜ | — |
-| Phase2-2 | 逐筆重放資料源 | `core/backtest/datafeed/tw/stock_tick_replay.py`（新） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ⬜ | 相依 Phase2-1 |
-| Phase3-1 | 逐筆回測迴圈與段落 | `core/backtest/backtester.py`（或拆出 `tick_backtester.py`） | 盤前、盤中逐筆、尾盤三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ⬜ | 相依 Phase1-1、Phase1-3、Phase2-2 |
-| Phase3-2 | 逐筆成交模型 | `core/backtest/models/fill_model.py`（或新增 `tick_fill_model.py`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、成交量上限的單元測試 | ⬜ | 相依 Phase3-1；吸收 `滑價模型後續優化.md` S3 |
-| Phase3-3 | 盤中帳務與日終結算 | `core/backtest/backtester.py`、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ⬜ | 相依 Phase3-2 |
+| Phase2-2 | 台股逐筆資料源 `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py`（新，繼承 `StockDataFeed`） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ⬜ | 相依 Phase2-1 |
+| Phase3-1 | `TickSimulator`：一天三段與逐筆迴圈 | `core/backtest/simulator/tick_simulator.py`（新）、`core/backtest/factory.py` | 開盤集合競價、逐筆、收盤集合競價三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ⬜ | 相依 Phase1-1、Phase1-3、Phase1-4、Phase2-2 |
+| Phase3-2 | 逐筆成交模型與在途委託 | `core/backtest/models/fill_model.py`、`core/backtest/simulator/pending_orders.py`（新：`PendingOrderManager`、`PendingOrder`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、IOC 作廢、成交量上限的單元測試 | ⬜ | 相依 Phase3-1；吸收 `滑價模型後續優化.md` S3 |
+| Phase3-3 | 盤中帳務與日終結算 | `core/backtest/simulator/tick_simulator.py`、`core/backtest/backtester.py`（`finish_day()`）、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ⬜ | 相依 Phase3-2 |
 | Phase4-1 | `IntradayMomentumStrategy` 支援 TICK 回測 | `strategies/stock/intraday_momentum_strategy.py` | 移除 `setup_apis()` 的 `NotImplementedError`；逐筆分支在回測與實盤共用 | ⬜ | 相依 Phase3-3 |
 | Phase4-2 | 既有 DAY 策略宣告支援範圍 | `strategies/**/*.py`、`strategies/README.md` | 每支策略都宣告支援的級別；只支援 DAY 者加 `--scale tick` 報錯 | ⬜ | 相依 Phase1-1 |
-| Phase5-1 | 端到端測試 | `tests/backtest/test_tick_replay_backtest.py`（新） | 手寫 tick：無前視、下一筆成交、決定性（跑兩次逐位元相同）、多檔交錯順序 | ⬜ | 相依 Phase3-3 |
+| Phase5-1 | 端到端測試 | `tests/backtest/test_tick_simulator.py`（新） | 手寫 tick：無前視、下一筆成交、決定性（跑兩次逐位元相同）、多檔交錯順序 | ⬜ | 相依 Phase3-3 |
 | Phase5-2 | 真實資料實跑與效能量測 | 本文件（實跑紀錄）、`盤中動能策略.md` | 兩種標的範圍各跑一段區間；記錄每日耗時、峰值記憶體；與 S2 日 K 近似逐項對照 | ⬜ | 相依 Phase4-1、Phase5-1 |
 | Phase5-3 | 文件 | `core/backtest/README.md`、`strategies/README.md`、`docs/backtest/module-map.md` | 文件描述逐筆重放的語意、段落、成交規則與已知限制 | ⬜ | 相依 Phase5-2 |
 
@@ -75,13 +78,47 @@
 7. **策略清單的來源**：沿用 `get_live_symbols(latest_date)`，回測每個交易日盤前以「前一交易日」呼叫一次，再加上當時的持倉標的（與實盤 `LiveTrader.quote_symbols()` 一致）。
    **策略沒有覆寫（回傳 `None`）時，選 `--tick-universe strategy` 當場報錯**，訊息提示改用 `--tick-universe all`；不自動退回全市場（避免在不知情下改跑一天 120 萬筆的全市場）。
 
+8. **架構與命名**（2026-10-10 使用者逐項選定）：日 K 與 tick 結構對稱，日 K 也從 `Backtester` 抽成獨立的 simulator。
+
+   ```
+   Backtester.run()                       逐日迴圈（日 K 與 tick 共用）
+    └─ 每個交易日：
+        prepare_day(date)                 每日準備：漲跌停基準、融券餘額、停券、交易所名單、除權息
+        close_quotes = simulator.run_day(date)
+        finish_day(date, close_quotes)    收盤結算：當沖回補、借券費、盯市、權益快照、次日漲跌停基準
+
+   BarSimulator.run_day(date)             TickSimulator.run_day(date)
+       process_bar(quotes)                    process_opening_auction()   開盤集合競價，對應 AT_OPEN
+                                              process_tick(quote)         逐筆迴圈，對應 IMMEDIATE
+                                              process_closing_auction()   收盤集合競價，對應 AT_CLOSE
+   ```
+
+   | 名稱 | 檔案 | 新增／修改 | 工作內容 |
+   |------|------|:---------:|----------|
+   | `Backtester` | `core/backtest/backtester.py` | 修改 | 逐日迴圈、`prepare_day()`／`finish_day()`、報表；依 scale 交給 `self.simulator` |
+   | `BaseSimulator` | `core/backtest/simulator/base.py` | 新增 | 兩個 simulator 的共同介面 `run_day(date) -> List[BaseQuote]`；共用的 `execute_open_signal()`／`execute_close_signal()`（自 `Backtester` 搬來） |
+   | `BarSimulator` | `core/backtest/simulator/bar_simulator.py` | 新增 | 日 K：一天一根 bar，`process_bar(quotes)` 依 `allow_day_trade` 開平倉、當根成交（自 `execute_bar()` 搬來） |
+   | `TickSimulator` | `core/backtest/simulator/tick_simulator.py` | 新增 | 逐筆：開盤集合競價 → 逐筆 `process_tick(quote)`（先撮合在途委託、再把這一筆交給策略）→ 收盤集合競價 |
+   | `PendingOrderManager` | `core/backtest/simulator/pending_orders.py` | 新增 | 在途委託：依股票查詢、IOC 下一筆沒成交作廢、收盤清空 ROD |
+   | `PendingOrder` | `core/backtest/simulator/pending_orders.py` | 新增 | 一張在途委託：訂單、階段（開倉／停損／平倉）、送出時間、IOC 或 ROD |
+   | `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py` | 新增 | 繼承 `StockDataFeed`（日頻資料照用），加上逐筆產生報價與開盤、13:20、收盤快照 |
+   | `TwStockFillModel` | `core/backtest/models/fill_model.py` | 修改 | 加上逐筆撮合：下一筆成交、市價吃 bid/ask、限價穿越、鎖漲跌停不成交 |
+   | `StockTickAPI`／`StockTickDAO` | `core/api/tw/`、`core/dao/tw/` | 修改 | `get_ordered_ticks()` 加選填 `stock_ids`；回傳當日累計量 `cum_volume` |
+
+   - **選名理由**：Simulator 沿用 Zipline `AlgorithmSimulator` 的慣例；`process_*` 是 NautilusTrader 撮合引擎的寫法，表示引擎內部處理，
+     不用業界常當成「策略回呼」的 `on_bar`／`on_tick`；集合競價用交易所術語 opening／closing auction，也避開本專案代表開倉的 open。
+   - 未成交委託不叫 open order（業界慣例），因為本專案的 open 指開倉。
+   - 既有的 `Backtester`、`TwStockFillModel`、`StockTickAPI`、`StockTickDAO` 維持原名。
+   - 移除：`Backtester.run_day_backtest()`、`run_tick_backtest()`、`execute_bar()`、`_reject_intraday_tick_backtest()`，以及 `FillModel.on_bar_open()` 的全日區間邏輯。
+
 ## 步驟詳述
 
-### Phase0-1. 定案介面細節 ✅
+### Phase0-1. 定案介面細節與命名 ✅
 
 - **目的**：級別宣告、鉤子時點、策略清單都是策略作者會寫的欄位或鉤子，定了就難改。
 - **做法**：逐點與使用者確認，結果寫回〈已定案〉。
-- **結果（2026-10-10）**：前四點使用者直接選定；後三點（支援級別的宣告、鉤子時點、策略清單）原列為〈待定案〉，使用者採用建議，已併入〈已定案〉第 5～7 點。
+- **結果（2026-10-10）**：前四點使用者直接選定；後三點（支援級別的宣告、鉤子時點、策略清單）原列為〈待定案〉，使用者採用建議，已併入〈已定案〉第 5～7 點；
+  架構與命名（第 8 點）由使用者從業界慣例的候選中逐項選定。
 - **產出**：本文件。
 - **驗證方式**：使用者確認。
 - **相依**：無。
@@ -93,7 +130,7 @@
   - `BaseStrategy` 新增 `self.supported_scales: Set[Scale]`。預設值要在子類設定完 `self.scale` 之後才決定（子類在 `super().__init__()` 之後才改 `self.scale`），
     所以基底不在 `__init__` 寫死，改在驗證時以「未設定就視為 `{self.scale}`」處理。
   - `apps/backtest.py` 新增 `--scale {day,tick}`；未帶時沿用策略的 `self.scale`。
-  - `Backtester.__init__` 驗證：級別不在支援範圍內時拋出明確錯誤（列出策略支援哪些級別）。
+  - `Backtester.validate_scale()`（在 `__init__` 呼叫）：級別不在支援範圍內時拋出明確錯誤（列出策略支援哪些級別）；`self.scale` 本身不在 `supported_scales` 內也報錯，兩個欄位寫錯不會被默默放過。
   - 現行 `_reject_intraday_tick_backtest()` 的拒絕條件，改到 Phase3-1 逐筆迴圈完成時才移除；這一步只先加驗證。
 - **產出**：上列檔案與測試。
 - **驗證方式**：不帶 `--scale` 時所有既有回測行為不變（回歸零變動）；`--scale` 在範圍外時當場報錯、錯誤訊息列出支援的級別。
@@ -119,10 +156,34 @@
   - 全專案改名：2026-10-10 實查 `.py` 13 檔、24 處（含 `core/live/strategy_guard.py`、`core/live/trader.py`、`strategies/` 各策略與 `tests/`），文件 3 份。
   - **舊名不保留別名**：沿用 `BaseStrategy.check_removed_settings()` 的機制，策略還設定 `live_schedule` 時啟動當場報錯並提示新名稱，不讓舊設定被默默忽略。
   - `LiveHook` 列舉名稱不改（它描述的是鉤子，不是設定）。
+  - **`resolve_hook_timing()` 搬到回測與實盤共用的位置**（例如 `core/portfolio/order_rules.py`）：它在 `core/live/strategy_guard.py`，`TickSimulator` 要用它判斷鉤子排在哪一段，
+    但回測不可 import 實盤模組（`scripts/check_layer_deps.py` 會擋）。
 - **產出**：上列檔案。
 - **驗證方式**：`grep -rn "live_schedule" core apps strategies tests docs` 只剩 `check_removed_settings()` 的對照表；`tests/live/` 與 `strategy_guard` 測試全數通過；設定舊名的策略啟動即報錯。
 - **相依**：Phase0-1。動到實盤程式：部署跟著本分支合併，排在 `實盤下單架構規劃.md` Phase7-1（模擬環境端到端演練）結束之後；
   launchd 排程跑的是主目錄的程式，合併後要重啟常駐行程。
+
+### Phase1-4. 日 K 路徑抽成 `BarSimulator`（純重構） ⬜
+
+- **目的**：讓日 K 與 tick 結構對稱（〈已定案〉第 8 點）。先把日 K 抽出來、證明零變動，tick 再疊上去，兩件事不混在同一個 diff。
+- **做法**：
+  - 新增 `core/backtest/simulator/`：`BaseSimulator`（`run_day(date) -> List[BaseQuote]` 抽象方法；`execute_open_signal()`／`execute_close_signal()` 自 `Backtester` 搬來共用）、
+    `BarSimulator`（`run_day()` 取當天日 K 呼叫 `process_bar(quotes)`；`process_bar()` 即現行 `execute_bar()` 中間的開平倉段）。
+  - `Backtester`：`execute_bar()` 的開頭抽成 `prepare_day(date)`、結尾抽成 `finish_day(date, close_quotes)`；`run()` 改成「`prepare_day` → `self.simulator.run_day` → `finish_day`」；
+    刪除 `run_day_backtest()`、`execute_bar()`。`factory.py` 依 scale 組出 simulator 並注入。
+  - simulator 需要的引擎服務（`validate_orders`、`enrich_orders`、`sort_orders`、`check_max_holdings`、`position_manager`、`fill_model`、`submitted_orders`）由 `Backtester` 傳入；
+    介面寫法在實作時定，原則是 simulator 不持有帳戶以外的狀態。
+  - **對外介面不變**：實盤 parity（`core/live/factory.py`）呼叫 `Backtester.run()`，並讀 `submitted_orders`、`enrich_orders()`、`position_manager`；這幾個留在 `Backtester`。
+    `settlement_model/tw_stock.py` 的 docstring 提到 `Backtester.execute_close_signal()`，跟著改指向。
+  - **期貨走同一條路**：`execute_bar()` 是市場無關的，期貨回測（每日結算、保證金追繳、換月）也經過它，`BarSimulator` 同樣要涵蓋期貨，`tests/backtest/test_futures_backtest.py` 是期貨側的守門。
+  - **每日流程的順序一個都不能動**：`cur_date` 前進 → 漲跌停基準 → 融券餘額 → 停券與名單（只在允許放空時）→ 除權息 → 開平倉（依 `allow_day_trade`）→ `settlement.on_bar_close()` → 權益快照 → 次日漲跌停基準。
+  - 測試：2026-10-10 實查 `execute_bar` 36 處、`execute_open_signal` 9 處、`execute_close_signal` 3 處、`run_day_backtest` 1 處，分布在 `tests/backtest/` 7 檔與 `make_baseline.py`／`make_short_baseline.py`，一併改寫。
+  - `scripts/check_layer_deps.py` 登記 `core.backtest.simulator`（與 `core.backtest.models` 同層）。
+- **產出**：上列檔案。
+- **驗證方式**：`scripts/run_regression.sh` 回歸雙線零變動（SHORT、LONG baseline，**結束碼 3（有 skip）不算通過**）；`tests/backtest/`、`tests/live/` 全數通過；
+  重構前後各跑一次幾支現有策略的完整回測，交易紀錄與每日權益 CSV 逐位元相同；`backtester.py` 不再出現開平倉細節。
+  worktree 沒有 `data/db/`，LONG 線會被 skip：要讓它唯讀讀到主目錄的研究庫才算真的跑過。
+- **相依**：無（可與 Phase1-1～Phase2-1 平行）。
 
 ### Phase2-1. tick 查詢支援多檔與當日累計量 ⬜
 
@@ -132,45 +193,49 @@
     再組成 `stock_id IN (...)`；清單為空時直接回空表、不送查詢。
   - 累計量用 `sum(volume) OVER (PARTITION BY stock_id, time::date ORDER BY time, seq)` 在資料庫算好，回傳多一欄 `cum_volume`；
     或在 Python 端 `groupby().cumsum()`——兩者擇一，以 Phase5-2 的量測決定。
-  - `StockTickAPI` 新增對應方法（名稱沿用 `get_` 前綴），回傳欄位契約寫進 docstring。
+  - `StockTickAPI.get_ordered_ticks()` 加選填參數 `stock_ids: Optional[List[str]] = None`（不另開方法），回傳欄位契約寫進 docstring。
 - **產出**：上列檔案；`tests/test_stock_tick_timescale.py`、`tests/test_stock_tick_api.py` 補測試。
 - **驗證方式**：多檔查詢結果與逐檔查詢合併後相同；`cum_volume` 等於逐筆加總；不合法代號在送出查詢前就被拒絕。
 - **相依**：無（可最先做）。
 
-### Phase2-2. 逐筆重放資料源 ⬜
+### Phase2-2. 台股逐筆資料源 `StockTickDataFeed` ⬜
 
 - **目的**：把一天的 tick 依時間順序逐筆交給引擎，語意與實盤推播一致。
 - **做法**：
-  - 新增 `StockTickReplayFeed`（`core/backtest/datafeed/tw/stock_tick_replay.py`），每個交易日：
-    1. 依 Phase1-2 的範圍查當天 tick（Phase2-1）。
-    2. 依 `(time, stock_id, seq)` 排序，逐筆產生 `StockQuote`（`scale=TICK`、`cur_price=close`、**`volume=當日累計量`**、`tick` 掛單筆的 `TickQuote`）。
-       同一時間戳記跨股票的順序以代號固定，回測才可重現。
-    3. **不要一次建完一整天的物件**：現行 `from_tick_rows()` 全市場一天要 3.5 秒、0.64 GB。改成產生器逐筆建，或先以向量化欄位處理、迴圈時才組物件。
-  - 另外提供段落需要的快照：盤前的參考價（前一交易日收盤）、開盤價（當天第一筆）、尾盤快照（13:20 前每檔最後一筆）、收盤價（最後一筆）。
+  - 新增 `StockTickDataFeed`（`core/backtest/datafeed/tw/stock_tick_datafeed.py`），**繼承 `StockDataFeed`**：TICK 回測同樣需要日頻資料
+    （參考價、漲跌停基準、除權息、融券與當沖名單），沿用父類別；新增的只有逐筆部分：
+    - `setup_day(date, symbols: Optional[List[str]])`：依 Phase1-2 的範圍查當天 tick（Phase2-1），每天只查一次；`symbols=None` 為全市場。
+    - `iter_day_ticks() -> Iterator[StockQuote]`：依 `(time, stock_id, seq)` 逐筆產生 `StockQuote`（`scale=TICK`、`cur_price=close`、**`volume=當日累計量`**、`tick` 掛單筆的 `TickQuote`）。
+      同一時間戳記跨股票的順序以代號固定，回測才可重現。用產生器而不是 `get_` 回傳 list：現行 `from_tick_rows()` 全市場一天要 3.5 秒、0.64 GB。
+    - 段落快照：`get_reference_quotes()`（參考價）、`get_open_quotes()`（每檔第一筆）、`get_close_snapshot_quotes()`（13:20 前每檔最後一筆）、`get_close_quotes()`（每檔最後一筆）。
   - 現行 `StockDataFeed.get_quotes(date, Scale.TICK)` 整天一次給的路徑，在 Phase3-1 完成後移除。
 - **產出**：新檔案與測試。
 - **驗證方式**：順序、累計量、`tick.volume` 為單筆量、各快照的值都以手寫資料驗證。
 - **相依**：Phase2-1。
 
-### Phase3-1. 逐筆回測迴圈與段落 ⬜
+### Phase3-1. `TickSimulator`：一天三段與逐筆迴圈 ⬜
 
 - **目的**：取代 `run_tick_backtest()` 的「整天一根 K 棒」，讓策略只看得到當下以前的資料。
-- **做法**：每個交易日依序跑三段，各鉤子在哪一段呼叫依策略的 `execution_schedule`（〈已定案〉第 6 點）：
-  1. **盤前（對應 `AT_OPEN`）**：以盤前快照（參考價）呼叫排在這段的鉤子；委託進開盤集合競價，以開盤價成交。
-  2. **盤中逐筆（對應 `IMMEDIATE`）**：每一筆 tick 先撮合在途委託（Phase3-2），再呼叫排在這段的鉤子，傳入長度 1 的 list。
-     停損與平倉只傳**該筆 tick 的那一檔**，解決「同一檔數千筆報價重複平倉」。
-  3. **尾盤（對應 `AT_CLOSE`）**：以 13:20 快照呼叫排在這段的鉤子；委託進收盤集合競價，以收盤價成交。
+- **做法**：新增 `TickSimulator(BaseSimulator)`（`core/backtest/simulator/tick_simulator.py`），`run_day(date)` 依序跑三段，各鉤子在哪一段呼叫依策略的 `execution_schedule`（〈已定案〉第 6 點）：
+  1. **`process_opening_auction()`（對應 `AT_OPEN`）**：以參考價快照呼叫排在這段的鉤子；委託進開盤集合競價，以開盤價成交。
+  2. **`process_tick(quote)`（對應 `IMMEDIATE`，逐筆迴圈）**：每一筆 tick 先撮合在途委託（Phase3-2），再呼叫排在這段的鉤子，傳入長度 1 的 list；
+     開倉與停損、平倉的先後照 `allow_day_trade`，與實盤 `LiveTrader._invoke_hooks()` 相同。停損與平倉只傳**該筆 tick 的那一檔**，解決「同一檔數千筆報價重複平倉」。
+  3. **`process_closing_auction()`（對應 `AT_CLOSE`）**：以 13:20 快照呼叫排在這段的鉤子；委託進收盤集合競價，以收盤價成交。
+  - `run_day()` 回傳每檔一筆的收盤報價，交給 `Backtester.finish_day()`。
   - 委託帶下單時間（觸發那一筆 tick 的時間），報表的成交紀錄也記時間。
-  - 移除 `_reject_intraday_tick_backtest()` 與它的測試，改成新契約的測試。
-- **產出**：上列檔案（`backtester.py` 已 648 行，逐筆迴圈建議拆成獨立類別）。
+  - 標的範圍（Phase1-2）由 `TickSimulator` 每天盤前算好交給 `StockTickDataFeed.setup_day()`。
+  - 移除 `Backtester.run_tick_backtest()`、`_reject_intraday_tick_backtest()` 與它的測試，改成新契約的測試；`factory.py` 在 TICK 時組出 `TickSimulator` 與 `StockTickDataFeed`。
+- **產出**：上列檔案。
 - **驗證方式**：手寫兩檔交錯的 tick，驗證鉤子呼叫順序、每次只拿到一筆、段落時點；策略在第 N 筆時看不到第 N+1 筆。
-- **相依**：Phase1-1、Phase1-3、Phase2-2。
+- **相依**：Phase1-1、Phase1-3、Phase1-4、Phase2-2。
 
 ### Phase3-2. 逐筆成交模型 ⬜
 
 - **目的**：沒有前視、貼近實盤的成交規則。
 - **做法**：
-  - 在途委託佇列：委託送出後，**同一檔的下一筆 tick** 才嘗試撮合。
+  - 在途委託：`PendingOrderManager`（`core/backtest/simulator/pending_orders.py`）保存 `PendingOrder`（訂單、階段、送出時間、IOC／ROD），
+    提供 `add()`、`get_orders(symbol)`、`remove()`、`expire_ioc(symbol)`、`cancel_all()`。委託送出後，**同一檔的下一筆 tick** 才嘗試撮合。
+  - `TwStockFillModel` 新增 `match_tick(pending, quote) -> Optional[BaseOrder]` 與 `get_tick_fill_price(order, quote) -> Optional[float]`。
   - 市價（`ExecutionStyle.MARKET`）：買吃 `ask_price`、賣吃 `bid_price`；該值為 0（漲停鎖死沒有委賣、跌停鎖死沒有委買）時不成交。
     實盤盤中的市價是「決策價加保護價的限價＋IOC」，所以下一筆沒成交就作廢，不追價（與 `實盤委託價格類型設計.md` 的執行層一致）。
   - 限價（`ExecutionStyle.LIMIT`）：之後的成交價穿越限價才成交，成交價取限價；ROD 留到收盤未成交作廢。
@@ -191,7 +256,7 @@
 - **目的**：盤中的成交要即時反映在可用餘額與持倉檔數上，否則同一天後面的訊號會用錯的資金。
 - **做法**：
   - 每筆成交立即更新帳戶與持倉（`position_manager`）；`check_max_holdings` 以當下持倉計算。
-  - 日終沿用現行 `settlement.on_bar_close()`：當沖未回補處理、借券費、盯市（以收盤價）、權益快照、次日漲跌停基準。傳入的報價改成「每檔一筆收盤快照」，不再是整天的 tick。
+  - 日終走 Phase1-4 抽出的 `Backtester.finish_day()`（內含 `settlement.on_bar_close()`：當沖未回補處理、借券費、盯市、權益快照、次日漲跌停基準），傳入 `TickSimulator.run_day()` 回傳的每檔一筆收盤報價，不再是整天的 tick。
 - **產出**：上列檔案與測試。
 - **驗證方式**：同一天先買後賣的當沖，帳務與 DAY 路徑同一筆交易的口徑一致（稅費、當沖減半）；盤中資金不足時後面的委託被擋。
 - **相依**：Phase3-2。
@@ -224,7 +289,7 @@
   - 決定性：同一份資料跑兩次，成交紀錄逐位元相同。
   - 多檔交錯：同一時間戳記跨股票的順序固定。
   - 停損只對該筆的那一檔觸發一次。
-- **產出**：`tests/backtest/test_tick_replay_backtest.py`。
+- **產出**：`tests/backtest/test_tick_simulator.py`。
 - **驗證方式**：測試全綠；逐一突變對應的實作（例如改回當筆成交）時對應測試會紅。
 - **相依**：Phase3-3。
 
