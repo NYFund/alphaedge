@@ -414,7 +414,7 @@ def test_updater_resumes_from_load_log(
 
 
 # === 讀取（StockTickAPI） ===
-def _tick(stock_id: str, t: str, seq: int, close: float) -> Dict:
+def _tick(stock_id: str, t: str, seq: int, close: float, volume: int = 1) -> Dict:
     """一列寫入用的 tick"""
 
     return {
@@ -422,7 +422,7 @@ def _tick(stock_id: str, t: str, seq: int, close: float) -> Dict:
         "time": pd.Timestamp(t),
         "seq": seq,
         "close": close,
-        "volume": 1,
+        "volume": volume,
         "bid_price": close,
         "bid_volume": 2,
         "ask_price": close,
@@ -433,19 +433,24 @@ def _tick(stock_id: str, t: str, seq: int, close: float) -> Dict:
 
 @pytest.fixture
 def loaded_api(dao: StockTickDAO) -> Iterator[StockTickAPI]:
-    """寫好兩檔股票三天資料的 API（同一時間戳記有多筆、跨日邊界各一筆）"""
+    """
+    寫好三檔股票兩天資料的 API（同一時間戳記有多筆、跨日邊界各一筆）
+
+    每筆成交量都不同，累計量算錯（漏加、重複加、跨股票或跨日沒歸零）時數字才會對不上。
+    """
 
     rows: List[Dict] = [
         # 5/8：2330 同一瞬間兩筆（seq 0、1），1101 與 2330 同時間戳記
-        _tick("2330", "2024-05-08 09:00:01", 0, 800.0),
-        _tick("2330", "2024-05-08 09:00:01", 1, 801.0),
-        _tick("1101", "2024-05-08 09:00:01", 0, 40.0),
+        _tick("2330", "2024-05-08 09:00:01", 0, 800.0, 5),
+        _tick("2330", "2024-05-08 09:00:01", 1, 801.0, 7),
+        _tick("1101", "2024-05-08 09:00:01", 0, 40.0, 11),
         # 夾在 2330 兩段之間：依時間排與依股票排的結果才會不同
-        _tick("1101", "2024-05-08 09:00:05", 1, 40.5),
-        _tick("2330", "2024-05-08 23:59:59.999999", 2, 802.0),
-        # 5/9 00:00:00 整：屬於 5/9，查 5/8 時不可被包進來
-        _tick("2330", "2024-05-09 00:00:00", 0, 803.0),
-        _tick("1101", "2024-05-09 09:00:02", 0, 41.0),
+        _tick("1101", "2024-05-08 09:00:05", 1, 40.5, 13),
+        _tick("2603", "2024-05-08 09:00:06", 0, 150.0, 17),
+        _tick("2330", "2024-05-08 23:59:59.999999", 2, 802.0, 19),
+        # 5/9 00:00:00 整：屬於 5/9，查 5/8 時不可被包進來；累計量從這一筆重新起算
+        _tick("2330", "2024-05-09 00:00:00", 0, 803.0, 23),
+        _tick("1101", "2024-05-09 09:00:02", 0, 41.0, 29),
     ]
     frame: pd.DataFrame = pd.DataFrame(rows)
     for (stock_id, day), group in frame.groupby(
@@ -477,12 +482,14 @@ def test_get_ordered_ticks_orders_by_time_then_stock_then_seq(
         "ask_price",
         "ask_volume",
         "tick_type",
+        "cum_volume",
     ]
     assert list(zip(ticks["stock_id"], ticks["close"])) == [
         ("1101", 40.0),
         ("2330", 800.0),
         ("2330", 801.0),
         ("1101", 40.5),
+        ("2603", 150.0),
         ("2330", 802.0),
     ]
     assert str(ticks["time"].dtype) == "datetime64[ns]"
@@ -503,7 +510,7 @@ def test_get_groups_by_stock_and_get_stock_ticks_filters(
     stock_ticks: pd.DataFrame = loaded_api.get_stock_ticks("2330", start, end)
     last: pd.DataFrame = loaded_api.get_last_tick("2330", start)
 
-    assert all_ticks["stock_id"].tolist() == ["1101"] * 3 + ["2330"] * 4
+    assert all_ticks["stock_id"].tolist() == ["1101"] * 3 + ["2330"] * 4 + ["2603"]
     assert stock_ticks["close"].tolist() == [800.0, 801.0, 802.0, 803.0]
     assert last["close"].tolist() == [802.0]
 
@@ -518,6 +525,78 @@ def test_empty_result_keeps_columns_and_dtypes(loaded_api: StockTickAPI) -> None
     assert empty.empty
     assert str(empty["time"].dtype) == "datetime64[ns]"
     assert str(empty["volume"].dtype) == "int64"
+    assert str(empty["cum_volume"].dtype) == "int64"
+
+
+def test_get_ordered_ticks_with_stock_ids_equals_per_stock_queries(
+    loaded_api: StockTickAPI,
+) -> None:
+    """
+    多檔查詢的結果，等於逐檔查詢合併後再依 `(time, stock_id)` 排序
+
+    策略清單模式一天只查一次；結果必須和逐檔查的一樣，只是少了好幾百次往返。
+    """
+
+    start: datetime.date = datetime.date(2024, 5, 8)
+    end: datetime.date = datetime.date(2024, 5, 9)
+    stock_ids: List[str] = ["2330", "1101"]
+
+    multi: pd.DataFrame = loaded_api.get_ordered_ticks(start, end, stock_ids=stock_ids)
+    # 逐檔查回來各自已依 (time, seq) 排序；穩定排序後同一時間戳記內的 seq 順序不變
+    per_stock: pd.DataFrame = (
+        pd.concat(
+            [loaded_api.get_stock_ticks(sid, start, end) for sid in stock_ids],
+            ignore_index=True,
+        )
+        .sort_values(["time", "stock_id"], kind="stable")
+        .reset_index(drop=True)
+    )
+
+    pd.testing.assert_frame_equal(multi.reset_index(drop=True), per_stock)
+    assert "2603" not in set(multi["stock_id"])
+
+
+def test_get_ordered_ticks_ignores_duplicate_and_missing_stock_ids(
+    loaded_api: StockTickAPI,
+) -> None:
+    """清單裡重複的代號不會讓資料重複；沒有資料的代號只是沒有列"""
+
+    day: datetime.date = datetime.date(2024, 5, 8)
+
+    ticks: pd.DataFrame = loaded_api.get_ordered_ticks(
+        day, day, stock_ids=["2603", "2603", "9999"]
+    )
+
+    assert ticks["stock_id"].tolist() == ["2603"]
+
+
+def test_cum_volume_is_daily_running_total_per_stock(
+    loaded_api: StockTickAPI,
+) -> None:
+    """`cum_volume` 是該檔當日到這一筆為止的累計量：含這一筆、跨股票互不影響、隔天歸零"""
+
+    start: datetime.date = datetime.date(2024, 5, 8)
+    end: datetime.date = datetime.date(2024, 5, 9)
+
+    ticks: pd.DataFrame = loaded_api.get_ordered_ticks(start, end)
+    stock_ticks: pd.DataFrame = loaded_api.get_stock_ticks("2330", start, end)
+    filtered: pd.DataFrame = loaded_api.get_ordered_ticks(
+        start, end, stock_ids=["2330"]
+    )
+
+    assert list(zip(ticks["stock_id"], ticks["volume"], ticks["cum_volume"])) == [
+        ("1101", 11, 11),
+        ("2330", 5, 5),
+        ("2330", 7, 12),
+        ("1101", 13, 24),
+        ("2603", 17, 17),
+        ("2330", 19, 31),
+        ("2330", 23, 23),
+        ("1101", 29, 29),
+    ]
+    # 不論查全市場、只查一檔或用清單查，同一筆 tick 的累計量都相同
+    assert stock_ticks["cum_volume"].tolist() == [5, 12, 31, 23]
+    assert filtered["cum_volume"].tolist() == [5, 12, 31, 23]
 
 
 def test_api_refuses_when_table_missing(dao: StockTickDAO) -> None:
@@ -548,9 +627,9 @@ def test_datafeed_returns_one_quote_per_tick(loaded_api: StockTickAPI) -> None:
 
     quotes = feed.get_quotes(datetime.date(2024, 5, 8), Scale.TICK)
 
-    assert len(quotes) == 5
+    assert len(quotes) == 6
     assert all(isinstance(q.tick_quote.time, datetime.datetime) for q in quotes)
-    assert [q.close for q in quotes] == [40.0, 800.0, 801.0, 40.5, 802.0]
+    assert [q.close for q in quotes] == [40.0, 800.0, 801.0, 40.5, 150.0, 802.0]
 
 
 # === 端到端：歷史匯入腳本 ===

@@ -2,7 +2,7 @@ import datetime
 import io
 import re
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -69,6 +69,10 @@ class StockTickDAO:
         "ask_volume": "int64",
         "tick_type": "int64",
     }
+
+    # 讀取介面在 `READ_DTYPES` 之後多回傳的當日累計量（張）：實盤 TICK 報價的 `volume`
+    # 是券商給的當日累計量，回測要能給出同一個值，策略的量門檻兩邊才可比
+    CUM_VOLUME_COLUMN: str = "cum_volume"
 
     # 寫入的欄位與順序（含 `seq`）
     WRITE_COLUMNS: Tuple[str, ...] = (
@@ -336,45 +340,70 @@ class StockTickDAO:
         start_date: datetime.date,
         end_date: datetime.date,
         order_by: Tuple[str, ...],
-        stock_id: Optional[str] = None,
+        stock_ids: Optional[Sequence[str]] = None,
     ) -> pd.DataFrame:
         """
         - Description:
-            以 ConnectorX 讀取區間內的 tick，直接組成 DataFrame
+            以 ConnectorX 讀取區間內的 tick，直接組成 DataFrame，並附上每檔的當日累計量
 
             **不用 `pd.read_sql`**：它逐列轉成 Python 物件，一天全市場百萬列時慢上數十倍。
             **ConnectorX 不支援參數佔位符**，值只能嵌進 SQL：日期由 `datetime.date` 格式化、
-            `stock_id` 先驗證只含英數字、排序欄位只接受讀取欄位與 `seq`，三者都不是任意字串。
+            每個代號都先驗證只含英數字、排序欄位只接受讀取欄位與 `seq`，三者都不是任意字串。
             只選讀取欄位、不用 `SELECT *`：壓縮 chunk 依欄位解壓，多選一欄就多解一欄。
+
+            **累計量在 pandas 端算**：全市場一天約 125 萬列，資料庫 window function 要再排序一次
+            （實測查詢由 0.8 秒變 2.0 秒），pandas 依「股票 × 日期」累加只要約 0.2 秒。
+            累加依結果的列序進行，所以**同一檔內必須依 `(time, seq)` 排序**，其餘排序一律拒絕。
         - Parameters:
             - start_date: datetime.date
                 起日（含）
             - end_date: datetime.date
                 迄日（含）；以「隔天 00:00 之前」的半開區間查詢
             - order_by: Tuple[str, ...]
-                排序欄位
-            - stock_id: Optional[str]
-                只取某檔股票；None 取全市場
+                排序欄位；去掉 `stock_id` 後必須是 `("time", "seq")`
+            - stock_ids: Optional[Sequence[str]]
+                只取這些股票；None 取全市場，空序列直接回空表、不送查詢
         - Return:
             - pd.DataFrame
-                `READ_DTYPES` 的欄位與 dtype；沒有資料時是同欄位的空表
+                `READ_DTYPES` 的欄位與 dtype，再加 int64 的 `cum_volume`（該檔當日到這一筆為止的
+                累計成交量，含這一筆）；沒有資料時是同欄位的空表
         - Raise:
             - ValueError
-                `stock_id` 或排序欄位不合法
+                代號或排序欄位不合法
+            - TypeError
+                `stock_ids` 傳成單一字串
         """
 
         allowed_order: Set[str] = set(self.READ_DTYPES) | {"seq"}
         if not order_by or any(column not in allowed_order for column in order_by):
             raise ValueError(f"排序欄位不合法：{order_by}")
-        if stock_id is not None and not stock_id.isalnum():
-            raise ValueError(f"stock_id 不合法：{stock_id!r}")
+        if tuple(column for column in order_by if column != "stock_id") != (
+            "time",
+            "seq",
+        ):
+            raise ValueError(
+                f"排序欄位不合法：{order_by}（同一檔內必須依 time、seq 排序，累計量才正確）"
+            )
+        if isinstance(stock_ids, str):
+            # 字串本身也是 Sequence，"2330" 會被拆成四個字元各查一次
+            raise TypeError(f"stock_ids 要傳代號清單，不是單一字串：{stock_ids!r}")
+        if stock_ids is not None:
+            for stock_id in stock_ids:
+                if not stock_id.isalnum():
+                    raise ValueError(f"stock_id 不合法：{stock_id!r}")
+            if not stock_ids:
+                return self._empty_result()
 
         conditions: List[str] = [
             f"time >= '{start_date.isoformat()}'",
             f"time < '{(end_date + datetime.timedelta(days=1)).isoformat()}'",
         ]
-        if stock_id is not None:
-            conditions.append(f"stock_id = '{stock_id}'")
+        if stock_ids is not None:
+            # 去重後再組 IN：清單由策略與持倉合併而來，重複代號只會讓 SQL 變長
+            id_list: str = ", ".join(
+                f"'{stock_id}'" for stock_id in dict.fromkeys(stock_ids)
+            )
+            conditions.append(f"stock_id IN ({id_list})")
         query: str = (
             f"SELECT {', '.join(self.READ_DTYPES)} "
             f"FROM {self._regclass(self.TABLE_NAME)} "
@@ -389,15 +418,15 @@ class StockTickDAO:
         # 走 Arrow 再轉 pandas：ConnectorX 直接產生 pandas 的路徑用的是 pandas 已棄用的
         # 內部 API（`make_block`），pandas 拿掉它那天這條讀取路徑就壞
         ticks: pd.DataFrame = cx.read_sql(uri, query, return_type="arrow").to_pandas()
-        # 強制轉 dtype：空表與非空表的欄位型別一致，`SMALLINT`／`INTEGER` 也統一成 int64
         if ticks.empty:
-            return pd.DataFrame(
-                {
-                    column: pd.Series(dtype=dtype)
-                    for column, dtype in self.READ_DTYPES.items()
-                }
-            )
-        return ticks.astype(self.READ_DTYPES)
+            return self._empty_result()
+        # 強制轉 dtype：`SMALLINT`／`INTEGER` 統一成 int64，與空表的欄位型別一致
+        ticks = ticks.astype(self.READ_DTYPES)
+        # 以 `normalize()` 取日期而不是 `.dt.date`：後者會逐列建 Python 物件
+        ticks[self.CUM_VOLUME_COLUMN] = ticks.groupby(
+            [ticks["stock_id"], ticks["time"].dt.normalize()], sort=False
+        )["volume"].cumsum()
+        return ticks
 
     # === 壓縮 ===
     def pause_compression_policy(self) -> None:
@@ -506,6 +535,14 @@ class StockTickDAO:
         ]
 
     # === 內部 ===
+    def _empty_result(self) -> pd.DataFrame:
+        """與有資料時同欄位、同 dtype 的空表"""
+
+        dtypes: Dict[str, str] = {**self.READ_DTYPES, self.CUM_VOLUME_COLUMN: "int64"}
+        return pd.DataFrame(
+            {column: pd.Series(dtype=dtype) for column, dtype in dtypes.items()}
+        )
+
     def _copy_rows(self, day_df: pd.DataFrame) -> None:
         """
         以 `COPY ... FROM STDIN (FORMAT csv)` 整塊寫入（呼叫端負責交易）

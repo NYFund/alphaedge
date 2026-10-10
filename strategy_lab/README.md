@@ -155,7 +155,8 @@ df_2330 = price.get_stock_price(
 
 來源：TimescaleDB 的 `stock_tick`（連線字串為 `.env` 的 `TICK_DATABASE_URL`）。
 **注意：需 `uv sync --extra tick`，並先開 Docker Desktop、`docker compose up -d postgres`；歷史資料要先以 `scripts/manual/manual_tick_history_import.py` 匯入。**
-回傳欄位固定為 `stock_id, time, close, volume, bid_price, bid_volume, ask_price, ask_volume, tick_type`；興櫃時期不入庫。
+回傳欄位固定為 `stock_id, time, close, volume, bid_price, bid_volume, ask_price, ask_volume, tick_type, cum_volume`；興櫃時期不入庫。
+`volume` 是這一筆的成交量，`cum_volume` 是該檔當日到這一筆為止的累計量（含這一筆），單位都是張——實盤 TICK 報價的 `volume` 對應的是 `cum_volume`。
 
 ```python
 import datetime
@@ -169,10 +170,11 @@ df = tick.get(
     end_date=datetime.date(2024, 5, 10),
 )
 
-# 2) 所有個股混排（模擬盤中時序）
+# 2) 所有個股混排（模擬盤中時序）；可用 stock_ids 只取部分股票，一次查完
 df_ordered = tick.get_ordered_ticks(
     start_date=datetime.date(2024, 5, 10),
     end_date=datetime.date(2024, 5, 10),
+    stock_ids=["2330", "2317"],  # 省略則為全市場
 )
 
 # 3) 指定個股 tick

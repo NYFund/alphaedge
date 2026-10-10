@@ -1,7 +1,9 @@
 import datetime
 
+import pandas as pd
 import pytest
 
+import core.dao.tw.stock_tick_dao as stock_tick_dao_module
 from core.dao.tw.stock_tick_dao import StockTickDAO
 
 """
@@ -24,18 +26,57 @@ def _dao() -> StockTickDAO:
 
 @pytest.mark.parametrize("stock_id", ["2330'; DROP TABLE stock_tick; --", "23 30", ""])
 def test_query_rejects_non_alphanumeric_stock_id(stock_id: str) -> None:
-    """代號只接受英數字；在送出查詢之前就拒絕"""
+    """清單裡每個代號都只接受英數字；混在合法代號後面也在送出查詢之前就拒絕"""
 
     with pytest.raises(ValueError, match="stock_id"):
-        _dao().query_ticks(DAY, DAY, ("time", "seq"), stock_id=stock_id)
+        _dao().query_ticks(DAY, DAY, ("time", "seq"), stock_ids=["2330", stock_id])
 
 
-@pytest.mark.parametrize("order_by", [(), ("time; DROP TABLE x",), ("loaded_at",)])
+def test_query_rejects_single_string_as_stock_ids() -> None:
+    """單一字串也是 Sequence，不擋的話 "2330" 會被當成 2、3、3、0 四檔"""
+
+    with pytest.raises(TypeError, match="stock_ids"):
+        _dao().query_ticks(DAY, DAY, ("time", "seq"), stock_ids="2330")
+
+
+@pytest.mark.parametrize(
+    "order_by",
+    [
+        (),
+        ("time; DROP TABLE x",),
+        ("loaded_at",),
+        # 以下欄位都合法，但同一檔內不是依 (time, seq) 排序，累計量會算錯
+        ("time",),
+        ("seq", "time"),
+        ("close", "time", "seq"),
+    ],
+)
 def test_query_rejects_unknown_order_columns(order_by: tuple) -> None:
-    """排序欄位只接受讀取欄位與 `seq`"""
+    """排序欄位只接受讀取欄位與 `seq`，且同一檔內必須依 `(time, seq)` 排序"""
 
     with pytest.raises(ValueError, match="排序"):
         _dao().query_ticks(DAY, DAY, order_by)
+
+
+def test_empty_stock_ids_returns_empty_frame_without_querying(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    空清單直接回空表、不送查詢
+
+    策略當天沒有任何候選標的是正常情況；`stock_id IN ()` 在 PostgreSQL 是語法錯誤。
+    """
+
+    def _fail() -> str:
+        raise AssertionError("空清單不應送出查詢")
+
+    monkeypatch.setattr(stock_tick_dao_module, "get_connectorx_uri", _fail)
+
+    ticks: pd.DataFrame = _dao().query_ticks(DAY, DAY, ("time", "seq"), stock_ids=[])
+
+    assert ticks.empty
+    assert list(ticks.columns) == [*StockTickDAO.READ_DTYPES, "cum_volume"]
+    assert str(ticks["cum_volume"].dtype) == "int64"
 
 
 def test_schema_name_is_validated_before_connecting() -> None:
