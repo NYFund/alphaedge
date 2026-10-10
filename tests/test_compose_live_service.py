@@ -197,3 +197,35 @@ def test_frontend_does_not_depend_on_the_batch_container() -> None:
     assert not any(line.startswith("depends_on") for line in block), (
         "`frontend` 宣告了 `depends_on`——`docker compose up frontend` 會順手跑回測"
     )
+
+
+def test_image_installs_tick_extra_when_core_uses_timescaledb() -> None:
+    """
+    `core` 接了 TimescaleDB，映像就要裝 `tick` extra
+
+    psycopg 與 ConnectorX 只在 `tick` extra 裡、且在 `core/dao/` 內惰性 import：
+    映像漏裝時 build 與啟動都正常，要到容器裡第一次讀寫 tick 才 ImportError。
+    **每一行 `uv sync` 都要帶**：uv sync 是 exact sync，只帶在前一行的話，
+    後一行會把它拔掉。
+    """
+
+    core: str = "\n".join(
+        normalized(line)
+        for line in service_block("core")
+        if not line.strip().startswith("#")
+    )
+    dockerfile: List[str] = (
+        (_PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    )
+    syncs: List[str] = [
+        normalized(line)
+        for line in dockerfile
+        if "uv sync" in line and not line.strip().startswith("#")
+    ]
+
+    assert "TICK_DATABASE_URL" in core, (
+        "`core` 沒有接 TimescaleDB，本測試的前提已不成立"
+    )
+    assert syncs, "`Dockerfile` 找不到 `uv sync`，定位方式可能已失效"
+    missing: List[str] = [line for line in syncs if "--extra tick" not in line]
+    assert not missing, f"這幾行 `uv sync` 沒有帶 `--extra tick`：{missing}"

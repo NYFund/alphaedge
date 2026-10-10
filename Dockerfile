@@ -35,8 +35,11 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
 # `--frozen`：直接照 lock 裝、不檢查 pyproject 是否變動——一致性由 CI 的 `--locked` 把關
 # `--no-dev`：`dev` 是預設會裝的 dependency group，正式映像不需要 pytest 與 ruff。
 # 兩行 `uv sync` 都要帶，漏一行就會在第二次同步時把它們裝回來
+# `--extra tick`：compose 讓 `core` 連 TimescaleDB 做 tick 級回測與資料更新，
+# 而 psycopg／ConnectorX 只在 `tick` extra 裡；不帶的話容器內一碰 tick 就 ImportError。
+# 同樣兩行都要帶——uv sync 是 exact sync，後一行沒帶會把前一行裝的 extra 拔掉
 COPY pyproject.toml uv.lock /app/
-RUN uv sync --frozen --no-dev --no-install-project --no-cache
+RUN uv sync --frozen --no-dev --extra tick --no-install-project --no-cache
 
 # NOTE:
 # Build this Dockerfile with project root as context:
@@ -52,7 +55,7 @@ COPY strategies /app/strategies
 # **必須是 editable**（uv sync 對本專案預設即是）：`core/config/paths.py` 以 `__file__`
 # 推算專案根目錄，一般安裝會把程式複製進 site-packages，`results/`、`logs/`
 # 就不會落在掛載的 /app 底下
-RUN uv sync --frozen --no-dev --no-cache && uv pip check --python /opt/venv/bin/python
+RUN uv sync --frozen --no-dev --extra tick --no-cache && uv pip check --python /opt/venv/bin/python
 
 # 預設是回測入口；實盤由 compose 的 `live` service 把 entrypoint 換成 `python -m apps.live`
 ENTRYPOINT ["python", "-m", "apps.backtest"]
