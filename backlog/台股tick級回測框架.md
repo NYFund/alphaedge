@@ -44,12 +44,13 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| Phase0-1 | 定案介面細節 | 本文件〈待定案〉 | 使用者確認 | ⬜ | 2026-10-10 已定案四點（見〈已定案〉）；〈待定案〉三點要在動工前確認 |
-| Phase1-1 | 策略宣告支援的級別＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ⬜ | 相依 Phase0-1 |
-| Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/strategies/base.py` | 兩個選項各自只讀到預期的標的 | ⬜ | 相依 Phase0-1 |
+| Phase0-1 | 定案介面細節 | 本文件〈已定案〉 | 使用者確認 | ✅ | **✅ 2026-10-10**：七點全數定案（見〈已定案〉），後三點為使用者採用建議 |
+| Phase1-1 | 策略宣告支援的級別（`supported_scales`）＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ⬜ | 相依 Phase0-1 |
+| Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ⬜ | 相依 Phase0-1；動到實盤程式，部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後） |
+| Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1 |
 | Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ⬜ | — |
 | Phase2-2 | 逐筆重放資料源 | `core/backtest/datafeed/tw/stock_tick_replay.py`（新） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ⬜ | 相依 Phase2-1 |
-| Phase3-1 | 逐筆回測迴圈與段落 | `core/backtest/backtester.py`（或拆出 `tick_backtester.py`） | 盤前、盤中逐筆、尾盤三段依策略宣告的時點呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ⬜ | 相依 Phase1-1、Phase2-2 |
+| Phase3-1 | 逐筆回測迴圈與段落 | `core/backtest/backtester.py`（或拆出 `tick_backtester.py`） | 盤前、盤中逐筆、尾盤三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ⬜ | 相依 Phase1-1、Phase1-3、Phase2-2 |
 | Phase3-2 | 逐筆成交模型 | `core/backtest/models/fill_model.py`（或新增 `tick_fill_model.py`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、成交量上限的單元測試 | ⬜ | 相依 Phase3-1；吸收 `滑價模型後續優化.md` S3 |
 | Phase3-3 | 盤中帳務與日終結算 | `core/backtest/backtester.py`、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ⬜ | 相依 Phase3-2 |
 | Phase4-1 | `IntradayMomentumStrategy` 支援 TICK 回測 | `strategies/stock/intraday_momentum_strategy.py` | 移除 `setup_apis()` 的 `NotImplementedError`；逐筆分支在回測與實盤共用 | ⬜ | 相依 Phase3-3 |
@@ -65,28 +66,22 @@
 1. **級別決定方式**：策略宣告預設級別與支援的級別；回測可用 `--scale` 覆寫，只能選策略支援的，否則當場報錯。
 2. **餵入單位**：逐筆、一次一筆，`List[StockQuote]` 長度 1，與實盤 `is_tick_triggered` 同契約。
 3. **成交規則**：下單後同一檔的下一筆 tick 才成交；市價買吃 `ask_price`、賣吃 `bid_price`；限價單等之後的成交價穿越才成交。
-4. **標的範圍**：策略盤前宣告的清單與全市場兩套都做，回測前自己選。
-
-## 待定案（Phase0-1，動工前要確認）
-
-以下三點是策略作者會直接碰到的介面，依「策略介面先問再做」的約定，先列建議、確認後才實作：
-
-1. **支援級別的宣告方式**：建議 `self.supported_scales: Set[Scale]`，預設 `{self.scale}`（只支援自己宣告的那一個）；
-   `--scale` 指定的級別不在集合內就報錯。替代方案：不另設欄位，改由策略覆寫 `supports_scale(scale) -> bool`。
-2. **盤中各鉤子的時點從哪裡來**：TICK 回測要知道 `open`／`close`／`stop_loss` 各在哪一段呼叫。建議**沿用 `live_schedule`**
-   （例如盤中動能是 `{"open": IMMEDIATE, "stop_loss": IMMEDIATE, "close": AT_OPEN}`），回測與實盤才是同一套時點；
-   代價是 `BaseStrategy` 的 docstring「回測完全不讀這一區」要改寫，`live_schedule` 變成回測與實盤共用的設定（可能要改名，例如 `execution_schedule`）。
-   替代方案：另設回測專用的 `tick_schedule`，但兩份設定會漂移。
-3. **策略清單的鉤子**：建議沿用 `get_live_symbols(latest_date)` 當「策略清單」的來源（盤中動能已實作：前一交易日當沖名單內成交量前 190 檔），
-   回測時每個交易日盤前以「前一交易日」呼叫一次。替代方案：另設 `get_tick_universe(date)`，預設呼叫 `get_live_symbols()`。
-   策略沒有覆寫（回傳 `None`）時，選「策略清單」要報錯還是退回全市場也要定。
+4. **標的範圍**：策略盤前宣告的清單與全市場兩套都做，回測前自己選（`--tick-universe {strategy,all}`）。
+5. **支援級別的宣告方式**：`self.supported_scales: Set[Scale]`，預設 `{self.scale}`（只支援自己宣告的那一個）；`--scale` 指定的級別不在集合內就報錯。
+   盤中動能策略設為 `{Scale.DAY, Scale.TICK}`。
+6. **鉤子時點**：TICK 回測沿用實盤的段落設定，**`live_schedule` 改名為 `execution_schedule`**，成為回測與實盤共用的設定
+   （`BaseStrategy` docstring「回測完全不讀這一區」一併改寫）。例如盤中動能是 `{"open": IMMEDIATE, "stop_loss": IMMEDIATE, "close": AT_OPEN}`。
+   改名獨立成 Phase1-3。DAY 回測仍不讀它（日 K 回測一次拿到整天，沒有段落）。
+7. **策略清單的來源**：沿用 `get_live_symbols(latest_date)`，回測每個交易日盤前以「前一交易日」呼叫一次，再加上當時的持倉標的（與實盤 `LiveTrader.quote_symbols()` 一致）。
+   **策略沒有覆寫（回傳 `None`）時，選 `--tick-universe strategy` 當場報錯**，訊息提示改用 `--tick-universe all`；不自動退回全市場（避免在不知情下改跑一天 120 萬筆的全市場）。
 
 ## 步驟詳述
 
-### Phase0-1. 定案介面細節 ⬜
+### Phase0-1. 定案介面細節 ✅
 
-- **目的**：〈待定案〉三點都是策略作者會寫的欄位或鉤子，定了就難改。
-- **做法**：逐點與使用者確認，結果寫回〈已定案〉，並刪掉〈待定案〉中已決定的項目。
+- **目的**：級別宣告、鉤子時點、策略清單都是策略作者會寫的欄位或鉤子，定了就難改。
+- **做法**：逐點與使用者確認，結果寫回〈已定案〉。
+- **結果（2026-10-10）**：前四點使用者直接選定；後三點（支援級別的宣告、鉤子時點、策略清單）原列為〈待定案〉，使用者採用建議，已併入〈已定案〉第 5～7 點。
 - **產出**：本文件。
 - **驗證方式**：使用者確認。
 - **相依**：無。
@@ -95,7 +90,8 @@
 
 - **目的**：同一支策略可以選擇用日 K 或逐筆回測，但不能讓只寫了日 K 邏輯的策略吃到 tick 而默默算錯。
 - **做法**：
-  - `BaseStrategy` 依 Phase0-1 的定案加上支援級別的宣告，預設只支援自己的 `self.scale`。
+  - `BaseStrategy` 新增 `self.supported_scales: Set[Scale]`。預設值要在子類設定完 `self.scale` 之後才決定（子類在 `super().__init__()` 之後才改 `self.scale`），
+    所以基底不在 `__init__` 寫死，改在驗證時以「未設定就視為 `{self.scale}`」處理。
   - `apps/backtest.py` 新增 `--scale {day,tick}`；未帶時沿用策略的 `self.scale`。
   - `Backtester.__init__` 驗證：級別不在支援範圍內時拋出明確錯誤（列出策略支援哪些級別）。
   - 現行 `_reject_intraday_tick_backtest()` 的拒絕條件，改到 Phase3-1 逐筆迴圈完成時才移除；這一步只先加驗證。
@@ -107,12 +103,26 @@
 
 - **目的**：策略清單貼近實盤（訂閱上限 200 檔、前一天冷門當天才爆量的股票會漏掉），全市場則看策略本身的潛力；兩者都要能跑。
 - **做法**：
-  - `apps/backtest.py` 新增 `--tick-universe {strategy,all}`，只在 TICK 級別有效（DAY 帶了就報錯或警告，Phase0-1 一併定）。預設值建議 `strategy`（與實盤一致，也比較快）。
-  - `strategy`：每個交易日盤前以前一交易日呼叫策略清單的鉤子（Phase0-1 第 3 點），再加上**當時的持倉標的**（實盤 `LiveTrader.quote_symbols()` 也一律替持倉訂閱）。
+  - `apps/backtest.py` 新增 `--tick-universe {strategy,all}`，只在 TICK 級別有效（DAY 帶了就報錯，避免以為有作用）。預設 `strategy`（與實盤一致，也比較快）。
+  - `strategy`：每個交易日盤前以前一交易日呼叫 `get_live_symbols()`，再加上**當時的持倉標的**（實盤 `LiveTrader.quote_symbols()` 也一律替持倉訂閱）。
+    回傳 `None`（策略沒有覆寫）時當場報錯，訊息提示改用 `--tick-universe all`。
   - `all`：當天 tick 表裡出現的全部股票。
 - **產出**：上列檔案與測試。
-- **驗證方式**：兩個選項各自只讀到預期的標的；`strategy` 模式下持倉標的即使掉出清單也會被讀到。
+- **驗證方式**：兩個選項各自只讀到預期的標的；`strategy` 模式下持倉標的即使掉出清單也會被讀到；策略沒有清單時選 `strategy` 當場報錯；DAY 帶 `--tick-universe` 報錯。
 - **相依**：Phase0-1。
+
+### Phase1-3. `live_schedule` 改名為 `execution_schedule` ⬜
+
+- **目的**：TICK 回測與實盤讀同一份段落設定（〈已定案〉第 6 點），名稱不能再寫 live。
+- **做法**：
+  - `BaseStrategy` 的 `live_schedule` 改名為 `execution_schedule`，docstring 從 `=== Live Setting ===` 區塊移出、改寫成「實盤與 TICK 回測共用；DAY 回測不讀」。
+  - 全專案改名：2026-10-10 實查 `.py` 13 檔、24 處（含 `core/live/strategy_guard.py`、`core/live/trader.py`、`strategies/` 各策略與 `tests/`），文件 3 份。
+  - **舊名不保留別名**：沿用 `BaseStrategy.check_removed_settings()` 的機制，策略還設定 `live_schedule` 時啟動當場報錯並提示新名稱，不讓舊設定被默默忽略。
+  - `LiveHook` 列舉名稱不改（它描述的是鉤子，不是設定）。
+- **產出**：上列檔案。
+- **驗證方式**：`grep -rn "live_schedule" core apps strategies tests docs` 只剩 `check_removed_settings()` 的對照表；`tests/live/` 與 `strategy_guard` 測試全數通過；設定舊名的策略啟動即報錯。
+- **相依**：Phase0-1。動到實盤程式：部署跟著本分支合併，排在 `實盤下單架構規劃.md` Phase7-1（模擬環境端到端演練）結束之後；
+  launchd 排程跑的是主目錄的程式，合併後要重啟常駐行程。
 
 ### Phase2-1. tick 查詢支援多檔與當日累計量 ⬜
 
@@ -145,7 +155,7 @@
 ### Phase3-1. 逐筆回測迴圈與段落 ⬜
 
 - **目的**：取代 `run_tick_backtest()` 的「整天一根 K 棒」，讓策略只看得到當下以前的資料。
-- **做法**：每個交易日依序跑三段，各鉤子在哪一段呼叫依 Phase0-1 第 2 點的定案：
+- **做法**：每個交易日依序跑三段，各鉤子在哪一段呼叫依策略的 `execution_schedule`（〈已定案〉第 6 點）：
   1. **盤前（對應 `AT_OPEN`）**：以盤前快照（參考價）呼叫排在這段的鉤子；委託進開盤集合競價，以開盤價成交。
   2. **盤中逐筆（對應 `IMMEDIATE`）**：每一筆 tick 先撮合在途委託（Phase3-2），再呼叫排在這段的鉤子，傳入長度 1 的 list。
      停損與平倉只傳**該筆 tick 的那一檔**，解決「同一檔數千筆報價重複平倉」。
@@ -154,7 +164,7 @@
   - 移除 `_reject_intraday_tick_backtest()` 與它的測試，改成新契約的測試。
 - **產出**：上列檔案（`backtester.py` 已 648 行，逐筆迴圈建議拆成獨立類別）。
 - **驗證方式**：手寫兩檔交錯的 tick，驗證鉤子呼叫順序、每次只拿到一筆、段落時點；策略在第 N 筆時看不到第 N+1 筆。
-- **相依**：Phase1-1、Phase2-2。
+- **相依**：Phase1-1、Phase1-3、Phase2-2。
 
 ### Phase3-2. 逐筆成交模型 ⬜
 
@@ -190,9 +200,9 @@
 
 - **目的**：讓盤中動能策略用逐筆資料回測，取代偏樂觀的日 K 近似。
 - **做法**：
-  - `supported_scales`（依 Phase0-1 的名稱）設為 `{DAY, TICK}`，預設維持 `DAY`，不改既有 S2 的結果。
+  - `supported_scales` 設為 `{Scale.DAY, Scale.TICK}`，預設維持 `DAY`，不改既有 S2 的結果。
   - 移除 `setup_apis()` 對 TICK 的 `NotImplementedError`；逐筆分支 `generate_tick_open_signals()` 已是實盤用的，回測直接共用。
-  - 停損、隔天開盤出場在 TICK 回測照 `live_schedule` 的時點執行。
+  - 停損、隔天開盤出場在 TICK 回測照 `execution_schedule` 的時點執行。
 - **產出**：策略檔與 `tests/test_intraday_momentum_strategy.py`。
 - **驗證方式**：手寫 tick 驗證觸發、停損、隔天開盤出場；DAY 回測結果不變。
 - **相依**：Phase3-3。
