@@ -8,6 +8,7 @@
 - **目標**：以「平行模組」方式建置美股 ETL 與回測——市場軸目錄新增 `us/`（`core/pipeline/us/`、`core/api/us/`、`core/adapters/us/`、
   `core/dao/us/`、`core/market/us/`、`core/backtest/datafeed/us/`），
   共用 `core/pipeline/shared/` 的 base 類別與既有回測引擎；市場欄位、交易日曆與成本模型分開。跑通最小閉環後再逐步補可信度。
+  （`core/pipeline/` 日後會搬到頂層並改名 `etl/`，屆時 `core/pipeline/us/` 跟著改為 `etl/us/`，見 §二。）
 - **範圍界線**：**保留現有台股流程不動**，不做一次性大重構；本規劃**不含**日內／高頻資料、不含實盤下單路徑、
   不含選擇權與 ETF 衍生商品、不含事件驅動引擎改寫（長期方向見 [多市場回測引擎架構 §5.1](../docs/backtest/multi-market-engine.md#51-事件驅動迴圈長期方向)）。
 - **驗收標準**：`us_universe` 與 `us_price_daily` 可日更、重跑冪等、中斷可續跑；一支美股日線動能策略可經**回測入口**跑完回測（回測入口目前是 `python -m apps.backtest --strategy`，2026-09-30 由 `run.py` 拆出，見 [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)；**本條驗收不綁入口名稱，以當時的回測入口為準**），
@@ -24,13 +25,25 @@
 > 美股交易日曆改放 `core/market/us/`（ETL 差集續跑也要用，放回測層會讓 pipeline 反向相依回測）；
 > `BaseDataFeed` 已在中立的 `core/datafeed/base.py`；結算模型已是 `settlement_model/` package；
 > 交易單位除了 `UsStockSpec`，還要動 `core/portfolio/sizing.py`（`EqualWeightSizer` 寫死以張計）。
+>
+> **2026-10-10 依現行程式碼（main、`feature/post-rehearsal`、`feature/tick-timescaledb`）再校正**，步驟拆分與相依不變：
+> - `InstrumentSpec`／`CostModel` 已於 2026-10-01 下沉到 `core/market/`（[回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md) Phase3-2），
+>   `UsStockSpec` 與 `UsStockCostModel` 一律放 `core/market/us/`；留在 `core/backtest/models/` 的只剩 `FillModel` 與 `settlement_model/`。
+> - 具體策略搬到頂層 `strategies/`、`core/strategies/` 只剩契約（[core目錄邊界收斂.md](core目錄邊界收斂.md) Phase2-2、Phase2-3，已在 `feature/post-rehearsal` 實作、待演練後合併）；
+>   美股策略因此放 `strategies/stock/`，§二目錄樹已同步。
+> - `tasks/` 併入 `apps/`（[回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md) Phase1-8，同樣待演練後合併）：
+>   本文件寫的 `tasks/update_db.py` 合併後改為 `apps/update_db.py`。
+> - `core/pipeline/` 將搬到頂層並改名 `etl/`（[core目錄邊界收斂.md](core目錄邊界收斂.md) Phase5-1，⏸ 等 TimescaleDB 與 PostgreSQL 兩份計畫落地）：
+>   恢復時若已搬完，`core/pipeline/us/` 一律改寫成 `etl/us/`。
+> - 委託前處理已由 `core/execution/` 搬到 `core/portfolio/order_rules.py`；`core/managers/` 已改名 `core/position/`；
+>   `yfinance` 已由主相依移到 `lab` extra（見 §一）。
 
 > **⏸ 暫緩紀錄（2026-10-01）**
 > - 暫緩原因：使用者裁示整份暫緩，優先處理其他 backlog（`暫緩工作彙整.md` 等）。
 > - 已完成：Phase3-3（多市場共用介面，台股逐步歸位 `tw/`，2026-09-02）；其餘 8 步未動工，**程式碼中沒有任何半成品**。
 > - 解除條件：使用者指示恢復。
 > - 恢復時的下一步：Phase1-1（建立 `us/` 目錄骨架與 provider 介面），無前置相依。恢復前先重跑一次 `scripts/check_doc_paths.py`，
->   確認本文件的產出路徑仍與現行目錄一致（例如成本模型已於 2026-10-01 由 `core/backtest/models/` 下沉到 `core/market/`，本文件已同步）。
+>   確認本文件的產出路徑仍與現行目錄一致（2026-10-10 已依現況校正一次，見上方校正紀錄），並確認 `feature/post-rehearsal` 是否已合併、`core/pipeline/` 是否已改名 `etl/`。
 
 ---
 
@@ -38,14 +51,14 @@
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
-| Phase1-1 | 建立 `us/` 目錄骨架與 provider 介面 | `core/pipeline/us/`（含 `providers/base.py`）、`core/api/us/` | 骨架可 import；`scripts/check_layer_deps.py` 通過；假 provider 可通過介面測試 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；策略**不**開 `us/` 目錄，見 §二 |
-| Phase1-2 | `us_universe` ＋ `us_price_daily` ETL（差集續跑、冪等寫入） | `core/pipeline/us/*`、`core/dao/us/`（`us_universe`／`us_price_daily` 的 DAO）、`core/api/us/{price,universe}_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py` 的 `DataType` | 中斷後可續跑；重跑不產生重複資料；統計行格式與台股一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-1；須符合 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈新增或修改 updater 的檢查表〉與 [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 DAO） |
-| Phase1-3 | 美股日線動能策略跑通回測 | `strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/market_calendar.py`、`core/adapters/us/`、`core/backtest/models/`（美股 spec／fill／`settlement_model/us_stock.py`）、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
-| Phase2-1 | `us_corporate_actions` ＋ raw/adjusted 回測切換 | `core/pipeline/us/*`、`core/backtest/datafeed/us/stock_datafeed.py` | 同一策略在兩種模式下結果可解釋 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-3；`BaseDataFeed` 在中立的 `core/datafeed/base.py`（回測與實盤共用同一份契約） |
-| Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/market/us/cost_model.py` | 費用計算有單元測試 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-3；繼承既有 `BaseCostModel` |
-| Phase2-3 | 資料品質檢核與異常告警 | `core/pipeline/us/*` | 缺洞天數、成交量異常可被偵測 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase1-2 |
-| Phase3-1 | `us_fundamentals` ETL 支援因子策略 | `core/pipeline/us/*`、`core/api/us/fundamentals_api.py` | 財報欄位可查詢且無未來資料污染 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase2-1 |
-| Phase3-2 | 參數掃描框架（walk-forward / grid search） | `core/backtest/` | 可批次產出參數組合的績效比較 | ⏸ | **2026-10-01 使用者裁示整份暫緩**；相依 Phase2-2 |
+| Phase1-1 | 建立 `us/` 目錄骨架與 provider 介面 | `core/pipeline/us/`（含 `providers/base.py`）、`core/api/us/` | 骨架可 import；`scripts/check_layer_deps.py` 通過；假 provider 可通過介面測試 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；策略**不**開 `us/` 目錄，見 §二 |
+| Phase1-2 | `us_universe` ＋ `us_price_daily` ETL（差集續跑、冪等寫入） | `core/pipeline/us/*`、`core/dao/us/`（`us_universe`／`us_price_daily` 的 DAO）、`core/api/us/{price,universe}_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py` 的 `DataType`、`tasks/update_db.py`（合併後為 `apps/update_db.py`） | 中斷後可續跑；重跑不產生重複資料；統計行格式與台股一致 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase1-1；須符合 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈新增或修改 updater 的檢查表〉與 [資料存取層](../docs/dev/data-access-layer.md)（SQL 只寫在 DAO） |
+| Phase1-3 | 美股日線動能策略跑通回測 | `strategies/stock/momentum_us_strategy.py`、`core/backtest/datafeed/us/`、`core/market/us/`（`market_calendar.py`、美股 spec 的 `instrument_spec.py`）、`core/adapters/us/`、`core/backtest/models/fill_model.py`（`UsStockFillModel`）、`settlement_model/us_stock.py`、`core/portfolio/sizing.py`、`core/backtest/factory.py` | 產出資產曲線與交易明細；交易日數與 NYSE 日曆一致 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase1-2；成本先用最小版本，Phase2-2 補完整；報表沿用 `core/backtest/report/reporter.py`；`EqualWeightSizer` 寫死以張計，須參數化或另建美股 sizer |
+| Phase2-1 | `us_corporate_actions` ＋ raw/adjusted 回測切換 | `core/pipeline/us/*`、`core/backtest/datafeed/us/stock_datafeed.py` | 同一策略在兩種模式下結果可解釋 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase1-3；`BaseDataFeed` 在中立的 `core/datafeed/base.py`（回測與實盤共用同一份契約） |
+| Phase2-2 | 美股成本模型（手續費 ＋ SEC fee ＋ 滑價） | `core/market/us/cost_model.py` | 費用計算有單元測試 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase1-3；繼承既有 `BaseCostModel` |
+| Phase2-3 | 資料品質檢核與異常告警 | `core/pipeline/us/*` | 缺洞天數、成交量異常可被偵測 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase1-2 |
+| Phase3-1 | `us_fundamentals` ETL 支援因子策略 | `core/pipeline/us/*`、`core/api/us/fundamentals_api.py` | 財報欄位可查詢且無未來資料污染 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase2-1 |
+| Phase3-2 | 參數掃描框架（walk-forward / grid search） | `core/backtest/` | 可批次產出參數組合的績效比較 | ⏸ | 整份暫緩（2026-10-01，見〈暫緩紀錄〉）；相依 Phase2-2 |
 | Phase3-3 | 多市場共用介面，台股逐步歸位 `tw/` | 全專案 | 台股回歸測試逐筆相同 | ✅ | **2026-09-02 結案**：所有市場軸目錄都只有 `tw/`（清單以 `scripts/check_layer_deps.py` 的 `_MARKET_AXIS_PACKAGES` 為準）；`models`／`strategies`／`managers` 依定案承載的是**軸 B**，本來就不該有 `us/`。詳見該步驟 |
 
 ---
@@ -54,7 +67,7 @@
 
 結論：**不需要再調整既有架構，美股只需平行新增。** 原規劃寫的「增量式調整」（市場分層、回測核心拆分）已由其他工作完成（見 Phase3-3）。
 
-### 目前可沿用的基礎（2026-09-15）
+### 目前可沿用的基礎（2026-10-10 校正）
 
 - **ETL 四層 base 類別已在 `core/pipeline/shared/`**（`BaseDataCrawler`／`BaseDataCleaner`／`BaseDataLoader`／`BaseDataUpdater`），
   `us/` 直接繼承，不會反向相依 `tw/`。
@@ -63,11 +76,12 @@
   逐檔（年季 × 個股）來源另有 `SeasonPlanner`／`SeasonProgressStore`（`core/pipeline/shared/season_planner.py`），季頻財報可沿用。
 - **SQL 集中在 `core/dao/`**：`BaseDAO`／`DBConnection`（`core/dao/base.py`、`connection.py`）市場無關，美股 DAO 放 `core/dao/us/` 直接繼承。
 - **報價驗證已是來源無關的純函式**：`core/adapters/quote_validation.py`，美股 adapter 可直接沿用。
-- `tasks/update_db.py` 以 `DataType`（`core/pipeline/utils/constant.py`）列舉 target，新增美股 target 只需擴充列舉與分派。
+- `tasks/update_db.py`（`feature/post-rehearsal` 合併後為 `apps/update_db.py`）以 `DataType`（`core/pipeline/utils/constant.py`）列舉 target，新增美股 target 只需擴充列舉與分派。
 - **回測已是單一引擎 ＋ 可插拔 model**：新增（美股, 股票）組合依 [多市場回測引擎架構〈四、新增一個（市場, 商品）組合要做什麼〉](../docs/backtest/multi-market-engine.md)
-  的六個步驟，既有檔案只改 `factory.py` 一個分支。`Market.US` 已定義於 `core/utils/constant/`。
-- `yfinance` 已是主相依（`strategy_lab` 的 `tsmc_overnight_signal` 用它抓美股日線），
-  Phase1-1 的第一個 provider 可沿用，不增加相依。
+  的步驟，既有檔案只改 `factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。`Market.US` 已定義於 `core/utils/constant/market.py`。
+- `yfinance` 已在 `pyproject.toml` 的 `lab` extra（`strategy_lab` 的 `tsmc_overnight_signal` 用它抓美股日線），**不是主相依**——
+  2026-09-26 刻意移出主相依，理由是它連網抓資料、進 Docker 映像只會讓映像變大。Phase1-1 的第一個 provider 沿用它時，
+  要把它搬回主相依或另立 `us` extra（CI 與正式映像都不裝 `lab`），動工時決定。
 
 ### 目前主要缺口
 
@@ -115,10 +129,13 @@ core/
 │   └── us/                          # 新增：us_universe／us_price_daily／us_corporate_actions／
 │                                    #       us_fundamentals_quarterly 的 DAO（建表、UNIQUE、寫入、查詢）
 ├── market/
-│   ├── tw/                          # 既有：market_calendar.py、futures_calendar.py…
+│   ├── instrument_spec.py、cost_model.py  # 既有：InstrumentSpec／BaseCostModel 抽象基底
+│   ├── tw/                          # 既有：market_calendar.py、instrument_spec.py、cost_model.py…
 │   └── us/                          # 新增
-│       └── market_calendar.py       # NYSE/NASDAQ 交易日曆（ETL／回測／策略共用）
-├── pipeline/
+│       ├── market_calendar.py       # NYSE/NASDAQ 交易日曆（ETL／回測／策略共用）
+│       ├── instrument_spec.py       # UsStockSpec（Phase1-3）
+│       └── cost_model.py            # UsStockCostModel（Phase1-3 最小版、Phase2-2 補完整）
+├── pipeline/                        # 日後搬到頂層並改名 etl/（見下方說明）
 │   ├── shared/                      # 既有：四層 base、DatePlanner、SeasonPlanner、GracefulStop、RequestUtils、source_priority
 │   ├── tw/                          # 既有
 │   └── us/                          # 新增：美股 ETL
@@ -132,9 +149,7 @@ core/
 ├── backtest/
 │   ├── factory.py                   # 既有：加一個 (Market.US, InstrumentType.STOCK) 分支
 │   ├── models/
-│   │   ├── instrument_spec.py       # 既有：新增 UsStockSpec
 │   │   ├── fill_model.py            # 既有：新增 UsStockFillModel
-│   │   ├── cost_model.py            # 既有：新增 UsStockCostModel
 │   │   └── settlement_model/        # 既有 package（base／tw_stock／tw_futures）
 │   │       └── us_stock.py          # 新增：UsStockSettlementModel，並在 __init__.py 登記
 │   └── datafeed/
@@ -146,8 +161,19 @@ core/
 ├── portfolio/
 │   └── sizing.py                    # 既有：EqualWeightSizer 以張計，需參數化交易單位或新增美股 sizer
 └── strategies/
-    └── stock/                       # 既有：美股策略也放這裡，靠 self.market = Market.US 區分
+    └── stock/base.py                # 既有契約：BaseStockStrategy（美股策略繼承它，self.market = Market.US）
+
+strategies/                          # 頂層：具體策略
+└── stock/
+    └── momentum_us_strategy.py      # 新增（Phase1-3）
 ```
+
+**與目錄搬遷計畫的關係**（[core目錄邊界收斂.md](core目錄邊界收斂.md)）：
+
+- 具體策略放頂層 `strategies/stock/`、`core/strategies/` 只放契約——`core目錄邊界收斂.md` Phase2-2、Phase2-3 已在 `feature/post-rehearsal` 實作，
+  待 `實盤下單架構規劃.md` Phase7-1 演練結束後合併。合併前 main 的策略仍在 `core/strategies/stock/`，本規劃一律以合併後的位置為準。
+- `core/pipeline/` 將搬到頂層並改名 `etl/`（`core目錄邊界收斂.md` Phase5-1，⏸）。本規劃恢復時若已搬完，樹中的 `core/pipeline/us/` 改為 `etl/us/`，
+  分層規則照搬（`etl` 只能單向依賴 `core`）。
 
 資料庫檔依命名軸線「檔名帶軸 A」：`data/db/us_stock.db`，常數 `US_STOCK_DB_PATH` 放 `core/config/schema.py`。
 
@@ -155,8 +181,8 @@ core/
 
 | 原規劃 | 不開的理由 | 改放 |
 |--------|------------|------|
-| `core/strategies/us/`、`core/models/us/`、`core/position/us/`（2026-10-01 前為 `core/managers/us/`） | 這三個目錄承載軸 B（`base/`＋`stock/`＋`futures/`），加 `us/` 會破壞定案 | `stock/` 底下，市場由 `self.market` 宣告 |
-| `core/backtest/engine/`（`event_loop`／`order_matcher`／`portfolio`／`fee_models`） | 單一引擎已在 `backtester.py`，撮合、成本、部位分別是 `FillModel`／`CostModel`／`core/managers/` | `core/backtest/models/`；事件驅動迴圈見多市場回測引擎架構 §5.1 |
+| `core/strategies/us/`、`core/models/us/`、`core/position/us/`（2026-10-01 前為 `core/managers/us/`） | 這三個目錄承載軸 B（`base/`＋`stock/`＋`futures/`），加 `us/` 會破壞定案 | 具體策略放頂層 `strategies/stock/`（契約留 `core/strategies/stock/base.py`），市場由 `self.market` 宣告 |
+| `core/backtest/engine/`（`event_loop`／`order_matcher`／`portfolio`／`fee_models`） | 單一引擎已在 `backtester.py`，撮合、成本、部位分別是 `FillModel`／`CostModel`／`core/position/` | `FillModel` 在 `core/backtest/models/`，spec 與成本在 `core/market/us/`；事件驅動迴圈見多市場回測引擎架構 §5.1 |
 | `core/backtest/calendars/` | 交易日曆屬市場結構，ETL（差集續跑）、回測、實盤與策略共用，台股已在 `core/market/tw/market_calendar.py`；放回測層會讓 pipeline 反向相依回測 | `core/market/us/market_calendar.py` |
 | `core/pipeline/shared/checkpoint_store.py` | `DateProgressStore` 已存在 | 直接沿用 `core/pipeline/shared/date_planner.py` |
 
@@ -212,6 +238,13 @@ core/
 原規劃的 `etl_checkpoints` 表不建：續跑狀態沿用 `DateProgressStore`。
 表名前綴 `us_` 保留——[PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 的目標是單一資料庫，屆時前綴是必要的。
 
+> **儲存層現況（2026-10-10）**：「SQLite 先行」是 2026-09 的前提，恢復時要重新確認。
+> - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 0 / 16 項，研究庫仍是 SQLite；`PostgreSQL遷移計畫.md` Phase2-1 要剷掉的正是 `INSERT OR IGNORE` 這類 SQLite 專屬語法。
+> - [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service（TimescaleDB image）、
+>   `psycopg`／ConnectorX（放在 `tick` extra）與獨立的 `TICK_DATABASE_URL`；它只承載 tick，日頻研究庫刻意沒有切過去。
+> - 因此美股表要「先寫 SQLite 再隨研究庫遷移」，還是「直接寫進 PostgreSQL」，是恢復時的第一個決策（見〈關聯與狀態〉的相關 backlog）；
+>   無論哪種，SQL 都只寫在 `core/dao/us/`，冪等寫入走 DAO 的 `insert_or_ignore()` 介面，不在 DAO 外寫方言語法。
+
 建議唯一鍵：
 
 - `us_price_daily`：`(ticker, trade_date, source)`
@@ -237,7 +270,7 @@ core/
 |------|------|----------|
 | DataFeed | 供應策略所需資料（價格、公司行為、基本面） | `BaseDataFeed` → 新增 `UsStockDataFeed` |
 | Signal / Strategy | 產生交易訊號（不直接操作資金帳本） | `BaseStockStrategy`（`self.market = Market.US`） |
-| Execution Simulator | 模擬成交（滑價、手續費、最小交易單位） | `InstrumentSpec` ＋ `FillModel` ＋ `CostModel`；委託前處理（方向白名單、執行順序、持倉檔數上限）在 `core/execution/order_preprocess.py`，回測實盤共用 |
+| Execution Simulator | 模擬成交（滑價、手續費、最小交易單位） | `InstrumentSpec` ＋ `FillModel` ＋ `CostModel`；訂單規則（方向白名單、執行順序、持倉檔數上限）在 `core/portfolio/order_rules.py`，回測實盤共用 |
 | Portfolio / Risk | 倉位、現金、風險控制 | `core/portfolio/`（`sizing.py` 部位大小、`construction.py` 組合建構）＋ `core/position/stock/position_manager.py` ＋ `SettlementModel` |
 | Performance / Report | 績效指標與圖表輸出 | `core/backtest/report/reporter.py`、`core/analysis/` |
 
@@ -262,7 +295,7 @@ core/
 
 ## 五、任務入口與執行流程建議
 
-### 5.1 CLI target 建議（對齊現有 `tasks/update_db.py` 風格）
+### 5.1 CLI target 建議（對齊現有 `tasks/update_db.py` 風格；合併 `feature/post-rehearsal` 後為 `apps/update_db.py`）
 
 在 `DataType` 新增 `us_universe`、`us_price`、`us_actions`、`us_fundamentals`。
 既有的 `all`／`no_tick` 是否納入美股 target 要一併決定（建議不納入，另設 `us_all`，避免台股日更被美股 provider 的失敗拖住）。
@@ -282,7 +315,7 @@ core/
 ### Phase1-1. 建立 `us/` 目錄骨架與 provider 介面 ⏸
 
 - **目的**：先把平行模組的骨架與對外 API 抽象定下來，後續兩步才有落點。
-- **做法**：依 §二建立 `core/pipeline/us/`（含 `providers/`、四層子目錄）與 `core/api/us/`；
+- **做法**：依 §二建立 `core/pipeline/us/`（已改名 `etl/` 時為 `etl/us/`；含 `providers/`、四層子目錄）與 `core/api/us/`；
   `providers/base.py` 定義 provider 介面（`fetch_xxx`），先實作一個 provider（建議沿用已是相依的 `yfinance`，免金鑰）。
   **不建** `core/strategies/us/`（見 §二）。
 - **產出**：`core/pipeline/us/`、`core/api/us/` 的骨架檔。
@@ -297,7 +330,7 @@ core/
   `core/config/schema.py` 新增 `US_STOCK_DB_PATH` 與表名常數；`DataType` 新增 `us_universe`、`us_price` 兩個 target。
   建表、`UNIQUE`、寫入與查詢寫在 `core/dao/us/` 的 DAO（繼承 `BaseDAO`）；loader 只讀 CSV、檔內去重、逐檔彙報，
   `core/api/us/` 的查詢委派給 DAO（依 [資料存取層](../docs/dev/data-access-layer.md)）。
-- **產出**：`core/pipeline/us/*`、`core/dao/us/`（`us_universe`、`us_price_daily` 的 DAO）、`core/api/us/price_api.py`、`core/api/us/universe_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py`、`tasks/update_db.py`；若差集續跑採外部日曆，另含 `core/market/us/market_calendar.py`（見 §3.3）。
+- **產出**：`core/pipeline/us/*`、`core/dao/us/`（`us_universe`、`us_price_daily` 的 DAO）、`core/api/us/price_api.py`、`core/api/us/universe_api.py`、`core/config/schema.py`、`core/pipeline/utils/constant.py`、`tasks/update_db.py`（合併後為 `apps/update_db.py`）；若差集續跑採外部日曆，另含 `core/market/us/market_calendar.py`（見 §3.3）。
 - **驗證方式**：中斷後重跑可續跑且不產生重複資料；抽樣比對來源網站數據；新增的 API 公開方法有測試（`scripts/check_api_orphan_methods.py` 通過）。
 - **相依**：Phase1-1。
 
@@ -308,7 +341,8 @@ core/
   1. `core/backtest/datafeed/us/stock_datafeed.py`：`UsStockDataFeed`（繼承 `core/datafeed/base.py` 的 `BaseDataFeed`）；
      NYSE/NASDAQ 交易日曆放 `core/market/us/market_calendar.py`（§4.2；Phase1-2 已建就直接沿用）。
   2. `core/adapters/us/`：美股 DataFrame → `StockQuote`（沿用 `core/models/stock/`；報價驗證沿用 `core/adapters/quote_validation.py`）。
-  3. `core/backtest/models/`：`UsStockSpec`（`instrument_spec.py`）／`UsStockFillModel`（`fill_model.py`）／
+  3. `core/market/us/` 的 `instrument_spec.py`：`UsStockSpec`（繼承 `core/market/instrument_spec.py` 的 `InstrumentSpec`）；
+     `core/backtest/models/`：`UsStockFillModel`（`fill_model.py`）／
      `UsStockSettlementModel`（`settlement_model/us_stock.py`，並在 `settlement_model/__init__.py` re-export），
      成本先給最小版本（例如只算固定手續費），Phase2-2 補完整。
   4. `core/portfolio/sizing.py`：`EqualWeightSizer` 寫死以張（`Units.LOT`）計、至少 1 張，美股 1 股即可交易——
@@ -318,7 +352,7 @@ core/
   6. `strategies/stock/momentum_us_strategy.py`：日線動能策略，`self.market = Market.US`。
      `BaseStockStrategy` 會帶入台股 API，是否需要另一支不帶台股 API 的美股基底，動工時決定。
   回測報表沿用 `core/backtest/report/reporter.py`，先完成可比較的資產曲線與交易明細。
-- **產出**：上述各檔（含 `core/portfolio/sizing.py`、`core/market/us/market_calendar.py`）。
+- **產出**：上述各檔（含 `core/portfolio/sizing.py`、`core/market/us/` 的 `market_calendar.py` 與 `instrument_spec.py`）。
 - **驗證方式**：以**回測入口**指定該美股策略類別名（`python -m apps.backtest --strategy <類別名>`）可產出資產曲線與交易明細；交易日數與 NYSE 日曆一致；
   台股回歸雙線（`./scripts/run_regression.sh`）逐筆相同（證明 factory 分支沒有影響台股）。
 - **相依**：Phase1-2。
@@ -341,7 +375,7 @@ core/
 ### Phase2-2. 美股成本模型 ⏸
 
 - **目的**：手續費結構與台股不同（含 SEC fee、最小費用、無證交稅），不可沿用台股模型。
-- **做法**：新增 `core/market/us/cost_model.py`，定義 `UsStockCostModel`（繼承 `core/market/cost_model.py` 的 `BaseCostModel`；成本模型已於 2026-10-01 由 `core/backtest/models/` 下沉到 `core/market/`）：手續費、SEC fee、最小費用；
+- **做法**：新增 `core/market/us/cost_model.py`，定義 `UsStockCostModel`（繼承 `core/market/cost_model.py` 的 `BaseCostModel`，與台股 `StockCostModel` 同放市場層）：手續費、SEC fee、最小費用；
   滑價放 `CostModel` 或 `FillModel`，動工時對照台股實作決定。放空相關方法（`borrow_fee` 等）若不支援須明確拋錯，不可靜默回 0。
 - **產出**：`core/market/us/cost_model.py`、`core/backtest/factory.py`（改用完整版成本模型）。
 - **驗證方式**：各項費用有單元測試，含最小費用的邊界案例。
@@ -387,12 +421,12 @@ core/
 > **✅ 完成（2026-09-02 結案）**
 > 本步驟**不是由美股這條線做掉的**，而是被兩件其他工作分別完成：引擎層共用介面由
 > [多市場回測引擎架構](../docs/backtest/multi-market-engine.md) 完成，目錄歸位由
-> [命名軸線](../docs/dev/naming-axes.md) 收斂與台期貨規劃 Phase5-3 完成。
+> [命名軸線](../docs/dev/naming-axes.md) 收斂與已結案移出的 `台期貨ETL與回測架構規劃.md` Phase5-3 完成。
 >
 > | 目錄 | 現況 | 說明 |
 > |------|------|------|
 > | `core/pipeline/` | `shared/` ＋ `tw/` ＋ `utils/` | 2026-08-31 命名軸線收斂；`utils/` 是層不是軸（2026-09-13） |
-> | `core/api/` | `base.py` ＋ `tw/` | **2026-09-02 台期貨 Phase5-3 收斂** |
+> | `core/api/` | `base.py` ＋ `tw/` | **2026-09-02 `台期貨ETL與回測架構規劃.md` Phase5-3 收斂** |
 > | `core/adapters/` | `tw/` | 同上 |
 > | `core/backtest/datafeed/` | `tw/`（`BaseDataFeed` 已移到中立的 `core/datafeed/`） | 同上 |
 > | `core/models/`／`core/strategies/`／`core/managers/` | `base/`＋`stock/`＋`futures/` | **承載軸 B（商品類別），本來就不該有 `us/`** |
@@ -407,6 +441,7 @@ core/
 > 市場軸目錄新增 `core/market/`、`core/dao/`、`core/broker/`、`core/live/datafeed/` 四個，
 > 同樣只有 `tw/`，本步驟「台股歸位 `tw/`」的結論不變；目前完整清單以 `scripts/check_layer_deps.py` 的
 > `_MARKET_AXIS_PACKAGES` 為準。其中 `broker`、`live/datafeed` 屬實盤，美股不在本規劃範圍內開 `us/`。
+> 上表的 `core/managers/` 已於 2026-10-01 改名 `core/position/`（[core目錄邊界收斂.md](core目錄邊界收斂.md) Phase3-1），軸 B 的結論不變。
 
 ---
 
@@ -421,8 +456,8 @@ core/
 ## 關聯與狀態
 
 - **優先級**：P3（長期架構規劃）
-- **進度**：1 / 9 項 ✅（Phase3-3，2026-09-02）；其餘 8 項 ⬜，**Phase1-1 可直接開工**
-- **相關程式**：`core/pipeline/shared/`、`core/api/base.py`、`core/dao/`、`core/market/`、`core/datafeed/base.py`、`core/backtest/factory.py`、`core/backtest/models/`、`core/backtest/datafeed/`、`core/portfolio/sizing.py`、`core/strategies/stock/`、`core/utils/constant/`、`scripts/check_layer_deps.py`、`tasks/update_db.py`
+- **進度**：1 / 9 項 ✅（Phase3-3，2026-09-02）；其餘 8 項 ⏸（2026-10-01 整份暫緩）；恢復時 Phase1-1 無前置相依，可直接開工
+- **相關程式**：`core/pipeline/shared/`、`core/api/base.py`、`core/dao/`、`core/market/`、`core/datafeed/base.py`、`core/backtest/factory.py`、`core/backtest/models/`、`core/backtest/datafeed/`、`core/portfolio/sizing.py`、`core/strategies/stock/base.py`（契約）、頂層 `strategies/stock/`、`core/utils/constant/`、`scripts/check_layer_deps.py`、`tasks/update_db.py`（合併後為 `apps/update_db.py`）
 - **相關文件**：
   - [多市場回測引擎架構](../docs/backtest/multi-market-engine.md)（新增（市場, 商品）組合的步驟；§5.1 事件驅動迴圈的長期方向）
   - [命名軸線](../docs/dev/naming-axes.md)（`us/` 可以放哪些目錄、不能放哪些目錄）
@@ -431,9 +466,15 @@ core/
   - [台期貨平台](../docs/futures/tw-futures-platform.md)（同樣是「平行市場模組、共享核心、不共享市場細節」的前例）
 - **相關 backlog**：
   - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md)（美股資料量較大，建議 DB 遷移先收斂；表名前綴的考量同源）。
-    **若本文件先落地**：§3.3 要求的 `INSERT OR IGNORE` 正是該計畫 Phase2-1 要剷掉的 SQLite 專屬語法，
+    **若本文件先落地**：§3.3 要求的 `INSERT OR IGNORE` 正是 `PostgreSQL遷移計畫.md` Phase2-1 要剷掉的 SQLite 專屬語法，
     `core/dao/us/` 一寫就讓它的工作量變大，`get_engine()` 與 fallback 也要從兩個研究庫擴到三個
     （`US_STOCK_DB_PATH` 是本文件 Phase1-2 的產出）。**該計畫若已完成或正在並行，`core/dao/us/`
     直接寫 `ON CONFLICT`，不要新增 `INSERT OR IGNORE`。**
+  - [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md)：已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service 與 driver；
+    美股表要不要直接寫進 PostgreSQL，恢復時與上一條一起決定（見 §3.4 的儲存層現況）。
   - [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)：回測入口已於 2026-09-30
-    由 `run.py` 換成 `python -m apps.backtest`，本文件的驗收標準與 Phase3-1 驗證方式已同步改寫。
+    由 `run.py` 換成 `python -m apps.backtest`，本文件的驗收標準與 Phase1-3 驗證方式已同步改寫；
+    `回測與實盤入口拆分及架構收斂.md` Phase3-2 把 spec／成本模型下沉到 `core/market/`（本文件的美股 spec 與成本因此放 `core/market/us/`），
+    `回測與實盤入口拆分及架構收斂.md` Phase1-8 把 `tasks/` 併入 `apps/`（待演練後合併）。
+  - [core目錄邊界收斂.md](core目錄邊界收斂.md)：`core目錄邊界收斂.md` Phase2-2、Phase2-3 讓具體策略搬到頂層 `strategies/`（美股策略的落點），
+    `core目錄邊界收斂.md` Phase5-1 把 `core/pipeline/` 搬到頂層並改名 `etl/`（本文件 `core/pipeline/us/` 的未來位置）。
