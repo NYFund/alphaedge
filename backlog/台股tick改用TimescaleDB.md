@@ -3,7 +3,7 @@
 ## Abstract
 
 - **背景／問題**：台股 tick 原本（**main 上至今仍是**）的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 main 上的 tick 級回測**沒有可用的資料源**。
-  **2026-10-09 使用者把完整歷史 CSV 補回本機**（1,856 檔、56 GB、2020-04-01～2024-05-10、約 10.6 億列，現放 `data/tick_history/`），並確認**這批就是要入庫的全部資料**；
+  **2026-10-09 使用者把完整歷史 CSV 補回本機**（1,856 檔、56 GB、2020-04-01～2024-05-10、約 10.6 億列，曾放 `data/tick_history/`；全量匯入並比對通過後，2026-10-10 依使用者指示刪除本機這份），並確認**這批就是要入庫的全部資料**；
   **Google 雲端仍保有同一份**，本機這份不是唯一備份。原本那 541 檔（2024-05-13～05-15）已不存在，資料庫的歷史止於 2024-05-10。全量盤點結果見〈CSV 樣式〉與 Phase4-1 的盤點紀錄。
 - **目前狀態（2026-10-10）**：**16 步全數在 `feature/tick-timescaledb` 完成，尚未 merge 進 main**。該分支從 `feature/post-rehearsal` 分出，要等後者在模擬演練結束後部署進 main 才能合併；合併前 main 仍是 DolphinDB 程式。合併與部署時剩下的收尾見下方〈現況與合併部署〉。
 - **目標**：落地目標改成 TimescaleDB（PostgreSQL extension）：
@@ -41,7 +41,9 @@
 >   1. 主目錄 `uv sync --extra frontend --extra lab --extra tick`（Phase0-3：只寫 `--extra tick` 會拔掉另外兩個）；`.env` 補 `TICK_DATABASE_URL` 與 `POSTGRES_*`（Phase0-1、Phase0-2）；`docker compose build` 重建映像。
 >   2. **資料庫不必重灌**：compose 寫死專案名稱（Phase0-1），worktree 匯入的資料就在主目錄會用的同一個 volume `alphaedge_alphaedge_pgdata`。
 >   3. 刪除主目錄的 `tick_metadata.json`（含 backup）與期貨 tick 的 1 個 CSV（Phase5-2）。主目錄在合併前仍跑舊程式，所以留到這時才刪。
->   4. `data/tick_history/`（56 GB）要刪、壓縮封存或保留，由使用者決定（Phase5-2）。
+>   4. ~~`data/tick_history/` 去留~~：**2026-10-10 已刪除**（使用者指示，連同匯入暫存 `data/tick_import_work/`）。這批資料現存三份：TimescaleDB 本身、
+>      `data/backups/alphaedge_tick_20261010.dump`（`pg_dump`，約 7.8 GB，已做過還原測試）、Google 雲端的原始 CSV。
+>      **該 dump 仍與資料庫在同一台 Mac 上，須由使用者另複製到雲端或外接硬碟**（尚未確認完成）。
 >   5. 第一次對正式資料表跑 `--target tick` 仍要等使用者下指令（〈範圍界線〉）。
 > - **步驟完成後在功能分支另修的兩件事**（2026-10-09）：
 >   - `5adb56d`：`update_db` 的 tick 改排在 price 之後。tick 入庫以 `price` 表判斷上市櫃交易日（Phase2-1），排在前面的話 `--target all` 收盤後跑當天的 tick 一律失敗；`test_targets_that_read_price_run_after_price` 釘住順序。
@@ -686,7 +688,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **期貨 tick 裁示（2026-10-09 使用者採選項 A：一併刪除）**。依據：
   - 期貨 tick 已裁示不做（2026-09-15），程式沒有落地目標；日後要做時比照本文件另立 backlog，改寫成 TimescaleDB 的 `futures_tick` 表。
   - 舊程式**每跑一次就重複寫入一份**：`futures_tick_updater.py` 沒有任何已爬紀錄可續跑，DolphinDB 表又設 `keepDuplicates=ALL`（去重會丟掉同時間戳的多筆成交）。選項 B（保留）至少要補「契約 × 日」的載入紀錄，不能原樣留著。
-  - 期貨 tick 的下游缺口（期貨逐筆回測做不了）記在 `暫緩工作彙整.md` S9。
+  - 期貨 tick 的下游缺口（期貨逐筆回測做不了）記在 [台期貨平台說明](../docs/futures/tw-futures-platform.md)〈已知限制〉（原 `暫緩工作彙整.md` S9，2026-10-10 改判不做並移出）。
 - **產出**：見下方實作紀錄。
 - **驗證方式**：`grep -rn "dolphindb\|DDB_\|tick_metadata" core apps scripts .env.example` 只剩說明性註解；`pytest` 全數通過；`python scripts/check_layer_deps.py` 通過。
 - **實作紀錄（2026-10-09，`feature/tick-timescaledb`，選項 A）**：
@@ -699,7 +701,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - `grep -rn "dolphindb\|DDB_\|tick_metadata" core apps scripts .env.example` 只剩三處說明「`load_log` 取代了 `tick_metadata.json`」的註解，沒有程式相依。
   - **本機資料留到合併部署時再刪**：主目錄的 `data/downloads/tw_stock/meta/tick/tick_metadata.json`（含 backup）與 `data/downloads/tw_futures/tick/` 的 1 個 CSV。
     主目錄在合併前仍跑舊程式，先刪沒有好處。
-  - **歷史 CSV（`data/tick_history/`）本步驟不刪**：Phase4-3 已比對通過，本機那份要刪、壓縮封存或保留由使用者決定（Google 雲端另有一份）。
+  - **歷史 CSV（`data/tick_history/`）本步驟不刪**：Phase4-3 比對通過後，2026-10-10 由使用者另行指示刪除（備份去向見〈現況與合併部署〉第 4 點）。
 - **相依**：原定 Phase4-3（實際未等，見上方偏離原規格）、Phase5-1。
 
 ### Phase5-3. 更新文件 ✅
@@ -781,4 +783,4 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   - [滑價模型後續優化.md](滑價模型後續優化.md) S3（tick 級改用 bid/ask 成交）與 S2 的「實際買賣價差」依據都相依本文件；資料已入庫，本分支合併進 main 後即可開工。
   - [core目錄邊界收斂.md](core目錄邊界收斂.md) Phase5-1（`core/pipeline/` 搬到頂層 `etl/`）暫緩到本文件與 `PostgreSQL遷移計畫.md` 涉及 pipeline 的步驟完成，避免搬兩次；本文件這一半要等合併進 main 才算落地。
   - [盤中動能策略.md](盤中動能策略.md)：S2 日 K 近似的偏差（成交量、停損先後）要靠逐筆資料校準；逐筆觸發策略不能跑 `Scale.TICK` 回測，校準另寫研究腳本（見文首〈現況與合併部署〉）。
-  - [暫緩工作彙整.md](暫緩工作彙整.md) S9：期貨 tick 不做造成的下游缺口（期貨逐筆回測做不了）；期貨 tick 程式已由本文件 Phase5-2 移除。
+  - 期貨 tick 不做造成的下游缺口（期貨逐筆回測做不了）：原 `暫緩工作彙整.md` S9，2026-10-10 改判不做並移出，缺口改記在 [台期貨平台說明](../docs/futures/tw-futures-platform.md)〈已知限制〉；期貨 tick 程式已由本文件 Phase5-2 移除。
