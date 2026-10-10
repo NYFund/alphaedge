@@ -107,7 +107,8 @@ strategies/                        # 具體策略（相依只能 strategies → 
 │   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；回測為日 K 近似、實盤逐筆）
 └── futures/                       # 期貨策略
     ├── __init__.py
-    └── momentum_futures_strategy.py
+    ├── momentum_futures_strategy.py
+    └── futures_rollover_rehearsal_strategy.py  # 換月演練專用（2026-10 模擬環境，不是交易策略）
 
 core/portfolio/                    # 部位建構層（回測與實盤共用，不屬於任一市場）
 ├── signal.py                      # Signal：Alpha 層的輸出型別

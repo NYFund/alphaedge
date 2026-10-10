@@ -44,6 +44,23 @@ def test_update_db_runs_at_taipei_six_and_is_followed_by_parity() -> None:
     assert "update-db" not in _DAILY_JOBS
 
 
+def test_futures_segments_load_the_rollover_rehearsal_strategy() -> None:
+    """
+    期貨三個段落都載入換月演練策略，且與示範策略在同一個行程
+
+    少了任一段，演練策略就缺那個段落的鉤子；分成兩個行程則兩邊各以為
+    帳戶是自己的。parity 補比不含演練策略（見上一條）。
+    """
+
+    for suffix in ("futures-open", "futures-close", "futures-after-close"):
+        args: List[str] = _DAILY_JOBS[suffix][2]
+        strategies: List[str] = args[args.index("--strategy") + 1].split(",")
+        assert strategies == [
+            "MomentumFuturesStrategy",
+            "FuturesRolloverRehearsalStrategy",
+        ], suffix
+
+
 def test_chain_runs_every_step_and_reports_the_first_failure(tmp_path: Path) -> None:
     """
     前一步失敗不中斷後面，結束碼取第一個失敗的
