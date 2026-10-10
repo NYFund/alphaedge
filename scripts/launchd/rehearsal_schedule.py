@@ -39,6 +39,12 @@ _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 # 盤後對帳與快照也要涵蓋它；盤中進場與停損由 `stock-intraday` 另一個行程負責
 _STOCK_STRATEGIES: str = "VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy"
 
+# 期貨三個段落載入的策略（同一個行程、共用帳戶）。
+# `FuturesRolloverRehearsalStrategy` 只為 2026-10-20 的換月演練而設：示範策略很少出訊號，
+# 換月日沒有部位就驗不到換月兩腿。演練結束移除排程時一併拿掉；
+# 盤後 parity 補比只比示範策略（演練策略沒有回測意義）
+_FUTURES_STRATEGIES: str = "MomentumFuturesStrategy,FuturesRolloverRehearsalStrategy"
+
 # 標籤後綴 → (台北時, 台北分, `python` 之後的參數)
 _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
     "stock-open": (
@@ -74,7 +80,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumFuturesStrategy",
+            _FUTURES_STRATEGIES,
             "--phase",
             "open",
         ],
@@ -98,7 +104,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumFuturesStrategy",
+            _FUTURES_STRATEGIES,
             "--phase",
             "close",
         ],
@@ -122,7 +128,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumFuturesStrategy",
+            _FUTURES_STRATEGIES,
             "--phase",
             "after_close",
         ],

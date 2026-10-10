@@ -43,7 +43,7 @@
 >   3. 刪除主目錄的 `tick_metadata.json`（含 backup）與期貨 tick 的 1 個 CSV（Phase5-2）。主目錄在合併前仍跑舊程式，所以留到這時才刪。
 >   4. ~~`data/tick_history/` 去留~~：**2026-10-10 已刪除**（使用者指示，連同匯入暫存 `data/tick_import_work/`）。這批資料現存三份：TimescaleDB 本身、
 >      `data/backups/alphaedge_tick_20261010.dump`（`pg_dump`，約 7.8 GB，已做過還原測試）、Google 雲端的原始 CSV。
->      **該 dump 仍與資料庫在同一台 Mac 上，須由使用者另複製到雲端或外接硬碟**（尚未確認完成）。
+>      該 dump 已由使用者另存一份到雲端（2026-10-10 確認）。
 >   5. 第一次對正式資料表跑 `--target tick` 仍要等使用者下指令（〈範圍界線〉）。
 > - **步驟完成後在功能分支另修的兩件事**（2026-10-09）：
 >   - `5adb56d`：`update_db` 的 tick 改排在 price 之後。tick 入庫以 `price` 表判斷上市櫃交易日（Phase2-1），排在前面的話 `--target all` 收盤後跑當天的 tick 一律失敗；`test_targets_that_read_price_run_after_price` 釘住順序。
