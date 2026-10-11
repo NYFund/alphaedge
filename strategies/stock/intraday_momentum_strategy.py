@@ -76,7 +76,12 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     - 當沖名單：當天那一份收盤後才入庫，盤中沿用最近一份（見實盤資料源的 `get_day_trade_list()`）。
     - 時區：逐筆報價與盤中成交的日期都帶時刻（`datetime`），比較開倉日前一律轉成日期。
 
-    **TICK 級別回測不支援**：`setup_apis()` 會直接 `NotImplementedError`。
+    〈逐筆回測〉`supported_scales` 為 DAY 與 TICK，預設 DAY（日 K 近似）；`--scale TICK` 時由 `TickSimulator` 逐筆重放，
+    直接走上方〈實盤執行〉的逐筆分支（同一份程式），段落照 `execution_schedule`：
+    - 開倉與停損在盤中逐筆段落，市價委託在同一檔的下一筆以委賣／委買價成交，沒成交即作廢。
+    - 隔天開盤出場以盤前參考價為決策價，在該檔當天第一筆（開盤集合競價）成交。
+    - 成交量上限同樣是 10%，分母改為下一筆的對手方委託量。
+    - 當沖名單用回測當天那一份（實盤盤中只拿得到最近一份，見〈實盤執行〉）。
     """
 
     DEFAULT_MAX_HOLDINGS: int = 10
@@ -109,6 +114,8 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         self.init_capital: float = 1000000.0
         self.max_holdings: int = self.DEFAULT_MAX_HOLDINGS
         self.scale: Scale = Scale.DAY
+        # 逐筆分支與實盤共用，`--scale TICK` 即逐筆回測；預設維持日 K 近似
+        self.supported_scales = {Scale.DAY, Scale.TICK}
         self.direction: TradeDirection = TradeDirection.LONG
         # 進場當天停損就是現股當沖：引擎依此採先開後平，當天的新倉當天就會檢查停損
         self.allow_day_trade: bool = True
@@ -166,16 +173,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         - Parameters:
             - feed: BaseDataFeed
                 引擎持有的資料源
-        - Raise:
-            - NotImplementedError
-                `scale` 不是 `Scale.DAY`（逐筆分支尚未實作）
         """
-
-        if self.scale != Scale.DAY:
-            raise NotImplementedError(
-                f"{self.strategy_name} 目前只有日 K 近似版本（Scale.DAY），"
-                f"逐筆分支尚未實作。目前的 scale 是 {self.scale}"
-            )
 
         self.feed = feed
         self.price = feed.price

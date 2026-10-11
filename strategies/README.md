@@ -601,7 +601,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 
 - **`Scale.DAY`**: 日線回測，使用每日收盤價
 - **`Scale.TICK`**: 逐筆回測，使用每筆成交資料（僅台股；期貨 Tick 回測未實作）
-- 回測時可用 `--scale DAY`／`--scale TICK`（大小寫皆可）改用另一個級別，**只能選策略 `supported_scales` 宣告支援的**，否則以用法錯誤（退出碼 2）拒絕並列出支援的級別。只寫了日 K 邏輯的策略吃到 tick 不會報錯、只會默默算錯，所以預設只支援自己宣告的 `scale`。
+- 回測時可用 `--scale DAY`／`--scale TICK`（大小寫皆可）改用另一個級別，**只能選策略 `supported_scales` 宣告支援的**，否則以用法錯誤（退出碼 2）拒絕並列出支援的級別。只寫了日 K 邏輯的策略吃到 tick 不會報錯、只會默默算錯，所以預設只支援自己宣告的 `scale`。目前宣告支援 TICK 的只有 `IntradayMomentumStrategy`（`self.supported_scales = {Scale.DAY, Scale.TICK}`）；新增一支時要同時寫好逐筆分支，並更新 `tests/backtest/test_backtest_scale.py` 的 `TICK_CAPABLE_STRATEGIES`。
 - TICK 回測每天讀哪些標的由 `--tick-universe` 決定：預設 `strategy` 會以前一交易日呼叫策略的 `get_live_symbols()`、再加上當時的持倉（與實盤盤前訂閱一致），**沒有覆寫 `get_live_symbols()` 的策略要明確改用 `--tick-universe all`**（全市場，一天上百萬筆，較慢）。
 
 ### 盤中逐筆策略：`is_tick_triggered`

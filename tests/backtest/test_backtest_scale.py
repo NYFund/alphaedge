@@ -8,6 +8,7 @@ from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.strategies.base import UnsupportedScaleError
 from core.utils import Scale, TickUniverse
+from strategies.loader import StrategyLoader
 from strategies.stock.volume_breakout_momentum_strategy import (
     VolumeBreakoutMomentumStrategy,
 )
@@ -163,3 +164,29 @@ def test_unknown_scale_value_is_rejected_by_the_parser() -> None:
 
     assert result.returncode == 2
     assert "--scale" in result.stderr
+
+
+# === 既有策略的宣告 ===
+# 宣告支援逐筆的策略；新增一支時要同時寫好逐筆分支並更新這裡，否則下方測試轉紅
+TICK_CAPABLE_STRATEGIES: Set[str] = {"IntradayMomentumStrategy"}
+
+
+@pytest.mark.parametrize(
+    "name", sorted(StrategyLoader.load_strategies()), ids=lambda name: name
+)
+def test_registered_strategies_declare_their_scales(name: str) -> None:
+    """
+    每支策略的支援級別都是明確的：只寫了日 K 邏輯的策略要求 TICK 會當場報錯，
+    宣告支援 TICK 的只有清單上那幾支
+    """
+
+    strategy = StrategyLoader.load_strategies()[name]()
+    strategy.validate_scale()
+
+    if name in TICK_CAPABLE_STRATEGIES:
+        assert strategy.get_supported_scales() == {Scale.DAY, Scale.TICK}
+        strategy.validate_scale(Scale.TICK)
+    else:
+        assert strategy.get_supported_scales() == {Scale(strategy.scale)}
+        with pytest.raises(UnsupportedScaleError):
+            strategy.validate_scale(Scale.TICK)

@@ -57,8 +57,8 @@
 | Phase3-1 | `TickSimulator`：一天三段與逐筆迴圈 | `core/backtest/simulator/tick_simulator.py`（新）、`core/backtest/factory.py` | 開盤集合競價、逐筆、收盤集合競價三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：與 Phase3-2 同一個 commit（沒有撮合規則就產生不了任何成交，兩步無法分開驗證）；factory 在 TICK 時組出 `TickSimulator`＋`StockTickDataFeed`，整天一次給的舊路徑與 `IntradayScaleMismatchError` 已移除 |
 | Phase3-2 | 逐筆成交模型與在途委託 | `core/backtest/models/fill_model.py`、`core/backtest/simulator/pending_orders.py`（新：`PendingOrderManager`、`PendingOrder`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、IOC 作廢、成交量上限的單元測試 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：規則依〈已定案〉第 10 點；**偏離原規格：`get_filled_price()` 不改簽章**（成交價在呼叫它之前就由這一筆決定，見步驟詳述）；`滑價模型後續優化.md` S3 一併 ✅ |
 | Phase3-3 | 盤中帳務與日終結算 | `core/backtest/simulator/tick_simulator.py`、`core/backtest/backtester.py`（`finish_day()`）、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：不需改程式（成交即時經 `position_manager` 入帳、日終走 `finish_day()`），補三條測試釘住 |
-| Phase4-1 | `IntradayMomentumStrategy` 支援 TICK 回測 | `strategies/stock/intraday_momentum_strategy.py` | 移除 `setup_apis()` 的 `NotImplementedError`；逐筆分支在回測與實盤共用 | ⬜ | 相依 Phase3-3 |
-| Phase4-2 | 既有 DAY 策略宣告支援範圍 | `strategies/**/*.py`、`strategies/README.md` | 每支策略都宣告支援的級別；只支援 DAY 者加 `--scale tick` 報錯 | ⬜ | 相依 Phase1-1 |
+| Phase4-1 | `IntradayMomentumStrategy` 支援 TICK 回測 | `strategies/stock/intraday_momentum_strategy.py` | 移除 `setup_apis()` 的 `NotImplementedError`；逐筆分支在回測與實盤共用 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`supported_scales = {DAY, TICK}`、移除 `NotImplementedError`；逐筆分支與實盤同一份；手寫兩天 tick 驗證觸發、停損、隔天開盤出場 |
+| Phase4-2 | 既有 DAY 策略宣告支援範圍 | `strategies/**/*.py`、`strategies/README.md` | 每支策略都宣告支援的級別；只支援 DAY 者加 `--scale tick` 報錯 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：其餘策略都維持預設（只支援自己的 `scale`），不必改檔；以 `StrategyLoader` 逐支驗證 |
 | Phase5-1 | 端到端測試 | `tests/backtest/test_tick_simulator.py`（新） | 手寫 tick：無前視、下一筆成交、決定性（跑兩次逐位元相同）、多檔交錯順序 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`tests/backtest/test_tick_simulator.py` 19 條，隨 Phase3-1～3-3 寫成；清單逐項對照見步驟詳述 |
 | Phase5-2 | 真實資料實跑與效能量測 | 本文件（實跑紀錄）、`盤中動能策略.md` | 兩種標的範圍各跑一段區間；記錄每日耗時、峰值記憶體；與 S2 日 K 近似逐項對照 | ⬜ | 相依 Phase4-1、Phase5-1 |
 | Phase5-3 | 文件 | `core/backtest/README.md`、`strategies/README.md`、`docs/backtest/module-map.md` | 文件描述逐筆重放的語意、段落、成交規則與已知限制 | ⬜ | 相依 Phase5-2 |
@@ -380,7 +380,7 @@
   新增三條測試：同價同量的當沖來回，逐筆與日 K 的手續費、證交稅、損益完全相同（並確認證交稅確實減半為 153）；第一筆成交用掉資金後，後面的開倉單以 `rejected_insufficient_balance` 被擋；
   持有到收盤的部位以最後一筆盯市、次日參考價記成最後一筆。完整 pytest 2914 passed；回歸雙線零變動。
 
-### Phase4-1. `IntradayMomentumStrategy` 支援 TICK 回測 ⬜
+### Phase4-1. `IntradayMomentumStrategy` 支援 TICK 回測 ✅
 
 - **目的**：讓盤中動能策略用逐筆資料回測，取代偏樂觀的日 K 近似。
 - **做法**：
@@ -390,14 +390,21 @@
 - **產出**：策略檔與 `tests/test_intraday_momentum_strategy.py`。
 - **驗證方式**：手寫 tick 驗證觸發、停損、隔天開盤出場；DAY 回測結果不變。
 - **相依**：Phase3-3。
+- **結果（2026-10-10，`feature/tick-backtest`）**：策略只改三處（`supported_scales`、刪掉 `setup_apis()` 的拒絕、class docstring 補〈逐筆回測〉），逐筆分支 `generate_tick_*` 原封不動。
+  `tests/test_intraday_momentum_tick_backtest.py`：累計量未達門檻不進場、達門檻以下一筆委賣價買進、沒停損就以隔天第一筆（開盤集合競價）賣出；進場當天跌破停損價以下一筆委買價賣出、之後再跌不重送。
+  突變「不宣告 TICK」三條全紅。**DAY 結果不變**：五支策略 2024 全年重跑，與 Phase1-4 重構後的 25 個報表 CSV 逐位元相同（涵蓋 Phase1-1 以來所有變更）。
+  移除 `test_tick_scale_is_rejected`（契約已改）。
 
-### Phase4-2. 既有 DAY 策略宣告支援範圍 ⬜
+### Phase4-2. 既有 DAY 策略宣告支援範圍 ✅
 
 - **目的**：日 K 策略依賴 OHLC，吃到 tick 會默默算錯；要明確宣告。
 - **做法**：預設值已經是「只支援自己的 `self.scale`」，這一步逐支確認並在 `strategies/README.md` 寫清楚怎麼宣告。
 - **產出**：`strategies/README.md`；必要時調整策略檔。
 - **驗證方式**：每支策略加 `--scale tick` 時，只支援 DAY 者當場報錯。
 - **相依**：Phase1-1。
+- **結果（2026-10-10，`feature/tick-backtest`）**：逐支確認其餘五支（含兩支期貨）都沒有覆寫 `supported_scales`，預設只支援自己的 `scale`，不必改策略檔。
+  `tests/backtest/test_backtest_scale.py` 新增以 `StrategyLoader` 逐支驗證：清單（`TICK_CAPABLE_STRATEGIES`，目前只有 `IntradayMomentumStrategy`）以外的策略要求 TICK 一律 `UnsupportedScaleError`；
+  新增支援 TICK 的策略忘了更新清單也會轉紅。`strategies/README.md` 寫明怎麼宣告。
 
 ### Phase5-1. 端到端測試 ✅
 
