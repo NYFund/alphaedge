@@ -632,6 +632,38 @@ def test_datafeed_returns_one_quote_per_tick(loaded_api: StockTickAPI) -> None:
     assert [q.close for q in quotes] == [40.0, 800.0, 801.0, 40.5, 150.0, 802.0]
 
 
+def test_tick_datafeed_replays_with_cumulative_volume(
+    loaded_api: StockTickAPI,
+) -> None:
+    """
+    逐筆資料源接上真的 API：依時間逐筆產生，`volume` 為當日累計量、`tick_quote.volume` 為單筆量；
+    指定標的範圍時只讀到清單裡的股票
+    """
+
+    from core.backtest.datafeed.tw.stock_tick_datafeed import StockTickDataFeed
+
+    day: datetime.date = datetime.date(2024, 5, 8)
+    feed: StockTickDataFeed = StockTickDataFeed()
+    feed.tick = loaded_api
+
+    feed.setup_day(day, None)
+    whole_market = [
+        (q.stock_id, q.volume, q.tick_quote.volume) for q in feed.iter_day_ticks()
+    ]
+    feed.setup_day(day, ["2330"])
+    only_2330 = [q.stock_id for q in feed.iter_day_ticks()]
+
+    assert whole_market == [
+        ("1101", 11, 11),
+        ("2330", 5, 5),
+        ("2330", 12, 7),
+        ("1101", 24, 13),
+        ("2603", 17, 17),
+        ("2330", 31, 19),
+    ]
+    assert only_2330 == ["2330", "2330", "2330"]
+
+
 # === 端到端：歷史匯入腳本 ===
 def test_history_import_script_end_to_end(
     dao: StockTickDAO, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -75,10 +75,12 @@ class StockQuoteAdapter:
             **`open`／`high`／`low` 維持 0**：單一 tick 本來就沒有 OHLC，
             需要當日區間的地方（`FillModel`）自己累計 `intraday_range`。
 
-            **`volume` 不做換算**：tick 表的單位原本就是張。
+            **`volume` 是當日累計量、`tick.volume` 是這一筆的量**（單位都是張，不換算）：
+            實盤 TICK 報價的 `volume` 是券商給的當日累計量，策略的量門檻（例如累計 5,000 張）
+            依它判斷；回測給單筆量的話，同一個欄位兩邊意思不同，訊號不可比。
         - Parameters:
             - row: Any
-                tick 表的一列
+                tick 表的一列（`StockTickAPI` 的欄位，含 `cum_volume`）
             - date: datetime.date
                 要轉換的日期
         - Return:
@@ -103,7 +105,7 @@ class StockQuoteAdapter:
             scale=Scale.TICK,
             date=date,
             cur_price=tick_quote.close,
-            volume=tick_quote.volume,
+            volume=row.cum_volume,
             close=tick_quote.close,
             tick=tick_quote,
         )
