@@ -48,7 +48,7 @@
 |------|----------|----------|----------|:----:|--------------|
 | Phase0-1 | 定案介面細節與命名 | 本文件〈已定案〉 | 使用者確認 | ✅ | **✅ 2026-10-10**：介面七點與架構命名（〈已定案〉第 8 點）全數定案；同日追加第 9 點引擎內部改名 |
 | Phase1-1 | 策略宣告支援的級別（`supported_scales`）＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`supported_scales`、`--scale`、`Backtester.validate_scale()` 完成；策略檔不必改（預設只支援自己的 `scale`），逐支宣告留給 Phase4-1／Phase4-2 |
-| Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1、Phase2-2。**2026-10-10 改排在 Phase2-2 之後**：選項要靠 `StockTickDataFeed.setup_day(date, symbols)` 才有作用，先做的話 TICK 暫走的整天一根 bar 會讀全市場、選項被默默忽略 |
+| Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：選項、驗證、每日標的規則完成並接上 `setup_day()`；每天由 `TickSimulator` 呼叫在 Phase3-1 接上（在那之前沒有策略宣告支援 TICK，選項不會被默默忽略）。原排在 Phase2-2 之後（選項要靠 `setup_day(date, symbols)` 才有作用） |
 | Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：全專案改名完成，舊名啟動即報錯；`resolve_hook_timing()` 移到 `core/strategies/base.py`（偏離原規格，見步驟詳述）。動到實盤程式：部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後），合併後要重啟常駐行程 |
 | Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構）＋引擎內部兩處改名 | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`core/backtest/models/`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表；`on_bar_close`、`prev_close` grep 為零 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：改名 `48752a8` 與抽 simulator 各一個 commit；回歸雙線零變動、5 支策略 2024 全年 25 個報表 CSV 逐位元相同。偏離原規格：多一個 `load_day()`（見步驟詳述） |
 | Phase1-5 | 每日市場狀態改由各 model 自己準備 | `core/backtest/backtester.py`（`prepare_day()`）、`core/backtest/models/`、`core/backtest/datafeed/` | 回歸雙線零變動；`prepare_day()` 不再逐一推台股專屬 hook | ⬜ | 相依 Phase1-4；2026-10-10 承接 `框架對稱化重構.md`〈與其他文件的交集〉 |
@@ -152,7 +152,7 @@
     突變「拿掉宣告先驗」「`validate_scale()` 改成 no-op」「覆寫不寫回策略」各讓一條轉紅。回歸雙線零變動；完整 pytest 2876 passed。
   - 文件：`strategies/README.md` 設定表與級別說明、`core/backtest/README.md`、根目錄兩份 README、`docs/backtest/module-map.md`。
 
-### Phase1-2. 標的範圍選項（策略清單／全市場） ⬜
+### Phase1-2. 標的範圍選項（策略清單／全市場） ✅
 
 - **目的**：策略清單貼近實盤（訂閱上限 200 檔、前一天冷門當天才爆量的股票會漏掉），全市場則看策略本身的潛力；兩者都要能跑。
 - **做法**：
@@ -163,6 +163,15 @@
 - **產出**：上列檔案與測試。
 - **驗證方式**：兩個選項各自只讀到預期的標的；`strategy` 模式下持倉標的即使掉出清單也會被讀到；策略沒有清單時選 `strategy` 當場報錯；DAY 帶 `--tick-universe` 報錯。
 - **相依**：Phase0-1。
+- **結果（2026-10-10，`feature/tick-backtest`）**：
+  - `TickUniverse`（`strategy`／`all`）放在 `core/utils/constant/engine.py`；`--tick-universe` 經 `BacktestOverrides.tick_universe` 由 factory 交給 `Backtester`（不寫回策略：它不是策略的設定）。
+  - `Backtester.validate_tick_universe()`：DAY 帶了就拒絕；TICK 未指定時預設 `strategy`；策略沒覆寫 `get_live_symbols()` 卻用 `strategy` 時拒絕並提示 `--tick-universe all`（`InvalidTickUniverseError`，CLI 退出碼 2）。
+    逐筆觸發策略的拒絕（`_reject_intraday_tick_backtest()`）排在它之前，那個錯誤更根本。
+  - 每日標的規則 `core/backtest/simulator/tick_universe.py` 的 `resolve_strategy_symbols(strategy, account, previous_trading_day)`：清單在前、清單外的持倉依代號排序附後，與實盤 `LiveTrader.quote_symbols()` 相同；
+    有覆寫卻在某天回傳 None 時報錯，不改讀全市場。`get_live_symbols()` 的 docstring 從「回測不呼叫」改寫。
+  - 「前一交易日」怎麼取留給 Phase3-1（`TickSimulator` 每天盤前呼叫時才需要）。
+  - 驗證：`tests/backtest/test_tick_universe.py` 10 條（DAY 帶選項被拒、DAY 預設 None、無清單的 TICK 被拒、全市場不需清單、有清單時預設策略清單、覆寫偵測、清單＋持倉、回傳 None 被拒、
+    兩種範圍各自只查預期的標的（接上 `StockTickDataFeed.setup_day()`）、CLI 退出碼）。突變「DAY 不拒絕」「覆寫偵測恆真」「不加持倉」各讓兩條轉紅。回歸雙線零變動；完整 pytest 2896 passed。
 
 ### Phase1-3. `live_schedule` 改名為 `execution_schedule` ✅
 
