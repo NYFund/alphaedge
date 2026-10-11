@@ -2,6 +2,8 @@ import datetime
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Set
 
+from loguru import logger
+
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
 from core.portfolio.signal import Signal
@@ -9,6 +11,7 @@ from core.utils import (
     ExecutionStyle,
     ExecutionTiming,
     InstrumentType,
+    LiveHook,
     Market,
     Scale,
     TradeDirection,
@@ -25,6 +28,7 @@ _REMOVED_SETTINGS: Dict[str, str] = {
     "enable_intraday": "改用 `allow_day_trade`（預設 False）",
     "bar_execution_order": "已移除：執行順序一律由 `allow_day_trade` 推導",
     "is_intraday": "改用 `is_tick_triggered`",
+    "live_schedule": "改名為 `execution_schedule`（實盤與 TICK 回測共用）",
 }
 
 
@@ -106,6 +110,24 @@ class BaseStrategy(ABC):
         self.start_date: datetime.date = None  # Optional: 回測起始日
         self.end_date: datetime.date = None  # Optional: 回測結束日
 
+        # === Execution Schedule：實盤與 TICK 回測共用，DAY 回測不讀 ===
+        #
+        # 宣告各鉤子在哪一個段落被呼叫，例如
+        # `{"open": AT_OPEN, "close": AT_CLOSE, "stop_loss": AT_CLOSE}`。
+        # 日 K 在實盤不存在——日 K 回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道
+        # close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點。
+        # TICK 回測照同一份設定決定鉤子排在開盤集合競價、盤中逐筆還是收盤集合競價，
+        # 回測與實盤才是同一套時點；DAY 回測沒有段落（一次拿到整天），所以不讀它。
+        # 停損沒宣告時退回平倉的段落，見 `resolve_hook_timing()`。
+        #
+        # ⚠️ **它與 `allow_day_trade` 可能互相矛盾。**
+        # 日 K 回測依 `allow_day_trade` 決定同一根 bar 內先開後平還是先平後開；拆成段落之後，
+        # **兩個鉤子分屬不同段落時，實際順序由段落決定**：`open` 排在 `close` 之前，
+        # 當天開的部位當天就會被拿去檢查要不要平，等同當沖。兩者不一致時會**靜默**
+        # 改掉交易順序，回測與實盤的部位軌跡從當天起就不同。
+        # 故實盤啟動時一律檢查（見 `core/live/strategy_guard.py`）。
+        self.execution_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
+
         """
         === Live Setting ===
 
@@ -117,18 +139,6 @@ class BaseStrategy(ABC):
         算一次而盤中會過期的清單）。實盤會在任意時點重啟，重建不出來的狀態
         會產生錯訊號，而且不會報錯。標成 True 之前要逐項確認並寫進
         class docstring 的〈實盤執行〉區塊。
-
-        `live_schedule` 宣告各鉤子在哪一個段落被呼叫，例如
-        `{"open": AT_OPEN, "close": AT_CLOSE, "stop_loss": AT_CLOSE}`。
-        日 K 在實盤不存在——回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道
-        close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點。
-
-        ⚠️ **`live_schedule` 與 `allow_day_trade` 可能互相矛盾。**
-        回測依 `allow_day_trade` 決定同一根 bar 內先開後平還是先平後開；實盤拆成兩段之後，
-        **兩個鉤子分屬不同段落時，實際順序由段落決定**：`open` 排在 `close` 之前，
-        當天開的部位當天就會被拿去檢查要不要平，等同當沖。兩者不一致時會**靜默**
-        改掉交易順序，回測與實盤的部位軌跡從當天起就不同。
-        故啟動時一律檢查（見 `core/live/strategy_guard.py`）。
 
         `live_tag` 是策略代號，**只寫本地紀錄與報表，不送券商**——券商的
         `custom_field` 那 6 個字元讓給委託識別碼的壓縮碼（壓縮碼反查得到策略，
@@ -143,7 +153,6 @@ class BaseStrategy(ABC):
         給預設值等於替策略作者決定它要不要成交。
         """
         self.live_ready: bool = False  # 預設不可上實盤
-        self.live_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
         self.live_tag: str = ""  # 策略代號（只寫本地）
         self.live_execution: Optional[ExecutionStyle] = None  # 實盤執行方式
 
@@ -425,3 +434,43 @@ class BaseStrategy(ABC):
             return []
 
         return self.build_close_orders(self.generate_stop_loss_signals(quotes))
+
+
+def resolve_hook_timing(
+    strategy: BaseStrategy, hook: LiveHook
+) -> Optional[ExecutionTiming]:
+    """
+    - Description:
+        取得某個鉤子的執行段落（實盤與 TICK 回測共用）
+
+        放在策略契約而不是實盤模組：TICK 回測也要依它把鉤子排進段落，
+        回測不可 import 實盤模組。
+
+        **停損沒宣告時退回平倉的段落**：兩者都是出場，把停損排在與平倉不同的
+        段落是刻意的決定，不該由「忘了寫」造成。
+    - Parameters:
+        - strategy: BaseStrategy
+            策略
+        - hook: LiveHook
+            鉤子
+    - Return:
+        - Optional[ExecutionTiming]
+            執行段落；未宣告且無從退回時為 None
+    """
+
+    timing: Optional[ExecutionTiming] = strategy.execution_schedule.get(hook.value)
+    if timing is not None:
+        return timing
+
+    if hook is LiveHook.STOP_LOSS:
+        fallback: Optional[ExecutionTiming] = strategy.execution_schedule.get(
+            LiveHook.CLOSE.value
+        )
+        if fallback is not None:
+            logger.debug(
+                f"{type(strategy).__name__} 未宣告 stop_loss 的段落，退回 close 的 "
+                f"{fallback.value}"
+            )
+        return fallback
+
+    return None

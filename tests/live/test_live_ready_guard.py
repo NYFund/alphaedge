@@ -7,7 +7,6 @@ from core.live.strategy_guard import (
     LiveReadinessError,
     check_schedule_conflicts,
     inspect_strategy,
-    resolve_hook_timing,
     verify_strategies,
 )
 from core.models import (
@@ -18,7 +17,7 @@ from core.models import (
     StockQuote,
 )
 from core.models.base.quote import PreOpenQuoteMixin
-from core.strategies.base import BaseStrategy
+from core.strategies.base import BaseStrategy, resolve_hook_timing
 from core.utils import (
     ExecutionStyle,
     ExecutionTiming,
@@ -33,7 +32,7 @@ from core.utils import (
 擋的都是**不會報錯、只會讓結果安靜地不同**的情況：
 
 - 盤前把 OHLC 填成參考價 → 漲幅類訊號永遠算出 0%，整天不開倉。
-- `live_schedule` 與 `allow_day_trade` 矛盾 → 交易順序被默默改掉，
+- `execution_schedule` 與 `allow_day_trade` 矛盾 → 交易順序被默默改掉，
   回測與實盤的部位軌跡從當天起就不同。
 - 策略沒宣告 `live_ready` → 作者根本沒確認過它的實盤語意。
 - 策略沒宣告或宣告錯 `live_execution` → 送單時才發現，尾盤段沒有時間補救。
@@ -49,13 +48,15 @@ class FakeStrategy(BaseStrategy):
     def __init__(
         self,
         live_ready: bool = True,
-        live_schedule: Optional[Dict[str, ExecutionTiming]] = None,
+        execution_schedule: Optional[Dict[str, ExecutionTiming]] = None,
         allow_day_trade: bool = False,
         live_execution: Optional[object] = ExecutionStyle.MARKET,
     ) -> None:
         super().__init__()
         self.live_ready = live_ready
-        self.live_schedule = live_schedule if live_schedule is not None else {}
+        self.execution_schedule = (
+            execution_schedule if execution_schedule is not None else {}
+        )
         self.allow_day_trade = allow_day_trade
         self.live_execution = live_execution
 
@@ -85,7 +86,7 @@ def test_missing_live_ready_is_rejected() -> None:
     """沒宣告就拒絕啟動，而且訊息要說明它帶的是什麼契約"""
 
     problems: List[str] = inspect_strategy(
-        FakeStrategy(live_ready=False, live_schedule=BOTH_AT_CLOSE)
+        FakeStrategy(live_ready=False, execution_schedule=BOTH_AT_CLOSE)
     )
 
     assert len(problems) == 1
@@ -95,9 +96,9 @@ def test_missing_live_ready_is_rejected() -> None:
 def test_missing_schedule_is_rejected() -> None:
     """沒宣告段落，引擎不知道哪個鉤子該在哪一段呼叫"""
 
-    problems: List[str] = inspect_strategy(FakeStrategy(live_schedule={}))
+    problems: List[str] = inspect_strategy(FakeStrategy(execution_schedule={}))
 
-    assert any("live_schedule" in problem for problem in problems)
+    assert any("execution_schedule" in problem for problem in problems)
 
 
 def test_unknown_hook_name_is_rejected() -> None:
@@ -108,7 +109,7 @@ def test_unknown_hook_name_is_rejected() -> None:
     """
 
     problems: List[str] = inspect_strategy(
-        FakeStrategy(live_schedule={"opne": ExecutionTiming.AT_CLOSE})
+        FakeStrategy(execution_schedule={"opne": ExecutionTiming.AT_CLOSE})
     )
 
     assert any("不認得的鉤子名" in problem for problem in problems)
@@ -117,13 +118,13 @@ def test_unknown_hook_name_is_rejected() -> None:
 def test_valid_strategy_has_no_problems() -> None:
     """兩個鉤子同段落、有宣告 live_ready：通過"""
 
-    assert inspect_strategy(FakeStrategy(live_schedule=BOTH_AT_CLOSE)) == []
+    assert inspect_strategy(FakeStrategy(execution_schedule=BOTH_AT_CLOSE)) == []
 
 
 def test_removed_setting_blocks_live_start() -> None:
     """設了已移除的欄位不可上實盤：實盤照預設值跑，與作者以為的不同"""
 
-    strategy: FakeStrategy = FakeStrategy(live_schedule=BOTH_AT_CLOSE)
+    strategy: FakeStrategy = FakeStrategy(execution_schedule=BOTH_AT_CLOSE)
     strategy.bar_execution_order = "OPEN_THEN_CLOSE"
 
     problems: List[str] = inspect_strategy(strategy)
@@ -147,7 +148,7 @@ def test_missing_execution_style_is_rejected() -> None:
     """沒宣告執行方式：啟動就擋，不等到送單時才失敗"""
 
     problems: List[str] = inspect_strategy(
-        FakeStrategy(live_schedule=BOTH_AT_CLOSE, live_execution=None)
+        FakeStrategy(execution_schedule=BOTH_AT_CLOSE, live_execution=None)
     )
 
     assert len(problems) == 1
@@ -164,7 +165,7 @@ def test_broker_price_type_is_not_an_execution_style(wrong: object) -> None:
     """
 
     problems: List[str] = inspect_strategy(
-        FakeStrategy(live_schedule=BOTH_AT_CLOSE, live_execution=wrong)
+        FakeStrategy(execution_schedule=BOTH_AT_CLOSE, live_execution=wrong)
     )
 
     assert len(problems) == 1
@@ -177,7 +178,7 @@ def test_every_execution_style_passes(style: ExecutionStyle) -> None:
 
     assert (
         inspect_strategy(
-            FakeStrategy(live_schedule=BOTH_AT_CLOSE, live_execution=style)
+            FakeStrategy(execution_schedule=BOTH_AT_CLOSE, live_execution=style)
         )
         == []
     )
@@ -193,12 +194,12 @@ def test_all_problems_are_reported_at_once() -> None:
 
     with pytest.raises(LiveReadinessError) as error:
         verify_strategies(
-            [FakeStrategy(live_ready=False, live_schedule={}), FakeStrategy()]
+            [FakeStrategy(live_ready=False, execution_schedule={}), FakeStrategy()]
         )
 
     message: str = str(error.value)
     assert "live_ready" in message
-    assert "live_schedule" in message
+    assert "execution_schedule" in message
 
 
 def test_duplicate_strategy_names_are_rejected() -> None:
@@ -212,8 +213,8 @@ def test_duplicate_strategy_names_are_rejected() -> None:
     with pytest.raises(LiveReadinessError, match="名稱重複"):
         verify_strategies(
             [
-                FakeStrategy(live_schedule=BOTH_AT_CLOSE),
-                FakeStrategy(live_schedule=BOTH_AT_CLOSE),
+                FakeStrategy(execution_schedule=BOTH_AT_CLOSE),
+                FakeStrategy(execution_schedule=BOTH_AT_CLOSE),
             ]
         )
 
@@ -221,7 +222,7 @@ def test_duplicate_strategy_names_are_rejected() -> None:
 def test_verify_passes_for_a_clean_set() -> None:
     """全部通過時不拋出"""
 
-    verify_strategies([FakeStrategy(live_schedule=BOTH_AT_CLOSE)])
+    verify_strategies([FakeStrategy(execution_schedule=BOTH_AT_CLOSE)])
 
 
 # === schedule 與 allow_day_trade 的一致性 ===
@@ -232,7 +233,7 @@ def test_same_segment_needs_no_check() -> None:
     這時 `allow_day_trade` 推導的順序照樣生效，沒有矛盾可言。
     """
 
-    strategy: FakeStrategy = FakeStrategy(live_schedule=BOTH_AT_CLOSE)
+    strategy: FakeStrategy = FakeStrategy(execution_schedule=BOTH_AT_CLOSE)
 
     assert check_schedule_conflicts(strategy) is None
 
@@ -245,7 +246,7 @@ def test_contradiction_is_detected() -> None:
     """
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         },
@@ -262,7 +263,7 @@ def test_day_trade_with_close_first_is_detected() -> None:
     """當沖卻把 close 排在前面的段落 → 當天開的部位當天平不掉，實盤當不了沖"""
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
         },
@@ -284,7 +285,7 @@ def test_consistent_cross_segment_schedule_passes() -> None:
     """
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         },
@@ -298,7 +299,7 @@ def test_intraday_hooks_share_one_segment() -> None:
     """盤中逐筆沒有段落之分，兩個鉤子都在同一格，不會被判成矛盾"""
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
             LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
         },
@@ -315,7 +316,7 @@ def test_stop_loss_after_close_is_detected() -> None:
     """
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             LiveHook.STOP_LOSS.value: ExecutionTiming.AT_CLOSE,
@@ -338,7 +339,7 @@ def test_stop_loss_not_later_than_close_passes(stop_timing: ExecutionTiming) -> 
     """停損與平倉同段落、或排在更早的段落（含盤中逐筆）都與回測一致"""
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
             LiveHook.STOP_LOSS.value: stop_timing,
@@ -352,7 +353,7 @@ def test_both_conflicts_are_reported_together() -> None:
     """開平倉順序與停損順序都矛盾時一併列出，不必修一個才看到下一個"""
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             LiveHook.STOP_LOSS.value: ExecutionTiming.AT_CLOSE,
@@ -392,7 +393,7 @@ def test_stop_loss_falls_back_to_close() -> None:
     不該由「忘了寫」造成。
     """
 
-    strategy: FakeStrategy = FakeStrategy(live_schedule=BOTH_AT_CLOSE)
+    strategy: FakeStrategy = FakeStrategy(execution_schedule=BOTH_AT_CLOSE)
 
     assert resolve_hook_timing(strategy, LiveHook.STOP_LOSS) is ExecutionTiming.AT_CLOSE
 
@@ -401,7 +402,7 @@ def test_explicit_stop_loss_timing_wins() -> None:
     """明確宣告時以宣告為準：停損要盤中就反應是合理的設計"""
 
     strategy: FakeStrategy = FakeStrategy(
-        live_schedule={
+        execution_schedule={
             **BOTH_AT_CLOSE,
             LiveHook.STOP_LOSS.value: ExecutionTiming.AT_OPEN,
         }

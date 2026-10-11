@@ -92,7 +92,7 @@ class VolumeBreakoutMomentumStrategy(BaseStockStrategy):
 
         # 實盤：兩個鉤子都在尾盤段呼叫（見 class docstring〈實盤執行〉）
         self.live_ready = True
-        self.live_schedule = {
+        self.execution_schedule = {
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }

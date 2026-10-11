@@ -20,7 +20,7 @@ EXECUTION_TIMING_AT_CLOSE = "AT_CLOSE"  # 尾盤取快照算訊號，進收盤�
 EXECUTION_TIMING_IMMEDIATE = "IMMEDIATE"  # 盤中逐筆觸發，算完就送
 
 
-# 定義實盤策略鉤子名稱常量（`live_schedule` 的鍵）
+# 定義策略鉤子名稱常量（`execution_schedule` 的鍵；實盤與 TICK 回測共用）
 LIVE_HOOK_OPEN = "open"  # 開倉訊號
 
 
@@ -39,7 +39,7 @@ EXECUTION_STYLE_LIMIT = "LIMIT"  # 照價掛單：只接受策略給的價，沒
 
 class LiveHook(str, Enum):
     """
-    策略鉤子；`live_schedule` 以它宣告「哪個鉤子在哪一段被呼叫」
+    策略鉤子；`execution_schedule` 以它宣告「哪個鉤子在哪一段被呼叫」
 
     停損與一般平倉分開列出，是因為它們在實盤**可能落在不同段落**：
     停損要盤中就反應，一般平倉可以等到尾盤算完訊號再送。

@@ -569,12 +569,17 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `init_capital` | `float` | 初始資金（元） | `0` |
 | `max_holdings` | `Optional[int]` | 最大持倉檔數，`None` 表示**無限制**（＝基底預設；每支策略都該自己設一個值） | `None` |
 
+### 執行段落（實盤與 TICK 回測共用，DAY 回測不讀）
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `execution_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫；`stop_loss` 沒宣告時同 `close`。舊名 `live_schedule` 已移除，設定舊名時啟動即報錯 | `{}` |
+
 ### 實盤設定（回測不讀）
 
 | 參數 | 類型 | 說明 | 預設值 |
 |------|------|------|--------|
 | `live_ready` | `bool` | 策略可上實盤；標 `True` 前要確認內部狀態能由「歷史資料 ＋ 當前部位」重建 | `False` |
-| `live_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫 | `{}` |
 | `live_execution` | `Optional[ExecutionStyle]` | `MARKET`（要成交）或 `LIMIT`（照價掛單），開倉與平倉共用；**停損一律 `MARKET`**。沒宣告時啟動檢查拒絕。回測假設以收盤價成交的策略應宣告 `MARKET` | `None` |
 
 > **不要填 `price_type`，也不要把 `live_execution` 設成 `StockPriceType.MKT`。**

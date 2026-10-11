@@ -52,7 +52,7 @@ class LiveStockStrategy(BaseStrategy):
         self.instrument_type = InstrumentType.STOCK
         self.init_capital = 1_000_000.0
         self.live_ready = True
-        self.live_schedule = {
+        self.execution_schedule = {
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }

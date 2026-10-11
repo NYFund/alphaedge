@@ -138,7 +138,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         # 實盤（見 class docstring〈實盤執行〉）
         self.is_tick_triggered = True
         self.live_ready = True
-        self.live_schedule = {
+        self.execution_schedule = {
             LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
             LiveHook.STOP_LOSS.value: ExecutionTiming.IMMEDIATE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
