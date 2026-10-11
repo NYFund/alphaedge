@@ -71,6 +71,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
     ("core.backtest.report", 4, "引擎層／報表", False),
+    ("core.backtest.simulator", 4, "引擎層／一天怎麼跑（日 K、逐筆）", False),
     ("core.position", 4, "引擎層／部位與帳務", False),
     ("core.backtest.backtester", 5, "引擎層／引擎本體", False),
     ("core.backtest.factory", 6, "組裝層", False),
@@ -157,9 +158,11 @@ _MARKET_AXIS_PACKAGES: Tuple[str, ...] = (
 )
 # 引擎本體：市場語意一律由注入物件承載，檔案內不得出現 Stock／Futures／Tw 字樣。
 # 回測與實盤各一支，兩邊用同一條規則——實盤引擎若分出 `TwStockLiveTrader` 子類，
-# 就會重演回測引擎當初的分裂
+# 就會重演回測引擎當初的分裂。回測的開平倉執行在 simulator，與引擎本體同一條規則
 _ENGINE_FILES: Tuple[str, ...] = (
     "core/backtest/backtester.py",
+    "core/backtest/simulator/base.py",
+    "core/backtest/simulator/bar_simulator.py",
     "core/live/trader.py",
 )
 _INSTRUMENT_AXIS_PACKAGES: Tuple[str, ...] = (
@@ -547,6 +550,7 @@ _BACKTEST_INTERNAL_PACKAGES: Tuple[str, ...] = (
     "core.backtest.models",
     "core.backtest.datafeed",
     "core.backtest.report",
+    "core.backtest.simulator",
 )
 _BACKTEST_DIR: str = "core/backtest"
 _DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "strategies")

@@ -36,7 +36,7 @@ import `core.backtest.models`／`datafeed`／`report`，搬出去的東西不會
 
 | 性質 | 內容 |
 |------|------|
-| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`execute_bar()` 執行順序、委託前處理（`validate_orders()` 方向白名單、`resolve_open/close_action()`、`check_max_holdings()`、`sort_orders()`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
+| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`prepare_day()`／`finish_day()`、simulator 的執行順序（`BarSimulator.process_bar()`）、委託前處理（`validate_orders()` 方向白名單、`resolve_open/close_action()`、`check_max_holdings()`、`sort_orders()`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
 | **市場規則**（介面共用、實作不同） | 成交價驗證、價格區間、開盤判定 |
 | **台股信用交易專屬** | 成本設定推導、隨單欄位補值、當沖強制回補、轉融券留倉、持有成本計提、維持率追繳 |
 
@@ -85,26 +85,37 @@ class Backtester:
 
 ### 2.2 單根 bar 的流程
 
+`Backtester` 只負責逐日迴圈與每日前後的共用處理，「一天怎麼跑」交給注入的 simulator（日 K 是 `BarSimulator`）：
+
 ```python
-def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
+# Backtester.run() 的每一個開盤日
+if not self.simulator.load_day(date):  # 當天沒有報價就整天跳過
+    continue
+self.prepare_day(date)
+close_quotes = self.simulator.run_day(date)
+self.finish_day(date, close_quotes)
+
+def prepare_day(self, date):
     # 下單前先由 DataFeed 推入當日的市場事件：
-    # 漲跌停基準、券源餘額、停券期間、交易所名單（開啟檢核時）→ FillModel；
+    # 漲跌停參考價、券源餘額、停券期間、交易所名單（開啟檢核時）→ FillModel；
     # 停券回補日、現金股利、配股 → SettlementModel
     ...
 
-    if self.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
-        self.execute_open_signal(quotes)
-        self.execute_close_signal(quotes)
-    else:
-        self.execute_close_signal(quotes)
-        self.execute_open_signal(quotes)
+# BarSimulator.process_bar(quotes)
+if self.engine.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
+    self.execute_open_signal(quotes)
+    self.execute_close_signal(quotes)
+else:
+    self.execute_close_signal(quotes)
+    self.execute_open_signal(quotes)
 
+def finish_day(self, date, close_quotes):
     # 台股：當沖強制回補 ＋ 借券費計提 ＋ 維持率追繳
     # 期貨：每日結算 ＋ 保證金追繳 ＋ 到期換月
-    self.settlement.settle_day(date, quotes, self.account, self.event_counts)
+    self.settlement.settle_day(date, close_quotes, self.account, self.event_counts)
 
-    self.snapshot_daily_equity(date, quotes)
-    self.update_reference_prices(quotes)
+    self.snapshot_daily_equity(date, close_quotes)
+    self.update_reference_prices(close_quotes)
 ```
 
 ### 2.2.1 單根 bar 的委託順序

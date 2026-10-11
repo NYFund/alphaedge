@@ -275,7 +275,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 | 策略（Alpha） | `generate_open_signals()` | 選標的、決定 `sizing_price`（算量價）與 `order_price`（委託價） |
 | 部位建構 | `StockPortfolioConstructor`（`core/portfolio/construction.py`） | 把訊號交給 sizer，再組成訂單 |
 | 部位大小模型 | `EqualWeightSizer`（`core/portfolio/sizing.py`） | 依剩餘名額均分餘額、換算張數 |
-| 引擎 | `order_rules.check_max_holdings()`（回測經 `Backtester.check_max_holdings()` 呼叫） | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
+| 引擎 | `order_rules.check_max_holdings()`（回測經 `BaseSimulator.check_max_holdings()` 呼叫） | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
 
 > **sizer 與引擎的 `max_holdings` 檢查刻意不合併。** 兩者回答不同問題：sizer 問
 > 「資金要切成幾份」（訊號階段，張數不足 1 張的候選不佔名額），引擎問「這張單送出去
@@ -329,7 +329,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 
 ### 引擎側硬上限
 
-`max_holdings` 是真正的風控，不是「策略願意遵守才生效」的建議值。策略即使不呼叫 sizer，超額的開倉單仍會在 `execute_open_signal()` 內被剔除，並以 `logger.warning` ＋ `event_counts["rejected_max_holdings"]` 留痕——**禁止靜默丟棄**。`max_holdings` 為 `None` 時不做任何截斷。
+`max_holdings` 是真正的風控，不是「策略願意遵守才生效」的建議值。策略即使不呼叫 sizer，超額的開倉單仍會在 `BaseSimulator.execute_open_signal()` 內被剔除，並以 `logger.warning` ＋ `event_counts["rejected_max_holdings"]` 留痕——**禁止靜默丟棄**。`max_holdings` 為 `None` 時不做任何截斷。
 
 ## 回測結果
 

@@ -11,6 +11,7 @@ from core.backtest.models.settlement_model import (
 from core.backtest.overrides import BacktestOverrides
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
+from core.backtest.simulator.bar_simulator import BarSimulator
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
@@ -149,6 +150,9 @@ def build_tw_stock_backtester(
         settlement=settlement,
         data_feed=TwStockDataFeed(),
         reporter_cls=StockBacktestReporter,
+        # `Scale.TICK` 目前同樣交給 BarSimulator（整天的 tick 當一根 bar）；
+        # 逐筆重放的 simulator 完成後，這裡改依策略的級別選類別
+        simulator_cls=BarSimulator,
         event_counts=event_counts,
         adjusted_price=adjusted_price,
         write_artifacts=write_artifacts,
@@ -270,6 +274,7 @@ def build_tw_futures_backtester(
         settlement=settlement,
         data_feed=data_feed,
         reporter_cls=FuturesBacktestReporter,
+        simulator_cls=BarSimulator,
         event_counts=event_counts,
         adjusted_price=False,
         write_artifacts=write_artifacts,

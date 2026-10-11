@@ -8,6 +8,7 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.models import StockOrder, StockTradeRecord
 from core.utils import Action, PositionType
+from tests.backtest.conftest import run_bar
 
 """單根 bar 的委託決定性排序與同標的開平倉並存規則
 
@@ -85,7 +86,7 @@ def test_open_orders_are_sorted_by_symbol(
         make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
         for stock_id in stock_ids
     ]
-    backtester.execute_open_signal(quotes)
+    backtester.simulator.execute_open_signal(quotes)
 
     # 若沿用策略給定的順序，成交的會是 2454 與 2330
     assert [p.stock_id for p in backtester.account.positions] == ["2317", "2330"]
@@ -113,7 +114,7 @@ def test_same_symbol_orders_keep_arrival_order(
         make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
         for stock_id in ("2330", "2317")
     ]
-    backtester.execute_open_signal(quotes)
+    backtester.simulator.execute_open_signal(quotes)
 
     actual: List[Tuple[str, int]] = [
         (p.stock_id, p.volume) for p in backtester.account.positions
@@ -145,8 +146,8 @@ def test_close_orders_are_sorted_by_symbol(
         for stock_id in stock_ids
     ]
 
-    backtester.execute_open_signal(day_1_quotes)
-    backtester.execute_close_signal(day_2_quotes)
+    backtester.simulator.execute_open_signal(day_1_quotes)
+    backtester.simulator.execute_close_signal(day_2_quotes)
 
     records: List[StockTradeRecord] = backtester.account.trade_records
     assert [record.stock_id for record in records] == ["2317", "2330", "2454"]
@@ -171,7 +172,7 @@ def test_result_is_independent_of_signal_order(
             make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
             for stock_id in permutation
         ]
-        backtester.execute_open_signal(quotes)
+        backtester.simulator.execute_open_signal(quotes)
 
         results.append([(p.stock_id, p.volume) for p in backtester.account.positions])
 
@@ -206,8 +207,8 @@ def test_stop_loss_precedes_normal_close(
         for stock_id in stock_ids
     ]
 
-    backtester.execute_open_signal(day_1_quotes)
-    backtester.execute_close_signal(day_2_quotes)
+    backtester.simulator.execute_open_signal(day_1_quotes)
+    backtester.simulator.execute_close_signal(day_2_quotes)
 
     records: List[StockTradeRecord] = backtester.account.trade_records
     assert [record.stock_id for record in records] == ["2330", "2317"]
@@ -227,7 +228,8 @@ def test_same_bar_open_and_close_are_not_netted(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(
+    run_bar(
+        backtester,
         DAY_1,
         [
             make_quote(
@@ -263,11 +265,13 @@ def test_close_then_open_reopens_same_symbol_in_one_bar(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(
+    run_bar(
+        backtester,
         DAY_1,
         [make_quote(stock_id="2330", date=DAY_1, cur_price=100.0)],
     )
-    backtester.execute_bar(
+    run_bar(
+        backtester,
         DAY_2,
         [
             make_quote(
@@ -305,6 +309,6 @@ def test_submitted_orders_carry_the_bar_date(
     backtester: Backtester = make_backtester(strategy)
 
     for day in days:
-        backtester.execute_bar(day, [make_quote(stock_id="2330", date=day)])
+        run_bar(backtester, day, [make_quote(stock_id="2330", date=day)])
 
     assert [date for date, _, _ in backtester.submitted_orders] == days

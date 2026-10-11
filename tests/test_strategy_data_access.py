@@ -215,7 +215,7 @@ def test_max_holdings_defaults_to_unlimited() -> None:
     """
     `BaseStrategy.max_holdings` 預設 None ＝ 不限制
 
-    舊版預設 0，而 `Backtester.check_max_holdings()` 只把 None 當成不限制
+    舊版預設 0，而 `BaseSimulator.check_max_holdings()` 只把 None 當成不限制
     ——忘記設定的新策略，每一張開倉單都被引擎剔除，回測跑完是零筆交易、
     零錯誤訊息。
     """

@@ -21,7 +21,8 @@
               │
 組裝層      core/backtest/factory.py  ← 回測路徑唯一的 if market ==（實盤另有 core/live/factory.py）
               │
-引擎層      core/backtest/backtester.py（市場無關，無子類）
+引擎層      core/backtest/backtester.py（市場無關，無子類；逐日迴圈與每日前後處理）
+              ├── core/backtest/simulator/   一天怎麼跑：BarSimulator（日 K；開平倉執行在基底 BaseSimulator）
               ├── core/backtest/models/      FillModel、SettlementModel（回測模擬）
               ├── core/market/               InstrumentSpec、CostModel、交易日曆（市場規則，回測與實盤共用）
               ├── core/portfolio/order_rules.py  訂單規則（方向白名單、執行順序、持倉上限、排序；回測與實盤共用）
@@ -40,7 +41,7 @@
 **頂層 `strategies/` 套件**放具體策略與策略載入器（相依只能 `strategies` → `core`，`core/` 反向 import 會被
 `check_layer_deps.py` 擋下）；`core/strategies/` 只留契約（抽象基底與門面），具體策略放回去也會被同一支檢查擋下。
 
-**引擎不認識任何市場**：`grep "Stock" core/backtest/backtester.py` 為 0。市場語意全部在 `factory.py` 組裝時注入。
+**引擎不認識任何市場**：`grep "Stock" core/backtest/backtester.py core/backtest/simulator/` 為 0（`check_layer_deps.py` 檢查）。市場語意全部在 `factory.py` 組裝時注入。
 
 **策略層與部位建構層的分界**：
 
@@ -67,6 +68,7 @@ sequenceDiagram
     participant Loader as StrategyLoader
     participant F as factory
     participant BT as Backtester
+    participant Sim as BarSimulator
     participant Feed as DataFeed
     participant S as Strategy
     participant PM as PositionManager
@@ -86,15 +88,17 @@ sequenceDiagram
 
     loop 回測期間的每一天
         BT->>Feed: is_market_open(date)
-        BT->>Feed: get_quotes(date, scale)
-        Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionSequence 決定開平倉先後
-        BT->>S: check_open_signal(quotes)
-        BT->>BT: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()
-        BT->>PM: open_position(order)
-        BT->>S: check_stop_loss_signal() / check_close_signal()
-        BT->>PM: close_position(order)
+        BT->>Sim: load_day(date)（get_quotes；當天沒有報價就整天跳過）
+        Note over BT: prepare_day()：推入當日市場事件（漲跌停參考價、券源、停券、名單、除權息）
+        BT->>Sim: run_day(date) → process_bar(quotes)：依 BarExecutionSequence 決定開平倉先後
+        Sim->>S: check_open_signal(quotes)
+        Sim->>Sim: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()
+        Sim->>PM: open_position(order)
+        Sim->>S: check_stop_loss_signal() / check_close_signal()
+        Sim->>PM: close_position(order)
+        Note over BT: finish_day(date, close_quotes)
         BT->>SM: settle_day(date, quotes, account, event_counts)
-        BT->>BT: snapshot_daily_equity(date, quotes)
+        BT->>BT: snapshot_daily_equity(date, quotes) → update_reference_prices(quotes)
     end
 
     BT->>R: generate_trading_report() / direction_summary / event_report
@@ -110,10 +114,10 @@ sequenceDiagram
 |:----:|------|----------|------------|
 | 1 | 方向白名單（`direction`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/portfolio/order_rules.py` | `rejected_direction` |
 | 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`），之後做決定性排序 | `CostModel.enrich_orders()`、`Backtester.sort_orders()` | —（只補值、排序不擋） |
-| 3 | 持倉檔數硬上限（`max_holdings`） | `Backtester.check_max_holdings()` → `order_rules.check_max_holdings()` | `rejected_max_holdings` |
-| 4 | 當日查不到報價（停牌、非股票池） | `Backtester.execute_open_signal()` | `rejected_no_quote` |
+| 3 | 持倉檔數硬上限（`max_holdings`） | `BaseSimulator.check_max_holdings()` → `order_rules.check_max_holdings()` | `rejected_max_holdings` |
+| 4 | 當日查不到報價（停牌、非股票池） | `BaseSimulator.execute_open_signal()` | `rejected_no_quote` |
 | 5 | 成交價可信度（無成交、OHLC 區間、漲跌停、全日鎖漲跌停；檔位未對齊只警告） | `FillModel.validate()` | `rejected_fill_price`／`rejected_limit_up_locked`／`rejected_limit_down_locked` |
-| 6 | 成交假設（交易所名單、券源、停券、成交量上限、滑價） | `FillModel.fill()`（經 `Backtester.apply_fill_model()`） | `rejected_short_halted`／`rejected_below_reference`／`rejected_not_day_tradable`／`rejected_no_borrow`／`rejected_short_suspended`／`rejected_volume_cap` 等 |
+| 6 | 成交假設（交易所名單、券源、停券、成交量上限、滑價） | `FillModel.fill()`（經 `BaseSimulator.apply_fill_model()`） | `rejected_short_halted`／`rejected_below_reference`／`rejected_not_day_tradable`／`rejected_no_borrow`／`rejected_short_suspended`／`rejected_volume_cap` 等 |
 
 通過六關後才交給 `PositionManager.open_position()`（餘額不足、同標的反向持倉在那一層再擋）。
 
@@ -135,7 +139,8 @@ sequenceDiagram
 
 | 檔案 | 職責 | 持有的狀態 |
 |------|------|------------|
-| `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts` |
+| `core/backtest/backtester.py` | 日期迴圈、每日準備（`prepare_day()`）與收盤結算（`finish_day()`）、逐日權益快照、觸發報表 | `daily_equity`、`event_counts`、`submitted_orders` |
+| `core/backtest/simulator/` | 一天怎麼跑：`BaseSimulator` 放共用的開平倉執行與訂單關卡，`BarSimulator` 一天一根 bar（台股與期貨共用；`Scale.TICK` 目前也走它，整天的 tick 當一根 bar） | 無（帳戶與委託紀錄經由引擎取用；`BarSimulator` 只暫存當天報價） |
 | `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
 | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊（ETF 另用兩段檔位表）、漲跌停區間（槓桿型 ETF 幅度加倍） | 無（純規則） |
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `reference_prices`（漲跌停參考價）、`intraday_range`、當日名單與券源快照 |

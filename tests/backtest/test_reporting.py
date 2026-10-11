@@ -14,6 +14,7 @@ from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.models import StockAccount, StockOrder, StockTradeRecord
 from core.utils import Action, PositionType, ShortMethod, TradeDirection
+from tests.backtest.conftest import run_bar
 
 """每日權益、多空分開統計與事件報表的測試"""
 
@@ -56,8 +57,10 @@ def test_snapshot_daily_equity_includes_unrealized(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(
-        DAY_1, [make_quote(date=DAY_1, cur_price=100.0, high=101.0, low=99.0)]
+    run_bar(
+        backtester,
+        DAY_1,
+        [make_quote(date=DAY_1, cur_price=100.0, high=101.0, low=99.0)],
     )
 
     # 開倉當日：現金 1000000 − 90422 + 部位（保證金 90000 + 未實現 0）
@@ -65,8 +68,10 @@ def test_snapshot_daily_equity_includes_unrealized(
 
     # 次日股價上漲 5 元，未實現虧損 5000 應立刻反映在權益上
     day_2: datetime.date = datetime.date(2024, 1, 3)
-    backtester.execute_bar(
-        day_2, [make_quote(date=day_2, cur_price=105.0, high=106.0, low=104.0)]
+    run_bar(
+        backtester,
+        day_2,
+        [make_quote(date=day_2, cur_price=105.0, high=106.0, low=104.0)],
     )
 
     assert backtester.account.get_positions()[0].unrealized_pnl == -5000.0

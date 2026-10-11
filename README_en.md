@@ -463,7 +463,8 @@ AlphaEdge/
 │   │   └── utils/            # cross-market: constants, DataFrame and SQLite helpers, exceptions
 │   ├── backtest/              # backtest engine
 │   │   ├── README.md          # bar scales, price basis, fill assumptions, performance metrics
-│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses
+│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses; daily loop and pre/post-day steps
+│   │   ├── simulator/         # how one day runs: BarSimulator (daily bars; order execution lives in BaseSimulator)
 │   │   ├── factory.py         # assembles the model set from (market, instrument_type)
 │   │   ├── models/            # FillModel / SettlementModel (backtest simulation; instrument spec and cost model live in core/market/)
 │   │   ├── datafeed/          # data loading, quote conversion, trading calendar, futures roll

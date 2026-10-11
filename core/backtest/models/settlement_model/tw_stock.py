@@ -621,7 +621,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             做多部位連續無報價達上限時強制出場
 
             下市或長期停牌的股票不會再出現在 `price` 表，引擎也不會把無報價的
-            標的交給策略（`Backtester.execute_close_signal()` 只走有報價的部位），
+            標的交給策略（`BaseSimulator.execute_close_signal()` 只走有報價的部位），
             於是它永遠留在帳上、以最後一個收盤價計入權益（下市損失完全不反映，
             屬存活者偏差），還一直佔著 `max_holdings` 的名額。
 

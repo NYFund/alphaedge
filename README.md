@@ -460,7 +460,8 @@ AlphaEdge/
 │   │   └── utils/            # 跨市場通用：常數、DataFrame 與 SQLite 工具、例外類別
 │   ├── backtest/              # 回測引擎
 │   │   ├── README.md          # 回測級別、價格口徑、成交假設、績效指標
-│   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類
+│   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類；逐日迴圈與每日前後處理
+│   │   ├── simulator/         # 一天怎麼跑：BarSimulator（日 K，開平倉執行在基底 BaseSimulator）
 │   │   ├── factory.py         # 依（market, instrument_type）組合組裝 model 組合
 │   │   ├── models/            # FillModel／SettlementModel（回測模擬；商品規格與成本模型在 core/market/）
 │   │   ├── datafeed/          # 資料載入、報價轉換、交易日曆、期貨換月

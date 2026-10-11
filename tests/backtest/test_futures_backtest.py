@@ -253,7 +253,7 @@ def test_engine_does_not_reject_futures_orders_by_holdings_cap(
     backtester: Backtester = make_backtester(ScriptedFuturesStrategy())
 
     assert backtester.max_holdings is None
-    assert backtester.check_max_holdings(make_order()) is True
+    assert backtester.simulator.check_max_holdings(make_order()) is True
 
 
 # === 契約乘數（股票期貨） ===

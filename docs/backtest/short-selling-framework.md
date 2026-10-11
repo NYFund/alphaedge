@@ -247,16 +247,17 @@ validate_orders(orders, stage)       # 白名單 + action 與方向是否相符�
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
 ```
 
-另外兩個是 `Backtester` 上的方法：
+另外兩個方法：
 
 ```python
-validate_fill_price(order, quote)    # 轉呼叫 FillModel.validate()，§5.6 的檢查
-snapshot_daily_equity(...)           # 含未實現損益的逐日權益
+BaseSimulator.validate_fill_price(order, quote)  # 轉呼叫 FillModel.validate()，§5.6 的檢查
+Backtester.snapshot_daily_equity(...)            # 含未實現損益的逐日權益
 ```
 
-單根 K 棒的流程固定為（`execute_bar()`，日 K 與 Tick 共用）：
+單根 K 棒的流程固定為（`Backtester.prepare_day()` → `BarSimulator.process_bar()` → `Backtester.finish_day()`）：
 
 ```python
+prepare_day(date)                    # 漲跌停參考價、券源、停券、名單、除權息
 if order == BarExecutionSequence.OPEN_THEN_CLOSE:
     execute_open_signal(quotes); execute_close_signal(quotes)
 else:

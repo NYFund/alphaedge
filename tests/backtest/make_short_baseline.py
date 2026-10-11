@@ -15,7 +15,7 @@ from core.models import (
 )
 from core.models.cost_config import ShortConstraint
 from core.utils import Action, PositionType, ShortMethod, TradeDirection
-from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy
+from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy, run_bar
 from tests.conftest import build_stock_quote
 
 """
@@ -451,7 +451,7 @@ def run_scenario(scenario: ShortScenario) -> Backtester:
     )
 
     for date, stock_quotes in scenario.bars:
-        backtester.execute_bar(date, stock_quotes)
+        run_bar(backtester, date, stock_quotes)
 
     backtester.account.update_account_status()
     return backtester
