@@ -47,7 +47,7 @@
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
 | Phase0-1 | 定案介面細節與命名 | 本文件〈已定案〉 | 使用者確認 | ✅ | **✅ 2026-10-10**：介面七點與架構命名（〈已定案〉第 8 點）全數定案；同日追加第 9 點引擎內部改名 |
-| Phase1-1 | 策略宣告支援的級別（`supported_scales`）＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ⬜ | 相依 Phase0-1 |
+| Phase1-1 | 策略宣告支援的級別（`supported_scales`）＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`supported_scales`、`--scale`、`Backtester.validate_scale()` 完成；策略檔不必改（預設只支援自己的 `scale`），逐支宣告留給 Phase4-1／Phase4-2 |
 | Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1 |
 | Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ⬜ | 相依 Phase0-1；動到實盤程式，部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後） |
 | Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構）＋引擎內部兩處改名 | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`core/backtest/models/`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表；`on_bar_close`、`prev_close` grep 為零 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：改名 `48752a8` 與抽 simulator 各一個 commit；回歸雙線零變動、5 支策略 2024 全年 25 個報表 CSV 逐位元相同。偏離原規格：多一個 `load_day()`（見步驟詳述） |
@@ -130,7 +130,7 @@
 - **驗證方式**：使用者確認。
 - **相依**：無。
 
-### Phase1-1. 策略宣告支援的級別＋回測 `--scale` 覆寫 ⬜
+### Phase1-1. 策略宣告支援的級別＋回測 `--scale` 覆寫 ✅
 
 - **目的**：同一支策略可以選擇用日 K 或逐筆回測，但不能讓只寫了日 K 邏輯的策略吃到 tick 而默默算錯。
 - **做法**：
@@ -142,6 +142,15 @@
 - **產出**：上列檔案與測試。
 - **驗證方式**：不帶 `--scale` 時所有既有回測行為不變（回歸零變動）；`--scale` 在範圍外時當場報錯、錯誤訊息列出支援的級別。
 - **相依**：Phase0-1。
+- **結果（2026-10-10，`feature/tick-backtest`）**：
+  - `BaseStrategy.supported_scales: Optional[Set[Scale]] = None`（None ＝ 只支援 `self.scale`），`get_supported_scales()` 取實際範圍，`validate_scale(scale=None)` 檢查宣告一致與指定級別；新增 `UnsupportedScaleError`。
+  - `--scale` 走既有的 `BacktestOverrides`（新增 `scale` 欄位），與 `--start`／`--end`／`--capital` 同樣在組裝前寫回策略：**先驗策略自己的宣告、再驗覆寫值**——覆寫會蓋掉 `scale`，先蓋再驗就看不出策略寫錯。
+    範圍外的覆寫是用法錯誤（`InvalidBacktestOverridesError`，退出碼 2，訊息列出支援的級別）；宣告矛盾是策略的錯（`UnsupportedScaleError`，退出碼 1，與「設了已移除欄位」同一類）。
+  - `Backtester.validate_scale()` 在 `__init__` 呼叫，守不經覆寫的路徑（實盤 parity、直接呼叫 factory）。
+  - CLI 的選項顯示為 `{TICK,DAY}`，輸入不分大小寫（`--scale tick` 可用）。
+  - 測試 `tests/backtest/test_backtest_scale.py` 9 條：預設範圍、子類在 `super().__init__()` 後才改 `scale` 時範圍跟著變、宣告矛盾（含帶合法覆寫時）、範圍外覆寫被拒且策略不變、範圍內覆寫傳到引擎、不帶覆寫不變、CLI 退出碼與 stderr。
+    突變「拿掉宣告先驗」「`validate_scale()` 改成 no-op」「覆寫不寫回策略」各讓一條轉紅。回歸雙線零變動；完整 pytest 2876 passed。
+  - 文件：`strategies/README.md` 設定表與級別說明、`core/backtest/README.md`、根目錄兩份 README、`docs/backtest/module-map.md`。
 
 ### Phase1-2. 標的範圍選項（策略清單／全市場） ⬜
 
