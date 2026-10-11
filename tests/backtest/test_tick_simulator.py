@@ -18,6 +18,8 @@ from core.utils import (
     Scale,
     TickUniverse,
 )
+from tests.backtest.conftest import ScriptedStrategy, run_bar
+from tests.conftest import build_stock_quote
 
 """
 逐筆回測 `TickSimulator` 的端到端測試：手寫 tick、腳本策略，完整跑 `Backtester.run()`
@@ -619,3 +621,106 @@ def test_same_data_twice_gives_identical_trades(
 
     assert first == second
     assert first
+
+
+# === 盤中帳務與日終結算 ===
+def test_same_day_round_trip_costs_match_day_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    同一天先買後賣：逐筆與日 K 走同一套帳務，同價同量時手續費、證交稅（當沖減半）、損益完全相同
+    """
+
+    def close_rule(quote: StockQuote, strategy: _TickStrategy) -> List[StockOrder]:
+        if quote.tick_quote.time.strftime("%H:%M:%S") == "11:00:00":
+            return [_order("2330", Action.SELL, quote.close)]
+        return []
+
+    strategy: _TickStrategy = _TickStrategy(
+        IMMEDIATE_ALL, open_rule=_buy_once_at("10:00:00"), close_rule=close_rule
+    )
+    strategy.allow_day_trade = True
+    rows: List[Dict] = [
+        _tick("2330", "10:00:00", 99.5, 99.0, 99.5),
+        _tick("2330", "10:01:00", 100.0, 99.5, 100.0),
+        _tick("2330", "11:00:00", 102.0, 101.5, 102.0),
+        _tick("2330", "11:01:00", 102.5, 102.0, 102.5),
+    ]
+    tick_records = [
+        r
+        for r in _run(strategy, rows, monkeypatch).account.trade_records
+        if r.is_closed
+    ]
+
+    day_strategy = ScriptedStrategy(
+        open_script={DAY: [_order("2330", Action.BUY, 100.0)]},
+        close_script={DAY: [_order("2330", Action.SELL, 102.0)]},
+    )
+    day_strategy.allow_day_trade = True
+    day_strategy.start_date = DAY
+    day_strategy.end_date = DAY
+    day_backtester: Backtester = build_backtester(day_strategy, write_artifacts=False)
+    run_bar(
+        day_backtester,
+        DAY,
+        [build_stock_quote("2330", DAY, cur_price=101.0, high=103.0, low=99.0)],
+    )
+    day_records = [r for r in day_backtester.account.trade_records if r.is_closed]
+
+    def costs(records) -> List[Tuple]:
+        return [
+            (r.buy_price, r.sell_price, r.commission, r.tax, r.realized_pnl)
+            for r in records
+        ]
+
+    assert costs(tick_records) == costs(day_records)
+    assert len(tick_records) == 1
+    # 當沖減半真的有套到：102 元 × 1 張的證交稅全額 0.3% 是 306，減半為 153
+    assert tick_records[0].tax == 153
+
+
+def test_intraday_fill_reduces_cash_for_later_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """盤中成交即時入帳：第一筆成交用掉資金後，後面的開倉單因餘額不足被擋"""
+
+    def rule(quote: StockQuote, strategy: _TickStrategy) -> List[StockOrder]:
+        clock: str = quote.tick_quote.time.strftime("%H:%M:%S")
+        if (quote.stock_id, clock) in {("2330", "10:00:00"), ("1101", "11:00:00")}:
+            return [_order(quote.stock_id, Action.BUY, quote.close)]
+        return []
+
+    strategy: _TickStrategy = _TickStrategy(IMMEDIATE_ALL, open_rule=rule)
+    strategy.init_capital = 150_000.0
+    rows: List[Dict] = [
+        _tick("2330", "10:00:00", 100.0, 99.5, 100.0),
+        _tick("2330", "10:01:00", 100.0, 99.5, 100.0),
+        _tick("1101", "11:00:00", 100.0, 99.5, 100.0),
+        _tick("1101", "11:01:00", 100.0, 99.5, 100.0),
+    ]
+
+    backtester: Backtester = _run(strategy, rows, monkeypatch)
+
+    assert [p.symbol for p in backtester.account.positions] == ["2330"]
+    assert backtester.event_counts["rejected_insufficient_balance"] == 1
+
+
+def test_end_of_day_settlement_uses_last_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+    """日終結算與權益快照用每檔最後一筆：持有到收盤的部位以收盤成交價盯市"""
+
+    strategy: _TickStrategy = _TickStrategy(
+        IMMEDIATE_ALL, open_rule=_buy_once_at("10:00:00")
+    )
+    rows: List[Dict] = [
+        _tick("2330", "10:00:00", 100.0, 99.5, 100.0),
+        _tick("2330", "10:01:00", 100.0, 99.5, 100.0),
+        _tick("2330", "13:30:00", 110.0, 109.5, 110.0),
+    ]
+
+    backtester: Backtester = _run(strategy, rows, monkeypatch)
+
+    position_value: float = 110.0 * 1000
+    assert backtester.daily_equity[-1]["Equity"] == pytest.approx(
+        backtester.account.balance + position_value
+    )
+    assert backtester.fill_model.reference_prices["2330"] == 110.0
