@@ -44,7 +44,7 @@ def make_settlement(
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,
-        prev_close={},
+        reference_prices={},
         max_no_quote_days=max_no_quote_days,
     )
 
@@ -227,7 +227,7 @@ def test_long_position_exits_after_the_no_quote_limit() -> None:
 
     account: StockAccount = make_account()
     settlement: TwStockSettlementModel = make_settlement(account, max_no_quote_days=3)
-    settlement.prev_close[STOCK_ID] = 90.0
+    settlement.reference_prices[STOCK_ID] = 90.0
     event_counts: Dict[str, int] = new_event_counts()
 
     # 連續三天沒有報價

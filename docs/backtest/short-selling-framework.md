@@ -261,7 +261,7 @@ if order == BarExecutionSequence.OPEN_THEN_CLOSE:
     execute_open_signal(quotes); execute_close_signal(quotes)
 else:
     execute_close_signal(quotes); execute_open_signal(quotes)
-settlement.on_bar_close(date, quotes, account, event_counts)
+settlement.settle_day(date, quotes, account, event_counts)
     # 當沖日終強制回補 → 借券費計提 ＋ 維持率追繳 → 停券回補 → 股利補償
 snapshot_daily_equity(date, quotes)
 ```
@@ -450,7 +450,7 @@ snapshot_daily_equity(date, quotes)
 | `DAY` | `StockQuote.high` / `.low` | 已有 OHLC 欄位，直接用 |
 | `TICK` | `FillModel` 維護的**當日累計高低點** | `intraday_range` 記錄各檔當日累計 low/high。**目前有前視**：引擎把整天的 tick 一次交給 `on_bar_open()`，區間是全日高低點而非「該 tick 之前」，盤中較早的委託會通過稍後才出現的價位；TICK 回測只能當量級參考 |
 
-漲跌停基準取前一交易日收盤（`prev_close`）；除權息日改用 `DataFeed.get_price_limit_basis()` 推入的開盤競價基準。首個交易日無前收時跳過該項檢查。
+漲跌停基準取前一交易日收盤（`reference_prices`）；除權息日改用 `DataFeed.get_price_limit_basis()` 推入的開盤競價基準。首個交易日無前收時跳過該項檢查。
 
 特別針對 `OPEN_THEN_CLOSE`：策略在日 K 級別拿得到當日 `close`，卻可以宣稱「以 `open` 放空」。引擎無法從價格本身分辨這是合理假設還是前視偏誤，因此**當沖放空策略的文件中必須明確宣告成交價假設**（建議：開倉用 `open`，回補用 `close`），並在 `generate_open_signals` 的實作中只使用該時點之前可得的資訊。這條屬於策略紀律，引擎只能擋掉「不可能的價格」，擋不掉「可能但不誠實的價格」。
 

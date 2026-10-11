@@ -195,7 +195,7 @@ def make_settlement(
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,
-        prev_close={},
+        reference_prices={},
     )
 
 

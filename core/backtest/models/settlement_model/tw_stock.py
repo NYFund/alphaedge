@@ -41,7 +41,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         self,
         position_manager: StockPositionManager,
         cost_model: StockCostModel,
-        prev_close: Dict[str, float],
+        reference_prices: Dict[str, float],
         instrument: Optional[InstrumentSpec] = None,
         day_trade_uncovered_policy: DayTradeUncoveredPolicy = (
             DayTradeUncoveredPolicy.FORCE_COVER_AT_CLOSE
@@ -57,9 +57,10 @@ class TwStockSettlementModel(BaseSettlementModel):
         self.cost_model: StockCostModel = cost_model
         self.instrument: InstrumentSpec = instrument or TwStockSpec()
 
-        # 與 FillModel 共用同一個 dict：停牌盯市與漲停判定都要用前收，
-        # 但「記錄前收」屬成交價模型的職責，故此處只持有參照，不自行維護
-        self.prev_close: Dict[str, float] = prev_close
+        # 與 FillModel 共用同一個 dict（漲跌停參考價：前一交易日收盤，除權息日為公告的
+        # 開盤競價基準）：停牌盯市與漲停判定都要用它，但「記錄參考價」屬成交價模型的職責，
+        # 故此處只持有參照，不自行維護
+        self.reference_prices: Dict[str, float] = reference_prices
 
         # 策略宣告的處理政策，由 factory 從策略帶入
         self.day_trade_uncovered_policy: DayTradeUncoveredPolicy = (
@@ -89,7 +90,7 @@ class TwStockSettlementModel(BaseSettlementModel):
 
         self.share_ratios = ratios
 
-    def on_bar_close(
+    def settle_day(
         self,
         date: datetime.date,
         quotes: List[StockQuote],
@@ -179,7 +180,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         """
 
         return self.instrument.is_locked_at_limit(
-            prev_close=self.prev_close.get(quote.symbol),
+            prev_close=self.reference_prices.get(quote.symbol),
             open_price=quote.open,
             high=quote.high,
             low=quote.low,
@@ -844,4 +845,4 @@ class TwStockSettlementModel(BaseSettlementModel):
         logger.warning(
             f"[Mark Price] {position.symbol} 當日無報價，沿用前一交易日收盤價盯市"
         )
-        return self.prev_close.get(position.symbol, position.price)
+        return self.reference_prices.get(position.symbol, position.price)

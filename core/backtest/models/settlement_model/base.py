@@ -82,7 +82,7 @@ class BaseSettlementModel(ABC):
         return filled_order
 
     @abstractmethod
-    def on_bar_close(
+    def settle_day(
         self,
         date: datetime.date,
         quotes: List[BaseQuote],
@@ -91,7 +91,7 @@ class BaseSettlementModel(ABC):
     ) -> None:
         """
         - Description:
-            一根 bar 收盤後由市場規則強制執行的動作
+            日終結算：一根 bar 收盤後由市場規則強制執行的動作
         - Parameters:
             - date: datetime.date
                 當前交易日

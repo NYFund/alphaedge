@@ -93,7 +93,7 @@ sequenceDiagram
         BT->>PM: open_position(order)
         BT->>S: check_stop_loss_signal() / check_close_signal()
         BT->>PM: close_position(order)
-        BT->>SM: on_bar_close(date, quotes, account, event_counts)
+        BT->>SM: settle_day(date, quotes, account, event_counts)
         BT->>BT: snapshot_daily_equity(date, quotes)
     end
 
@@ -138,9 +138,9 @@ sequenceDiagram
 | `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts` |
 | `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
 | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊（ETF 另用兩段檔位表）、漲跌停區間（槓桿型 ETF 幅度加倍） | 無（純規則） |
-| `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `prev_close`、`intraday_range`、當日名單與券源快照 |
+| `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `reference_prices`（漲跌停參考價）、`intraday_range`、當日名單與券源快照 |
 | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`），**定義在 `core/models/cost_config.py`** |
-| `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
+| `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.reference_prices`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
 | `core/backtest/models/event_counts.py` | `EVENT_KEYS` 與 `new_event_counts()`：事件計數 key 的唯一清單 | 無 |
 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
 | `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日）；建構子收交易日清單，要從資料庫取清單時用 `MarketCalendar.from_api()`（與 `FuturesCalendar` 同形狀） | 由 `DataFeed`、策略建立；持有交易日清單 |
@@ -148,7 +148,7 @@ sequenceDiagram
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞，model 之間不互相 import：
 
 - `event_counts`：`factory` 以 `new_event_counts()` 建立 → 同時給 `Backtester`、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，**不可更名**（新增可以）。
-- `prev_close`：`FillModel` 持有 → `SettlementModel` 建構時取得同一個 dict 的參照。
+- `reference_prices`（漲跌停參考價）：`FillModel` 持有 → `SettlementModel` 建構時取得同一個 dict 的參照。
 
 ### 帳務與領域模型
 

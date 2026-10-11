@@ -101,10 +101,10 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
     # 台股：當沖強制回補 ＋ 借券費計提 ＋ 維持率追繳
     # 期貨：每日結算 ＋ 保證金追繳 ＋ 到期換月
-    self.settlement.on_bar_close(date, quotes, self.account, self.event_counts)
+    self.settlement.settle_day(date, quotes, self.account, self.event_counts)
 
     self.snapshot_daily_equity(date, quotes)
-    self.update_prev_close(quotes)
+    self.update_reference_prices(quotes)
 ```
 
 ### 2.2.1 單根 bar 的委託順序
@@ -204,7 +204,7 @@ ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心
 model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳遞：
 
 - **`event_counts`**：由 factory 以 `new_event_counts()`（`core/backtest/models/event_counts.py`）建立，同時交給引擎、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，不可更名（新增可以）。
-- **`prev_close`**：由 `FillModel` 持有（記錄前收是成交價模型的職責），`SettlementModel` 建構時取得同一個 dict 的參照，用於停牌盯市與漲停判定。
+- **`reference_prices`**（漲跌停參考價：前收，除權息日為公告基準）：由 `FillModel` 持有（記錄參考價是成交價模型的職責），`SettlementModel` 建構時取得同一個 dict 的參照，用於停牌盯市與漲停判定。
 
 `get_mark_price()` 屬 `BaseSettlementModel` 的介面方法而非 `FillModel`——**期貨的盯市價就是每日結算價**，本來就是結算模型的職責；引擎的 `snapshot_daily_equity()` 也用它算未實現損益。
 

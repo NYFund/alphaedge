@@ -475,7 +475,7 @@ def test_fill_does_not_apply_price_limits(make_quote, make_order) -> None:
     """
 
     fill_model: TwFuturesFillModel = TwFuturesFillModel()
-    fill_model.on_bar_close([make_quote(close=10000)])  # 前收 10000
+    fill_model.update_reference_prices([make_quote(close=10000)])  # 前收 10000
 
     # 較前收 +80%，但落在當根 bar 區間內
     quote: FuturesQuote = make_quote(close=18000, high=18000, low=18000)
@@ -621,7 +621,7 @@ def test_daily_settlement_moves_cash_on_the_same_day(
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
     balance_before: float = account.balance
-    backtester.settlement.on_bar_close(
+    backtester.settlement.settle_day(
         DAY_1,
         [make_quote(close=18120.0, settlement_price=18100.0)],
         account,
@@ -670,7 +670,7 @@ def test_expired_contract_is_closed_at_the_last_settlement_price(
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
     # 到期前的最後一根 bar
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_1,
         [make_quote(close=18100.0, settlement_price=18100.0)],
         account,
@@ -679,10 +679,10 @@ def test_expired_contract_is_closed_at_the_last_settlement_price(
 
     # 之後連續無報價：門檻之前不出場
     for _ in range(settlement.MAX_NO_QUOTE_DAYS - 1):
-        settlement.on_bar_close(DAY_2, [], account, backtester.event_counts)
+        settlement.settle_day(DAY_2, [], account, backtester.event_counts)
         assert account.get_positions()
 
-    settlement.on_bar_close(DAY_2, [], account, backtester.event_counts)
+    settlement.settle_day(DAY_2, [], account, backtester.event_counts)
 
     assert account.get_positions() == []
     assert account.margin_used == 0.0
@@ -702,9 +702,9 @@ def test_no_quote_counter_resets_when_quotes_come_back(
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
     for _ in range(settlement.MAX_NO_QUOTE_DAYS - 1):
-        settlement.on_bar_close(DAY_1, [], account, backtester.event_counts)
+        settlement.settle_day(DAY_1, [], account, backtester.event_counts)
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2,
         [make_quote(close=18000.0, settlement_price=18000.0)],
         account,

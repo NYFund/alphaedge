@@ -51,7 +51,7 @@ def make_fill_model(
         check_short_sale_list=check_short_sale_list,
         check_day_trade_list=check_day_trade_list,
     )
-    model.prev_close[SYMBOL] = REFERENCE
+    model.reference_prices[SYMBOL] = REFERENCE
     model.apply_trading_lists(short_sale_list, day_trade_list)
     return model
 

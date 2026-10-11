@@ -160,7 +160,7 @@ def test_fill_price_limit_rejected(make_order, make_quote) -> None:
     """超出漲跌停區間即拒單（漲跌停以前一交易日收盤為基準）"""
 
     fill_model: TwStockFillModel = TwStockFillModel()
-    fill_model.prev_close["2330"] = 100.0
+    fill_model.reference_prices["2330"] = 100.0
 
     # 漲停 110、跌停 90
     in_range: StockQuote = make_quote(cur_price=112.0, high=130.0, low=90.0)
@@ -342,7 +342,7 @@ def test_limit_up_cannot_cover(make_strategy, make_backtester, make_quote) -> No
         },
     )
     backtester: Backtester = make_backtester(strategy)
-    backtester.fill_model.prev_close["2330"] = 100.0  # 漲停價 110
+    backtester.fill_model.reference_prices["2330"] = 100.0  # 漲停價 110
 
     backtester.execute_bar(
         DAY_1,

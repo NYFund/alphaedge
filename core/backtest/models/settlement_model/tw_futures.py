@@ -87,7 +87,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
 
         return self.position_manager.margin_config
 
-    def on_bar_close(
+    def settle_day(
         self,
         date: datetime.date,
         quotes: List[FuturesQuote],
@@ -553,7 +553,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             （TX 一口契約價值 900 萬、保證金只有 70 萬），沿用基底的現金帳戶口徑
             會讓權益曲線整段偏高一個數量級。
 
-            `on_bar_close()` 的逐日盯市已把當日損益結進 `balance`，故本方法在
+            `settle_day()` 的逐日盯市已把當日損益結進 `balance`，故本方法在
             多數日子算出的未實現損益是 **0——那是對的，不是沒算到**；
             只有當日無結算價（沿用舊價）或報價缺漏時才會有殘值。
 

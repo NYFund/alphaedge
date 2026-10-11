@@ -512,7 +512,7 @@ def test_buy_open_is_rejected_when_locked_at_limit_up() -> None:
 
     event_counts: Dict[str, int] = make_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
-    fill_model.prev_close[STOCK_ID] = 100.0
+    fill_model.reference_prices[STOCK_ID] = 100.0
 
     locked: StockQuote = make_locked_quote(110.0, 110.0, 110.0, 110.0)
 
@@ -525,7 +525,7 @@ def test_short_open_is_rejected_when_locked_at_limit_down() -> None:
 
     event_counts: Dict[str, int] = make_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
-    fill_model.prev_close[STOCK_ID] = 100.0
+    fill_model.reference_prices[STOCK_ID] = 100.0
 
     locked: StockQuote = make_locked_quote(90.0, 90.0, 90.0, 90.0)
     order = make_order(action=Action.SELL, position_type=PositionType.SHORT, price=90.0)
@@ -543,7 +543,7 @@ def test_touching_the_limit_without_locking_is_allowed() -> None:
 
     event_counts: Dict[str, int] = make_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
-    fill_model.prev_close[STOCK_ID] = 100.0
+    fill_model.reference_prices[STOCK_ID] = 100.0
 
     touched: StockQuote = make_locked_quote(105.0, 110.0, 104.0, 110.0)
 

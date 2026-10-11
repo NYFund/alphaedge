@@ -78,7 +78,7 @@ def make_stock_settlement(
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,
-        prev_close={},
+        reference_prices={},
         fill_model=fill_model,
     )
 
@@ -449,7 +449,7 @@ def test_roll_pays_the_slippage_on_both_legs() -> None:
     account: FuturesAccount = settlement.position_manager.account
     event_counts: Dict[str, int] = {}
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         FUTURES_DAY_2,
         [make_futures_quote("202404", 20100.0)],
         account,
@@ -471,7 +471,7 @@ def test_roll_without_slippage_is_unchanged() -> None:
     open_futures_position(settlement, expiry="202403", price=20000.0)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         FUTURES_DAY_2, [make_futures_quote("202404", 20100.0)], account, {}
     )
 
@@ -487,7 +487,7 @@ def test_short_roll_pays_the_slippage_on_both_legs() -> None:
     )
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         FUTURES_DAY_2, [make_futures_quote("202404", 20100.0)], account, {}
     )
 

@@ -41,7 +41,7 @@ class BaseFillModel(ABC):
     **子類別必須在 `__init__` 備妥三個屬性**，基底的夾價、區間警告與逐 bar 掛點直接使用：
     - `event_counts: Dict[str, int]`：與引擎共用同一個 dict，計數才會進報表
     - `intraday_range: Dict[str, Tuple[float, float]]`：Tick 級別的當日累計高低點
-    - `prev_close: Dict[str, float]`：次一根 bar 的漲跌停基準
+    - `reference_prices: Dict[str, float]`：次一根 bar 的漲跌停參考價
     """
 
     # 數量單位：股票論張、期貨論口。只影響 log 訊息，成交量上限的政策兩邊相同
@@ -98,9 +98,11 @@ class BaseFillModel(ABC):
             low, high = self.intraday_range.get(quote.symbol, (price, price))
             self.intraday_range[quote.symbol] = (min(low, price), max(high, price))
 
-    def on_bar_close(self, quotes: List[BaseQuote]) -> None:
+    def update_reference_prices(self, quotes: List[BaseQuote]) -> None:
         """
-        一根 bar 收盤：記錄收盤價，作為次一根 bar 的漲跌停基準
+        一根 bar 收盤後：記錄收盤價，作為次一根 bar 的漲跌停參考價
+
+        除權息日的參考價不是前收，由 `apply_price_limit_basis()` 在當天開盤前覆寫。
 
         **記的是收盤價、不是結算價**：期貨的盯市價一律走 `SettlementModel`，
         這裡只負責次日的漲跌停基準。
@@ -109,7 +111,7 @@ class BaseFillModel(ABC):
         for quote in quotes:
             close: float = quote.close or quote.cur_price
             if close:
-                self.prev_close[quote.symbol] = close
+                self.reference_prices[quote.symbol] = close
 
     def get_filled_volume(self, order: BaseOrder, quote: BaseQuote) -> Optional[int]:
         """
@@ -374,8 +376,8 @@ class TwStockFillModel(BaseFillModel):
         # Tick 級別的當日累計高低點（TickQuote 沒有 OHLC，成交價驗證需自行維護）
         self.intraday_range: Dict[str, Tuple[float, float]] = {}
 
-        # 前一交易日收盤價，作為漲跌停判定基準
-        self.prev_close: Dict[str, float] = {}
+        # 漲跌停參考價：前一交易日收盤，除權息日由 `apply_price_limit_basis()` 覆寫為公告基準
+        self.reference_prices: Dict[str, float] = {}
 
         # 今日停券的標的，由引擎每根 bar 從 DataFeed 推入
         self.short_suspended_symbols: Set[str] = set()
@@ -400,11 +402,11 @@ class TwStockFillModel(BaseFillModel):
             self.event_counts["rejected_fill_price"] += 1
             return False
 
-        prev_close: Optional[float] = self.prev_close.get(order.symbol)
-        if prev_close:
+        reference_price: Optional[float] = self.reference_prices.get(order.symbol)
+        if reference_price:
             # 帶入報價日期：2015-06-01 前的漲跌停幅度為 7%，非現行的 10%
             limit_down, limit_up = self.instrument.get_price_limits(
-                prev_close, TimeUtils.to_date(quote.date), order.symbol
+                reference_price, TimeUtils.to_date(quote.date), order.symbol
             )
             if not (limit_down <= order.price <= limit_up):
                 logger.warning(
@@ -414,7 +416,7 @@ class TwStockFillModel(BaseFillModel):
                 self.event_counts["rejected_fill_price"] += 1
                 return False
 
-        if self.is_locked_at_limit(order, quote, prev_close):
+        if self.is_locked_at_limit(order, quote, reference_price):
             return False
 
         if (
@@ -428,7 +430,7 @@ class TwStockFillModel(BaseFillModel):
         return True
 
     def is_locked_at_limit(
-        self, order: BaseOrder, quote: BaseQuote, prev_close: Optional[float]
+        self, order: BaseOrder, quote: BaseQuote, reference_price: Optional[float]
     ) -> bool:
         """
         - Description:
@@ -444,8 +446,8 @@ class TwStockFillModel(BaseFillModel):
                 待驗證的開倉單
             - quote: BaseQuote
                 當根 bar 的報價
-            - prev_close: Optional[float]
-                漲跌停基準價
+            - reference_price: Optional[float]
+                漲跌停參考價
         - Return:
             - bool
                 True 表示被鎖死、應拒單
@@ -456,7 +458,7 @@ class TwStockFillModel(BaseFillModel):
             return False
 
         if not self.instrument.is_locked_at_limit(
-            prev_close=prev_close,
+            prev_close=reference_price,
             open_price=quote.open,
             high=quote.high,
             low=quote.low,
@@ -664,7 +666,7 @@ class TwStockFillModel(BaseFillModel):
             self.event_counts["rejected_short_halted"] += 1
             return False
 
-        reference: Optional[float] = self.prev_close.get(order.symbol)
+        reference: Optional[float] = self.reference_prices.get(order.symbol)
         if (
             reference
             and order.price < reference
@@ -811,7 +813,7 @@ class TwStockFillModel(BaseFillModel):
             **開盤競價基準**。沿用前收會讓整段區間偏移——除息日前收偏高，
             上下界一起偏高，`validate()` 的第二道檢查因此失準。
 
-            **只覆寫有公告的標的**，其餘維持 `on_bar_close()` 累積的前收盤價。
+            **只覆寫有公告的標的**，其餘維持 `update_reference_prices()` 記錄的前收盤價。
         - Parameters:
             - basis: Dict[str, float]
                 `{stock_id: 開盤競價基準}`，由 DataFeed 依當日除權息公告提供
@@ -819,7 +821,7 @@ class TwStockFillModel(BaseFillModel):
 
         for symbol, price in basis.items():
             if price:
-                self.prev_close[symbol] = price
+                self.reference_prices[symbol] = price
 
 
 class TwFuturesFillModel(BaseFillModel):
@@ -834,7 +836,7 @@ class TwFuturesFillModel(BaseFillModel):
     3. **成交量的單位是口**，不是張；`FillConfig.max_volume_share` 的語意不變。
 
     ⚠️ **同一契約的日盤與夜盤 `symbol` 相同**（`{product}{expiry}`）。本 model 的
-    `prev_close` 與 `intraday_range` 以 symbol 為鍵，兩個時段混在同一根 bar 傳進來
+    `reference_prices` 與 `intraday_range` 以 symbol 為鍵，兩個時段混在同一根 bar 傳進來
     會互相覆蓋。DataFeed 一律只取策略宣告的那一個時段，見 `TwFuturesDataFeed`。
     """
 
@@ -863,7 +865,7 @@ class TwFuturesFillModel(BaseFillModel):
         self.intraday_range: Dict[str, Tuple[float, float]] = {}
 
         # 前一交易日收盤價；期貨沒有漲跌停檢查，此處僅供無報價時盯市與外部查詢
-        self.prev_close: Dict[str, float] = {}
+        self.reference_prices: Dict[str, float] = {}
 
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
         """

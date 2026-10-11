@@ -270,10 +270,10 @@ class Backtester:
 
         return self.fill_model.clamp_filled_price(filled_order, quote)
 
-    def update_prev_close(self, quotes: List[BaseQuote]) -> None:
-        """收盤後記錄當日收盤價；狀態由 FillModel 持有"""
+    def update_reference_prices(self, quotes: List[BaseQuote]) -> None:
+        """收盤後記錄當日收盤價，作為次日的漲跌停參考價；狀態由 FillModel 持有"""
 
-        self.fill_model.on_bar_close(quotes)
+        self.fill_model.update_reference_prices(quotes)
 
     # === Main Backtest Loop ===
     def run(self) -> None:
@@ -425,10 +425,10 @@ class Backtester:
         # 一根 bar 收盤後由市場規則強制執行的動作
         # 台股：當沖強制回補 ＋ 借券費計提 ＋ 維持率追繳
         # 期貨：每日結算 ＋ 保證金追繳 ＋ 到期換月
-        self.settlement.on_bar_close(date, quotes, self.account, self.event_counts)
+        self.settlement.settle_day(date, quotes, self.account, self.event_counts)
 
         self.snapshot_daily_equity(date, quotes)
-        self.update_prev_close(quotes)
+        self.update_reference_prices(quotes)
 
     # === Signal Execution ===
     def execute_open_signal(self, quotes: List[BaseQuote]) -> List[BasePosition]:

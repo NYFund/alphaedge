@@ -130,7 +130,7 @@ def build_tw_stock_backtester(
     settlement: TwStockSettlementModel = TwStockSettlementModel(
         position_manager=position_manager,
         cost_model=cost_model,
-        prev_close=fill_model.prev_close,
+        reference_prices=fill_model.reference_prices,
         instrument=instrument,
         day_trade_uncovered_policy=strategy.day_trade_uncovered_policy,
         margin_call_policy=strategy.margin_call_policy,
