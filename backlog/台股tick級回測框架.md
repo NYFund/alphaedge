@@ -51,7 +51,7 @@
 | Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：選項、驗證、每日標的規則完成並接上 `setup_day()`；每天由 `TickSimulator` 呼叫在 Phase3-1 接上（在那之前沒有策略宣告支援 TICK，選項不會被默默忽略）。原排在 Phase2-2 之後（選項要靠 `setup_day(date, symbols)` 才有作用） |
 | Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：全專案改名完成，舊名啟動即報錯；`resolve_hook_timing()` 移到 `core/strategies/base.py`（偏離原規格，見步驟詳述）。動到實盤程式：部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後），合併後要重啟常駐行程 |
 | Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構）＋引擎內部兩處改名 | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`core/backtest/models/`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表；`on_bar_close`、`prev_close` grep 為零 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：改名 `48752a8` 與抽 simulator 各一個 commit；回歸雙線零變動、5 支策略 2024 全年 25 個報表 CSV 逐位元相同。偏離原規格：多一個 `load_day()`（見步驟詳述） |
-| Phase1-5 | 每日市場狀態改由各 model 自己準備 | `core/backtest/backtester.py`（`prepare_day()`）、`core/backtest/models/`、`core/backtest/datafeed/` | 回歸雙線零變動；`prepare_day()` 不再逐一推台股專屬 hook | ⬜ | 相依 Phase1-4；2026-10-10 承接 `框架對稱化重構.md`〈與其他文件的交集〉 |
+| Phase1-5 | 每日市場狀態改由各 model 自己準備 | `core/backtest/backtester.py`（`prepare_day()`）、`core/backtest/models/`、`core/backtest/datafeed/` | 回歸雙線零變動；`prepare_day()` 不再逐一推台股專屬 hook | ✅ | **✅ 2026-10-11**（`feature/tick-backtest`）：`FillModel`／`SettlementModel` 各一個 `prepare_day(feed, date, allow_short)`，基底七個 no-op 鉤子移除；回歸雙線與五支策略 25 個報表 CSV 零變動；補上停券擋板的引擎層測試 |
 | Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`stock_ids` 與 `cum_volume` 完成；累計量定案在 pandas 端算（實測較快，見步驟詳述）；真實資料 200 檔清單一天 0.73 秒 |
 | Phase2-2 | 台股逐筆資料源 `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py`（新，繼承 `StockDataFeed`） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：資料源與快照完成，一般股過濾放在這一步；尚未接上引擎（Phase3-1 由 factory 在 TICK 時組出）。偏離原規格兩處見步驟詳述 |
 | Phase3-1 | `TickSimulator`：一天三段與逐筆迴圈 | `core/backtest/simulator/tick_simulator.py`（新）、`core/backtest/factory.py` | 開盤集合競價、逐筆、收盤集合競價三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：與 Phase3-2 同一個 commit（沒有撮合規則就產生不了任何成交，兩步無法分開驗證）；factory 在 TICK 時組出 `TickSimulator`＋`StockTickDataFeed`，整天一次給的舊路徑與 `IntradayScaleMismatchError` 已移除 |
@@ -240,7 +240,7 @@
     交易紀錄、每日權益、多空統計、事件、績效 5 種 CSV 共 25 個逐位元相同。突變「開平倉先後對調」5 條測試轉紅、「simulator 出現市場字樣」分層檢查報錯。
   - 文件：`docs/backtest/module-map.md`、`multi-market-engine.md`、`short-selling-framework.md`、`core/backtest/README.md`、根目錄兩份 README 的目錄樹同步。
 
-### Phase1-5. 每日市場狀態改由各 model 自己準備 ⬜
+### Phase1-5. 每日市場狀態改由各 model 自己準備 ✅
 
 - **目的**：`prepare_day()` 目前由引擎逐一把台股專屬的每日狀態（融券餘額、停券、交易所名單、除權息參考價等）推給各 model，三個基底為此掛了約 15 個台股專屬的 no-op hook；
   期貨則在 factory 建構時注入 resolver。傳遞方式不對稱是漂移，內容本身才是市場差異（`框架對稱化重構.md`〈盤點結果〉第 2 組）。
@@ -252,6 +252,15 @@
 - **產出**：上列檔案與測試。
 - **驗證方式**：`scripts/run_regression.sh` 回歸雙線零變動（結束碼 3 不算通過）；期貨回測測試全綠；被移除的 hook 名稱 grep 為零。
 - **相依**：Phase1-4。
+- **結果（2026-10-11，`feature/tick-backtest`）**：
+  - `BaseFillModel.prepare_day()`、`BaseSettlementModel.prepare_day()` 預設 no-op；台股兩個 model 覆寫：成交模型取漲跌停基準、融券餘額，可能放空時再取停券標的與（開啟檢核時）交易所名單；
+    結算模型可能放空時取停券回補標的，兩個方向都取除權息與股數倍率。`Backtester.prepare_day()` 只剩 `cur_date` 前進與兩行委派，引擎只告訴 model「策略可不可能放空」。
+  - 基底移除七個只為推狀態而存在的 no-op 鉤子（成交模型 4 個、結算模型 3 個）；台股實作的 `apply_*` 保留（單元測試直接驅動），grep 基底已無這些名稱。DataFeed 的 getter 不動（策略也會呼叫）。
+  - **順序**：成交模型的取用先、結算模型後；原本兩者交錯（停券回補排在成交模型的停券之前），但兩邊只各自寫自己的狀態、資料源的 getter 不受呼叫順序影響，同一個 model 內的順序維持不變。
+  - 驗證：回歸雙線零變動；五支策略 2024 全年 25 個報表 CSV 與 Phase1-4 後逐位元相同；完整 pytest 2922 passed（含期貨回測測試）。
+    突變「結算模型不取股利」3 條轉紅；突變「成交模型不取停券」**原本沒有任何測試會紅**——停券擋板只有直接呼叫 `apply_short_suspended_symbols()` 的單元測試，
+    引擎每天有沒有真的取停券標的沒人守（重構前把引擎那行拿掉同樣不會紅，屬既有的假綠燈），已補 `test_daily_preparation_feeds_suspension_to_fill_model` 走完整每日流程，突變轉紅。
+  - 實作過程 2026-10-11 被中斷一次（驗證跑到一半）：程式改動完整保留，中斷的驗證已重跑。
 
 ### Phase2-1. tick 查詢支援多檔與當日累計量 ✅
 
