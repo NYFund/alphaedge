@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Type
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
 
 import pandas as pd
 from loguru import logger
@@ -29,10 +29,6 @@ from core.utils import (
 from core.utils.log_manager import LogManager
 
 """Backtesting engine that simulates trading based on strategy signals"""
-
-
-class IntradayScaleMismatchError(RuntimeError):
-    """逐筆觸發的策略與整天一次給的 TICK 回測，報價語意不同"""
 
 
 class InvalidTickUniverseError(ValueError):
@@ -64,7 +60,7 @@ class Backtester:
         settlement: BaseSettlementModel,
         data_feed: BaseDataFeed,
         reporter_cls: Type[BaseBacktestReporter],
-        simulator_cls: Type[BaseSimulator],
+        build_simulator: Callable[["Backtester"], BaseSimulator],
         event_counts: Optional[Dict[str, int]] = None,
         adjusted_price: bool = False,
         write_artifacts: bool = True,
@@ -125,13 +121,12 @@ class Backtester:
         # 由 `validate_tick_universe()` 決定最終值（DAY 為 None、TICK 預設策略清單）
         self.tick_universe: Optional[TickUniverse] = tick_universe
 
-        # 「一天怎麼跑」：由 factory 依級別選定類別，simulator 經由本引擎取用帳戶與 model
-        self.simulator: BaseSimulator = simulator_cls(self)
-
-        # 逐筆觸發策略的拒絕排在標的範圍之前：它說的是「這種回測根本不該跑」，比範圍不合法更根本
         self.validate_scale()
-        self._reject_intraday_tick_backtest()
         self.validate_tick_universe()
+
+        # 「一天怎麼跑」：由 factory 依級別決定怎麼建（日 K 或逐筆），simulator 經由本引擎取用帳戶與 model。
+        # 排在級別與標的範圍的檢查之後：逐筆 simulator 建立時要讀已決定的設定
+        self.simulator: BaseSimulator = build_simulator(self)
 
         self.setup()
 
@@ -180,38 +175,6 @@ class Backtester:
                 f"{type(self.strategy).__name__} 沒有覆寫 get_live_symbols()，"
                 "無法用策略清單決定要讀哪些標的；要讀全市場請改用 --tick-universe all"
             )
-
-    def _reject_intraday_tick_backtest(self) -> None:
-        """
-        - Description:
-            逐筆觸發的策略不得跑 `Scale.TICK` 回測
-
-            同一個 `check_open_signal(stock_quotes)`，實盤逐筆拿到**長度 1** 的 list，
-            TICK 回測卻**一次拿到整天**的 tick——兩邊的 list 語意根本不同。
-            需要橫斷面的邏輯（挑當下最強的前 N 檔）在回測裡看起來完全正常，
-            上了實盤每次只看得到一檔，訊號完全不同，**而且兩邊都跑得完、都不報錯**。
-
-            **讓錯誤現形而不是留一個看起來正常的績效**：這是 `PreOpenQuoteMixin`
-            「讀 OHLC 就拋」在盤中這一側的對應物。要用回測估量級的人，
-            得自己明確把 `is_tick_triggered` 關掉，不會在不知情的狀況下拿到一份
-            訊號語意不同的報表。
-        - Raise:
-            - IntradayScaleMismatchError
-                策略宣告 `is_tick_triggered=True` 且 `scale` 為 `Scale.TICK`
-        """
-
-        if not getattr(self.strategy, "is_tick_triggered", False):
-            return
-
-        if self.scale != Scale.TICK:
-            return
-
-        raise IntradayScaleMismatchError(
-            f"{type(self.strategy).__name__} 宣告 is_tick_triggered=True（實盤逐筆觸發，"
-            "每次鉤子只拿到一檔的一筆報價），但現行 Scale.TICK 回測是"
-            "**整天的 tick 一次給**，兩者的報價 list 語意不同，訊號不可比。"
-            "要用回測估量級請明確改為 Scale.DAY，或把 is_tick_triggered 關掉。"
-        )
 
     def setup(self) -> None:
         """Set Up the Config of Backtester"""

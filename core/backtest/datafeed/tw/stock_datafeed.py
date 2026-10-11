@@ -203,15 +203,30 @@ class TwStockDataFeed(BaseDataFeed):
         adjusted: bool = False,
     ) -> List[StockQuote]:
         """
-        依級別取得當日報價
+        - Description:
+            取得當日的日 K 報價
 
-        tick 不做還原：tick 為當日盤中資料，跨日還原無意義
+            **TICK 不從這裡取**：整天的 tick 一次給就是前視（早盤的委託會拿下午的價位成交），
+            逐筆回測由 `StockTickDataFeed` 依時間逐筆產生。
+        - Parameters:
+            - date: datetime.date
+                交易日
+            - scale: Scale
+                級別；只接受 `Scale.DAY`
+            - adjusted: bool
+                是否附上還原價（只影響訊號用的 `adj_close`）
+        - Return:
+            - List[StockQuote]
+                當日報價
+        - Raise:
+            - ValueError
+                要求 `Scale.TICK`
         """
 
         if scale == Scale.TICK:
-            # 一次取一天的 tick，避免資料量太大 RAM 爆掉
-            ticks: pd.DataFrame = self.tick.get_ordered_ticks(date, date)
-            return StockQuoteAdapter.from_tick_rows(ticks, date)
+            raise ValueError(
+                "TICK 報價不能一次取整天（那是前視）；逐筆回測請用 StockTickDataFeed"
+            )
 
         price_df: pd.DataFrame = self.price.get(date)
         adjusted_close_map: Dict[str, Any] = (

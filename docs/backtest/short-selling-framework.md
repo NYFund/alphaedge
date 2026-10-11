@@ -449,7 +449,7 @@ snapshot_daily_equity(date, quotes)
 | Scale | 高低點來源 | 說明 |
 |-------|-----------|------|
 | `DAY` | `StockQuote.high` / `.low` | 已有 OHLC 欄位，直接用 |
-| `TICK` | `FillModel` 維護的**當日累計高低點** | `intraday_range` 記錄各檔當日累計 low/high。**目前有前視**：引擎把整天的 tick 一次交給 `on_bar_open()`，區間是全日高低點而非「該 tick 之前」，盤中較早的委託會通過稍後才出現的價位；TICK 回測只能當量級參考 |
+| `TICK` | 不用區間 | 逐筆回測由 `TickSimulator` 重放，委託在同一檔的下一筆才撮合，成交價取自那一筆的委賣／委買價（或限價、集合競價價），不經 `validate()` 的區間檢查；`intraday_range` 只累計「到目前這一筆為止」的高低點，供結算層的強制出場夾價 |
 
 漲跌停基準取前一交易日收盤（`reference_prices`）；除權息日改用 `DataFeed.get_price_limit_basis()` 推入的開盤競價基準。首個交易日無前收時跳過該項檢查。
 

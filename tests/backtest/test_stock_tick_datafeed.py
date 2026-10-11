@@ -156,18 +156,16 @@ def test_whole_market_symbols_come_from_the_day_ticks() -> None:
 
 
 # === 段落快照 ===
-def test_open_snapshot_and_close_quotes_per_stock() -> None:
-    """開盤取第一筆、快照取時點之前（不含）的最後一筆、收盤取最後一筆，都依代號排序"""
+def test_snapshot_and_close_quotes_per_stock() -> None:
+    """快照取時點之前（不含）的最後一筆、收盤取最後一筆，都依代號排序"""
 
     feed, _ = _feed()
     feed.setup_day(DAY, None)
 
-    opens: List[StockQuote] = feed.get_open_quotes()
     # 13:30:00 整有一筆：不含時點本身，快照停在它前一筆
     snapshot: List[StockQuote] = feed.get_snapshot_quotes(datetime.time(13, 30))
     closes: List[StockQuote] = feed.get_close_quotes()
 
-    assert [(q.stock_id, q.close) for q in opens] == [("1101", 40.0), ("2330", 800.0)]
     assert [(q.stock_id, q.close) for q in snapshot] == [
         ("1101", 40.5),
         ("2330", 805.0),
@@ -219,7 +217,6 @@ def test_empty_day_returns_nothing() -> None:
 
     assert feed.setup_day(DAY, None) == 0
     assert list(feed.iter_day_ticks()) == []
-    assert feed.get_open_quotes() == []
     assert feed.get_snapshot_quotes(datetime.time(13, 25)) == []
     assert feed.get_close_quotes() == []
     assert feed.get_reference_quotes({"2330": 800.0}) == []

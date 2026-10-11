@@ -140,7 +140,7 @@ sequenceDiagram
 | 檔案 | 職責 | 持有的狀態 |
 |------|------|------------|
 | `core/backtest/backtester.py` | 日期迴圈、每日準備（`prepare_day()`）與收盤結算（`finish_day()`）、逐日權益快照、觸發報表 | `daily_equity`、`event_counts`、`submitted_orders` |
-| `core/backtest/simulator/` | 一天怎麼跑：`BaseSimulator` 放共用的開平倉執行與訂單關卡，`BarSimulator` 一天一根 bar（台股與期貨共用；`Scale.TICK` 目前也走它，整天的 tick 當一根 bar） | 無（帳戶與委託紀錄經由引擎取用；`BarSimulator` 只暫存當天報價） |
+| `core/backtest/simulator/` | 一天怎麼跑：`BaseSimulator` 放共用的開平倉執行與訂單關卡，`BarSimulator` 一天一根 bar（台股與期貨共用）；`TickSimulator` 逐筆重放（開盤集合競價、逐筆、收盤集合競價三段），在途委託由 `PendingOrderManager` 保存、在同一檔的下一筆撮合 | 無（帳戶與委託紀錄經由引擎取用；`BarSimulator` 只暫存當天報價） |
 | `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
 | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊（ETF 另用兩段檔位表）、漲跌停區間（槓桿型 ETF 幅度加倍） | 無（純規則） |
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `reference_prices`（漲跌停參考價）、`intraday_range`、當日名單與券源快照 |

@@ -16,7 +16,7 @@ from core.models import (
 from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
-from core.utils import BarExecutionSequence
+from core.utils import BarExecutionSequence, TickUniverse
 
 """
 回測 simulator 的共同介面與共用的開平倉執行
@@ -48,6 +48,7 @@ class SimulationEngine(Protocol):
     max_holdings: Optional[int]
     scale: str
     adjusted_price: bool
+    tick_universe: Optional[TickUniverse]
 
     def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
         """方向白名單驗證"""

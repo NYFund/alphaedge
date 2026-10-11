@@ -613,25 +613,6 @@ def test_api_refuses_when_table_missing(dao: StockTickDAO) -> None:
             dao.conn.execute(f'DROP SCHEMA "{dao.schema}_empty" CASCADE')
 
 
-def test_datafeed_returns_one_quote_per_tick(loaded_api: StockTickAPI) -> None:
-    """
-    回測 DataFeed 以 `get_ordered_ticks()` 取報價：每天的 TickQuote 數＝資料庫列數，
-    `time` 經 `itertuples()` 取出後仍是 `datetime`
-    """
-
-    from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
-    from core.utils.constant import Scale
-
-    feed: TwStockDataFeed = TwStockDataFeed()
-    feed.tick = loaded_api
-
-    quotes = feed.get_quotes(datetime.date(2024, 5, 8), Scale.TICK)
-
-    assert len(quotes) == 6
-    assert all(isinstance(q.tick_quote.time, datetime.datetime) for q in quotes)
-    assert [q.close for q in quotes] == [40.0, 800.0, 801.0, 40.5, 150.0, 802.0]
-
-
 def test_tick_datafeed_replays_with_cumulative_volume(
     loaded_api: StockTickAPI,
 ) -> None:

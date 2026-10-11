@@ -14,10 +14,7 @@ class BarSimulator(BaseSimulator):
         一天一根 bar：整天的報價一次交給策略，依 `allow_day_trade` 推導的先後開平倉，當根成交
 
         台股與期貨共用：市場差異全在注入引擎的 model 裡，本類別不分市場。
-
-        **`Scale.TICK` 暫時也走這裡**：整天的 tick 被當成同一根 bar 一次傳入，
-        成交驗證用的是全日高低點，盤中較早的委託會通過稍後才出現的價位（有前視）。
-        逐筆重放的 simulator 完成後，TICK 改由它負責。
+        只處理 `Scale.DAY`；逐筆由 `TickSimulator` 負責。
     """
 
     def __init__(self, engine: SimulationEngine) -> None:
@@ -31,8 +28,7 @@ class BarSimulator(BaseSimulator):
 
         super().__init__(engine)
 
-        # `load_day()` 取到的當天報價，`run_day()` 用完即清掉：
-        # TICK 一天全市場上百萬筆，不該留到下一個交易日
+        # `load_day()` 取到的當天報價，`run_day()` 用完即清掉，不留到下一個交易日
         self.quotes: List[BaseQuote] = []
 
     def load_day(self, date: datetime.date) -> bool:
@@ -44,18 +40,12 @@ class BarSimulator(BaseSimulator):
                 交易日
         - Return:
             - bool
-                False 表示當天沒有任何報價（或級別不支援），整天跳過
+                False 表示當天沒有任何報價，整天跳過
         """
 
-        if self.engine.scale == Scale.DAY:
-            self.quotes = self.engine.data_feed.get_quotes(
-                date, Scale.DAY, adjusted=self.engine.adjusted_price
-            )
-        elif self.engine.scale == Scale.TICK:
-            self.quotes = self.engine.data_feed.get_quotes(date, Scale.TICK)
-        else:
-            self.quotes = []
-
+        self.quotes = self.engine.data_feed.get_quotes(
+            date, Scale.DAY, adjusted=self.engine.adjusted_price
+        )
         return bool(self.quotes)
 
     def run_day(self, date: datetime.date) -> List[BaseQuote]:
@@ -72,10 +62,6 @@ class BarSimulator(BaseSimulator):
 
         quotes: List[BaseQuote] = self.quotes
         self.quotes = []
-
-        if self.engine.scale == Scale.TICK:
-            # 整天的 tick 一次累計出全日高低點，供成交驗證使用（前視的來源）
-            self.engine.fill_model.on_bar_open(quotes)
 
         self.process_bar(quotes)
         return quotes

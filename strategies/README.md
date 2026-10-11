@@ -619,10 +619,9 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 2. **橫斷面邏輯要自己維護狀態**。日頻策略的 `generate_open_signals(stock_quotes)`
    一次拿到一批，可以「挑最強的前 N 檔」；逐筆之下每次只有一檔，
    需要跨標的比較的策略**必須自己在策略內保存其他標的的最新報價**。
-3. **不能跑 `Scale.TICK` 回測**。引擎會在建立時就拒絕（`IntradayScaleMismatchError`）——
-   同一個 `generate_open_signals(stock_quotes)`，實盤拿到長度 1 的 list、
-   TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。要用回測估量級，
-   把 `scale` 設成 `Scale.DAY` 或把 `is_tick_triggered` 關掉。
+3. **可以跑 `Scale.TICK` 回測**：逐筆重放每次同樣只給一筆，與實盤同一個契約
+   （成交規則與段落見 `core/backtest/README.md` 的〈`Scale.TICK`：逐筆重放〉）。
+   要同時保留日 K 近似，`supported_scales` 宣告 `{Scale.DAY, Scale.TICK}`，回測時用 `--scale` 切換。
 
 ### 當沖與單根 bar 的執行順序
 

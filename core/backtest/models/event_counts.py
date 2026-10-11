@@ -43,6 +43,15 @@ EVENT_KEYS: Tuple[str, ...] = (
     "forced_exit_no_quote",  # 連續無報價（停牌／下市）強制出場的做多部位
 )
 
+# 只有逐筆回測才有的事件：由 `TickSimulator` 建立時加進共用的計數器。
+# **不放進 `EVENT_KEYS`**：日 K 回測的事件報表與 SHORT 回歸基準以 `EVENT_KEYS` 為欄位，
+# 多三個永遠是 0 的欄位只會讓既有基準失效，換不到任何資訊
+TICK_EVENT_KEYS: Tuple[str, ...] = (
+    "expired_ioc",  # 市價（IOC）委託在下一筆無法成交而作廢
+    "expired_at_close",  # 限價（ROD）委託到收盤仍未成交而作廢
+    "rejected_duplicate_pending",  # 同一檔已有在途開倉委託，新的開倉單被略過
+)
+
 
 def new_event_counts() -> Dict[str, int]:
     """建立事件計數器；由 factory 建立後交給引擎、FillModel 與 SettlementModel 共用同一個 dict"""

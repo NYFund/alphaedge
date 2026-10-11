@@ -7,6 +7,7 @@ from loguru import logger
 from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.market.tw.instrument_spec import TwStockSpec
+from core.market.tw.market_calendar import MarketCalendar
 from core.models import PreOpenStockQuote, StockQuote
 from core.utils.instrument import StockUtils
 
@@ -25,8 +26,8 @@ class StockTickDataFeed(TwStockDataFeed):
 
         每個交易日先 `setup_day()` 查一次當天的 tick（依標的範圍），之後：
         - `iter_day_ticks()`：依 `(time, stock_id, seq)` 逐筆產生報價，同一時間戳記跨股票的順序以代號固定，回測才可重現。
-        - 段落快照：盤前參考價（`get_reference_quotes()`）、開盤（`get_open_quotes()`）、
-          某個時點之前的最後一筆（`get_snapshot_quotes()`）、收盤（`get_close_quotes()`）。
+        - 段落快照：盤前參考價（`get_reference_quotes()`）、某個時點之前的最後一筆（`get_snapshot_quotes()`）、
+          收盤（`get_close_quotes()`）。開盤集合競價的成交就是逐筆裡各檔的第一筆，不另給快照。
 
         **報價的 `volume` 是當日累計量、`tick_quote.volume` 是這一筆的量**，與實盤同語意。
 
@@ -81,6 +82,22 @@ class StockTickDataFeed(TwStockDataFeed):
         else:
             self.day_symbols = sorted(ticks["stock_id"].unique().tolist())
         return len(ticks)
+
+    def get_previous_trading_day(self, date: datetime.date) -> datetime.date:
+        """
+        - Description:
+            前一交易日：策略清單模式以它呼叫 `get_live_symbols()`（盤前看得到的最新資料日）
+
+            向行情表查，而不是用回測區間的交易日集合：回測第一天的前一交易日在區間之外。
+        - Parameters:
+            - date: datetime.date
+                交易日
+        - Return:
+            - datetime.date
+                前一交易日
+        """
+
+        return MarketCalendar.previous_trading_day_from_api(self.price, date)
 
     def iter_day_ticks(self) -> Iterator[StockQuote]:
         """
@@ -140,13 +157,6 @@ class StockTickDataFeed(TwStockDataFeed):
         if missing:
             logger.info(f"[Tick] {self.day} 盤前有 {missing} 檔沒有參考價，本段略過")
         return quotes
-
-    def get_open_quotes(self) -> List[StockQuote]:
-        """每檔當天的第一筆（開盤集合競價的成交），依代號排序"""
-
-        if self.day_ticks.empty:
-            return []
-        return self._to_quotes(self.day_ticks.groupby("stock_id", sort=True).head(1))
 
     def get_snapshot_quotes(self, cutoff: datetime.time) -> List[StockQuote]:
         """

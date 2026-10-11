@@ -14,7 +14,14 @@ from core.models import (
     ShortSaleListSnapshot,
 )
 from core.models.fill_config import FillConfig, FuturesFillConfig, VolumeCapPolicy
-from core.utils import Action, PositionType, Scale, ShortMethod, TimeUtils
+from core.utils import (
+    Action,
+    ExecutionStyle,
+    PositionType,
+    Scale,
+    ShortMethod,
+    TimeUtils,
+)
 
 """
 FillModel: 這張單成不成交、以什麼價量成交
@@ -69,25 +76,12 @@ class BaseFillModel(ABC):
 
         pass
 
-    def on_bar_open(self, quotes: List[BaseQuote]) -> None:
-        """
-        一根 bar 開始：重置並累計盤中已發生的高低點
-
-        **TICK 回測在這裡有前視**：引擎把整天的 tick 當成同一根 bar 一次傳進來，
-        累計出來的是全日高低點，而不是「下單當下以前」的高低點——盤中較早的委託
-        會通過稍後才出現的價位。目前沒有 TICK 策略；要做逐筆回測前，得先改成
-        逐筆餵入並逐筆更新區間。
-        """
-
-        self.intraday_range = {}
-        self.update_intraday_range(quotes)
-
     def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
         """
         更新 Tick 級別的當日累計高低點
 
-        只納入傳進來的報價；防不防前視取決於呼叫端怎麼餵。目前 `on_bar_open()`
-        一次餵整天，得到的是全日區間（限制見上方的 `on_bar_open()`）。
+        只納入傳進來的報價；逐筆 simulator 每一筆呼叫一次（每天開始時清空），
+        累計出來的是「到這一筆為止」的區間，沒有前視。
         """
 
         for quote in quotes:
@@ -118,9 +112,8 @@ class BaseFillModel(ABC):
         - Description:
             套用成交量上限：單筆訂單數量不得超過當日成交量的指定比例
 
-            **`quote.volume` 的語意依級別不同**：DAY 為當日總量、TICK 為單筆成交量。
-            TICK 級別下以單筆量當分母沒有意義，故本檢查只在 DAY 級別生效
-            （TICK 的累計量檢查尚未實作）。
+            **只在 DAY 級別生效**：TICK 的報價 `volume` 是當日累計量，逐筆成交的上限另以
+            `TwStockFillModel.get_tick_filled_volume()` 計算（分母是這一筆的對手方委託量）。
 
             股票與期貨是同一套政策（縮量或拒單），只有單位不同——
             單位字由子類的 `VOLUME_UNIT` 提供，不為了一個字各寫一份。
@@ -216,6 +209,86 @@ class BaseFillModel(ABC):
 
         return order
 
+    @staticmethod
+    def get_tick_fill_price(
+        order: BaseOrder, style: ExecutionStyle, quote: BaseQuote, auction: bool
+    ) -> Optional[float]:
+        """
+        - Description:
+            在途委託遇到同一檔的一筆 tick 時，能不能成交、成交價多少
+
+            - **對手方掛單為 0 不成交**：買單要有委賣（`ask_price` > 0）、賣單要有委買；
+              為 0 代表鎖漲停沒有人賣、鎖跌停沒有人買，集合競價也一樣。
+            - **集合競價的那一筆**（開盤的第一筆、收盤集合競價）：以該筆成交價成交；
+              限價單要成交價優於或等於限價才成交。
+            - **連續競價、市價**：買吃這一筆的 `ask_price`、賣吃 `bid_price`。
+            - **連續競價、限價**：成交價**穿越**限價才成交（買要成交價低於限價、賣要高於），
+              成交價取限價。只碰到限價不算：同價位前面還有人排隊，碰到就成交會偏樂觀。
+
+            放在基底：這是「逐筆撮合」的規則，與市場無關；市場差異（名單、券源、成交量）在 `fill_tick()`。
+        - Parameters:
+            - order: BaseOrder
+                在途委託（`price` 是策略的委託價：限價單的限價、市價單的決策價）
+            - style: ExecutionStyle
+                市價或限價
+            - quote: BaseQuote
+                同一檔的這一筆 tick（`tick_quote` 帶 bid/ask）
+            - auction: bool
+                這一筆是否為集合競價的成交
+        - Return:
+            - Optional[float]
+                成交價；這一筆不能成交時為 None
+        """
+
+        tick: Any = quote.tick_quote
+        is_buy: bool = order.action == Action.BUY
+
+        if is_buy and not tick.ask_price:
+            return None
+        if not is_buy and not tick.bid_price:
+            return None
+
+        if auction:
+            price: float = tick.close
+            if style == ExecutionStyle.LIMIT and (
+                (is_buy and price > order.price) or (not is_buy and price < order.price)
+            ):
+                return None
+            return price
+
+        if style == ExecutionStyle.MARKET:
+            return tick.ask_price if is_buy else tick.bid_price
+
+        if (is_buy and tick.close < order.price) or (
+            not is_buy and tick.close > order.price
+        ):
+            return order.price
+        return None
+
+    def fill_tick(
+        self, order: BaseOrder, price: float, quote: BaseQuote, auction: bool
+    ) -> Optional[BaseOrder]:
+        """
+        - Description:
+            逐筆成交：以 `get_tick_fill_price()` 決定的價格成交，套用市場的成交假設
+
+            預設不支援：沒有逐筆資料的市場（期貨）走不到這裡，走到就是組裝錯了。
+        - Parameters:
+            - order: BaseOrder
+                在途委託
+            - price: float
+                這一筆決定的成交價（滑價前）
+            - quote: BaseQuote
+                同一檔的這一筆 tick
+            - auction: bool
+                這一筆是否為集合競價的成交
+        - Return:
+            - Optional[BaseOrder]
+                成交的訂單副本；不可成交時為 None
+        """
+
+        raise NotImplementedError(f"{type(self).__name__} 不支援逐筆成交")
+
     @abstractmethod
     def get_filled_price(self, order: BaseOrder) -> float:
         """
@@ -239,9 +312,7 @@ class BaseFillModel(ABC):
         self, quote: BaseQuote
     ) -> Tuple[Optional[float], Optional[float]]:
         """
-        取得該報價可成交的價格區間：日 K 用 OHLC，Tick 用當日累計高低點
-
-        Tick 的區間目前是全日高低點而非下單當下以前的，有前視（見 `on_bar_open()`）。
+        取得該報價可成交的價格區間：日 K 用 OHLC，Tick 用「到目前這一筆為止」的當日累計高低點
 
         **放在基底而不是各市場一份**：台股與期貨的答案一模一樣，各寫一次必然漂移；
         夾價與平倉腿的區間警告都以此為唯一判準。
@@ -791,6 +862,94 @@ class TwStockFillModel(BaseFillModel):
             return False
 
         return True
+
+    def fill_tick(
+        self, order: BaseOrder, price: float, quote: BaseQuote, auction: bool
+    ) -> Optional[BaseOrder]:
+        """
+        - Description:
+            台股的逐筆成交：交易所名單 → 券源 → 停券 → 滑價 → 成交量上限，與 `fill()` 同一套檢查
+
+            - **成交價是這一筆決定的價格**（對手價、限價或集合競價價），不是策略的委託價；
+              策略的委託價留在副本的 `reference_price`，滑價統計因此量得到「決策價到成交價」的差。
+            - **不再額外加滑價**：bid/ask 已經含價差；策略明確設定 `slippage_bps_*` 時才疊加。
+            - **不做 `validate()` 的區間檢查與夾價**：成交價取自實際的報價，市價買在委賣價本來就可能
+              高於目前為止的最高成交價，用成交區間去擋會把正常的成交拒掉或夾成沒人賣的價格。
+            - **成交量上限的分母**：連續競價是這一筆的對手方委託量（買看 `ask_volume`、賣看 `bid_volume`），
+              集合競價是這一筆的成交量（撮合後對手方掛單常是 0，不代表沒成交）。截斷的部分直接放棄，不留在途。
+        - Parameters:
+            - order: BaseOrder
+                在途委託
+            - price: float
+                這一筆決定的成交價（滑價前）
+            - quote: BaseQuote
+                同一檔的這一筆 tick
+            - auction: bool
+                這一筆是否為集合競價的成交
+        - Return:
+            - Optional[BaseOrder]
+                成交的訂單副本；不可成交時為 None
+        """
+
+        priced: BaseOrder = copy.copy(order)
+        priced.price = price
+
+        # 平盤下的限制看**實際成交價**：市價放空以委買價成交，決策價在平盤上、成交價卻可能在平盤下
+        if not self.check_trading_lists(priced):
+            return None
+        if not self.check_short_borrowable(priced):
+            return None
+        if not self.check_short_not_suspended(priced):
+            return None
+
+        priced.price = self.get_filled_price(priced)
+        priced.reference_price = order.price
+
+        volume: Optional[int] = self.get_tick_filled_volume(order, quote, auction)
+        if volume is None:
+            return None
+        priced.volume = volume
+        return priced
+
+    def get_tick_filled_volume(
+        self, order: BaseOrder, quote: BaseQuote, auction: bool
+    ) -> Optional[int]:
+        """
+        逐筆成交量上限：分母見 `fill_tick()`；未設定 `max_volume_share` 時不限制。
+        截斷與拒單的政策和日 K 相同（`VolumeCapPolicy`）
+        """
+
+        share: Optional[float] = self.config.max_volume_share
+        if not share:
+            return order.volume
+
+        tick: Any = quote.tick_quote
+        available: int
+        if auction:
+            available = tick.volume
+        elif order.action == Action.BUY:
+            available = tick.ask_volume
+        else:
+            available = tick.bid_volume
+
+        cap: int = int(available * share)
+        if order.volume <= cap:
+            return order.volume
+
+        if self.config.volume_cap_policy == VolumeCapPolicy.REJECT or cap <= 0:
+            logger.warning(
+                f"[Fill] {order.symbol} 委託 {order.volume} 張 > 這一筆可成交量上限 "
+                f"{cap} 張（{share:.1%} × {available}），拒單"
+            )
+            self.event_counts["rejected_volume_cap"] += 1
+            return None
+
+        logger.warning(
+            f"[Fill] {order.symbol} 委託 {order.volume} 張縮量至 {cap} 張"
+            f"（這一筆可成交量 {available} 張的 {share:.1%}）"
+        )
+        self.event_counts["truncated_by_volume"] += 1
+        return cap
 
     def get_filled_price(self, order: BaseOrder) -> float:
         """依訂單方向套用滑價；係數為 0 時原價回傳"""

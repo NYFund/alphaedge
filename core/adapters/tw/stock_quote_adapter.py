@@ -27,41 +27,10 @@ class StockQuoteAdapter:
     """
     將不同資料型態（Tick Data 或 Day Data）轉換為統一格式的 StockQuote 物件
 
-    兩個進入點各自完整：`from_day_rows()` 與 `from_tick_rows()`。
+    兩個進入點各自完整：`from_day_rows()` 與 `from_tick_row()`（逐筆資料源一筆一筆轉，不再整天一次轉）。
     """
 
     # === Tick ===
-    @staticmethod
-    def from_tick_rows(ticks: pd.DataFrame, date: datetime.date) -> List[StockQuote]:
-        """
-        - Description:
-            把當日的 tick 表轉成 `StockQuote`
-
-            **查詢由呼叫端負責**：本層是純轉換，自己查資料會讓
-            `core.adapters` 相依 `core.api`，也讓測試為了驗一條轉換規則
-            得先有連線或先造假 API。tick 一次只取一天，避免 RAM 爆掉，
-            那個限制留在 feed 那一側。
-
-            **不做一般股過濾，也不驗價格**：tick 表本來就只會有被訂閱的標的，
-            而單一 tick 的成交價是交易所給的，沒有「無成交日」這種形態。
-        - Parameters:
-            - ticks: pd.DataFrame
-                當日的 tick 表
-            - date: datetime.date
-                要轉換的日期
-        - Return:
-            - List[StockQuote]
-                轉換後的 StockQuote 物件列表
-        """
-
-        if ticks is None or ticks.empty:
-            return []
-
-        return [
-            StockQuoteAdapter.from_tick_row(tick, date)
-            for tick in ticks.itertuples(index=False)
-        ]
-
     @staticmethod
     def from_tick_row(row: Any, date: datetime.date) -> StockQuote:
         """

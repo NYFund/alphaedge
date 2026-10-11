@@ -166,7 +166,7 @@ def finish_day(self, date, close_quotes):
 
 | 路徑 | 位置 | 輸入 | 命名 |
 |---|---|---|---|
-| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_rows()`／`combine_sessions()` |
+| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_row()`／`combine_sessions()` |
 | 實盤 | `core/broker/tw/shioaji_quote_stream.py` | 券商的 `Snapshot`／逐筆推播 | `from_stock_snapshot()`／`from_futures_snapshot()`／`from_tick_message()` |
 
 ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心。

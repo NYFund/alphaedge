@@ -3,6 +3,7 @@ from typing import List, Optional
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
+from core.backtest.datafeed.tw.stock_tick_datafeed import StockTickDataFeed
 from core.backtest.models.fill_model import TwFuturesFillModel, TwStockFillModel
 from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
@@ -12,10 +13,12 @@ from core.backtest.overrides import BacktestOverrides
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
 from core.backtest.simulator.bar_simulator import BarSimulator
+from core.backtest.simulator.tick_simulator import TickSimulator
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
+from core.market.tw.segment_schedule import TW_STOCK_SEGMENTS
 from core.models import FuturesAccount, StockAccount
 from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.models.fill_config import FillConfig, FuturesFillConfig
@@ -24,7 +27,7 @@ from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy, RemovedStrategySettingError
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
-from core.utils import InstrumentType, Market, ShortMethod, TickUniverse
+from core.utils import InstrumentType, Market, Scale, ShortMethod, TickUniverse
 
 """Backtester factory: **回測路徑**唯一一處依（市場, 商品）組合分派的地方"""
 
@@ -134,6 +137,9 @@ def build_tw_stock_backtester(
         check_day_trade_list=cost_model.config.short_constraint.check_day_trade_list,
     )
 
+    # 級別在組裝前已依 `--scale` 寫回策略
+    is_tick: bool = strategy.scale == Scale.TICK
+
     settlement: TwStockSettlementModel = TwStockSettlementModel(
         position_manager=position_manager,
         cost_model=cost_model,
@@ -154,11 +160,14 @@ def build_tw_stock_backtester(
         fill_model=fill_model,
         cost_model=cost_model,
         settlement=settlement,
-        data_feed=TwStockDataFeed(),
+        data_feed=StockTickDataFeed() if is_tick else TwStockDataFeed(),
         reporter_cls=StockBacktestReporter,
-        # `Scale.TICK` 目前同樣交給 BarSimulator（整天的 tick 當一根 bar）；
-        # 逐筆重放的 simulator 完成後，這裡改依策略的級別選類別
-        simulator_cls=BarSimulator,
+        # 逐筆依台股的段落時窗重放；日 K 一天一根 bar
+        build_simulator=(
+            (lambda engine: TickSimulator(engine, TW_STOCK_SEGMENTS))
+            if is_tick
+            else BarSimulator
+        ),
         event_counts=event_counts,
         adjusted_price=adjusted_price,
         write_artifacts=write_artifacts,
@@ -285,7 +294,7 @@ def build_tw_futures_backtester(
         settlement=settlement,
         data_feed=data_feed,
         reporter_cls=FuturesBacktestReporter,
-        simulator_cls=BarSimulator,
+        build_simulator=BarSimulator,
         event_counts=event_counts,
         adjusted_price=False,
         write_artifacts=write_artifacts,

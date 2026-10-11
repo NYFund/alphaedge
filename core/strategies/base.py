@@ -62,10 +62,8 @@ class BaseStrategy(ABC):
         # （挑最強的前 N 檔）的邏輯必須自己在策略內保存其他標的的最新報價——
         # 逐筆之下沒有人會把全市場一次交給你。
         #
-        # **它同時會擋掉 `Scale.TICK` 的整天回測**（見 `Backtester.__init__`）：
-        # 同一個 `check_open_signal(stock_quotes)`，實盤拿到長度 1 的 list、
-        # TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。
-        # 兩邊都跑得完、都不報錯，而訊號完全不一樣——那是最難查的一種錯。
+        # `Scale.TICK` 回測由 `TickSimulator` 逐筆重放，每次同樣只給一筆，與實盤是同一個契約，
+        # 所以同一支策略不改程式就能回測與實盤。
         #
         # 與當沖無關：能不能當沖看下方的 `allow_day_trade`。
         self.is_tick_triggered: bool = False  # 盤中逐筆觸發（實盤）

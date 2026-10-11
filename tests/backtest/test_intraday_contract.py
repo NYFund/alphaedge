@@ -2,21 +2,21 @@ import datetime
 
 import pytest
 
-from core.backtest.backtester import Backtester, IntradayScaleMismatchError
+from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
+from core.backtest.overrides import BacktestOverrides
+from core.backtest.simulator.bar_simulator import BarSimulator
+from core.backtest.simulator.tick_simulator import TickSimulator
 from core.strategies.base import BaseStrategy
-from core.utils import Scale
+from core.utils import Scale, TickUniverse
 from strategies.loader import StrategyLoader
 
 """
-盤中逐筆策略的契約守門
+盤中逐筆策略的回測契約
 
-同一個 `generate_open_signals(stock_quotes)`，實盤逐筆拿到**長度 1** 的 list，
-`Scale.TICK` 回測卻**一次拿到整天**的 tick——兩邊的 list 語意根本不同。
-
-需要橫斷面的邏輯（挑當下最強的前 N 檔）在回測裡看起來完全正常，上了實盤每次只
-看得到一檔，訊號完全不同，**而且兩邊都跑得完、都不報錯**。那是最難查的一種錯，
-故在建立引擎時就讓它現形。
+同一個 `generate_open_signals(stock_quotes)`，實盤逐筆拿到**長度 1** 的 list。
+`Scale.TICK` 回測由 `TickSimulator` 逐筆重放、每次也只給一筆，兩邊是同一個契約，
+所以宣告逐筆觸發的策略可以跑 TICK 回測（舊版整天一次給，只能拒絕）。
 """
 
 
@@ -60,36 +60,23 @@ def test_default_strategy_is_not_intraday() -> None:
     assert tick_triggered == {"IntradayMomentumStrategy"}
 
 
-def test_intraday_strategy_refuses_tick_backtest() -> None:
-    """宣告逐筆觸發的策略跑 `Scale.TICK` 回測要當場拒絕"""
+def test_intraday_strategy_runs_tick_backtest_on_tick_simulator() -> None:
+    """宣告逐筆觸發的策略跑 `Scale.TICK` 回測：組出逐筆 simulator，不再拒絕"""
 
-    with pytest.raises(IntradayScaleMismatchError, match="語意不同"):
-        build_backtester(make_strategy(is_tick_triggered=True, scale=Scale.TICK))
+    backtester: Backtester = build_backtester(
+        make_strategy(is_tick_triggered=True, scale=Scale.TICK),
+        write_artifacts=False,
+        overrides=BacktestOverrides(tick_universe=TickUniverse.ALL),
+    )
+
+    assert isinstance(backtester.simulator, TickSimulator)
 
 
 def test_intraday_strategy_may_still_run_day_backtest() -> None:
-    """
-    改用 `Scale.DAY` 就放行
+    """改用 `Scale.DAY` 照樣可以跑日 K 回測（日 K 近似，結果不可當實盤預估）"""
 
-    擋的是「報價 list 語意不同」，不是「盤中策略不准回測」——
-    要估量級的人明確改設定即可，只是結果不可當實盤預估。
-    """
-
-    assert build_backtester(make_strategy(is_tick_triggered=True, scale=Scale.DAY))
-
-
-def test_non_intraday_tick_backtest_is_untouched() -> None:
-    """
-    既有的 TICK 回測語意不動：沒宣告逐筆的策略不受這道守門影響
-
-    **直接驗守門本身而不是建一個 TICK 引擎**：TICK 回測要 TimescaleDB，
-    沒啟動資料庫的環境會在載入資料時就先炸掉，那樣這條測試驗到的是相依有沒有裝，
-    不是守門有沒有放行。
-    """
-
-    backtester = build_backtester(
-        make_strategy(is_tick_triggered=False, scale=Scale.DAY)
+    backtester: Backtester = build_backtester(
+        make_strategy(is_tick_triggered=True, scale=Scale.DAY), write_artifacts=False
     )
-    backtester.scale = Scale.TICK
 
-    backtester._reject_intraday_tick_backtest()
+    assert isinstance(backtester.simulator, BarSimulator)
