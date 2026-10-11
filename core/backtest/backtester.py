@@ -10,6 +10,7 @@ from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.settlement_model import BaseSettlementModel
 from core.backtest.report.base import BaseBacktestReporter
 from core.backtest.simulator.base import BaseSimulator
+from core.backtest.simulator.tick_universe import has_live_symbols
 from core.config import BACKTEST_RESULT_DIR_PATH
 from core.datafeed.base import BaseDataFeed
 from core.market.cost_model import BaseCostModel
@@ -22,6 +23,7 @@ from core.utils import (
     BarExecutionSequence,
     PositionType,
     Scale,
+    TickUniverse,
     TimeUtils,
 )
 from core.utils.log_manager import LogManager
@@ -31,6 +33,10 @@ from core.utils.log_manager import LogManager
 
 class IntradayScaleMismatchError(RuntimeError):
     """逐筆觸發的策略與整天一次給的 TICK 回測，報價語意不同"""
+
+
+class InvalidTickUniverseError(ValueError):
+    """TICK 回測的標的範圍不合法：DAY 回測帶了範圍，或策略沒有清單卻選了策略清單模式"""
 
 
 class Backtester:
@@ -62,6 +68,7 @@ class Backtester:
         event_counts: Optional[Dict[str, int]] = None,
         adjusted_price: bool = False,
         write_artifacts: bool = True,
+        tick_universe: Optional[TickUniverse] = None,
     ) -> None:
         self.strategy: BaseStrategy = strategy  # 要回測的策略
         self.account: BaseAccount = account  # 虛擬帳戶資訊
@@ -114,11 +121,17 @@ class Backtester:
         # 全都會一起寫進 `logs/backtest/<策略>.log`
         self.write_artifacts: bool = write_artifacts
 
+        # TICK 回測每天讀哪些標的（`--tick-universe`）；None 表示沿用預設，
+        # 由 `validate_tick_universe()` 決定最終值（DAY 為 None、TICK 預設策略清單）
+        self.tick_universe: Optional[TickUniverse] = tick_universe
+
         # 「一天怎麼跑」：由 factory 依級別選定類別，simulator 經由本引擎取用帳戶與 model
         self.simulator: BaseSimulator = simulator_cls(self)
 
+        # 逐筆觸發策略的拒絕排在標的範圍之前：它說的是「這種回測根本不該跑」，比範圍不合法更根本
         self.validate_scale()
         self._reject_intraday_tick_backtest()
+        self.validate_tick_universe()
 
         self.setup()
 
@@ -135,6 +148,38 @@ class Backtester:
         """
 
         self.strategy.validate_scale()
+
+    def validate_tick_universe(self) -> None:
+        """
+        - Description:
+            決定並檢查 TICK 回測的標的範圍
+
+            - DAY 回測帶了範圍：拒絕，避免以為選項有作用。
+            - TICK 回測沒指定：預設策略清單（與實盤一致，也比較快）。
+            - 選策略清單、策略卻沒覆寫 `get_live_symbols()`：拒絕並提示改用全市場——
+              **不自動退回全市場**，那會在不知情下改跑一天上百萬筆的全市場。
+        - Raise:
+            - InvalidTickUniverseError
+                範圍不合法
+        """
+
+        if self.scale != Scale.TICK:
+            if self.tick_universe is not None:
+                raise InvalidTickUniverseError(
+                    f"--tick-universe 只在 TICK 回測有效（目前級別：{Scale(self.scale).value}）"
+                )
+            return
+
+        if self.tick_universe is None:
+            self.tick_universe = TickUniverse.STRATEGY
+
+        if self.tick_universe == TickUniverse.STRATEGY and not has_live_symbols(
+            self.strategy
+        ):
+            raise InvalidTickUniverseError(
+                f"{type(self.strategy).__name__} 沒有覆寫 get_live_symbols()，"
+                "無法用策略清單決定要讀哪些標的；要讀全市場請改用 --tick-universe all"
+            )
 
     def _reject_intraday_tick_backtest(self) -> None:
         """

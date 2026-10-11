@@ -282,7 +282,7 @@ python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 - `--strategy` takes a strategy class name; existing strategies live in `strategies/stock/` and `strategies/futures/`.
-- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--scale` switches to another bar scale the strategy declares as supported; `--show` opens charts in a browser. Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
+- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--scale` switches to another bar scale the strategy declares as supported; `--tick-universe` picks the symbols a TICK backtest reads; `--show` opens charts in a browser. Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
 **Step 3: Open the frontend to view results**

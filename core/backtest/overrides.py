@@ -4,7 +4,7 @@ from typing import Dict, Optional
 
 from core.config import DEFAULT_FUTURES_START_DATE, DEFAULT_PRICE_START_DATE
 from core.strategies.base import BaseStrategy, UnsupportedScaleError
-from core.utils import InstrumentType, Scale
+from core.utils import InstrumentType, Scale, TickUniverse
 
 """
 回測執行參數的覆寫：區間、初始資金與級別
@@ -34,6 +34,9 @@ class BacktestOverrides:
     end: Optional[datetime.date] = None
     capital: Optional[float] = None
     scale: Optional[Scale] = None
+    # TICK 回測的標的範圍。不是策略的設定，不寫回策略：由 factory 交給引擎，
+    # 是否合法取決於最終級別與策略有沒有清單，由 `Backtester.validate_tick_universe()` 判斷
+    tick_universe: Optional[TickUniverse] = None
 
     def apply_to(self, strategy: BaseStrategy) -> None:
         """

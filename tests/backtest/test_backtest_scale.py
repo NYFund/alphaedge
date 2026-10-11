@@ -7,7 +7,7 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.strategies.base import UnsupportedScaleError
-from core.utils import Scale
+from core.utils import Scale, TickUniverse
 from strategies.stock.volume_breakout_momentum_strategy import (
     VolumeBreakoutMomentumStrategy,
 )
@@ -108,7 +108,8 @@ def test_override_inside_supported_scales_reaches_the_engine(
     backtester: Backtester = build_backtester(
         strategy,
         write_artifacts=False,
-        overrides=BacktestOverrides(scale=Scale.TICK),
+        # 這支策略沒有盤前清單，TICK 要明確選全市場（策略清單模式會拒絕）
+        overrides=BacktestOverrides(scale=Scale.TICK, tick_universe=TickUniverse.ALL),
     )
 
     assert strategy.scale == Scale.TICK

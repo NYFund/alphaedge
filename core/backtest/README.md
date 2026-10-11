@@ -432,6 +432,7 @@ python -m apps.backtest --strategy <StrategyName>
 - `--strategy`: 指定要使用的策略類別名稱（必填）
 - `--start` / `--end`（`YYYY-MM-DD`）、`--capital`: 覆寫策略宣告的回測區間與初始資金，三者皆選填。
 - `--scale DAY|TICK`: 改用另一個回測級別，只能選策略 `supported_scales` 宣告支援的（未宣告時只支援策略的 `scale`），否則以用法錯誤拒絕。
+- `--tick-universe strategy|all`: TICK 回測每天讀哪些標的的逐筆資料。`strategy`（TICK 的預設）＝策略 `get_live_symbols()` 以前一交易日給的清單加上當時的持倉，與實盤盤前訂閱同規則；`all`＝當天有成交的全市場。策略沒覆寫 `get_live_symbols()` 卻選 `strategy` 會當場拒絕並提示改用 `all`（不自動退回全市場）；DAY 回測帶了也會拒絕。
   覆寫在組裝任何元件之前寫回策略實例（`core/backtest/overrides.py` 的 `BacktestOverrides`），
   不合法時（起日晚於迄日、早於歷史資料起點、資金不為正）以結束碼 2 結束
 - `--show` / `--no-show`: 回測結束後要不要在瀏覽器開圖。**預設不開**——圖本來就會
