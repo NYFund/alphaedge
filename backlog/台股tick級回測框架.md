@@ -48,8 +48,8 @@
 |------|----------|----------|----------|:----:|--------------|
 | Phase0-1 | 定案介面細節與命名 | 本文件〈已定案〉 | 使用者確認 | ✅ | **✅ 2026-10-10**：介面七點與架構命名（〈已定案〉第 8 點）全數定案；同日追加第 9 點引擎內部改名 |
 | Phase1-1 | 策略宣告支援的級別（`supported_scales`）＋回測 `--scale` 覆寫 | `core/strategies/base.py`、`apps/backtest.py`、`core/backtest/backtester.py`、各策略 | 支援範圍外的 `--scale` 當場報錯；不帶 `--scale` 時行為不變 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`supported_scales`、`--scale`、`Backtester.validate_scale()` 完成；策略檔不必改（預設只支援自己的 `scale`），逐支宣告留給 Phase4-1／Phase4-2 |
-| Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1 |
-| Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ⬜ | 相依 Phase0-1；動到實盤程式，部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後） |
+| Phase1-2 | 標的範圍選項（策略清單／全市場） | `apps/backtest.py`、`core/backtest/` | 兩個選項各自只讀到預期的標的；策略沒有清單時選策略清單當場報錯 | ⬜ | 相依 Phase0-1、Phase2-2。**2026-10-10 改排在 Phase2-2 之後**：選項要靠 `StockTickDataFeed.setup_day(date, symbols)` 才有作用，先做的話 TICK 暫走的整天一根 bar 會讀全市場、選項被默默忽略 |
+| Phase1-3 | `live_schedule` 改名為 `execution_schedule`（回測與實盤共用） | `core/strategies/base.py`、`core/live/`（含 `strategy_guard.py`）、`strategies/`、`tests/`、相關文件 | `grep -rn live_schedule` 無結果；實盤與回測測試全數通過 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：全專案改名完成，舊名啟動即報錯；`resolve_hook_timing()` 移到 `core/strategies/base.py`（偏離原規格，見步驟詳述）。動到實盤程式：部署跟著本分支合併（在 `實盤下單架構規劃.md` Phase7-1 演練結束後），合併後要重啟常駐行程 |
 | Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構）＋引擎內部兩處改名 | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`core/backtest/models/`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表；`on_bar_close`、`prev_close` grep 為零 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：改名 `48752a8` 與抽 simulator 各一個 commit；回歸雙線零變動、5 支策略 2024 全年 25 個報表 CSV 逐位元相同。偏離原規格：多一個 `load_day()`（見步驟詳述） |
 | Phase1-5 | 每日市場狀態改由各 model 自己準備 | `core/backtest/backtester.py`（`prepare_day()`）、`core/backtest/models/`、`core/backtest/datafeed/` | 回歸雙線零變動；`prepare_day()` 不再逐一推台股專屬 hook | ⬜ | 相依 Phase1-4；2026-10-10 承接 `框架對稱化重構.md`〈與其他文件的交集〉 |
 | Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`stock_ids` 與 `cum_volume` 完成；累計量定案在 pandas 端算（實測較快，見步驟詳述）；真實資料 200 檔清單一天 0.73 秒 |
@@ -164,7 +164,7 @@
 - **驗證方式**：兩個選項各自只讀到預期的標的；`strategy` 模式下持倉標的即使掉出清單也會被讀到；策略沒有清單時選 `strategy` 當場報錯；DAY 帶 `--tick-universe` 報錯。
 - **相依**：Phase0-1。
 
-### Phase1-3. `live_schedule` 改名為 `execution_schedule` ⬜
+### Phase1-3. `live_schedule` 改名為 `execution_schedule` ✅
 
 - **目的**：TICK 回測與實盤讀同一份段落設定（〈已定案〉第 6 點），名稱不能再寫 live。
 - **做法**：
@@ -178,6 +178,12 @@
 - **驗證方式**：`grep -rn "live_schedule" core apps strategies tests docs` 只剩 `check_removed_settings()` 的對照表；`tests/live/` 與 `strategy_guard` 測試全數通過；設定舊名的策略啟動即報錯。
 - **相依**：Phase0-1。動到實盤程式：部署跟著本分支合併，排在 `實盤下單架構規劃.md` Phase7-1（模擬環境端到端演練）結束之後；
   launchd 排程跑的是主目錄的程式，合併後要重啟常駐行程。
+- **結果（2026-10-10，`feature/tick-backtest`）**：
+  - 17 檔改名（含 `core/live/strategy_guard.py`、`core/live/trader.py`、`strategies/` 四支策略、`tests/live/` 五檔、文件三份）。`_REMOVED_SETTINGS` 新增 `live_schedule`，設定舊名時回測（`build_backtester()`）與實盤（`strategy_guard`）啟動都會報錯。
+  - `BaseStrategy` 的說明移出 `=== Live Setting ===`，改成獨立的「Execution Schedule：實盤與 TICK 回測共用，DAY 回測不讀」區塊（依 Coding Style 用 `#` 註解，不再新增三引號分組）；`Live Setting` 的「回測完全不讀這一區」因此仍然成立。
+  - **偏離原規格：`resolve_hook_timing()` 放在 `core/strategies/base.py`（模組層級函式），不是 `core/portfolio/order_rules.py`**：它要讀策略，而 `core.strategies` 已經 import `core.portfolio`，放進 `order_rules` 會循環相依；
+    `core/strategies/` 是回測與實盤都能 import 的策略契約層，分層檢查也只准它放契約檔，所以不另開新檔。`trader.py`、`strategy_guard.py`、測試改從這裡 import。
+  - 驗證：`grep -rn live_schedule` 只剩移除對照表、`strategies/README.md` 的舊名說明與移除欄位測試；`tests/live/` 950 passed；回歸雙線零變動；完整 pytest 2877 passed；突變「拿掉對照表的 `live_schedule`」移除欄位測試轉紅。
 
 ### Phase1-4. 日 K 路徑抽成 `BarSimulator`（純重構）＋引擎內部兩處改名 ✅
 
