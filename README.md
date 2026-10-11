@@ -283,7 +283,7 @@ python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 - `--strategy` 填策略類別名稱，現有策略在 `strategies/stock/` 與 `strategies/futures/`。
-- 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--show` 在瀏覽器開圖。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
+- 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--scale` 改用策略支援的另一個回測級別，`--show` 在瀏覽器開圖。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
 **步驟 3：開啟前端檢視結果**

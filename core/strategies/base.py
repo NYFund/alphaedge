@@ -1,6 +1,6 @@
 import datetime
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
@@ -30,6 +30,10 @@ _REMOVED_SETTINGS: Dict[str, str] = {
 
 class RemovedStrategySettingError(ValueError):
     """策略設定了已移除的欄位：引擎不會讀它，照跑只會靜默套用預設值"""
+
+
+class UnsupportedScaleError(ValueError):
+    """回測級別不在策略宣告的支援範圍內：只寫了日 K 邏輯的策略吃到 tick 會默默算錯"""
 
 
 class BaseStrategy(ABC):
@@ -93,6 +97,12 @@ class BaseStrategy(ABC):
 
         """ === Backtest Setting === """
         self.scale: str = Scale.DAY  # Backtest scale: DAY / TICK
+        # 回測可用 `--scale` 切換的級別；**None ＝ 只支援 `self.scale`**。
+        # 例如同時寫了日 K 與逐筆邏輯的策略設 `{Scale.DAY, Scale.TICK}`。
+        #
+        # 基底不寫死成 `{self.scale}`：子類在 `super().__init__()` 之後才改 `scale`，
+        # 這裡先記下的話會留著基底的 DAY，宣告 TICK 的策略反而不支援 TICK
+        self.supported_scales: Optional[Set[Scale]] = None
         self.start_date: datetime.date = None  # Optional: 回測起始日
         self.end_date: datetime.date = None  # Optional: 回測結束日
 
@@ -172,6 +182,42 @@ class BaseStrategy(ABC):
             for name, hint in _REMOVED_SETTINGS.items()
             if name in vars(self)
         ]
+
+    def get_supported_scales(self) -> Set[Scale]:
+        """策略支援的回測級別：有宣告 `supported_scales` 就用它，否則只有 `self.scale`"""
+
+        if self.supported_scales is None:
+            return {Scale(self.scale)}
+        return {Scale(scale) for scale in self.supported_scales}
+
+    def validate_scale(self, scale: Optional[Scale] = None) -> None:
+        """
+        - Description:
+            檢查回測級別的宣告：`self.scale` 必須在支援範圍內；指定 `scale` 時它也必須在範圍內
+
+            兩個欄位寫得互相矛盾（宣告 TICK 卻只支援 DAY）時當場報錯，不默默挑一個來跑。
+        - Parameters:
+            - scale: Optional[Scale]
+                要改用的級別（回測 `--scale`）；None 時只檢查宣告本身
+        - Raise:
+            - UnsupportedScaleError
+                宣告矛盾，或指定的級別不在支援範圍內
+        """
+
+        supported: Set[Scale] = self.get_supported_scales()
+        supported_text: str = "、".join(sorted(s.value for s in supported))
+        name: str = type(self).__name__
+
+        if Scale(self.scale) not in supported:
+            raise UnsupportedScaleError(
+                f"{name} 的 scale={Scale(self.scale).value} 不在它宣告的 "
+                f"supported_scales（{supported_text}）內，請修正策略設定"
+            )
+        if scale is not None and Scale(scale) not in supported:
+            raise UnsupportedScaleError(
+                f"{name} 不支援 {Scale(scale).value} 級別回測（支援：{supported_text}）；"
+                "要支援請在策略宣告 supported_scales 並實作該級別的邏輯"
+            )
 
     @abstractmethod
     def setup_account(self, account: BaseAccount) -> None:

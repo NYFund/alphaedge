@@ -588,6 +588,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 |------|------|------|--------|
 | `is_backtest` | `bool` | 是否為回測模式 | `True` |
 | `scale` | `str` | 回測級別：`Scale.DAY`、`Scale.TICK` | `Scale.DAY` |
+| `supported_scales` | `Optional[Set[Scale]]` | 回測可用 `--scale` 切換的級別；`None` 表示只支援 `scale`。同時寫了日 K 與逐筆邏輯的策略才設成 `{Scale.DAY, Scale.TICK}`；`scale` 不在集合內時建立回測當場報錯 | `None` |
 | `start_date` | `datetime.date` | 回測起始日期 | `None` |
 | `end_date` | `datetime.date` | 回測結束日期 | `None` |
 
@@ -595,6 +596,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 
 - **`Scale.DAY`**: 日線回測，使用每日收盤價
 - **`Scale.TICK`**: 逐筆回測，使用每筆成交資料（僅台股；期貨 Tick 回測未實作）
+- 回測時可用 `--scale DAY`／`--scale TICK`（大小寫皆可）改用另一個級別，**只能選策略 `supported_scales` 宣告支援的**，否則以用法錯誤（退出碼 2）拒絕並列出支援的級別。只寫了日 K 邏輯的策略吃到 tick 不會報錯、只會默默算錯，所以預設只支援自己宣告的 `scale`。
 
 ### 盤中逐筆策略：`is_tick_triggered`
 

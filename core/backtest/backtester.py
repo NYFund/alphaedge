@@ -117,9 +117,24 @@ class Backtester:
         # 「一天怎麼跑」：由 factory 依級別選定類別，simulator 經由本引擎取用帳戶與 model
         self.simulator: BaseSimulator = simulator_cls(self)
 
+        self.validate_scale()
         self._reject_intraday_tick_backtest()
 
         self.setup()
+
+    def validate_scale(self) -> None:
+        """
+        - Description:
+            回測級別必須在策略宣告的支援範圍內
+
+            `--scale` 的覆寫在組裝前就驗過；這裡守的是不經覆寫的路徑（實盤 parity、
+            直接呼叫 factory），策略的 `scale` 與 `supported_scales` 矛盾時同樣當場報錯。
+        - Raise:
+            - UnsupportedScaleError
+                級別不在支援範圍內
+        """
+
+        self.strategy.validate_scale()
 
     def _reject_intraday_tick_backtest(self) -> None:
         """

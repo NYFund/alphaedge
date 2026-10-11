@@ -8,7 +8,12 @@ from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.config import SHOW_FIGURES_ENV_VAR, resolve_show_figures
 from core.datafeed.base import TradingListCoverageError
-from core.strategies.base import BaseStrategy, RemovedStrategySettingError
+from core.strategies.base import (
+    BaseStrategy,
+    RemovedStrategySettingError,
+    UnsupportedScaleError,
+)
+from core.utils import Scale
 
 from ._common import EXIT_USAGE, _resolve_strategy_or_exit
 
@@ -18,6 +23,7 @@ from ._common import EXIT_USAGE, _resolve_strategy_or_exit
 - `--strategy` 收的是**策略的類別名稱**，只接一支；可用的策略以
   `strategies/{stock,futures}/` 底下的非抽象子類為準
 - `--start`／`--end`／`--capital` 覆寫策略宣告的回測區間與初始資金，不帶時沿用策略預設
+- `--scale` 改用另一個回測級別，只能選策略 `supported_scales` 宣告支援的，否則當場拒絕
 - 本 parser 只認得回測的旗標：帶了實盤旗標（例如 `--production`）時，
   argparse 會直接以用法錯誤拒絕，不可能「以為在下單、其實跑了回測」
 
@@ -73,6 +79,12 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=float,
         help="覆寫初始資金（不帶時沿用策略預設）",
     )
+    parser.add_argument(
+        "--scale",
+        type=str.upper,
+        choices=[scale.value for scale in Scale],
+        help="改用的回測級別（不帶時沿用策略的 scale；只能選策略支援的）",
+    )
     # 回測畫完的五張圖要不要在瀏覽器開起來。**預設不開**：圖本來就會存成 PNG，
     # 自動開啟在批次掃參數時一次彈出幾十個分頁，在無頭環境（CI、容器、nohup）更是直接失敗
     show_group = parser.add_mutually_exclusive_group()
@@ -109,15 +121,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     strategy: BaseStrategy = _resolve_strategy_or_exit(args.strategy)()
 
     overrides: BacktestOverrides = BacktestOverrides(
-        start=args.start, end=args.end, capital=args.capital
+        start=args.start,
+        end=args.end,
+        capital=args.capital,
+        scale=Scale(args.scale) if args.scale is not None else None,
     )
     try:
         backtester: Backtester = build_backtester(strategy, overrides=overrides)
     except InvalidBacktestOverridesError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
-    except RemovedStrategySettingError as exc:
-        # 策略照舊寫法設了已移除的欄位：訊息已寫明改用什麼，不需要 traceback
+    except (RemovedStrategySettingError, UnsupportedScaleError) as exc:
+        # 策略照舊寫法設了已移除的欄位，或 scale 與 supported_scales 互相矛盾：
+        # 訊息已寫明怎麼改，不需要 traceback
         print(str(exc), file=sys.stderr)
         return 1
     except TradingListCoverageError as exc:

@@ -79,7 +79,7 @@ sequenceDiagram
     Loader-->>CLI: {類別名稱: 策略類別}
     CLI->>F: build_backtester(strategy, overrides)
 
-    Note over F: 先套用 --start／--end／--capital 覆寫<br/>再依 strategy.market 組裝<br/>account / position_manager / 四個 model / data_feed
+    Note over F: 先套用 --start／--end／--capital／--scale 覆寫<br/>再依 strategy.market 組裝<br/>account / position_manager / 四個 model / data_feed
     F->>BT: Backtester(全部注入)
     CLI->>BT: run()
     BT->>Feed: setup(strategy)（建立唯一的 SQLite 連線）
@@ -129,7 +129,7 @@ sequenceDiagram
 
 | 檔案 | 職責 | 被誰呼叫 |
 |------|------|----------|
-| `apps/backtest.py` | CLI 解析（`--strategy`、`--start`／`--end`／`--capital`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
+| `apps/backtest.py` | CLI 解析（`--strategy`、`--start`／`--end`／`--capital`／`--scale`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
 | `apps/_common.py` | 兩個入口共用的策略名解析：只載入指定策略，找不到時才全掃描列出可用策略並以退出碼 2 結束 | `apps/backtest.py`、`apps/live.py` |
 | `strategies/loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描頂層 `strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
 | `core/backtest/overrides.py` | `BacktestOverrides`：命令列的回測區間與初始資金覆寫，在組裝任何元件之前套用到策略 | `apps/backtest.py`、實盤 parity |

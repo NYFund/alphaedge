@@ -431,6 +431,7 @@ python -m apps.backtest --strategy <StrategyName>
 - 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（必須帶 `--phase`）
 - `--strategy`: 指定要使用的策略類別名稱（必填）
 - `--start` / `--end`（`YYYY-MM-DD`）、`--capital`: 覆寫策略宣告的回測區間與初始資金，三者皆選填。
+- `--scale DAY|TICK`: 改用另一個回測級別，只能選策略 `supported_scales` 宣告支援的（未宣告時只支援策略的 `scale`），否則以用法錯誤拒絕。
   覆寫在組裝任何元件之前寫回策略實例（`core/backtest/overrides.py` 的 `BacktestOverrides`），
   不合法時（起日晚於迄日、早於歷史資料起點、資金不為正）以結束碼 2 結束
 - `--show` / `--no-show`: 回測結束後要不要在瀏覽器開圖。**預設不開**——圖本來就會

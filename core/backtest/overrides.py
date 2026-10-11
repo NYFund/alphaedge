@@ -3,16 +3,16 @@ from dataclasses import dataclass
 from typing import Dict, Optional
 
 from core.config import DEFAULT_FUTURES_START_DATE, DEFAULT_PRICE_START_DATE
-from core.strategies.base import BaseStrategy
-from core.utils import InstrumentType
+from core.strategies.base import BaseStrategy, UnsupportedScaleError
+from core.utils import InstrumentType, Scale
 
 """
-回測執行參數的覆寫：區間與初始資金
+回測執行參數的覆寫：區間、初始資金與級別
 
 策略在 `__init__` 宣告預設的回測區間與資金；要換區間或資金（參數掃描、
 walk-forward、同一支策略比較不同區間）時，由呼叫端傳入 `BacktestOverrides`，
 在組裝任何元件之前寫回策略實例——帳戶、資料源、`Backtester` 與策略自己的
-資料預載都讀策略上的這三個值，所以只能在最前面改一次，不能各自覆寫。
+資料預載都讀策略上的這些值，所以只能在最前面改一次，不能各自覆寫。
 """
 
 # 各商品類別的歷史資料起點；更早的區間查不到任何行情，回測會整段空跑
@@ -23,16 +23,17 @@ _DATA_START_DATES: Dict[InstrumentType, datetime.date] = {
 
 
 class InvalidBacktestOverridesError(ValueError):
-    """覆寫值不合法：起日晚於迄日、早於資料起點，或資金不為正"""
+    """覆寫值不合法：起日晚於迄日、早於資料起點、資金不為正，或級別不在策略的支援範圍內"""
 
 
 @dataclass(frozen=True)
 class BacktestOverrides:
-    """回測區間與初始資金的覆寫值；欄位為 None 表示沿用策略的預設"""
+    """回測區間、初始資金與級別的覆寫值；欄位為 None 表示沿用策略的預設"""
 
     start: Optional[datetime.date] = None
     end: Optional[datetime.date] = None
     capital: Optional[float] = None
+    scale: Optional[Scale] = None
 
     def apply_to(self, strategy: BaseStrategy) -> None:
         """
@@ -47,6 +48,8 @@ class BacktestOverrides:
         - Raise:
             - InvalidBacktestOverridesError
                 覆寫後的值不合法
+            - UnsupportedScaleError
+                策略自己的 `scale` 與 `supported_scales` 互相矛盾（策略寫錯，不是覆寫值的問題）
         """
 
         start: Optional[datetime.date] = (
@@ -70,7 +73,17 @@ class BacktestOverrides:
         if self.capital is not None and self.capital <= 0:
             raise InvalidBacktestOverridesError(f"初始資金必須為正數：{self.capital}")
 
+        # 先驗策略自己的宣告：矛盾的宣告是策略的錯，蓋掉 `scale` 之後就看不出來了
+        strategy.validate_scale()
+        if self.scale is not None:
+            try:
+                strategy.validate_scale(self.scale)
+            except UnsupportedScaleError as exc:
+                raise InvalidBacktestOverridesError(str(exc)) from exc
+
         strategy.start_date = start
         strategy.end_date = end
         if self.capital is not None:
             strategy.init_capital = self.capital
+        if self.scale is not None:
+            strategy.scale = Scale(self.scale)
