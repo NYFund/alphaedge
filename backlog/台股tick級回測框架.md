@@ -56,10 +56,10 @@
 | Phase2-2 | 台股逐筆資料源 `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py`（新，繼承 `StockDataFeed`） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：資料源與快照完成，一般股過濾放在這一步；尚未接上引擎（Phase3-1 由 factory 在 TICK 時組出）。偏離原規格兩處見步驟詳述 |
 | Phase3-1 | `TickSimulator`：一天三段與逐筆迴圈 | `core/backtest/simulator/tick_simulator.py`（新）、`core/backtest/factory.py` | 開盤集合競價、逐筆、收盤集合競價三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：與 Phase3-2 同一個 commit（沒有撮合規則就產生不了任何成交，兩步無法分開驗證）；factory 在 TICK 時組出 `TickSimulator`＋`StockTickDataFeed`，整天一次給的舊路徑與 `IntradayScaleMismatchError` 已移除 |
 | Phase3-2 | 逐筆成交模型與在途委託 | `core/backtest/models/fill_model.py`、`core/backtest/simulator/pending_orders.py`（新：`PendingOrderManager`、`PendingOrder`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、IOC 作廢、成交量上限的單元測試 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：規則依〈已定案〉第 10 點；**偏離原規格：`get_filled_price()` 不改簽章**（成交價在呼叫它之前就由這一筆決定，見步驟詳述）；`滑價模型後續優化.md` S3 一併 ✅ |
-| Phase3-3 | 盤中帳務與日終結算 | `core/backtest/simulator/tick_simulator.py`、`core/backtest/backtester.py`（`finish_day()`）、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ⬜ | 相依 Phase3-2 |
+| Phase3-3 | 盤中帳務與日終結算 | `core/backtest/simulator/tick_simulator.py`、`core/backtest/backtester.py`（`finish_day()`）、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：不需改程式（成交即時經 `position_manager` 入帳、日終走 `finish_day()`），補三條測試釘住 |
 | Phase4-1 | `IntradayMomentumStrategy` 支援 TICK 回測 | `strategies/stock/intraday_momentum_strategy.py` | 移除 `setup_apis()` 的 `NotImplementedError`；逐筆分支在回測與實盤共用 | ⬜ | 相依 Phase3-3 |
 | Phase4-2 | 既有 DAY 策略宣告支援範圍 | `strategies/**/*.py`、`strategies/README.md` | 每支策略都宣告支援的級別；只支援 DAY 者加 `--scale tick` 報錯 | ⬜ | 相依 Phase1-1 |
-| Phase5-1 | 端到端測試 | `tests/backtest/test_tick_simulator.py`（新） | 手寫 tick：無前視、下一筆成交、決定性（跑兩次逐位元相同）、多檔交錯順序 | ⬜ | 相依 Phase3-3 |
+| Phase5-1 | 端到端測試 | `tests/backtest/test_tick_simulator.py`（新） | 手寫 tick：無前視、下一筆成交、決定性（跑兩次逐位元相同）、多檔交錯順序 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`tests/backtest/test_tick_simulator.py` 19 條，隨 Phase3-1～3-3 寫成；清單逐項對照見步驟詳述 |
 | Phase5-2 | 真實資料實跑與效能量測 | 本文件（實跑紀錄）、`盤中動能策略.md` | 兩種標的範圍各跑一段區間；記錄每日耗時、峰值記憶體；與 S2 日 K 近似逐項對照 | ⬜ | 相依 Phase4-1、Phase5-1 |
 | Phase5-3 | 文件 | `core/backtest/README.md`、`strategies/README.md`、`docs/backtest/module-map.md` | 文件描述逐筆重放的語意、段落、成交規則與已知限制 | ⬜ | 相依 Phase5-2 |
 
@@ -366,7 +366,7 @@
     在途開倉佔名額、重複開倉被略過、跑兩次結果相同；`test_trading_list_constraints.py` 新增逐筆放空以成交價判斷平盤下。
     七個突變（當筆成交、市價改用成交價、限價碰到就成交、不擋重複出場、在途不佔名額、收盤段整天跑完才呼叫、IOC 不作廢）全部轉紅；前兩版測試漏掉的兩個突變已補測試。回歸雙線零變動；完整 pytest 2910 passed。
 
-### Phase3-3. 盤中帳務與日終結算 ⬜
+### Phase3-3. 盤中帳務與日終結算 ✅
 
 - **目的**：盤中的成交要即時反映在可用餘額與持倉檔數上，否則同一天後面的訊號會用錯的資金。
 - **做法**：
@@ -375,6 +375,10 @@
 - **產出**：上列檔案與測試。
 - **驗證方式**：同一天先買後賣的當沖，帳務與 DAY 路徑同一筆交易的口徑一致（稅費、當沖減半）；盤中資金不足時後面的委託被擋。
 - **相依**：Phase3-2。
+- **結果（2026-10-10，`feature/tick-backtest`）**：程式不必改——`TickSimulator.execute_fill()` 成交當下就呼叫 `position_manager.open_position()`／`close_position()`，
+  帳務（含「開平倉同一天且策略允許當沖才減半」的判斷）與日 K 共用同一份；持倉檔數以當下部位加在途開倉委託計算（Phase3-2）；日終由 `finish_day()` 以每檔最後一筆結算。
+  新增三條測試：同價同量的當沖來回，逐筆與日 K 的手續費、證交稅、損益完全相同（並確認證交稅確實減半為 153）；第一筆成交用掉資金後，後面的開倉單以 `rejected_insufficient_balance` 被擋；
+  持有到收盤的部位以最後一筆盯市、次日參考價記成最後一筆。完整 pytest 2914 passed；回歸雙線零變動。
 
 ### Phase4-1. `IntradayMomentumStrategy` 支援 TICK 回測 ⬜
 
@@ -395,7 +399,7 @@
 - **驗證方式**：每支策略加 `--scale tick` 時，只支援 DAY 者當場報錯。
 - **相依**：Phase1-1。
 
-### Phase5-1. 端到端測試 ⬜
+### Phase5-1. 端到端測試 ✅
 
 - **目的**：把五個現存問題（見 Abstract）各自釘一個會紅的測試。
 - **做法**：手寫小量 tick（不讀正式資料表），用測試替身的資料源跑完整回測：
@@ -407,6 +411,9 @@
 - **產出**：`tests/backtest/test_tick_simulator.py`。
 - **驗證方式**：測試全綠；逐一突變對應的實作（例如改回當筆成交）時對應測試會紅。
 - **相依**：Phase3-3。
+- **結果（2026-10-10，`feature/tick-backtest`）**：清單逐項對應 `tests/backtest/test_tick_simulator.py`——無前視（`test_hooks_never_see_a_later_tick`、`test_market_buy_fills_at_next_tick_ask_of_same_stock`）、
+  下一筆成交吃 bid/ask（市價買、市價賣兩條）、決定性（`test_same_data_twice_gives_identical_trades`）、多檔交錯順序（`test_immediate_hooks_get_one_quote_per_call_inside_the_window`）、
+  停損只觸發一次（`test_stop_loss_is_submitted_once_per_position`，另有 ROD 平倉不被重問）。突變紀錄見 Phase3-2 的結果（七個突變全紅）。
 
 ### Phase5-2. 真實資料實跑與效能量測 ⬜
 
