@@ -206,7 +206,7 @@ class TwStockDataFeed(BaseDataFeed):
         - Description:
             取得當日的日 K 報價
 
-            **TICK 不從這裡取**：整天的 tick 一次給就是前視（早盤的委託會拿下午的價位成交），
+            **TICK 不從這裡取**：把一天的 tick 一次交出去就是前視（早盤的委託會拿下午的價位成交），
             逐筆回測由 `StockTickDataFeed` 依時間逐筆產生。
         - Parameters:
             - date: datetime.date
