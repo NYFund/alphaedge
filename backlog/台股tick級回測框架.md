@@ -53,7 +53,7 @@
 | Phase1-4 | 日 K 路徑抽成 `BarSimulator`（純重構）＋引擎內部兩處改名 | `core/backtest/simulator/`（新：`base.py`、`bar_simulator.py`）、`core/backtest/backtester.py`、`core/backtest/factory.py`、`core/backtest/models/`、`tests/backtest/` | 回歸雙線零變動；`Backtester` 只剩逐日迴圈、`prepare_day()`／`finish_day()`、報表；`on_bar_close`、`prev_close` grep 為零 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：改名 `48752a8` 與抽 simulator 各一個 commit；回歸雙線零變動、5 支策略 2024 全年 25 個報表 CSV 逐位元相同。偏離原規格：多一個 `load_day()`（見步驟詳述） |
 | Phase1-5 | 每日市場狀態改由各 model 自己準備 | `core/backtest/backtester.py`（`prepare_day()`）、`core/backtest/models/`、`core/backtest/datafeed/` | 回歸雙線零變動；`prepare_day()` 不再逐一推台股專屬 hook | ⬜ | 相依 Phase1-4；2026-10-10 承接 `框架對稱化重構.md`〈與其他文件的交集〉 |
 | Phase2-1 | tick 查詢支援多檔與當日累計量 | `core/dao/tw/stock_tick_dao.py`、`core/api/tw/stock_tick_api.py` | 暫存 schema 測試：多檔查詢結果與逐檔查詢相同；累計量與逐筆加總一致 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：`stock_ids` 與 `cum_volume` 完成；累計量定案在 pandas 端算（實測較快，見步驟詳述）；真實資料 200 檔清單一天 0.73 秒 |
-| Phase2-2 | 台股逐筆資料源 `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py`（新，繼承 `StockDataFeed`） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ⬜ | 相依 Phase2-1 |
+| Phase2-2 | 台股逐筆資料源 `StockTickDataFeed` | `core/backtest/datafeed/tw/stock_tick_datafeed.py`（新，繼承 `StockDataFeed`） | 依 `(time, stock_id, seq)` 順序逐筆產生報價；`volume` 為當日累計量、`tick.volume` 為單筆量 | ✅ | **✅ 2026-10-10**（`feature/tick-backtest`）：資料源與快照完成，一般股過濾放在這一步；尚未接上引擎（Phase3-1 由 factory 在 TICK 時組出）。偏離原規格兩處見步驟詳述 |
 | Phase3-1 | `TickSimulator`：一天三段與逐筆迴圈 | `core/backtest/simulator/tick_simulator.py`（新）、`core/backtest/factory.py` | 開盤集合競價、逐筆、收盤集合競價三段依 `execution_schedule` 呼叫鉤子；取消對 `is_tick_triggered` 的拒絕 | ⬜ | 相依 Phase1-1、Phase1-3、Phase1-4、Phase2-2 |
 | Phase3-2 | 逐筆成交模型與在途委託 | `core/backtest/models/fill_model.py`、`core/backtest/simulator/pending_orders.py`（新：`PendingOrderManager`、`PendingOrder`） | 下一筆成交、bid/ask、限價穿越、漲跌停鎖死、IOC 作廢、成交量上限的單元測試 | ⬜ | 相依 Phase3-1；吸收 `滑價模型後續優化.md` S3 |
 | Phase3-3 | 盤中帳務與日終結算 | `core/backtest/simulator/tick_simulator.py`、`core/backtest/backtester.py`（`finish_day()`）、`core/backtest/models/settlement_model/tw_stock.py` | 盤中成交即時入帳（可用餘額、持倉檔數）；日終當沖回補、盯市、權益快照與 DAY 口徑一致 | ⬜ | 相依 Phase3-2 |
@@ -259,7 +259,7 @@
   - 驗證：`tests/test_stock_tick_api.py`（無資料庫：代號驗證、單一字串、排序限制、空清單不送查詢）與 `tests/test_stock_tick_timescale.py`（暫存 schema：多檔等於逐檔合併、重複與不存在的代號、累計量含當筆／跨股票獨立／隔天歸零）共 33 條全綠；
     突變「累計量不分日」「空清單照送查詢」各自讓對應測試轉紅。真實資料：成交量前 200 檔一天 827,836 筆 0.73 秒（全市場 0.91 秒），抽 3 檔比對清單查詢、全市場查詢與逐檔查詢逐列相同，當日最後一筆 `cum_volume` 等於成交量加總。
 
-### Phase2-2. 台股逐筆資料源 `StockTickDataFeed` ⬜
+### Phase2-2. 台股逐筆資料源 `StockTickDataFeed` ✅
 
 - **目的**：把一天的 tick 依時間順序逐筆交給引擎，語意與實盤推播一致。
 - **做法**：
@@ -273,6 +273,20 @@
 - **產出**：新檔案與測試。
 - **驗證方式**：順序、累計量、`tick.volume` 為單筆量、各快照的值都以手寫資料驗證。
 - **相依**：Phase2-1。
+- **結果（2026-10-10，`feature/tick-backtest`）**：
+  - 新增 `core/backtest/datafeed/tw/stock_tick_datafeed.py` 的 `StockTickDataFeed(TwStockDataFeed)`：`setup_day(date, symbols)`（回傳筆數）、`iter_day_ticks()`（產生器）、
+    `get_reference_quotes()`、`get_open_quotes()`、`get_snapshot_quotes(cutoff)`、`get_close_quotes()`；快照一律依代號排序。
+  - `StockQuoteAdapter.from_tick_row()` 的 `volume` 改成 `cum_volume`（單筆量留在 `tick_quote.volume`）。**現行 TICK 回測（整天一根 bar）的 `volume` 語意也跟著變成累計量**；
+    目前沒有策略跑 TICK，`FillModel` 的成交量上限也只在 DAY 生效，不影響任何結果。
+  - **偏離原規格一：`get_close_snapshot_quotes()`（13:20）改成 `get_snapshot_quotes(cutoff)`**，時點由呼叫端傳入：段落時點是市場特性，實盤也由外部注入（`core/live/factory.py` 的段落表，台股收盤段 13:25 才送單），
+    資料源寫死 13:20 會和實盤的段落對不上。Phase3-1 的 `TickSimulator` 依段落設定傳入時點。
+  - **偏離原規格二：`get_reference_quotes(reference_prices)` 由呼叫端傳入參考價**（引擎成交模型持有的 `reference_prices`），漲跌停用 `TwStockSpec.get_price_limits()` 算；
+    不在資料源另算一份前收，兩份來源遲早不一致。沒有參考價的標的略過（回測第一天），與實盤取不到參考價時的處理相同。產出 `PreOpenStockQuote`，讀 OHLC 會拋出，與實盤開盤段一致。
+  - **定案 Phase3-2 留下的選擇：一般股過濾放在資料源**（`setup_day()` 內，指定清單先濾再查）：日 K 路徑在報價轉換時就濾掉 ETF 與權證，兩種級別的策略看到的標的池才一致。
+    實測 2024-05-08 的 tick 庫沒有 ETF（1,811 檔全是一般股），過濾目前是防線而非必要。
+  - 驗證：`tests/backtest/test_stock_tick_datafeed.py` 8 條（手寫 tick：交錯順序、累計量與單筆量、清單去重排序與一般股過濾、全市場範圍、開盤／快照／收盤、快照不含時點本身、盤前報價與 OHLC 拋出、空日）；
+    `tests/test_stock_tick_timescale.py` 新增接真 API 的逐筆測試。突變「拿掉一般股過濾」「volume 改回單筆量」「快照改成含時點」各自轉紅。
+    真實資料 2024-05-08 全市場：1,256,763 筆、1,811 檔，`setup_day()` 0.99 秒、逐筆轉成報價 2.29 秒，收盤報價的 `volume` 等於當日成交量加總。回歸雙線零變動；完整 pytest 2886 passed。
 
 ### Phase3-1. `TickSimulator`：一天三段與逐筆迴圈 ⬜
 
