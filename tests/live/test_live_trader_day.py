@@ -19,8 +19,8 @@ from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO, RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
-from core.live.segment import SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
+from core.market.segment import SegmentWindow
 from core.models import (
     BaseOrder,
     BaseQuote,

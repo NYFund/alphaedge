@@ -50,8 +50,8 @@ from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
 from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
 from core.live.risk.trading_mode import TradingMode, TradingModeState
-from core.live.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.live.strategy_guard import verify_strategies
+from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.models import (
     BaseAccount,
     BaseOrder,

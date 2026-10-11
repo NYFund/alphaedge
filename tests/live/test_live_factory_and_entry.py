@@ -11,15 +11,14 @@ import pytest
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import (
-    TW_FUTURES_SEGMENTS,
-    TW_STOCK_SEGMENTS,
     UnsupportedMarketError,
     _merge_schedules,
     build_live_trader,
     make_closing_limit_lookup,
 )
-from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
+from core.market.segment import SegmentSchedule, SegmentWindow
+from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,

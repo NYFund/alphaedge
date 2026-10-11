@@ -344,7 +344,7 @@ def test_intraday_waits_for_its_window_before_subscribing() -> None:
     各自都會收到對方的委託回報。
     """
 
-    from core.live.segment import SegmentWindow
+    from core.market.segment import SegmentWindow
 
     harness: Any = make_harness()
     harness.broker.connect()
