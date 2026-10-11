@@ -96,10 +96,12 @@ close_quotes = self.simulator.run_day(date)
 self.finish_day(date, close_quotes)
 
 def prepare_day(self, date):
-    # 下單前先由 DataFeed 推入當日的市場事件：
+    # 下單前各 model 自己向 DataFeed 取當日的市場狀態（model 的 prepare_day）：
     # 漲跌停參考價、券源餘額、停券期間、交易所名單（開啟檢核時）→ FillModel；
     # 停券回補日、現金股利、配股 → SettlementModel
-    ...
+    allow_short = PositionType.SHORT in self.get_allowed_directions()
+    self.fill_model.prepare_day(self.data_feed, date, allow_short)
+    self.settlement.prepare_day(self.data_feed, date, allow_short)
 
 # BarSimulator.process_bar(quotes)
 if self.engine.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
@@ -307,7 +309,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 SHORT 的 14 組情境刻意各只動一個變因，任一情境快照有變即可直接指向出問題的掛點：當沖同日回補（稅率減半）、融券留倉 10 天、FIFO 部分回補的等比例攤提、維持率斷頭、當沖鎖漲停轉留倉、當沖遇停券回補日（釘住結算順序）、SBL 與 MARGIN 借券費對照、除權息停券日的 MARGIN／SBL 對照、跨除息日的股利補償（含部分回補攤提）、平盤下名單擋單、現股當沖名單暫停先賣後買。
 
-停券日、除息股利與交易所名單由 `DataFeed` 每根 bar 推給 model，故相關情境的腳本掛在
+停券日、除息股利與交易所名單由 model 的 `prepare_day()` 每天向 `DataFeed` 取，故相關情境的腳本掛在
 `tests/backtest/conftest.py` 的 `ScriptedDataFeed` 上——直接設 `SettlementModel` 的欄位
 會在下一根 bar 被引擎覆寫。
 

@@ -1,10 +1,12 @@
 import copy
+import datetime
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
 from core.backtest.models.event_counts import new_event_counts
+from core.datafeed.base import BaseDataFeed
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.models import (
@@ -162,27 +164,22 @@ class BaseFillModel(ABC):
         self.event_counts["truncated_by_volume"] += 1
         return cap
 
-    def apply_price_limit_basis(self, basis: Dict[str, float]) -> None:
-        """一根 bar 開始：以交易所公告的基準價覆寫漲跌停基準；預設不處理"""
-
-        pass
-
-    def apply_short_balance(self, balance: Dict[str, int]) -> None:
-        """一根 bar 開始：更新當日可借券餘額；預設不處理"""
-
-        pass
-
-    def apply_short_suspended_symbols(self, symbols: Set[str]) -> None:
-        """一根 bar 開始：更新今日處於停券期間的標的；預設不處理"""
-
-        pass
-
-    def apply_trading_lists(
-        self,
-        short_sale_list: Optional[ShortSaleListSnapshot],
-        day_trade_list: Optional[DayTradeListSnapshot],
+    def prepare_day(
+        self, feed: BaseDataFeed, date: datetime.date, allow_short: bool
     ) -> None:
-        """一根 bar 開始：更新當日的交易所名單；預設不處理"""
+        """
+        - Description:
+            每日開盤前，自己向資料源取當天需要的市場狀態；沒有這類制度的市場沿用預設 no-op
+
+            理由與 `BaseSettlementModel.prepare_day()` 相同：要取哪些狀態是市場規則，不是引擎的事。
+        - Parameters:
+            - feed: BaseDataFeed
+                引擎持有的資料源
+            - date: datetime.date
+                交易日
+            - allow_short: bool
+                策略是否可能放空；不可能時不必取放空才用得到的狀態
+        """
 
         pass
 
@@ -430,7 +427,7 @@ class TwStockFillModel(BaseFillModel):
         # 是否依交易所名單檢核放空開倉；由 factory 依 ShortConstraint 帶入
         self.check_short_sale_list: bool = check_short_sale_list
         self.check_day_trade_list: bool = check_day_trade_list
-        # 當日名單，由引擎每根 bar 從 DataFeed 推入
+        # 當日名單，`prepare_day()` 每天從 DataFeed 取
         self.short_sale_list: Optional[ShortSaleListSnapshot] = None
         self.day_trade_list: Optional[DayTradeListSnapshot] = None
 
@@ -450,7 +447,7 @@ class TwStockFillModel(BaseFillModel):
         # 漲跌停參考價：前一交易日收盤，除權息日由 `apply_price_limit_basis()` 覆寫為公告基準
         self.reference_prices: Dict[str, float] = {}
 
-        # 今日停券的標的，由引擎每根 bar 從 DataFeed 推入
+        # 今日停券的標的，`prepare_day()` 每天從 DataFeed 取
         self.short_suspended_symbols: Set[str] = set()
 
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
@@ -577,6 +574,40 @@ class TwStockFillModel(BaseFillModel):
             return True
 
         return bool(quote.volume) and bool(quote.close or quote.cur_price)
+
+    def prepare_day(
+        self, feed: BaseDataFeed, date: datetime.date, allow_short: bool
+    ) -> None:
+        """
+        - Description:
+            每日開盤前取當天的漲跌停基準、融券餘額，以及（可能放空時）停券標的與交易所名單
+
+            - **除權息日的漲跌停基準要在下任何單之前覆寫**：否則整段漲跌停區間會沿用偏高的前收而失準。
+            - **停券與名單只在可能放空時取**：推導停券日要掃整段交易日曆，純做多策略不可能有空單，連查都不查。
+            - **交易所名單只在開啟檢核時取**：每天兩次查詢，不用的回測不該付這個成本。
+        - Parameters:
+            - feed: BaseDataFeed
+                引擎持有的資料源
+            - date: datetime.date
+                交易日
+            - allow_short: bool
+                策略是否可能放空
+        """
+
+        self.apply_price_limit_basis(feed.get_price_limit_basis(date))
+        self.apply_short_balance(feed.get_short_balance(date))
+
+        if not allow_short:
+            return
+
+        # 停券期間不得新增融券賣出；回補日當天的強制回補由 settlement 處理，
+        # 這裡擋的是回補日之後到除權息交易日之間的新開倉
+        self.apply_short_suspended_symbols(feed.get_short_suspended_symbols(date))
+        if self.check_short_sale_list or self.check_day_trade_list:
+            self.apply_trading_lists(
+                feed.get_short_sale_list(date) if self.check_short_sale_list else None,
+                feed.get_day_trade_list(date) if self.check_day_trade_list else None,
+            )
 
     def apply_short_balance(self, balance: Dict[str, int]) -> None:
         """

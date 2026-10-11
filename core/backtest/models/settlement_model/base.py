@@ -1,9 +1,10 @@
 import copy
 import datetime
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 
 from core.backtest.models.fill_model import BaseFillModel
+from core.datafeed.base import BaseDataFeed
 from core.models import (
     BaseAccount,
     BaseOrder,
@@ -126,38 +127,22 @@ class BaseSettlementModel(ABC):
 
         pass
 
-    def apply_force_cover_symbols(self, symbols: Set[str]) -> None:
+    def prepare_day(
+        self, feed: BaseDataFeed, date: datetime.date, allow_short: bool
+    ) -> None:
         """
         - Description:
-            更新今日觸發停券強制回補的標的（由 DataFeed 每根 bar 提供）
+            每日開盤前，自己向資料源取當天需要的市場狀態；沒有這類制度的市場沿用預設 no-op
 
-            與 `FillModel.apply_short_balance()` 同一種掛法：把「當日市場狀態」
-            推給 model，model 不自行查資料源。沒有停券制度的市場沿用預設 no-op。
+            **由 model 自己準備，而不是引擎逐一推入**：哪些狀態要取是市場規則（台股有停券、除權息，
+            期貨沒有），引擎逐一推的話，基底就得替每個市場的狀態各掛一個空的鉤子。
         - Parameters:
-            - symbols: Set[str]
-                今日觸及回補日的標的
-        """
-
-        pass
-
-    def apply_cash_dividends(self, dividends: Dict[str, float]) -> None:
-        """
-        - Description:
-            更新今日除息的每股現金股利（由 DataFeed 每根 bar 提供）
-        - Parameters:
-            - dividends: Dict[str, float]
-                `{symbol: 每股現金股利}`
-        """
-
-        pass
-
-    def apply_share_ratios(self, ratios: Dict[str, float]) -> None:
-        """
-        - Description:
-            更新今日的股數倍率（配股、分割、減資；由 DataFeed 每根 bar 提供）
-        - Parameters:
-            - ratios: Dict[str, float]
-                `{symbol: 新股數 / 舊股數}`
+            - feed: BaseDataFeed
+                引擎持有的資料源
+            - date: datetime.date
+                交易日
+            - allow_short: bool
+                策略是否可能放空；不可能時不必取放空才用得到的狀態（推導要掃整段交易日曆）
         """
 
         pass

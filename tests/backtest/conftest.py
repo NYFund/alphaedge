@@ -147,7 +147,7 @@ class ScriptedDataFeed(TwStockDataFeed):
     """
     測試用資料源：停券日與除息股利改由腳本給定，完全不連資料庫
 
-    引擎每根 bar 都會從 DataFeed 把這兩份資料推給 `SettlementModel`
+    `SettlementModel.prepare_day()` 每天都會從 DataFeed 取這兩份資料
     （`Backtester.prepare_day()`），因此腳本情境要驗停券強制回補與股利補償，
     只能從這一層注入——直接設 `SettlementModel` 的欄位會在下一根 bar 被覆寫。
     """
@@ -165,7 +165,7 @@ class ScriptedDataFeed(TwStockDataFeed):
     ) -> None:
         super().__init__()
 
-        # 交易所名單同樣由引擎每根 bar 推給 `FillModel`，只能從資料源這一層注入
+        # 交易所名單同樣由 `FillModel.prepare_day()` 每天從資料源取，只能從這一層注入
         self.short_sale_list_script: Dict[datetime.date, ShortSaleListSnapshot] = (
             short_sale_list_script or {}
         )

@@ -89,7 +89,7 @@ sequenceDiagram
     loop 回測期間的每一天
         BT->>Feed: is_market_open(date)
         BT->>Sim: load_day(date)（get_quotes；當天沒有報價就整天跳過）
-        Note over BT: prepare_day()：推入當日市場事件（漲跌停參考價、券源、停券、名單、除權息）
+        Note over BT: prepare_day()：FillModel／SettlementModel 各自的 prepare_day() 向 DataFeed 取當日市場狀態（漲跌停參考價、券源、停券、名單、除權息）
         BT->>Sim: run_day(date) → process_bar(quotes)：依 BarExecutionSequence 決定開平倉先後
         Sim->>S: check_open_signal(quotes)
         Sim->>Sim: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()

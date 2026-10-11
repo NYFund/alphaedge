@@ -19,7 +19,9 @@ from core.models import (
 from core.models.cost_config import CostConfig, ShortConstraint
 from core.models.fill_config import FillConfig
 from core.position.stock.position_manager import StockPositionManager
-from core.utils import Action, PositionType, Scale, ShortMethod
+from core.utils import Action, PositionType, Scale, ShortMethod, TradeDirection
+from tests.backtest.conftest import ScriptedDataFeed, run_bar
+from tests.backtest.make_short_baseline import build_scripted_backtester
 from tests.conftest import build_stock_quote
 
 """
@@ -613,3 +615,37 @@ def test_forced_cover_applies_slippage() -> None:
     record: StockTradeRecord = account.trade_records[-1]
     # 回補是買進，滑價往上；100 元 ＋ 100 bps 後對齊檔位
     assert record.buy_price > 100.0
+
+
+class _SuspendedFeed(ScriptedDataFeed):
+    """停券標的由腳本給定的資料源（真實資料源要掃整段除權息行事曆才推得出來）"""
+
+    def __init__(self, suspended: Set[str]) -> None:
+        super().__init__()
+
+        self.suspended: Set[str] = suspended
+
+    def get_short_suspended_symbols(self, date: datetime.date) -> Set[str]:
+        return set(self.suspended)
+
+
+def test_daily_preparation_feeds_suspension_to_fill_model(make_strategy) -> None:
+    """
+    完整每日流程（每日準備 → 開平倉 → 結算）：成交模型在每日準備時自己向資料源取停券標的，
+    停券期間的融券放空開倉因此被擋
+
+    單元測試直接呼叫 `apply_short_suspended_symbols()`，守不到「每天有沒有真的取」這一段；
+    少了它，停券擋板在回測裡就是一行永遠不會生效的程式。
+    """
+
+    strategy = make_strategy(
+        open_script={datetime.date(2024, 1, 4): [make_short_order()]},
+        direction=TradeDirection.SHORT,
+    )
+    backtester = build_scripted_backtester(strategy)
+    backtester.data_feed = _SuspendedFeed({STOCK_ID})
+
+    run_bar(backtester, datetime.date(2024, 1, 4), [make_stock_quote()])
+
+    assert backtester.event_counts["rejected_short_suspended"] == 1
+    assert backtester.account.get_positions() == []

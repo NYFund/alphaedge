@@ -310,10 +310,11 @@ class Backtester:
     def prepare_day(self, date: datetime.date) -> None:
         """
         - Description:
-            每日開盤前的準備：把當天的市場狀態推給成交與結算模型
+            每日開盤前的準備：各 model 自己向資料源取當天的市場狀態
 
-            順序固定為：漲跌停參考價 → 融券餘額 → 停券與交易所名單（只在允許放空時）→ 除權息。
-            日 K 與逐筆共用，simulator 開始處理當天的報價之前呼叫。
+            日 K 與逐筆共用，simulator 開始處理當天的報價之前呼叫。要取哪些狀態（漲跌停基準、
+            融券餘額、停券、交易所名單、除權息）是市場規則，由 model 的 `prepare_day()` 決定；
+            引擎只告訴它們策略可不可能放空。成交模型先、結算模型後，兩者各自的取用順序在 model 內固定。
         - Parameters:
             - date: datetime.date
                 當前交易日
@@ -323,42 +324,9 @@ class Backtester:
         # 多日回測的每一筆都會記成起始日，parity 比對日期全錯且不報錯
         self.cur_date = date
 
-        # 除權息日的漲跌停基準由交易所另行公告，須在下任何單之前覆寫，
-        # 否則整段漲跌停區間會沿用偏高的前一交易日收盤而失準
-        self.fill_model.apply_price_limit_basis(
-            self.data_feed.get_price_limit_basis(date)
-        )
-        self.fill_model.apply_short_balance(self.data_feed.get_short_balance(date))
-
-        # 停券日只有放空路徑會用到，且推導它需掃整段交易日曆；
-        # 純做多策略不可能有空單，故連查都不查，避免替 LONG 回測加上無謂的成本
-        if PositionType.SHORT in self.get_allowed_directions():
-            self.settlement.apply_force_cover_symbols(
-                self.data_feed.get_force_cover_symbols(date)
-            )
-            # 停券期間不得新增融券賣出；回補日當天的強制回補由 settlement 處理，
-            # 這裡擋的是回補日之後到除權息交易日之間的新開倉
-            self.fill_model.apply_short_suspended_symbols(
-                self.data_feed.get_short_suspended_symbols(date)
-            )
-            # 交易所名單只有開啟檢核時才查：每天兩次查詢，不用的回測不該付這個成本
-            if (
-                self.fill_model.check_short_sale_list
-                or self.fill_model.check_day_trade_list
-            ):
-                self.fill_model.apply_trading_lists(
-                    self.data_feed.get_short_sale_list(date)
-                    if self.fill_model.check_short_sale_list
-                    else None,
-                    self.data_feed.get_day_trade_list(date)
-                    if self.fill_model.check_day_trade_list
-                    else None,
-                )
-
-        # **除權息資料兩個方向都要**：做多跨除息要收現金股利、跨配股要調整股數，
-        # 不餵的話做多績效會系統性偏低（除權息日的跳空變成憑空虧損）
-        self.settlement.apply_cash_dividends(self.data_feed.get_cash_dividend_map(date))
-        self.settlement.apply_share_ratios(self.data_feed.get_share_ratio_map(date))
+        allow_short: bool = PositionType.SHORT in self.get_allowed_directions()
+        self.fill_model.prepare_day(self.data_feed, date, allow_short)
+        self.settlement.prepare_day(self.data_feed, date, allow_short)
 
     def finish_day(self, date: datetime.date, close_quotes: List[BaseQuote]) -> None:
         """
