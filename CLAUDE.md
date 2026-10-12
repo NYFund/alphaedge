@@ -73,20 +73,7 @@
    ```
 
    不要改用 Google style 的 `Args:` / `Returns:`（專案中僅零星出現，屬例外）。
-4. 策略類別的 class docstring 用條列描述交易邏輯，區塊固定為「買進條件 / 賣出條件 / 停損條件」，並註明未實作的部分：
-
-   ```python
-   class VolumeBreakoutMomentumStrategy(BaseStockStrategy):
-       """
-       量能突破動能策略（日線）
-
-       買進條件（全部滿足）：
-       - 當日收盤相對「前一交易日」收盤漲幅 ≥ 門檻（預設 9%）
-
-       停損條件：
-       - 未實作（一律不回傳停損單）
-       """
-   ```
+4. 策略類別的 class docstring 格式見 [`strategies/CLAUDE.md`](strategies/CLAUDE.md)（在該目錄下工作時自動載入）。
 
 ### 2.3 模組層級說明字串
 
@@ -119,21 +106,7 @@
 
 ### 2.5 Import 排序
 
-依 Ruff/isort 預設分組，組間空一行，組內字母排序：
-
-```python
-# 1. 標準函式庫
-import datetime
-from typing import List, Optional
-
-# 2. 第三方套件
-import pandas as pd
-from loguru import logger
-
-# 3. 專案內部（core.* 以絕對路徑；同目錄可用相對 .module）
-from core.api.base import BaseDataAPI
-from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
-```
+分組與排序由 Ruff `I` 規則（pre-commit 與 CI）強制。專案內部 `core.*` 用絕對路徑，同目錄可用相對 `.module`。
 
 ### 2.6 命名
 
@@ -170,7 +143,7 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 
 ### 2.10 格式化工具
 
-1. 程式碼由 formatter 產生（Ruff/Black 風格，行寬 88、雙引號、magic trailing comma），提交前確保格式一致，不要手動調整成其他排版。
+1. 格式由 `ruff-format`（pre-commit 與 CI）強制，不要手動調整成其他排版。
 2. SQL 查詢用三引號多行字串，參數一律走 `params=(...)` 佔位符，不要用 f-string 拼接使用者輸入。
 
 ---
@@ -233,3 +206,4 @@ from core.config import PRICE_TABLE_NAME, TW_STOCK_DB_PATH
 | 目錄 | 規則檔 | 說明 |
 |------|--------|------|
 | `strategy_lab/` | [`strategy_lab/CLAUDE.md`](strategy_lab/CLAUDE.md) | 對應 `.cursor/rules/strategy-lab-layout.mdc`，只在該目錄下工作時套用 |
+| `strategies/` | [`strategies/CLAUDE.md`](strategies/CLAUDE.md) | 策略類別 docstring 格式，只在該目錄下工作時套用 |
