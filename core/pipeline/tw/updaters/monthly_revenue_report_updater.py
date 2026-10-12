@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -12,6 +12,7 @@ from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.season_planner import PeriodPlanner
 from core.pipeline.tw.cleaners.monthly_revenue_report_cleaner import (
     MonthlyRevenueReportCleaner,
 )
@@ -21,7 +22,6 @@ from core.pipeline.tw.crawlers.monthly_revenue_report_crawler import (
 from core.pipeline.tw.loaders.monthly_revenue_report_loader import (
     MonthlyRevenueReportLoader,
 )
-from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -153,13 +153,9 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         - Description:
             算出這次要請求的年月：區間內所有年月 − 表內**已收齊**的年月
 
-            **不可用「表內最新年月 +1」起跑**：中間某個月失敗被跳過之後，只要
-            下一個月成功入庫，`MAX` 就越過它，那個月從此不會再被請求。
-            財報三表（`FinancialStatementUpdater`）同樣走差集，理由相同。
-
-            **不可用 years × months 的笛卡兒積**：起點 2025/03、終點 2026/12 時
-            `months` 只會是 [3..12]，2026/01 與 2026/02 不會被爬；起點月份大於
-            終點月份時甚至是空清單，整輪什麼都不做而沒有任何錯誤。
+            規劃與財報三表共用 `PeriodPlanner.plan_pending_periods()`（差集、
+            申報期內不算收齊、缺口回報的理由都寫在那裡），這裡只提供年月的
+            申報期判準 `is_month_settled()`。
         - Parameters:
             - start_year / start_month: int
                 區間起點
@@ -170,50 +166,14 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
                 由早到晚排序的 (year, month)
         """
 
-        year_months: List[Tuple[int, int]] = TimeUtils.generate_year_period_range(
-            start_year, start_month, end_year, end_month, periods_per_year=12
+        return PeriodPlanner.plan_pending_periods(
+            start=(start_year, start_month),
+            end=(end_year, end_month),
+            periods_per_year=12,
+            existing=self.dao.get_existing_year_months(),
+            is_settled=self.is_month_settled,
+            label="mrr",
         )
-        existing: Set[Tuple[int, int]] = self.dao.get_existing_year_months()
-
-        # **申報期還沒關閉的月份不算收齊**：月營收是逐家公司在次月 10 日前申報的，
-        # 申報期內入庫的只有「已送件的那批公司」。當成收齊的話，年月差集從此跳過
-        # 它，後送件的公司永遠補不進來——而每個月初跑一次日常更新就會踩到。
-        # 判準與財報三表同一套（見 `FinancialStatementUpdater.is_season_settled()`），
-        # 只是週期不同；寫入走 `INSERT OR IGNORE`，重問不會產生重複列
-        incomplete: Set[Tuple[int, int]] = {
-            year_month
-            for year_month in existing
-            if not self.is_month_settled(*year_month)
-        }
-        if incomplete:
-            logger.info(
-                f"[mrr] {len(incomplete)} 個月份仍在申報期內"
-                f"（{sorted(f'{y}/{m:02d}' for y, m in incomplete)}），"
-                f"本次一併重問以補進後送件的公司"
-            )
-
-        settled: Set[Tuple[int, int]] = existing - incomplete
-        pending: List[Tuple[int, int]] = [
-            year_month for year_month in year_months if year_month not in settled
-        ]
-
-        # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的月份，
-        # 晚於最新的是尚未公布的月份，兩者每輪都會出現，報出來只是噪音
-        if existing:
-            earliest: Tuple[int, int] = min(existing)
-            latest: Tuple[int, int] = max(existing)
-            gaps: List[str] = [
-                f"{year}/{month:02d}"
-                for year, month in pending
-                if earliest < (year, month) < latest
-            ]
-            if gaps:
-                logger.warning(
-                    f"[mrr] 偵測到 {len(gaps)} 個年月缺口"
-                    f"（表內最新為 {latest[0]}/{latest[1]:02d}），本次一併回補：{gaps[:10]}"
-                )
-
-        return pending
 
     @classmethod
     def is_month_settled(

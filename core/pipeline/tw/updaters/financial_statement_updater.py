@@ -18,6 +18,7 @@ from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.season_planner import PeriodPlanner
 from core.pipeline.tw.cleaners.financial_statement_cleaner import (
     FinancialStatementCleaner,
 )
@@ -29,7 +30,6 @@ from core.pipeline.tw.updaters.financial_statement import (
     EquityChangeMixin,
 )
 from core.pipeline.utils import FinancialStatementType
-from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -450,12 +450,10 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         - Description:
             算出該報表這次要請求的年季：區間內所有年季 − 表內**已收齊**的年季
 
-            **不可用 `MAX(year, season) + 1` 起跑**：某一季失敗被跳過之後，只要下一季
-            成功入庫，`MAX` 就越過它，那一季從此不會再被請求——資產負債表 2021Q1
-            整季缺就是這樣來的。逐日來源的 `DatePlanner.plan()` 改用差集是同一個理由。
-
-            代價是來源本就沒有的年季（2013Q1）與尚未公布的年季每輪都會再問一次，
-            每張報表每季只是上市、上櫃各一次請求。
+            規劃與月營收共用 `PeriodPlanner.plan_pending_periods()`（差集、
+            申報期內不算收齊、缺口回報的理由都寫在那裡），這裡只提供年季的
+            申報期判準 `is_season_settled()`。每張報表每季只是上市、上櫃各一次請求，
+            來源本就沒有的年季（2013Q1）每輪重問的代價很小。
         - Parameters:
             - table_name: str
                 目標資料表
@@ -468,51 +466,14 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
                 由早到晚排序的 (year, season)
         """
 
-        # **不可用 years × seasons 的笛卡兒積**：起點 2024Q3、終點 2026Q4 時
-        # `seasons` 只會是 [3, 4]，2025Q1／Q2 與 2026Q1／Q2 整整四季不會被爬，
-        # 且不會有任何錯誤——它們只是從來沒出現在迴圈裡
-        year_seasons: List[Tuple[int, int]] = TimeUtils.generate_year_period_range(
-            start_year, start_season, end_year, end_season, periods_per_year=4
+        pending: List[Tuple[int, int]] = PeriodPlanner.plan_pending_periods(
+            start=(start_year, start_season),
+            end=(end_year, end_season),
+            periods_per_year=4,
+            existing=self.get_existing_year_seasons(table_name),
+            is_settled=self.is_season_settled,
+            label=table_name,
         )
-        existing: Set[Tuple[int, int]] = self.get_existing_year_seasons(table_name)
-
-        # **申報期還沒關閉的年季不算完成**：財報是逐家公司申報的，申報期內入庫的
-        # 只是「當下已送件的那批公司」。把它當成完成，年季差集從此跳過它，
-        # 後送件的公司永遠補不進來——而每季申報期間跑一次日常更新就會踩到。
-        # 重問的代價很小（每張報表每季只有上市、上櫃各一次請求），且寫入走
-        # `INSERT OR IGNORE`，已入庫的列不會重複，只有新送件的公司會被加進來
-        incomplete: Set[Tuple[int, int]] = {
-            year_season
-            for year_season in existing
-            if not self.is_season_settled(*year_season)
-        }
-        if incomplete:
-            logger.info(
-                f"[{table_name}] {len(incomplete)} 個年季仍在申報期內"
-                f"（{sorted(f'{y}Q{s}' for y, s in incomplete)}），"
-                f"本次一併重問以補進後送件的公司"
-            )
-
-        settled: Set[Tuple[int, int]] = existing - incomplete
-        pending: List[Tuple[int, int]] = [
-            year_season for year_season in year_seasons if year_season not in settled
-        ]
-
-        # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的年季
-        # （2013Q1），晚於最新的是新年季，兩者每輪都會出現，報出來只是噪音
-        if existing:
-            earliest: Tuple[int, int] = min(existing)
-            latest: Tuple[int, int] = max(existing)
-            gaps: List[str] = [
-                f"{year}Q{season}"
-                for year, season in pending
-                if earliest < (year, season) < latest
-            ]
-            if gaps:
-                logger.warning(
-                    f"[{table_name}] 偵測到 {len(gaps)} 個年季缺口"
-                    f"（表內最新為 {latest[0]}Q{latest[1]}），本次一併回補：{gaps[:10]}"
-                )
 
         logger.info(f"[{table_name}] 本次待更新年季：{len(pending)} 季")
         return pending
