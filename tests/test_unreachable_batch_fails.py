@@ -178,7 +178,7 @@ def test_daily_updater_raises_when_latest_day_is_unreachable(
         (StockDividendUpdater, ("crawl_twse_dividend", "crawl_tpex_dividend")),
         (
             CorporateActionUpdater,
-            ("crawl_twse_capital_reduction", "crawl_tpex_capital_reduction"),
+            ("crawl_twse_corporate_action", "crawl_tpex_corporate_action"),
         ),
     ],
 )

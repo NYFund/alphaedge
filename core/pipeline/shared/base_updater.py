@@ -13,7 +13,12 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
-from core.pipeline.utils.exceptions import DataLoadError
+from core.pipeline.utils.exceptions import (
+    CleanFailureError,
+    ColumnLayoutError,
+    DataLoadError,
+)
+from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -651,4 +656,188 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
         stats.report(self.SOURCE)
         self.report_cleaner_failures(cleaner_failures)
         self.report_latest_date()
+        self.raise_if_unreachable(self.SOURCE, stats)
+
+
+class YearlyRangeTwoMarketUpdater(BaseDataUpdater):
+    """
+    - Description:
+        「以年為區間爬上市＋上櫃、清洗、整批入庫」這條流程的骨架
+
+        除權息與公司行動（減資、面額變更）兩支走的是同一條路：逐年雙市場爬 →
+        清洗（版面改制逐年隔離）→ 節流 → 整批入庫 → 收尾報表。兩邊原本各抄一份，
+        差別只在方法名與檔名，**各自一份的代價是漂移**：一邊修了隔離或收尾的判斷，
+        另一邊不會跟著修，而症狀都是還原價的輸入無聲地停止更新。
+
+        子類要填的東西：`SOURCE`（同時決定 crawler／cleaner 的方法名與錯誤訊息的來源名）、
+        `SOURCE_LABEL`、`TABLE_LABEL`、`LOG_FILE_NAME`、`FILE_SUFFIX`。
+
+        **爬取與清洗一律以 `SOURCE` 組方法名取用**（`crawl_twse_{SOURCE}`、
+        `clean_twse_{SOURCE}`），與 `DailyTwoMarketUpdater` 同一種寫法。
+
+        **每次都掃整個區間，不從 `MAX(date)+1` 續跑**：兩個來源都支援區間查詢，
+        一年只要一次請求；`MAX(date)+1` 會讓中間任何一年的缺漏永遠補不回來。
+        入庫走 `INSERT OR REPLACE`，重跑是冪等的。
+    """
+
+    # 資料來源代號；同時是 crawler／cleaner 的方法名後綴與錯誤訊息的來源名
+    SOURCE: str = ""
+    # log 訊息中的顯示名稱（開頭的「Start Updating」那一行）
+    SOURCE_LABEL: str = ""
+    # 收尾「Latest available date」那一行的表名
+    TABLE_LABEL: str = ""
+    # 落地的 log 檔名
+    LOG_FILE_NAME: str = ""
+    # 清洗後 CSV 檔名的後綴。**照各來源原樣保留**：loader 依檔名挑檔，
+    # 後綴改壞了不會報錯，只會讓那個來源整批漏入庫
+    FILE_SUFFIX: str = ""
+
+    # 區間請求之間的節流（一年一次請求，不需要像逐日爬蟲那樣長時間休息）
+    YEAR_REQUEST_DELAY_MIN: int = 3
+    YEAR_REQUEST_DELAY_MAX: int = 8
+
+    def setup(self) -> None:
+        """Set Up the Config of Updater"""
+
+        LogManager.setup_logger(self.LOG_FILE_NAME)
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
+
+    def clean_year(
+        self,
+        year: int,
+        period: str,
+        twse: CrawlResult,
+        tpex: CrawlResult,
+        stats: UpdateStats,
+        layout_failures: List[str],
+    ) -> None:
+        """
+        - Description:
+            清洗一年兩個市場的資料，**版面改制逐年隔離**
+
+            一年的版面改制不可中止整段回補：其餘年份照樣清洗入庫，
+            改制的年份記進 `layout_failures`，收尾時讓整批以失敗結束——
+            這兩張表是還原價的輸入，靜靜停止更新不會有任何錯誤訊息。
+        - Parameters:
+            - year: int
+                年份（只用於訊息）
+            - period: str
+                區間字串（`YYYYMMDD_YYYYMMDD`），組成落地檔名
+            - twse / tpex: CrawlResult
+                兩個市場的爬取結果
+            - stats: UpdateStats
+                本批統計
+            - layout_failures: List[str]
+                版面改制的「來源 年份」清單（就地追加）
+        """
+
+        for result, source in ((twse, "twse"), (tpex, "tpex")):
+            if not result.is_ok:
+                continue
+            clean: Callable[..., Optional[pd.DataFrame]] = getattr(
+                self.cleaner, f"clean_{source}_{self.SOURCE}"
+            )
+            try:
+                cleaned: Optional[pd.DataFrame] = clean(
+                    result.data, file_name=f"{source}_{period}{self.FILE_SUFFIX}"
+                )
+            except ColumnLayoutError as error:
+                logger.error(
+                    f"[{self.SOURCE}] {source.upper()} {year} 版面改制：{error}"
+                )
+                layout_failures.append(f"{source} {year}")
+                stats.count_clean_failure()
+                continue
+
+            if cleaned is None or cleaned.empty:
+                logger.warning(f"Cleaned {source.upper()} dataframe empty for {year}")
+
+    def report_latest_date(self) -> None:
+        """收尾印出表內最新日期；沒有任何資料時降級為 warning"""
+
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
+        if table_latest_date:
+            logger.info(
+                f"{self.TABLE_LABEL} data updated. "
+                f"Latest available date: {table_latest_date}"
+            )
+        else:
+            logger.warning(f"No new {self.TABLE_LABEL.lower()} data was updated")
+
+    def update(
+        self,
+        start_date: datetime.date,
+        end_date: Optional[datetime.date] = None,
+    ) -> None:
+        """
+        - Description:
+            逐年爬取兩個市場、清洗，最後整批入庫
+
+            **先入庫再拋**：沒改制的年份已經清洗好了，不入庫等於這次白跑。
+
+            **中止訊號收在年與年之間**：按下 Ctrl+C 後，已爬好的年份照樣入庫、
+            印完統計行才離開；年與年之間的節流也可被中止打斷，不必等滿。
+        - Parameters:
+            - start_date: datetime.date
+                回補起日
+            - end_date: Optional[datetime.date]
+                回補迄日；None 取當日（預設值不可在 def 行求值）
+        """
+
+        logger.info(f"* Start Updating TWSE & TPEX {self.SOURCE_LABEL} Data...")
+
+        end_date: datetime.date = end_date or datetime.date.today()
+
+        if start_date > end_date:
+            logger.info(f"{self.TABLE_LABEL} data is already up to date")
+            return
+
+        years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
+        stats: UpdateStats = UpdateStats()
+        layout_failures: List[str] = []
+
+        with GracefulStop(label=self.SOURCE) as stop:
+            for year in years:
+                year_start: datetime.date = max(start_date, datetime.date(year, 1, 1))
+                year_end: datetime.date = min(end_date, datetime.date(year, 12, 31))
+                period: str = (
+                    f"{TimeUtils.format_date(year_start)}_"
+                    f"{TimeUtils.format_date(year_end)}"
+                )
+
+                twse: CrawlResult = getattr(self.crawler, f"crawl_twse_{self.SOURCE}")(
+                    year_start, year_end
+                )
+                tpex: CrawlResult = getattr(self.crawler, f"crawl_tpex_{self.SOURCE}")(
+                    year_start, year_end
+                )
+                stats.record(twse, tpex)
+                self.clean_year(year, period, twse, tpex, stats, layout_failures)
+
+                if stop.requested:
+                    logger.warning(
+                        f"[{self.SOURCE}] 收到中止要求，停在 {year} 年；"
+                        f"已爬的年份先入庫再離開，下次執行會重掃整個區間"
+                    )
+                    break
+
+                delay: int = random.randint(
+                    self.YEAR_REQUEST_DELAY_MIN, self.YEAR_REQUEST_DELAY_MAX
+                )
+                self.sleep(delay, stop)
+
+        # `requested` 的單位是「年」而不是「天」：本來源支援區間查詢，一年一次請求
+        stats.report(f"{self.SOURCE}（單位：年）")
+
+        self.loader.add_to_db(remove_files=False)
+        self.report_latest_date()
+
+        if layout_failures:
+            raise CleanFailureError(self.SOURCE, layout_failures)
+
         self.raise_if_unreachable(self.SOURCE, stats)

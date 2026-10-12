@@ -601,13 +601,16 @@ def test_corporate_action_layout_change_fails_the_run(
 ) -> None:
     """公司行動版面改制時整批更新以失敗收尾（理由同除權息）"""
 
-    def raise_layout(df: pd.DataFrame, source: str, file_name: str) -> pd.DataFrame:
+    def raise_layout(df: pd.DataFrame, file_name: str) -> pd.DataFrame:
         raise ColumnLayoutError("[corporate_action] twse", expected=11, actual=2)
 
     updater = make_yearly_updater(
         CorporateActionUpdater,
-        ("crawl_twse_capital_reduction", "crawl_tpex_capital_reduction"),
-        SimpleNamespace(clean=raise_layout),
+        ("crawl_twse_corporate_action", "crawl_tpex_corporate_action"),
+        SimpleNamespace(
+            clean_twse_corporate_action=raise_layout,
+            clean_tpex_corporate_action=raise_layout,
+        ),
         tmp_path,
         dao_factory,
     )

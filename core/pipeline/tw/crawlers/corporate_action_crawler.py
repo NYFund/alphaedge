@@ -59,10 +59,10 @@ class CorporateActionCrawler(BaseDataCrawler):
     def crawl(self, start_date: datetime.date, end_date: datetime.date) -> None:
         """Crawl TWSE & TPEX Capital Reduction Data"""
 
-        self.crawl_twse_capital_reduction(start_date, end_date)
-        self.crawl_tpex_capital_reduction(start_date, end_date)
+        self.crawl_twse_corporate_action(start_date, end_date)
+        self.crawl_tpex_corporate_action(start_date, end_date)
 
-    def crawl_twse_capital_reduction(
+    def crawl_twse_corporate_action(
         self,
         start_date: datetime.date,
         end_date: datetime.date,
@@ -114,7 +114,7 @@ class CorporateActionCrawler(BaseDataCrawler):
 
         return self._build_result(rows, fields, label, TWSE_COLUMN_COUNT, "twse")
 
-    def crawl_tpex_capital_reduction(
+    def crawl_tpex_corporate_action(
         self,
         start_date: datetime.date,
         end_date: datetime.date,
