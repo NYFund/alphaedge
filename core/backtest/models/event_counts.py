@@ -64,7 +64,6 @@ _STOCK_EVENT_KEY_SCOPES: Tuple[Tuple[str, str], ...] = (
 
 # 台股事件報表的 key（原順序）；名稱維持 `EVENT_KEYS`，既有呼叫端與測試都以它為台股清單
 EVENT_KEYS: Tuple[str, ...] = tuple(key for key, _ in _STOCK_EVENT_KEY_SCOPES)
-STOCK_EVENT_KEYS: Tuple[str, ...] = EVENT_KEYS
 
 # 兩個市場共用的 key（維持台股清單內的相對順序）
 SHARED_EVENT_KEYS: Tuple[str, ...] = tuple(

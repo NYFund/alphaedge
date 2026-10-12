@@ -71,6 +71,14 @@ class BaseBacktestReporter(ABC):
         price: Optional[Any] = None,
         show: Optional[bool] = None,
     ) -> None:
+        # 欄位清單少填或漏掉累計兩欄時，交易明細會變成一張沒有欄位的空表而不是錯誤；
+        # 在建構時就擋下，不等到報表產出
+        if tuple(self.TRADING_REPORT_COLUMNS[-2:]) != self.CUMULATIVE_COLUMNS:
+            raise TypeError(
+                f"{type(self).__name__}.TRADING_REPORT_COLUMNS 必須以 "
+                f"{self.CUMULATIVE_COLUMNS} 收尾"
+            )
+
         self.strategy: BaseStrategy = strategy
         self.account: BaseAccount = self.strategy.account
         self.output_dir: Optional[Path] = output_dir

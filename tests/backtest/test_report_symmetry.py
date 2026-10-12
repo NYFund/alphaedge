@@ -20,7 +20,6 @@ from core.backtest.models.event_counts import (
     FUTURES_EVENT_KEYS,
     FUTURES_ONLY_EVENT_KEYS,
     SHARED_EVENT_KEYS,
-    STOCK_EVENT_KEYS,
     TICK_EVENT_KEYS,
     new_event_counts,
 )
@@ -86,7 +85,6 @@ def test_stock_event_keys_keep_their_order() -> None:
     """台股清單的內容與順序不可動：事件報表與 SHORT 回歸基準都以它為欄位"""
 
     assert list(EVENT_KEYS) == LEGACY_STOCK_EVENT_KEYS
-    assert STOCK_EVENT_KEYS is EVENT_KEYS
     assert list(new_event_counts()) == LEGACY_STOCK_EVENT_KEYS
 
 
@@ -303,3 +301,30 @@ def test_stock_factory_keeps_the_stock_event_counter(
 
     assert list(backtester.event_counts) == LEGACY_STOCK_EVENT_KEYS
     assert backtester.fill_model.event_counts is backtester.event_counts
+
+
+def test_reporter_without_report_columns_fails_at_construction() -> None:
+    """子類漏填欄位清單時，建構當場報錯，而不是產出一張沒有欄位的空表"""
+
+    import datetime
+    from types import SimpleNamespace
+
+    class _NoColumns(BaseBacktestReporter):
+        def load_benchmark_series(self) -> pd.Series:
+            return pd.Series(dtype=float)
+
+        def build_trade_row(self, record) -> Dict:
+            return {}
+
+        def build_direction_row(self, position_type, group) -> Dict:
+            return {}
+
+    strategy = SimpleNamespace(
+        account=SimpleNamespace(init_capital=1.0, trade_records=[]),
+        start_date=datetime.date(2024, 1, 2),
+        end_date=datetime.date(2024, 1, 3),
+        strategy_name="demo",
+    )
+
+    with pytest.raises(TypeError, match="TRADING_REPORT_COLUMNS"):
+        _NoColumns(strategy)

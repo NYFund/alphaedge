@@ -11,6 +11,7 @@ from core.pipeline.shared.base_updater import (
 from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.tw.updaters.corporate_action_updater import CorporateActionUpdater
 from core.pipeline.tw.updaters.financial_statement_updater import (
     FinancialStatementUpdater,
 )
@@ -20,6 +21,7 @@ from core.pipeline.tw.updaters.monthly_revenue_report_updater import (
     MonthlyRevenueReportUpdater,
 )
 from core.pipeline.tw.updaters.stock_chip_updater import StockChipUpdater
+from core.pipeline.tw.updaters.stock_dividend_updater import StockDividendUpdater
 from core.pipeline.tw.updaters.stock_margin_updater import StockMarginUpdater
 from core.pipeline.tw.updaters.stock_price_updater import StockPriceUpdater
 
@@ -224,7 +226,14 @@ def test_base_template_cannot_be_instantiated_without_plan_dates() -> None:
         _NoPlan()
 
 
-@pytest.mark.parametrize("updater_cls", DAILY_UPDATERS)
+# 以 `SOURCE` 組方法名取用 crawler／cleaner 的 updater：日頻三支＋年度區間兩支
+SOURCE_DRIVEN_UPDATERS: List[type] = DAILY_UPDATERS + [
+    StockDividendUpdater,
+    CorporateActionUpdater,
+]
+
+
+@pytest.mark.parametrize("updater_cls", SOURCE_DRIVEN_UPDATERS)
 def test_source_resolves_to_real_crawler_and_cleaner_methods(
     updater_cls: type,
 ) -> None:
