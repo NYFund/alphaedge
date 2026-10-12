@@ -34,7 +34,10 @@ _STOCK_EVENT_KEY_SCOPES: Tuple[Tuple[str, str], ...] = (
     ("forced_cover_insufficient_margin", STOCK),  # 當沖轉留倉時餘額不足而強制回補
     ("forced_cover_max_holding", STOCK),  # 超過最長持有天數強制回補
     ("forced_cover_suspended", STOCK),  # 停券日強制回補
-    ("forced_cover_no_quote", SHARED),  # 連續無報價（停牌／下市）強制出場
+    (
+        "forced_cover_no_quote",
+        SHARED,
+    ),  # 連續無報價（停牌／下市／契約到期）強制回補的放空部位
     ("limit_up_cover_failed", STOCK),  # 漲停鎖死無法回補
     ("rejected_max_holdings", SHARED),  # 超過最大持倉檔數被引擎剔除的開倉單
     ("rejected_no_quote", SHARED),  # 當日查不到報價（停牌、非股票池）被拒的開倉單
@@ -59,9 +62,10 @@ _STOCK_EVENT_KEY_SCOPES: Tuple[Tuple[str, str], ...] = (
     ("dividend_received", STOCK),  # 除息日收到現金股利的做多部位
     ("share_adjustment_applied", STOCK),  # 配股、分割、減資造成股數調整的部位
     ("share_adjustment_unknown", STOCK),  # 權息並存拆不出配股率而未調整股數的部位
-    # 連續無報價強制出場的做多部位。期貨的多單目前仍記在 `forced_cover_no_quote`，
-    # 兩邊統一之後本 key 才移到共用
-    ("forced_exit_no_quote", STOCK),
+    (
+        "forced_exit_no_quote",
+        SHARED,
+    ),  # 連續無報價（停牌／下市／契約到期）強制出場的做多部位
 )
 
 # 台股事件報表的 key（原順序）；名稱維持 `EVENT_KEYS`，既有呼叫端與測試都以它為台股清單

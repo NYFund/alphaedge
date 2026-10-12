@@ -286,6 +286,7 @@ def build_tw_futures_backtester(
         instrument=instrument,
         roll_config=roll_config,
         fill_model=fill_model,
+        max_no_quote_days=strategy.max_no_quote_days,
     )
 
     return Backtester(

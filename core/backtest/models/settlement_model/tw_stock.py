@@ -52,7 +52,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         max_no_quote_days: Optional[int] = None,
         fill_model: Optional[BaseFillModel] = None,
     ) -> None:
-        super().__init__(fill_model=fill_model)
+        super().__init__(fill_model=fill_model, max_no_quote_days=max_no_quote_days)
 
         self.position_manager: StockPositionManager = position_manager
         self.cost_model: TwStockCostModel = cost_model
@@ -69,7 +69,6 @@ class TwStockSettlementModel(BaseSettlementModel):
         )
         self.margin_call_policy: MarginCallPolicy = margin_call_policy
         self.max_holding_days: Optional[int] = max_holding_days
-        self.max_no_quote_days: Optional[int] = max_no_quote_days
 
         # 當日市場狀態，`prepare_day()` 每天開盤前從 DataFeed 取（單元測試直接呼叫 `apply_*`）
         self.force_cover_symbols: Set[str] = set()  # 今日觸及融券最後回補日的標的
@@ -386,6 +385,7 @@ class TwStockSettlementModel(BaseSettlementModel):
 
         quote_map: Dict[str, StockQuote] = {sq.symbol: sq for sq in stock_quotes}
 
+        self.update_holding_days(date, positions)
         self.update_no_quote_days(quote_map, positions)
         self.accrue_holding_cost(date, quote_map, account)
         # 股利與股數調整先於強制回補／出場：除權息當日的權利義務屬該日仍在倉者，
@@ -403,12 +403,12 @@ class TwStockSettlementModel(BaseSettlementModel):
     ) -> None:
         """
         - Description:
-            逐日計提持有成本並更新持有天數
+            逐日計提 SBL 借券費
 
-            **持有天數與計提天數都是曆日，不是 bar 數**：週五開的空單到週一
-            只過了 1 根 bar，卻是 3 個曆日的借券費。逐根 bar `+= 1` 的話一年
-            只計到 252 天，年化費率會低估約 31%（1 − 252/365）；`holding_days`
-            在 `TradeRecord` 那邊指的也是曆日，兩處口徑必須一致。
+            **計提天數是曆日，不是 bar 數**：週五開的空單到週一只過了 1 根 bar，
+            卻是 3 個曆日的借券費。逐根 bar `+= 1` 的話一年只計到 252 天，
+            年化費率會低估約 31%（1 − 252/365）。持有天數本身由基底的
+            `update_holding_days()` 更新，口徑相同。
 
             只有 SBL 借券費在此逐日累加；MARGIN 的融券手續費在開倉時一次收取、
             融券利息於平倉時依日期差一次計算，在此重複計算會造成雙重計費。
@@ -428,8 +428,6 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"[SBL] {position.symbol} 的開倉日無法解析，本日不計提借券費"
                 )
                 continue
-
-            position.holding_days = max((date - open_date).days, 0)
 
             if position.short_method != ShortMethod.SBL:
                 continue
@@ -659,12 +657,13 @@ class TwStockSettlementModel(BaseSettlementModel):
             return
 
         for position in list(account.get_positions(position_type=PositionType.LONG)):
-            if position.no_quote_days < self.max_no_quote_days:
+            if not self.has_exceeded_no_quote_limit(position.symbol):
                 continue
 
             price: float = self.get_mark_price(position, quote_map)
             logger.warning(
-                f"[Forced Exit] {position.symbol} 連續 {position.no_quote_days} 日"
+                f"[Forced Exit] {position.symbol} 連續 "
+                f"{self.no_quote_days[position.symbol]} 日"
                 f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
             )
             event_counts["forced_exit_no_quote"] += 1
@@ -748,10 +747,23 @@ class TwStockSettlementModel(BaseSettlementModel):
     ) -> None:
         """
         - Description:
-            維持率追繳與強制回補檢查
+            放空部位的日終檢查迴圈：先走 `check_short_forced_exits()`，沒出場的再做維持率追繳
+
+            **單一迴圈、逐筆依序判定**：無報價 → 最長持有 → 停券 → 維持率。
+            拆成兩個迴圈會改變同一天多筆部位的平倉順序，交易紀錄的先後就不同。
+            本方法自己只做維持率追繳，與期貨的 `check_margin_call()` 同義。
 
             現行引擎沒有跨日的委託佇列，無法模擬「次一交易日開盤成交」，
             因此一律以觸發當日收盤價立即回補。
+        - Parameters:
+            - date: datetime.date
+                當前交易日
+            - quote_map: Dict[str, StockQuote]
+                當日報價對照表
+            - account: BaseAccount
+                交易帳戶
+            - event_counts: Dict[str, int]
+                事件計數
         """
 
         for position in list(account.get_positions(position_type=PositionType.SHORT)):
@@ -759,45 +771,9 @@ class TwStockSettlementModel(BaseSettlementModel):
             # 停牌／下市時取不到報價，`apply_fill_price()` 遇到 None 會跳過區間檢查
             quote: Optional[StockQuote] = quote_map.get(position.symbol)
 
-            # 連續無報價（停牌／下市）：強制出場
-            #
-            # 出場價採「最後可得價格」而非歸零：下市清算實務上多為部分償還，
-            # 回測無法精確模擬，歸零會系統性高估放空獲利。保守估計者可另行
-            # 以報表的本事件計數自行調整。
-            if (
-                self.max_no_quote_days is not None
-                and position.no_quote_days >= self.max_no_quote_days
+            if self.check_short_forced_exits(
+                date, position, price, quote, event_counts
             ):
-                logger.warning(
-                    f"[Force Cover] {position.symbol} 連續 {position.no_quote_days} 日"
-                    f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
-                )
-                event_counts["forced_cover_no_quote"] += 1
-                self.force_cover_position(position, date, price, quote)
-                continue
-
-            # 超過最長持有天數：強制回補
-            if (
-                self.max_holding_days is not None
-                and position.holding_days >= self.max_holding_days
-            ):
-                logger.warning(
-                    f"[Force Cover] {position.symbol} 持有 {position.holding_days} 天"
-                    f"已達上限，以 {price} 強制回補"
-                )
-                event_counts["forced_cover_max_holding"] += 1
-                self.force_cover_position(position, date, price, quote)
-                continue
-
-            # 停券強制回補日（使用者指定 ＋ 除權息行事曆推導的融券最後回補日）
-            if self.check_force_cover(date, position):
-                logger.warning(
-                    f"[Force Cover] {position.symbol} 於 {date} 停券，以 {price} 強制回補"
-                )
-                # 停券與持有天數到期是兩種成因，記到同一個桶會讓「策略設定的持有上限
-                # 太短」與「標的停券」無法區分，兩者的因應方式完全不同
-                event_counts["forced_cover_suspended"] += 1
-                self.force_cover_position(position, date, price, quote)
                 continue
 
             # 維持率追繳
@@ -824,30 +800,80 @@ class TwStockSettlementModel(BaseSettlementModel):
             event_counts["forced_cover_margin_call"] += 1
             self.force_cover_position(position, date, price, quote)
 
-    def update_no_quote_days(
+    def check_short_forced_exits(
         self,
-        quote_map: Dict[str, StockQuote],
-        positions: List[StockPosition],
-    ) -> None:
+        date: datetime.date,
+        position: StockPosition,
+        price: float,
+        quote: Optional[StockQuote],
+        event_counts: Dict[str, int],
+    ) -> bool:
         """
         - Description:
-            更新每個部位的連續無報價天數
+            單一放空部位的三種強制出場：連續無報價 → 超過最長持有天數 → 停券回補日
 
-            有報價即歸零，無報價則累加。長期停牌或已下市的標的會持續累加，
-            成為 `check_long_no_quote_exit()` 與 `check_margin_call()` 的出場依據。
+            命中任一條就以 `price` 回補並計入對應事件；三種成因各記各的桶，
+            「策略設定的持有上限太短」與「標的停券」的因應方式完全不同。
+            維持率追繳不在這裡，由呼叫端 `check_margin_call()` 負責。
         - Parameters:
-            - quote_map: Dict[str, StockQuote]
-                當日報價對照表
-            - positions: List[StockPosition]
-                要更新的部位
+            - date: datetime.date
+                當前交易日
+            - position: StockPosition
+                待判定的放空部位
+            - price: float
+                回補參考價（盯市價）
+            - quote: Optional[StockQuote]
+                當根 bar 的報價；停牌無報價時為 None
+            - event_counts: Dict[str, int]
+                事件計數
+        - Return:
+            - bool
+                True 表示已回補
         """
 
-        for position in positions:
-            quote: Optional[StockQuote] = quote_map.get(position.symbol)
-            if quote is not None and (quote.close or quote.cur_price):
-                position.no_quote_days = 0
-            else:
-                position.no_quote_days += 1
+        # 連續無報價（停牌／下市）：強制出場
+        #
+        # 出場價採「最後可得價格」而非歸零：下市清算實務上多為部分償還，
+        # 回測無法精確模擬，歸零會系統性高估放空獲利。保守估計者可另行
+        # 以報表的本事件計數自行調整。
+        if self.has_exceeded_no_quote_limit(position.symbol):
+            logger.warning(
+                f"[Force Cover] {position.symbol} 連續 "
+                f"{self.no_quote_days[position.symbol]} 日"
+                f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
+            )
+            event_counts["forced_cover_no_quote"] += 1
+            self.force_cover_position(position, date, price, quote)
+            return True
+
+        # 超過最長持有天數：強制回補
+        if (
+            self.max_holding_days is not None
+            and position.holding_days >= self.max_holding_days
+        ):
+            logger.warning(
+                f"[Force Cover] {position.symbol} 持有 {position.holding_days} 天"
+                f"已達上限，以 {price} 強制回補"
+            )
+            event_counts["forced_cover_max_holding"] += 1
+            self.force_cover_position(position, date, price, quote)
+            return True
+
+        # 停券強制回補日（使用者指定 ＋ 除權息行事曆推導的融券最後回補日）
+        if self.check_force_cover(date, position):
+            logger.warning(
+                f"[Force Cover] {position.symbol} 於 {date} 停券，以 {price} 強制回補"
+            )
+            event_counts["forced_cover_suspended"] += 1
+            self.force_cover_position(position, date, price, quote)
+            return True
+
+        return False
+
+    def get_accrued_holding_cost(self, position: StockPosition) -> float:
+        """SBL 逐日計提的借券費：持有期間先從部位價值扣掉，回補時才真正結算"""
+
+        return position.accrued_borrow_fee
 
     def get_mark_price(
         self, position: StockPosition, quote_map: Dict[str, StockQuote]

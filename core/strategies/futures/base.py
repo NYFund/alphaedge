@@ -73,6 +73,11 @@ class BaseFuturesStrategy(BaseStrategy):
         # （同一交易日的夜盤列 ＋ 日盤列，跨盤別跳空保留在 bar 內）
         self.session: FuturesSession = FuturesSession.DAY
         self.max_lots: int = 0  # 總口數上限（0 表示不開倉）
+        # 契約連續幾根 bar 沒有盯市價就以最近一次結算價強制出場（到期契約的兜底，
+        # 多單計入 `forced_exit_no_quote`、空單 `forced_cover_no_quote`）。
+        # 預設 3：單日資料缺漏與契約到期在報價層看起來一樣，設 1 會把前者當成到期。
+        # None 表示不做兜底——到期部位會留到回測結束並持續佔用保證金
+        self.max_no_quote_days: Optional[int] = 3
         # 期貨限制的是**總口數**不是持倉檔數。值與 `BaseStrategy` 的預設相同，
         # 明寫一次是為了讓「期貨不用檔數上限」這件事在基底裡看得見
         self.max_holdings: Optional[int] = None

@@ -693,7 +693,7 @@ def test_expired_contract_is_closed_at_the_last_settlement_price(
     )
 
     # 之後連續無報價：門檻之前不出場
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS - 1):
+    for _ in range(settlement.max_no_quote_days - 1):
         settlement.settle_day(DAY_2, [], account, backtester.event_counts)
         assert account.get_positions()
 
@@ -701,7 +701,7 @@ def test_expired_contract_is_closed_at_the_last_settlement_price(
 
     assert account.get_positions() == []
     assert account.margin_used == 0.0
-    assert backtester.event_counts["forced_cover_no_quote"] == 1
+    assert backtester.event_counts["forced_exit_no_quote"] == 1  # 多單出場
     # 損益在到期前已逐日結清，出場那一段不再產生價差
     assert account.trade_records[0].realized_pnl == 20000.0
 
@@ -716,7 +716,7 @@ def test_no_quote_counter_resets_when_quotes_come_back(
     settlement: TwFuturesSettlementModel = backtester.settlement
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS - 1):
+    for _ in range(settlement.max_no_quote_days - 1):
         settlement.settle_day(DAY_1, [], account, backtester.event_counts)
 
     settlement.settle_day(

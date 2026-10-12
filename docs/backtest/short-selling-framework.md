@@ -198,7 +198,7 @@ class TwStockCostModel:
 | `MARGIN` 融券手續費 0.08% | **開倉時**一次收 | `open_position()` |
 | `MARGIN` 融券利息（收入） | **平倉時**用 `exit_date − entry_date` 一次算 | `close_position()` |
 | `SBL` 借券費（年化） | **逐日計提**到 `position.accrued_borrow_fee` | `accrue_holding_cost()` |
-| 維持率／強制回補判定 | 每日收盤 | `check_margin_call()` |
+| 維持率／強制回補判定 | 每日收盤 | `check_margin_call()`（單一迴圈；無報價、最長持有、停券三種強制回補由 `check_short_forced_exits()` 判定，維持率由它自己做） |
 
 即：每日部位檢查**不碰融券利息**（`MARGIN` 的利息只在平倉時算一次），`accrued_borrow_fee` 欄位**只有 `SBL` 會用**。這條規則同時寫在 `StockPosition` 的 docstring，否則很容易在兩個地方各算一次。
 

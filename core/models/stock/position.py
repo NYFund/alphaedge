@@ -78,8 +78,6 @@ class StockPosition(BasePosition):
         # 週五開的空單到週一只過了 1 根 bar，卻是 3 個曆日的借券費。
         # 每根 bar 計 1/365 的話，一年只計到 252 天、年費低估約 31%
         self.last_accrual_date: Optional[datetime.date] = last_accrual_date
-        # 連續無報價天數；停牌／下市的部位靠它才有出場依據
-        self.no_quote_days: int = 0
 
     @property
     def stock_id(self) -> str:

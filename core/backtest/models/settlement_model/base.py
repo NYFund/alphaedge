@@ -3,6 +3,8 @@ import datetime
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional
 
+from loguru import logger
+
 from core.backtest.models.fill_model import BaseFillModel
 from core.datafeed.base import BaseDataFeed
 from core.models import (
@@ -10,14 +12,13 @@ from core.models import (
     BaseOrder,
     BasePosition,
     BaseQuote,
-    StockPosition,
-    StockQuote,
 )
 from core.utils import (
     PositionType,
+    TimeUtils,
 )
 
-"""BaseSettlementModel: 一根 bar 收盤後由市場規則強制執行的動作（各市場共用契約）"""
+"""BaseSettlementModel: 一根 bar 收盤後由市場規則強制執行的動作（各市場共用契約；無報價計數與持有天數在此）"""
 
 
 class BaseSettlementModel(ABC):
@@ -29,10 +30,23 @@ class BaseSettlementModel(ABC):
     MarginInterestRateModel。
     """
 
-    def __init__(self, fill_model: Optional[BaseFillModel] = None) -> None:
+    def __init__(
+        self,
+        fill_model: Optional[BaseFillModel] = None,
+        max_no_quote_days: Optional[int] = None,
+    ) -> None:
         # 引擎強制出場時同樣要走成交假設（滑價），否則同一支策略會有兩種口徑：
         # 策略自己送的平倉單吃滑價、引擎的強制出場與換月轉倉不吃
         self.fill_model: Optional[BaseFillModel] = fill_model
+
+        # 連續幾根 bar 沒有報價就強制出場；None 表示不做這件事。
+        # 門檻是市場規則加上策略的選擇，由 factory 從策略帶入
+        self.max_no_quote_days: Optional[int] = max_no_quote_days
+
+        # {代號: 連續無報價的 bar 數}。**記在 model 而不是部位上**：無報價是標的
+        # （停牌、下市、契約到期）的狀態，不是部位的狀態；同一標的的多筆部位共用
+        # 同一個答案，記在部位上只會存好幾份一樣的數
+        self.no_quote_days: Dict[str, int] = {}
 
     def apply_fill_price(
         self, order: BaseOrder, quote: Optional[BaseQuote]
@@ -106,26 +120,78 @@ class BaseSettlementModel(ABC):
 
         pass
 
-    @abstractmethod
+    def has_quote(self, quote: BaseQuote) -> bool:
+        """
+        這筆報價算不算「有報價」：預設看有沒有成交價
+
+        期貨覆寫成「有沒有盯市價」——遠月契約整天零成交是常態，但日盤仍有結算價，
+        契約還掛在交易所上，不是到期。
+        """
+
+        return bool(quote.close or quote.cur_price)
+
     def update_no_quote_days(
         self,
-        quote_map: Dict[str, StockQuote],
-        positions: List[StockPosition],
+        quote_map: Dict[str, BaseQuote],
+        positions: List[BasePosition],
     ) -> None:
         """
         - Description:
-            更新每個部位的連續無報價天數
+            更新持倉標的的連續無報價 bar 數：有報價即歸零，無報價則累加
 
-            有報價即歸零，無報價則累加。長期停牌或已下市的標的會持續累加，
-            成為強制出場的依據。
+            長期停牌、已下市的股票與到期的期貨契約都不會再有報價，計數會一路累加，
+            成為強制出場的依據（`has_exceeded_no_quote_limit()`）。
         - Parameters:
-            - quote_map: Dict[str, StockQuote]
-                當日報價對照表
-            - positions: List[StockPosition]
-                要更新的部位
+            - quote_map: Dict[str, BaseQuote]
+                當根 bar 的報價（以代號為鍵）
+            - positions: List[BasePosition]
+                目前的未平倉部位
         """
 
-        pass
+        # **一個標的一天只加一次**：同一標的的多筆部位（加碼）共用同一個計數，
+        # 逐部位累加會讓它以部位數的倍數衝到門檻
+        for symbol in dict.fromkeys(position.symbol for position in positions):
+            quote: Optional[BaseQuote] = quote_map.get(symbol)
+            if quote is not None and self.has_quote(quote):
+                self.no_quote_days[symbol] = 0
+            else:
+                self.no_quote_days[symbol] = self.no_quote_days.get(symbol, 0) + 1
+
+    def has_exceeded_no_quote_limit(self, symbol: str) -> bool:
+        """該標的連續無報價是否已達門檻；未設門檻一律 False"""
+
+        if self.max_no_quote_days is None:
+            return False
+
+        return self.no_quote_days.get(symbol, 0) >= self.max_no_quote_days
+
+    def update_holding_days(
+        self, date: datetime.date, positions: List[BasePosition]
+    ) -> None:
+        """
+        - Description:
+            更新每個部位的已持有曆日數（＝當前日期 − 開倉日），兩個市場、多空都更新
+
+            **是曆日不是 bar 數**：週五開的部位到週一只過了 1 根 bar，卻是 3 個曆日；
+            逐根 bar `+= 1` 一年只計到 252 天。`TradeRecord.holding_days` 指的也是曆日，
+            兩處口徑必須一致。
+        - Parameters:
+            - date: datetime.date
+                當前交易日
+            - positions: List[BasePosition]
+                目前的未平倉部位
+        """
+
+        today: Optional[datetime.date] = TimeUtils.to_date(date)
+        for position in positions:
+            open_date: Optional[datetime.date] = TimeUtils.to_date(position.date)
+            if open_date is None or today is None:
+                logger.warning(
+                    f"[Holding Days] {position.symbol} 的開倉日無法解析，本日不更新"
+                )
+                continue
+
+            position.holding_days = max((today - open_date).days, 0)
 
     def prepare_day(
         self, feed: BaseDataFeed, date: datetime.date, allow_short: bool
@@ -201,14 +267,14 @@ class BaseSettlementModel(ABC):
 
         if position.position_type == PositionType.SHORT:
             # 開倉時只扣了保證金與成本，賣出價款留作擔保品。
-            # **已計提的借券費要扣掉**：它逐日累加在部位上、平倉時才結算，
+            # **已計提的持有成本要扣掉**：它逐日累加在部位上、平倉時才結算，
             # 不扣的話持有期間的權益偏高、回補日一次掉下來，MDD 與日報酬都失真
             # （股利補償走的是即時扣款，除息當日就反映在餘額裡，不必在此重複扣）
             position.unrealized_pnl = round((position.price - mark_price) * units, 2)
             position_value = (
                 position.margin
                 + position.unrealized_pnl
-                - getattr(position, "accrued_borrow_fee", 0.0)
+                - self.get_accrued_holding_cost(position)
             )
         else:
             position.unrealized_pnl = round((mark_price - position.price) * units, 2)
@@ -220,3 +286,13 @@ class BaseSettlementModel(ABC):
         )
 
         return position_value
+
+    def get_accrued_holding_cost(self, position: BasePosition) -> float:
+        """
+        已逐日計提、平倉時才結算的持有成本（會從放空部位的價值扣掉）
+
+        預設 0：期貨沒有這種成本。台股覆寫成 SBL 借券費——那是台股的制度，
+        基底不該知道那個欄位叫什麼。
+        """
+
+        return 0.0
