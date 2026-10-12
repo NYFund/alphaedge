@@ -305,6 +305,36 @@ class BaseFillModel(ABC):
 
         pass
 
+    @staticmethod
+    def has_tradable_quote(quote: BaseQuote) -> bool:
+        """
+        - Description:
+            該報價當日是否真的有成交（台股與期貨共用同一個判準）
+
+            **無成交的 bar 在報價上是成交量 0、四價皆 0**：台股的來源給 `--`，
+            舊資料存成 0；期貨的零成交列存成 NULL，由 adapter 收斂成 0。
+            `get_price_range()` 對 0 回 `(None, None)` 而**跳過**區間檢查，
+            不擋的話策略能在一個根本沒開盤或整天無量的標的上以任意價格成交。
+
+            台股 adapter 會先丟掉這種列，策略根本看不到；期貨不能丟（零成交的
+            日盤列仍有結算價，盯市要靠它），所以 simulator 把策略看得到的報價
+            也用這一條過濾，開倉的 `validate()` 再擋一次是最後一道。
+
+            只擋 DAY 級別：TICK 的每一筆本來就是成交，`volume` 為 0 的 tick
+            （試撮）由 `intraday_range` 自行處理。
+        - Parameters:
+            - quote: BaseQuote
+                當根 bar 的報價
+        - Return:
+            - bool
+                有成交為 True
+        """
+
+        if quote.scale == Scale.TICK:
+            return True
+
+        return bool(quote.volume) and bool(quote.close or quote.cur_price)
+
     def get_price_range(
         self, quote: BaseQuote
     ) -> Tuple[Optional[float], Optional[float]]:
@@ -320,6 +350,12 @@ class BaseFillModel(ABC):
 
         if quote.high and quote.low:
             return (quote.low, quote.high)
+
+        # 只成交一筆的 bar 來源不給高低價（期交所記成 `-`），但那一筆的價格就是
+        # 收盤價，區間就是 `[close, close]`——沒有這一條，委託價等於實際成交價
+        # 也會被當成「沒有區間可比」而放行或誤拒
+        if quote.close:
+            return (quote.close, quote.close)
 
         return (None, None)
 
@@ -549,31 +585,6 @@ class TwStockFillModel(BaseFillModel):
         )
         self.event_counts[event_key] += 1
         return True
-
-    @staticmethod
-    def has_tradable_quote(quote: BaseQuote) -> bool:
-        """
-        - Description:
-            該報價當日是否真的有成交
-
-            **無成交日在資料上是四價皆 0**（來源給 `--`）：`get_price_range()`
-            對 0 回 `(None, None)` 而**跳過**區間檢查，不擋的話策略能在一個
-            根本沒開盤或整天無量的標的上以任意價格成交。
-
-            只擋 DAY 級別：TICK 的每一筆本來就是成交，`volume` 為 0 的 tick
-            （試撮）由 `intraday_range` 自行處理。
-        - Parameters:
-            - quote: BaseQuote
-                當根 bar 的報價
-        - Return:
-            - bool
-                有成交為 True
-        """
-
-        if quote.scale == Scale.TICK:
-            return True
-
-        return bool(quote.volume) and bool(quote.close or quote.cur_price)
 
     def prepare_day(
         self, feed: BaseDataFeed, date: datetime.date, allow_short: bool
@@ -1056,7 +1067,8 @@ class TwFuturesFillModel(BaseFillModel):
         # Tick 級別的當日累計高低點（期貨 Tick 回測尚未實作，目前不會被填入）
         self.intraday_range: Dict[str, Tuple[float, float]] = {}
 
-        # 前一交易日收盤價；期貨沒有漲跌停檢查，此處僅供無報價時盯市與外部查詢
+        # 前一交易日收盤價；期貨沒有漲跌停檢查，這份只供外部查詢——
+        # 盯市一律走 `TwFuturesSettlementModel.get_mark_price()`（結算價優先），不看這裡
         self.reference_prices: Dict[str, float] = {}
 
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
@@ -1065,7 +1077,18 @@ class TwFuturesFillModel(BaseFillModel):
 
         期貨沒有漲跌停可查（見 `TwFuturesSpec.get_price_limits()`）；跳動點未對齊
         僅記錄警告不拒單，與台股一致——資料本身的價格精度問題不該擋掉正常回測。
+
+        **零成交的契約先擋**：遠月契約整天零成交是常態（資料裡三成的列），
+        它的區間是 `(None, None)`，只靠區間檢查會讓任何價格都成交。
         """
+
+        if not self.has_tradable_quote(quote):
+            logger.warning(
+                f"[Validate Fill] {order.symbol} 當日無成交（volume={quote.volume}、"
+                f"close={quote.close}），拒單"
+            )
+            self.event_counts["rejected_fill_price"] += 1
+            return False
 
         low, high = self.get_price_range(quote)
         if low is not None and high is not None and not (low <= order.price <= high):

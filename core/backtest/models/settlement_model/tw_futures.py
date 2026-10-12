@@ -55,11 +55,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     成本）。設定裡沒開滑價時兩者相同。
     """
 
-    # 契約連續幾根 bar 沒有報價就強制出場。
+    # 契約連續幾根 bar 沒有盯市價就強制出場。
     #
-    # **不設成 1**：單日的資料缺漏（爬蟲漏一天、當日零成交）與「契約已到期」
+    # **不設成 1**：單日的資料缺漏（爬蟲漏一天、夜盤零成交）與「契約已到期」
     # 在報價層看起來一模一樣，設成 1 會讓前者被誤判成到期而提早平倉。
-    # 到期契約晚幾天出場不影響損益——盯市價已凍結在最後一次結算價，
+    # 到期契約晚幾天出場不影響損益——盯市價已凍結在最近一次盯市價，
     # 那幾天的每日結算損益都是 0。
     MAX_NO_QUOTE_DAYS: int = 3
 
@@ -288,6 +288,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             if active is None or active <= position.expiry:
                 continue
 
+            # 新契約當日零成交（收盤價為 0）也不轉：轉進去等於以不存在的價格建倉
             new_quote: Optional[FuturesQuote] = quote_map.get(
                 f"{position.product}{active}"
             )
@@ -463,7 +464,12 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     ) -> None:
         """
         - Description:
-            更新每個契約的連續無報價 bar 數（有報價即歸零）
+            更新每個契約的連續無盯市價 bar 數（有盯市價即歸零）
+
+            **「有報價」的判準是有盯市價，不是有成交**：遠月契約整天零成交是常態，
+            但日盤仍會公告結算價，契約還掛在交易所上，不是到期；這種 bar 要歸零。
+            夜盤沒有結算價、零成交時也沒有收盤價，才算沒有報價——與契約到期後
+            整筆消失同一種處理，由 `MAX_NO_QUOTE_DAYS` 吸收單日缺漏。
 
             **計數掛在 model 而不是部位上**：無報價是**契約**的狀態不是部位的狀態，
             同一契約的多個部位共用同一個答案，記在部位上只會存好幾份一樣的數。
@@ -476,7 +482,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
 
         for position in positions:
             quote: Optional[FuturesQuote] = quote_map.get(position.symbol)
-            if quote is not None and (quote.close or quote.cur_price):
+            if quote is not None and self.get_quote_mark_price(quote):
                 self.no_quote_days[position.symbol] = 0
             else:
                 self.no_quote_days[position.symbol] = (
@@ -493,9 +499,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             結算價缺漏時退回收盤價——夜盤本來就沒有結算價（來源即為 NULL），
             日盤偶有缺漏。**不可當成 0**：那會讓部位在一天內被結算成歸零。
 
-            當日完全無報價（契約已到期、或資料缺這一天）時沿用
-            `position.price`——逐日盯市之後它就是**最近一次結算價**
-            （尚未結算過則為開倉價），見 `FuturesPosition`。
+            零成交的契約也照這個順序：日盤零成交仍有結算價，就以結算價盯市；
+            夜盤零成交兩種價都沒有（adapter 把它們收斂成 0），與當日完全無報價
+            （契約已到期、或資料缺這一天）同一種處理——沿用 `position.price`，
+            逐日盯市之後它就是**最近一次盯市價**（尚未結算過則為開倉價），
+            見 `FuturesPosition`。
         - Parameters:
             - position: FuturesPosition
                 待盯市的部位

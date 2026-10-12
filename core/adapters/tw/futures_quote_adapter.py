@@ -25,6 +25,13 @@ FuturesQuoteAdapter: 把 `FuturesPriceAPI` 的查詢結果轉成回測吃的 `Fu
   （見 `FuturesStockUniverseAPI`）。
 - **同一根 bar 內出現重複 symbol 是正常的**——同一契約的日盤與夜盤是兩筆；
   因此 `session` 混用時不發重複警告，而是要求呼叫端指定時段。
+- **零成交的契約不過濾，但價格一律轉成 0**：台股 adapter 直接丟掉無成交價的列，
+  期貨不能丟——零成交的日盤列仍有結算價，逐日盯市要靠它。來源的 `-` 進資料庫是
+  NULL，pandas 讀出來卻看同一次查詢的其他列而定：欄內有任何數字就是 NaN，
+  整欄 NULL 才是 None。NaN 是 truthy，`if quote.close` 這種判斷會把零成交當成
+  有成交，任何價格都能成交；None 又會讓算術直接拋錯。`to_price()` 把兩種
+  都收斂成 0.0——那是 `BaseQuote` 價格欄位「沒有這個價」的既定表示
+  （tick 報價的 OHLC、盤前報價都是如此），下游只需要 `if quote.close`。
 """
 
 
@@ -55,6 +62,27 @@ class FuturesQuoteAdapter:
 
         as_float: Optional[float] = FuturesQuoteAdapter.to_optional_float(value)
         return None if as_float is None else int(as_float)
+
+    @staticmethod
+    def to_price(value: Any) -> float:
+        """
+        - Description:
+            價格欄位：NULL／NaN 一律轉成 0.0，表示「這一段沒有成交」
+
+            **與 `to_optional_float()` 相反，這裡要的是 0 不是 None**：價格不可能
+            合法地等於 0，所以 0 沒有歧義；而 `BaseQuote` 的 OHLC 型別是 `float`，
+            「沒有」的既定表示就是 0.0。零成交的列一定要有單一表示法——
+            NaN 是 truthy，`if quote.close` 會把它當成有成交；None 進到算術就拋錯；
+            而同一個 NULL 讀成哪一種只取決於同一次查詢的其他列。
+        - Parameters:
+            - value: Any
+                資料庫讀出的價格（可能為 NULL、NaN 或數值）
+        - Return:
+            - float
+                價格；沒有成交時為 0.0
+        """
+
+        return FuturesQuoteAdapter.to_optional_float(value) or 0.0
 
     @staticmethod
     def resolve_multiplier(product: str) -> int:
@@ -200,6 +228,8 @@ class FuturesQuoteAdapter:
                 整併後的報價
         """
 
+        # 夜盤零成交（收盤價為 0）與夜盤缺該契約同一種處理：這段 bar 從日盤開始。
+        # 零成交的價格已由 `to_price()` 收斂成 0，這裡才能用真值判斷
         if night_quote is None or not night_quote.close:
             return FuturesQuoteAdapter.mark_combined(day_quote)
 
@@ -279,7 +309,11 @@ class FuturesQuoteAdapter:
                 報價物件（`scale` 固定為日線）
         """
 
-        close: float = getattr(row, FuturesPriceColumn.CLOSE.value)
+        # 零成交的列四價都是 NULL，只成交一筆的列高低價是 NULL；統一轉成 0.0
+        # 之後，下游判斷「有沒有成交」只看 `close`、判斷「有沒有區間」只看高低價
+        close: float = FuturesQuoteAdapter.to_price(
+            getattr(row, FuturesPriceColumn.CLOSE.value)
+        )
         product: str = str(row.product)
 
         return FuturesQuote(
@@ -288,10 +322,19 @@ class FuturesQuoteAdapter:
             scale=Scale.DAY,
             date=date,
             cur_price=close,
-            volume=int(getattr(row, FuturesPriceColumn.VOLUME.value) or 0),
-            open=getattr(row, FuturesPriceColumn.OPEN.value),
-            high=getattr(row, FuturesPriceColumn.HIGH.value),
-            low=getattr(row, FuturesPriceColumn.LOW.value),
+            volume=FuturesQuoteAdapter.to_optional_int(
+                getattr(row, FuturesPriceColumn.VOLUME.value)
+            )
+            or 0,
+            open=FuturesQuoteAdapter.to_price(
+                getattr(row, FuturesPriceColumn.OPEN.value)
+            ),
+            high=FuturesQuoteAdapter.to_price(
+                getattr(row, FuturesPriceColumn.HIGH.value)
+            ),
+            low=FuturesQuoteAdapter.to_price(
+                getattr(row, FuturesPriceColumn.LOW.value)
+            ),
             close=close,
             session=FuturesSession(row.session),
             settlement_price=FuturesQuoteAdapter.to_optional_float(

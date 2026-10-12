@@ -181,10 +181,35 @@ class BaseSimulator(ABC):
         )
 
     # === Signal Execution ===
+    def filter_tradable_quotes(self, quotes: List[BaseQuote]) -> List[BaseQuote]:
+        """
+        - Description:
+            只把當根 bar 有成交的報價交給策略
+
+            台股 adapter 已先丟掉無成交價的列，這裡對它是 no-op。期貨的零成交契約
+            不能在 adapter 丟——日盤零成交的列仍有結算價，逐日盯市要靠它——
+            只能在這裡攔：策略拿到一筆四價皆 0 的報價，會以 0 元下平倉單、
+            或算出 −100% 的停損。
+
+            攔掉之後兩個市場的行為一致：零成交標的的開倉單走「查不到報價」
+            那條拒單路徑（`rejected_no_quote`），平倉則留給結算層的連續無報價出場。
+            完整的報價（含零成交）仍由 `run_day()` 原樣交給 `Backtester.finish_day()`。
+        - Parameters:
+            - quotes: List[BaseQuote]
+                當根 bar 的全部報價
+        - Return:
+            - List[BaseQuote]
+                有成交的報價
+        """
+
+        fill_model: BaseFillModel = self.engine.fill_model
+        return [quote for quote in quotes if fill_model.has_tradable_quote(quote)]
+
     def execute_open_signal(self, quotes: List[BaseQuote]) -> List[BasePosition]:
         """若倉位數量未達到限制且有開倉訊號，則執行開倉"""
 
         engine: SimulationEngine = self.engine
+        quotes = self.filter_tradable_quotes(quotes)
         open_orders: List[BaseOrder] = engine.strategy.check_open_signal(quotes)
 
         # 方向驗證 → 補值 → 決定性排序 → 成交價驗證，最後才進倉位管理器
@@ -246,6 +271,7 @@ class BaseSimulator(ABC):
         """
 
         engine: SimulationEngine = self.engine
+        quotes = self.filter_tradable_quotes(quotes)
         positions: List[BaseQuote] = [
             q for q in quotes if engine.account.check_has_position(q.symbol)
         ]
