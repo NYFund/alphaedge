@@ -22,6 +22,8 @@ class MonthlyRevenueDAO(BaseDAO):
 
     TABLE_NAME: str = MONTHLY_REVENUE_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：尚未回補時查詢回空表、規劃端視為全部待抓
+    OPTIONAL_TABLE: bool = True
 
     PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("year", "month", "stock_id", "公司名稱")
     TEXT_NOT_NULL_COLUMNS: Tuple[str, ...] = ("stock_id", "公司名稱")
@@ -124,6 +126,9 @@ class MonthlyRevenueDAO(BaseDAO):
             - pd.DataFrame
                 區間內的月營收；起點晚於終點時為空表
         """
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""

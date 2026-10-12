@@ -208,6 +208,12 @@ class BaseDAO:
     # 去查，一呼叫就是 SQL 錯誤。只有一個鍵欄的表才支援 `get_by_stock()`
     KEY_COLUMNS: Tuple[str, ...] = ("stock_id",)
 
+    # 這張表可不可以不存在。**可缺的表查詢回空、不可缺的表照常拋出**：
+    # 選用資料集（名單、籌碼、保證金、公告）的回補是獨立作業，尚未執行時回測仍應能跑；
+    # 行情表缺了則整場回測沒有意義，讓 SQLite 的「no such table」直接現形。
+    # 原本缺表的處理散在 DAO 與 API 層各自判斷，同一張表在不同入口有不同答案
+    OPTIONAL_TABLE: bool = False
+
     # 建表後是否補 `(標的, 日期)` 複合索引。**逐表宣告而不是一律建**：
     # 只有一列一（標的, 日期）的明細表才吃得到它，參考表（股票基本資料、
     # 券商名冊）建了只是白佔空間與寫入成本
@@ -250,6 +256,11 @@ class BaseDAO:
         """本 DAO 的資料表是否存在"""
 
         return table_exists(self.conn, self.TABLE_NAME)
+
+    def missing_optional_table(self) -> bool:
+        """表宣告為可缺且目前不存在：共用查詢據此回空，不去碰 SQLite"""
+
+        return self.OPTIONAL_TABLE and not self.table_exists()
 
     def count_rows(self) -> int:
         """本表的列數；表不存在時為 0（其他查詢錯誤往外拋）"""
@@ -307,8 +318,7 @@ class BaseDAO:
         - Description:
             取得資料表在區間內有資料的日期（已排序、去重）
 
-            **表不存在時會拋出**，與讀取端既有行為一致；需要容忍「尚未建表」的
-            呼叫端（例如 ETL 的日期規劃）應先呼叫 `table_exists()`。
+            缺表的處理依 `OPTIONAL_TABLE`：可缺的表回空 list，不可缺的表拋出。
         - Parameters:
             - start_date: datetime.date
                 起始日（含）
@@ -319,7 +329,7 @@ class BaseDAO:
                 區間內的日期；無資料或 `start_date > end_date` 時回傳空 list
         """
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return []
 
         df: pd.DataFrame = self.query_df(
@@ -401,7 +411,10 @@ class BaseDAO:
     # 換資料庫後端時要改寫的 SQLite 專屬語法就在這裡，重複五份就得改五次，
     # 而漏改一份不會報錯——只會讓那一張表的查詢走不同的語意
     def get_by_date(self, date: datetime.date) -> pd.DataFrame:
-        """取得指定日期的全部列"""
+        """取得指定日期的全部列；可缺的表不存在時為空表"""
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""
@@ -420,10 +433,10 @@ class BaseDAO:
         取得日期區間內的全部列；`start_date > end_date` 時回傳空表
 
         **區間反了回空表而不是拋出**：呼叫端多半是把使用者給的兩個日期直接傳進來，
-        反了就是查無資料，不是程式錯誤。
+        反了就是查無資料，不是程式錯誤。可缺的表不存在時同樣回空表。
         """
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return pd.DataFrame()
 
         return self.query_df(
@@ -459,9 +472,10 @@ class BaseDAO:
         取得指定標的在區間內的全部列；`start_date > end_date` 時回傳空表
 
         只有單一鍵欄的表（台股各表）支援；期貨表的鍵是組合，呼叫會拋 `NotImplementedError`。
+        可缺的表不存在時回空表。
         """
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return pd.DataFrame()
 
         return self.query_df(

@@ -130,6 +130,13 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 **「表還沒建」與「查詢出錯」必須分得開。** 前者是全新環境或尚未跑過該 ETL 的正常狀態，回 `None`／空表／空清單；
 後者（`database is locked`、欄名打錯、schema 壞掉）一律往外拋。判斷一律先 `table_exists()`，不以 `except` 收掉整類錯誤。
 
+**哪些表可以不存在，由 DAO 以 `OPTIONAL_TABLE` 宣告**：可缺的表（名單、籌碼、保證金、公告、財報、月營收、期貨行情等
+選用或可獨立回補的資料集）在 `get_by_date()`／`get_range()`／`get_by_stock()`／`get_distinct_dates()` 與各自的
+自訂查詢裡經 `missing_optional_table()` 回空；不可缺的表（台股 `price`、`chip`）缺了就讓 SQLite 的 `no such table`
+直接現形。API 層不再自己檢查表存不存在——同一張表在不同入口才會有同一個答案。例外兩處各有理由：
+`StockDividendAPI` 缺 `corporate_action` 表時要發 warning 提示回補指令；`StockTickAPI` 的 TimescaleDB 表缺了
+tick 回測根本跑不了，直接拋錯。
+
 被吞掉的代價都是靜默的：
 
 | 被吞的地方（已修） | 會發生什麼 |

@@ -29,10 +29,8 @@ class StockShortSaleListAPI(BaseDataAPI):
     def get_covered_dates(
         self, start_date: datetime.date, end_date: datetime.date
     ) -> List[datetime.date]:
-        """區間內已入庫的日期；**表不存在時回傳空 list**（等同全部未入庫）"""
+        """區間內已入庫的日期；**表不存在時回傳空 list**（等同全部未入庫；由 DAO 宣告為可缺）"""
 
-        if not self.dao.table_exists():
-            return []
         return self.dao.get_distinct_dates(start_date, end_date)
 
     def get_snapshot(self, date: datetime.date) -> Optional[ShortSaleListSnapshot]:
@@ -47,9 +45,6 @@ class StockShortSaleListAPI(BaseDataAPI):
                 **該日未入庫（或表不存在）時為 None**——不可以回空快照，
                 空快照的意思是「當天沒有任何證券可融券」
         """
-
-        if not self.dao.table_exists():
-            return None
 
         df: pd.DataFrame = self.get(date)
         if df.empty:

@@ -26,6 +26,8 @@ class FuturesContinuousDAO(BaseDAO):
     # 同一天同一商品依調整方式與換月規則各一列
     KEY_COLUMNS: Tuple[str, ...] = ("product", "session", "method", "roll_rule")
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 可缺：衍生表，尚未跑過 `--target futures_continuous` 時序列為空
+    OPTIONAL_TABLE: bool = True
 
     def ensure_table(self) -> None:
         """確保資料表與序列查詢索引存在（`IF NOT EXISTS`）並 commit；可重複呼叫"""
@@ -126,10 +128,10 @@ class FuturesContinuousDAO(BaseDAO):
                 日期範圍（含兩端）
         - Return:
             - pd.DataFrame
-                依日期排序的序列；`start_date > end_date` 或查無資料時為空表
+                依日期排序的序列；`start_date > end_date`、查無資料或缺表時為空表
         """
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return pd.DataFrame()
 
         return self.query_df(

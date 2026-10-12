@@ -26,6 +26,8 @@ class FuturesPriceDAO(BaseDAO):
     # 鍵是契約與時段的組合，沒有單一標的欄
     KEY_COLUMNS: Tuple[str, ...] = ("product", "expiry", "session")
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 可缺：尚未跑過 `--target futures_price` 是全新環境的正常狀態：交易日為空、行情為空
+    OPTIONAL_TABLE: bool = True
 
     # === 建表 ===
     def create_table(self) -> None:
@@ -98,7 +100,10 @@ class FuturesPriceDAO(BaseDAO):
         product: Optional[str] = None,
         session: Optional[str] = None,
     ) -> pd.DataFrame:
-        """取得指定日期的行情（所有到期月），依 `product, expiry` 排序"""
+        """取得指定日期的行情（所有到期月），依 `product, expiry` 排序；缺表時為空表"""
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         product_clause, product_params = self.build_optional_filter("product", product)
         session_clause, session_params = self.build_optional_filter("session", session)
@@ -119,9 +124,9 @@ class FuturesPriceDAO(BaseDAO):
         product: Optional[str] = None,
         session: Optional[str] = None,
     ) -> pd.DataFrame:
-        """取得日期範圍內的行情（所有到期月）；`start_date > end_date` 時回傳空表"""
+        """取得日期範圍內的行情（所有到期月）；`start_date > end_date` 或缺表時回傳空表"""
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return pd.DataFrame()
 
         product_clause, product_params = self.build_optional_filter("product", product)
@@ -188,7 +193,7 @@ class FuturesPriceDAO(BaseDAO):
         if start_date > end_date:
             return []
 
-        if not self.table_exists():
+        if self.missing_optional_table():
             logger.warning(
                 f"[Futures Price] {self.TABLE_NAME} 不存在，"
                 f"回傳空交易日清單（請先執行 --target futures_price）"

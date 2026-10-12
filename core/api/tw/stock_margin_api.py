@@ -57,9 +57,9 @@ class StockMarginAPI(BaseDataAPI):
         - Description:
             取得單日全市場的融券今日餘額對照表（張），供回測的券源檢核使用
 
-            **`margin` 表不存在時回傳空 dict 而非拋錯**：該表的歷史回補是獨立作業，
-            尚未執行時回測仍應能跑，由呼叫端（`FillModel`）以 warning 表明
-            「查無資料，本次跳過檢核」，而不是靜默地把所有標的都當成借不到券。
+            **`margin` 表不存在時回傳空 dict 而非拋錯**（DAO 宣告為可缺的表）：
+            該表的歷史回補是獨立作業，尚未執行時回測仍應能跑，由呼叫端（`FillModel`）
+            以 warning 表明「查無資料，本次跳過檢核」，而不是靜默地把所有標的都當成借不到券。
         - Parameters:
             - date: datetime.date
                 查詢日期
@@ -67,9 +67,6 @@ class StockMarginAPI(BaseDataAPI):
             - Dict[str, int]
                 `{stock_id: 融券今日餘額（張）}`；查無資料時為空 dict
         """
-
-        if not self.dao.table_exists():
-            return {}
 
         df: pd.DataFrame = self.get_short_balance(date)
         balance_map: Dict[str, Any] = self.build_column_map(df, "融券今日餘額")

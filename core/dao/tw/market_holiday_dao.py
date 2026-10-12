@@ -25,6 +25,8 @@ class MarketHolidayDAO(BaseDAO):
 
     TABLE_NAME: str = MARKET_HOLIDAY_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：官方行事曆只替已入庫的年度作答，缺表＝沒有任何年度
+    OPTIONAL_TABLE: bool = True
     # 一天一列，只有日期鍵
     KEY_COLUMNS: Tuple[str, ...] = ()
 

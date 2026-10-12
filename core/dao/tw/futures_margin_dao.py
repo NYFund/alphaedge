@@ -32,6 +32,8 @@ class FuturesMarginDAO(BaseDAO):
 
     TABLE_NAME: str = FUTURES_MARGIN_HISTORY_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 可缺：尚未跑過保證金 ETL 時查詢回 None
+    OPTIONAL_TABLE: bool = True
     # 變動序列：生效日 ＋ 契約代碼
     DATE_COLUMN: str = "effective_date"
     KEY_COLUMNS: Tuple[str, ...] = ("product",)

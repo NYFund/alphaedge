@@ -22,6 +22,8 @@ class CorporateActionDAO(BaseDAO):
 
     TABLE_NAME: str = CORPORATE_ACTION_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：尚未回補的環境可能沒有；還原價退回只用除權息
+    OPTIONAL_TABLE: bool = True
     NEEDS_SYMBOL_DATE_INDEX: bool = True
 
     # === 建表 ===

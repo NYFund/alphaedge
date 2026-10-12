@@ -64,10 +64,7 @@ class FuturesContinuousAPI(BaseDataAPI):
         """
 
         # 表不存在＝尚未跑過 `--target futures_continuous`，那是「還沒有資料」
-        # 不是查詢寫錯（全新環境本來就會走到這裡），語意與其他 API 一致
-        if not self.dao.table_exists():
-            return pd.DataFrame()
-
+        # 不是查詢寫錯（全新環境本來就會走到這裡）；DAO 宣告為可缺的表，缺表回空表
         return self.dao.get_series(
             product,
             session.value,

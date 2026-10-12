@@ -38,6 +38,8 @@ class FuturesChipDAO(BaseDAO):
     """
 
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 可缺：籌碼是選用資料集，尚未回補時策略拿到的是「查無資料」
+    OPTIONAL_TABLE: bool = True
 
     # 三張表的鍵不同，由建構子依表設定（見 `__init__`）
     KEY_COLUMNS: Tuple[str, ...] = ()
@@ -222,17 +224,6 @@ class FuturesChipDAO(BaseDAO):
             f"SELECT MAX(date) FROM {self.TABLE_NAME} WHERE date < ?", (date,)
         )
         return row[0] if row and row[0] else None
-
-    def get_by_date(self, date: Union[datetime.date, str]) -> pd.DataFrame:
-        """取得某一天公布的籌碼；表不存在時為空表"""
-
-        if not self.table_exists():
-            return pd.DataFrame()
-
-        return self.query_df(
-            f"SELECT * FROM {self.TABLE_NAME} WHERE date = ?",
-            (date,),
-        )
 
     def get_covered_date_range(self) -> Optional[Tuple[str, str]]:
         """表的（最早, 最晚）資料日期；表不存在或為空時為 None"""

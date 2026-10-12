@@ -33,6 +33,8 @@ class FinancialStatementDAO(BaseDAO):
     """
 
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：尚未回補時查詢回空表、規劃端視為全部待抓
+    OPTIONAL_TABLE: bool = True
 
     # 允許存取的資料表；表名不可參數化，只能以白名單擋下非預期的值
     ALLOWED_TABLES: Tuple[str, ...] = (
@@ -208,6 +210,9 @@ class FinancialStatementDAO(BaseDAO):
             - pd.DataFrame
                 區間內的財報；起點晚於終點時為空表
         """
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""
