@@ -4,7 +4,7 @@ import inspect
 import pkgutil
 import re
 import sqlite3
-from typing import Any, Dict, List, Set, Type
+from typing import Any, Dict, List, Set, Tuple, Type
 
 import pandas as pd
 import pytest
