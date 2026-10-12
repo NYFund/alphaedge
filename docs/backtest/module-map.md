@@ -148,7 +148,7 @@ sequenceDiagram
 | `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.reference_prices`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
 | `core/backtest/models/event_counts.py` | 事件計數 key 的唯一清單，分共用／台股／期貨三組（`SHARED_EVENT_KEYS`、`EVENT_KEYS`（台股）、`FUTURES_EVENT_KEYS`）；`new_event_counts(keys)` 由 factory 依市場建立 | 無 |
 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
-| `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日）；建構子收交易日清單，要從資料庫取清單時用 `MarketCalendar.from_api()`（與 `FuturesCalendar` 同形狀） | 由 `DataFeed`、策略建立；持有交易日清單 |
+| `core/market/calendar.py`、`core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日、區間內交易日與計數）在 `BaseTradingCalendar` 只有一份；`MarketCalendar`／`FuturesCalendar` 繼承它，只決定清單從哪張表來（`from_api()`） | 由 `DataFeed`、策略建立；持有交易日清單 |
 
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞，model 之間不互相 import：
 

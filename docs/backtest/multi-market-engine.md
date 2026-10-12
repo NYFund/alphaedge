@@ -155,7 +155,7 @@ def finish_day(self, date, close_quotes):
 | | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | `BaseCostModel`／`TwStockCostModel`／`TwFuturesCostModel`（設定類別 `CostConfig`／`FuturesCostConfig`／`ShortConstraint` 在 `core/models/cost_config.py`，回測與實盤共用）|
 | | `core/backtest/models/settlement_model/` | 套件：`base.py`（`BaseSettlementModel`）＋ `tw_stock.py`（`TwStockSettlementModel`）／`tw_futures.py`（`TwFuturesSettlementModel`），由 `__init__.py` re-export |
 | 資料源 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | `BaseDataFeed` ＋ `TwStockDataFeed`／`TwFuturesDataFeed` |
-| 市場結構 | `core/market/tw/market_calendar.py`／`futures_calendar.py`／`futures_roll.py`／`futures_margin_config.py` | 交易日曆、期貨結算日、換月規則、保證金設定；ETL、回測、實盤、策略共用，不屬於回測套件 |
+| 市場結構 | `core/market/calendar.py`（`BaseTradingCalendar`）、`core/market/tw/market_calendar.py`／`futures_calendar.py`／`futures_roll.py`／`futures_margin_config.py` | 交易日曆（交易日運算在基底，兩個市場只決定清單來源）、期貨結算日、換月規則、保證金設定；ETL、回測、實盤、策略共用，不屬於回測套件 |
 | 委託前處理 | `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序；回測與實盤共用 |
 | 資料模型 | `core/models/base/` | `BaseQuote`／`BaseOrder`／`BasePosition`／`BaseTradeRecord`／`BaseAccount`，識別欄位一律 `symbol` |
 | 策略 | `core/strategies/base.py` | `BaseStrategy`，`market` ＋ `instrument_type` 兩欄位為 factory 的分派鍵 |

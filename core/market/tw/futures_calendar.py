@@ -1,11 +1,11 @@
-import bisect
 import datetime
 import re
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Optional, Tuple
 
 from loguru import logger
 
 from core.api.tw.futures_price_api import FuturesPriceAPI
+from core.market.calendar import BaseTradingCalendar
 from core.utils import (
     FUTURES_DAY_SESSION_CLOSE,
     FUTURES_DAY_SESSION_OPEN,
@@ -17,7 +17,8 @@ from core.utils import (
 """
 FuturesCalendar: 台期貨交易日曆（交易日、時段、結算日與最後交易日）
 
-**不沿用股票 calendar**（`market_calendar.py`），三個原因每一個都會算錯：
+**交易日的運算與股票 calendar 共用 `BaseTradingCalendar`，但不沿用股票的清單**，
+三個原因每一個都會算錯：
 
 1. **期貨有夜盤**，且夜盤跨日（15:00 → 次日 05:00）——股票沒有這個概念。
 2. **期貨有結算日與最後交易日**：契約到期後就不再有報價，用股票那套「一直有
@@ -38,8 +39,8 @@ FuturesCalendar: 台期貨交易日曆（交易日、時段、結算日與最後
 """
 
 
-class FuturesCalendar:
-    """台期貨交易日曆"""
+class FuturesCalendar(BaseTradingCalendar):
+    """台期貨交易日曆（交易日運算在 `BaseTradingCalendar`，結算日與時段在此）"""
 
     # === 交易時段（TAIFEX 現行制度）===
     # 起訖只定義在 `core/utils/constant/futures.py` 一處，這裡是別名
@@ -60,11 +61,6 @@ class FuturesCalendar:
     # 到期月代碼：`YYYYMM` 或 `YYYYMMWn`（週契約，n 為第幾週）
     EXPIRY_PATTERN: re.Pattern = re.compile(r"^(\d{4})(\d{2})(?:W(\d))?$")
 
-    def __init__(self, trading_days: Optional[Iterable[datetime.date]] = None) -> None:
-        # 已排序的交易日清單 ＋ 供 O(1) 查詢的集合
-        self.trading_days: List[datetime.date] = sorted(set(trading_days or []))
-        self.trading_day_set: Set[datetime.date] = set(self.trading_days)
-
     @classmethod
     def from_api(
         cls,
@@ -72,6 +68,7 @@ class FuturesCalendar:
         start_date: datetime.date,
         end_date: datetime.date,
         product: Optional[str] = None,
+        **kwargs,
     ) -> "FuturesCalendar":
         """
         - Description:
@@ -98,62 +95,6 @@ class FuturesCalendar:
         """
 
         return cls(api.get_trading_days(start_date, end_date, product=product))
-
-    # === 交易日 ===
-    def is_trading_day(self, date: datetime.date) -> bool:
-        """該日是否有行情（涵蓋臨時休市與補行交易日，見模組說明）"""
-
-        return date in self.trading_day_set
-
-    def get_trading_days(
-        self, start_date: datetime.date, end_date: datetime.date
-    ) -> List[datetime.date]:
-        """區間內的交易日（含頭含尾）"""
-
-        left: int = bisect.bisect_left(self.trading_days, start_date)
-        right: int = bisect.bisect_right(self.trading_days, end_date)
-        return self.trading_days[left:right]
-
-    def count_trading_days(
-        self, start_date: datetime.date, end_date: datetime.date
-    ) -> int:
-        """
-        區間內的交易日數
-
-        **持倉天數要用這個而不是曆日相減**：跨春節的部位用曆日算會多出 10 天，
-        用在「最長持有天數」這類風控上會提早出場。
-        """
-
-        return len(self.get_trading_days(start_date, end_date))
-
-    def shift_trading_days(
-        self, date: datetime.date, offset: int
-    ) -> Optional[datetime.date]:
-        """
-        以**交易日**為單位平移；`offset` 為負代表往前推
-
-        基準日不在清單內時，以「不早於它的第一個交易日」為基準
-        （與 `MarketCalendar.shift_trading_days()` 同一種語意）。
-        超出清單範圍時回傳 None——那代表日曆涵蓋的區間不足以推算，不是「沒有那天」。
-        """
-
-        index: int = bisect.bisect_left(self.trading_days, date) + offset
-
-        if index < 0 or index >= len(self.trading_days):
-            return None
-        return self.trading_days[index]
-
-    def get_next_trading_day(self, date: datetime.date) -> Optional[datetime.date]:
-        """下一個交易日（不含當日）"""
-
-        index: int = bisect.bisect_right(self.trading_days, date)
-        return self.trading_days[index] if index < len(self.trading_days) else None
-
-    def get_previous_trading_day(self, date: datetime.date) -> Optional[datetime.date]:
-        """前一個交易日（不含當日）"""
-
-        index: int = bisect.bisect_left(self.trading_days, date) - 1
-        return self.trading_days[index] if index >= 0 else None
 
     # === 結算日與最後交易日 ===
     @classmethod
