@@ -684,7 +684,8 @@ close_map: Dict[str, Any] = self.price.get_close_map(date)
 # {stock_id: 成交量（張）}
 volume_map: Dict[str, int] = self.price.get_volume_lots_map(date)
 
-# 單一個股的收盤價序列
+# 單一個股的收盤價序列：index 為 datetime.date、值為 float、name 為「收盤價」
+# （期貨的 get_close_series() 也是同一個契約，見 BaseDataAPI.build_close_series()）
 close_series = self.price.get_close_series(
     stock_id="2330",
     start_date=datetime.date(2024, 1, 1),

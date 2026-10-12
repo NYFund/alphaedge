@@ -173,6 +173,9 @@ def test_adjusted_series_is_continuous(price_api: StockPriceAPI) -> None:
     assert len(series) == 2
     assert series.iloc[0] == pytest.approx(909.0)
     assert series.iloc[1] == pytest.approx(900.0 * FIRST_FACTOR)
+    # 還原序列與原始序列同一個契約：index 為 datetime.date、name 為「收盤價」
+    assert all(type(value) is datetime.date for value in series.index)
+    assert series.name == "收盤價"
 
 
 def test_single_and_cumulative_factor_maps_differ(price_api: StockPriceAPI) -> None:

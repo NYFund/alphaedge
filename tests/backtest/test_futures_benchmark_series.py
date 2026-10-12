@@ -127,6 +127,8 @@ def test_api_returns_only_the_requested_adjust_method(tmp_path: Path) -> None:
     assert len(backward) == 3
     assert backward.iloc[0] == 18000.0
     assert backward.index[0] == START
+    assert backward.name == "收盤價"
+    assert backward.dtype == float
 
 
 def test_api_returns_empty_for_a_series_that_was_never_built(tmp_path: Path) -> None:

@@ -28,7 +28,17 @@ class BaseDataAPI(ABC):  # noqa: B024
     需要多個 DAO 或額外快取的子類覆寫 `setup()`，**先呼叫 `super().setup()`**
     再補自己的；需要額外建構參數的覆寫 `__init__()`，同樣先設好自己的屬性
     再呼叫 `super().__init__(conn)`——基底的 `__init__()` 最後才呼叫 `setup()`。
+
+    **價格序列只有一種形狀**：各市場的 `get_close_series()` 一律經 `build_close_series()`
+    回傳 index 為 `datetime.date`、dtype float、name 為「收盤價」、依日期排序的 Series。
+    三支 API 原本各回一種（字串 index 帶 name、字串 index 不帶 name、`date` index），
+    呼叫端只能各自補轉換，而字串日期比大小與排序都容易出錯。
     """
+
+    # 價格序列的統一名稱；與各市場收盤欄的欄名相同
+    CLOSE_SERIES_NAME: str = "收盤價"
+    # 價格序列 index 的名稱；沿用資料表的日期欄名
+    CLOSE_SERIES_INDEX_NAME: str = "date"
 
     # 子類宣告：自建連線時要連哪個資料庫、單一 DAO 的類別、log 檔名。
     # `DAO_CLASS` 留 None 代表「不只一個 DAO」或「DAO 延遲建立」，由子類自理
@@ -96,6 +106,59 @@ class BaseDataAPI(ABC):  # noqa: B024
 
         deduped: pd.DataFrame = df.drop_duplicates(subset="stock_id", keep="first")
         return dict(zip(deduped["stock_id"], deduped[column]))
+
+    @classmethod
+    def empty_close_series(cls) -> pd.Series:
+        """查無資料時的價格序列：與有資料時同一個 name 與 dtype，呼叫端以 `empty`／`len()` 判斷"""
+
+        return pd.Series(
+            dtype=float,
+            name=cls.CLOSE_SERIES_NAME,
+            index=pd.Index([], name=cls.CLOSE_SERIES_INDEX_NAME),
+        )
+
+    @classmethod
+    def build_close_series(
+        cls, df: pd.DataFrame, date_column: str, close_column: str
+    ) -> pd.Series:
+        """
+        - Description:
+            把含日期欄與收盤欄的 DataFrame 轉成**價格序列**；各市場 `get_close_series()`
+            的回傳契約都在這裡
+
+            契約：index 為 `datetime.date`（name 為 `date`）、dtype float、
+            name 為「收盤價」、依日期穩定排序；查無資料時回同一個形狀的空 Series。
+
+            **不去重**：同一日期多列（期貨 `session=None` 時日夜盤各一列）維持原樣，
+            要哪一列由呼叫端決定——在這裡挑等於替呼叫端選了時段。
+
+            無法轉成數值的價格轉成 NaN 而不是拋錯：缺資料與「有資料但值異常」
+            要分得開（與 `build_column_map()` 同一個理由）。
+        - Parameters:
+            - df: pd.DataFrame
+                含日期欄與收盤欄的查詢結果
+            - date_column: str
+                日期欄名（字串或 datetime 皆可）
+            - close_column: str
+                收盤欄名
+        - Return:
+            - pd.Series
+                價格序列；`df` 為空或缺欄位時為空 Series
+        """
+
+        if df.empty or date_column not in df.columns or close_column not in df.columns:
+            return cls.empty_close_series()
+
+        ordered: pd.DataFrame = df.sort_values(date_column, kind="stable")
+        series: pd.Series = pd.to_numeric(
+            ordered[close_column], errors="coerce"
+        ).astype(float)
+        series.index = pd.Index(
+            pd.to_datetime(ordered[date_column]).dt.date,
+            name=cls.CLOSE_SERIES_INDEX_NAME,
+        )
+        series.name = cls.CLOSE_SERIES_NAME
+        return series
 
     def close(self) -> None:
         """

@@ -163,14 +163,16 @@ def test_get_volume_lots_map_skips_invalid(price_api: StockPriceAPI) -> None:
 
 
 def test_get_close_series_sorted_by_date(price_api: StockPriceAPI) -> None:
-    """區間收盤序列依日期排序，index 為 date"""
+    """區間收盤序列依日期排序，index 為 `datetime.date`（資料表存的是字串，API 轉好）"""
 
     series: pd.Series = price_api.get_close_series(
         "2330", datetime.date(2024, 1, 1), datetime.date(2024, 1, 31)
     )
 
     assert list(series.values) == [590.0, 600.0]
-    assert list(series.index) == [DAY_1, DAY_2]
+    assert list(series.index) == [datetime.date(2024, 1, 2), datetime.date(2024, 1, 3)]
+    assert series.name == "收盤價"
+    assert series.dtype == float
 
 
 def test_get_close_series_empty_when_no_data(price_api: StockPriceAPI) -> None:

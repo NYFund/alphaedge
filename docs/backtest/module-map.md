@@ -254,7 +254,7 @@ sequenceDiagram
    |------|------|
    | `StockPriceAPI.get_close_map(date)` | 單日全市場收盤價對照表 |
    | `StockPriceAPI.get_volume_lots_map(date)` | 單日全市場成交量（張）對照表 |
-   | `StockPriceAPI.get_close_series(stock_id, start, end)` | 個股區間收盤序列 |
+   | `StockPriceAPI.get_close_series(stock_id, start, end)` | 個股區間收盤序列（index 為 `datetime.date`、float、name「收盤價」；期貨兩支 API 同一契約） |
    | `StockChipAPI.get_trust_net_shares_map(date)` | 單日全市場投信買賣超股數對照表 |
 
    `tests/test_strategy_data_access.py` 會在策略層出現欄位字面值時失敗——這類錯誤是**靜默**的（換資料源後策略會安靜地不開倉，報表上只表現為訊號變少）。

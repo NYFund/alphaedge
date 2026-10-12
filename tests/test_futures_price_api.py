@@ -192,14 +192,16 @@ def test_contract_price_is_one_row_per_date(api: FuturesPriceAPI) -> None:
 
 
 def test_close_series_is_indexed_by_date(api: FuturesPriceAPI) -> None:
-    """技術指標的共通輸入：index 為日期、值為收盤價"""
+    """技術指標的共通輸入：index 為 `datetime.date`（不是字串）、值為 float 收盤價"""
 
     series: pd.Series = api.get_close_series(
         product="TX", expiry="202610", start_date=DATE_1, end_date=DATE_2
     )
 
-    assert list(series.index) == [str(DATE_1), str(DATE_2)]
-    assert list(series) == [46000, 46400]
+    assert list(series.index) == [DATE_1, DATE_2]
+    assert list(series) == [46000.0, 46400.0]
+    assert series.name == "收盤價"
+    assert series.dtype == float
 
 
 def test_empty_result_when_start_after_end(api: FuturesPriceAPI) -> None:

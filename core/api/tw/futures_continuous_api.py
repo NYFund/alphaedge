@@ -88,14 +88,15 @@ class FuturesContinuousAPI(BaseDataAPI):
     ) -> pd.Series:
         """
         - Description:
-            取連續合約的收盤價序列，index 為 `datetime.date`
+            取連續合約的收盤價序列
 
             對標曲線只要收盤價，`get_series()` 的其餘欄位對它沒有意義。
         - Parameters:
             - 同 `get_series()`
         - Return:
             - pd.Series
-                index 為交易日、值為收盤價；查無資料時為空 Series
+                價格序列（契約見 `BaseDataAPI.build_close_series()`：index 為
+                `datetime.date`、dtype float、name 為「收盤價」）；查無資料時為空 Series
         """
 
         df: pd.DataFrame = self.get_series(
@@ -106,9 +107,4 @@ class FuturesContinuousAPI(BaseDataAPI):
             method=method,
             roll_rule=roll_rule,
         )
-        if df.empty:
-            return pd.Series(dtype=float)
-
-        series: pd.Series = df[FuturesPriceColumn.CLOSE.value].astype(float)
-        series.index = pd.to_datetime(df["date"]).dt.date
-        return series
+        return self.build_close_series(df, "date", FuturesPriceColumn.CLOSE.value)

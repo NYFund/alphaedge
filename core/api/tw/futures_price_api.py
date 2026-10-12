@@ -294,7 +294,7 @@ class FuturesPriceAPI(BaseDataAPI):
     ) -> pd.Series:
         """
         - Description:
-            取得單一合約的收盤價序列（index 為日期字串）
+            取得單一合約的收盤價序列
 
             技術指標的共通輸入。固定合約之後才有「序列」可言——跨合約直接接起來
             會在換月接點產生假跳空，那要走 `futures_continuous` 連續合約。
@@ -307,7 +307,9 @@ class FuturesPriceAPI(BaseDataAPI):
                 交易時段
         - Return:
             - pd.Series
-                收盤價序列；查無資料時為空 Series
+                價格序列（契約見 `BaseDataAPI.build_close_series()`：index 為
+                `datetime.date`、dtype float、name 為「收盤價」）；查無資料時為空 Series。
+                `session=None` 時同一天日夜盤各一列，不在此挑選
         """
 
         df: pd.DataFrame = self.get_contract_price(
@@ -317,8 +319,4 @@ class FuturesPriceAPI(BaseDataAPI):
             end_date=end_date,
             session=session,
         )
-        close_col: str = FuturesPriceColumn.CLOSE.value
-
-        if df.empty or close_col not in df.columns:
-            return pd.Series(dtype=float)
-        return df.set_index("date")[close_col]
+        return self.build_close_series(df, "date", FuturesPriceColumn.CLOSE.value)

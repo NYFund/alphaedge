@@ -85,14 +85,13 @@ class StockBacktestReporter(BaseBacktestReporter):
         if self.price is None:
             self.price = StockPriceAPI()
 
-        series: pd.Series = self.price.get_adjusted_close_series(
+        # 價格序列的 index 已是 `datetime.date`（`BaseDataAPI.build_close_series()` 的契約），
+        # 這裡不再轉一次
+        return self.price.get_adjusted_close_series(
             stock_id=self.benchmark,
             start_date=self.start_date,
             end_date=self.end_date,
         )
-        if not series.empty:
-            series.index = pd.to_datetime(series.index).date
-        return series
 
     def build_trade_row(self, record: StockTradeRecord) -> Dict[str, Any]:
         """一筆已平倉紀錄 → 交易明細的一列（累計兩欄由基底補上）"""
