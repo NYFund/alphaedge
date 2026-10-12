@@ -17,11 +17,11 @@ from core.utils import (
 from core.utils.instrument import StockUtils
 
 """
-台灣市場的成本模型：台股（`StockCostModel`，含信用交易）與台期貨（`TwFuturesCostModel`，期交稅、逐筆保證金）
+台灣市場的成本模型：台股（`TwStockCostModel`，含信用交易）與台期貨（`TwFuturesCostModel`，期交稅、逐筆保證金）
 """
 
 
-class StockCostModel(BaseCostModel):
+class TwStockCostModel(BaseCostModel):
     """
     方向感知的成本／損益計算；PositionManager 與 Backtester 只呼叫這一層
 
@@ -94,7 +94,9 @@ class StockCostModel(BaseCostModel):
 
         return orders
 
-    def commission(self, price: float, volume: int) -> int:
+    def commission(
+        self, price: float, volume: int, product: Optional[str] = None
+    ) -> int:
         """
         - Description: 計算單邊手續費（買賣方向無關，費率相同）
         - Parameters:
@@ -330,121 +332,36 @@ class StockCostModel(BaseCostModel):
         )
 
     # === 損益（方向統一入口）===
-    def realized_pnl(
-        self,
-        position_type: PositionType,
-        entry_price: float,
-        exit_price: float,
-        volume: int,
-        entry_cost: int = 0,
-        exit_cost: int = 0,
-        carry_cost: int = 0,
+    def notional_capital(
+        self, entry_price: float, volume: int, entry_cost: int = 0
     ) -> float:
         """
-        - Description: 計算已實現損益（多空統一入口）
-        - Parameters:
-            - position_type: PositionType
-                部位方向
-            - entry_price: float
-                開倉價（LONG 為買進價、SHORT 為放空賣出價）
-            - exit_price: float
-                平倉價（LONG 為賣出價、SHORT 為回補買進價）
-            - volume: int
-                張數（Unit: Lots）
-            - entry_cost: int
-                開倉成本（手續費 + 稅 + 一次性券費）
-            - exit_cost: int
-                平倉成本（手續費 + 稅）
-            - carry_cost: int
-                持有期間淨成本（券費支出 − 利息收入），可為負值
-        - Return:
-            - pnl: float
-                已實現損益
+        名目報酬率的分母：開倉價金 ＋ 開倉成本
+
+        多空、當沖與留倉共用同一基準，跨交易的聚合統計（平均報酬、勝率分組等）
+        都應以它算出來的 `roi` 為準。
         """
 
-        shares: int = StockUtils.convert_lot_to_share(volume)
+        return entry_price * StockUtils.convert_lot_to_share(volume) + entry_cost
 
-        # SHORT 為先賣後買，價差方向與 LONG 相反
-        if position_type == PositionType.SHORT:
-            gross: float = (entry_price - exit_price) * shares
-        else:
-            gross = (exit_price - entry_price) * shares
-
-        return round(gross - entry_cost - exit_cost - carry_cost, 2)
-
-    def roi(
+    def occupied_capital(
         self,
         position_type: PositionType,
         entry_price: float,
-        exit_price: float,
         volume: int,
         entry_cost: int = 0,
-        exit_cost: int = 0,
-        carry_cost: int = 0,
-    ) -> float:
-        """
-        - Description: 名目報酬率（%），分母一律為「開倉價金 + 開倉成本」
-        - Return:
-            - roi: float
-                報酬率（%）
-        - Notes:
-            多空、當沖與留倉共用同一基準，跨交易的聚合統計（平均報酬、勝率分組等）都應使用本值
-        """
-
-        shares: int = StockUtils.convert_lot_to_share(volume)
-        notional: float = entry_price * shares + entry_cost
-        if notional <= 0:
-            return 0.0
-
-        pnl: float = self.realized_pnl(
-            position_type=position_type,
-            entry_price=entry_price,
-            exit_price=exit_price,
-            volume=volume,
-            entry_cost=entry_cost,
-            exit_cost=exit_cost,
-            carry_cost=carry_cost,
-        )
-        return round(pnl / notional * 100, 2)
-
-    def roi_on_capital(
-        self,
-        position_type: PositionType,
-        entry_price: float,
-        exit_price: float,
-        volume: int,
-        entry_cost: int = 0,
-        exit_cost: int = 0,
-        carry_cost: int = 0,
         margin: float = 0.0,
     ) -> float:
         """
-        - Description: 資金效率（%），分母為實際佔用的資金
-        - Notes:
-            LONG = 買進價金 + 手續費；SHORT/MARGIN = 保證金 + 開倉成本；
-            SHORT/DAY_TRADE = 開倉成本（幾乎不佔資金，數值會很大，僅供參考）
+        資金效率報酬率的分母：實際佔用的資金
+
+        LONG ＝ 買進價金 ＋ 手續費；SHORT/MARGIN ＝ 保證金 ＋ 開倉成本；
+        SHORT/DAY_TRADE ＝ 開倉成本（幾乎不佔資金，數值會很大，僅供參考）。
         """
 
-        shares: int = StockUtils.convert_lot_to_share(volume)
-
         if position_type == PositionType.SHORT:
-            capital: float = margin + entry_cost
-        else:
-            capital = entry_price * shares + entry_cost
-
-        if capital <= 0:
-            return 0.0
-
-        pnl: float = self.realized_pnl(
-            position_type=position_type,
-            entry_price=entry_price,
-            exit_price=exit_price,
-            volume=volume,
-            entry_cost=entry_cost,
-            exit_cost=exit_cost,
-            carry_cost=carry_cost,
-        )
-        return round(pnl / capital * 100, 2)
+            return margin + entry_cost
+        return self.notional_capital(entry_price, volume, entry_cost)
 
 
 class TwFuturesCostModel(BaseCostModel):
@@ -454,18 +371,19 @@ class TwFuturesCostModel(BaseCostModel):
     費率的唯一來源是 `FuturesCostConfig`，且 `FuturesPositionManager` 與本 model
     **共用同一個實例**（由 factory 注入）——兩處各算一份必然漂移。
 
-    取整規則與 `StockCostModel` 一致：費用無條件捨去（`int()`），損益與報酬率
+    取整規則與 `TwStockCostModel` 一致：費用無條件捨去（`int()`），損益與報酬率
     round 至小數點後 2 位。**期交稅捨去到元是刻意的**：TX 一口的期交稅約
     20000 × 200 × 0.00002 ＝ 80 元，捨去的誤差在 1 元以內；用浮點數留小數只會讓
     交易明細出現 79.9999 這種數字。
 
-    與 `StockCostModel` 的三個結構差異：
+    與 `TwStockCostModel` 的三個結構差異：
 
     1. **稅基是契約價值**（價格 × 乘數 × 口數），故 `tax()` 需要 `multiplier`。
     2. **買賣都要課稅**：`tax()` 不看 `action`，這正是「不可複用證交稅」的核心。
     3. **報酬率的分母是保證金**，不是契約價值——期貨投入的資金就是保證金，
-       用契約價值當分母會把槓桿效果整個抹掉，故 `roi()` 與 `roi_on_capital()`
-       在期貨是同一個數字。
+       用契約價值當分母會把槓桿效果整個抹掉。損益與報酬率的公式都在基底
+       （`BaseCostModel.realized_pnl()`／`roi()`），部位管理層把契約乘數當計價單位、
+       釋回的保證金當資金基礎傳進去。
     """
 
     def __init__(self, config: Optional[FuturesCostConfig] = None) -> None:
@@ -564,46 +482,6 @@ class TwFuturesCostModel(BaseCostModel):
 
         cost: int = self.round_trip_cost(price, price, volume, multiplier, product)
         return round(cost / (multiplier * volume), 4)
-
-    def realized_pnl(
-        self,
-        entry_price: float = 0.0,
-        exit_price: float = 0.0,
-        volume: int = 0,
-        multiplier: int = 0,
-        position_type: PositionType = PositionType.LONG,
-        transaction_cost: float = 0.0,
-        **kwargs,
-    ) -> float:
-        """
-        已實現損益 ＝ 價格變動 × 乘數 × 口數 − 交易成本
-
-        **不含逐日盯市已結算的各段**：那由 `FuturesPositionManager` 依平倉口數
-        等比例攤提，見 `close_single_position()`。本方法只算單一段落的價格損益。
-        """
-
-        direction: int = 1 if position_type == PositionType.LONG else -1
-        pnl: float = (exit_price - entry_price) * multiplier * volume * direction
-        return round(pnl - transaction_cost, 2)
-
-    def roi(self, realized_pnl: float = 0.0, margin: float = 0.0, **kwargs) -> float:
-        """名目報酬率（%）：**分母是保證金**，保證金為 0 時回傳 0"""
-
-        if not margin:
-            return 0.0
-        return round(realized_pnl / margin * 100, 2)
-
-    def roi_on_capital(
-        self, realized_pnl: float = 0.0, margin: float = 0.0, **kwargs
-    ) -> float:
-        """
-        資金效率報酬率（%）
-
-        期貨實際投入的資金就是保證金，故與 `roi()` 相同——台股兩者不同是因為
-        放空的名目報酬率以賣出價款為分母，實際佔用的卻是保證金。
-        """
-
-        return self.roi(realized_pnl=realized_pnl, margin=margin)
 
     def margin_required(
         self,

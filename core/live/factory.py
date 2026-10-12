@@ -51,7 +51,7 @@ from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.trader import LiveTrader, StrategyContext
 from core.market.segment import SegmentSchedule, SegmentWindow
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
@@ -587,7 +587,7 @@ def _build_context(
 
     if market == Market.TW and instrument == InstrumentType.STOCK:
         account: StockAccount = StockAccount(init_capital=live_capital(strategy))
-        cost_model: StockCostModel = StockCostModel(CostConfig.default())
+        cost_model: TwStockCostModel = TwStockCostModel(CostConfig.default())
         manager: BasePositionManager = StockPositionManager(account, cost_model)
         feed: BaseLiveDataFeed = TwStockLiveDataFeed(broker, now_provider=now_provider)
         spec: TwStockSpec = TwStockSpec()
@@ -670,7 +670,7 @@ def make_trade_cost_estimator() -> TradeCostEstimator:
             估算器
     """
 
-    stock_cost: StockCostModel = StockCostModel(CostConfig.default())
+    stock_cost: TwStockCostModel = TwStockCostModel(CostConfig.default())
     futures_cost: TwFuturesCostModel = TwFuturesCostModel(FuturesCostConfig.default())
 
     def estimate(

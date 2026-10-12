@@ -359,16 +359,16 @@ class FuturesPositionManager(BasePositionManager):
                 損益（未扣交易成本）
         """
 
-        # **一律走成本模型**：損益公式只留 `TwFuturesCostModel.realized_pnl()` 一份。
-        # 本層若自己再算一次，改動乘數或多空方向的處理時另一邊不會跟著改，
-        # 也不會有測試失敗，兩份必然漂移
+        # **一律走成本模型**：損益公式只留 `BaseCostModel.realized_pnl()` 一份，
+        # 期貨的計價單位就是契約乘數。本層若自己再算一次，改動乘數或多空方向的
+        # 處理時另一邊不會跟著改，也不會有測試失敗，兩份必然漂移
         return self.cost_model.realized_pnl(
+            position_type=position_type,
             entry_price=entry_price,
             exit_price=exit_price,
             volume=volume,
-            multiplier=multiplier,
-            position_type=position_type,
-            transaction_cost=0.0,
+            unit_size=multiplier,
+            cost=0.0,
         )
 
     @staticmethod
@@ -611,7 +611,8 @@ class FuturesPositionManager(BasePositionManager):
             tax=proportional_open_tax + close_tax,
             transaction_cost=total_transaction_cost,
             realized_pnl=realized_pnl,
-            roi=self.calculate_roi(realized_pnl, released_margin),
+            # 報酬率以**釋回的保證金**為分母，不是契約價值；公式在成本模型基底
+            roi=self.cost_model.roi(realized_pnl, released_margin),
             multiplier=position.multiplier,
             margin=released_margin,
             settled_pnl=settled_pnl,
@@ -639,16 +640,3 @@ class FuturesPositionManager(BasePositionManager):
         self.account.trade_records.append(record)
 
         return record
-
-    @staticmethod
-    def calculate_roi(realized_pnl: float, margin: float) -> float:
-        """
-        報酬率以**保證金**為分母，不是契約價值
-
-        期貨是保證金交易，投入的資金就是保證金；用契約價值當分母會把槓桿效果抹掉。
-        保證金為 0（例如比率設成 0）時回傳 0，不拋除零錯誤。
-        """
-
-        if margin == 0:
-            return 0.0
-        return round(realized_pnl / margin * 100, 2)

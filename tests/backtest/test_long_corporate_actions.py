@@ -2,7 +2,7 @@ import datetime
 from typing import Dict, Optional
 
 from core.backtest.models.settlement_model import TwStockSettlementModel
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models import StockAccount, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
 from core.position.stock.position_manager import StockPositionManager
@@ -40,7 +40,7 @@ def make_settlement(
 ) -> TwStockSettlementModel:
     """組出台股結算模型"""
 
-    cost_model: StockCostModel = StockCostModel(CostConfig.default())
+    cost_model: TwStockCostModel = TwStockCostModel(CostConfig.default())
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,

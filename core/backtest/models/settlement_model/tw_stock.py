@@ -8,7 +8,7 @@ from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.settlement_model.base import BaseSettlementModel
 from core.datafeed.base import BaseDataFeed
 from core.market.instrument_spec import InstrumentSpec
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.market.tw.instrument_spec import TwStockSpec
 from core.models import (
     BaseAccount,
@@ -41,7 +41,7 @@ class TwStockSettlementModel(BaseSettlementModel):
     def __init__(
         self,
         position_manager: StockPositionManager,
-        cost_model: StockCostModel,
+        cost_model: TwStockCostModel,
         reference_prices: Dict[str, float],
         instrument: Optional[InstrumentSpec] = None,
         day_trade_uncovered_policy: DayTradeUncoveredPolicy = (
@@ -55,7 +55,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         super().__init__(fill_model=fill_model)
 
         self.position_manager: StockPositionManager = position_manager
-        self.cost_model: StockCostModel = cost_model
+        self.cost_model: TwStockCostModel = cost_model
         self.instrument: InstrumentSpec = instrument or TwStockSpec()
 
         # 與 FillModel 共用同一個 dict（漲跌停參考價：前一交易日收盤，除權息日為公告的

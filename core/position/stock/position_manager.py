@@ -3,12 +3,12 @@ from typing import Dict, Optional, Union
 
 from loguru import logger
 
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models import StockAccount, StockOrder, StockPosition, StockTradeRecord
 from core.models.cost_config import CostConfig
 from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
-from core.utils import Action, PositionType, ShortMethod, TimeUtils
+from core.utils import Action, PositionType, ShortMethod, TimeUtils, Units
 from core.utils.instrument import StockUtils
 
 """
@@ -19,7 +19,7 @@ from core.utils.instrument import StockUtils
     2. 逐日結算與借券費累計
     3. 部位市值計算
 - 使用場景:
-    **多空的記帳差異全部收斂在本檔**，費用與損益一律走 `StockCostModel`——
+    **多空的記帳差異全部收斂在本檔**，費用與損益一律走 `TwStockCostModel`——
     本層只決定「什麼時候收」，費率與公式全在 model。兩處各算一份必然漂移，
     而成本算錯不會有任何徵兆，只會讓整條 PnL 靜默偏掉。
 """
@@ -29,7 +29,7 @@ class StockPositionManager(BasePositionManager):
     """
     Stock Position Manager
 
-    多空的記帳差異全部收斂在此，兩邊的費用與損益一律走 `StockCostModel`：
+    多空的記帳差異全部收斂在此，兩邊的費用與損益一律走 `TwStockCostModel`：
     - LONG：手續費、賣出端證交稅、開倉成本等比例攤提
     - SHORT：另含保證金、借券費、融券利息、股利補償與當沖稅率
     """
@@ -37,11 +37,11 @@ class StockPositionManager(BasePositionManager):
     def __init__(
         self,
         account: StockAccount,
-        cost_model: Optional[StockCostModel] = None,
+        cost_model: Optional[TwStockCostModel] = None,
         event_counts: Optional[Dict[str, int]] = None,
     ) -> None:
         super().__init__(account)
-        self.cost_model: StockCostModel = cost_model or StockCostModel(
+        self.cost_model: TwStockCostModel = cost_model or TwStockCostModel(
             CostConfig.default()
         )
 
@@ -359,6 +359,23 @@ class StockPositionManager(BasePositionManager):
             proportional_buy_commission + sell_commission + sell_tax
         )
 
+        # 損益與報酬率都走成本模型基底的同一條公式：台股的計價單位是每張股數，
+        # 名目報酬率的分母是開倉價金 ＋ 開倉成本
+        realized_pnl: float = self.cost_model.realized_pnl(
+            position_type=PositionType.LONG,
+            entry_price=position.price,
+            exit_price=stock_order.price,
+            volume=close_volume,
+            unit_size=Units.LOT,
+            cost=proportional_buy_commission + sell_commission + sell_tax,
+        )
+        roi: float = self.cost_model.roi(
+            realized_pnl,
+            self.cost_model.notional_capital(
+                position.price, close_volume, proportional_buy_commission
+            ),
+        )
+
         record: StockTradeRecord = StockTradeRecord(
             id=position.id,
             stock_id=position.stock_id,
@@ -373,22 +390,8 @@ class StockPositionManager(BasePositionManager):
             commission=proportional_buy_commission + sell_commission,
             tax=sell_tax,
             transaction_cost=total_transaction_cost,
-            realized_pnl=self.cost_model.realized_pnl(
-                position_type=PositionType.LONG,
-                entry_price=position.price,
-                exit_price=stock_order.price,
-                volume=close_volume,
-                entry_cost=proportional_buy_commission,
-                exit_cost=sell_commission + sell_tax,
-            ),
-            roi=self.cost_model.roi(
-                position_type=PositionType.LONG,
-                entry_price=position.price,
-                exit_price=stock_order.price,
-                volume=close_volume,
-                entry_cost=proportional_buy_commission,
-                exit_cost=sell_commission + sell_tax,
-            ),
+            realized_pnl=realized_pnl,
+            roi=roi,
         )
 
         position.volume -= close_volume
@@ -504,33 +507,29 @@ class StockPositionManager(BasePositionManager):
             prop_accrued_borrow_fee + prop_dividend_compensation - interest
         )
 
+        # 損益與報酬率都走成本模型基底的同一條公式；分母由台股的成本模型決定：
+        # 名目報酬率用開倉價金 ＋ 開倉成本，資金效率用實際佔用的資金（保證金 ＋ 開倉成本）
         realized_pnl: float = self.cost_model.realized_pnl(
             position_type=PositionType.SHORT,
             entry_price=position.price,
             exit_price=stock_order.price,
             volume=close_volume,
-            entry_cost=entry_cost,
-            exit_cost=close_commission,
-            carry_cost=carry_cost,
+            unit_size=Units.LOT,
+            cost=entry_cost + close_commission + carry_cost,
         )
         roi: float = self.cost_model.roi(
-            position_type=PositionType.SHORT,
-            entry_price=position.price,
-            exit_price=stock_order.price,
-            volume=close_volume,
-            entry_cost=entry_cost,
-            exit_cost=close_commission,
-            carry_cost=carry_cost,
+            realized_pnl,
+            self.cost_model.notional_capital(position.price, close_volume, entry_cost),
         )
-        roi_on_capital: float = self.cost_model.roi_on_capital(
-            position_type=PositionType.SHORT,
-            entry_price=position.price,
-            exit_price=stock_order.price,
-            volume=close_volume,
-            entry_cost=entry_cost,
-            exit_cost=close_commission,
-            carry_cost=carry_cost,
-            margin=prop_margin,
+        roi_on_capital: float = self.cost_model.roi(
+            realized_pnl,
+            self.cost_model.occupied_capital(
+                PositionType.SHORT,
+                position.price,
+                close_volume,
+                entry_cost,
+                margin=prop_margin,
+            ),
         )
 
         # sell_* 記的是放空開倉那一腿，buy_* 才是回補

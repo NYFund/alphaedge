@@ -7,7 +7,7 @@ from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
     TwStockSettlementModel,
 )
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import (
@@ -67,7 +67,7 @@ def make_stock_settlement(
 ) -> TwStockSettlementModel:
     """組出台股結算模型；`fill_config` 為 None 時不注入 fill_model"""
 
-    cost_model: StockCostModel = StockCostModel(CostConfig.default())
+    cost_model: TwStockCostModel = TwStockCostModel(CostConfig.default())
     fill_model: Optional[TwStockFillModel] = None
     if fill_config is not None:
         fill_model = TwStockFillModel(

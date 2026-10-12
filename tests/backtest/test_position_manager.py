@@ -4,7 +4,7 @@ from typing import Dict, List, Optional
 import pytest
 
 from core.backtest.backtester import new_event_counts
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models import StockAccount, StockPosition, StockTradeRecord
 from core.models.cost_config import CostConfig, ShortConstraint
 from core.position.stock.position_manager import StockPositionManager
@@ -28,7 +28,7 @@ def build_manager(
 
     return StockPositionManager(
         StockAccount(init_capital),
-        StockCostModel(config),
+        TwStockCostModel(config),
         event_counts=event_counts,
     )
 

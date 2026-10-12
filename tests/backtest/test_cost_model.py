@@ -2,10 +2,10 @@ import datetime
 
 import pytest
 
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models import StockTradeRecord
 from core.models.cost_config import CostConfig, ShortConstraint
-from core.utils import Action, PositionType, ShortMethod
+from core.utils import Action, PositionType, ShortMethod, Units
 from core.utils.instrument import StockUtils
 
 """成本模型與數值處理規則的單元測試"""
@@ -15,7 +15,7 @@ from core.utils.instrument import StockUtils
 def test_cost_model_day_trade() -> None:
     """100 元放空 1 張、95 元回補的當沖，各項成本與損益需與手算一致"""
 
-    model: StockCostModel = StockCostModel(
+    model: TwStockCostModel = TwStockCostModel(
         CostConfig.default(ShortMethod.DAY_TRADE, is_day_trade=True)
     )
 
@@ -38,29 +38,17 @@ def test_cost_model_day_trade() -> None:
         entry_price=100.0,
         exit_price=95.0,
         volume=1,
-        entry_cost=entry_cost,
-        exit_cost=close_commission,
+        unit_size=Units.LOT,
+        cost=entry_cost + close_commission,
     )
     assert pnl == 4768.0
 
-    roi: float = model.roi(
-        position_type=PositionType.SHORT,
-        entry_price=100.0,
-        exit_price=95.0,
-        volume=1,
-        entry_cost=entry_cost,
-        exit_cost=close_commission,
-    )
+    roi: float = model.roi(pnl, model.notional_capital(100.0, 1, entry_cost))
     assert roi == 4.76  # 4768 / 100192
 
-    roi_on_capital: float = model.roi_on_capital(
-        position_type=PositionType.SHORT,
-        entry_price=100.0,
-        exit_price=95.0,
-        volume=1,
-        entry_cost=entry_cost,
-        exit_cost=close_commission,
-        margin=0.0,
+    roi_on_capital: float = model.roi(
+        pnl,
+        model.occupied_capital(PositionType.SHORT, 100.0, 1, entry_cost, margin=0.0),
     )
     assert roi_on_capital == 2483.33  # 4768 / 192
 
@@ -68,7 +56,7 @@ def test_cost_model_day_trade() -> None:
 def test_cost_model_margin_short() -> None:
     """100 元融券放空 1 張、持有 10 天後 95 元回補"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.MARGIN))
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default(ShortMethod.MARGIN))
 
     open_commission: int = model.commission(price=100.0, volume=1)
     open_tax: int = model.tax(price=100.0, volume=1, action=Action.SELL)
@@ -92,34 +80,18 @@ def test_cost_model_margin_short() -> None:
         entry_price=100.0,
         exit_price=95.0,
         volume=1,
-        entry_cost=entry_cost,
-        exit_cost=close_commission,
-        carry_cost=-interest,  # 利息為收入，故為負的持有成本
+        unit_size=Units.LOT,
+        cost=entry_cost + close_commission - interest,  # 利息為收入，故為負的持有成本
     )
     assert pnl == 4548.0
 
+    assert model.roi(pnl, model.notional_capital(100.0, 1, entry_cost)) == 4.53
     assert (
         model.roi(
-            position_type=PositionType.SHORT,
-            entry_price=100.0,
-            exit_price=95.0,
-            volume=1,
-            entry_cost=entry_cost,
-            exit_cost=close_commission,
-            carry_cost=-interest,
-        )
-        == 4.53
-    )
-    assert (
-        model.roi_on_capital(
-            position_type=PositionType.SHORT,
-            entry_price=100.0,
-            exit_price=95.0,
-            volume=1,
-            entry_cost=entry_cost,
-            exit_cost=close_commission,
-            carry_cost=-interest,
-            margin=margin,
+            pnl,
+            model.occupied_capital(
+                PositionType.SHORT, 100.0, 1, entry_cost, margin=margin
+            ),
         )
         == 5.03
     )
@@ -128,7 +100,7 @@ def test_cost_model_margin_short() -> None:
 def test_maintenance_ratio() -> None:
     """維持率 =（擔保價款 + 保證金）/ 市值；130 元時為 146.15%，146.5 元才跌破 130% 門檻"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.MARGIN))
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default(ShortMethod.MARGIN))
 
     assert round(model.maintenance_ratio(100000.0, 90000.0, 130.0, 1), 4) == 1.4615
     assert model.check_margin_call(100000.0, 90000.0, 130.0, 1) is False
@@ -138,15 +110,15 @@ def test_maintenance_ratio() -> None:
 def test_long_pnl_direction() -> None:
     """做多方向的損益必須與放空相反，且與既有 StockUtils 結果一致"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default())
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default())
 
     pnl: float = model.realized_pnl(
         position_type=PositionType.LONG,
         entry_price=100.0,
         exit_price=110.0,
         volume=1,
-        entry_cost=42,
-        exit_cost=47 + 330,
+        unit_size=Units.LOT,
+        cost=42 + 47 + 330,
     )
     legacy_pnl: float = StockUtils.calculate_net_profit(
         buy_price=100.0, sell_price=110.0, volume=1
@@ -160,7 +132,7 @@ def test_long_pnl_direction() -> None:
 def test_rounding_rules() -> None:
     """費用一律無條件捨去、保證金無條件進位"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.MARGIN))
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default(ShortMethod.MARGIN))
 
     # 手續費 42.75 → 42（若用 round() 會得到 43）
     assert model.commission(price=100.0, volume=1) == 42
@@ -183,8 +155,8 @@ def test_rounding_rules() -> None:
 def test_sbl_borrow_fee_accrues_by_day() -> None:
     """SBL 借券費依持有天數年化計算，MARGIN 則與天數無關"""
 
-    sbl: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.SBL))
-    margin: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.MARGIN))
+    sbl: TwStockCostModel = TwStockCostModel(CostConfig.default(ShortMethod.SBL))
+    margin: TwStockCostModel = TwStockCostModel(CostConfig.default(ShortMethod.MARGIN))
 
     # 100000 × 3% × 30 / 365 = 246.57 → 捨去
     assert sbl.borrow_fee(price=100.0, volume=1, holding_days=30) == 246
@@ -201,7 +173,7 @@ def test_sbl_borrow_fee_accrues_by_day() -> None:
 def test_tax_rate_switch() -> None:
     """is_day_trade 切換 0.15% / 0.3%，且 StockUtils 的預設行為不變"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default(ShortMethod.MARGIN))
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default(ShortMethod.MARGIN))
 
     assert model.tax(100.0, 1, Action.SELL, is_day_trade=True) == 150
     assert model.tax(100.0, 1, Action.SELL, is_day_trade=False) == 300
@@ -215,13 +187,13 @@ def test_day_trade_tax_halving_respects_the_effective_date() -> None:
     """
     當沖減半只在 2017-04-28 之後適用，**兩個入口都要一致**
 
-    公式與日期閘門都只有一份（`StockUtils`），`StockCostModel.tax()` 轉呼叫它。
+    公式與日期閘門都只有一份（`StockUtils`），`TwStockCostModel.tax()` 轉呼叫它。
     原本兩處各有一份實作，而 `StockUtils` 那一份不看日期——只要有人從生產
     程式碼傳 `is_day_trade=True`，2013-01 ~ 2017-04 的每一筆當沖賣出都會少算
     一半的稅（約 4 年 4 個月），而少算的稅不會讓任何測試變紅。
     """
 
-    model: StockCostModel = StockCostModel()
+    model: TwStockCostModel = TwStockCostModel()
     before: datetime.date = datetime.date(2017, 4, 27)
     after: datetime.date = datetime.date(2017, 4, 28)
 
@@ -319,7 +291,7 @@ def test_day_trade_tax_is_full_before_2017_04_28() -> None:
     ——約 4 年 4 個月，而且結果只會偏樂觀。
     """
 
-    model: StockCostModel = StockCostModel()
+    model: TwStockCostModel = TwStockCostModel()
 
     assert (
         model.tax(
@@ -332,7 +304,7 @@ def test_day_trade_tax_is_full_before_2017_04_28() -> None:
 def test_day_trade_tax_is_halved_on_the_start_date() -> None:
     """起始日當天就適用減半（含端點）"""
 
-    model: StockCostModel = StockCostModel()
+    model: TwStockCostModel = TwStockCostModel()
 
     assert (
         model.tax(
@@ -345,7 +317,7 @@ def test_day_trade_tax_is_halved_on_the_start_date() -> None:
 def test_day_trade_tax_is_full_after_expiry() -> None:
     """落日之後回到全額稅率"""
 
-    model: StockCostModel = StockCostModel()
+    model: TwStockCostModel = TwStockCostModel()
 
     assert (
         model.tax(
@@ -358,7 +330,7 @@ def test_day_trade_tax_is_full_after_expiry() -> None:
 def test_tax_without_date_keeps_current_regime() -> None:
     """沒有日期資訊時視為現行制度，維持舊行為（既有呼叫端不受影響）"""
 
-    model: StockCostModel = StockCostModel()
+    model: TwStockCostModel = TwStockCostModel()
 
     assert model.tax(100.0, 1, Action.SELL, is_day_trade=True) == 150
 
@@ -366,7 +338,7 @@ def test_tax_without_date_keeps_current_regime() -> None:
 def test_non_day_trade_tax_ignores_the_date() -> None:
     """非當沖一律全額，日期不影響"""
 
-    model: StockCostModel = StockCostModel()
+    model: TwStockCostModel = TwStockCostModel()
 
     assert (
         model.tax(
@@ -394,7 +366,7 @@ def test_no_warning_when_backtest_stays_inside_the_tax_window() -> None:
     messages: list = []
     handler_id: int = logger.add(messages.append, level="WARNING")
     try:
-        StockCostModel(
+        TwStockCostModel(
             make_day_trade_config(
                 datetime.date(2020, 1, 2), datetime.date(2024, 12, 31)
             )
@@ -419,7 +391,7 @@ def test_warns_when_backtest_runs_past_the_expiry_date() -> None:
     messages: list = []
     handler_id: int = logger.add(messages.append, level="WARNING")
     try:
-        StockCostModel(
+        TwStockCostModel(
             make_day_trade_config(datetime.date(2026, 1, 5), datetime.date(2028, 6, 30))
         )
     finally:
@@ -439,7 +411,7 @@ def test_warns_when_backtest_starts_before_the_halving_took_effect() -> None:
     messages: list = []
     handler_id: int = logger.add(messages.append, level="WARNING")
     try:
-        StockCostModel(
+        TwStockCostModel(
             make_day_trade_config(
                 datetime.date(2015, 1, 5), datetime.date(2020, 12, 31)
             )
@@ -465,7 +437,7 @@ def test_stays_silent_when_the_backtest_range_is_unknown() -> None:
     messages: list = []
     handler_id: int = logger.add(messages.append, level="WARNING")
     try:
-        StockCostModel(CostConfig.default(ShortMethod.DAY_TRADE, is_day_trade=True))
+        TwStockCostModel(CostConfig.default(ShortMethod.DAY_TRADE, is_day_trade=True))
     finally:
         logger.remove(handler_id)
 
@@ -484,7 +456,7 @@ def test_non_day_trade_never_warns_about_the_tax_window() -> None:
     messages: list = []
     handler_id: int = logger.add(messages.append, level="WARNING")
     try:
-        StockCostModel(config)
+        TwStockCostModel(config)
     finally:
         logger.remove(handler_id)
 

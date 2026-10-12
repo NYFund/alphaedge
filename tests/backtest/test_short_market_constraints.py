@@ -7,7 +7,7 @@ from core.backtest.backtester import new_event_counts
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.backtest.models.fill_model import TwStockFillModel
 from core.backtest.models.settlement_model import TwStockSettlementModel
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.market.tw.market_calendar import MarketCalendar
 from core.models import (
     StockAccount,
@@ -193,7 +193,7 @@ def make_settlement(
     if short_constraint is not None:
         config.short_constraint = short_constraint
 
-    cost_model: StockCostModel = StockCostModel(config)
+    cost_model: TwStockCostModel = TwStockCostModel(config)
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,

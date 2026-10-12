@@ -8,7 +8,7 @@
 
 1. **單一引擎**：`core/backtest/backtester.py` 的 `Backtester` 統一處理多空，不另開 `ShortBacktester`。方向差異全部收斂到「成本模型 + 部位管理器 + 結算模型」。
 2. **方向來自訂單，策略只做白名單**：記帳與成本路徑一律依**每一張 `StockOrder` 自己的 `position_type`** 決定；策略層的 `direction` 只用於驗證（方向白名單）。這與業界框架（Lean／Backtrader／Zipline 的 signed quantity 模型）一致——方向是部位的屬性，不是策略的屬性——要做多空並存的市場中性策略時不需重構引擎。
-3. **成本模型可插拔**：手續費／稅／券費／利息／保證金集中在 `StockCostModel`，由「放空管道（`ShortMethod`）+ 是否當沖」決定參數組合，不在 `PositionManager` 裡散落 if-else。
+3. **成本模型可插拔**：手續費／稅／券費／利息／保證金集中在 `TwStockCostModel`，由「放空管道（`ShortMethod`）+ 是否當沖」決定參數組合，不在 `PositionManager` 裡散落 if-else。
 4. **當沖與留倉同骨架**：兩者差別只是「是否收借券費／利息、是否佔用保證金、稅率是否減半」，共用同一組開倉／平倉流程。
 5. **保守預設、可調參數**：所有費率集中在 `core/utils/constant/` 與策略可覆寫的 config，不寫死在公式裡；預設值取市場常見值（見 §2.3）。
 6. **不可靜默失敗**：放空路徑任何無法成交（券源不足、非可空標的、漲停無法回補、保證金不足）都必須 log warning 或計入統計，禁止讓單安靜地消失。
@@ -134,7 +134,7 @@ Backtester (統一迴圈、方向驗證、執行順序、逐日盯市)
     ↓ StockOrder
 StockPositionManager (方向分派：open/close × LONG/SHORT)
     ↓
-StockCostModel (成本與損益公式；依 ShortMethod + is_day_trade 決定參數)
+TwStockCostModel (成本與損益公式；依 ShortMethod + is_day_trade 決定參數)
     ↓
 StockUtils (純數學工具：手續費、稅、股數換算)
 
@@ -153,16 +153,16 @@ TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計
 | `MarginCallPolicy(str, Enum)` | `FORCE_COVER`（預設）/ `WARN_ONLY` | 維持率追繳（§5.2） |
 | `ShortCost(float, Enum)` / `MarginCost(float, Enum)` | 見 §2.3 | 放空與融資費率 |
 
-⚠️ **型別注意**：`Commission` / `ShortCost` 是 `(float, Enum)`，塞不進 `date` 或 `int` 語意的成員。因此 `DAY_TRADE_TAX_EXPIRY = datetime.date(2027, 12, 31)` 與 `DAYS_PER_YEAR = 365` 一律放 **module-level 常數**。回測區間跨過 `DAY_TRADE_TAX_EXPIRY` 時，`StockCostModel` 會 `logger.warning` 提醒「當沖稅率減半假設可能已失效」——**看的是回測區間，不是執行當下的日期**。
+⚠️ **型別注意**：`Commission` / `ShortCost` 是 `(float, Enum)`，塞不進 `date` 或 `int` 語意的成員。因此 `DAY_TRADE_TAX_EXPIRY = datetime.date(2027, 12, 31)` 與 `DAYS_PER_YEAR = 365` 一律放 **module-level 常數**。回測區間跨過 `DAY_TRADE_TAX_EXPIRY` 時，`TwStockCostModel` 會 `logger.warning` 提醒「當沖稅率減半假設可能已失效」——**看的是回測區間，不是執行當下的日期**。
 
 ### 3.3 成本模型（`core/market/tw/cost_model.py`；設定類別在 `core/models/cost_config.py`）
 
-`CostConfig` 為一次回測固定的成本參數，`StockCostModel` 為方向感知的成本／損益計算，`PositionManager` 只呼叫這一層。
+`CostConfig` 為一次回測固定的成本參數，`TwStockCostModel` 為方向感知的成本／損益計算，`PositionManager` 只呼叫這一層。
 
 ```python
-class StockCostModel:
+class TwStockCostModel:
     # --- 單邊成本 ---
-    def commission(self, price, volume) -> int: ...
+    def commission(self, price, volume, product=None) -> int: ...
     def tax(self, price, volume, *, action, position_type, is_day_trade) -> int:
         """買進恆為 0；賣出依 is_day_trade 選 0.15% / 0.3%"""
 
@@ -177,15 +177,16 @@ class StockCostModel:
         """(擔保價款 + 保證金) × 年利率 × 天數 / 365；DAY_TRADE / SBL 為 0"""
     def maintenance_ratio(self, proceeds, margin, cur_price, volume) -> float: ...
 
-    # --- 損益（方向統一入口）---
-    def realized_pnl(self, *, position_type, entry_price, exit_price, volume,
-                     entry_cost, exit_cost, carry_cost=0) -> float:
-        """LONG : (exit - entry) × shares - 成本
-           SHORT: (entry - exit) × shares - 成本"""
-    def roi(self, ...) -> float:
-        """名目報酬率：分母一律為「開倉價金 + 開倉成本」→ 存入 record.roi"""
-    def roi_on_capital(self, ...) -> float:
-        """資金效率：分母為「實際佔用的資金」→ 存入 record.roi_on_capital"""
+    # --- 損益與報酬率：公式在 BaseCostModel，台股只提供兩種分母 ---
+    def realized_pnl(self, position_type, entry_price, exit_price, volume,
+                     unit_size, cost=0.0) -> float:   # 繼承自 BaseCostModel
+        """(exit - entry) × unit_size × volume × 方向 - 成本；台股 unit_size = 每張股數"""
+    def roi(self, pnl, capital_base) -> float:        # 繼承自 BaseCostModel
+        """pnl ÷ capital_base × 100"""
+    def notional_capital(self, entry_price, volume, entry_cost=0) -> float:
+        """名目報酬率的分母：開倉價金 + 開倉成本 → roi(pnl, …) 存入 record.roi"""
+    def occupied_capital(self, position_type, entry_price, volume, entry_cost=0, margin=0.0) -> float:
+        """資金效率的分母：實際佔用的資金 → roi(pnl, …) 存入 record.roi_on_capital"""
 ```
 
 **兩個 ROI 的用途分工（必須遵守）**：任何跨交易的聚合統計（平均報酬、獲利因子、勝率分組）**一律使用 `record.roi`**。若當沖用名目、融券用保證金當分母，兩者混在同一個平均值裡毫無意義（保證金基準的數值天生高一截）。`roi_on_capital` 只出現在報表的獨立欄位，供評估資金運用效率。
@@ -241,7 +242,7 @@ resolve_close_action(position_type)  # LONG → SELL；SHORT → BUY
 validate_orders(orders, stage)       # 白名單 + action 與方向是否相符，不符 warning 剔除
 ```
 
-隨單欄位補值屬市場規則，住在 `StockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
+隨單欄位補值屬市場規則，住在 `TwStockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
 
 ```python
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
@@ -476,7 +477,7 @@ snapshot_daily_equity(date, quotes)
 
 | 本框架元件 | 業界對應 | 對齊程度 |
 |------------|----------|----------|
-| `StockCostModel` + `CostConfig` | Lean `FeeModel`；Backtrader `CommissionInfo`；Zipline `CommissionModel` | ✅ 一致。Lean 另把 `BuyingPowerModel`／`MarginInterestRateModel` 拆開，本專案合併，需留意 `CostConfig` 不要膨脹成 god object |
+| `TwStockCostModel` + `CostConfig` | Lean `FeeModel`；Backtrader `CommissionInfo`；Zipline `CommissionModel` | ✅ 一致。Lean 另把 `BuyingPowerModel`／`MarginInterestRateModel` 拆開，本專案合併，需留意 `CostConfig` 不要膨脹成 god object |
 | `SettlementModel` 的每日部位檢查 | Lean `MarginCallModel` + `MarginInterestRateModel`；Backtrader `interest_long`；Nautilus 每日 mark-to-market | ✅ 一致 |
 | `ShortConstraint.check_borrowable` | Lean `IShortableProvider` | ✅ 概念一致 |
 | `validate_fill_price` | 各框架的 fill model 都限制成交價於 bar range 內 | ✅ 一致 |
@@ -493,7 +494,7 @@ snapshot_daily_equity(date, quotes)
 | 檔案 | 內容 |
 |------|------|
 | `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
-| `core/market/tw/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
+| `core/market/tw/cost_model.py` | `TwStockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
 | `core/backtest/models/fill_model.py` | 成交價驗證、交易所名單檢核、券源檢核、停券期間拒單、當日累計高低點 |
 | `core/backtest/datafeed/tw/stock_datafeed.py` | 推導停券與回補日、提供券源／名單／除權息給 model 的 `prepare_day()`、開跑前檢查名單涵蓋 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |

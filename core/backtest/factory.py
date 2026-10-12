@@ -15,7 +15,7 @@ from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
 from core.backtest.simulator.bar_simulator import BarSimulator
 from core.backtest.simulator.tick_simulator import TickSimulator
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
@@ -120,7 +120,7 @@ def build_tw_stock_backtester(
     account: StockAccount = StockAccount(strategy.init_capital)
     strategy.setup_account(account)
 
-    cost_model: StockCostModel = StockCostModel(build_cost_config(strategy))
+    cost_model: TwStockCostModel = TwStockCostModel(build_cost_config(strategy))
 
     # 事件計數由 factory 建立，引擎、FillModel 與部位管理層共用同一個 dict
     event_counts: dict = new_event_counts()

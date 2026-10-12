@@ -164,7 +164,7 @@ class BaseStockStrategy(BaseStrategy):
         決定（`VolumeBreakoutMomentumStrategy` 平第一筆部位、`ForeignSellingReversalShortStrategy`
         合併同標的所有空單，後者逐筆送單會被 `close_position()` 的 FIFO 吃掉）。
 
-        `short_method` 與 `is_day_trade` 不在此填，由 `StockCostModel.enrich_orders()`
+        `short_method` 與 `is_day_trade` 不在此填，由 `TwStockCostModel.enrich_orders()`
         依成本設定補值。
         """
 
