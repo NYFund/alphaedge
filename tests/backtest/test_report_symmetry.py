@@ -14,6 +14,8 @@ import core.backtest.models.settlement_model.tw_stock as tw_stock_module
 import core.backtest.simulator.bar_simulator as bar_simulator_module
 import core.backtest.simulator.base as simulator_base_module
 import core.portfolio.order_rules as order_rules_module
+import core.position.base.position_manager as base_position_module
+import core.position.futures.position_manager as futures_position_module
 import core.position.stock.position_manager as stock_position_module
 from core.backtest.models.event_counts import (
     EVENT_KEYS,
@@ -114,9 +116,9 @@ def _event_keys_used(
     """
     以 AST 掃出模組（或其中幾個 class）實際計入的事件 key
 
-    認三種寫法：`<x>.event_counts["key"]`、`_count(event_counts, "key")`、
-    `event_counts.get("key", …)`。以變數當 key 的寫法掃不到，由各市場的
-    端到端測試補。
+    認四種寫法：`<x>.event_counts["key"]`、`_count(event_counts, "key")`、
+    `event_counts.get("key", …)`、`<x>.count_event("key")`（部位管理層）。
+    以變數當 key 的寫法掃不到，由各市場的端到端測試補。
     """
 
     tree: ast.Module = ast.parse(inspect.getsource(module))
@@ -166,6 +168,13 @@ def _event_keys_used(
                     and isinstance(node.args[0], ast.Constant)
                 ):
                     keys.add(node.args[0].value)
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "count_event"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                ):
+                    keys.add(node.args[0].value)
     return keys
 
 
@@ -177,6 +186,7 @@ def test_every_key_the_futures_side_counts_is_in_the_futures_list() -> None:
         used |= _event_keys_used(module)
     used |= _event_keys_used(fill_model_module, {"BaseFillModel", "TwFuturesFillModel"})
     used |= _event_keys_used(tw_futures_module)
+    used |= _event_keys_used(futures_position_module)
 
     assert used, "一個 key 都掃不到，掃描規則與程式碼的寫法對不上"
     assert used <= set(FUTURES_EVENT_KEYS), (
@@ -210,6 +220,7 @@ def test_shared_code_only_counts_shared_keys() -> None:
     for module in SHARED_MODULES:
         used |= _event_keys_used(module)
     used |= _event_keys_used(fill_model_module, {"BaseFillModel"})
+    used |= _event_keys_used(base_position_module)
 
     assert used <= set(SHARED_EVENT_KEYS), (
         f"市場無關程式碼計入了專屬 key：{sorted(used - set(SHARED_EVENT_KEYS))}"

@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, Optional, Union
+from typing import Dict, Optional
 
 from loguru import logger
 
@@ -40,14 +40,9 @@ class StockPositionManager(BasePositionManager):
         cost_model: Optional[TwStockCostModel] = None,
         event_counts: Optional[Dict[str, int]] = None,
     ) -> None:
-        super().__init__(account)
+        super().__init__(account, event_counts)
         self.cost_model: TwStockCostModel = cost_model or TwStockCostModel(
             CostConfig.default()
-        )
-
-        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）
-        self.event_counts: Dict[str, int] = (
-            event_counts if event_counts is not None else {}
         )
 
     def setup(self, *args, **kwargs) -> None:
@@ -55,33 +50,24 @@ class StockPositionManager(BasePositionManager):
 
         pass
 
-    def normalize_date(
-        self, date: Union[datetime.date, datetime.datetime]
-    ) -> datetime.date:
-        """Tick 級別的 date 會是 datetime，統一取其日期部分以計算持有曆日數"""
+    def get_position_unit_size(self, position: StockPosition) -> int:
+        """台股的計價單位是「股」（1 張 ＝ 1,000 股）"""
 
-        return date.date() if isinstance(date, datetime.datetime) else date
+        return StockUtils.convert_lot_to_share(1)
 
-    def calculate_holding_days(
-        self,
-        entry_date: Union[datetime.date, datetime.datetime],
-        exit_date: Union[datetime.date, datetime.datetime],
-    ) -> int:
-        """計算持有曆日數（非交易日），同日開平倉為 0 天"""
-
-        if entry_date is None or exit_date is None:
-            return 0
-
-        return (self.normalize_date(exit_date) - self.normalize_date(entry_date)).days
-
-    def open_position(self, stock_order: StockOrder) -> Optional[StockPosition]:
+    def _book_open(self, stock_order: StockOrder) -> Optional[StockPosition]:
         """
-        - Description: 開倉下單股票
+        - Description:
+            開倉入帳（多空分流）：做多付出整筆部位價值，放空只扣保證金與開倉成本
+
+            方向與動作一致、同標的無反向部位，已由 `BasePositionManager.open_position()`
+            擋過，這裡不再檢查。
         - Parameters:
-            - stock: StockOrder
+            - stock_order: StockOrder
                 目標股票的訂單資訊
         - Return:
-            - position: StockPosition
+            - Optional[StockPosition]
+                入帳的部位；餘額不足或曝險超限時為 None
         """
 
         position_value: float = self.calculate_position_value(
@@ -89,92 +75,63 @@ class StockPositionManager(BasePositionManager):
             volume=stock_order.volume,
         )
 
-        position: Optional[StockPosition] = None
-
-        # 做多開倉（買進）
-        if (
-            stock_order.position_type == PositionType.LONG
-            and stock_order.action == Action.BUY
-        ):
-            logger.info(
-                f"* Open Long Position: {stock_order.stock_id} ({stock_order.volume} lots)"
-            )
-
-            # 同一標的不允許雙向持倉，**多空兩端都要檢查**：只擋單邊的話，
-            # 反序開倉就會讓同一檔同時掛著多空兩個部位，兩邊各自盯市、
-            # 各自計算維持率，帳面曝險與實際完全對不上
-            if self.account.check_has_position(
-                stock_order.stock_id, PositionType.SHORT
-            ):
-                logger.warning(
-                    f"[Open Long] {stock_order.stock_id} 已有放空部位，"
-                    f"不允許同標的雙向持倉，拒絕開倉"
-                )
-                return None
-
-            open_commission: int = self.cost_model.commission(
-                price=stock_order.price,
-                volume=stock_order.volume,
-            )
-            # 做多的證交稅課在賣出端，開倉恆為 0（由成本模型依 action 判定）
-            open_tax: int = self.cost_model.tax(
-                price=stock_order.price,
-                volume=stock_order.volume,
-                action=Action.BUY,
-                date=TimeUtils.to_date(stock_order.date),
-            )
-            open_cost: int = open_commission + open_tax
-
-            # 做多要付出整筆部位價值，故以「部位價值 ＋ 開倉成本」檢查餘額
-            if self.account.balance >= position_value + open_cost:
-                logger.info(f"* Place Open Order: {stock_order.stock_id}")
-
-                position = StockPosition(
-                    id=self.account.generate_trade_id(),
-                    stock_id=stock_order.stock_id,
-                    is_closed=False,
-                    position_type=stock_order.position_type,
-                    date=stock_order.date,
-                    price=stock_order.price,
-                    volume=stock_order.volume,
-                    commission=open_commission,
-                    tax=open_tax,
-                    transaction_cost=open_cost,
-                    unrealized_pnl=0,
-                    unrealized_roi=0,
-                )
-
-                self.account.balance -= position_value + open_cost
-                self.account.positions.append(position)
-            else:
-                # **餘額不足一定要留下警告與計數**：只回 None 的話引擎會靜默跳過，
-                # 回測結果看起來只是少一筆交易。開了滑價後成交價會高於 sizer
-                # 估算的參考價，這條路徑相當容易被觸發，不記錄就查不出成交數變少的原因
-                logger.warning(
-                    f"[Open Long] {stock_order.stock_id} 餘額不足："
-                    f"需要 {position_value + open_cost}，"
-                    f"可用 {self.account.balance}，拒絕開倉"
-                )
-                self.event_counts["rejected_insufficient_balance"] = (
-                    self.event_counts.get("rejected_insufficient_balance", 0) + 1
-                )
         # 放空開倉（賣出）
-        elif (
-            stock_order.position_type == PositionType.SHORT
-            and stock_order.action == Action.SELL
-        ):
+        if stock_order.position_type == PositionType.SHORT:
             logger.info(
                 f"* Open Short Position: {stock_order.stock_id} ({stock_order.volume} lots)"
             )
+            return self.open_short_position(stock_order, position_value)
 
-            position = self.open_short_position(stock_order, position_value)
+        # 做多開倉（買進）
+        logger.info(
+            f"* Open Long Position: {stock_order.stock_id} ({stock_order.volume} lots)"
+        )
 
-        # **開成了才算滑價**：被拒的單沒有成交，價差也就不存在。
-        # 台股的計價單位是「股」（1 張 ＝ 1,000 股）
-        if position is not None:
-            self.accrue_slippage_cost(
-                stock_order, stock_order.volume, StockUtils.convert_lot_to_share(1)
+        open_commission: int = self.cost_model.commission(
+            price=stock_order.price,
+            volume=stock_order.volume,
+        )
+        # 做多的證交稅課在賣出端，開倉恆為 0（由成本模型依 action 判定）
+        open_tax: int = self.cost_model.tax(
+            price=stock_order.price,
+            volume=stock_order.volume,
+            action=Action.BUY,
+            date=TimeUtils.to_date(stock_order.date),
+        )
+        open_cost: int = open_commission + open_tax
+
+        # 做多要付出整筆部位價值，故以「部位價值 ＋ 開倉成本」檢查餘額
+        if self.account.balance < position_value + open_cost:
+            # **餘額不足一定要留下警告與計數**：只回 None 的話引擎會靜默跳過，
+            # 回測結果看起來只是少一筆交易。開了滑價後成交價會高於 sizer
+            # 估算的參考價，這條路徑相當容易被觸發，不記錄就查不出成交數變少的原因
+            logger.warning(
+                f"[Open Long] {stock_order.stock_id} 餘額不足："
+                f"需要 {position_value + open_cost}，"
+                f"可用 {self.account.balance}，拒絕開倉"
             )
+            self.count_event("rejected_insufficient_balance")
+            return None
+
+        logger.info(f"* Place Open Order: {stock_order.stock_id}")
+
+        position: StockPosition = StockPosition(
+            id=self.account.generate_trade_id(),
+            stock_id=stock_order.stock_id,
+            is_closed=False,
+            position_type=stock_order.position_type,
+            date=stock_order.date,
+            price=stock_order.price,
+            volume=stock_order.volume,
+            commission=open_commission,
+            tax=open_tax,
+            transaction_cost=open_cost,
+            unrealized_pnl=0,
+            unrealized_roi=0,
+        )
+
+        self.account.balance -= position_value + open_cost
+        self.account.positions.append(position)
 
         return position
 
@@ -203,13 +160,6 @@ class StockPositionManager(BasePositionManager):
         short_method: ShortMethod = (
             stock_order.short_method or self.cost_model.config.short_method
         )
-
-        # 同一標的不允許同時持有反向部位
-        if self.account.check_has_position(stock_order.stock_id, PositionType.LONG):
-            logger.warning(
-                f"[Open Short] {stock_order.stock_id} 已有做多部位，不允許同標的雙向持倉，拒絕開倉"
-            )
-            return None
 
         open_commission: int = self.cost_model.commission(
             price=stock_order.price, volume=stock_order.volume

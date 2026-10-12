@@ -244,12 +244,17 @@ def build_tw_futures_backtester(
     # 標的池的契約單位（會隨除權息被交易所調整，寫死必錯）；股期的保證金走比例表，
     # 算式需要的標的股價在 `tw_stock.db`，跨庫取值同樣屬 DataFeed 的職責
     # （連線一律由它持有）。部位管理層自己查常數表的話，股期第一筆開倉就 KeyError
+    # 事件計數由 factory 建立，引擎、部位管理層與 FillModel 共用同一個 dict；
+    # 期貨用自己的 key 清單，事件報表才不會列出二十個永遠是 0 的台股列
+    event_counts: dict = new_event_counts(FUTURES_EVENT_KEYS)
+
     position_manager: FuturesPositionManager = FuturesPositionManager(
         account,
         cost_model=cost_model,
         margin_config=margin_config,
         multiplier_resolver=data_feed.resolve_multiplier,
         underlying_price_resolver=data_feed.resolve_underlying_price,
+        event_counts=event_counts,
     )
 
     instrument: TwFuturesSpec = TwFuturesSpec()
@@ -268,9 +273,6 @@ def build_tw_futures_backtester(
             f"基底 FillConfig 只有基點（slippage_bps_*），兩者不可互換"
         )
 
-    # 事件計數由 factory 建立，引擎與 FillModel 共用同一個 dict；
-    # 期貨用自己的 key 清單，事件報表才不會列出二十個永遠是 0 的台股列
-    event_counts: dict = new_event_counts(FUTURES_EVENT_KEYS)
     fill_model: TwFuturesFillModel = TwFuturesFillModel(
         instrument=instrument,
         event_counts=event_counts,
