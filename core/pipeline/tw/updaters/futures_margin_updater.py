@@ -13,6 +13,7 @@ from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.step_runner import run_isolated
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.crawlers.futures_margin_crawler import FuturesMarginCrawler
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
@@ -194,24 +195,18 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 有來源失敗時，於兩支都跑完後拋出（中途不中斷）
         """
 
-        failures: List[str] = []
-
-        for name, step in (
-            ("index_margin", self.update_index_margin),
-            ("stock_margin", self.update_stock_margin),
-        ):
-            try:
-                step()
-            except Exception as error:
-                # **這層盲捕不可收斂成列舉**：`step` 是一整條子管線（抓取→清洗→
-                # 入庫），拋得出什麼由那一側決定，漏掉哪一種就會讓排在後面的
-                # `update_stock_margin()` 完全不跑。兩段互不相干，一段失敗不該連累
-                # 另一段。**`DataLoadError` 尤其要攔**：兩個 step 正是用它表達
-                # 「取得一覽表失敗」「清洗結果為空」這些最常見的失敗
-                logger.error(
-                    f"[Futures Margin] {name} 失敗：{type(error).__name__}: {error}"
-                )
-                failures.append(name)
+        # 兩段互不相干，一段失敗不該連累另一段；**`DataLoadError` 尤其要攔**：
+        # 兩個 step 正是用它表達「取得一覽表失敗」「清洗結果為空」這些最常見的失敗
+        failures: List[str] = [
+            name
+            for name, _ in run_isolated(
+                [
+                    ("index_margin", self.update_index_margin),
+                    ("stock_margin", self.update_stock_margin),
+                ],
+                "Futures Margin",
+            )
+        ]
 
         self.log_summary()
         self.log_margin_chain_gaps()

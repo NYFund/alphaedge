@@ -1,4 +1,5 @@
 import datetime
+import functools
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -16,6 +17,7 @@ from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.step_runner import retry_if_blocked, run_isolated
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
@@ -170,7 +172,6 @@ class FuturesChipUpdater(BaseDataUpdater):
         """
 
         end: datetime.date = end_date or datetime.date.today()
-        blocked: List[str] = []
 
         datasets: List[Tuple[str, str, Callable, Callable]] = [
             dataset
@@ -181,36 +182,69 @@ class FuturesChipUpdater(BaseDataUpdater):
             logger.warning(f"[Futures Chip] `tables` 沒有對應到任何資料集：{tables}")
             return
 
-        for table, label, crawl, clean in datasets:
-            # 續跑時先補表內中間缺的月份：起點是「最新 +1」，被擋掉、之後又有
-            # 月份成功入庫的那幾個月它看不到
-            if resume:
-                for gap_start, gap_end in self.find_gap_windows(table):
-                    _, gap_blocked = self.update_dataset(
-                        table, label, crawl, clean, gap_start, gap_end
-                    )
-                    blocked.extend(
-                        f"{table} {window_start}~{window_end}"
-                        for window_start, window_end in gap_blocked
-                    )
-
-            start: datetime.date = self.resolve_start_date(
-                table, start_date, resume=resume
-            )
-            start = self.clamp_start_date(table, label, start)
-            _, blocked_windows = self.update_dataset(
-                table, label, crawl, clean, start, end
-            )
-            blocked.extend(
-                f"{table} {window_start}~{window_end}"
-                for window_start, window_end in blocked_windows
-            )
+        # 逐資料集隔離：一張表失敗（例外或被擋的月份）不擋後面的表，跑完再彙總
+        failures: List[Tuple[str, str]] = run_isolated(
+            [
+                (
+                    table,
+                    functools.partial(
+                        self.update_table,
+                        table,
+                        label,
+                        crawl,
+                        clean,
+                        start_date,
+                        end,
+                        resume,
+                    ),
+                )
+                for table, label, crawl, clean in datasets
+            ],
+            "Futures Chip",
+        )
 
         # **「該有資料卻沒拿到」必須讓行程非零結束**：TAIFEX 擋流量時回的是
         # HTTP 200 ＋ 一整頁 HTML，與非交易日的回應一模一樣。只記 warning 的話，
         # 被擋的月份會被當成「那幾個月沒有籌碼」而永遠不再補。
-        if blocked:
-            raise DataLoadError("futures_chip", blocked)
+        if failures:
+            raise DataLoadError(
+                "futures_chip", [f"{table} {item}" for table, item in failures]
+            )
+
+    def update_table(
+        self,
+        table: str,
+        label: str,
+        crawl: Callable,
+        clean: Callable,
+        start_date: Optional[datetime.date],
+        end: datetime.date,
+        resume: bool,
+    ) -> List[str]:
+        """單一籌碼表的更新：續跑時先補中間缺的月份，再從起點抓到迄日；回傳被擋的月份"""
+
+        blocked: List[str] = []
+
+        # 續跑時先補表內中間缺的月份：起點是「最新 +1」，被擋掉、之後又有
+        # 月份成功入庫的那幾個月它看不到
+        if resume:
+            for gap_start, gap_end in self.find_gap_windows(table):
+                _, gap_blocked = self.update_dataset(
+                    table, label, crawl, clean, gap_start, gap_end
+                )
+                blocked.extend(
+                    f"{window_start}~{window_end}"
+                    for window_start, window_end in gap_blocked
+                )
+
+        start: datetime.date = self.resolve_start_date(table, start_date, resume=resume)
+        start = self.clamp_start_date(table, label, start)
+        _, blocked_windows = self.update_dataset(table, label, crawl, clean, start, end)
+        blocked.extend(
+            f"{window_start}~{window_end}"
+            for window_start, window_end in blocked_windows
+        )
+        return blocked
 
     def find_gap_windows(self, table: str) -> List[Tuple[datetime.date, datetime.date]]:
         """
@@ -413,26 +447,33 @@ class FuturesChipUpdater(BaseDataUpdater):
                 有交易日卻重試後仍拿不到時為 `FAILED`
         """
 
-        result: CrawlResult = crawl(window_start, window_end)
+        # 有交易日卻拿不到 CSV＝疑似被擋：等待隨次數遞增，退避可被中止。
+        # 交易日只查一次（第一次拿不到時才查），之後的重試沿用答案
+        has_trading_days: Optional[bool] = None
+
+        def is_blocked(crawled: CrawlResult) -> bool:
+            nonlocal has_trading_days
+            if crawled.is_ok:
+                return False
+            if has_trading_days is None:
+                has_trading_days = self.has_trading_days(window_start, window_end)
+            return has_trading_days
+
+        result, _ = retry_if_blocked(
+            fetch=lambda: crawl(window_start, window_end),
+            is_blocked=is_blocked,
+            attempts=self.BLOCKED_RETRY_ATTEMPTS,
+            delay_seconds=self.BLOCKED_RETRY_DELAY_SECONDS,
+            label=f"Futures Chip {label} {window_start}~{window_end}",
+            stop=stop,
+            sleep=lambda seconds: self.sleep(seconds, stop),
+        )
         if result.is_ok:
             return result
-        if not self.has_trading_days(window_start, window_end):
+        if not has_trading_days:
             return CrawlResult.no_data(f"{window_start}~{window_end} 沒有交易日")
-
-        for attempt in range(1, self.BLOCKED_RETRY_ATTEMPTS):
-            wait: int = self.BLOCKED_RETRY_DELAY_SECONDS * attempt
-            logger.warning(
-                f"[Futures Chip] {label} {window_start}~{window_end} 該有交易日卻沒拿到 CSV，"
-                f"{wait} 秒後重試（第 {attempt} 次）"
-            )
-            # 退避也要可中斷：這裡一次可能睡數十秒，裸 sleep 會讓 Ctrl+C 沒反應
-            self.sleep(wait, stop)
-            if stop is not None and stop.requested:
-                return CrawlResult.failed("收到中止要求，未重試完")
-
-            result = crawl(window_start, window_end)
-            if result.is_ok:
-                return result
+        if stop is not None and stop.requested:
+            return CrawlResult.failed("收到中止要求，未重試完")
 
         return CrawlResult.failed(
             f"{label} {window_start}~{window_end} 該有交易日卻沒拿到 CSV（{result.reason}）"

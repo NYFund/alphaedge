@@ -1,4 +1,5 @@
 import datetime
+import functools
 from typing import List, Optional
 
 import pandas as pd
@@ -9,6 +10,7 @@ from core.dao.connection import DBConnection
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.step_runner import run_isolated
 from core.pipeline.tw.cleaners.market_holiday_cleaner import MarketHolidayCleaner
 from core.pipeline.tw.crawlers.market_holiday_crawler import MarketHolidayCrawler
 from core.pipeline.tw.loaders.market_holiday_loader import MarketHolidayLoader
@@ -71,40 +73,42 @@ class MarketHolidayUpdater(BaseDataUpdater):
         """
 
         base_year: int = (today or datetime.date.today()).year
-        failures: List[str] = []
-        loaded: int = 0
+        loaded: List[int] = []
 
-        for year in (base_year - 1, base_year, base_year + 1):
-            result: CrawlResult = self.crawler.crawl(year)
-
-            if result.is_no_data:
-                logger.info(f"[market_holiday] {year} 年站方尚未公告，本次略過")
-                continue
-
-            if result.is_failed:
-                logger.warning(f"[market_holiday] {year} 年取不到：{result.reason}")
-                failures.append(f"{year}: {result.reason}")
-                continue
-
-            try:
-                cleaned: pd.DataFrame = self.cleaner.clean(result.data, year)
-            except Exception as error:
-                # **這層盲捕不可收斂**：`cleaner.clean()` 是各來源自己實作的，
-                # 與 `BaseDataUpdater.clean_one()` 同一種外掛邊界。
-                # 收斂等於要求清洗器只能拋我們列得出來的那幾種
-                logger.error(
-                    f"[market_holiday] {year} 年清洗失敗（{type(error).__name__}: "
-                    f"{error}），本年度不入庫"
-                )
-                failures.append(f"{year}: clean_error")
-                continue
-
-            self.loader.add_to_db(cleaned, year)
-            loaded += 1
+        # 逐年隔離：清洗失敗（各來源自己實作的外掛邊界，拋得出什麼由它決定）
+        # 或取不到都只記下來，其餘年度照跑
+        failures: List[str] = [
+            f"{year}: {reason}"
+            for year, reason in run_isolated(
+                [
+                    (str(year), functools.partial(self.update_year, year, loaded))
+                    for year in (base_year - 1, base_year, base_year + 1)
+                ],
+                "market_holiday",
+            )
+        ]
 
         logger.info(
             f"[market_holiday] 已涵蓋年度：{sorted(self.dao.get_covered_years())}"
         )
 
         if failures:
-            raise DataLoadError("market_holiday", failures, succeeded=loaded)
+            raise DataLoadError("market_holiday", failures, succeeded=len(loaded))
+
+    def update_year(self, year: int, loaded: List[int]) -> List[str]:
+        """單一年度：尚未公告就略過、取不到回報原因、清洗失敗往外拋、成功就入庫並記到 `loaded`"""
+
+        result: CrawlResult = self.crawler.crawl(year)
+
+        if result.is_no_data:
+            logger.info(f"[market_holiday] {year} 年站方尚未公告，本次略過")
+            return []
+
+        if result.is_failed:
+            logger.warning(f"[market_holiday] {year} 年取不到：{result.reason}")
+            return [result.reason]
+
+        cleaned: pd.DataFrame = self.cleaner.clean(result.data, year)
+        self.loader.add_to_db(cleaned, year)
+        loaded.append(year)
+        return []

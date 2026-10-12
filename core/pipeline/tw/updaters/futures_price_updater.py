@@ -1,4 +1,5 @@
 import datetime
+import functools
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -20,6 +21,7 @@ from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.step_runner import retry_if_blocked, run_isolated
 from core.pipeline.tw.cleaners.futures_price_cleaner import FuturesPriceCleaner
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
 from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
@@ -339,18 +341,24 @@ class FuturesPriceUpdater(BaseDataUpdater):
         # 逐商品隔離：一個商品觸發保險絲（或任何例外）不擋排在後面的商品——
         # 股期一次更新前 N 檔，上市晚於起點的那檔就會觸發保險絲。
         # 但跑完之後統一拋出，讓 target 仍以失敗結束，不會安靜地少一檔
-        failures: Dict[str, str] = {}
-        for product in target_products:
-            try:
-                self.update_product(product, start_date, end_date, resume=resume)
-            except Exception as error:
-                # **這層盲捕不可收斂**：`update_product()` 是一整條子管線，
-                # 上面那行註解寫的「或任何例外」就是它的契約。收斂成列舉的話，
-                # 漏掉的那一種會讓後面的商品全部不跑，而 target 仍以成功結束
-                logger.opt(exception=True).error(
-                    f"* {product} 更新失敗，繼續下一個商品：{type(error).__name__}"
-                )
-                failures[product] = f"{type(error).__name__}: {error}"
+        failures: Dict[str, str] = dict(
+            run_isolated(
+                [
+                    (
+                        product,
+                        functools.partial(
+                            self.update_product,
+                            product,
+                            start_date,
+                            end_date,
+                            resume=resume,
+                        ),
+                    )
+                    for product in target_products
+                ],
+                "Futures Price",
+            )
+        )
 
         self.log_summary(target_products)
 
@@ -664,27 +672,25 @@ class FuturesPriceUpdater(BaseDataUpdater):
             for date in dates:
                 crawled: Set[FuturesSession]
                 unreachable: bool
-                crawled, unreachable = self.crawl_and_clean_date(product, date)
-
                 # 沒拿到日盤時一律等待後再試一次：站方擋流量多半是暫時的，
                 # 第二次仍取不到才記為失敗（或兩個時段都查無資料，才是非交易日）。
-                # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子
-                if not self.is_day_complete(crawled):
-                    backoff_seconds: int = self.EMPTY_RETRY_DELAY_SECONDS * min(
-                        consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR
+                # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子。
+                # 等待隨連續空產出遞增（base × 1、×2 … 至多 ×8）
+                (crawled, unreachable), retries = retry_if_blocked(
+                    fetch=functools.partial(self.crawl_and_clean_date, product, date),
+                    is_blocked=lambda outcome: not self.is_day_complete(outcome[0]),
+                    attempts=2,
+                    delay_seconds=self.EMPTY_RETRY_DELAY_SECONDS
+                    * min(consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR),
+                    label=f"Futures Price {product} {date}",
+                    stop=stop,
+                    sleep=lambda seconds: self.sleep(seconds, stop),
+                )
+                if retries and self.is_day_complete(crawled):
+                    logger.warning(
+                        f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
+                        f"不是非交易日"
                     )
-                    logger.info(
-                        f"{date} {product} 未取得日盤（本次時段："
-                        f"{sorted(session.value for session in crawled) or '無'}），"
-                        f"{backoff_seconds} 秒後重試一次"
-                    )
-                    self.sleep(backoff_seconds, stop)
-                    crawled, unreachable = self.crawl_and_clean_date(product, date)
-                    if self.is_day_complete(crawled):
-                        logger.warning(
-                            f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
-                            f"不是非交易日"
-                        )
 
                 if date in new_dates:
                     stats.mark_day(

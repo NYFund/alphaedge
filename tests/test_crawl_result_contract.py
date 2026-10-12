@@ -189,6 +189,29 @@ def test_chip_window_with_trading_days_becomes_failed_after_retries() -> None:
     assert "該有交易日卻沒拿到" in result.reason
 
 
+def test_chip_window_retries_the_declared_number_of_times() -> None:
+    """有交易日卻拿不到時真的會重取：總共取 `BLOCKED_RETRY_ATTEMPTS` 次，等待隨次數遞增"""
+
+    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    updater.BLOCKED_RETRY_ATTEMPTS = 3
+    updater.BLOCKED_RETRY_DELAY_SECONDS = 7
+    updater.has_trading_days = lambda start, end: True
+    waits: List[float] = []
+    updater.sleep = lambda seconds, stop=None: waits.append(seconds)
+    calls: List[int] = []
+    day: datetime.date = datetime.date(2026, 8, 28)
+
+    def crawl(start, end) -> CrawlResult:
+        calls.append(1)
+        return CrawlResult.no_data("回的是 HTML")
+
+    result: CrawlResult = updater.crawl_window(crawl, "三大法人", day, day)
+
+    assert result.is_failed
+    assert len(calls) == 3
+    assert waits == [7, 14]
+
+
 # === FinMind：空表是 NO_DATA，不入庫也不報錯 ===
 def test_finmind_no_data_skips_the_load() -> None:
     """API 正常回傳空表：不清洗、不入庫；有資料時才走完整條流程"""

@@ -328,6 +328,12 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 一個商品觸發空產出保險絲不擋其他商品；全部跑完、印出統計後才拋 `ProductUpdateError`
 列出失敗商品，讓 `target_guard()` 仍把整個 target 記為失敗（與 §3.2 的 `finish_load()` 同一個原則）。
 
+這兩個流程骨架只有一份，在 `core/pipeline/shared/step_runner.py`：`run_isolated(steps, label)`
+逐子項執行、把例外與子項自己回報的失敗收成一份清單（期貨行情逐商品、保證金逐來源、籌碼逐表、
+休市日逐年都走它）；`retry_if_blocked(fetch, is_blocked, attempts, delay_seconds, ...)`
+負責「疑似被擋就等待後重取、等待隨次數遞增、可被中止」（籌碼的月份、行情的日盤都走它）。
+怎樣算被擋、等多久，仍由各來源決定。
+
 ### 期貨的時段層完整性
 
 期貨一天由日盤與夜盤兩段拼成，但兩者**不對稱**，故判準不是「兩段齊全」而是**日盤有沒有拿到**：
