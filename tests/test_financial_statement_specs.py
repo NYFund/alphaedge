@@ -185,16 +185,21 @@ def test_updater_still_exposes_the_equity_change_constants() -> None:
 
 def test_equity_change_throttle_does_not_shadow_the_shared_one() -> None:
     """
-    權益變動表的節流不可與基底同名
+    權益變動表的節流與三張全市場報表的節流是兩種計數語意，不可混用
 
-    它的單位是**請求**、簽名是 `(stop, cnt)`，而基底那份的單位是**檔案／日期**、
-    簽名是 `(file_cnt, stop)`。同名的話三張全市場報表呼叫基底那份時會把
-    `file_cnt` 綁到 `stop` 參數上——拆分前正是這個狀態，而它之所以沒發作，
-    只是因為當時那三張報表各自寫了一份裸 sleep、沒人呼叫共用的那個。
-    現在兩者的名字都帶單位：`throttle_per_file` 與 `throttle_per_request`。
+    權益變動表數的是**本季累計請求數**（取模、不歸零），三張全市場報表數的是
+    **自上次長睡以來的年季數**（達門檻歸零）。拆分前兩者同名、簽名又不同，
+    三張全市場報表呼叫基底那份時會綁錯參數；現在兩者各自建出
+    `RateLimitPolicy`，以 `reset_after_long_sleep` 區分。
     """
 
-    assert hasattr(FinancialStatementUpdater, "throttle_per_request")
+    updater: FinancialStatementUpdater = FinancialStatementUpdater.__new__(
+        FinancialStatementUpdater
+    )
+
+    assert not updater.build_equity_change_rate_limit_policy().reset_after_long_sleep
+    assert updater.build_rate_limit_policy().reset_after_long_sleep
     assert (
-        FinancialStatementUpdater.throttle_per_file is BaseDataUpdater.throttle_per_file
-    ), "`throttle_per_file` 被覆寫了，三張全市場報表的節流會綁錯參數"
+        FinancialStatementUpdater.build_rate_limit_policy
+        is BaseDataUpdater.build_rate_limit_policy
+    ), "`build_rate_limit_policy` 被覆寫了，三張全市場報表的節流會用錯計數語意"

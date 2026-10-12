@@ -17,6 +17,7 @@ from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.cleaners.financial_statement_cleaner import (
     FinancialStatementCleaner,
 )
@@ -299,25 +300,35 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
             end_year=end_year,
             end_season=end_season,
         )
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
 
-        for year, season in year_seasons:
-            logger.info(f"* {year}Q{season}")
-            df_list: Optional[List[pd.DataFrame]] = spec.crawl(year, season)
+        # 中止收在年季與年季之間：已清洗的年季照常入庫，未爬的下次執行會接續
+        with GracefulStop(label=spec.table_name) as stop:
+            for year, season in year_seasons:
+                logger.info(f"* {year}Q{season}")
+                df_list: Optional[List[pd.DataFrame]] = spec.crawl(year, season)
 
-            # Step 2: Clean
-            if df_list is None or not df_list:
-                continue
+                # Step 2: Clean
+                if df_list is None or not df_list:
+                    continue
 
-            cleaned_df: pd.DataFrame = spec.clean(df_list, year, season)
+                cleaned_df: pd.DataFrame = spec.clean(df_list, year, season)
 
-            if cleaned_df is None or cleaned_df.empty:
-                logger.warning(
-                    f"Cleaned {spec.lowercase_label} dataframe empty on {year}Q{season}"
-                )
-                continue
+                if cleaned_df is None or cleaned_df.empty:
+                    logger.warning(
+                        f"Cleaned {spec.lowercase_label} dataframe empty "
+                        f"on {year}Q{season}"
+                    )
+                    continue
 
-            file_cnt = self.throttle_per_file(file_cnt + 1)
+                if stop.requested:
+                    logger.warning(
+                        f"[{spec.table_name}] 收到中止要求，停在 {year}Q{season}；"
+                        f"已清洗的年季照常入庫，未爬的下次執行會接續"
+                    )
+                    break
+
+                throttle.tick(stop)
 
         # Step 3: Load
         self.loader.add_to_db(
@@ -404,6 +415,11 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         if self.get_crawled_stock_ids(year, season):
             return True
 
+        # 試探只打兩、三檔，用不到長睡；只保留請求之間的隨機延遲
+        probe_throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.EQUITY_CHANGE_RANDOM_DELAY_MIN,
+            delay_max=self.EQUITY_CHANGE_RANDOM_DELAY_MAX,
+        )
         for stock_id in self.EQUITY_CHANGE_PROBE_STOCK_IDS:
             if stop is not None and stop.requested:
                 # 收工途中不必再判定：回 False 只是略過本季，重跑會重新試探
@@ -418,7 +434,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
             if df_list is None or df_list:
                 return True
 
-            self.throttle_per_request(stop)
+            probe_throttle.tick(stop)
 
         return False
 

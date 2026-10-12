@@ -19,6 +19,7 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.cleaners.futures_price_cleaner import FuturesPriceCleaner
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
 from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
@@ -643,7 +644,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
         dates: List[datetime.date] = sorted(set(gaps) | set(candidates))
         logger.info(f"* {product}: {actual_start} ~ {end_date}，共 {len(dates)} 天")
 
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
         batch_dates: List[str] = []
         consecutive_empty: int = 0
         stats: UpdateStats = UpdateStats()
@@ -717,8 +718,6 @@ class FuturesPriceUpdater(BaseDataUpdater):
                             f"（請調整 start_date）；③ 來源異常。"
                         )
 
-                file_cnt += 1
-
                 if len(batch_dates) >= self.LOAD_BATCH_SIZE:
                     self.load_batch(batch_dates)
                     batch_dates = []
@@ -730,7 +729,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle_per_file(file_cnt, stop)
+                throttle.tick(stop)
 
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:

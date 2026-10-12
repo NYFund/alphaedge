@@ -10,6 +10,7 @@ from core.pipeline.shared.base_updater import (
 )
 from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.updaters.financial_statement_updater import (
     FinancialStatementUpdater,
 )
@@ -56,38 +57,49 @@ class _ThrottleOnly(BaseDataUpdater):
 
 
 # === 可中斷節流 ===
+def _policy(**overrides: float) -> RateLimitPolicy:
+    """以 `_ThrottleOnly` 的設定建節流，可覆寫個別欄位"""
+
+    policy: RateLimitPolicy = _ThrottleOnly().build_rate_limit_policy()
+    for name, value in overrides.items():
+        setattr(policy, name, value)
+    return policy
+
+
 def test_long_sleep_returns_immediately_once_stop_is_requested() -> None:
     """
     中止旗標立起來後，長睡那一段要立刻回來
 
-    這是本步驟的核心：改動前走的是 `time.sleep(120)`，按 Ctrl+C 要等滿 120 秒。
+    這是可中斷節流的核心：改動前走的是 `time.sleep(120)`，按 Ctrl+C 要等滿 120 秒。
     """
 
-    updater: _ThrottleOnly = _ThrottleOnly()
+    policy: RateLimitPolicy = _policy()
+    policy.count = _ThrottleOnly.BATCH_SLEEP_EVERY_N_FILES - 1
     stop: GracefulStop = GracefulStop(label="test")
     stop.request(reason="test")
 
     started: float = time.monotonic()
-    file_cnt: int = updater.throttle_per_file(updater.BATCH_SLEEP_EVERY_N_FILES, stop)
+    finished: bool = policy.tick(stop)
     elapsed: float = time.monotonic() - started
 
     assert elapsed < MAX_STOP_LATENCY_SECONDS, f"長睡耗了 {elapsed:.2f} 秒才回來"
-    assert file_cnt == 0, "達到門檻時計數要歸零"
+    assert finished is False
+    assert policy.count == 0, "達到門檻時計數要歸零"
 
 
 def test_short_sleep_returns_immediately_once_stop_is_requested() -> None:
     """隨機短睡那一段同樣要能被中止打斷"""
 
-    updater: _ThrottleOnly = _ThrottleOnly()
+    policy: RateLimitPolicy = _policy()
     stop: GracefulStop = GracefulStop(label="test")
     stop.request(reason="test")
 
     started: float = time.monotonic()
-    file_cnt: int = updater.throttle_per_file(1, stop)
+    policy.tick(stop)
     elapsed: float = time.monotonic() - started
 
     assert elapsed < MAX_STOP_LATENCY_SECONDS, f"短睡耗了 {elapsed:.2f} 秒才回來"
-    assert file_cnt == 1, "未達門檻時計數要維持不變"
+    assert policy.count == 1, "未達門檻時計數只往前推一格"
 
 
 def test_throttle_without_stop_still_sleeps() -> None:
@@ -98,33 +110,58 @@ def test_throttle_without_stop_still_sleeps() -> None:
     那會讓沒接上 `GracefulStop` 的呼叫端在回補時被站方擋下來。
     """
 
-    class _Quick(_ThrottleOnly):
-        BATCH_SLEEP_EVERY_N_FILES: int = 1
-        BATCH_SLEEP_DURATION_SECONDS: int = 1
+    policy: RateLimitPolicy = _policy(long_sleep_every=1, long_sleep_seconds=1)
 
     started: float = time.monotonic()
-    _Quick().throttle_per_file(1, None)
+    policy.tick(None)
     elapsed: float = time.monotonic() - started
 
     assert elapsed >= 1.0, f"沒傳 stop 時應照睡滿，實際只有 {elapsed:.2f} 秒"
 
 
-def test_counter_resets_only_at_the_threshold() -> None:
-    """計數只在達到門檻時歸零，否則原樣傳回"""
+def test_counter_resets_after_each_long_sleep() -> None:
+    """預設語意：每 N 次長睡一次，長睡後計數歸零，之後再數 N 次"""
 
-    updater: _ThrottleOnly = _ThrottleOnly()
-    # 三個秒數都歸零：本測試只驗計數的進位與歸零，不驗真的睡了多久
-    updater.BATCH_RANDOM_DELAY_MIN = 0
-    updater.BATCH_RANDOM_DELAY_MAX = 0
-    updater.BATCH_SLEEP_DURATION_SECONDS = 0
+    policy: RateLimitPolicy = _policy(delay_min=0, delay_max=0)
 
-    assert updater.throttle_per_file(0) == 0
-    assert updater.throttle_per_file(1) == 1
-    assert updater.throttle_per_file(2) == 2
-    assert updater.throttle_per_file(3) == 0, "達到 BATCH_SLEEP_EVERY_N_FILES 時要歸零"
-    assert updater.throttle_per_file(4) == 0, (
-        "超過門檻同樣歸零（防止計數溢出後永遠不睡）"
+    plan: List[bool] = [policy.plan_next()[1] for _ in range(7)]
+
+    assert plan == [False, False, True, False, False, True, False]
+    assert policy.count == 1
+
+
+def test_cumulative_count_takes_modulo_without_reset() -> None:
+    """
+    不歸零語意：以呼叫端傳入的累計數取模
+
+    權益變動表數的是本季累計送出幾個請求，中途跳過的股票也算在累計裡，
+    所以長睡落在 50、100、150……，不是「每呼叫 50 次」。
+    """
+
+    policy: RateLimitPolicy = _policy(
+        delay_min=0, delay_max=0, reset_after_long_sleep=False
     )
+
+    assert policy.plan_next(count=0) == (0.0, False), "累計 0 不是長睡的時點"
+    assert policy.plan_next(count=2)[1] is False
+    assert policy.plan_next(count=3)[1] is True
+    assert policy.plan_next(count=4)[1] is False
+    assert policy.plan_next(count=6)[1] is True
+    assert policy.count == 0, "傳入累計數時不動自己的計數"
+
+
+def test_long_sleep_seconds_come_from_the_policy() -> None:
+    """長睡的秒數取自設定，短睡落在隨機區間內"""
+
+    policy: RateLimitPolicy = _policy(delay_min=1, delay_max=2)
+    policy.count = _ThrottleOnly.BATCH_SLEEP_EVERY_N_FILES - 1
+
+    assert policy.plan_next() == (
+        float(_ThrottleOnly.BATCH_SLEEP_DURATION_SECONDS),
+        True,
+    )
+    seconds, is_long = policy.plan_next()
+    assert is_long is False and 1 <= seconds <= 2
 
 
 # === 三支日頻 updater 的骨架 ===
@@ -271,33 +308,44 @@ LONG_RUNNING_UPDATERS: List[type] = [
     FinancialStatementUpdater,
 ]
 
-# **刻意不列**（2026-09-23 的排程實測時間）：
-#   dividend 約 3 分、corporate_action 約 1.7 分、futures_margin 約 3 秒。
-# 它們也有裸 `time.sleep()`，但整段就跑幾分鐘——「按 Ctrl+C 要等幾秒」在那個
-# 量級不構成問題，而本檔的守門是為了「數小時～數十小時的回補按了沒反應」。
-# 哪天它們變長了再列進來；列進來就會因為裸 sleep 而變紅，那正是預期行為。
+# 不必列進上面那份清單、但同樣不可留裸 `time.sleep()` 的模組：
+# 除權息、公司行動、期貨保證金整段只跑幾分鐘，FinMind 的 quota 等待一次就要數分鐘，
+# 這幾處原本都是裸 sleep，收斂到 `RateLimitPolicy`／`GracefulStop` 之後一併守門
+SHORT_RUNNING_MODULES: List[str] = [
+    "core.pipeline.tw.updaters.stock_dividend_updater",
+    "core.pipeline.tw.updaters.corporate_action_updater",
+    "core.pipeline.tw.updaters.futures_margin_updater",
+    "core.pipeline.tw.updaters.finmind.common",
+]
 
 
 @pytest.mark.parametrize("updater_cls", LONG_RUNNING_UPDATERS)
-def test_long_running_updaters_do_not_shadow_the_shared_throttle(
-    updater_cls: type,
-) -> None:
+def test_long_running_updaters_share_one_throttle(updater_cls: type) -> None:
     """
-    沒有人可以覆寫基底的 `throttle_per_file()`
+    節流只有一種寫法：`RateLimitPolicy`，各 updater 不再自己寫一份節流函式
 
-    子類**可以**有自己的節流（單位不同就該分開，例如逐請求、逐月批次），
-    但不可以用同一個名字——簽名不同的同名方法會把基底那份遮蔽掉，
-    而遮蔽不會報錯，只會在某天有人呼叫基底那份時把參數綁到錯的位置上。
+    原本有 `throttle_per_file`、`throttle_per_window`、`throttle_per_request` 三種，
+    判準各不相同、名字又容易互相遮蔽。改成同一個物件之後，差異只剩建構參數。
     """
 
-    assert hasattr(updater_cls, "throttle_per_file")
-    assert updater_cls.throttle_per_file is BaseDataUpdater.throttle_per_file, (
-        f"{updater_cls.__name__} 覆寫了 throttle_per_file()"
+    legacy: List[str] = [
+        name
+        for name in ("throttle_per_file", "throttle_per_window", "throttle_per_request")
+        if hasattr(updater_cls, name)
+    ]
+    assert legacy == [], f"{updater_cls.__name__} 仍有舊的節流函式：{legacy}"
+    assert (
+        updater_cls.build_rate_limit_policy is BaseDataUpdater.build_rate_limit_policy
     )
 
 
-@pytest.mark.parametrize("updater_cls", LONG_RUNNING_UPDATERS)
-def test_no_updater_keeps_a_bare_sleep(updater_cls: type) -> None:
+@pytest.mark.parametrize(
+    "module_name",
+    sorted(
+        {cls.__module__ for cls in LONG_RUNNING_UPDATERS} | set(SHORT_RUNNING_MODULES)
+    ),
+)
+def test_no_updater_keeps_a_bare_sleep(module_name: str) -> None:
     """
     長跑 updater 的節流一律走可中斷的 sleep，不可自己寫裸 `time.sleep()`
 
@@ -307,11 +355,13 @@ def test_no_updater_keeps_a_bare_sleep(updater_cls: type) -> None:
     """
 
     import ast
+    import importlib
     import inspect
 
     # **以 AST 掃而不是字串比對**：註解與 docstring 裡本來就會提到
     # `time.sleep()`（說明為什麼不用它），字串比對會把那些說明當成違規
-    tree: ast.Module = ast.parse(inspect.getsource(inspect.getmodule(updater_cls)))
+    module = importlib.import_module(module_name)
+    tree: ast.Module = ast.parse(inspect.getsource(module))
     offenders: List[str] = [
         ast.unparse(node)
         for node in ast.walk(tree)
@@ -322,9 +372,7 @@ def test_no_updater_keeps_a_bare_sleep(updater_cls: type) -> None:
         and node.func.value.id == "time"
     ]
 
-    assert offenders == [], (
-        f"{updater_cls.__name__} 所在模組仍有裸 time.sleep()：{offenders}"
-    )
+    assert offenders == [], f"{module_name} 仍有裸 time.sleep()：{offenders}"
 
 
 # === 骨架的收尾順序 ===

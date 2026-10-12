@@ -8,6 +8,7 @@ import pytest
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import YearlyRangeTwoMarketUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.updaters.corporate_action_updater import CorporateActionUpdater
 from core.pipeline.tw.updaters.stock_dividend_updater import StockDividendUpdater
 
@@ -59,14 +60,31 @@ def _make(
         add_to_db=lambda **kwargs: calls["load"].append(kwargs)
     )
     updater.dao = SimpleNamespace(get_latest_date=lambda: "2024-12-31")
-    updater.sleep = lambda seconds, stop=None: calls["sleep"].append(stop)
     return updater
 
 
 def _calls() -> Dict[str, List[Any]]:
     """空的呼叫紀錄"""
 
-    return {"crawl": [], "clean": [], "load": [], "sleep": []}
+    return {"crawl": [], "clean": [], "load": []}
+
+
+@pytest.fixture(autouse=True)
+def record_throttle(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> List[Optional[GracefulStop]]:
+    """節流不真的睡，只記下每次帶進來的中止旗標"""
+
+    ticks: List[Optional[GracefulStop]] = []
+
+    def tick(
+        self: RateLimitPolicy, stop: Optional[GracefulStop] = None, count=None
+    ) -> bool:
+        ticks.append(stop)
+        return True
+
+    monkeypatch.setattr(RateLimitPolicy, "tick", tick)
+    return ticks
 
 
 @pytest.mark.parametrize(("updater_cls", "suffix"), UPDATERS)
@@ -97,7 +115,9 @@ def test_crawls_each_year_and_keeps_the_file_suffix(
 
 @pytest.mark.parametrize(("updater_cls", "suffix"), UPDATERS)
 def test_throttle_between_years_is_interruptible(
-    updater_cls: Type[YearlyRangeTwoMarketUpdater], suffix: str
+    updater_cls: Type[YearlyRangeTwoMarketUpdater],
+    suffix: str,
+    record_throttle: List[Optional[GracefulStop]],
 ) -> None:
     """年與年之間的節流帶著中止旗標睡（原本是不可中斷的 `time.sleep`）"""
 
@@ -106,8 +126,8 @@ def test_throttle_between_years_is_interruptible(
 
     updater.update(datetime.date(2023, 1, 1), datetime.date(2024, 12, 31))
 
-    assert len(calls["sleep"]) == 2
-    assert all(isinstance(stop, GracefulStop) for stop in calls["sleep"])
+    assert len(record_throttle) == 2
+    assert all(isinstance(stop, GracefulStop) for stop in record_throttle)
 
 
 @pytest.mark.parametrize(("updater_cls", "suffix"), UPDATERS)
@@ -115,6 +135,7 @@ def test_stop_request_ends_after_the_current_year_and_still_loads(
     updater_cls: Type[YearlyRangeTwoMarketUpdater],
     suffix: str,
     monkeypatch: pytest.MonkeyPatch,
+    record_throttle: List[Optional[GracefulStop]],
 ) -> None:
     """收到中止要求：做完手上這一年就停，已爬的年份照樣入庫"""
 
@@ -142,5 +163,5 @@ def test_stop_request_ends_after_the_current_year_and_still_loads(
 
     crawled_years: List[int] = sorted({start.year for _, start, _ in calls["crawl"]})
     assert crawled_years == [2022]
-    assert calls["sleep"] == []
+    assert record_throttle == []
     assert calls["load"] == [{"remove_files": False}]

@@ -1,5 +1,4 @@
 import datetime
-import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -13,6 +12,7 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.utils.exceptions import (
     CleanFailureError,
     ColumnLayoutError,
@@ -170,7 +170,7 @@ class UpdateStats:
 class BaseDataUpdater(ABC):
     """Base Class of Data Updater"""
 
-    # 節流：每處理 N 個單位休息一次，其餘時候隨機短暫延遲。
+    # 節流：每處理 N 個單位休息一次，其餘時候隨機短暫延遲（`build_rate_limit_policy()`）。
     # 放在基底是因為每一支長跑 updater 都需要同一組數字；各自寫一份的話，
     # 調整節流要記得改好幾個檔案，而漏改的那支會在站方限流時先被擋下來
     BATCH_SLEEP_EVERY_N_FILES: int = 100
@@ -201,48 +201,24 @@ class BaseDataUpdater(ABC):
         if reason:
             raise DataLoadError(source, [reason], succeeded=stats.ok)
 
-    def throttle_per_file(
-        self, file_cnt: int, stop: Optional[GracefulStop] = None
-    ) -> int:
+    def build_rate_limit_policy(self) -> RateLimitPolicy:
         """
         - Description:
-            以**檔案／日期**為單位的節流，回傳更新後的計數
+            以本 updater 的 `BATCH_*` 設定建出一份節流（長睡後計數歸零）
 
-            **名字帶單位是刻意的**：權益變動表那條逐檔迴圈另有一份以「請求」
-            為單位的節流（`throttle_per_request()`），兩者的判準不同
-            （這裡達門檻後計數歸零，那裡取模、計數從不歸零）。
-            都叫 `throttle` 的話子類會把基底這份遮蔽掉，而簽名不同，
-            一旦有人呼叫基底那份就是參數綁錯位置。
-
-            達到 `BATCH_SLEEP_EVERY_N_FILES` 就長睡一次並把計數歸零，
-            其餘時候隨機短睡，避免固定間隔的請求樣態。
-
-            **傳入 `stop` 時用的是可中斷的 sleep**：`time.sleep()` 被訊號打斷會
-            自動續睡（PEP 475），於是「每 100 天睡 2 分鐘」那一段按下 Ctrl+C
-            得等滿 2 分鐘才有反應。數小時～數十小時的回補按了沒反應，
-            實際上就是逼人用 `kill -9`，而那會讓手上未入庫的那批直接消失。
-        - Parameters:
-            - file_cnt: int
-                自上次長睡以來已處理的單位數
-            - stop: Optional[GracefulStop]
-                中止旗標；None 表示退化成不可中斷的 `time.sleep()`
+            **每次 `update()` 開頭各建一份**：計數是這一輪回補的狀態，
+            跨輪沿用會讓第二輪的第一次長睡提早到來；各子類也只需覆寫類別常數。
         - Return:
-            - int
-                更新後的計數；剛長睡過為 0
+            - RateLimitPolicy
+                本輪回補用的節流
         """
 
-        if file_cnt >= self.BATCH_SLEEP_EVERY_N_FILES:
-            # 訊息帶出實際秒數：`BATCH_SLEEP_DURATION_SECONDS` 由各子類覆寫，
-            # 寫死字面秒數會讓 log 與實際行為對不上
-            logger.info(f"Sleep {self.BATCH_SLEEP_DURATION_SECONDS} seconds...")
-            self.sleep(self.BATCH_SLEEP_DURATION_SECONDS, stop)
-            return 0
-
-        delay: int = random.randint(
-            self.BATCH_RANDOM_DELAY_MIN, self.BATCH_RANDOM_DELAY_MAX
+        return RateLimitPolicy(
+            delay_min=self.BATCH_RANDOM_DELAY_MIN,
+            delay_max=self.BATCH_RANDOM_DELAY_MAX,
+            long_sleep_every=self.BATCH_SLEEP_EVERY_N_FILES,
+            long_sleep_seconds=self.BATCH_SLEEP_DURATION_SECONDS,
         )
-        self.sleep(delay, stop)
-        return file_cnt
 
     @staticmethod
     def sleep(seconds: float, stop: Optional[GracefulStop] = None) -> None:
@@ -604,7 +580,7 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
         dates: List[datetime.date] = self.plan_dates(progress, start_date, end_date)
         logger.info(f"本次待更新日期：{len(dates)} 天（{start_date} ~ {end_date}）")
 
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
         batch_dates: List[str] = []
         stats: UpdateStats = UpdateStats()
         cleaner_failures: List[datetime.date] = []
@@ -627,7 +603,6 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
                 progress.record(date, day_status)
                 stats.mark_day(date, day_status)
 
-                file_cnt += 1
                 if day_status is CrawlStatus.FAILED:
                     self.report_partial_day(self.SOURCE, date, twse, tpex)
                 else:
@@ -646,7 +621,7 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle_per_file(file_cnt, stop)
+                throttle.tick(stop)
 
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:
@@ -800,6 +775,10 @@ class YearlyRangeTwoMarketUpdater(BaseDataUpdater):
         years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
         stats: UpdateStats = UpdateStats()
         layout_failures: List[str] = []
+        throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.YEAR_REQUEST_DELAY_MIN,
+            delay_max=self.YEAR_REQUEST_DELAY_MAX,
+        )
 
         with GracefulStop(label=self.SOURCE) as stop:
             for year in years:
@@ -826,10 +805,7 @@ class YearlyRangeTwoMarketUpdater(BaseDataUpdater):
                     )
                     break
 
-                delay: int = random.randint(
-                    self.YEAR_REQUEST_DELAY_MIN, self.YEAR_REQUEST_DELAY_MAX
-                )
-                self.sleep(delay, stop)
+                throttle.tick(stop)
 
         # `requested` 的單位是「年」而不是「天」：本來源支援區間查詢，一年一次請求
         stats.report(f"{self.SOURCE}（單位：年）")

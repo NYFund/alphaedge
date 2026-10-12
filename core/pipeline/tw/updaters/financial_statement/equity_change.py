@@ -1,5 +1,3 @@
-import random
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -10,6 +8,7 @@ from loguru import logger
 from core.config import BALANCE_SHEET_TABLE_NAME, EQUITY_CHANGE_TABLE_NAME
 from core.dao.tw.stock_info_dao import StockInfoDAO
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
 from core.pipeline.utils.exceptions import DataLoadError
 from core.utils import TimeUtils
@@ -337,6 +336,7 @@ class EquityChangeMixin:
 
         stats: EquityChangeSeasonStats = EquityChangeSeasonStats()
         cleaned_df_list: List[pd.DataFrame] = []
+        throttle: RateLimitPolicy = self.build_equity_change_rate_limit_policy()
         # 申報期是否已關閉只與年季有關，逐檔問一次是浪費
         settled: bool = self.is_season_settled(year, season)
 
@@ -395,7 +395,7 @@ class EquityChangeMixin:
                     stats.stopped = True
                     break
 
-                self.throttle_per_request(stop, request_cnt=stats.requested)
+                throttle.tick(stop, count=stats.requested)
         finally:
             # 收尾：不滿一批的資料一律先入庫。**這個 finally 是「隨時可中斷」的關鍵**——
             # 中止訊號、清洗以外的例外、第二次 Ctrl+C 的 KeyboardInterrupt 都會走到這裡，
@@ -409,44 +409,27 @@ class EquityChangeMixin:
 
         return stats
 
-    def throttle_per_request(
-        self, stop: Optional[GracefulStop] = None, request_cnt: int = 0
-    ) -> None:
+    def build_equity_change_rate_limit_policy(self) -> RateLimitPolicy:
         """
         - Description:
-            以**請求**為單位的節流；權益變動表逐檔查詢之間用它
+            權益變動表逐檔查詢的節流：以**本季累計請求數取模**決定長睡，計數不歸零
 
-            與基底的 `throttle_per_file()` 判準不同：這裡取模、計數從不歸零
-            （數的是本季累計送出幾個請求），那裡達門檻後歸零。
-
-            **不直接用 `time.sleep()`**：它被訊號打斷會自動續睡（PEP 475），
-            於是「每 50 檔睡 15 秒」那一段按下 Ctrl+C 得等滿 15 秒才有反應。
-        - Parameters:
-            - stop: Optional[GracefulStop]
-                中止旗標；None 時退化成不可打斷的 sleep
-            - request_cnt: int
-                目前已送出的請求數，決定是否輪到「每 N 檔多睡一段」
+            與其他 updater 的 `build_rate_limit_policy()` 判準不同：這裡數的是
+            本季累計送出幾個請求（`stats.requested`，由呼叫端傳入），
+            那裡數的是自上次長睡以來處理了幾個單位、達門檻後歸零。
+            兩者由 `RateLimitPolicy.reset_after_long_sleep` 區分，不可混用。
+        - Return:
+            - RateLimitPolicy
+                本季逐檔查詢用的節流
         """
 
-        seconds: float = random.uniform(
-            self.EQUITY_CHANGE_RANDOM_DELAY_MIN,
-            self.EQUITY_CHANGE_RANDOM_DELAY_MAX,
+        return RateLimitPolicy(
+            delay_min=self.EQUITY_CHANGE_RANDOM_DELAY_MIN,
+            delay_max=self.EQUITY_CHANGE_RANDOM_DELAY_MAX,
+            long_sleep_every=self.EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES,
+            long_sleep_seconds=self.EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS,
+            reset_after_long_sleep=False,
         )
-
-        if (
-            request_cnt
-            and request_cnt % self.EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES == 0
-        ):
-            seconds = float(self.EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS)
-            logger.info(
-                f"Sleep {self.EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS} seconds..."
-            )
-
-        if stop is None:
-            time.sleep(seconds)
-            return
-
-        stop.sleep(seconds)
 
     def crawl_equity_changes_one(
         self,

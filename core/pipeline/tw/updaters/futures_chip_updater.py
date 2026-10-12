@@ -1,5 +1,4 @@
 import datetime
-import random
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -15,6 +14,7 @@ from core.config import (
 from core.dao.connection import DBConnection, connect_sqlite
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
@@ -331,6 +331,10 @@ class FuturesChipUpdater(BaseDataUpdater):
 
         inserted: int = 0
         blocked_windows: List[Tuple[datetime.date, datetime.date]] = []
+        # 月批次之間的間隔：請求數已經很少，但仍不要連續打
+        throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.MIN_DELAY_SECONDS, delay_max=self.MAX_DELAY_SECONDS
+        )
 
         with GracefulStop(label=f"futures_chip:{label}") as stop:
             for window_start, window_end in self.split_months(start_date, end_date):
@@ -340,14 +344,14 @@ class FuturesChipUpdater(BaseDataUpdater):
                 if raw is None:
                     if self.has_trading_days(window_start, window_end):
                         blocked_windows.append((window_start, window_end))
-                    self.throttle_per_window(stop)
+                    throttle.tick(stop)
                     if stop.requested:
                         break
                     continue
 
                 df: Optional[pd.DataFrame] = clean(raw)
                 if df is None or df.empty:
-                    self.throttle_per_window(stop)
+                    throttle.tick(stop)
                     if stop.requested:
                         break
                     continue
@@ -365,7 +369,7 @@ class FuturesChipUpdater(BaseDataUpdater):
                     )
                     break
 
-                self.throttle_per_window(stop)
+                throttle.tick(stop)
 
         if blocked_windows:
             logger.error(
@@ -480,24 +484,6 @@ class FuturesChipUpdater(BaseDataUpdater):
             cursor = next_month
 
         return windows
-
-    def throttle_per_window(self, stop: Optional[GracefulStop] = None) -> None:
-        """
-        - Description:
-            月批次之間的間隔；請求數已經很少，但仍不要連續打
-
-            **名字帶單位、也不叫 `throttle`**：基底另有一份以「檔案／日期」為
-            單位的 `throttle_per_file(file_cnt, stop)`，簽名不同。同名會把基底
-            那份遮蔽掉，而遮蔽在這裡沒發作只是因為呼叫端剛好都不帶參數。
-
-            **睡眠必須可中斷**：裸 `time.sleep()` 被訊號打斷會自動續睡
-            （PEP 475），按下 Ctrl+C 要等滿 2~4 秒才有反應。
-        - Parameters:
-            - stop: Optional[GracefulStop]
-                中止旗標；None 時退化成不可打斷的 sleep
-        """
-
-        self.sleep(random.uniform(self.MIN_DELAY_SECONDS, self.MAX_DELAY_SECONDS), stop)
 
     def get_coverage(self) -> Dict[str, Optional[str]]:
         """三張表各自補到哪一天（供人工確認進度）"""

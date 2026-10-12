@@ -11,6 +11,7 @@ from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.cleaners.monthly_revenue_report_cleaner import (
     MonthlyRevenueReportCleaner,
 )
@@ -92,7 +93,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
             start_year, start_month, end_year, end_month
         )
         logger.info(f"本次待更新年月：{len(year_months)} 個")
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
         stats: UpdateStats = UpdateStats()
 
         with GracefulStop(label="mrr") as stop:
@@ -115,8 +116,6 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
                     )
                     continue
 
-                file_cnt += 1
-
                 if stop.requested:
                     logger.warning(
                         f"[mrr] 收到中止要求，停在 {year}/{month}；"
@@ -124,7 +123,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle_per_file(file_cnt, stop)
+                throttle.tick(stop)
 
         # `requested` 這裡的單位是「年月」而不是「天」
         stats.report("mrr（單位：年月）")
