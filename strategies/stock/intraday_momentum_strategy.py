@@ -46,8 +46,9 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     - 進場：當日最高價 ≥ 觸發價即視為觸發，以觸發價成交；開盤就已在觸發價之上時以開盤價成交。
     - 成交量：用當日**總量**判斷，盤中觸發當下的累計量可能還沒到——**偏樂觀**。
     - 停損：依 K 棒方向推盤中路徑（OHLC 回測的常見慣例），跌破時以停損價出場：
-      - 陽線（收盤 ≥ 開盤）視為「開 → 低 → 高 → 收」：最低價出現在拉漲、進場之前，
-        進場後只看收盤是否跌破停損價。
+      - 陽線（收盤 ≥ 開盤）視為「開 → 低 → 高 → 收」：盤中拉到觸發價才進場時，最低價出現在
+        拉漲、進場之前，進場後只看收盤是否跌破停損價；**開盤就跳空在觸發價之上**時進場價是
+        開盤價，同一條路徑的低點落在進場之後，改看最低價。
       - 陰線（收盤 < 開盤）視為「開 → 高 → 低 → 收」：最低價出現在進場之後，最低價跌破即停損。
       漲到 9% 的股票多半開低走高，若一律拿最低價判斷，當天的低點幾乎都在進場前，
       會把九成以上的交易誤判成當天停損。開盤後先探底、拉上 9% 又跌回 8% 再收高的陽線會漏判——**偏樂觀**。
@@ -332,25 +333,32 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         self.live_entered = set()
         self.stop_loss_sent = set()
 
-    def is_stop_loss_hit(self, stock_quote: StockQuote, stop_price: float) -> bool:
+    def is_stop_loss_hit(
+        self, stock_quote: StockQuote, stop_price: float, trigger_price: float
+    ) -> bool:
         """
         - Description:
             以日 K 推斷進場**之後**價格是否跌到停損價
 
-            陽線的最低價出現在拉漲之前（開 → 低 → 高 → 收），那時還沒進場，
-            進場後的最低點只能確定不高於收盤；陰線的最低價出現在最高價之後
-            （開 → 高 → 低 → 收），也就是進場之後。
+            陰線的最低價出現在最高價之後（開 → 高 → 低 → 收），也就是進場之後，看最低價。
+            陽線（開 → 低 → 高 → 收）要看進場落在路徑的哪一段：盤中拉到觸發價才進場時，
+            最低價出現在拉漲之前、還沒進場，進場後的最低點只能確定不高於收盤；
+            **開盤就跳空在觸發價之上**時進場價是開盤價（與 `generate_open_signals()` 一致），
+            低點落在進場之後，同樣要看最低價——只看收盤會漏掉這種當天的停損。
         - Parameters:
             - stock_quote: StockQuote
                 進場當天的日 K
             - stop_price: float
                 停損價
+            - trigger_price: float
+                進場觸發價；開盤 ≥ 觸發價即為跳空進場
         - Return:
             - bool
                 是否停損
         """
 
-        if stock_quote.close >= stock_quote.open:
+        entered_during_rally: bool = stock_quote.open < trigger_price
+        if stock_quote.close >= stock_quote.open and entered_during_rally:
             return stock_quote.close <= stop_price
         return stock_quote.low <= stop_price
 
@@ -551,7 +559,10 @@ class IntradayMomentumStrategy(BaseStockStrategy):
             stop_price: float = self.get_stop_loss_price(
                 reference_price, stock_quote.stock_id
             )
-            if not self.is_stop_loss_hit(stock_quote, stop_price):
+            trigger_price: float = self.get_entry_trigger_price(
+                reference_price, stock_quote.stock_id
+            )
+            if not self.is_stop_loss_hit(stock_quote, stop_price, trigger_price):
                 continue
 
             logger.warning(
