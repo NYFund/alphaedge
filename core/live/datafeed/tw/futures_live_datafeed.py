@@ -8,7 +8,7 @@ from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.config import TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.config.settings import now_live
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.connection import DBConnection
 from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
@@ -102,21 +102,26 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         self.stock_conn: Optional[DBConnection] = None
         self.market_holiday: Optional[MarketHolidayAPI] = None
 
-    def setup(self, strategy: BaseStrategy) -> None:
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
         """
-        建立歷史資料 API（唯讀）與交易日來源
+        建立歷史資料 API（唯讀）
 
-        期貨沿用 TWSE 公告的開休市日曆當主來源（期貨市場的休市日原則上與證券市場相同）；
-        它在 `tw_stock.db`，另開一條唯讀連線。
+        期貨沿用 TWSE 公告的開休市日曆當交易日主來源（期貨市場的休市日原則上與
+        證券市場相同）；它在 `tw_stock.db`，另開一條唯讀連線。
         """
 
-        self.conn = connect_sqlite(self.db_path, read_only=True)
-        self.stock_conn = connect_sqlite(self.stock_db_path, read_only=True)
+        self.conn = self.connect_db(self.db_path, read_only=True)
+        self.stock_conn = self.connect_db(self.stock_db_path, read_only=True)
         self.futures_price = FuturesPriceAPI(conn=self.conn)
         self.margin = FuturesMarginAPI(conn=self.conn)
         self.market_holiday = MarketHolidayAPI(conn=self.stock_conn)
         self.inject_margin_api()
         self.inject_roll_calendar()
+
+    def setup(self, strategy: BaseStrategy) -> None:
+        """基底的外框之後：補預設的交易日來源、把資料源交給策略、補契約清單"""
+
+        super().setup(strategy)
 
         if not self.calendar_sources:
             self.calendar_sources = [

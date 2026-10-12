@@ -82,6 +82,9 @@ class FakeFeed(BaseLiveDataFeed):
     def setup(self, strategy: BaseStrategy) -> None:
         """測試不需要建 API"""
 
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
+        """同上"""
+
     def is_market_open(self, date: datetime.date) -> bool:
         """由測試指定；不建日曆來源（那是 `test_live_datafeed.py` 的範疇）"""
 

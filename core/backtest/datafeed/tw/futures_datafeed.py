@@ -1,5 +1,5 @@
 import datetime
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -49,8 +49,9 @@ class TwFuturesDataFeed(BaseDataFeed):
         margin_config: Optional[FuturesMarginConfig] = None,
         roll_config: Optional[FuturesRollConfig] = None,
     ) -> None:
-        # 單次回測共用一條 SQLite 連線：行情與保證金查的是同一個 DB 檔
-        self.conn: Optional[DBConnection] = None
+        super().__init__()
+
+        # 單次回測共用一條 SQLite 連線（基底的 `conn`）：行情與保證金查的是同一個 DB 檔
 
         # 本次回測的保證金設定；`setup()` 會把建好的 API 注入其中，
         # 讓策略層與部位管理層**共用同一個查表來源**（見 `inject_margin_api()`）
@@ -77,20 +78,18 @@ class TwFuturesDataFeed(BaseDataFeed):
         self.products: List[str] = []
         self.session: FuturesSession = FuturesSession.DAY
 
-        # 回測區間與期貨交易日曆（整場只建一次）
-        self.start_date: Optional[datetime.date] = None
-        self.end_date: Optional[datetime.date] = None
-        self.calendar: Optional[FuturesCalendar] = None
-
     def setup(self, strategy: BaseStrategy) -> None:
-        """建立資料 API 並記下策略宣告的商品與時段"""
+        """基底的外框之後，把建好的日曆注入換月設定（換月規則要用它算最後交易日）"""
 
-        # **先確保目錄存在再連線**：全新環境（CI、剛 clone 的機器）沒有
-        # `data/db/`，`connect_sqlite()` 會丟出
-        # `unable to open database file`——那個訊息完全看不出是「目錄不存在」。
-        # 與各 loader 同一種作法；此時開出來的是空 DB，查詢一律回空結果
-        TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = connect_sqlite(TW_FUTURES_DB_PATH)
+        super().setup(strategy)
+
+        if self.roll_config is not None:
+            self.roll_config.calendar = self.calendar
+
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
+        """開 SQLite 連線、建立期貨的資料 API，並記下策略宣告的商品與時段"""
+
+        self.conn = self.connect_db(TW_FUTURES_DB_PATH)
 
         self.futures_price = FuturesPriceAPI(conn=self.conn)
         self.margin = FuturesMarginAPI(conn=self.conn)
@@ -98,15 +97,8 @@ class TwFuturesDataFeed(BaseDataFeed):
 
         self.products = list(getattr(strategy, "products", []) or [])
         self.session = getattr(strategy, "session", FuturesSession.DAY)
-        self.start_date = strategy.start_date
-        self.end_date = strategy.end_date
 
-        self.calendar = self.build_calendar()
         self.inject_margin_api()
-
-        # 換月規則要用日曆算最後交易日，故在日曆建好之後才注入
-        if self.roll_config is not None:
-            self.roll_config.calendar = self.calendar
 
         if not self.products:
             logger.warning(
@@ -177,27 +169,14 @@ class TwFuturesDataFeed(BaseDataFeed):
                     f"（比率近似，TX 實測跨年份誤差 +143% ~ −38%）"
                 )
 
-    def is_market_open(self, date: datetime.date) -> bool:
-        """
-        期貨開盤日判定：交給 `FuturesCalendar`（判準是「當日表內有行情」）
-
-        **不沿用股票 calendar**：期貨的休市日與現貨不完全相同，且最後交易日
-        遇休市要順延到**期貨自己**的下一個開盤日。日曆整場只建一次
-        （回測期間資料表不會變動）。
-        """
-
-        if self.futures_price is None:
-            return False
-
-        if self.calendar is None:
-            self.calendar = self.build_calendar()
-
-        return self.calendar.is_trading_day(date)
-
-    def build_calendar(self) -> FuturesCalendar:
+    def build_calendar(self) -> Optional[FuturesCalendar]:
         """
         - Description:
-            建立本次回測的期貨交易日曆
+            建立本次回測的期貨交易日曆（判準是「當日表內有行情」）
+
+            **不沿用股票 calendar**：期貨的休市日與現貨不完全相同，且最後交易日
+            遇休市要順延到**期貨自己**的下一個開盤日。日曆整場只建一次
+            （回測期間資料表不會變動）。
 
             **只看策略宣告的商品**：不同商品的掛牌期間不同，把全市場的交易日
             都算進來會讓該策略根本不交易的商品也影響休市判定。
@@ -206,11 +185,16 @@ class TwFuturesDataFeed(BaseDataFeed):
             其最後交易日可能在 `end_date` 之後，只取回測區間本身會讓
             `get_last_trading_date()` 因為「日曆涵蓋不到」而失準（換月規則會用到）。
         - Return:
-            - FuturesCalendar
+            - Optional[FuturesCalendar]
+                沒有行情 API（尚未 `setup()`）或沒有區間時為 None
         """
 
-        if self.start_date is None or self.end_date is None:
-            return FuturesCalendar()
+        if (
+            self.futures_price is None
+            or self.start_date is None
+            or self.end_date is None
+        ):
+            return None
 
         # **多商品取聯集，不可只看 `products[0]`**：只看第一個商品的話，
         # 它停止交易（下市、尚未上市、資料缺一段）的那些日子整場回測都會被判定為
@@ -438,18 +422,17 @@ class TwFuturesDataFeed(BaseDataFeed):
 
         return date
 
+    def data_apis(self) -> Tuple[Any, ...]:
+        """本資料源建立的 API（供基底的 `close()` 逐一關閉）"""
+
+        return (self.futures_price, self.margin, self.universe, self.stock_price)
+
     def close(self) -> None:
-        """關閉資料連線（回測結束時由引擎呼叫）"""
+        """關閉資料連線（回測結束時由引擎呼叫）；標的股價那一條是延遲開的，另外關"""
 
-        for api in (self.futures_price, self.margin, self.universe, self.stock_price):
-            if api is not None:
-                api.close()
+        super().close()
 
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None
-
-        # 標的股價那一條是延遲開的，只跑指數期貨時根本沒建立
+        # 只跑指數期貨時根本沒建立
         if self.stock_conn is not None:
             self.stock_conn.close()
             self.stock_conn = None

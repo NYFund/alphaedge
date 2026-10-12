@@ -6,7 +6,6 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from loguru import logger
 
 from core.config.settings import now_live
-from core.dao.connection import DBConnection
 from core.datafeed.base import BaseDataFeed
 from core.live.datafeed.calendar import (
     TradingCalendarSource,
@@ -91,15 +90,21 @@ class BaseLiveDataFeed(BaseDataFeed):
                 歷史資料庫路徑；連線由子類在 `setup()` 內建立
         """
 
+        super().__init__()
+
         self.broker: Any = broker
         self.calendar_sources: List[TradingCalendarSource] = list(
             calendar_sources or []
         )
         self._now: Callable[[], datetime.datetime] = now_provider
         self.db_path: Any = db_path
-        self.conn: Optional[DBConnection] = None
 
     # === 交易日 ===
+    def build_calendar(self) -> None:
+        """實盤不預建日曆：交易日由多個來源互相佐證（`is_market_open()`），判不出來一律拋出"""
+
+        return None
+
     def is_market_open(self, date: datetime.date) -> bool:
         """
         - Description:
@@ -414,13 +419,6 @@ class BaseLiveDataFeed(BaseDataFeed):
         raise NotImplementedError(
             f"實盤不從歷史表逐日取報價；策略需要歷史資料時走 API（{self.HISTORY_API_HINT}）"
         )
-
-    def close(self) -> None:
-        """關閉歷史資料連線；可重複呼叫（引擎以 `try/finally` 保證它跑到）"""
-
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None
 
     def plan_rolls(
         self, positions: Sequence[Any], today: datetime.date

@@ -160,6 +160,9 @@ class FakeLiveFeed(BaseLiveDataFeed):
     def setup(self, strategy: Any) -> None:
         """本檔只驗新鮮度，不需要真的建 API"""
 
+    def open_data_sources(self, strategy: Any) -> None:
+        """同上"""
+
     def get_quotes(
         self, date: datetime.date, scale: Any, adjusted: bool = False
     ) -> List[BaseQuote]:
@@ -365,7 +368,7 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 
     def assigned_api_names(cls: Any) -> set:
-        source: str = inspect.getsource(cls.setup)
+        source: str = inspect.getsource(cls.open_data_sources)
         return {
             line.split("=")[0].strip().removeprefix("self.")
             for line in source.splitlines()
@@ -380,7 +383,7 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     live_apis: set = assigned_api_names(TwStockLiveDataFeed)
 
     # **先確認掃描結果非空**：`assigned_api_names()` 是從原始碼刮出
-    # `self.x = XxxAPI(` 這種行，哪天 `setup()` 改用迴圈、dict 或 factory 建 API，
+    # `self.x = XxxAPI(` 這種行，哪天 `open_data_sources()` 改用迴圈、dict 或 factory 建 API，
     # 它就會回空集合——而 `set() <= 任何集合` 恆為真，下面那條斷言會無條件通過，
     # 這道護欄就在沒人察覺的情況下死掉
     assert len(backtest_apis) >= 5, (

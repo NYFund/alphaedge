@@ -16,7 +16,6 @@ from core.live.datafeed.calendar import (
     WeekendCalendarSource,
     resolve_trading_day,
 )
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.live.factory import to_live_roll_config
@@ -72,8 +71,9 @@ def stock_db(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
     def connect(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:") if db_path == "futures" else conn
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect)
     return conn
 
 
