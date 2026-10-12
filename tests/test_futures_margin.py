@@ -1047,6 +1047,7 @@ def make_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     updater = FuturesMarginUpdater.__new__(FuturesMarginUpdater)
     updater.loader = FuturesMarginLoader()
     updater.dao = updater.loader.dao
+    updater.rate_dao = updater.loader.rate_dao
     updater.conn = updater.loader.conn
     updater.ANNOUNCEMENT_DELAY_SECONDS = 0
     return updater
@@ -1324,7 +1325,7 @@ def test_second_backfill_skips_processed_announcements(
 
     assert len(crawler.downloaded_urls) == 3
     assert updater.dao.count_rows() == 2
-    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 2
+    assert updater.rate_dao.count_rows() == 2
 
     crawler.resolved_links.clear()
     crawler.downloaded_urls.clear()
@@ -1349,14 +1350,14 @@ def test_same_effective_date_does_not_mark_other_announcements_loaded(
     crawler.contents["https://taifex/attach/stock.csv"] = None
     updater.update_history()
 
-    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 0
+    assert updater.rate_dao.count_rows() == 0
 
     crawler.contents["https://taifex/attach/stock.csv"] = ANNOUNCEMENT_RATE_CSV
     crawler.downloaded_urls.clear()
     updater.update_history()
 
     assert crawler.downloaded_urls == ["https://taifex/attach/stock.csv"]
-    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 2
+    assert updater.rate_dao.count_rows() == 2
 
 
 def test_record_is_ignored_when_the_database_lost_the_rows(

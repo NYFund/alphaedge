@@ -13,14 +13,13 @@ from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
 from core.config import (
     FUTURES_LARGE_TRADER_TABLE_NAME,
-    STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
-from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
@@ -382,8 +381,7 @@ def futures_margin_api(dao_factory: Callable[..., BaseDAO]) -> FuturesMarginAPI:
     """建立含股期適用比例與契約單位的 in-memory 表"""
 
     margin_dao: BaseDAO = dao_factory(
-        FuturesMarginDAO,
-        records_table=STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
+        StockFuturesMarginRateDAO,
         records=[
             {
                 "product_id": "CDF",

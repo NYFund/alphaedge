@@ -28,10 +28,20 @@ class MonthlyRevenueDAO(BaseDAO):
     INT_NOT_NULL_COLUMNS: Tuple[str, ...] = ("year", "month")
 
     # === 建表 ===
-    def ensure_table(self, columns: List[str]) -> None:
+    def ensure_table(self) -> None:
+        """欄位由清洗器的欄位清單決定，無參數的建表無從下手：請改呼叫 `ensure_table_from_columns()`"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 的欄位由清單決定，請用 ensure_table_from_columns(columns)"
+        )
+
+    def ensure_table_from_columns(self, columns: List[str]) -> None:
         """
         - Description:
             確保資料表存在；可重複呼叫
+
+            **與基底無參數的 `ensure_table()` 分開命名**：簽名不同的同名方法會讓
+            以基底型別持有 DAO 的呼叫端無從分辨。
         - Parameters:
             - columns: List[str]
                 建表時的欄位清單（表已存在時不使用）

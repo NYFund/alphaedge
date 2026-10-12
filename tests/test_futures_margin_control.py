@@ -467,9 +467,8 @@ def test_margin_table_matches_the_announced_adjustment(tmp_path: Path) -> None:
     from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 
     dao: FuturesMarginDAO = FuturesMarginDAO(db_path=tmp_path / "tw_futures.db")
-    dao.ensure_tables()
+    dao.ensure_table()
     dao.insert_rows(
-        FuturesMarginDAO.TABLE_NAME,
         pd.DataFrame(
             [
                 [

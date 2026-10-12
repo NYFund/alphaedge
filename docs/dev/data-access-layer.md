@@ -47,7 +47,8 @@ import 它們會被分層檢查判成反向相依；`core.models` 同層，會�
 | `StockInfoDAO`／`StockInfoWithWarrantDAO`／`SecuritiesTraderInfoDAO`／`BrokerTradingDAO` | FinMind 四表 | `tw_stock.db` |
 | `FuturesPriceDAO` | `futures_price_daily` | `tw_futures.db` |
 | `FuturesStockUniverseDAO` | `futures_stock_universe`（快照序列） | `tw_futures.db` |
-| `FuturesMarginDAO` | `futures_margin_history` ＋ `stock_futures_margin_rate_history` | `tw_futures.db` |
+| `FuturesMarginDAO` | `futures_margin_history`（金額表） | `tw_futures.db` |
+| `StockFuturesMarginRateDAO` | `stock_futures_margin_rate_history`（股期比例表；與金額表同一支 ETL，一張表一個 DAO） | `tw_futures.db` |
 | `FuturesChipDAO(table_name)` | 期貨籌碼三表（表名白名單） | `tw_futures.db` |
 | `FuturesContinuousDAO` | `futures_continuous`（衍生表） | `tw_futures.db` |
 | `MarketHolidayDAO` | `market_holiday` | `tw_stock.db` |
@@ -152,7 +153,8 @@ savepoint 一經 `RELEASE` 就等於 commit），例外時 `ROLLBACK TO` 再往�
 - **API 持有連線、DAO 不持有**：API 仍依 `owns_conn` 自行開連線，再以 `conn=` 交給 DAO。
   `BaseDataAPI.close()`、DataFeed 的共用連線與 reporter 的關閉邏輯因此都不用改。
 - **欄位清單由 pipeline 傳入的表**（財報、月營收）：欄位定義存在清洗器產出的 `*_cleaned_columns.json`，
-  讀檔屬於 pipeline；DAO 的 `ensure_table(columns)` 只負責欄名到 SQL 型別的對應。
+  讀檔屬於 pipeline；DAO 的 `ensure_table_from_columns(columns)` 只負責欄名到 SQL 型別的對應
+  （與基底無參數的 `ensure_table()` 分開命名；這類 DAO 的 `ensure_table()` 會明確拋 `NotImplementedError`）。
 - **同一個查詢刻意保留兩種語意時以參數表達，並寫進 docstring**：
   - `FuturesMarginDAO.get_margin_in_effect(inclusive=...)`：回測問「這一天適用多少」用 `<=`；
     updater 驗證公告問「這次調整之前是多少」用 `<`（同一生效日已有列時 `<=` 會拿到調整後的值）。

@@ -8,6 +8,7 @@ from loguru import logger
 from core.config import FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH, TW_FUTURES_DB_PATH
 from core.dao.connection import DBConnection, DBError
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
@@ -156,7 +157,8 @@ class FuturesMarginUpdater(BaseDataUpdater):
             FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH
         )
 
-        # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一個 DAO**（tw_futures.db）
+        # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一條連線**（tw_futures.db）：
+        # 金額表的 DAO 擁有連線，比例表的 DAO 掛在同一條上
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.dao: FuturesMarginDAO = FuturesMarginDAO(db_path=TW_FUTURES_DB_PATH)
         self.conn: Optional[DBConnection] = self.dao.conn
@@ -165,6 +167,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
         self.crawler: FuturesMarginCrawler = FuturesMarginCrawler()
         self.cleaner: FuturesMarginCleaner = FuturesMarginCleaner()
         self.loader: FuturesMarginLoader = FuturesMarginLoader(dao=self.dao)
+        self.rate_dao: StockFuturesMarginRateDAO = self.loader.rate_dao
 
         self.setup()
 
@@ -372,7 +375,10 @@ class FuturesMarginUpdater(BaseDataUpdater):
         **新增 0 列是正常狀態不是失敗**：保證金沒調整時本來就不會有新列。
         """
 
-        for table, total, products, earliest, latest in self.dao.get_table_summaries():
+        for table, total, products, earliest, latest in (
+            self.dao.get_summary(),
+            self.rate_dao.get_summary(),
+        ):
             logger.info(
                 f"* {table}：{total} 列、{products} 個商品，"
                 f"生效日範圍 {earliest} ~ {latest}"
@@ -417,7 +423,10 @@ class FuturesMarginUpdater(BaseDataUpdater):
         # **必須限定 source**：snapshot 恰好同一天時會讓該則公告被整則跳過
         loaded_dates: Dict[str, Set[str]] = {
             table: self.loader.get_effective_dates(table, source="announcement")
-            for table in (FuturesMarginDAO.TABLE_NAME, FuturesMarginDAO.RATE_TABLE_NAME)
+            for table in (
+                FuturesMarginDAO.TABLE_NAME,
+                StockFuturesMarginRateDAO.TABLE_NAME,
+            )
         }
         store: AnnouncementMetadataStore = AnnouncementMetadataStore(
             self.announcement_metadata_path
@@ -574,7 +583,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
                         table
                         for table, df in (
                             (FuturesMarginDAO.TABLE_NAME, margin_df),
-                            (FuturesMarginDAO.RATE_TABLE_NAME, rate_df),
+                            (StockFuturesMarginRateDAO.TABLE_NAME, rate_df),
                         )
                         if df is not None
                     ],

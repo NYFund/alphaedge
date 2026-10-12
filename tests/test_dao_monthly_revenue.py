@@ -60,7 +60,7 @@ def dao() -> MonthlyRevenueDAO:
     """已建表、內含 2023-10～2024-03 六個月資料的記憶體 DAO"""
 
     mrr_dao: MonthlyRevenueDAO = MonthlyRevenueDAO(conn=sqlite3.connect(":memory:"))
-    mrr_dao.ensure_table(MRR_COLUMNS)
+    mrr_dao.ensure_table_from_columns(MRR_COLUMNS)
     mrr_dao.insert_or_ignore(
         make_mrr_rows(
             [(2023, 10), (2023, 11), (2023, 12), (2024, 1), (2024, 2), (2024, 3)]
@@ -107,7 +107,7 @@ def test_latest_year_month_orders_numerically() -> None:
     mrr_dao: MonthlyRevenueDAO = MonthlyRevenueDAO(conn=sqlite3.connect(":memory:"))
     assert mrr_dao.get_latest_year_month() is None
 
-    mrr_dao.ensure_table(MRR_COLUMNS)
+    mrr_dao.ensure_table_from_columns(MRR_COLUMNS)
     assert mrr_dao.get_latest_year_month() is None
 
     mrr_dao.insert_or_ignore(

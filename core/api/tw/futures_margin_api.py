@@ -7,6 +7,7 @@ from core.config import TW_FUTURES_DB_PATH
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 
 """
 Futures Margin API: query the two margin tables in tw_futures.db
@@ -53,6 +54,9 @@ class FuturesMarginAPI(BaseDataAPI):
         """建連線與主 DAO 由基底負責；此處只補本 API 多出來的 DAO"""
 
         super().setup()
+        self.rate_dao: StockFuturesMarginRateDAO = StockFuturesMarginRateDAO(
+            conn=self.conn
+        )
         self.universe_dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
             conn=self.conn
         )
@@ -163,7 +167,7 @@ class FuturesMarginAPI(BaseDataAPI):
 
         # 表不存在時與 `get_margin()` 同樣回 None：兩者的缺表語意必須一致，
         # 否則同一個「還沒跑 ETL」的環境下，查金額回 None、查比例卻拋例外
-        row: Optional[Tuple[Any, ...]] = self.dao.get_rates_in_effect(
+        row: Optional[Tuple[Any, ...]] = self.rate_dao.get_rates_in_effect(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )
 

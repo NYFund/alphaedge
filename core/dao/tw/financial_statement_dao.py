@@ -115,7 +115,14 @@ class FinancialStatementDAO(BaseDAO):
         return table_name
 
     # === 建表 ===
-    def ensure_table(self, columns: List[str]) -> None:
+    def ensure_table(self) -> None:
+        """欄位由清洗器的欄位清單決定，無參數的建表無從下手：請改呼叫 `ensure_table_from_columns()`"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 的欄位由清單決定，請用 ensure_table_from_columns(columns)"
+        )
+
+    def ensure_table_from_columns(self, columns: List[str]) -> None:
         """
         - Description:
             確保資料表存在；可重複呼叫

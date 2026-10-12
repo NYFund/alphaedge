@@ -10,7 +10,9 @@ from core.config import (
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
     TW_FUTURES_DB_PATH,
 )
+from core.dao.base import BaseDAO
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
 """
@@ -49,12 +51,17 @@ class FuturesMarginLoader(BaseDataLoader):
             建立期貨保證金 loader
         - Parameters:
             - dao: Optional[FuturesMarginDAO]
-                共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
-                指定時 loader 不擁有它，`disconnect()` 不會關閉；未指定時 loader 自行建立
+                共用的金額表 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
+                指定時 loader 不擁有它，`disconnect()` 不會關閉；未指定時 loader 自行建立。
+                比例表的 DAO 一律由本 loader 掛在同一條連線上（`rate_dao`）
         """
 
         # Downloads directory Path
         self.margin_dir: Path = FUTURES_MARGIN_DOWNLOADS_PATH
+
+        # 比例表的 DAO 與金額表共用同一條連線；基底的 `__init__` 會跑 `setup()` →
+        # `connect()`，在那之前先宣告，`connect()` 才掛得上
+        self.rate_dao: Optional[StockFuturesMarginRateDAO] = None
 
         super().__init__(dao)
 
@@ -75,15 +82,43 @@ class FuturesMarginLoader(BaseDataLoader):
 
         return Path(TW_FUTURES_DB_PATH)
 
+    def connect(self) -> None:
+        """開連線後，比例表的 DAO 掛在同一條連線上"""
+
+        super().connect()
+        if self.rate_dao is None and self.dao is not None:
+            self.rate_dao = StockFuturesMarginRateDAO(conn=self.dao.conn)
+
+    def disconnect(self) -> None:
+        """比例表的 DAO 不擁有連線，跟著金額表的 DAO 一起失效"""
+
+        super().disconnect()
+        if self.dao is None:
+            self.rate_dao = None
+
+    def dao_for(self, table: str) -> BaseDAO:
+        """依表名取對應的 DAO；不是兩張保證金表之一就當場拋出 `ValueError`"""
+
+        if table == FuturesMarginDAO.TABLE_NAME:
+            return self.dao
+        if table == StockFuturesMarginRateDAO.TABLE_NAME:
+            return self.rate_dao
+        raise ValueError(
+            f"不支援的保證金資料表：{table!r}；可用的有 "
+            f"{[FuturesMarginDAO.TABLE_NAME, StockFuturesMarginRateDAO.TABLE_NAME]}"
+        )
+
     def create_db(self) -> None:
         """Create New Database Table"""
 
-        self.dao.create_tables()
+        self.dao.create_table()
+        self.rate_dao.create_table()
 
     def create_missing_tables(self) -> None:
         """確保兩張保證金資料表都存在"""
 
-        self.dao.ensure_tables()
+        self.dao.ensure_table()
+        self.rate_dao.ensure_table()
 
     def add_to_db(self, df: pd.DataFrame) -> int:
         """
@@ -175,10 +210,11 @@ class FuturesMarginLoader(BaseDataLoader):
             self.connect()
         self.create_missing_tables()
 
+        dao: BaseDAO = self.dao_for(table)
         inserted: int
-        with self.dao.savepoint():
-            inserted = self.dao.insert_rows(table, df, replace=replace)
-        self.dao.commit()
+        with dao.savepoint():
+            inserted = dao.insert_rows(df, replace=replace)
+        dao.commit()
 
         if inserted:
             logger.info(f"* 新增 {inserted} 列{label}（共 {len(df)} 列，其餘已存在）")
@@ -190,7 +226,7 @@ class FuturesMarginLoader(BaseDataLoader):
     def count_rows(self, table: str = FUTURES_MARGIN_HISTORY_TABLE_NAME) -> int:
         """指定資料表目前的列數；預設為金額表"""
 
-        return self.dao.count_rows(table)
+        return self.dao_for(table).count_rows()
 
     def get_effective_dates(
         self,
@@ -209,4 +245,4 @@ class FuturesMarginLoader(BaseDataLoader):
             self.connect()
         self.create_missing_tables()
 
-        return self.dao.get_effective_dates(table, source=source)
+        return self.dao_for(table).get_effective_dates(source=source)

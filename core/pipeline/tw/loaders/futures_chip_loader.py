@@ -92,7 +92,7 @@ class FuturesChipLoader(BaseDataLoader):
     def create_db(self, table: str, df: pd.DataFrame) -> None:
         """依 DataFrame 的欄位建表（若不存在）；主鍵寫死、欄位由資料推導"""
 
-        self.get_dao(table).ensure_table(df)
+        self.get_dao(table).ensure_table_from_columns(list(df.columns))
 
     def create_missing_tables(self) -> None:
         """三張表的欄位要等第一批資料才知道，故建表延後到 `add_to_db()`"""
@@ -121,7 +121,7 @@ class FuturesChipLoader(BaseDataLoader):
 
         self.connect()
         dao: FuturesChipDAO = self.get_dao(table)
-        dao.ensure_table(df)
+        dao.ensure_table_from_columns(list(df.columns))
 
         inserted: int
         with dao.savepoint("futures_chip"):

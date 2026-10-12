@@ -54,7 +54,7 @@ def make_db(tmp_path: Path) -> sqlite3.Connection:
     """以正式 schema（含主鍵）建一張暫存 equity_change 表"""
 
     conn: sqlite3.Connection = sqlite3.connect(tmp_path / "test.db")
-    FinancialStatementDAO("equity_change", conn=conn).ensure_table(
+    FinancialStatementDAO("equity_change", conn=conn).ensure_table_from_columns(
         EQUITY_CHANGE_COLUMNS
     )
     return conn

@@ -90,29 +90,39 @@ class FuturesChipDAO(BaseDAO):
         return table_name
 
     # === 建表與寫入 ===
-    def ensure_table(self, df: pd.DataFrame) -> None:
+    def ensure_table(self) -> None:
+        """欄位由第一批資料推導，無參數的建表無從下手：請改呼叫 `ensure_table_from_columns()`"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 的欄位由資料推導，請用 ensure_table_from_columns(columns)"
+        )
+
+    def ensure_table_from_columns(self, columns: List[str]) -> None:
         """
         - Description:
-            依 DataFrame 的欄位建表（若不存在）並 commit；主鍵與名稱類欄位存文字，其餘存數值
+            依欄位清單建表（若不存在）並 commit；主鍵與名稱類欄位存文字，其餘存數值
+
+            **與基底無參數的 `ensure_table()` 分開命名**：簽名不同的同名方法會讓
+            以基底型別持有 DAO 的呼叫端（測試的 DAO 工廠、通用的建表迴圈）無從分辨。
         - Parameters:
-            - df: pd.DataFrame
-                本次要寫入的資料（用來推導欄位）
+            - columns: List[str]
+                本次要寫入的資料欄位（第一批資料的欄位）
         """
 
         keys: Tuple[str, ...] = self.PRIMARY_KEYS[self.TABLE_NAME]
-        columns: List[str] = []
-        for column in df.columns:
+        column_defs: List[str] = []
+        for column in columns:
             if column in keys:
                 sql_type: str = "TEXT NOT NULL"
             elif column.endswith("_name"):
                 sql_type = "TEXT"
             else:
                 sql_type = "REAL"
-            columns.append(f'"{column}" {sql_type}')
+            column_defs.append(f'"{column}" {sql_type}')
 
         primary_key: str = ", ".join(f'"{key}"' for key in keys)
         self.conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} ({', '.join(columns)}, "
+            f"CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} ({', '.join(column_defs)}, "
             f"PRIMARY KEY ({primary_key}));"
         )
         self.conn.commit()

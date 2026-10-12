@@ -1,7 +1,6 @@
 import datetime
-import inspect
 import sqlite3
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Set, Type
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Type
 
 import pandas as pd
 import pytest
@@ -160,20 +159,14 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
         dao: BaseDAO = dao_cls(conn=conn or memory_conn, **dao_kwargs)
         records = records or []
 
-        if hasattr(dao, "ensure_tables"):
+        if hasattr(dao, "ensure_table_from_columns"):
+            # 欄位由資料或清單決定的表（期貨籌碼、財報、月營收）
+            dao.ensure_table_from_columns(columns or list(records[0].keys()))
+        elif hasattr(dao, "ensure_tables"):
+            # 一個 DAO 管一組表（實盤交易紀錄）
             dao.ensure_tables()
         else:
-            parameters: Mapping[str, inspect.Parameter] = inspect.signature(
-                dao.ensure_table
-            ).parameters
-            if not parameters:
-                dao.ensure_table()
-            elif "df" in parameters:
-                # 欄位由資料推導的表（期貨籌碼）：以第一批資料建表
-                dao.ensure_table(pd.DataFrame(records, columns=columns))
-            else:
-                # 欄位清單由呼叫端提供的表（財報、月營收）
-                dao.ensure_table(columns or list(records[0].keys()))
+            dao.ensure_table()
 
         if records:
             table: str = records_table or dao.TABLE_NAME
