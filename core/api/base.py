@@ -79,10 +79,12 @@ class BaseDataAPI(ABC):  # noqa: B024
             )
 
     @staticmethod
-    def build_column_map(df: pd.DataFrame, column: str) -> Dict[str, Any]:
+    def build_column_map(
+        df: pd.DataFrame, column: str, key: str = "stock_id"
+    ) -> Dict[str, Any]:
         """
         - Description:
-            由單日全市場 DataFrame 建立 `{stock_id: 欄位值}` 對照表
+            由單日全市場 DataFrame 建立 `{鍵: 欄位值}` 對照表（鍵預設為 `stock_id`）
 
             具名查詢方法的共用底座。策略若自行「逐檔建 mask 再取欄位」，
             不但是 O(n²)，還會把資料表欄位名洩漏到策略層。
@@ -96,16 +98,19 @@ class BaseDataAPI(ABC):  # noqa: B024
                 單日全市場資料
             - column: str
                 要取的欄位名
+            - key: str
+                當作 dict 鍵的欄位：台股是 `stock_id`，期貨固定商品之後是 `expiry`。
+                **以參數而不是子類各寫一份**：期貨原本另寫一份逐字相同的對照表函式
         - Return:
             - Dict[str, Any]
-                對照表；`df` 為空或無該欄位時回傳空 dict
+                對照表；`df` 為空或無該欄位（或無鍵欄）時回傳空 dict
         """
 
-        if df.empty or column not in df.columns:
+        if df.empty or column not in df.columns or key not in df.columns:
             return {}
 
-        deduped: pd.DataFrame = df.drop_duplicates(subset="stock_id", keep="first")
-        return dict(zip(deduped["stock_id"], deduped[column]))
+        deduped: pd.DataFrame = df.drop_duplicates(subset=key, keep="first")
+        return dict(zip(deduped[key], deduped[column]))
 
     @classmethod
     def empty_close_series(cls) -> pd.Series:

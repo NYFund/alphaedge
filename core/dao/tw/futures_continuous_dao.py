@@ -1,7 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -23,6 +23,8 @@ class FuturesContinuousDAO(BaseDAO):
     """
 
     TABLE_NAME: str = FUTURES_CONTINUOUS_TABLE_NAME
+    # 同一天同一商品依調整方式與換月規則各一列
+    KEY_COLUMNS: Tuple[str, ...] = ("product", "session", "method", "roll_rule")
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
 
     def ensure_table(self) -> None:

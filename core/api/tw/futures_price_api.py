@@ -201,14 +201,14 @@ class FuturesPriceAPI(BaseDataAPI):
         return self.dao.get_products()
 
     # === 具名查詢：下游一律走這一組，不要自行操作 DataFrame 欄位 ===
-    @staticmethod
-    def build_expiry_map(df: pd.DataFrame, column: str) -> Dict[str, Any]:
+    @classmethod
+    def build_expiry_map(cls, df: pd.DataFrame, column: str) -> Dict[str, Any]:
         """
         - Description:
             由單日單商品的 DataFrame 建立 `{expiry: 欄位值}` 對照表
 
-            期貨版的 `BaseDataAPI.build_column_map()`——後者的鍵寫死為
-            `stock_id`，期貨在固定商品之後的自然鍵是到期月。
+            就是 `BaseDataAPI.build_column_map()` 以到期月當鍵——期貨在固定商品之後的
+            自然鍵是到期月。到期月一律轉成字串當鍵，與 `FuturesQuote.expiry` 同型別。
 
             **值維持資料庫原樣不做轉型**（含 `NaN`）：夜盤的 `結算價` 本來就是
             NULL，把它補成 0 會讓「沒有結算價」與「結算價為 0」混為一談。
@@ -222,11 +222,10 @@ class FuturesPriceAPI(BaseDataAPI):
                 對照表；`df` 為空或無該欄位時回傳空 dict
         """
 
-        if df.empty or column not in df.columns or "expiry" not in df.columns:
-            return {}
-
-        deduped: pd.DataFrame = df.drop_duplicates(subset="expiry", keep="first")
-        return dict(zip(deduped["expiry"].astype(str), deduped[column]))
+        return {
+            str(expiry): value
+            for expiry, value in cls.build_column_map(df, column, key="expiry").items()
+        }
 
     def get_close_map(
         self,

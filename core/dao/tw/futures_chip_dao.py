@@ -39,6 +39,9 @@ class FuturesChipDAO(BaseDAO):
 
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
 
+    # 三張表的鍵不同，由建構子依表設定（見 `__init__`）
+    KEY_COLUMNS: Tuple[str, ...] = ()
+
     # {表名: 主鍵欄位}；同時是表名白名單
     PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
         FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME: ("date", "product_name", "investor"),
@@ -68,6 +71,12 @@ class FuturesChipDAO(BaseDAO):
         """
 
         self.TABLE_NAME: str = self.check_table_name(table_name)
+        # 鍵欄隨表而定：主鍵扣掉日期欄
+        self.KEY_COLUMNS: Tuple[str, ...] = tuple(
+            column
+            for column in self.PRIMARY_KEYS[self.TABLE_NAME]
+            if column != self.DATE_COLUMN
+        )
         super().__init__(conn=conn, db_path=db_path)
 
     @classmethod

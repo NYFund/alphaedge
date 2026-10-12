@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Optional, Set
+from typing import Optional, Set, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -25,6 +25,8 @@ class MarketHolidayDAO(BaseDAO):
 
     TABLE_NAME: str = MARKET_HOLIDAY_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 一天一列，只有日期鍵
+    KEY_COLUMNS: Tuple[str, ...] = ()
 
     # === 建表 ===
     def create_table(self) -> None:

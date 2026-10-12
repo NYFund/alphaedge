@@ -25,6 +25,9 @@ class FuturesStockUniverseDAO(BaseDAO):
 
     TABLE_NAME: str = FUTURES_STOCK_UNIVERSE_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 快照序列：日期欄是快照日、鍵是股期代碼
+    DATE_COLUMN: str = "snapshot_date"
+    KEY_COLUMNS: Tuple[str, ...] = ("product_id",)
 
     # === 建表 ===
     def create_table(self) -> None:

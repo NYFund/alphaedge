@@ -32,6 +32,9 @@ class FuturesMarginDAO(BaseDAO):
     TABLE_NAME: str = FUTURES_MARGIN_HISTORY_TABLE_NAME
     RATE_TABLE_NAME: str = STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 金額表：生效日 ＋ 契約代碼（比例表的鍵欄見 `PRODUCT_COLUMNS`）
+    DATE_COLUMN: str = "effective_date"
+    KEY_COLUMNS: Tuple[str, ...] = ("product",)
 
     # 表名只能是這兩張；以參數指定表的方法一律先過白名單
     TABLES: Tuple[str, ...] = (TABLE_NAME, RATE_TABLE_NAME)

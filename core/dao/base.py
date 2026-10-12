@@ -156,12 +156,14 @@ def insert_or_replace(
     return len(df)
 
 
-def create_symbol_date_index(conn: sqlite3.Connection, table_name: str) -> None:
+def create_symbol_date_index(
+    conn: sqlite3.Connection, table_name: str, symbol_column: str = "stock_id"
+) -> None:
     """
     - Description:
-        建立 `(stock_id, date)` 索引並 commit
+        建立 `(標的, date)` 索引並 commit
 
-        日更表的主鍵都是 `(date, stock_id, ...)`，**date 在前**，所以
+        日更表的主鍵都是 `(date, 標的, ...)`，**date 在前**，所以
         「某一天的全市場」很快，「某一檔的整段歷史」卻要掃過整個 date 範圍。
         而策略研究問的幾乎都是後者。`IF NOT EXISTS` 讓既有資料庫在下次建表檢查時
         自動補上，不需要另外寫遷移腳本。
@@ -170,11 +172,13 @@ def create_symbol_date_index(conn: sqlite3.Connection, table_name: str) -> None:
             資料庫連線
         - table_name: str
             目標資料表
+        - symbol_column: str
+            標的欄名；索引名稱含它，台股表維持 `idx_<表>_stock_id_date` 不變
     """
 
     conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_stock_id_date "
-        f"ON {table_name} (stock_id, date)"
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_{symbol_column}_date "
+        f"ON {table_name} ({symbol_column}, date)"
     )
     conn.commit()
 
@@ -194,11 +198,15 @@ class BaseDAO:
     TABLE_NAME: str = ""
     DEFAULT_DB_PATH: Optional[Path] = None
 
-    # 共用查詢用的欄名。**以類別屬性而不是寫死在 SQL 裡**：日期欄與標的欄的
+    # 共用查詢用的欄名。**以類別屬性而不是寫死在 SQL 裡**：日期欄與鍵欄的
     # 名稱在不同表上可能不同（命名軸線收斂時 `stock_id` 會改成 `symbol`），
     # 改名時只動這兩行，不必回頭改每一支 DAO 的 SQL
     DATE_COLUMN: str = "date"
-    SYMBOL_COLUMN: str = "stock_id"
+
+    # 日期欄以外的鍵欄。**逐表宣告而不是寫死 `stock_id`**：期貨表的鍵是
+    # (product, expiry, session) 這種組合，根本沒有單一標的欄；沿用台股的預設
+    # 去查，一呼叫就是 SQL 錯誤。只有一個鍵欄的表才支援 `get_by_stock()`
+    KEY_COLUMNS: Tuple[str, ...] = ("stock_id",)
 
     # 建表後是否補 `(標的, 日期)` 複合索引。**逐表宣告而不是一律建**：
     # 只有一列一（標的, 日期）的明細表才吃得到它，參考表（股票基本資料、
@@ -371,7 +379,9 @@ class BaseDAO:
             self.create_table()
 
         if self.NEEDS_SYMBOL_DATE_INDEX:
-            create_symbol_date_index(self.conn, self.TABLE_NAME)
+            create_symbol_date_index(
+                self.conn, self.TABLE_NAME, self.single_key_column()
+            )
 
     def create_table(self) -> None:
         """
@@ -424,13 +434,32 @@ class BaseDAO:
             (start_date, end_date),
         )
 
+    def single_key_column(self) -> str:
+        """
+        唯一的鍵欄；鍵是組合（期貨）或沒有鍵欄（只有日期的表）時明確拋出
+
+        **拋 `NotImplementedError` 而不是退回 `stock_id`**：退回去的話錯誤會從 SQLite
+        以「no such column」的面貌出現，看不出是這張表根本沒有單一標的欄。
+        """
+
+        if len(self.KEY_COLUMNS) != 1:
+            raise NotImplementedError(
+                f"{type(self).__name__} 的鍵欄是 {self.KEY_COLUMNS}，"
+                f"沒有單一標的欄，不支援以標的查詢"
+            )
+        return self.KEY_COLUMNS[0]
+
     def get_by_stock(
         self,
         stock_id: str,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> pd.DataFrame:
-        """取得指定標的在區間內的全部列；`start_date > end_date` 時回傳空表"""
+        """
+        取得指定標的在區間內的全部列；`start_date > end_date` 時回傳空表
+
+        只有單一鍵欄的表（台股各表）支援；期貨表的鍵是組合，呼叫會拋 `NotImplementedError`。
+        """
 
         if start_date > end_date:
             return pd.DataFrame()
@@ -438,7 +467,7 @@ class BaseDAO:
         return self.query_df(
             f"""
             SELECT * FROM {self.TABLE_NAME}
-            WHERE {self.SYMBOL_COLUMN} = ?
+            WHERE {self.single_key_column()} = ?
               AND {self.DATE_COLUMN} BETWEEN ? AND ?
             """,
             (stock_id, start_date, end_date),

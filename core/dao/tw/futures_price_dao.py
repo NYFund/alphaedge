@@ -23,6 +23,8 @@ class FuturesPriceDAO(BaseDAO):
     """
 
     TABLE_NAME: str = FUTURES_PRICE_DAILY_TABLE_NAME
+    # 鍵是契約與時段的組合，沒有單一標的欄
+    KEY_COLUMNS: Tuple[str, ...] = ("product", "expiry", "session")
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
 
     # === 建表 ===
