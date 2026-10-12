@@ -204,7 +204,6 @@ def test_stock_futures_quotes_are_never_price_adjusted() -> None:
 
     from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
     from core.config.schema import FuturesPriceColumn
-    from core.utils import Scale
 
     df: pd.DataFrame = pd.DataFrame(
         [
@@ -224,8 +223,8 @@ def test_stock_futures_quotes_are_never_price_adjusted() -> None:
         ]
     )
 
-    quotes = FuturesQuoteAdapter.generate_futures_quotes(
-        df, datetime.date(2026, 8, 28), Scale.DAY, multiplier_resolver=lambda _: 2000
+    quotes = FuturesQuoteAdapter.from_day_rows(
+        df, datetime.date(2026, 8, 28), multiplier_resolver=lambda _: 2000
     )
 
     assert quotes[0].adj_close is None

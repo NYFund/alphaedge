@@ -14,7 +14,7 @@ from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
 from core.position.futures.position_manager import FuturesPositionManager
-from core.utils import Action, PositionType, Scale
+from core.utils import Action, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
 
 """
@@ -97,8 +97,8 @@ def test_target_products_cover_the_index_futures_family() -> None:
 def test_adapter_applies_the_product_multiplier(product: str, multiplier: int) -> None:
     """報價的乘數取自 `FUTURES_MULTIPLIER`，逐商品不同"""
 
-    quotes: List[FuturesQuote] = FuturesQuoteAdapter.generate_futures_quotes(
-        make_price_df(product, 20000.0), DATE, Scale.DAY
+    quotes: List[FuturesQuote] = FuturesQuoteAdapter.from_day_rows(
+        make_price_df(product, 20000.0), DATE
     )
 
     assert len(quotes) == 1

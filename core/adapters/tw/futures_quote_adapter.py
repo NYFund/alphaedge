@@ -105,8 +105,12 @@ class FuturesQuoteAdapter:
                 轉換後的報價清單；查無資料時為空 list
         """
 
-        return FuturesQuoteAdapter.generate_futures_quotes(
-            price_df, date, Scale.DAY, multiplier_resolver=multiplier_resolver
+        if price_df is None or price_df.empty:
+            return []
+
+        rows: List[Any] = list(price_df.itertuples(index=False))
+        return FuturesQuoteAdapter.from_day_records(
+            rows, date, multiplier_resolver=multiplier_resolver
         )
 
     @staticmethod
@@ -211,39 +215,38 @@ class FuturesQuoteAdapter:
         return FuturesQuoteAdapter.mark_combined(day_quote)
 
     @staticmethod
-    def generate_futures_quotes(
-        data: pd.DataFrame,
+    def from_day_records(
+        rows: List[Any],
         date: datetime.date,
-        scale: Scale = Scale.DAY,
         multiplier_resolver: Optional[Callable[[str], int]] = None,
     ) -> List[FuturesQuote]:
         """
         - Description:
-            由行情 DataFrame 建立 `FuturesQuote` 清單
+            由**已經攤成列**的日線行情建立 `FuturesQuote` 清單
+
+            入口結構與 `StockQuoteAdapter` 相同：`from_day_rows()`（DataFrame）→
+            本方法（列）→ `from_day_row()`（單列）。
 
             **乘數未登錄的商品直接跳過並不是選項**：`FUTURES_MULTIPLIER[product]`
             會 KeyError 當場中斷，理由見該常數的說明——乘數猜錯只會讓 PnL
             靜默偏掉。
         - Parameters:
-            - data: pd.DataFrame
-                行情資料（欄位為 `futures_price_daily` 的 schema）
+            - rows: List[Any]
+                日線行情的列（欄位為 `futures_price_daily` 的 schema）
             - date: datetime.date
                 報價日期
-            - scale: Scale
-                報價級別；目前僅日線
+            - multiplier_resolver: Optional[Callable[[str], int]]
+                商品代碼 → 契約乘數；None 時用內建對照表
         - Return:
             - List[FuturesQuote]
                 報價清單
         """
 
-        if data is None or data.empty:
-            return []
-
         quotes: List[FuturesQuote] = [
-            FuturesQuoteAdapter.generate_futures_quote(
-                row, date, scale, multiplier_resolver=multiplier_resolver
+            FuturesQuoteAdapter.from_day_row(
+                row, date, multiplier_resolver=multiplier_resolver
             )
-            for row in data.itertuples(index=False)
+            for row in rows
         ]
 
         # 引擎對期貨同樣建 `{q.symbol: q for q in quotes}`，而期貨的 symbol 是
@@ -254,15 +257,14 @@ class FuturesQuoteAdapter:
         return quotes
 
     @staticmethod
-    def generate_futures_quote(
+    def from_day_row(
         row: Any,
         date: datetime.date,
-        scale: Scale = Scale.DAY,
         multiplier_resolver: Optional[Callable[[str], int]] = None,
     ) -> FuturesQuote:
         """
         - Description:
-            由單列行情建立一個 `FuturesQuote`
+            由單列日線行情建立一個 `FuturesQuote`
 
             `cur_price` 取收盤價，與 `StockQuoteAdapter` 的日線行為一致。
         - Parameters:
@@ -270,11 +272,11 @@ class FuturesQuoteAdapter:
                 `itertuples()` 產出的單列
             - date: datetime.date
                 報價日期
-            - scale: Scale
-                報價級別
+            - multiplier_resolver: Optional[Callable[[str], int]]
+                商品代碼 → 契約乘數；None 時用內建對照表
         - Return:
             - FuturesQuote
-                報價物件
+                報價物件（`scale` 固定為日線）
         """
 
         close: float = getattr(row, FuturesPriceColumn.CLOSE.value)
@@ -283,7 +285,7 @@ class FuturesQuoteAdapter:
         return FuturesQuote(
             product=product,
             expiry=str(row.expiry),
-            scale=scale,
+            scale=Scale.DAY,
             date=date,
             cur_price=close,
             volume=int(getattr(row, FuturesPriceColumn.VOLUME.value) or 0),
