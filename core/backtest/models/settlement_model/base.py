@@ -12,7 +12,9 @@ from core.models import (
     BaseOrder,
     BasePosition,
     BaseQuote,
+    BaseTradeRecord,
 )
+from core.position.base.position_manager import BasePositionManager
 from core.utils import (
     PositionType,
     TimeUtils,
@@ -32,9 +34,13 @@ class BaseSettlementModel(ABC):
 
     def __init__(
         self,
+        position_manager: BasePositionManager,
         fill_model: Optional[BaseFillModel] = None,
         max_no_quote_days: Optional[int] = None,
     ) -> None:
+        # 強制出場要經部位管理層入帳；各市場的子類另以精確型別再標一次
+        self.position_manager: BasePositionManager = position_manager
+
         # 引擎強制出場時同樣要走成交假設（滑價），否則同一支策略會有兩種口徑：
         # 策略自己送的平倉單吃滑價、引擎的強制出場與換月轉倉不吃
         self.fill_model: Optional[BaseFillModel] = fill_model
@@ -95,6 +101,66 @@ class BaseSettlementModel(ABC):
             self.fill_model.warn_close_price_out_of_range(filled_order, quote)
 
         return filled_order
+
+    def force_close_position(
+        self,
+        position: BasePosition,
+        date: datetime.date,
+        price: float,
+        quote: Optional[BaseQuote],
+    ) -> List[BaseTradeRecord]:
+        """
+        - Description:
+            引擎以指定價格強制平掉一筆部位（多單賣出、空單買進回補）
+
+            **追繳、連續無報價、到期兜底、停券、當沖日終、轉倉的平倉腿全部共用這一條**：
+            原本台股空單、台股多單、期貨各有一支，滑價口徑與入帳方式三處各走各的。
+            要拆開不同口徑得先在此分流，而不是各自繞過 `apply_fill_price()`。
+
+            **走 `close_position()` 的同標的 FIFO**，不指定部位：引擎強制出場的判準
+            （無報價、到期、停券）都是標的層級的狀態，同標的的各筆部位會在同一天
+            一起達到門檻，依開倉順序逐筆平掉就是全部平掉。
+        - Parameters:
+            - position: BasePosition
+                要平掉的部位
+            - date: datetime.date
+                成交日
+            - price: float
+                平倉參考價（滑價前）
+            - quote: Optional[BaseQuote]
+                當根 bar 的報價，供區間檢查；**不給預設值**是刻意的：無報價時要
+                明確傳 `None`，新增的呼叫端漏傳才不會靜默跳過檢查
+        - Return:
+            - List[BaseTradeRecord]
+                平倉產生的交易紀錄
+        """
+
+        order: BaseOrder = self.build_exit_order(position, date, price)
+        return self.position_manager.close_position(self.apply_fill_price(order, quote))
+
+    @abstractmethod
+    def build_exit_order(
+        self, position: BasePosition, date: datetime.date, price: float
+    ) -> BaseOrder:
+        """
+        - Description:
+            組出平掉該部位的訂單：方向由部位反推，其餘欄位是各市場的本質
+
+            台股要帶 `short_method`／`is_day_trade`（稅率與費用看它們），
+            期貨要帶 `product`／`expiry`。
+        - Parameters:
+            - position: BasePosition
+                要平掉的部位
+            - date: datetime.date
+                成交日
+            - price: float
+                平倉參考價（滑價前）
+        - Return:
+            - BaseOrder
+                全量平倉的訂單
+        """
+
+        pass
 
     @abstractmethod
     def settle_day(

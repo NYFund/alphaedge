@@ -15,8 +15,8 @@ from core.models import (
     StockOrder,
     StockPosition,
     StockQuote,
-    StockTradeRecord,
 )
+from core.portfolio import order_rules
 from core.position.stock.position_manager import StockPositionManager
 from core.utils import (
     Action,
@@ -52,7 +52,11 @@ class TwStockSettlementModel(BaseSettlementModel):
         max_no_quote_days: Optional[int] = None,
         fill_model: Optional[BaseFillModel] = None,
     ) -> None:
-        super().__init__(fill_model=fill_model, max_no_quote_days=max_no_quote_days)
+        super().__init__(
+            position_manager,
+            fill_model=fill_model,
+            max_no_quote_days=max_no_quote_days,
+        )
 
         self.position_manager: StockPositionManager = position_manager
         self.cost_model: TwStockCostModel = cost_model
@@ -184,7 +188,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"[Day Trade Cover] {position.symbol} 未回補，以收盤價 {quote.close} 強制回補"
             )
             event_counts["forced_cover_day_trade"] += 1
-            self.force_cover_position(position, date, quote.close, quote)
+            self.force_close_position(position, date, quote.close, quote)
 
     def check_limit_up_locked(self, quote: StockQuote) -> bool:
         """
@@ -262,7 +266,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                     f"[Day Trade Cover] {position.symbol} 轉融券留倉需 {required} 元，"
                     f"帳戶只有 {account.balance} 元，改以收盤價 {close_price} 強制回補"
                 )
-                self.force_cover_position(position, date, close_price, quote)
+                self.force_close_position(position, date, close_price, quote)
             else:
                 logger.warning(
                     f"[Day Trade Cover] {position.symbol} 轉融券留倉需 {required} 元，"
@@ -314,43 +318,21 @@ class TwStockSettlementModel(BaseSettlementModel):
         )
         return max(0, full_tax - day_trade_tax)
 
-    def force_cover_position(
-        self,
-        position: StockPosition,
-        date: datetime.date,
-        price: float,
-        quote: Optional[StockQuote],
-    ) -> List[StockTradeRecord]:
-        """
-        - Description:
-            以指定價格強制回補放空部位（當沖日終、維持率追繳、超過持有天數共用）
-        - Parameters:
-            - position: StockPosition
-                要回補的放空部位
-            - date: datetime.date
-                成交日
-            - price: float
-                回補參考價（滑價前）
-            - quote: Optional[StockQuote]
-                當根 bar 的報價，供 `apply_fill_price()` 做區間檢查；
-                **不給預設值**是刻意的：停牌無報價時要明確傳 `None`，
-                而不是讓新增的呼叫端漏傳就靜默跳過檢查
-        - Return:
-            - List[StockTradeRecord]
-                回補產生的交易紀錄
-        """
+    def build_exit_order(
+        self, position: StockPosition, date: datetime.date, price: float
+    ) -> StockOrder:
+        """全量平倉單：多單賣出、空單買進回補；放空管道與當沖註記沿用部位的（稅率與費用看它們）"""
 
-        order: StockOrder = StockOrder(
+        return StockOrder(
             stock_id=position.symbol,
             date=date,
-            action=Action.BUY,
-            position_type=PositionType.SHORT,
+            action=order_rules.resolve_close_action(position.position_type),
+            position_type=position.position_type,
             price=price,
             volume=position.volume,
             short_method=position.short_method,
             is_day_trade=position.is_day_trade,
         )
-        return self.position_manager.close_position(self.apply_fill_price(order, quote))
 
     def execute_daily_position_check(
         self,
@@ -668,32 +650,9 @@ class TwStockSettlementModel(BaseSettlementModel):
             )
             event_counts["forced_exit_no_quote"] += 1
             # 走到這裡代表連續無報價，`quote_map.get()` 幾乎必然是 None（見上）
-            self.force_exit_long_position(
+            self.force_close_position(
                 position, date, price, quote_map.get(position.symbol)
             )
-
-    def force_exit_long_position(
-        self,
-        position: StockPosition,
-        date: datetime.date,
-        price: float,
-        quote: Optional[StockQuote],
-    ) -> None:
-        """以指定價格全量賣出做多部位（引擎強制出場用）；`quote` 供區間檢查，無報價時傳 None"""
-
-        order: StockOrder = StockOrder(
-            stock_id=position.symbol,
-            date=date,
-            action=Action.SELL,
-            position_type=PositionType.LONG,
-            price=price,
-            volume=position.volume,
-        )
-        self.position_manager.close_long_position(
-            position=position,
-            stock_order=self.apply_fill_price(order, quote),
-            close_volume=position.volume,
-        )
 
     @staticmethod
     def to_dividend_per_share(value: Any) -> float:
@@ -798,7 +757,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"[Margin Call] {position.symbol} 維持率不足，以 {price} 強制回補（斷頭）"
             )
             event_counts["forced_cover_margin_call"] += 1
-            self.force_cover_position(position, date, price, quote)
+            self.force_close_position(position, date, price, quote)
 
     def check_short_forced_exits(
         self,
@@ -843,7 +802,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"無報價（停牌／下市），以最後可得價格 {price} 強制出場"
             )
             event_counts["forced_cover_no_quote"] += 1
-            self.force_cover_position(position, date, price, quote)
+            self.force_close_position(position, date, price, quote)
             return True
 
         # 超過最長持有天數：強制回補
@@ -856,7 +815,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"已達上限，以 {price} 強制回補"
             )
             event_counts["forced_cover_max_holding"] += 1
-            self.force_cover_position(position, date, price, quote)
+            self.force_close_position(position, date, price, quote)
             return True
 
         # 停券強制回補日（使用者指定 ＋ 除權息行事曆推導的融券最後回補日）
@@ -865,7 +824,7 @@ class TwStockSettlementModel(BaseSettlementModel):
                 f"[Force Cover] {position.symbol} 於 {date} 停券，以 {price} 強制回補"
             )
             event_counts["forced_cover_suspended"] += 1
-            self.force_cover_position(position, date, price, quote)
+            self.force_close_position(position, date, price, quote)
             return True
 
         return False

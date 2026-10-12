@@ -608,7 +608,7 @@ def test_forced_cover_applies_slippage() -> None:
     settlement: TwStockSettlementModel = make_settlement(account)
     settlement.fill_model = fill_model
 
-    settlement.force_cover_position(
+    settlement.force_close_position(
         position, datetime.date(2024, 1, 4), 100.0, make_stock_quote()
     )
 

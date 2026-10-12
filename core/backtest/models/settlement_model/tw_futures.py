@@ -15,8 +15,8 @@ from core.models import (
     FuturesOrder,
     FuturesPosition,
     FuturesQuote,
-    FuturesTradeRecord,
 )
+from core.portfolio import order_rules
 from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import (
     Action,
@@ -73,7 +73,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         fill_model: Optional[BaseFillModel] = None,
         max_no_quote_days: Optional[int] = DEFAULT_MAX_NO_QUOTE_DAYS,
     ) -> None:
-        super().__init__(fill_model=fill_model, max_no_quote_days=max_no_quote_days)
+        super().__init__(
+            position_manager,
+            fill_model=fill_model,
+            max_no_quote_days=max_no_quote_days,
+        )
 
         self.position_manager: FuturesPositionManager = position_manager
         self.instrument: InstrumentSpec = instrument or TwFuturesSpec()
@@ -196,7 +200,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             )
             event_counts["forced_cover_margin_call"] += 1
 
-            if not self.close_position_at(
+            if not self.force_close_position(
                 position, date, price, quote_map.get(position.symbol)
             ):
                 # 平不掉就停手，否則會在同一根 bar 內無限重試
@@ -340,7 +344,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         exit_price: float = self.get_mark_price(position, quote_map)
         entry_price: float = self.get_quote_mark_price(new_quote)
 
-        self.close_position_at(
+        self.force_close_position(
             position, date, exit_price, quote_map.get(position.symbol)
         )
 
@@ -419,49 +423,22 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             else:
                 event_counts["forced_cover_no_quote"] += 1
             # 走到這裡的定義就是「連續無報價」，故一律傳 None 跳過區間檢查
-            self.close_position_at(position, date, position.price, None)
+            self.force_close_position(position, date, position.price, None)
 
-    def close_position_at(
-        self,
-        position: FuturesPosition,
-        date: datetime.date,
-        price: float,
-        quote: Optional[FuturesQuote],
-    ) -> List[FuturesTradeRecord]:
-        """
-        - Description:
-            以指定價格強制平掉部位（多單賣出、空單買進回補）
+    def build_exit_order(
+        self, position: FuturesPosition, date: datetime.date, price: float
+    ) -> FuturesOrder:
+        """全量平倉單：多單賣出、空單買進回補；契約由部位的商品與到期月決定"""
 
-            **追繳、到期兜底與轉倉的平倉腿共用這一條**，滑價因此只接一次；
-            三者要拆開不同口徑的話得先在此處分流，而不是各自繞過 `apply_fill_price()`。
-        - Parameters:
-            - position: FuturesPosition
-                要平掉的部位
-            - date: datetime.date
-                成交日
-            - price: float
-                平倉參考價（滑價前，一般為當日結算價）
-            - quote: Optional[FuturesQuote]
-                當根 bar 的報價，供區間檢查；到期無報價那條路徑傳 `None`
-        - Return:
-            - List[FuturesTradeRecord]
-                平倉產生的交易紀錄
-        """
-
-        order: FuturesOrder = FuturesOrder(
+        return FuturesOrder(
             product=position.product,
             expiry=position.expiry,
             date=date,
-            action=(
-                Action.SELL
-                if position.position_type == PositionType.LONG
-                else Action.BUY
-            ),
+            action=order_rules.resolve_close_action(position.position_type),
             position_type=position.position_type,
             price=price,
             volume=position.volume,
         )
-        return self.position_manager.close_position(self.apply_fill_price(order, quote))
 
     def has_quote(self, quote: FuturesQuote) -> bool:
         """
