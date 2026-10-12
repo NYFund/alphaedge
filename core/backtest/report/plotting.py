@@ -8,13 +8,13 @@ from loguru import logger
 from core.analysis.performance_metrics import compute_drawdown_series
 
 if TYPE_CHECKING:
-    from core.backtest.report.reporter import StockBacktestReporter
+    from core.backtest.report.base import BaseBacktestReporter
 
 """
 回測圖表的產生與輸出
 
-**繪圖與報表產生分屬兩個類別**：`StockBacktestReporter` 負責報表、指標與對標序列，
-本檔只負責把那些資料畫成圖。
+**繪圖與報表產生分屬兩個類別**：`BaseBacktestReporter`（與其市場子類）負責報表、
+指標與對標序列，本檔只負責把那些資料畫成圖；兩個市場共用同一個渲染器。
 
 **渲染器以組合持有報表物件當資料來源**：權益序列、對標價格與帳戶狀態的取值時機
 都由報表端決定（例如口徑一律走 `get_equity_series()`）。介面刻意不收窄成
@@ -25,14 +25,14 @@ if TYPE_CHECKING:
 class EquityChartRenderer:
     """把回測結果畫成圖並輸出檔案"""
 
-    def __init__(self, reporter: "StockBacktestReporter") -> None:
+    def __init__(self, reporter: "BaseBacktestReporter") -> None:
         """
         - Parameters:
-            - reporter: StockBacktestReporter
+            - reporter: BaseBacktestReporter
                 資料來源；圖表要的權益序列與對標價格都由它提供
         """
 
-        self.reporter: StockBacktestReporter = reporter
+        self.reporter: BaseBacktestReporter = reporter
 
     def plot_balance_curve(self) -> None:
         """繪製總資金曲線圖（總資金隨時間變化）"""
@@ -79,15 +79,13 @@ class EquityChartRenderer:
             logger.warning("benchmark_price 數據異常，無法繪製 benchmark 曲線")
             return
 
-        # 還原價；除權息、分割與減資都已併入還原係數，此處不再另外調整
-        benchmark_price_adjusted: pd.Series = self.reporter.get_adjusted_price(
-            benchmark_price_clean, self.reporter.benchmark
-        )
+        # 對標序列由報表端以可比較的口徑提供（台股還原價、期貨連續合約），
+        # 這裡不再做任何調整——除權息、分割與減資都已併入還原係數，再調一次就是重複調整
 
         # === Benchmark 淨值曲線 ===
         benchmark_net_worth: pd.Series = (
-            benchmark_price_adjusted
-            / benchmark_price_adjusted.iloc[0]
+            benchmark_price_clean
+            / benchmark_price_clean.iloc[0]
             * self.reporter.account.init_capital
         )
         # 加入初始資金節點
@@ -135,8 +133,7 @@ class EquityChartRenderer:
             2,
         )
         benchmark_roi: float = round(
-            (benchmark_price_adjusted.iloc[-1] / benchmark_price_adjusted.iloc[0] - 1)
-            * 100,
+            (benchmark_price_clean.iloc[-1] / benchmark_price_clean.iloc[0] - 1) * 100,
             2,
         )
 
@@ -198,15 +195,10 @@ class EquityChartRenderer:
             logger.warning("benchmark_price 數據異常，無法繪製 benchmark MDD")
             return
 
-        # 還原價；除權息、分割與減資都已併入還原係數，此處不再另外調整
-        benchmark_price_adjusted: pd.Series = self.reporter.get_adjusted_price(
-            benchmark_price_clean, self.reporter.benchmark
-        )
-
-        # 以還原價計算 benchmark 的 MDD（%）；用原始價的話除權息跳空會被
-        # 當成真實回撤
+        # 以還原價（期貨為連續合約）計算 benchmark 的 MDD（%）；用原始價的話
+        # 除權息跳空會被當成真實回撤。序列由報表端備好，這裡不再調整
         mdd_benchmark: pd.Series = (
-            benchmark_price_adjusted / benchmark_price_adjusted.cummax() - 1
+            benchmark_price_clean / benchmark_price_clean.cummax() - 1
         ) * 100
 
         # 加入初始資金節點

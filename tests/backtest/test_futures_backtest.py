@@ -7,6 +7,7 @@ import pytest
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.factory import build_backtester
+from core.backtest.models.event_counts import FUTURES_EVENT_KEYS
 from core.backtest.models.fill_model import TwFuturesFillModel
 from core.backtest.models.settlement_model import (
     BaseSettlementModel,
@@ -224,6 +225,20 @@ def test_factory_dispatches_to_the_futures_model_set(make_backtester) -> None:
     assert isinstance(backtester.settlement, TwFuturesSettlementModel)
     assert isinstance(backtester.data_feed, TwFuturesDataFeed)
     assert backtester.reporter_cls is FuturesBacktestReporter
+
+
+def test_factory_builds_the_futures_event_counter(make_backtester) -> None:
+    """
+    期貨的事件計數器只含期貨會發生的 key，且引擎、FillModel、結算模型共用同一個 dict
+
+    用台股清單的話，期貨事件報表會多出二十個永遠是 0 的信用交易列，
+    而換月轉倉的 `rolled_contract` 反而不在報表裡。
+    """
+
+    backtester: Backtester = make_backtester(ScriptedFuturesStrategy())
+
+    assert list(backtester.event_counts) == list(FUTURES_EVENT_KEYS)
+    assert backtester.fill_model.event_counts is backtester.event_counts
 
 
 def test_futures_never_uses_adjusted_price(make_backtester) -> None:

@@ -146,13 +146,13 @@ sequenceDiagram
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `reference_prices`（漲跌停參考價）、`intraday_range`、當日名單與券源快照 |
 | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`），**定義在 `core/models/cost_config.py`** |
 | `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.reference_prices`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
-| `core/backtest/models/event_counts.py` | `EVENT_KEYS` 與 `new_event_counts()`：事件計數 key 的唯一清單 | 無 |
+| `core/backtest/models/event_counts.py` | 事件計數 key 的唯一清單，分共用／台股／期貨三組（`SHARED_EVENT_KEYS`、`EVENT_KEYS`、`FUTURES_EVENT_KEYS`）；`new_event_counts(keys)` 由 factory 依市場建立 | 無 |
 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
 | `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日）；建構子收交易日清單，要從資料庫取清單時用 `MarketCalendar.from_api()`（與 `FuturesCalendar` 同形狀） | 由 `DataFeed`、策略建立；持有交易日清單 |
 
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞，model 之間不互相 import：
 
-- `event_counts`：`factory` 以 `new_event_counts()` 建立 → 同時給 `Backtester`、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，**不可更名**（新增可以）。
+- `event_counts`：`factory` 依市場以 `new_event_counts(keys)` 建立（台股 `EVENT_KEYS`、期貨 `FUTURES_EVENT_KEYS`）→ 同時給 `Backtester`、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，**不可更名**（新增可以）。
 - `reference_prices`（漲跌停參考價）：`FillModel` 持有 → `SettlementModel` 建構時取得同一個 dict 的參照。
 
 ### 帳務與領域模型
@@ -184,10 +184,10 @@ sequenceDiagram
 
 | 檔案 | 職責 |
 |------|------|
-| `core/backtest/report/base.py` | `BaseBacktestReporter`：報表介面與存檔工具 |
+| `core/backtest/report/base.py` | `BaseBacktestReporter`：市場無關的全部——交易明細與多空統計的迴圈、事件計數、績效指標、權益口徑、繪圖委派、存檔 |
 | `core/backtest/report/plotting.py` | `EquityChartRenderer`：只負責畫圖，資料（含權益口徑）一律向報表端取 |
-| `core/backtest/report/reporter.py` | 台股報表：交易明細、多空統計、事件計數、五張圖、benchmark（`0050` 還原價）比較 |
-| `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、對標序列（連續合約優先，查不到退回近月拼接） |
+| `core/backtest/report/reporter.py` | 台股報表：只提供對標序列（`0050` 還原價）、交易明細欄位（`Symbol`，含信用交易欄位）、多空統計欄位 |
+| `core/backtest/report/futures_reporter.py` | 期貨報表：與台股報表同樣直接繼承基底，只提供對標序列（連續合約優先，查不到退回近月拼接）、交易明細欄位（`Contract ID`）、多空統計欄位（口數、保證金） |
 | `core/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
 
 ---
@@ -213,7 +213,7 @@ sequenceDiagram
 
 ### 權益曲線的兩種口徑
 
-前三張圖的資料來源收斂在 `StockBacktestReporter.get_equity_series()` 這個唯一入口，回傳序列與其口徑：
+前三張圖的資料來源收斂在 `BaseBacktestReporter.get_equity_series()` 這個唯一入口，回傳序列與其口徑：
 
 | 口徑 | 何時採用 | 節點 | 風險 |
 |------|----------|------|------|

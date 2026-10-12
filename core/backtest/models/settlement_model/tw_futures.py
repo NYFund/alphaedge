@@ -299,8 +299,8 @@ class TwFuturesSettlementModel(BaseSettlementModel):
                 continue
 
             self.roll_single_position(position, new_quote, date, quote_map)
-            # 引擎的 `new_event_counts()` 沒有這個 key（那是台股的清單），
-            # 期貨場次自行加入；台股的事件報表因此完全不受影響
+            # 期貨的事件計數器已含這個 key；用 `.get` 是讓直接傳空 dict 的呼叫端
+            # （單獨測試本模型）也能計到，而不是因為 key 不存在
             event_counts["rolled_contract"] = event_counts.get("rolled_contract", 0) + 1
 
     def roll_single_position(

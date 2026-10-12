@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
-from core.backtest.models.event_counts import new_event_counts
+from core.backtest.models.event_counts import FUTURES_EVENT_KEYS, new_event_counts
 from core.datafeed.base import BaseDataFeed
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
@@ -1048,7 +1048,9 @@ class TwFuturesFillModel(BaseFillModel):
         # **自備的那份要有全部 key**（`new_event_counts()`）：只塞用得到的幾個，
         # 單獨建模型時走到成交量上限就會 `KeyError`
         self.event_counts: Dict[str, int] = (
-            event_counts if event_counts is not None else new_event_counts()
+            event_counts
+            if event_counts is not None
+            else new_event_counts(FUTURES_EVENT_KEYS)
         )
 
         # Tick 級別的當日累計高低點（期貨 Tick 回測尚未實作，目前不會被填入）

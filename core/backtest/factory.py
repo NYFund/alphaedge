@@ -4,6 +4,7 @@ from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.backtest.datafeed.tw.stock_tick_datafeed import StockTickDataFeed
+from core.backtest.models.event_counts import FUTURES_EVENT_KEYS
 from core.backtest.models.fill_model import TwFuturesFillModel, TwStockFillModel
 from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
@@ -267,8 +268,9 @@ def build_tw_futures_backtester(
             f"基底 FillConfig 只有基點（slippage_bps_*），兩者不可互換"
         )
 
-    # 事件計數由 factory 建立，引擎與 FillModel 共用同一個 dict
-    event_counts: dict = new_event_counts()
+    # 事件計數由 factory 建立，引擎與 FillModel 共用同一個 dict；
+    # 期貨用自己的 key 清單，事件報表才不會列出二十個永遠是 0 的台股列
+    event_counts: dict = new_event_counts(FUTURES_EVENT_KEYS)
     fill_model: TwFuturesFillModel = TwFuturesFillModel(
         instrument=instrument,
         event_counts=event_counts,

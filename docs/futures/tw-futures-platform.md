@@ -165,9 +165,9 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 | `CostModel` | `TwFuturesCostModel` | 期交稅 ＋ 每口手續費（§3.3） |
 | `SettlementModel` | `TwFuturesSettlementModel` | 逐日結算、保證金追繳、換月轉倉、保證金口徑的權益計價 |
 | `DataFeed` | `TwFuturesDataFeed` | `tw_futures.db`、期貨交易日曆、乘數解析、日夜盤整併 |
-| 報表 | `FuturesBacktestReporter` | 繼承台股報表，只覆寫交易明細欄位（`Contract ID`）、多空統計欄位、對標序列 |
+| 報表 | `FuturesBacktestReporter` | 與台股報表同樣直接繼承 `BaseBacktestReporter`，只提供對標序列、交易明細欄位（`Contract ID`）、多空統計欄位；事件報表只列期貨會發生的 key（含 `rolled_contract`） |
 
-**對標序列是「近月拼接」，不是連續合約**：換月當天有一段展期價差造成的假跳空，只能當粗略參考。
+**對標序列優先用連續合約**（`futures_continuous`，換月規則對齊策略設定），查不到才退回近月拼接；近月拼接在換月當天有一段展期價差造成的假跳空，只能當粗略參考，圖表註腳會標明用的是哪一種。
 
 ### 3.2 記帳：保證金交易與逐日盯市
 

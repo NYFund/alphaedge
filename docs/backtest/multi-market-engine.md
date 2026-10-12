@@ -216,7 +216,7 @@ ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心
 
 model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳遞：
 
-- **`event_counts`**：由 factory 以 `new_event_counts()`（`core/backtest/models/event_counts.py`）建立，同時交給引擎、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，不可更名（新增可以）。
+- **`event_counts`**：由 factory 以 `new_event_counts(keys)`（`core/backtest/models/event_counts.py`）建立，台股傳 `EVENT_KEYS`、期貨傳 `FUTURES_EVENT_KEYS`（共用 key ＋ 各市場專屬 key），同時交給引擎、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，不可更名（新增可以）。
 - **`reference_prices`**（漲跌停參考價：前收，除權息日為公告基準）：由 `FillModel` 持有（記錄參考價是成交價模型的職責），`SettlementModel` 建構時取得同一個 dict 的參照，用於停牌盯市與漲停判定。
 
 `get_mark_price()` 屬 `BaseSettlementModel` 的介面方法而非 `FillModel`——**期貨的盯市價就是每日結算價**，本來就是結算模型的職責；引擎的 `snapshot_daily_equity()` 也用它算未實現損益。

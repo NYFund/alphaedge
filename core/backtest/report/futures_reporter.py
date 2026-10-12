@@ -1,13 +1,12 @@
-import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
 
 from core.api.tw.futures_continuous_api import FuturesContinuousAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
-from core.backtest.report.reporter import StockBacktestReporter
+from core.backtest.report.base import BaseBacktestReporter
 from core.config.schema import FuturesPriceColumn
 from core.market.tw.futures_roll import FuturesRollPlanner
 from core.models.futures.record import FuturesTradeRecord
@@ -17,17 +16,13 @@ from core.utils import FuturesRollRule, FuturesSession
 """FuturesBacktestReporter: 台期貨回測報表（交易明細與績效圖表）"""
 
 
-class FuturesBacktestReporter(StockBacktestReporter):
+class FuturesBacktestReporter(BaseBacktestReporter):
     """
     期貨回測報表
 
-    **為什麼繼承 `StockBacktestReporter`**：四張圖（資金曲線、對標曲線、MDD、
-    每日損益）與權益口徑的判斷（`get_equity_series()`）本來就與商品類別無關，
-    複製一份四百行繪圖程式碼只會讓兩邊各自漂移。真正與商品有關的只有三件事，
-    本類別逐一覆寫：**交易明細欄位**、**多空統計欄位**、**對標的標的**。
-
-    > 繪圖要抽到 `BaseBacktestReporter` 得等美股加入時一起做（屆時 baseline
-    > 本來就要重產）；在那之前動它會連帶改到台股報表。
+    與基底的差異只有三件事：**對標序列**（連續合約）、**交易明細欄位**
+    （`Contract ID`、乘數、保證金、逐日結算損益）、**多空統計欄位**（口數與保證金）。
+    四張圖與權益口徑的判斷與商品類別無關，一律沿用基底。
 
     **對標序列優先讀連續合約**（`futures_continuous`，`BACKWARD` 調整、換月規則
     對齊策略的 `roll_config.rule`）：換月價差已經調整掉，接點沒有假跳空，
@@ -38,6 +33,45 @@ class FuturesBacktestReporter(StockBacktestReporter):
     價差造成的假跳空，只能當粗略參考。圖表註腳會標明實際採用的是哪一種，
     **兩種口徑的曲線不可混著看**。
     """
+
+    # 圖表註腳用的序列種類標示
+    CONTINUOUS_SERIES_LABEL: str = "連續合約"
+    NEAR_MONTH_SERIES_LABEL: str = "近月拼接"
+
+    # 與台股報表的三個欄位差異：
+    # 1. 識別欄是 **Contract ID**（`{product}{expiry}`）並拆出 Product／Expiry
+    #    ——同一商品的不同到期月是不同契約，混在一欄看不出換月；前端以它判斷報表型別。
+    # 2. 多了 **Multiplier**／**Margin**／**Settled PnL**：口數乘上乘數才是契約價值，
+    #    而 `Realized PnL` 已包含逐日盯市各段（`Settled PnL`），只看進出場價會對不上。
+    # 3. **沒有** Borrow Fee／Interest／Dividend Compensation／Short Method
+    #    ——期貨賣出開倉就是放空，沒有這一整組信用交易欄位。
+    TRADING_REPORT_COLUMNS: Tuple[str, ...] = (
+        "Contract ID",
+        "Product",
+        "Expiry",
+        "Position Type",
+        "Entry Date",
+        "Entry Price",
+        "Exit Date",
+        "Exit Price",
+        "Buy Date",
+        "Buy Price",
+        "Buy Volume",
+        "Sell Date",
+        "Sell Price",
+        "Sell Volume",
+        "Multiplier",
+        "Margin",
+        "Commission",
+        "Tax",
+        "Transaction Cost",
+        "Settled PnL",
+        "Holding Days",
+        "Realized PnL",
+        "ROI",
+        "Cumulative PnL",
+        "Cumulative Balance",
+    )
 
     def __init__(
         self,
@@ -57,6 +91,8 @@ class FuturesBacktestReporter(StockBacktestReporter):
         self.benchmark_product: str = (
             strategy.products[0] if getattr(strategy, "products", None) else "TX"
         )
+        self.benchmark: str = self.benchmark_product
+
         # 對標序列一律取**日盤**：`COMBINED` 不是資料表裡的值（見 `FuturesSession`），
         # 直接拿去查會回空表，圖上只會出現一行「benchmark 數據異常」的警告
         session: FuturesSession = getattr(strategy, "session", FuturesSession.DAY)
@@ -64,27 +100,25 @@ class FuturesBacktestReporter(StockBacktestReporter):
             FuturesSession.DAY if session == FuturesSession.COMBINED else session
         )
 
-        # `price` 由 Backtester 統一傳入；期貨報表不查台股資料庫，
-        # 收下只是為了讓兩個 reporter 的建構簽章一致
-        super().__init__(strategy, output_dir, price=price, show=show)
-
-    def setup(self) -> None:
-        """建立對標序列：連續合約優先，查不到才退回近月拼接"""
-
-        self.benchmark: str = self.benchmark_product
-        self.price = None  # 期貨報表不使用 StockPriceAPI
-
         # 實際採用的序列種類，供圖表註腳標示（兩種口徑不可混著看）
         self.benchmark_series_kind: str = self.CONTINUOUS_SERIES_LABEL
 
-        self.benchmark_price: pd.Series = self.build_continuous_close_series()
-        if not self.benchmark_price.empty:
-            return
+        # `price` 由 Backtester 統一傳入；期貨報表不查台股資料庫，收下只是為了讓
+        # 兩個 reporter 的建構簽章一致，一律不持有，`close()` 因此沒有東西要關
+        super().__init__(strategy, output_dir, price=None, show=show)
+
+    def load_benchmark_series(self) -> pd.Series:
+        """建立對標序列：連續合約優先，查不到才退回近月拼接"""
+
+        self.benchmark_series_kind = self.CONTINUOUS_SERIES_LABEL
+        series: pd.Series = self.build_continuous_close_series()
+        if not series.empty:
+            return series
 
         self.benchmark_series_kind = self.NEAR_MONTH_SERIES_LABEL
         futures_price: FuturesPriceAPI = FuturesPriceAPI()
         try:
-            self.benchmark_price = self.build_near_month_close_series(futures_price)
+            return self.build_near_month_close_series(futures_price)
         finally:
             futures_price.close()
 
@@ -98,7 +132,7 @@ class FuturesBacktestReporter(StockBacktestReporter):
 
             這是衍生表，`--target futures_continuous` 沒跑過、或那一組
             （商品, 調整方式, 換月規則）沒建過就會是空的——此時回空 Series，
-            由 `setup()` 決定退回近月拼接，**不在此自行換一組設定**。
+            由 `load_benchmark_series()` 決定退回近月拼接，**不在此自行換一組設定**。
         - Return:
             - pd.Series
                 index 為交易日、值為調整後收盤價；查無資料時為空 Series
@@ -127,10 +161,6 @@ class FuturesBacktestReporter(StockBacktestReporter):
             )
 
         return series
-
-    # 圖表註腳用的序列種類標示
-    CONTINUOUS_SERIES_LABEL: str = "連續合約"
-    NEAR_MONTH_SERIES_LABEL: str = "近月拼接"
 
     def build_near_month_close_series(
         self, futures_price: FuturesPriceAPI
@@ -221,148 +251,57 @@ class FuturesBacktestReporter(StockBacktestReporter):
 
         return f"{self.NEAR_MONTH_SERIES_LABEL}（換月接點有展期價差造成的假跳空）"
 
-    def get_adjusted_price(self, price_series: pd.Series, stock_id: str) -> pd.Series:
-        """期貨沒有除權息與分割，對標價格原樣回傳"""
+    def build_trade_row(self, record: FuturesTradeRecord) -> Dict[str, Any]:
+        """一筆已平倉紀錄 → 交易明細的一列（累計兩欄由基底補上）"""
 
-        return price_series
+        return {
+            "Contract ID": record.contract_id,
+            "Product": record.product,
+            "Expiry": record.expiry,
+            "Position Type": record.position_type.value,
+            "Entry Date": record.entry_date,
+            "Entry Price": record.entry_price,
+            "Exit Date": record.exit_date,
+            "Exit Price": record.exit_price,
+            "Buy Date": record.buy_date,
+            "Buy Price": record.buy_price,
+            "Buy Volume": record.buy_volume,
+            "Sell Date": record.sell_date,
+            "Sell Price": record.sell_price,
+            "Sell Volume": record.sell_volume,
+            "Multiplier": record.multiplier,
+            "Margin": record.margin,
+            "Commission": record.commission,
+            "Tax": record.tax,
+            "Transaction Cost": record.transaction_cost,
+            "Settled PnL": record.settled_pnl,
+            "Holding Days": record.holding_days,
+            "Realized PnL": record.realized_pnl,
+            "ROI": record.roi,
+        }
 
-    def generate_trading_report(self) -> pd.DataFrame:
+    def build_direction_row(
+        self, position_type: str, group: pd.DataFrame
+    ) -> Dict[str, Any]:
         """
-        - Description:
-            生成期貨交易明細
-
-            與台股報表的三個欄位差異：
-
-            1. 識別欄是 **Contract ID**（`{product}{expiry}`）並拆出 Product／Expiry
-               ——同一商品的不同到期月是不同契約，混在一欄看不出換月。
-            2. 多了 **Multiplier**／**Margin**／**Settled PnL**：口數乘上乘數才是
-               契約價值，而 `Realized PnL` 已包含逐日盯市各段（`Settled PnL`），
-               只看進出場價會對不上。
-            3. **沒有** Borrow Fee／Interest／Dividend Compensation／Short Method
-               ——期貨賣出開倉就是放空，沒有這一整組信用交易欄位。
-        - Return:
-            - df: pd.DataFrame
-                交易明細
-        """
-
-        report_columns: List[str] = [
-            "Contract ID",
-            "Product",
-            "Expiry",
-            "Position Type",
-            "Entry Date",
-            "Entry Price",
-            "Exit Date",
-            "Exit Price",
-            "Buy Date",
-            "Buy Price",
-            "Buy Volume",
-            "Sell Date",
-            "Sell Price",
-            "Sell Volume",
-            "Multiplier",
-            "Margin",
-            "Commission",
-            "Tax",
-            "Transaction Cost",
-            "Settled PnL",
-            "Holding Days",
-            "Realized PnL",
-            "ROI",
-            "Cumulative PnL",
-            "Cumulative Balance",
-        ]
-
-        cumulative_pnl: float = 0.0
-        cumulative_balance: float = self.account.init_capital
-
-        # 排序規則與台股相同：以平倉日為主鍵、原始順序為次鍵
-        # （SHORT 的 sell_date 是開倉日，時間軸一律用 exit_date）
-        closed_records: List[FuturesTradeRecord] = [
-            record
-            for _, record in sorted(
-                (
-                    (index, record)
-                    for index, record in enumerate(self.account.trade_records)
-                    if record.is_closed
-                ),
-                key=lambda item: (
-                    item[1].exit_date if item[1].exit_date else datetime.date.min,
-                    item[0],
-                ),
-            )
-        ]
-
-        rows: List[Dict[str, Any]] = []
-        for record in closed_records:
-            cumulative_pnl += record.realized_pnl
-            cumulative_balance += record.realized_pnl
-
-            rows.append(
-                {
-                    "Contract ID": record.contract_id,
-                    "Product": record.product,
-                    "Expiry": record.expiry,
-                    "Position Type": record.position_type.value,
-                    "Entry Date": record.entry_date,
-                    "Entry Price": record.entry_price,
-                    "Exit Date": record.exit_date,
-                    "Exit Price": record.exit_price,
-                    "Buy Date": record.buy_date,
-                    "Buy Price": record.buy_price,
-                    "Buy Volume": record.buy_volume,
-                    "Sell Date": record.sell_date,
-                    "Sell Price": record.sell_price,
-                    "Sell Volume": record.sell_volume,
-                    "Multiplier": record.multiplier,
-                    "Margin": record.margin,
-                    "Commission": record.commission,
-                    "Tax": record.tax,
-                    "Transaction Cost": record.transaction_cost,
-                    "Settled PnL": record.settled_pnl,
-                    "Holding Days": record.holding_days,
-                    "Realized PnL": record.realized_pnl,
-                    "ROI": record.roi,
-                    "Cumulative PnL": cumulative_pnl,
-                    "Cumulative Balance": cumulative_balance,
-                }
-            )
-
-        df: pd.DataFrame = pd.DataFrame(rows, columns=report_columns)
-        self.save_report(df, f"{self.strategy.strategy_name}_trading_report.csv")
-        return df
-
-    def generate_direction_summary(self) -> pd.DataFrame:
-        """
-        多空分開的績效統計（期貨口徑）
+        同一個方向的多空統計（期貨口徑）
 
         **口數與保證金要分開看**：期貨的獲利能力與資金佔用由保證金決定，
         故列出 Total Lots 與 Total Margin，而非台股的借券費與利息。
         """
 
-        if self.trading_report is None or self.trading_report.empty:
-            return pd.DataFrame()
+        wins: pd.DataFrame = group[group["Realized PnL"] > 0]
 
-        rows: List[Dict[str, Any]] = []
-        for position_type, group in self.trading_report.groupby("Position Type"):
-            wins: pd.DataFrame = group[group["Realized PnL"] > 0]
-
-            rows.append(
-                {
-                    "Position Type": position_type,
-                    "Trades": len(group),
-                    "Total Lots": int(group["Buy Volume"].sum()),
-                    "Win Rate (%)": round(len(wins) / len(group) * 100, 2),
-                    "Total PnL": round(group["Realized PnL"].sum(), 2),
-                    "Avg PnL": round(group["Realized PnL"].mean(), 2),
-                    "Avg ROI (%)": round(group["ROI"].mean(), 2),
-                    "Total Margin": round(group["Margin"].sum(), 2),
-                    "Total Commission": round(group["Commission"].sum(), 2),
-                    "Total Tax": round(group["Tax"].sum(), 2),
-                    "Avg Holding Days": round(group["Holding Days"].mean(), 2),
-                }
-            )
-
-        df: pd.DataFrame = pd.DataFrame(rows)
-        self.save_report(df, f"{self.strategy.strategy_name}_direction_summary.csv")
-        return df
+        return {
+            "Position Type": position_type,
+            "Trades": len(group),
+            "Total Lots": int(group["Buy Volume"].sum()),
+            "Win Rate (%)": round(len(wins) / len(group) * 100, 2),
+            "Total PnL": round(group["Realized PnL"].sum(), 2),
+            "Avg PnL": round(group["Realized PnL"].mean(), 2),
+            "Avg ROI (%)": round(group["ROI"].mean(), 2),
+            "Total Margin": round(group["Margin"].sum(), 2),
+            "Total Commission": round(group["Commission"].sum(), 2),
+            "Total Tax": round(group["Tax"].sum(), 2),
+            "Avg Holding Days": round(group["Holding Days"].mean(), 2),
+        }
