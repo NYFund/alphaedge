@@ -10,6 +10,7 @@ from .execution import (
 )
 from .order import BaseOrder
 from .position import BasePosition
+from .price_limits import PriceLimits
 from .quote import BaseQuote, LiveDataUnavailableError
 from .record import BaseTradeRecord
 

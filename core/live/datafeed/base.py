@@ -1,7 +1,7 @@
 import datetime
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from loguru import logger
 
@@ -11,7 +11,7 @@ from core.live.datafeed.calendar import (
     TradingCalendarSource,
     resolve_trading_day,
 )
-from core.models import BaseOrder, BaseQuote
+from core.models import BaseOrder, BaseQuote, PriceLimits
 from core.utils import ExecutionTiming, Scale
 
 """
@@ -324,7 +324,7 @@ class BaseLiveDataFeed(BaseDataFeed):
 
         return {}
 
-    def get_price_limits(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
+    def get_price_limits(self, symbol: str) -> PriceLimits:
         """
         - Description:
             取得某商品當日的漲跌停（券商合約檔的公告值）
@@ -336,16 +336,16 @@ class BaseLiveDataFeed(BaseDataFeed):
             - symbol: str
                 商品代號
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                （漲停, 跌停）
+            - PriceLimits
+                漲停與跌停（以欄位名存取）
         """
 
         contract: Optional[Any] = self._resolve_contract(symbol)
         if contract is None:
-            return (None, None)
-        return (
-            self._as_optional_float(contract, "limit_up"),
-            self._as_optional_float(contract, "limit_down"),
+            return PriceLimits.none()
+        return PriceLimits(
+            limit_up=self._as_optional_float(contract, "limit_up"),
+            limit_down=self._as_optional_float(contract, "limit_down"),
         )
 
     def get_reference_price(self, symbol: str) -> Optional[float]:

@@ -60,6 +60,7 @@ from core.models import (
     ExecutionReport,
     OrderTicket,
     PendingAction,
+    PriceLimits,
 )
 from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
@@ -1467,9 +1468,7 @@ class LiveTrader:
                 unsent.append((context, order))
                 continue
 
-            limits: Optional[Tuple[Optional[float], Optional[float]]] = (
-                self._apply_execution(context, order)
-            )
+            limits: Optional[PriceLimits] = self._apply_execution(context, order)
             if limits is None:
                 self.allocator.release(context.name, amount)
                 unsent.append((context, order))
@@ -1481,8 +1480,8 @@ class LiveTrader:
                 context.capital_limit,
                 amount,
                 reference_price=self._reference_price(order),
-                limit_up=limits[0],
-                limit_down=limits[1],
+                limit_up=limits.limit_up,
+                limit_down=limits.limit_down,
             )
             if not decision.passed:
                 self.allocator.release(context.name, amount)
@@ -1505,7 +1504,7 @@ class LiveTrader:
 
     def _apply_execution(
         self, context: StrategyContext, order: BaseOrder
-    ) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    ) -> Optional[PriceLimits]:
         """
         - Description:
             交給執行層換成券商委託；換不出來時寫事件並回 None（本張不送）
@@ -1519,8 +1518,8 @@ class LiveTrader:
             - order: BaseOrder
                 待送出的委託（就地改寫價格類型、委託價與委託效期）
         - Return:
-            - Optional[Tuple[Optional[float], Optional[float]]]
-                換算時用的（漲停, 跌停），要一併交給風控；None 表示本張不送
+            - Optional[PriceLimits]
+                換算時用的漲跌停，要一併交給風控；None 表示本張不送
         """
 
         model: Optional[BaseExecutionModel] = context.execution_model
@@ -1530,9 +1529,7 @@ class LiveTrader:
             )
             return None
 
-        limits: Tuple[Optional[float], Optional[float]] = model.get_price_limits(
-            order.symbol
-        )
+        limits: PriceLimits = model.get_price_limits(order.symbol)
         try:
             model.apply(order, limits)
         except ExecutionUnavailableError as exc:

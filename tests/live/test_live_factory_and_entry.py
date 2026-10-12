@@ -18,6 +18,7 @@ from core.live.factory import (
 from core.live.trader import LiveTrader, StrategyContext
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
+from core.models import PriceLimits
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
@@ -278,7 +279,7 @@ def test_each_market_gets_its_own_execution_model(dao: LiveTradeDAO) -> None:
 
     assert isinstance(stock.execution_model, StockExecutionModel)
     assert isinstance(futures.execution_model, FuturesExecutionModel)
-    assert stock.execution_model.get_price_limits("2330") == (None, None)
+    assert stock.execution_model.get_price_limits("2330") == PriceLimits.none()
 
 
 def test_parity_backtest_uses_the_live_capital_and_holdings(

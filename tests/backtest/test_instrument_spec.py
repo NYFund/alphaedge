@@ -1,10 +1,11 @@
 import datetime
-from typing import Optional, Tuple
+from typing import Optional
 
 import pytest
 
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.instrument_spec import TwStockSpec
+from core.models import PriceLimits
 from core.utils import Action
 from core.utils.instrument import StockUtils
 
@@ -69,29 +70,31 @@ def test_round_to_tick_default_direction(spec: TwStockSpec) -> None:
 
 
 @pytest.mark.parametrize(
-    "prev_close, expected",
+    "prev_close, limit_up, limit_down",
     [
-        (100.0, (90.0, 110.0)),  # 前收 100 → 跌停 90、漲停 110
-        (9.99, (9.0, 10.95)),  # 跨檔位：漲停落在 0.05 檔、跌停落在 0.01 檔
-        (1000.0, (900.0, 1100.0)),
+        (100.0, 110.0, 90.0),
+        (9.99, 10.95, 9.0),  # 跨檔位：漲停落在 0.05 檔、跌停落在 0.01 檔
+        (1000.0, 1100.0, 900.0),
     ],
 )
 def test_get_price_limits(
-    spec: TwStockSpec, prev_close: float, expected: Tuple[float, float]
+    spec: TwStockSpec, prev_close: float, limit_up: float, limit_down: float
 ) -> None:
     """漲跌停為前收 ±10%，並各自往內對齊檔位（漲停捨去、跌停進位）"""
 
-    assert spec.get_price_limits(prev_close) == expected
+    assert spec.get_price_limits(prev_close) == PriceLimits(
+        limit_up=limit_up, limit_down=limit_down
+    )
 
 
 def test_get_price_limits_rounds_inward(spec: TwStockSpec) -> None:
     """對齊方向不可對調：漲停必須 ≤ 理論值、跌停必須 ≥ 理論值"""
 
     prev_close: float = 33.3
-    limit_down, limit_up = spec.get_price_limits(prev_close)
+    limits: PriceLimits = spec.get_price_limits(prev_close)
 
-    assert limit_up <= prev_close * 1.1
-    assert limit_down >= prev_close * 0.9
+    assert limits.limit_up <= prev_close * 1.1
+    assert limits.limit_down >= prev_close * 0.9
 
 
 @pytest.mark.parametrize("prev_close", [0.0, None])
@@ -100,7 +103,7 @@ def test_get_price_limits_without_prev_close(
 ) -> None:
     """尚未取得前收時不做漲跌停判定，維持既有的「跳過該項檢查」行為"""
 
-    assert spec.get_price_limits(prev_close) == (None, None)
+    assert spec.get_price_limits(prev_close) == PriceLimits.none()
 
 
 # === 漲跌停幅度的年代分段 ===
@@ -131,8 +134,12 @@ def test_price_limits_use_era_specific_ratio() -> None:
 
     spec: TwStockSpec = TwStockSpec()
 
-    assert spec.get_price_limits(100.0, datetime.date(2014, 7, 1)) == (93.0, 107.0)
-    assert spec.get_price_limits(100.0, datetime.date(2024, 1, 4)) == (90.0, 110.0)
+    assert spec.get_price_limits(100.0, datetime.date(2014, 7, 1)) == PriceLimits(
+        limit_up=107.0, limit_down=93.0
+    )
+    assert spec.get_price_limits(100.0, datetime.date(2024, 1, 4)) == PriceLimits(
+        limit_up=110.0, limit_down=90.0
+    )
 
 
 def test_price_limits_match_official_announcement() -> None:
@@ -142,10 +149,9 @@ def test_price_limits_match_official_announcement() -> None:
     開盤競價基準 928 元，官方公告漲停 1020、跌停 836
     """
 
-    assert TwStockSpec().get_price_limits(928.0, datetime.date(2024, 1, 4)) == (
-        836.0,
-        1020.0,
-    )
+    assert TwStockSpec().get_price_limits(
+        928.0, datetime.date(2024, 1, 4)
+    ) == PriceLimits(limit_up=1020.0, limit_down=836.0)
 
 
 # === 普通股篩選 ===
@@ -164,18 +170,18 @@ def test_common_stock_filter_keeps_codes_above_9958() -> None:
 
 # === 與交易所公告值逐筆對照（`TWT84U` 股價升降幅度，以公告的開盤競價基準為輸入） ===
 @pytest.mark.parametrize(
-    ("symbol", "basis", "day", "expected"),
+    ("symbol", "basis", "day", "limit_up", "limit_down"),
     [
         # 浮點誤差：15.5 × 0.9 在浮點數是 13.950000000000001，往上對齊曾變成 14.0
-        ("1906", 15.5, datetime.date(2024, 1, 2), (13.95, 17.05)),
-        ("2101", 42.0, datetime.date(2024, 1, 2), (37.8, 46.2)),
-        ("2211", 104.0, datetime.date(2024, 1, 2), (93.6, 114.0)),
+        ("1906", 15.5, datetime.date(2024, 1, 2), 17.05, 13.95),
+        ("2101", 42.0, datetime.date(2024, 1, 2), 46.2, 37.8),
+        ("2211", 104.0, datetime.date(2024, 1, 2), 114.0, 93.6),
         # ETF 的檔位表比普通股細：0050 套普通股表曾算成 148.5
-        ("0050", 135.45, datetime.date(2024, 1, 2), (121.95, 148.95)),
-        ("0055", 24.12, datetime.date(2024, 1, 2), (21.71, 26.53)),
+        ("0050", 135.45, datetime.date(2024, 1, 2), 148.95, 121.95),
+        ("0055", 24.12, datetime.date(2024, 1, 2), 26.53, 21.71),
         # 槓桿型 ETF 的幅度乘上 2 倍
-        ("00631L", 151.2, datetime.date(2024, 1, 2), (121.0, 181.4)),
-        ("00631L", 24.48, datetime.date(2016, 10, 3), (19.59, 29.37)),
+        ("00631L", 151.2, datetime.date(2024, 1, 2), 181.4, 121.0),
+        ("00631L", 24.48, datetime.date(2016, 10, 3), 29.37, 19.59),
     ],
     ids=[
         "float-1906",
@@ -188,11 +194,13 @@ def test_common_stock_filter_keeps_codes_above_9958() -> None:
     ],
 )
 def test_price_limits_match_announced_values(
-    symbol: str, basis: float, day: datetime.date, expected: Tuple[float, float]
+    symbol: str, basis: float, day: datetime.date, limit_up: float, limit_down: float
 ) -> None:
-    """每一筆都是交易所當日公告的（跌停價, 漲停價）"""
+    """每一筆都是交易所當日公告的漲停價與跌停價"""
 
-    assert TwStockSpec().get_price_limits(basis, day, symbol) == expected
+    assert TwStockSpec().get_price_limits(basis, day, symbol) == PriceLimits(
+        limit_up=limit_up, limit_down=limit_down
+    )
 
 
 def test_leveraged_etf_ratio_is_doubled_but_inverse_is_not() -> None:

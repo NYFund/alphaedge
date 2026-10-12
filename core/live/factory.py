@@ -61,6 +61,7 @@ from core.models import (
     BrokerAccountSnapshot,
     FuturesAccount,
     FuturesOrder,
+    PriceLimits,
     RealizedTradeSnapshot,
     StockAccount,
     StockPositionSnapshot,
@@ -904,8 +905,10 @@ def make_closing_limit_lookup(
         if close is None or prev_close is None:
             return None
 
-        limit_down, limit_up = spec.get_price_limits(prev_close, run_date, symbol)
-        limit: Optional[float] = limit_up if side == Action.BUY.value else limit_down
+        limits: PriceLimits = spec.get_price_limits(prev_close, run_date, symbol)
+        limit: Optional[float] = (
+            limits.limit_up if side == Action.BUY.value else limits.limit_down
+        )
         if limit is None:
             return None
         return (close, float(limit))

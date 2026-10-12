@@ -26,6 +26,7 @@ from core.models import (
     BaseQuote,
     OrderTicket,
     PendingAction,
+    PriceLimits,
     StockAccount,
     StockOrder,
     StockPosition,
@@ -59,6 +60,8 @@ from .conftest import FakeBroker
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 21, 13, 26)
 TODAY: datetime.date = NOW.date()
+# 測試用的當日漲跌停：由測試指定、不碰券商合約
+LIMITS: PriceLimits = PriceLimits(limit_up=110.0, limit_down=90.0)
 CAPITAL: float = 10_000_000.0
 
 
@@ -203,7 +206,7 @@ class Harness:
         is_open: bool = True,
         latest_data_date: Optional[datetime.date] = None,
         quota: Optional[float] = None,
-        price_limits: Tuple[Optional[float], Optional[float]] = (110.0, 90.0),
+        price_limits: PriceLimits = LIMITS,
         live_capital: Optional[float] = None,
         risk_config: Optional[RiskConfig] = None,
     ) -> None:

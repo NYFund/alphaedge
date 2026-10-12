@@ -11,6 +11,7 @@ from .base import (
     OrderStatusEvent,
     OrderTicket,
     PendingAction,
+    PriceLimits,
     RealizedTradeSnapshot,
 )
 from .futures import (

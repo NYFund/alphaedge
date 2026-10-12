@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Tuple
 
 import pytest
 
@@ -8,7 +8,14 @@ from core.live.execution.base import ExecutionUnavailableError
 from core.live.execution.futures import FuturesExecutionModel
 from core.live.execution.stock import StockExecutionModel
 from core.live.trader import mark_execution
-from core.models import BaseOrder, BaseQuote, FuturesOrder, PendingAction, StockOrder
+from core.models import (
+    BaseOrder,
+    BaseQuote,
+    FuturesOrder,
+    PendingAction,
+    PriceLimits,
+    StockOrder,
+)
 from core.utils import (
     Action,
     ExecutionStyle,
@@ -21,6 +28,7 @@ from core.utils import (
 )
 
 from .test_live_trader_day import (
+    LIMITS,
     NOW,
     TODAY,
     Harness,
@@ -36,8 +44,6 @@ from .test_live_trader_day import (
 先前都預先填好限價，那正是「沒有任何程式填 `price_type`」這個缺口一直沒被抓到的原因——
 演練第一次送單，每一張都在券商轉換層才失敗。
 """
-
-LIMITS: Tuple[Optional[float], Optional[float]] = (110.0, 90.0)
 
 
 def stock_order(action: Action = Action.BUY, price: float = 100.0) -> StockOrder:
@@ -96,11 +102,11 @@ def test_auction_market_order_rests_at_the_price_limit(
 
 
 @pytest.mark.parametrize(
-    "limits", [(None, None), (None, 90.0)], ids=["both-missing", "limit-up-missing"]
+    "limits",
+    [PriceLimits.none(), PriceLimits(limit_up=None, limit_down=90.0)],
+    ids=["both-missing", "limit-up-missing"],
 )
-def test_auction_market_order_without_limits_is_skipped(
-    limits: Tuple[Optional[float], Optional[float]],
-) -> None:
+def test_auction_market_order_without_limits_is_skipped(limits: PriceLimits) -> None:
     """取不到漲跌停就略過，不自行推算：除權息日的基準價另行公告，推算會整段偏移"""
 
     order: BaseOrder = marked(
@@ -109,6 +115,17 @@ def test_auction_market_order_without_limits_is_skipped(
 
     with pytest.raises(ExecutionUnavailableError, match="漲停"):
         StockExecutionModel().apply(order, limits)
+
+
+def test_apply_without_limits_means_both_sides_are_unknown() -> None:
+    """沒帶漲跌停就當兩側都取不到：走同一條「略過」路徑，不是 AttributeError"""
+
+    order: BaseOrder = marked(
+        stock_order(Action.BUY), ExecutionTiming.AT_CLOSE, ExecutionStyle.MARKET
+    )
+
+    with pytest.raises(ExecutionUnavailableError, match="漲停"):
+        StockExecutionModel().apply(order)
 
 
 # === 股票：照價掛單 ===
@@ -121,7 +138,7 @@ def test_limit_style_keeps_the_strategy_price(timing: ExecutionTiming) -> None:
 
     order: BaseOrder = marked(stock_order(price=95.5), timing, ExecutionStyle.LIMIT)
 
-    StockExecutionModel().apply(order, (None, None))
+    StockExecutionModel().apply(order, PriceLimits.none())
 
     assert order.price == 95.5
     assert order.price_type is StockPriceType.LMT
@@ -149,7 +166,7 @@ def test_continuous_market_order_uses_a_protection_price(
         stock_order(action, decision), ExecutionTiming.IMMEDIATE, ExecutionStyle.MARKET
     )
 
-    StockExecutionModel().apply(order, (200.0, 10.0))
+    StockExecutionModel().apply(order, PriceLimits(limit_up=200.0, limit_down=10.0))
 
     assert order.price == pytest.approx(expected)
     assert order.price_type is StockPriceType.LMT
@@ -183,7 +200,7 @@ def test_continuous_market_order_without_limits_is_skipped() -> None:
     )
 
     with pytest.raises(ExecutionUnavailableError):
-        StockExecutionModel().apply(order, (None, None))
+        StockExecutionModel().apply(order, PriceLimits.none())
 
 
 # === 期貨 ===
@@ -197,7 +214,7 @@ def test_futures_market_order_is_a_ranged_market_ioc(timing: ExecutionTiming) ->
 
     order: BaseOrder = marked(futures_order(), timing, ExecutionStyle.MARKET)
 
-    FuturesExecutionModel().apply(order, (None, None))
+    FuturesExecutionModel().apply(order, PriceLimits.none())
 
     assert order.price_type is FuturesPriceType.MKP
     assert order.order_type is OrderType.IOC
@@ -209,7 +226,7 @@ def test_futures_limit_style_keeps_the_strategy_price() -> None:
         futures_order(), ExecutionTiming.AT_CLOSE, ExecutionStyle.LIMIT
     )
 
-    FuturesExecutionModel().apply(order, (None, None))
+    FuturesExecutionModel().apply(order, PriceLimits.none())
 
     assert (order.price, order.price_type, order.order_type) == (
         48000.0,
@@ -315,7 +332,7 @@ def test_reservation_uses_the_decision_price() -> None:
 def test_missing_price_limits_skip_the_order_and_release_the_reservation() -> None:
     """取不到漲跌停：本檔不送、寫事件、放掉保留，其餘照常"""
 
-    harness: Harness = Harness([MarketAlpha()], price_limits=(None, None))
+    harness: Harness = Harness([MarketAlpha()], price_limits=PriceLimits.none())
     context: Any = harness.contexts[0]
     harness.trader.prepare()
 
@@ -388,7 +405,9 @@ def test_protection_price_does_not_trip_the_deviation_check() -> None:
     每一張要成交的單都會被擋下。
     """
 
-    harness: Harness = Harness([MarketAlpha()], price_limits=(130.0, 70.0))
+    harness: Harness = Harness(
+        [MarketAlpha()], price_limits=PriceLimits(limit_up=130.0, limit_down=70.0)
+    )
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
     (order,) = sent_orders(harness)

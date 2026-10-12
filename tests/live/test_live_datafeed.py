@@ -16,7 +16,12 @@ from core.live.datafeed.calendar import (
 )
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
-from core.models import BaseQuote, LiveDataUnavailableError, PreOpenStockQuote
+from core.models import (
+    BaseQuote,
+    LiveDataUnavailableError,
+    PreOpenStockQuote,
+    PriceLimits,
+)
 from core.utils import ExecutionTiming
 
 """
@@ -595,7 +600,9 @@ def test_futures_pre_open_quote_carries_the_contract_id() -> None:
     (quote,) = feed.get_live_quotes(ExecutionTiming.AT_OPEN, ["TX202610"])
 
     assert (quote.product, quote.expiry) == ("TX", "202610")
-    assert feed.get_price_limits("TX202610") == (55090.0, 45074.0)
+    assert feed.get_price_limits("TX202610") == PriceLimits(
+        limit_up=55090.0, limit_down=45074.0
+    )
     assert feed.get_reference_price("TX202610") == 50082.0
 
 

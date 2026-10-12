@@ -9,6 +9,7 @@ from core.api.tw.stock_price_api import StockPriceAPI
 from core.dao.base import BaseDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.models import PriceLimits
 
 """
 還原價（後復權）查詢測試
@@ -317,7 +318,9 @@ def test_price_limit_basis_overrides_reference_price() -> None:
     fill_model.apply_price_limit_basis({"2454": 928.0})
 
     assert fill_model.reference_prices["2454"] == pytest.approx(928.0)
-    assert spec.get_price_limits(928.0) == (836.0, 1020.0)
+    assert spec.get_price_limits(928.0) == PriceLimits(
+        limit_up=1020.0, limit_down=836.0
+    )
 
 
 def test_price_limit_basis_only_touches_listed_symbols() -> None:

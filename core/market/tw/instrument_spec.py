@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 from loguru import logger
 
 from core.market.instrument_spec import InstrumentSpec
-from core.models import BaseOrder
+from core.models import BaseOrder, PriceLimits
 from core.utils import (
     FUTURES_TICK_SIZE,
     PRICE_LIMIT_RATIO,
@@ -81,7 +81,7 @@ class TwStockSpec(InstrumentSpec):
         prev_close: float,
         date: Optional[datetime.date] = None,
         product: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> PriceLimits:
         """
         - Description:
             台股漲跌停為前收 ±幅度，並各自往內對齊檔位（漲停捨去、跌停進位）
@@ -107,12 +107,12 @@ class TwStockSpec(InstrumentSpec):
             - product: Optional[str]
                 證券代號，用於選檔位表（ETF 與普通股不同）；未提供時用普通股表
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                （跌停價, 漲停價）；基準價為 0 時皆為 None
+            - PriceLimits
+                漲停與跌停（以欄位名存取）；基準價為 0 時皆為 None
         """
 
         if not prev_close:
-            return (None, None)
+            return PriceLimits.none()
 
         ratio: float = self.get_price_limit_ratio(date, product)
 
@@ -122,7 +122,7 @@ class TwStockSpec(InstrumentSpec):
         limit_down: float = self.round_to_tick(
             self.scale_price(prev_close, -ratio), "up", product
         )
-        return (limit_down, limit_up)
+        return PriceLimits(limit_up=limit_up, limit_down=limit_down)
 
     def is_locked_at_limit(
         self,
@@ -164,8 +164,10 @@ class TwStockSpec(InstrumentSpec):
         if not prev_close:
             return False
 
-        limit_down, limit_up = self.get_price_limits(prev_close, date, product)
-        limit: Optional[float] = limit_up if side == Action.BUY else limit_down
+        limits: PriceLimits = self.get_price_limits(prev_close, date, product)
+        limit: Optional[float] = (
+            limits.limit_up if side == Action.BUY else limits.limit_down
+        )
         if limit is None:
             return False
 
@@ -189,7 +191,7 @@ class TwFuturesSpec(InstrumentSpec):
        `FuturesPositionManager.calculate_pnl()`，不要自己乘。
     2. **沒有固定漲跌停**：期貨採動態價格穩定措施（撮合價超出參考區間即延後撮合），
        區間隨前幾分鐘的成交價變動，不是「前收 ±10%」這種可事先算出的固定區間。
-       故 `get_price_limits()` 一律回傳 `(None, None)`，`TwFuturesFillModel`
+       故 `get_price_limits()` 一律回傳兩側皆 None 的 `PriceLimits`，`TwFuturesFillModel`
        也不做漲跌停檢查。
 
     **跳動點逐商品查表**（`FUTURES_TICK_SIZE`，只登錄已查證的商品）：同一個
@@ -305,13 +307,13 @@ class TwFuturesSpec(InstrumentSpec):
         prev_close: float,
         date: Optional[datetime.date] = None,
         product: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> PriceLimits:
         """
-        期貨**沒有固定漲跌停**，一律回傳 `(None, None)`
+        期貨**沒有固定漲跌停**，一律回傳兩側皆 None 的 `PriceLimits`
 
         現行制度是動態價格穩定措施，區間由前幾分鐘的成交價即時算出，
-        無法由前一交易日收盤推得。回傳 `(None, None)` 的語意是「本市場無此制度」，
+        無法由前一交易日收盤推得。兩側皆 None 的語意是「本市場無此制度」，
         呼叫端（`FillModel`）據此跳過該項檢查，**不是「查不到資料」**。
         """
 
-        return (None, None)
+        return PriceLimits.none()

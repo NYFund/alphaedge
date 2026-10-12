@@ -17,6 +17,7 @@ from core.models import (
     BaseOrder,
     BaseQuote,
     DayTradeListSnapshot,
+    PriceLimits,
     ShortSaleListSnapshot,
 )
 from core.models.fill_config import FillConfig, FuturesFillConfig, VolumeCapPolicy
@@ -604,13 +605,13 @@ class TwStockFillModel(BaseFillModel):
         reference_price: Optional[float] = self.reference_prices.get(order.symbol)
         if reference_price:
             # 帶入報價日期：2015-06-01 前的漲跌停幅度為 7%，非現行的 10%
-            limit_down, limit_up = self.instrument.get_price_limits(
+            limits: PriceLimits = self.instrument.get_price_limits(
                 reference_price, TimeUtils.to_date(quote.date), order.symbol
             )
-            if not (limit_down <= order.price <= limit_up):
+            if not (limits.limit_down <= order.price <= limits.limit_up):
                 logger.warning(
                     f"[Validate Fill] {order.symbol} 成交價 {order.price} 超出漲跌停 "
-                    f"[{limit_down}, {limit_up}]，拒單"
+                    f"[{limits.limit_down}, {limits.limit_up}]，拒單"
                 )
                 self.event_counts["rejected_fill_price"] += 1
                 return False

@@ -1,6 +1,6 @@
-from typing import FrozenSet, Optional, Tuple
+from typing import FrozenSet
 
-from core.models import BaseOrder
+from core.models import BaseOrder, PriceLimits
 from core.utils import ExecutionTiming, FuturesPriceType, OrderType
 
 from .base import BaseExecutionModel
@@ -30,9 +30,7 @@ class FuturesExecutionModel(BaseExecutionModel):
 
         return FuturesPriceType.LMT
 
-    def _apply_continuous_market(
-        self, order: BaseOrder, limits: Tuple[Optional[float], Optional[float]]
-    ) -> None:
+    def _apply_continuous_market(self, order: BaseOrder, limits: PriceLimits) -> None:
         """範圍市價＋IOC；委託價保留決策價，送出時由轉換層換成 0"""
 
         order.price_type = FuturesPriceType.MKP

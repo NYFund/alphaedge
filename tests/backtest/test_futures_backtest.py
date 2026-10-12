@@ -22,6 +22,7 @@ from core.models import (
     FuturesOrder,
     FuturesPosition,
     FuturesQuote,
+    PriceLimits,
     StockPosition,
 )
 from core.models.cost_config import FuturesCostConfig
@@ -463,9 +464,9 @@ def test_unregistered_product_falls_back_to_the_default() -> None:
 
 
 def test_futures_have_no_price_limits() -> None:
-    """期貨沒有固定漲跌停；`(None, None)` 的語意是「本市場無此制度」"""
+    """期貨沒有固定漲跌停；兩側皆 None 的語意是「本市場無此制度」"""
 
-    assert TwFuturesSpec().get_price_limits(18000.0) == (None, None)
+    assert TwFuturesSpec().get_price_limits(18000.0) == PriceLimits.none()
 
 
 # === FillModel ===

@@ -1,9 +1,9 @@
 import datetime
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Optional, Tuple
+from typing import Optional
 
-from core.models import BaseOrder
+from core.models import BaseOrder, PriceLimits
 from core.utils import (
     Action,
 )
@@ -156,10 +156,10 @@ class InstrumentSpec(ABC):
         prev_close: float,
         date: Optional[datetime.date] = None,
         product: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> PriceLimits:
         """
         - Description:
-            依漲跌停基準價推算漲跌停區間
+            依漲跌停基準價推算漲跌停區間（具名結果，一律以欄位名存取）
         - Parameters:
             - prev_close: float
                 漲跌停基準價（一般為前一交易日收盤）
@@ -168,8 +168,8 @@ class InstrumentSpec(ABC):
             - product: Optional[str]
                 商品代碼；檔位依商品而不同時（台股的 ETF 與普通股）會用到
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                (跌停價, 漲停價)；無漲跌停制度時回傳 (None, None)
+            - PriceLimits
+                漲停與跌停（以欄位名存取）；無漲跌停制度時兩側皆為 None
         """
 
         pass
