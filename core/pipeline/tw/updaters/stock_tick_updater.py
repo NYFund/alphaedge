@@ -18,7 +18,6 @@ from core.pipeline.tw.loaders.stock_tick_loader import StockTickLoader
 from core.pipeline.tw.utils.stock_tick_utils import StockTickUtils
 from core.pipeline.utils.exceptions import DataLoadError
 from core.utils import TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 台股 tick 更新
@@ -33,6 +32,8 @@ Shioaji 的 tick 只回溯到 2020/03/02，更早的日期一律取不到資料�
 
 class StockTickUpdater(BaseDataUpdater):
     """Stock Tick Updater"""
+
+    LOG_FILE_NAME: str = "update_tick.log"
 
     # API 剩餘用量低於此值（MB）即停止爬取
     TICK_API_MIN_REMAINING_MB: float = 20.0
@@ -92,7 +93,7 @@ class StockTickUpdater(BaseDataUpdater):
 
         self.num_threads: int = len(self.api_list)
 
-        LogManager.setup_logger("update_tick.log")
+        super().setup()
 
     def update(
         self,
@@ -198,7 +199,7 @@ class StockTickUpdater(BaseDataUpdater):
             raise
         finally:
             # Step 4: Cleanup - 確保登出所有 API 連接（即使發生異常也會執行）
-            self.cleanup()
+            self.close()
 
     def remove_loaded_csv_files(self) -> int:
         """
@@ -530,8 +531,8 @@ class StockTickUpdater(BaseDataUpdater):
             for i in range(n_parts)
         ]
 
-    def cleanup(self) -> None:
-        """清理資源：登出所有 Shioaji 連線"""
+    def close(self) -> None:
+        """收尾：登出所有 Shioaji 連線；可重複呼叫（`update()` 的 finally 已關過一次）"""
 
         if not self.sessions:
             return

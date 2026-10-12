@@ -22,7 +22,6 @@ from core.pipeline.tw.crawlers.monthly_revenue_report_crawler import (
 from core.pipeline.tw.loaders.monthly_revenue_report_loader import (
     MonthlyRevenueReportLoader,
 )
-from core.utils.log_manager import LogManager
 
 """
 月營收報表更新
@@ -33,6 +32,8 @@ from core.utils.log_manager import LogManager
 
 class MonthlyRevenueReportUpdater(BaseDataUpdater):
     """TWSE & TPEX Monthly Revenue Report Updater"""
+
+    LOG_FILE_NAME: str = "update_monthly_revenue_report.log"
 
     # 月營收的申報期限：上市櫃公司須於**次月 10 日**前申報上月營收。
     # 寬限天數的意義與財報三表相同——逾期申報與申請延期都會落在期限之後，
@@ -67,7 +68,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("update_monthly_revenue_report.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""

@@ -2,7 +2,8 @@ import argparse
 import datetime
 import sys
 from contextlib import contextmanager
-from typing import Dict, Iterator, List, Optional, Set, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from loguru import logger
 
@@ -122,25 +123,207 @@ Target 對照表
 """
 
 
-# 需要 Shioaji 金鑰與 `[tick]` 選用相依（外加執行中的 TimescaleDB）的 target；`no_tick` 一律排除
-TICK_DATA_TYPES: Set[DataType] = {DataType.TICK}
+@dataclass(frozen=True)
+class TargetSpec:
+    """
+    `update_db` 的一個 target：怎麼建 updater、要不要取回補區間、怎麼跑、能不能被捷徑選到
 
-# 只在 `--target` 明確點名時才跑的 target；`all` 與 `no_tick` 兩個集合捷徑一律排除
+    **各 target 的 `update()` 簽名刻意不統一**（請求的單位本來就不同：日期、年季、年月、
+    或根本沒有區間），差異由 `run` 吸收；`main()` 只剩一個迴圈。
+    """
+
+    name: str
+    # 建 updater；**每次呼叫才建**，測試以 monkeypatch 換掉模組層的類別時才換得到
+    factory: Callable[[], Any]
+    # 跑這個 target：收 updater 與（有的話）回補區間設定
+    run: Callable[[Any, Optional[Dict[str, Any]]], None]
+    # 要不要取回補區間（`get_update_time_config()` 的 key）；None 表示這個 target 沒有區間
+    time_config: Optional[Union[DataType, str]] = None
+    # 只在 `--target` 明確點名時才跑；`all` 與 `no_tick` 兩個捷徑一律排除
+    explicit_only: bool = False
+    # 需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB；`no_tick` 排除
+    needs_tick: bool = False
+
+
+def run_date_range(method_name: str) -> Callable[[Any, Optional[Dict[str, Any]]], None]:
+    """以 `start_date`／`end_date` 呼叫 updater 的某個方法"""
+
+    def run(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+        getattr(updater, method_name)(
+            start_date=time_config["start_date"], end_date=time_config["end_date"]
+        )
+
+    return run
+
+
+def run_without_range(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """沒有回補區間的 target：直接 `update()`"""
+
+    updater.update()
+
+
+def run_stock_futures(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """股期：商品清單取自標的池，預設只爬流動性前 N 檔"""
+
+    updater.update_stock_futures(
+        start_date=time_config["start_date"],
+        end_date=time_config["end_date"],
+        top_n=STOCK_FUTURES_TOP_N,
+    )
+
+
+def run_year_season(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """以年季為單位的 target（財報）"""
+
+    updater.update(
+        start_year=time_config["start_year"],
+        end_year=time_config["end_year"],
+        start_season=time_config["start_season"],
+        end_season=time_config["end_season"],
+    )
+
+
+def run_year_month(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """以年月為單位的 target（月營收）"""
+
+    updater.update(
+        start_year=time_config["start_year"],
+        end_year=time_config["end_year"],
+        start_month=time_config["start_month"],
+        end_month=time_config["end_month"],
+    )
+
+
+def run_finmind_subset(
+    data_type: FinMindDataType,
+) -> Callable[[Any, Optional[Dict[str, Any]]], None]:
+    """FinMind 的單一資料集"""
+
+    def run(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+        updater.update(data_type=data_type)
+
+    return run
+
+
+# **順序就是執行順序**，與 `--target` 的點名順序無關：
 #
-# 股期的商品清單有 320 檔，而 `FuturesPriceUpdater.resolve_stock_futures_products()`
-# 在表內還沒有股期行情時排不出流動性，會**無聲退回整份標的池**——實測約每小時
-# 330 個交易日，單一商品 11 年就要 8.6 小時，320 檔是 100 天以上。
-# 這種量級的回補必須是人明確要求的動作，不能被 `python -m apps.update_db`
-# 的預設值一腳踩進去，更不能卡住排在它後面的 futures_chip、fs、mrr 等 target
-#
-# FinMind 暫停每日更新：現行帳號等級（register）沒有券商分點的資料集權限，
-# 每晚都在第一個組合就中止、以結束碼 1 收場。恆紅的 target 會讓真正的失敗混在裡面
-# 沒人看；其餘兩份（台股總覽、證券商資訊）幾乎不變，也沒有每日依賴它們的程式。
-# 帳號升級後從這裡移除即可恢復
-EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
-    DataType.FUTURES_STOCK_PRICE,
-    DataType.FINMIND,
-}
+# - PRICE 必須排在 CHIP／MARGIN 之前：那兩個以 `price` 表的交易日為日曆，price 還沒更新到
+#   今天的話，它們今天就不會被請求——結果是永遠落後一天。`DatePlanner.extend_calendar_tail()`
+#   是第二層保險，但正確的執行順序仍應在這裡表達。
+# - TICK 必須排在 PRICE 之後：tick 入庫以 `price` 表判斷「這天這檔是不是上市櫃」，
+#   `price` 表整天沒資料的日子會被當成日 K 還沒更新而計為失敗。
+# - FUTURES_STOCK_PRICE 只在點名時跑：股期有 320 檔，表內還沒有股期行情時排不出流動性會
+#   無聲退回整份標的池，320 檔是 100 天以上的回補，不能被預設值一腳踩進去。
+# - FINMIND 與它的四個子集只在點名時跑：帳號等級拿不到券商分點。
+# - 籌碼、標的池、保證金、休市日沒有回補區間：籌碼各自從表內最新日續跑（盤後公布，盤中跑只會
+#   拿到無資料，那是正常狀態）；標的池是當下快照；保證金是現行一覽表（沒有調整時不會新增列）；
+#   休市日固定抓去年／今年／明年（明年的公告 12 月前多半還沒出來）。
+# - 連續合約是衍生表，來源是同一個 DB 的 futures_price_daily，不連網路，一律整段重建。
+TARGETS: Tuple[TargetSpec, ...] = (
+    TargetSpec(
+        "price", lambda: StockPriceUpdater(), run_date_range("update"), DataType.PRICE
+    ),
+    TargetSpec(
+        "tick",
+        lambda: StockTickUpdater(),
+        run_date_range("update"),
+        DataType.TICK,
+        needs_tick=True,
+    ),
+    TargetSpec(
+        "chip", lambda: StockChipUpdater(), run_date_range("update"), DataType.CHIP
+    ),
+    TargetSpec(
+        "margin",
+        lambda: StockMarginUpdater(),
+        run_date_range("update"),
+        DataType.MARGIN,
+    ),
+    TargetSpec(
+        "short_sale_list",
+        lambda: StockShortSaleListUpdater(),
+        run_date_range("update"),
+        DataType.SHORT_SALE_LIST,
+    ),
+    TargetSpec(
+        "day_trade_list",
+        lambda: StockDayTradeListUpdater(),
+        run_date_range("update"),
+        DataType.DAY_TRADE_LIST,
+    ),
+    TargetSpec(
+        "dividend",
+        lambda: StockDividendUpdater(),
+        run_date_range("update"),
+        DataType.DIVIDEND,
+    ),
+    TargetSpec(
+        "corporate_action",
+        lambda: CorporateActionUpdater(),
+        run_date_range("update"),
+        DataType.CORPORATE_ACTION,
+    ),
+    TargetSpec(
+        "futures_price",
+        lambda: FuturesPriceUpdater(),
+        run_date_range("update"),
+        DataType.FUTURES_PRICE,
+    ),
+    TargetSpec(
+        "futures_stock_price",
+        lambda: FuturesPriceUpdater(),
+        run_stock_futures,
+        DataType.FUTURES_PRICE,
+        explicit_only=True,
+    ),
+    TargetSpec("futures_chip", lambda: FuturesChipUpdater(), run_without_range),
+    TargetSpec(
+        "futures_continuous", lambda: FuturesContinuousUpdater(), run_without_range
+    ),
+    TargetSpec(
+        "futures_stock_universe",
+        lambda: FuturesStockUniverseUpdater(),
+        run_without_range,
+    ),
+    TargetSpec("futures_margin", lambda: FuturesMarginUpdater(), run_without_range),
+    TargetSpec("market_holiday", lambda: MarketHolidayUpdater(), run_without_range),
+    TargetSpec("fs", lambda: FinancialStatementUpdater(), run_year_season, DataType.FS),
+    TargetSpec(
+        "mrr", lambda: MonthlyRevenueReportUpdater(), run_year_month, DataType.MRR
+    ),
+    TargetSpec(
+        "finmind",
+        lambda: FinMindUpdater(),
+        run_date_range("update_all"),
+        DataType.FINMIND,
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "stock_info",
+        lambda: FinMindUpdater(),
+        run_finmind_subset(FinMindDataType.STOCK_INFO),
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "stock_info_with_warrant",
+        lambda: FinMindUpdater(),
+        run_finmind_subset(FinMindDataType.STOCK_INFO_WITH_WARRANT),
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "broker_info",
+        lambda: FinMindUpdater(),
+        run_finmind_subset(FinMindDataType.BROKER_INFO),
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "broker_trading",
+        lambda: FinMindUpdater(),
+        run_date_range("update_broker_trading_daily_report"),
+        FinMindDataType.BROKER_TRADING.value.lower(),
+        explicit_only=True,
+    ),
+)
 
 
 def expand_targets(targets: Set[str]) -> Set[str]:
@@ -148,7 +331,7 @@ def expand_targets(targets: Set[str]) -> Set[str]:
     - Description:
         把 `all`／`no_tick` 兩個集合捷徑展開成實際的 target
 
-        `EXPLICIT_ONLY_DATA_TYPES` 兩個捷徑都不含，只有明確點名才會跑；
+        `explicit_only` 的 target 兩個捷徑都不含，只有明確點名才會跑；
         `no_tick` 另外排除所有需要 Shioaji 金鑰與 tick 選用相依的 target。
     - Parameters:
         - targets: Set[str]
@@ -160,19 +343,17 @@ def expand_targets(targets: Set[str]) -> Set[str]:
 
     expanded: Set[str] = set(targets)
 
-    # all = 所有資料類型（包含 tick 和 finmind），但不含 EXPLICIT_ONLY_DATA_TYPES
+    # all = 所有 target（包含 tick），但不含只能點名的那幾個
     if "all" in expanded:
-        expanded.update(
-            dt.name.lower() for dt in DataType if dt not in EXPLICIT_ONLY_DATA_TYPES
-        )
+        expanded.update(spec.name for spec in TARGETS if not spec.explicit_only)
 
-    # no_tick = 所有資料類型 − tick（預設值）：tick 需要 Shioaji 金鑰、`[tick]` 選用相依
+    # no_tick = all − tick（預設值）：tick 需要 Shioaji 金鑰、`[tick]` 選用相依
     # 與執行中的 TimescaleDB，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了
     if "no_tick" in expanded:
         expanded.update(
-            dt.name.lower()
-            for dt in DataType
-            if dt not in TICK_DATA_TYPES and dt not in EXPLICIT_ONLY_DATA_TYPES
+            spec.name
+            for spec in TARGETS
+            if not spec.explicit_only and not spec.needs_tick
         )
 
     return expanded
@@ -384,312 +565,24 @@ def main() -> None:
 
     targets = expand_targets(targets)
 
-    # **PRICE 必須排在 CHIP／MARGIN 之前**：那兩個以 `price` 表的交易日為
-    # 日曆，price 還沒更新到今天的話，它們今天就不會被請求——結果是永遠
-    # 落後一天。`DatePlanner.extend_calendar_tail()` 是第二層保險，
-    # 但正確的執行順序仍應在這裡表達
-    if DataType.PRICE.name.lower() in targets:
-        with target_guard("price", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.PRICE,
-                from_date=from_date,
+    for spec in TARGETS:
+        if spec.name not in targets:
+            continue
+        with target_guard(spec.name, failed_targets):
+            time_config: Optional[Dict[str, Any]] = (
+                get_update_time_config(spec.time_config, from_date=from_date)
+                if spec.time_config is not None
+                else None
             )
-            stock_price_updater: StockPriceUpdater = StockPriceUpdater()
+            updater: Any = spec.factory()
             try:
-                stock_price_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
+                spec.run(updater, time_config)
             finally:
-                stock_price_updater.close()
-
-    # **TICK 必須排在 PRICE 之後**：tick 入庫以 `price` 表判斷「這天這檔是不是上市櫃」，
-    # `price` 表整天沒資料的日子會被當成日 K 還沒更新而計為失敗。tick 先跑的話，
-    # `--target all` 收盤後跑當天的 tick 一律失敗
-    if DataType.TICK.name.lower() in targets:
-        with target_guard("tick", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.TICK,
-                from_date=from_date,
-            )
-            stock_tick_updater: StockTickUpdater = StockTickUpdater()
-            stock_tick_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
-
-    if DataType.CHIP.name.lower() in targets:
-        with target_guard("chip", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.CHIP,
-                from_date=from_date,
-            )
-            stock_chip_updater: StockChipUpdater = StockChipUpdater()
-            try:
-                stock_chip_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_chip_updater.close()
-
-    if DataType.MARGIN.name.lower() in targets:
-        with target_guard("margin", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.MARGIN,
-                from_date=from_date,
-            )
-            stock_margin_updater: StockMarginUpdater = StockMarginUpdater()
-            try:
-                stock_margin_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_margin_updater.close()
-
-    if DataType.SHORT_SALE_LIST.name.lower() in targets:
-        with target_guard("short_sale_list", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.SHORT_SALE_LIST,
-                from_date=from_date,
-            )
-            short_sale_list_updater: StockShortSaleListUpdater = (
-                StockShortSaleListUpdater()
-            )
-            try:
-                short_sale_list_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                short_sale_list_updater.close()
-
-    if DataType.DAY_TRADE_LIST.name.lower() in targets:
-        with target_guard("day_trade_list", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.DAY_TRADE_LIST,
-                from_date=from_date,
-            )
-            day_trade_list_updater: StockDayTradeListUpdater = (
-                StockDayTradeListUpdater()
-            )
-            try:
-                day_trade_list_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                day_trade_list_updater.close()
-
-    if DataType.DIVIDEND.name.lower() in targets:
-        with target_guard("dividend", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.DIVIDEND,
-                from_date=from_date,
-            )
-            stock_dividend_updater: StockDividendUpdater = StockDividendUpdater()
-            try:
-                stock_dividend_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_dividend_updater.close()
-
-    if DataType.CORPORATE_ACTION.name.lower() in targets:
-        with target_guard("corporate_action", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.CORPORATE_ACTION,
-                from_date=from_date,
-            )
-            corporate_action_updater: CorporateActionUpdater = CorporateActionUpdater()
-            try:
-                corporate_action_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                corporate_action_updater.close()
-
-    if DataType.FUTURES_PRICE.name.lower() in targets:
-        with target_guard("futures_price", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FUTURES_PRICE,
-                from_date=from_date,
-            )
-            futures_price_updater: FuturesPriceUpdater = FuturesPriceUpdater()
-            try:
-                futures_price_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                futures_price_updater.close()
-
-    if DataType.FUTURES_STOCK_PRICE.name.lower() in targets:
-        with target_guard("futures_stock_price", failed_targets):
-            # **股期不走 FUTURES_TARGET_PRODUCTS**：320 檔且會隨掛牌／下市異動，
-            # 清單改由 futures_stock_universe 提供。預設只爬流動性前 N 檔——
-            # 全爬是每天 640 次請求，而尾端商品一天只成交個位數口
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FUTURES_PRICE,
-                from_date=from_date,
-            )
-            stock_futures_updater: FuturesPriceUpdater = FuturesPriceUpdater()
-            try:
-                stock_futures_updater.update_stock_futures(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                    top_n=STOCK_FUTURES_TOP_N,
-                )
-            finally:
-                stock_futures_updater.close()
-
-    if DataType.FUTURES_CHIP.name.lower() in targets:
-        with target_guard("futures_chip", failed_targets):
-            # 三個資料集各自從自己表內的最新日續跑（見 FuturesChipUpdater）；
-            # **籌碼是盤後公布**，當日盤中跑只會拿到「無資料」，那是正常狀態
-            futures_chip_updater: FuturesChipUpdater = FuturesChipUpdater()
-            try:
-                futures_chip_updater.update()
-            finally:
-                futures_chip_updater.close()
-
-    if DataType.FUTURES_CONTINUOUS.name.lower() in targets:
-        with target_guard("futures_continuous", failed_targets):
-            # 連續合約是**衍生表**：來源是同一個 DB 的 futures_price_daily，
-            # 不連網路。逆向調整的調整量會隨「之後又換了幾次月」而改變，
-            # 故一律整段重建而非增量（見 FuturesContinuousUpdater.update()）
-            futures_continuous_updater: FuturesContinuousUpdater = (
-                FuturesContinuousUpdater()
-            )
-            try:
-                futures_continuous_updater.update()
-            finally:
-                futures_continuous_updater.close()
-
-    if DataType.FUTURES_STOCK_UNIVERSE.name.lower() in targets:
-        with target_guard("futures_stock_universe", failed_targets):
-            # 標的池是「當下快照」，沒有回補區間，故不取 time_config
-            futures_stock_universe_updater: FuturesStockUniverseUpdater = (
-                FuturesStockUniverseUpdater()
-            )
-            try:
-                futures_stock_universe_updater.update()
-            finally:
-                futures_stock_universe_updater.close()
-
-    if DataType.FUTURES_MARGIN.name.lower() in targets:
-        with target_guard("futures_margin", failed_targets):
-            # 保證金是「現行一覽表」，一次請求就結束，沒有回補區間，故不取 time_config；
-            # 沒有調整時不會新增列（主鍵相同被 INSERT OR IGNORE 擋掉），那是正常狀態
-            futures_margin_updater: FuturesMarginUpdater = FuturesMarginUpdater()
-            try:
-                futures_margin_updater.update()
-            finally:
-                futures_margin_updater.close()
-
-    if DataType.MARKET_HOLIDAY.name.lower() in targets:
-        with target_guard("market_holiday", failed_targets):
-            # 一年一次請求、固定抓去年／今年／明年，沒有回補區間，故不取 time_config；
-            # 明年的公告 12 月前多半還沒出來，那一年記一行 info 跳過屬正常
-            market_holiday_updater: MarketHolidayUpdater = MarketHolidayUpdater()
-            try:
-                market_holiday_updater.update()
-            finally:
-                market_holiday_updater.close()
-
-    if DataType.FS.name.lower() in targets:
-        with target_guard("fs", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FS,
-                from_date=from_date,
-            )
-            fs_updater: FinancialStatementUpdater = FinancialStatementUpdater()
-            try:
-                fs_updater.update(
-                    start_year=time_config["start_year"],
-                    end_year=time_config["end_year"],
-                    start_season=time_config["start_season"],
-                    end_season=time_config["end_season"],
-                )
-            finally:
-                fs_updater.close()
-
-    if DataType.MRR.name.lower() in targets:
-        with target_guard("mrr", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.MRR,
-                from_date=from_date,
-            )
-            mrr_updater: MonthlyRevenueReportUpdater = MonthlyRevenueReportUpdater()
-            try:
-                mrr_updater.update(
-                    start_year=time_config["start_year"],
-                    end_year=time_config["end_year"],
-                    start_month=time_config["start_month"],
-                    end_month=time_config["end_month"],
-                )
-            finally:
-                mrr_updater.close()
-
-    # FinMind 資料更新
-    if DataType.FINMIND.name.lower() in targets:
-        with target_guard("finmind", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FINMIND,
-                from_date=from_date,
-            )
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update_all(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                finmind_updater.close()
-
-    # FinMind 子類型更新
-    if FinMindDataType.STOCK_INFO.value.lower() in targets:
-        with target_guard("stock_info", failed_targets):
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update(data_type=FinMindDataType.STOCK_INFO)
-            finally:
-                finmind_updater.close()
-
-    if FinMindDataType.STOCK_INFO_WITH_WARRANT.value.lower() in targets:
-        with target_guard("stock_info_with_warrant", failed_targets):
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update(
-                    data_type=FinMindDataType.STOCK_INFO_WITH_WARRANT
-                )
-            finally:
-                finmind_updater.close()
-
-    if FinMindDataType.BROKER_INFO.value.lower() in targets:
-        with target_guard("broker_info", failed_targets):
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update(data_type=FinMindDataType.BROKER_INFO)
-            finally:
-                finmind_updater.close()
-
-    if FinMindDataType.BROKER_TRADING.value.lower() in targets:
-        with target_guard("broker_trading", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                FinMindDataType.BROKER_TRADING.value.lower(),
-                from_date=from_date,
-            )
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update_broker_trading_daily_report(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                finmind_updater.close()
+                # 每一支 updater 都以 `close()` 收尾（`BaseDataUpdater` 提供預設）；
+                # 測試可能以沒有 `close()` 的替身換掉類別，故容忍沒有
+                close: Optional[Callable[[], None]] = getattr(updater, "close", None)
+                if close is not None:
+                    close()
 
     # **一定要在結束碼判斷之前**：失敗的那幾天正是 `logs/api/` 長最多的時候，
     # 放在 `sys.exit(1)` 之後等於永遠跑不到

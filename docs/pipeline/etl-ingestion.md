@@ -367,7 +367,7 @@ crawler 回 `CrawlResult` 三態（`FuturesPriceCrawler.crawl_futures_price()`�
 6. **跨期間的來源要逐期間實查，測試 fixture 要涵蓋每一種期間。** MOPS 權益變動表的本期標籤 Q1 是「第N季」、Q2／Q3／Q4 分別是「上半年度／前3季／年度」；只用 Q1 驗證時，測試與實跑會同時漏掉另外三季。
 7. **把暫時性失敗記成 `FAILED`，不要記成「沒有資料」。** 連線失敗、被擋、版面解析不出來都要讓那一天或那一年下次重試；記成 `NO_DATA` 會讓它永遠不再被補。
 8. **多個來源拼成一份的資料，任一來源沒有完整取得就整份不入庫**（§3.5）。只入庫問到的那一邊不會有任何錯誤；同理，resume 不可用 `MAX + 1`，否則失敗的那一期被後面成功的期間越過之後永遠不會再被請求。
-9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 提供 `close()` 並在 `apps/update_db.py` 以 `try/finally` 呼叫**（§3.1.1）。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
+9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 的收尾一律叫 `close()`**（`BaseDataUpdater` 提供預設、日誌檔名以 `LOG_FILE_NAME` 宣告），新 target 在 `apps/update_db.py` 的 `TARGETS` 註冊表加一列，`main()` 只有一個迴圈，不再逐 target 手寫 `try/finally`（§3.1.1）。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
 10. **crawler 的 `crawl_*` 一律回 `CrawlResult` 三態**（`core/pipeline/shared/base_crawler.py`），不回 `Optional[...]`：`None` 分不出「沒問到」與「沒有資料」，而前者要重試、後者不必。CSV 原文放 `text`、多張表放 `tables`。分不出來的來源（期交所籌碼回 HTTP 200 ＋ HTML）回 `NO_DATA`，由 updater 以交易日曆升級成 `FAILED`。整批「該有資料卻一個都沒拿到」要讓 target 失敗（`UpdateStats.failure_reason()`），財報三表以前沒有這層，站方失聯時仍以結束碼 0 收場。守門：`tests/test_crawl_result_contract.py` 掃 `core/pipeline/tw/crawlers/` 的回傳型別標註。
 
 ## 相關文件

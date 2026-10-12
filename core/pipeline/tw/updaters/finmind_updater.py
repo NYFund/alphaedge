@@ -18,7 +18,6 @@ from core.pipeline.tw.updaters.finmind import (
     StockInfoUpdater,
 )
 from core.pipeline.utils import FinMindDataType
-from core.utils.log_manager import LogManager
 
 """
 FinMind data updater: stock info with warrant, broker info, broker trading daily report
@@ -30,6 +29,8 @@ FinMind data updater: stock info with warrant, broker info, broker trading daily
 
 class FinMindUpdater(BaseDataUpdater):
     """FinMind Updater"""
+
+    LOG_FILE_NAME: str = "update_finmind.log"
 
     # 預設日期（update_all 時 broker_trading 若未給 start_date）
     DEFAULT_BROKER_TRADING_START_DATE: datetime.date = datetime.date(2021, 6, 30)
@@ -54,7 +55,7 @@ class FinMindUpdater(BaseDataUpdater):
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("update_finmind.log")
+        super().setup()
 
         # 共用執行環境：四個資料集打的是同一把 token，quota 狀態掛在這裡
         self.context: FinMindContext = FinMindContext(

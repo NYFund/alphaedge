@@ -27,7 +27,6 @@ from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
 from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession, TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 台期貨每日行情 Updater
@@ -56,6 +55,8 @@ SESSIONS_PER_DAY: int = 2
 
 class FuturesPriceUpdater(BaseDataUpdater):
     """Futures Price Updater"""
+
+    LOG_FILE_NAME: str = "update_futures_price.log"
 
     # 每爬幾天就入庫一次；中斷最多只損失最後一批
     LOAD_BATCH_SIZE: int = 100
@@ -114,7 +115,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("update_futures_price.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束；含唯讀的台股連線）"""

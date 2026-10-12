@@ -20,7 +20,6 @@ from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
 from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import AnnouncementParseError, DataLoadError
 from core.utils import TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 台期貨保證金 Updater
@@ -144,6 +143,8 @@ class AnnouncementMetadataStore:
 class FuturesMarginUpdater(BaseDataUpdater):
     """Futures Margin Updater"""
 
+    LOG_FILE_NAME: str = "update_futures_margin.log"
+
     # 歷史回補的節流：每則公告要開明細頁 ＋ 下載附件（2 次請求）
     ANNOUNCEMENT_DELAY_SECONDS: float = 1.5
 
@@ -175,7 +176,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("update_futures_margin.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""

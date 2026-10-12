@@ -15,7 +15,6 @@ from core.pipeline.tw.cleaners.market_holiday_cleaner import MarketHolidayCleane
 from core.pipeline.tw.crawlers.market_holiday_crawler import MarketHolidayCrawler
 from core.pipeline.tw.loaders.market_holiday_loader import MarketHolidayLoader
 from core.pipeline.utils.exceptions import DataLoadError
-from core.utils.log_manager import LogManager
 
 """
 Market Holiday Updater：每次重抓「去年、今年、明年」三個年度
@@ -28,6 +27,8 @@ Market Holiday Updater：每次重抓「去年、今年、明年」三個年度
 
 class MarketHolidayUpdater(BaseDataUpdater):
     """Market Holiday Updater"""
+
+    LOG_FILE_NAME: str = "update_market_holiday.log"
 
     def __init__(self) -> None:
         super().__init__()
@@ -47,7 +48,7 @@ class MarketHolidayUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("update_market_holiday.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""

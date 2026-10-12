@@ -178,9 +178,39 @@ class BaseDataUpdater(ABC):
     BATCH_RANDOM_DELAY_MIN: int = 1
     BATCH_RANDOM_DELAY_MAX: int = 5
 
+    # 本 updater 的日誌檔名；`setup()` 據此開檔，空字串表示不另外落地
+    LOG_FILE_NAME: str = ""
+
     def __init__(self) -> None:
-        """建立 updater；連線與 log 一律由子類的 `setup()` 負責"""
+        """建立 updater；連線一律由子類的 `setup()` 負責，日誌由基底依 `LOG_FILE_NAME` 開"""
         pass
+
+    # === 生命週期 ===
+    def setup(self, *args, **kwargs) -> None:
+        """開日誌檔（`LOG_FILE_NAME`）；子類要建連線與 API 時先呼叫 `super().setup()`"""
+
+        if self.LOG_FILE_NAME:
+            LogManager.setup_logger(self.LOG_FILE_NAME)
+
+    def close(self) -> None:
+        """
+        關閉連線與對外資源；可重複呼叫，預設沒事可做
+
+        **每一支 updater 都有同一個收尾名字**：入口程式才能用同一個迴圈 `try/finally`
+        收尾，而不是逐支記住它叫 `close`、`cleanup` 還是 `logout`。
+        """
+
+        pass
+
+    def __enter__(self) -> "BaseDataUpdater":
+        """支援 with 語法：離開區塊即 `close()`"""
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """離開 with 區塊時關閉資源"""
+
+        self.close()
 
     @staticmethod
     def raise_if_unreachable(source: str, stats: UpdateStats) -> None:
@@ -363,10 +393,6 @@ class BaseDataUpdater(ABC):
         )
 
     @abstractmethod
-    def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Updater"""
-        pass
-
     @abstractmethod
     def update(self, *args, **kwargs) -> None:
         """Update the Database"""
@@ -403,11 +429,6 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
     # 2013 起的回補有 3,300 個交易日、數小時，中途失敗要全部重來。
     # 分批之後最多只損失最後一批（未入庫的部分），重跑會自動接續。
     LOAD_BATCH_SIZE: int = 100
-
-    def setup(self) -> None:
-        """Set Up the Config of Updater"""
-
-        LogManager.setup_logger(self.LOG_FILE_NAME)
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
@@ -670,11 +691,6 @@ class YearlyRangeTwoMarketUpdater(BaseDataUpdater):
     # 區間請求之間的節流（一年一次請求，不需要像逐日爬蟲那樣長時間休息）
     YEAR_REQUEST_DELAY_MIN: int = 3
     YEAR_REQUEST_DELAY_MAX: int = 8
-
-    def setup(self) -> None:
-        """Set Up the Config of Updater"""
-
-        LogManager.setup_logger(self.LOG_FILE_NAME)
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""

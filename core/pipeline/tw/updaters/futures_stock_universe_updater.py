@@ -21,7 +21,6 @@ from core.pipeline.tw.loaders.futures_stock_universe_loader import (
 )
 from core.pipeline.utils.exceptions import DataLoadError
 from core.utils import StockFuturesType, TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 股票期貨標的池 Updater
@@ -49,6 +48,8 @@ from core.utils.log_manager import LogManager
 class FuturesStockUniverseUpdater(BaseDataUpdater):
     """Futures Stock Universe Updater"""
 
+    LOG_FILE_NAME: str = "futures_stock_universe_updater.log"
+
     def __init__(self) -> None:
         super().__init__()
 
@@ -71,7 +72,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("futures_stock_universe_updater.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""

@@ -73,7 +73,7 @@ import 它們會被分層檢查判成反向相依；`core.models` 同層，會�
 
 **一次執行中同一個 DB 只開一條連線**：舊版 updater 與 loader 各開一條到同一個 DB，
 updater 那條從不關閉，兩條連線還會互搶寫入鎖（券商分點曾得先 commit loader 那條才查得動）。
-`apps/update_db.py` 的每個 SQLite target 一律 `try/finally: updater.close()`（tick 寫 TimescaleDB，Shioaji 連線由 updater 結束時自行登出）。
+`apps/update_db.py` 對每個 target 一律 `try/finally: updater.close()`——由 `TARGETS` 註冊表驅動的同一個迴圈，不分 SQLite 或 TimescaleDB（tick 的 `close()` 登出 Shioaji 連線，可重複呼叫）。
 
 **唯讀連線**（`connect_sqlite(path, read_only=True)`）用在只讀的場合：不會與背景 ETL 搶寫入鎖，
 檔案不存在時也不會被 `sqlite3.connect()` 默默建出一個空 DB。
@@ -182,7 +182,7 @@ tick 回測根本跑不了，直接拋錯。
    走 `load_csv_directory()` 的表另宣告 `PRIMARY_KEY_COLUMNS`（與 DDL 的 PRIMARY KEY 一致，供檔內去重）。
 2. **表不存在時的回傳約定寫進 docstring**，其餘錯誤往外拋（§五）。
 3. **loader 收 `dao=`（或多表時收 `conn=`），不擁有時不關閉**；逐檔包 savepoint，commit 時點依 §4.3 擇一。
-4. **updater 持有 DAO／連線並提供 `close()`**，`apps/update_db.py` 以 `try/finally` 呼叫。
+4. **updater 持有 DAO／連線並提供 `close()`**（基底有預設；日誌檔名以 `LOG_FILE_NAME` 宣告），在 `apps/update_db.py` 的 `TARGETS` 註冊表加一列即由同一個迴圈 `try/finally` 收尾。
 5. **API 以 `conn=` 建 DAO**，公開方法只做業務轉換，不寫 SQL。
 6. **測試建表走 `tests/conftest.py` 的 `dao_factory`**：以 DAO 自己的建表方法建出正式 schema，
    `complete_rows()` 補齊沒給值的 NOT NULL／主鍵欄，**給了 schema 沒有的欄位直接報錯**（欄名打錯或 schema 改名時測試會紅）。

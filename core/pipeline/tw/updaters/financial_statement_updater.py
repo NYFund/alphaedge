@@ -33,7 +33,6 @@ from core.pipeline.tw.updaters.financial_statement import (
 )
 from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.exceptions import DataLoadError
-from core.utils.log_manager import LogManager
 
 """
 * Crawl Balance Sheet (資產負債表)
@@ -122,6 +121,8 @@ class StatementSpec:
 class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
     """Financial Statement Updater"""
 
+    LOG_FILE_NAME: str = "update_financial_statement.log"
+
     BATCH_SLEEP_EVERY_N_FILES: int = 10
     BATCH_SLEEP_DURATION_SECONDS: int = 30
     BATCH_RANDOM_DELAY_MIN: int = 1
@@ -182,7 +183,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         """Set Up the Config of Updater"""
 
         # 設定 log 檔案儲存路徑
-        LogManager.setup_logger("update_financial_statement.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一條連線，一併結束）"""

@@ -22,7 +22,6 @@ from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
 from core.pipeline.utils.exceptions import DataLoadError
-from core.utils.log_manager import LogManager
 
 """
 台期貨籌碼 Updater：三大法人、大額交易人、選擇權 PCR
@@ -62,6 +61,8 @@ from core.utils.log_manager import LogManager
 class FuturesChipUpdater(BaseDataUpdater):
     """更新 tw_futures.db 的三張籌碼表"""
 
+    LOG_FILE_NAME: str = "futures_chip_updater.log"
+
     # 節流：月批次之後請求數只剩三十分之一，但仍要留間隔——
     # TAIFEX 擋流量時回的是 HTTP 200 ＋ 一頁 HTML，被擋了不會有任何錯誤
     MIN_DELAY_SECONDS: float = 2.0
@@ -100,7 +101,7 @@ class FuturesChipUpdater(BaseDataUpdater):
     def setup(self) -> None:
         """Set Up the Config of Updater"""
 
-        LogManager.setup_logger("futures_chip_updater.log")
+        super().setup()
         self.crawler = FuturesChipCrawler()
         self.cleaner = FuturesChipCleaner()
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
