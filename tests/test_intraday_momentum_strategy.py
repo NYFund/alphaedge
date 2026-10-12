@@ -296,6 +296,40 @@ def test_stop_loss_bullish_bar_ignores_low_before_entry() -> None:
     )
 
 
+def test_stop_loss_bullish_gap_up_bar_uses_low() -> None:
+    """
+    跳空開在觸發價之上的陽線：進場價是開盤價，路徑「開 → 低 → 高 → 收」的低點在進場之後
+
+    開 109.5 ≥ 觸發價 109 即以開盤進場，盤中最低 107.0 跌破停損價 107.5 就該停損；
+    只因收陽線就改看收盤（110.5）會漏掉這筆當天的停損，部位錯留到隔天
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.account.positions.append(make_position())
+
+    signals = strategy.generate_stop_loss_signals(
+        [make_quote(open=109.5, high=111.0, low=107.0, close=110.5)]
+    )
+
+    assert len(signals) == 1
+    assert signals[0].order_price == STOP_PRICE
+    assert signals[0].volume == 2
+
+
+def test_stop_loss_bullish_gap_up_bar_not_triggered_above_stop() -> None:
+    """跳空進場的陽線最低價守在停損價之上（108.0）就不停損，確認看的是最低價而不是一律停損"""
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.account.positions.append(make_position())
+
+    assert (
+        strategy.generate_stop_loss_signals(
+            [make_quote(open=109.5, high=111.0, low=108.0, close=110.5)]
+        )
+        == []
+    )
+
+
 def test_stop_loss_bullish_bar_closing_below_stop() -> None:
     """陽線收盤跌破停損價：進場後確定跌到過停損價，停損"""
 
