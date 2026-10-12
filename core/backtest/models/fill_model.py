@@ -5,7 +5,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger
 
-from core.backtest.models.event_counts import FUTURES_EVENT_KEYS, new_event_counts
+from core.backtest.models.event_counts import (
+    EVENT_KEYS,
+    FUTURES_EVENT_KEYS,
+    new_event_counts,
+)
 from core.datafeed.base import BaseDataFeed
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
@@ -47,11 +51,23 @@ class BaseFillModel(ABC):
     成交價可信度是市場規則而非引擎邏輯，故與 InstrumentSpec 一樣下沉為可插拔 model。
     對應 Lean 的 FillModel。
 
-    **子類別必須在 `__init__` 備妥三個屬性**，基底的夾價、區間警告與逐 bar 掛點直接使用：
-    - `event_counts: Dict[str, int]`：與引擎共用同一個 dict，計數才會進報表
-    - `intraday_range: Dict[str, Tuple[float, float]]`：Tick 級別的當日累計高低點
-    - `reference_prices: Dict[str, float]`：次一根 bar 的漲跌停參考價
+    **`validate()` 與 `fill()` 都是樣板方法**，兩個市場共用同一條流程，只在鉤子處不同：
+    - `validate()`：無成交擋板 → 當根 bar 區間 → `validate_market_rules()`（台股做漲跌停與
+      鎖死，期貨沒有）→ 檔位警告
+    - `fill()`：`check_order_eligibility()`（台股依序檢查交易所名單、券源、停券，期貨一律通過）
+      → 滑價 → 成交量上限 → 訂單副本
+
+    建構子備妥共用的四個屬性：`instrument`、`config`、`event_counts`（與引擎共用同一個 dict）、
+    `intraday_range`、`reference_prices`。市場專屬的狀態由子類在 `super().__init__()` 之後補。
     """
+
+    # 自備計數器時要用的 key 清單：台股用台股清單，期貨子類改成期貨清單。
+    # **自備的那份要有全部 key**：只塞用得到的幾個，單獨建模型時走到成交量上限、
+    # 券源或停券就會 `KeyError`
+    EVENT_KEYS: Tuple[str, ...] = EVENT_KEYS
+
+    # 未指定成交假設時的預設設定類別（滑價、成交量上限全關）
+    CONFIG_CLS: type = FillConfig
 
     # 數量單位：股票論張、期貨論口。只影響 log 訊息，成交量上限的政策兩邊相同
     VOLUME_UNIT: str = "張"
@@ -61,11 +77,39 @@ class BaseFillModel(ABC):
     check_short_sale_list: bool = False
     check_day_trade_list: bool = False
 
-    @abstractmethod
+    def __init__(
+        self,
+        instrument: InstrumentSpec,
+        event_counts: Optional[Dict[str, int]] = None,
+        config: Optional[FillConfig] = None,
+    ) -> None:
+        self.instrument: InstrumentSpec = instrument
+
+        # 成交假設（滑價、成交量上限）；預設全關
+        self.config: FillConfig = config or self.CONFIG_CLS()
+
+        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）
+        self.event_counts: Dict[str, int] = (
+            event_counts
+            if event_counts is not None
+            else new_event_counts(self.EVENT_KEYS)
+        )
+
+        # Tick 級別的當日累計高低點（TickQuote 沒有 OHLC，成交價驗證需自行維護）
+        self.intraday_range: Dict[str, Tuple[float, float]] = {}
+
+        # 漲跌停參考價：前一交易日收盤，台股除權息日由 `apply_price_limit_basis()`
+        # 覆寫為公告基準。期貨沒有漲跌停檢查，這份只供外部查詢——
+        # 盯市一律走 `SettlementModel.get_mark_price()`，不看這裡
+        self.reference_prices: Dict[str, float] = {}
+
     def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
         """
         - Description:
-            成交價合理性檢查
+            成交價合理性檢查（前視偏誤與不可能成交的擋板）：
+            無成交 → 當根 bar 區間 → 市場規則 → 檔位警告
+
+            檔位未對齊僅記錄警告不拒單——資料本身的價格精度問題不該擋掉正常回測。
         - Parameters:
             - order: BaseOrder
                 待驗證的訂單
@@ -76,7 +120,54 @@ class BaseFillModel(ABC):
                 False 時呼叫端應拒單
         """
 
-        pass
+        if not self.has_tradable_quote(quote):
+            logger.warning(
+                f"[Validate Fill] {order.symbol} 當日無成交（volume={quote.volume}、"
+                f"close={quote.close}），拒單"
+            )
+            self.event_counts["rejected_fill_price"] += 1
+            return False
+
+        low, high = self.get_price_range(quote)
+        if low is not None and high is not None and not (low <= order.price <= high):
+            logger.warning(
+                f"[Validate Fill] {order.symbol} 成交價 {order.price} 超出當日區間 "
+                f"[{low}, {high}]，拒單"
+            )
+            self.event_counts["rejected_fill_price"] += 1
+            return False
+
+        if not self.validate_market_rules(order, quote):
+            return False
+
+        product: Optional[str] = self.instrument.resolve_product(order)
+        if (
+            self.instrument.round_to_tick(order.price, "nearest", product)
+            != order.price
+        ):
+            logger.warning(
+                f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊檔位"
+            )
+
+        return True
+
+    def validate_market_rules(self, order: BaseOrder, quote: BaseQuote) -> bool:
+        """
+        - Description:
+            市場專屬的成交擋板（台股：漲跌停與全日鎖死）；沒有這類制度的市場一律通過
+
+            拒單時由子類自行 warning 並計數——事件 key 依規則不同。
+        - Parameters:
+            - order: BaseOrder
+                已通過區間檢查的訂單
+            - quote: BaseQuote
+                當根 bar 的報價
+        - Return:
+            - bool
+                False 時呼叫端應拒單
+        """
+
+        return True
 
     def update_intraday_range(self, quotes: List[BaseQuote]) -> None:
         """
@@ -186,14 +277,16 @@ class BaseFillModel(ABC):
     def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
         """
         - Description:
-            決定這張單成不成交、以什麼價量成交
+            決定這張單成不成交、以什麼價量成交：
+            `check_order_eligibility()` → 滑價 → 成交量上限 → 訂單副本
 
             **與 `validate()` 的分工**：`validate()` 只回答「這個價格在當根 bar
             可不可能成交」，是既有的前視偏誤擋板；`fill()` 負責市場執行假設
-            （滑價、成交量上限、券源），並在需要調整時回傳**訂單副本**。
+            （名單、券源、滑價、成交量上限），並在需要調整時回傳**訂單副本**。
 
             **絕不就地修改傳入的 order**：策略可能持有同一個物件，
             就地改動會讓策略下一根 bar 看到被引擎改過的價量。
+            未啟用任何假設時直接回傳**原物件**，下游就不可能拿到被改過的價量。
         - Parameters:
             - order: BaseOrder
                 策略產生的訂單
@@ -204,7 +297,42 @@ class BaseFillModel(ABC):
                 可成交的訂單（未調整時為原物件本身）；不可成交時為 None
         """
 
-        return order
+        if not self.check_order_eligibility(order):
+            return None
+
+        price: float = self.get_filled_price(order)
+        volume: Optional[int] = self.get_filled_volume(order, quote)
+
+        if volume is None:
+            return None
+
+        if price == order.price and volume == order.volume:
+            return order
+
+        filled_order: BaseOrder = copy.copy(order)
+        filled_order.price = price
+        filled_order.volume = volume
+        # **滑價前的委託價留在副本上**：滑價成本＝（成交價 − 委託價）× 數量 ×
+        # 計價單位，而計價單位只有部位管理層知道（期貨的乘數逐契約不同），
+        # 它又拿不到原單——兩者只能在副本上碰頭
+        filled_order.reference_price = order.price
+        return filled_order
+
+    def check_order_eligibility(self, order: BaseOrder) -> bool:
+        """
+        - Description:
+            這張單在制度上能不能成交（台股：交易所名單、券源、停券）；沒有這類制度的市場一律通過
+
+            拒單時由子類自行 warning 並計數——事件 key 依規則不同。
+        - Parameters:
+            - order: BaseOrder
+                策略產生的訂單（逐筆路徑傳入的是已帶成交價的副本）
+        - Return:
+            - bool
+                False 時呼叫端應拒單
+        """
+
+        return True
 
     @staticmethod
     def get_tick_fill_price(
@@ -452,10 +580,7 @@ class TwStockFillModel(BaseFillModel):
         check_short_sale_list: bool = False,
         check_day_trade_list: bool = False,
     ) -> None:
-        self.instrument: InstrumentSpec = instrument or TwStockSpec()
-
-        # 成交假設（滑價、成交量上限）；預設全關
-        self.config: FillConfig = config or FillConfig()
+        super().__init__(instrument or TwStockSpec(), event_counts, config)
 
         # 是否檢核券源；由 factory 依 ShortConstraint.check_borrowable 帶入
         self.check_borrowable: bool = check_borrowable
@@ -470,41 +595,11 @@ class TwStockFillModel(BaseFillModel):
         # 當日可借券餘額（張）：{stock_id: 融券今日餘額}，由 DataFeed 於每根 bar 開始時提供
         self.short_balance: Dict[str, int] = {}
 
-        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）。
-        # **自備的那份要有全部 key**（`new_event_counts()`）：只塞用得到的幾個，
-        # 單獨建模型時走到成交量上限、券源或停券就會 `KeyError`
-        self.event_counts: Dict[str, int] = (
-            event_counts if event_counts is not None else new_event_counts()
-        )
-
-        # Tick 級別的當日累計高低點（TickQuote 沒有 OHLC，成交價驗證需自行維護）
-        self.intraday_range: Dict[str, Tuple[float, float]] = {}
-
-        # 漲跌停參考價：前一交易日收盤，除權息日由 `apply_price_limit_basis()` 覆寫為公告基準
-        self.reference_prices: Dict[str, float] = {}
-
         # 今日停券的標的，`prepare_day()` 每天從 DataFeed 取
         self.short_suspended_symbols: Set[str] = set()
 
-    def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
-        """成交價合理性檢查（前視偏誤與不可能成交的擋板）"""
-
-        if not self.has_tradable_quote(quote):
-            logger.warning(
-                f"[Validate Fill] {order.symbol} 當日無成交（volume={quote.volume}、"
-                f"close={quote.close}），拒單"
-            )
-            self.event_counts["rejected_fill_price"] += 1
-            return False
-
-        low, high = self.get_price_range(quote)
-        if low is not None and high is not None and not (low <= order.price <= high):
-            logger.warning(
-                f"[Validate Fill] {order.symbol} 成交價 {order.price} 超出當日區間 "
-                f"[{low}, {high}]，拒單"
-            )
-            self.event_counts["rejected_fill_price"] += 1
-            return False
+    def validate_market_rules(self, order: BaseOrder, quote: BaseQuote) -> bool:
+        """台股的市場擋板：漲跌停區間（前收 ±幅度，除權息日為公告基準）→ 全日鎖漲跌停"""
 
         reference_price: Optional[float] = self.reference_prices.get(order.symbol)
         if reference_price:
@@ -520,18 +615,7 @@ class TwStockFillModel(BaseFillModel):
                 self.event_counts["rejected_fill_price"] += 1
                 return False
 
-        if self.is_locked_at_limit(order, quote, reference_price):
-            return False
-
-        if (
-            self.instrument.round_to_tick(order.price, "nearest", order.symbol)
-            != order.price
-        ):
-            logger.warning(
-                f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊檔位"
-            )
-
-        return True
+        return not self.is_locked_at_limit(order, quote, reference_price)
 
     def is_locked_at_limit(
         self, order: BaseOrder, quote: BaseQuote, reference_price: Optional[float]
@@ -666,49 +750,16 @@ class TwStockFillModel(BaseFillModel):
         self.short_sale_list = short_sale_list
         self.day_trade_list = day_trade_list
 
-    def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
-        """
-        - Description:
-            台股的成交假設：交易所名單 → 券源檢核 → 停券 → 滑價 → 成交量上限
-
-            三項預設皆為關閉，此時直接回傳**原物件**（不是副本），
-            未啟用任何假設時不改動訂單的價量。
-        - Parameters:
-            - order: BaseOrder
-                策略產生的訂單
-            - quote: BaseQuote
-                同一標的的當根 bar 報價
-        - Return:
-            - Optional[BaseOrder]
-                可成交的訂單；不可成交時為 None
-        """
+    def check_order_eligibility(self, order: BaseOrder) -> bool:
+        """台股的制度擋板：交易所名單 → 券源 → 停券（三項預設皆關閉，此時一律通過）"""
 
         if not self.check_trading_lists(order):
-            return None
+            return False
 
         if not self.check_short_borrowable(order):
-            return None
+            return False
 
-        if not self.check_short_not_suspended(order):
-            return None
-
-        price: float = self.get_filled_price(order)
-        volume: Optional[int] = self.get_filled_volume(order, quote)
-
-        if volume is None:
-            return None
-
-        if price == order.price and volume == order.volume:
-            return order
-
-        filled_order: BaseOrder = copy.copy(order)
-        filled_order.price = price
-        filled_order.volume = volume
-        # **滑價前的委託價留在副本上**：滑價成本＝（成交價 − 委託價）× 數量 ×
-        # 計價單位，而計價單位只有部位管理層知道（期貨的乘數逐契約不同），
-        # 它又拿不到原單——兩者只能在副本上碰頭
-        filled_order.reference_price = order.price
-        return filled_order
+        return self.check_short_not_suspended(order)
 
     def check_trading_lists(self, order: BaseOrder) -> bool:
         """
@@ -937,11 +988,7 @@ class TwStockFillModel(BaseFillModel):
         priced.price = price
 
         # 平盤下的限制看**實際成交價**：市價放空以委買價成交，決策價在平盤上、成交價卻可能在平盤下
-        if not self.check_trading_lists(priced):
-            return None
-        if not self.check_short_borrowable(priced):
-            return None
-        if not self.check_short_not_suspended(priced):
+        if not self.check_order_eligibility(priced):
             return None
 
         priced.price = self.get_filled_price(priced)
@@ -1029,12 +1076,15 @@ class TwFuturesFillModel(BaseFillModel):
     """
     台期貨成交價模型
 
-    與 `TwStockFillModel` 的三個差異：
+    與 `TwStockFillModel` 的三個差異（流程本身在基底，這裡只是鉤子沒有內容）：
 
     1. **不做漲跌停檢查**：期貨沒有可事先算出的漲跌停區間（見 `TwFuturesSpec`），
-       故 `validate()` 只保留「成交價須落在當根 bar 的區間內」這道前視偏誤擋板。
-    2. **不做券源檢核**：期貨賣出開倉就是放空，不需要借券也沒有融券餘額的概念。
+       `validate_market_rules()` 沿用基底的一律通過，`validate()` 只剩無成交擋板與
+       「成交價須落在當根 bar 的區間內」這道前視偏誤擋板。
+    2. **不做名單與券源檢核**：期貨賣出開倉就是放空，不需要借券也沒有融券餘額的概念，
+       `check_order_eligibility()` 同樣沿用基底。
     3. **成交量的單位是口**，不是張；`FillConfig.max_volume_share` 的語意不變。
+       滑價以跳動點表達（`FuturesFillConfig`），`get_filled_price()` 是本類唯一的實作。
 
     ⚠️ **同一契約的日盤與夜盤 `symbol` 相同**（`{product}{expiry}`）。本 model 的
     `reference_prices` 與 `intraday_range` 以 symbol 為鍵，兩個時段混在同一根 bar 傳進來
@@ -1044,97 +1094,19 @@ class TwFuturesFillModel(BaseFillModel):
     # 期貨論口，股票論張；只影響 log 訊息
     VOLUME_UNIT: str = "口"
 
+    # 自備計數器時用期貨清單，事件報表才不會列出二十個永遠是 0 的台股列
+    EVENT_KEYS: Tuple[str, ...] = FUTURES_EVENT_KEYS
+
+    # 期貨的滑價以跳動點表達
+    CONFIG_CLS: type = FuturesFillConfig
+
     def __init__(
         self,
         instrument: Optional[InstrumentSpec] = None,
         event_counts: Optional[Dict[str, int]] = None,
         config: Optional[FuturesFillConfig] = None,
     ) -> None:
-        self.instrument: InstrumentSpec = instrument or TwFuturesSpec()
-
-        # 成交假設（滑價、成交量上限）；預設全關
-        self.config: FillConfig = config or FuturesFillConfig()
-
-        # 與引擎共用同一個 dict，拒單計數才會反映到報表（傳 None 時自行持有，供單獨測試）。
-        # **自備的那份要有全部 key**（`new_event_counts()`）：只塞用得到的幾個，
-        # 單獨建模型時走到成交量上限就會 `KeyError`
-        self.event_counts: Dict[str, int] = (
-            event_counts
-            if event_counts is not None
-            else new_event_counts(FUTURES_EVENT_KEYS)
-        )
-
-        # Tick 級別的當日累計高低點（期貨 Tick 回測尚未實作，目前不會被填入）
-        self.intraday_range: Dict[str, Tuple[float, float]] = {}
-
-        # 前一交易日收盤價；期貨沒有漲跌停檢查，這份只供外部查詢——
-        # 盯市一律走 `TwFuturesSettlementModel.get_mark_price()`（結算價優先），不看這裡
-        self.reference_prices: Dict[str, float] = {}
-
-    def validate(self, order: BaseOrder, quote: BaseQuote) -> bool:
-        """
-        成交價合理性檢查：**只檢查是否落在當根 bar 的高低點之間**
-
-        期貨沒有漲跌停可查（見 `TwFuturesSpec.get_price_limits()`）；跳動點未對齊
-        僅記錄警告不拒單，與台股一致——資料本身的價格精度問題不該擋掉正常回測。
-
-        **零成交的契約先擋**：遠月契約整天零成交是常態（資料裡三成的列），
-        它的區間是 `(None, None)`，只靠區間檢查會讓任何價格都成交。
-        """
-
-        if not self.has_tradable_quote(quote):
-            logger.warning(
-                f"[Validate Fill] {order.symbol} 當日無成交（volume={quote.volume}、"
-                f"close={quote.close}），拒單"
-            )
-            self.event_counts["rejected_fill_price"] += 1
-            return False
-
-        low, high = self.get_price_range(quote)
-        if low is not None and high is not None and not (low <= order.price <= high):
-            logger.warning(
-                f"[Validate Fill] {order.symbol} 成交價 {order.price} 超出當日區間 "
-                f"[{low}, {high}]，拒單"
-            )
-            self.event_counts["rejected_fill_price"] += 1
-            return False
-
-        product: Optional[str] = getattr(order, "product", None)
-        if (
-            self.instrument.round_to_tick(order.price, "nearest", product)
-            != order.price
-        ):
-            logger.warning(
-                f"[Validate Fill] {order.symbol} 成交價 {order.price} 未對齊跳動點"
-            )
-
-        return True
-
-    def fill(self, order: BaseOrder, quote: BaseQuote) -> Optional[BaseOrder]:
-        """
-        期貨的成交假設：滑價 → 成交量上限
-
-        兩項預設皆為關閉，此時直接回傳**原物件**（不是副本），
-        與台股同一種寫法：未啟用任何假設時不改動訂單的價量。
-        """
-
-        price: float = self.get_filled_price(order)
-        volume: Optional[int] = self.get_filled_volume(order, quote)
-
-        if volume is None:
-            return None
-
-        if price == order.price and volume == order.volume:
-            return order
-
-        filled_order: BaseOrder = copy.copy(order)
-        filled_order.price = price
-        filled_order.volume = volume
-        # **滑價前的委託價留在副本上**：滑價成本＝（成交價 − 委託價）× 數量 ×
-        # 計價單位，而計價單位只有部位管理層知道（期貨的乘數逐契約不同），
-        # 它又拿不到原單——兩者只能在副本上碰頭
-        filled_order.reference_price = order.price
-        return filled_order
+        super().__init__(instrument or TwFuturesSpec(), event_counts, config)
 
     def get_filled_price(self, order: BaseOrder) -> float:
         """
@@ -1152,7 +1124,7 @@ class TwFuturesFillModel(BaseFillModel):
                 含滑價的成交價
         """
 
-        product: Optional[str] = getattr(order, "product", None)
+        product: Optional[str] = self.instrument.resolve_product(order)
 
         ticks: float = self.get_slippage_ticks(order)
         if ticks:
@@ -1172,7 +1144,7 @@ class TwFuturesFillModel(BaseFillModel):
             return 0.0
 
         return self.config.get_slippage_ticks(
-            order.action, getattr(order, "product", None)
+            order.action, self.instrument.resolve_product(order)
         )
 
     def apply_tick_slippage(

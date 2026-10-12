@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from loguru import logger
 
 from core.market.instrument_spec import InstrumentSpec
+from core.models import BaseOrder
 from core.utils import (
     FUTURES_TICK_SIZE,
     PRICE_LIMIT_RATIO,
@@ -246,6 +247,11 @@ class TwFuturesSpec(InstrumentSpec):
         """口 → 口（**不乘契約乘數**，理由見 class docstring 第 1 點）"""
 
         return volume
+
+    def resolve_product(self, order: BaseOrder) -> Optional[str]:
+        """期貨的規格鍵是商品代碼（`TX`），不是契約代號（`TX202601`）"""
+
+        return getattr(order, "product", None)
 
     def round_to_tick(
         self,

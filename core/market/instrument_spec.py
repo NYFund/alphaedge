@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from typing import Optional, Tuple
 
+from core.models import BaseOrder
 from core.utils import (
     Action,
 )
@@ -90,6 +91,25 @@ class InstrumentSpec(ABC):
 
         scaled: Decimal = Decimal(str(price)) * (Decimal(1) + Decimal(str(ratio)))
         return float(scaled)
+
+    def resolve_product(self, order: BaseOrder) -> Optional[str]:
+        """
+        - Description:
+            從訂單取出查跳動點、漲跌停等規格時要用的商品鍵
+
+            台股的規格依個股而定（ETF 的檔位表不同），鍵就是代號；期貨的跳動點依
+            商品代碼而定（同一個 `symbol` 是 `{商品}{到期月}`），鍵是 `product`。
+            成交價模型原本自己決定傳哪個欄位，兩個市場各傳各的；把它放在規格裡，
+            呼叫端只需要把訂單交出來。
+        - Parameters:
+            - order: BaseOrder
+                要查規格的訂單
+        - Return:
+            - Optional[str]
+                商品鍵；預設為訂單的 `symbol`
+        """
+
+        return order.symbol
 
     @abstractmethod
     def to_units(self, volume: int) -> int:
