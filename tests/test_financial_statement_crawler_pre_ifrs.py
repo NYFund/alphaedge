@@ -1,9 +1,9 @@
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
-import pandas as pd
 import pytest
 
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.crawlers import financial_statement_crawler as fs_crawler_module
 from core.pipeline.tw.crawlers.financial_statement_crawler import (
     FinancialStatementCrawler,
@@ -29,7 +29,7 @@ PRE_IFRS_PAGE: str = (
 TABLE_HTML: str = "<table><tr><th>會計項目</th></tr><tr><td>期初餘額</td></tr></table>"
 
 
-def request(monkeypatch: pytest.MonkeyPatch, text: str) -> Optional[List[pd.DataFrame]]:
+def request(monkeypatch: pytest.MonkeyPatch, text: str) -> CrawlResult:
     """以指定的回應內容呼叫 `_request_equity_changes()` 一次"""
 
     def fake_post(url: str, data: Dict[str, str]) -> Any:
@@ -51,7 +51,7 @@ def request(monkeypatch: pytest.MonkeyPatch, text: str) -> Optional[List[pd.Data
 def test_pre_ifrs_redirect_is_no_data(monkeypatch: pytest.MonkeyPatch) -> None:
     """導流訊息回 []，才會被寫進查無資料的永久名單、之後不再重打"""
 
-    assert request(monkeypatch, PRE_IFRS_PAGE) == []
+    assert request(monkeypatch, PRE_IFRS_PAGE).is_no_data
 
 
 def test_unparseable_page_without_marker_is_still_retried(
@@ -65,13 +65,13 @@ def test_unparseable_page_without_marker_is_still_retried(
 
     page: str = "<html><body>系統維護中，請稍後再試</body></html>"
 
-    assert request(monkeypatch, page) is None
+    assert request(monkeypatch, page).is_failed
 
 
 def test_explicit_no_data_message_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     """既有行為不得改變：「查無資料」照樣回 []"""
 
-    assert request(monkeypatch, "<html><body>查無資料！</body></html>") == []
+    assert request(monkeypatch, "<html><body>查無資料！</body></html>").is_no_data
 
 
 def test_page_with_tables_is_never_swallowed_by_the_marker(
@@ -86,7 +86,7 @@ def test_page_with_tables_is_never_swallowed_by_the_marker(
 
     page: str = f"<html><body><a>採IFRSs前之報表</a>{TABLE_HTML}</body></html>"
 
-    tables: Optional[List[pd.DataFrame]] = request(monkeypatch, page)
+    result: CrawlResult = request(monkeypatch, page)
 
-    assert tables is not None
-    assert len(tables) == 1
+    assert result.is_ok
+    assert len(result.tables) == 1

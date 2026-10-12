@@ -7,6 +7,7 @@ from loguru import logger
 
 from core.config import BALANCE_SHEET_TABLE_NAME, EQUITY_CHANGE_TABLE_NAME
 from core.dao.tw.stock_info_dao import StockInfoDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
@@ -343,15 +344,15 @@ class EquityChangeMixin:
         try:
             for stock_id in stock_ids:
                 # Step 1: Crawl
-                df_list: Optional[List[pd.DataFrame]] = self.crawl_equity_changes_one(
+                result: CrawlResult = self.crawl_equity_changes_one(
                     year, season, stock_id, stats
                 )
 
-                if df_list is None:
+                if result.is_failed:
                     # 站方過載或連線失敗：**沒問到**，不是「沒有資料」
                     stats.unreachable += 1
                     progress.record_incomplete(year, season, stock_id)
-                elif not df_list:
+                elif result.is_no_data:
                     # 該年季這檔沒有報表（多半是當時尚未上市）；本迴圈**不做任何早退**，
                     # 見 update_equity_changes() 對「未申報年季」的處理
                     stats.no_data += 1
@@ -359,7 +360,7 @@ class EquityChangeMixin:
                 else:
                     # Step 2: Clean
                     cleaned_df: Optional[pd.DataFrame] = self.clean_equity_changes_one(
-                        df_list, year, season, stock_id
+                        result.tables, year, season, stock_id
                     )
 
                     if cleaned_df is None:
@@ -437,7 +438,7 @@ class EquityChangeMixin:
         season: int,
         stock_id: str,
         stats: Optional["EquityChangeSeasonStats"] = None,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """
         - Description:
             爬取單一檔的權益變動表，**把非預期例外隔離在這一檔之內**
@@ -459,15 +460,15 @@ class EquityChangeMixin:
             - stats: Optional[EquityChangeSeasonStats]
                 本季統計；用來累計連續例外數，None 時不啟用斷路器（試探用）
         - Return:
-            - Optional[List[pd.DataFrame]]
-                crawler 的三態回傳值；非預期例外一律回 None（＝待重試）
+            - CrawlResult
+                crawler 的三態回傳值；非預期例外一律回 `FAILED`（＝待重試）
         - Raise:
             - Exception
                 連續 `EQUITY_CHANGE_MAX_CONSECUTIVE_ERRORS` 檔都拋例外時原樣往上拋
         """
 
         try:
-            df_list: Optional[List[pd.DataFrame]] = self.crawler.crawl_equity_changes(
+            result: CrawlResult = self.crawler.crawl_equity_changes(
                 year, season, stock_id
             )
         except Exception as error:
@@ -487,12 +488,12 @@ class EquityChangeMixin:
                 f"Failed to crawl equity changes on {stock_id} {year}Q{season}"
                 f"（{type(error).__name__}: {error}），本檔計為待重試"
             )
-            return None
+            return CrawlResult.failed(f"{type(error).__name__}: {error}")
 
         if stats is not None:
             stats.consecutive_errors = 0
 
-        return df_list
+        return result
 
     def clean_equity_changes_one(
         self,

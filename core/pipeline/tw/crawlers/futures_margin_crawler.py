@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import requests
 from loguru import logger
 
-from core.pipeline.shared.base_crawler import BaseDataCrawler
+from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import RequestUtils
 from core.pipeline.tw.utils.url_manager import URLManager
 from core.utils import FileEncoding
@@ -89,26 +89,26 @@ class FuturesMarginCrawler(BaseDataCrawler):
         """Set Up the Config of Crawler"""
         pass
 
-    def crawl(self) -> Optional[str]:
+    def crawl(self) -> CrawlResult:
         """爬取指數類保證金一覽表（預設路徑）"""
 
         return self.crawl_index_margin()
 
-    def crawl_index_margin(self) -> Optional[str]:
+    def crawl_index_margin(self) -> CrawlResult:
         """
         - Description:
             取得股價指數類的現行保證金一覽表（CSV 原文）
 
-            **查不到一律回傳 None 而不拋錯**，與本目錄其他 crawler 一致：
+            **查不到一律回 `FAILED` 而不拋錯**，與本目錄其他 crawler 一致：
             站方改版、暫時無回應等成因在此層分不出來，交由 updater 判斷。
         - Return:
-            - Optional[str]
-                big5 解碼後的 CSV 原文；取得失敗時為 None
+            - CrawlResult
+                `OK` 時 `text` 為 big5 解碼後的 CSV 原文；取得失敗時為 `FAILED`
         """
 
         return self.fetch_csv("TAIFEX_INDEX_MARGIN_URL", "指數類")
 
-    def crawl_stock_margin(self) -> Optional[str]:
+    def crawl_stock_margin(self) -> CrawlResult:
         """取得股票類的現行保證金一覽表（CSV 原文）；語意同 `crawl_index_margin()`"""
 
         return self.fetch_csv("TAIFEX_STOCK_MARGIN_URL", "股票類")
@@ -216,19 +216,21 @@ class FuturesMarginCrawler(BaseDataCrawler):
                 return attachment
         return None
 
-    def crawl_announcement_csv(self, csv_url: str) -> Optional[str]:
-        """取回公告附件的 CSV 原文（big5 解碼）"""
+    def crawl_announcement_csv(self, csv_url: str) -> CrawlResult:
+        """取回公告附件的 CSV 原文（big5 解碼）；下載失敗或內容為空都是 `FAILED`（下次重試）"""
 
         response: Optional[requests.Response] = RequestUtils.requests_get(csv_url)
         if response is None:
             logger.warning(f"[Futures Margin] 下載公告附件失敗：{csv_url}")
-            return None
+            return CrawlResult.failed(f"下載失敗：{csv_url}")
 
         text: str = response.content.decode(FileEncoding.BIG5.value, errors="replace")
-        return text if text.strip() else None
+        if not text.strip():
+            return CrawlResult.failed(f"附件內容為空：{csv_url}")
+        return CrawlResult.ok_text(text)
 
     @staticmethod
-    def fetch_csv(url_name: str, label: str) -> Optional[str]:
+    def fetch_csv(url_name: str, label: str) -> CrawlResult:
         """
         - Description:
             取回 CSV 並以 big5 解碼
@@ -242,8 +244,8 @@ class FuturesMarginCrawler(BaseDataCrawler):
             - label: str
                 log 用的類別名稱（指數類／股票類）
         - Return:
-            - Optional[str]
-                CSV 原文；取得失敗時為 None
+            - CrawlResult
+                `OK` 時 `text` 為 CSV 原文；取得失敗時為 `FAILED`
         """
 
         logger.info(f"* Start crawling TAIFEX futures margin: {label}")
@@ -253,12 +255,12 @@ class FuturesMarginCrawler(BaseDataCrawler):
 
         if response is None:
             logger.warning(f"[Futures Margin] 取得{label}保證金一覽表失敗")
-            return None
+            return CrawlResult.failed(f"{label}保證金一覽表無回應")
 
         text: str = response.content.decode(FileEncoding.BIG5.value, errors="replace")
 
         if not text.strip():
             logger.warning(f"[Futures Margin] {label}保證金一覽表為空")
-            return None
+            return CrawlResult.failed(f"{label}保證金一覽表為空")
 
-        return text
+        return CrawlResult.ok_text(text)

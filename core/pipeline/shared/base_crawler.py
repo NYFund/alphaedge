@@ -62,6 +62,9 @@ class CrawlResult:
     # 少數來源（月營收）一次「爬取」其實是好幾個請求、回好幾張表，
     # 且各表欄位不同無法先合併，故另留一個欄位；單表來源不會用到它。
     tables: List[pd.DataFrame] = field(default_factory=list)
+    # 期交所的籌碼與保證金一覽表回的是 CSV 原文而不是表格，由清洗器自己解析；
+    # 單表來源不會用到它
+    text: Optional[str] = None
 
     @property
     def is_ok(self) -> bool:
@@ -92,6 +95,12 @@ class CrawlResult:
         """建立成功結果（多張表，見 `tables` 欄位說明）"""
 
         return cls(status=CrawlStatus.OK, tables=tables)
+
+    @classmethod
+    def ok_text(cls, text: str) -> "CrawlResult":
+        """建立成功結果（CSV 原文，見 `text` 欄位說明）"""
+
+        return cls(status=CrawlStatus.OK, text=text)
 
     @classmethod
     def no_data(cls, reason: str) -> "CrawlResult":

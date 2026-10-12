@@ -1,7 +1,7 @@
 import json
 import pathlib
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 import pytest
@@ -203,7 +203,7 @@ def test_empty_body_fails_the_season_instead_of_raising(
         monkeypatch, SimpleNamespace(text="")
     )
 
-    assert crawler.crawl_balance_sheet(2024, 1) is None
+    assert crawler.crawl_balance_sheet(2024, 1).is_failed
 
 
 def test_transport_failure_fails_the_season(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -220,7 +220,7 @@ def test_transport_failure_fails_the_season(monkeypatch: pytest.MonkeyPatch) -> 
     ):
         crawler: FinancialStatementCrawler = make_mops_crawler(monkeypatch, error)
 
-        assert crawler.crawl_balance_sheet(2024, 1) is None, (
+        assert crawler.crawl_balance_sheet(2024, 1).is_failed, (
             f"{type(error).__name__} 應該被當成整季失敗"
         )
 
@@ -247,11 +247,11 @@ def test_equity_changes_empty_body_stays_retryable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    權益變動表拿到空 body 時回 None（待重試），不可拋出
+    權益變動表拿到空 body 時回 `FAILED`（待重試），不可拋出
 
     拋出的話會被逐檔隔離的斷路器計為一次非預期例外，連三檔就中止整段回補
     ——但空 body 是站方異常，屬於該重試的那一類。
-    **不可以回 `[]`**：那會把這一檔寫進「查無資料」的永久名單。
+    **不可以回 `NO_DATA`**：那會把這一檔寫進「查無資料」的永久名單。
     """
 
     crawler: FinancialStatementCrawler = make_mops_crawler(
@@ -259,9 +259,10 @@ def test_equity_changes_empty_body_stays_retryable(
     )
     monkeypatch.setattr(crawler, "EQUITY_CHANGE_RETRY_DELAY_SECONDS", 0)
 
-    result: Optional[List[pd.DataFrame]] = crawler.crawl_equity_changes(2024, 1, "2330")
+    result: CrawlResult = crawler.crawl_equity_changes(2024, 1, "2330")
 
-    assert result is None
+    assert result.is_failed
+    assert not result.is_no_data
 
 
 def test_equity_changes_programming_errors_reach_the_circuit_breaker(

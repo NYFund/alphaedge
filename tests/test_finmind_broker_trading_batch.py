@@ -2,7 +2,7 @@ import datetime
 import json
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 import pandas as pd
 import pytest
@@ -12,6 +12,7 @@ from core.config import (
     STOCK_INFO_TABLE_NAME,
     STOCK_TRADING_DAILY_REPORT_TABLE_NAME,
 )
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.crawlers.finmind_crawler import FinMindCrawler
 from core.pipeline.utils import (
     DataLoadError,
@@ -73,7 +74,7 @@ def make_crawler_stub(calls: List[Tuple[str, str, str, str]]):
         securities_trader_id: str,
         start_date: datetime.date,
         end_date: datetime.date,
-    ) -> Optional[pd.DataFrame]:
+    ) -> CrawlResult:
         calls.append((stock_id, securities_trader_id, str(start_date), str(end_date)))
         dates: List[datetime.date] = [
             d
@@ -84,21 +85,23 @@ def make_crawler_stub(calls: List[Tuple[str, str, str, str]]):
             if start_date <= d <= end_date
         ]
         if not dates:
-            return None
-        return pd.DataFrame(
-            [
-                {
-                    "securities_trader": f"券商{securities_trader_id}",
-                    "securities_trader_id": securities_trader_id,
-                    "stock_id": stock_id,
-                    "date": date.strftime("%Y-%m-%d"),
-                    "buy_volume": 1000,
-                    "sell_volume": 500,
-                    "buy_price": 100.0,
-                    "sell_price": 101.0,
-                }
-                for date in dates
-            ]
+            return CrawlResult.no_data("API 回傳空表")
+        return CrawlResult.ok(
+            pd.DataFrame(
+                [
+                    {
+                        "securities_trader": f"券商{securities_trader_id}",
+                        "securities_trader_id": securities_trader_id,
+                        "stock_id": stock_id,
+                        "date": date.strftime("%Y-%m-%d"),
+                        "buy_volume": 1000,
+                        "sell_volume": 500,
+                        "buy_price": 100.0,
+                        "sell_price": 101.0,
+                    }
+                    for date in dates
+                ]
+            )
         )
 
     return stub
@@ -276,7 +279,7 @@ def test_write_csv_flag_does_not_change_loaded_rows(updater) -> None:
     stub = make_crawler_stub([])
     raw_df: pd.DataFrame = pd.concat(
         [
-            stub(stock_id, trader_id, START_DATE, END_DATE)
+            stub(stock_id, trader_id, START_DATE, END_DATE).data
             for trader_id in TRADER_IDS
             for stock_id in STOCK_IDS
         ]

@@ -6,6 +6,7 @@ from typing import Any, List, Optional, Tuple
 import pandas as pd
 import pytest
 
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.tw.updaters.financial_statement_updater import (
@@ -54,10 +55,10 @@ def test_statement_loop_stops_after_the_current_season_and_still_loads(
     crawled: List[Tuple[int, int]] = []
     loaded: List[Any] = []
 
-    def crawl(year: int, season: int) -> List[pd.DataFrame]:
+    def crawl(year: int, season: int) -> CrawlResult:
         crawled.append((year, season))
         captured_stops[0].request("測試")
-        return [pd.DataFrame({"a": [1]})]
+        return CrawlResult.ok_tables([pd.DataFrame({"a": [1]})])
 
     updater: FinancialStatementUpdater = FinancialStatementUpdater.__new__(
         FinancialStatementUpdater

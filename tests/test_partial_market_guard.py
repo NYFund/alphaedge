@@ -451,14 +451,16 @@ def test_fs_crawler_fails_the_whole_season_when_one_market_fails(
     monkeypatch: pytest.MonkeyPatch, crawl_name: str, otc_response: Any
 ) -> None:
     """
-    上櫃沒問到時整季回 None，不可回傳上市那半
+    上櫃沒問到時整季 `FAILED`，不可回傳上市那半
 
     舊行為是 `continue` 之後回傳上市的表格，updater 照常清洗入庫。
     """
 
     crawler: FinancialStatementCrawler = make_fs_crawler(monkeypatch, otc_response)
+    result: CrawlResult = getattr(crawler, crawl_name)(2024, 1)
 
-    assert getattr(crawler, crawl_name)(2024, 1) is None
+    assert result.is_failed
+    assert result.tables == []
 
 
 def test_fs_crawler_returns_both_markets_on_success(
@@ -470,10 +472,10 @@ def test_fs_crawler_returns_both_markets_on_success(
         monkeypatch, SimpleNamespace(text=TABLE_HTML)
     )
 
-    tables: Optional[List[pd.DataFrame]] = crawler.crawl_balance_sheet(2024, 1)
+    result: CrawlResult = crawler.crawl_balance_sheet(2024, 1)
 
-    assert tables is not None
-    assert len(tables) == 2
+    assert result.is_ok
+    assert len(result.tables) == 2
 
 
 # === 財報三表：年季續跑 ===

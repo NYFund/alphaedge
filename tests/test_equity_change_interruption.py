@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
 from core.pipeline.tw.cleaners.financial_statement_cleaner import (
@@ -82,8 +83,8 @@ class FakeCrawler:
     """
     依對照表回應的假 crawler，並記下實際問過哪些檔
 
-    回傳語意照實際的 `crawl_equity_changes()`：`None` 為站方過載、
-    `[]` 為查無資料、非空 list 為正常。
+    對照表沿用舊的三態寫法方便造資料：`None` 為站方過載、`[]` 為查無資料、
+    非空 list 為正常；回傳時轉成實際的 `CrawlResult` 三態。
     """
 
     def __init__(
@@ -97,13 +98,18 @@ class FakeCrawler:
 
     def crawl_equity_changes(
         self, year: int, season: int, stock_id: str
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """記錄請求並回傳預先安排的結果"""
 
         self.requested.append(stock_id)
         if self.on_request is not None:
             self.on_request(stock_id)
-        return self.responses.get(stock_id, RAW_TABLES)
+        tables: Optional[List[pd.DataFrame]] = self.responses.get(stock_id, RAW_TABLES)
+        if tables is None:
+            return CrawlResult.failed("站方過載")
+        if not tables:
+            return CrawlResult.no_data("查無資料")
+        return CrawlResult.ok_tables(tables)
 
 
 class RecordingLoader:

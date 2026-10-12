@@ -15,6 +15,7 @@ from core.config import (
 )
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 
@@ -341,9 +342,13 @@ def test_blocked_window_is_retried_not_recorded_as_empty() -> None:
 
     def flaky_crawl(start, end):
         attempts.append(1)
-        return "日期,商品名稱\n2026/08/28,臺股期貨\n" if len(attempts) >= 2 else None
+        if len(attempts) >= 2:
+            return CrawlResult.ok_text("日期,商品名稱\n2026/08/28,臺股期貨\n")
+        return CrawlResult.no_data("回的是 HTML")
 
-    assert updater.crawl_window(flaky_crawl, "三大法人", DATE, DATE) is not None
+    result: CrawlResult = updater.crawl_window(flaky_crawl, "三大法人", DATE, DATE)
+
+    assert result.is_ok and result.text
     assert len(attempts) == 2  # 第一次被擋、第二次成功
 
 
@@ -359,9 +364,11 @@ def test_no_retry_when_the_window_has_no_trading_day() -> None:
 
     def always_blocked(start, end):
         attempts.append(1)
-        return None
+        return CrawlResult.no_data("回的是 HTML")
 
-    assert updater.crawl_window(always_blocked, "三大法人", DATE, DATE) is None
+    result: CrawlResult = updater.crawl_window(always_blocked, "三大法人", DATE, DATE)
+
+    assert result.is_no_data  # 沒有交易日：真的沒資料，不是被擋
     assert len(attempts) == 1
 
 

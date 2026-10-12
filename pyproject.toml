@@ -130,7 +130,7 @@ ignore = [
     # 不可因為「讓 CI 變綠」就當成永久豁免
     "BLE001",  # blind-except，68 處
     "TRY003",  # 例外訊息長度，與 §2.1 中文訊息衝突
-    "TRY300",  # try-consider-else，14 處
+    "TRY300",  # try-consider-else，10 處
     "TRY301",  # raise-within-try，7 處
     "TRY201",  # verbose-raise，2 處
     "TRY004",  # type-check-without-type-error，2 處

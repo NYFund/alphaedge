@@ -3,6 +3,7 @@ from typing import Optional
 import pandas as pd
 from loguru import logger
 
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.updaters.finmind.common import FinMindContext
 from core.pipeline.utils import FinMindQuotaExhaustedError
 
@@ -22,19 +23,21 @@ class StockInfoUpdater:
 
         # Step 1: Crawl
         try:
-            df: Optional[pd.DataFrame] = self.context.crawler.crawl_stock_info()
+            result: CrawlResult = self.context.crawler.crawl_stock_info()
         except FinMindQuotaExhaustedError as e:
             # **配額用盡必須往外拋**：在這裡 `return` 的話，「這次沒更新到」會以結束碼 0 收場
             logger.error(
                 f"⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. {e}"
             )
             raise
-        if df is None or df.empty:
-            logger.warning("No stock info data to update")
+        if not result.is_ok:
+            logger.warning(f"No stock info data to update（{result.reason}）")
             return
 
         # Step 2: Clean
-        cleaned_df: Optional[pd.DataFrame] = self.context.cleaner.clean_stock_info(df)
+        cleaned_df: Optional[pd.DataFrame] = self.context.cleaner.clean_stock_info(
+            result.data
+        )
         if cleaned_df is None or cleaned_df.empty:
             logger.warning("Cleaned stock info data is empty")
             return
@@ -53,22 +56,22 @@ class StockInfoUpdater:
 
         # Step 1: Crawl
         try:
-            df: Optional[pd.DataFrame] = (
-                self.context.crawler.crawl_stock_info_with_warrant()
-            )
+            result: CrawlResult = self.context.crawler.crawl_stock_info_with_warrant()
         except FinMindQuotaExhaustedError as e:
             # **配額用盡必須往外拋**：在這裡 `return` 的話，「這次沒更新到」會以結束碼 0 收場
             logger.error(
                 f"⚠️ FinMind API quota exhausted. Please wait for quota reset and retry later. {e}"
             )
             raise
-        if df is None or df.empty:
-            logger.warning("No stock info with warrant data to update")
+        if not result.is_ok:
+            logger.warning(
+                f"No stock info with warrant data to update（{result.reason}）"
+            )
             return
 
         # Step 2: Clean
         cleaned_df: Optional[pd.DataFrame] = (
-            self.context.cleaner.clean_stock_info_with_warrant(df)
+            self.context.cleaner.clean_stock_info_with_warrant(result.data)
         )
         if cleaned_df is None or cleaned_df.empty:
             logger.warning("Cleaned stock info with warrant data is empty")

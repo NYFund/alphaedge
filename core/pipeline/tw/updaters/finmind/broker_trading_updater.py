@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Set, Union
 import pandas as pd
 from loguru import logger
 
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.updaters.finmind.common import (
     BrokerTradingMetadataStore,
     FinMindContext,
@@ -395,7 +396,7 @@ class BrokerTradingUpdater:
 
         try:
             # Step 1: Crawl（配額用盡時由上層迴圈捕捉並等待重置）
-            df: Optional[pd.DataFrame] = (
+            result: CrawlResult = (
                 self.context.crawler.crawl_broker_trading_daily_report(
                     stock_id=stock_id,
                     securities_trader_id=securities_trader_id,
@@ -403,7 +404,7 @@ class BrokerTradingUpdater:
                     end_date=end_date,
                 )
             )
-            if df is None or df.empty:
+            if not result.is_ok:
                 logger.debug(
                     f"No broker trading daily report data for stock_id={stock_id}, "
                     f"securities_trader_id={securities_trader_id}, "
@@ -416,7 +417,7 @@ class BrokerTradingUpdater:
             # 代價是 `broker_trading/` 下的 CSV 不再反映本流程新抓的資料
             cleaned_df: Optional[pd.DataFrame] = (
                 self.context.cleaner.clean_broker_trading_daily_report(
-                    df, write_csv=False
+                    result.data, write_csv=False
                 )
             )
             if cleaned_df is None or cleaned_df.empty:

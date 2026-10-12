@@ -10,7 +10,7 @@ from loguru import logger
 from core.config import (
     FINANCIAL_STATEMENT_DOWNLOADS_PATH,
 )
-from core.pipeline.shared.base_crawler import BaseDataCrawler
+from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import RequestUtils
 from core.pipeline.tw.utils.mops_payload import Payload
 from core.pipeline.tw.utils.url_manager import URLManager
@@ -100,17 +100,15 @@ class FinancialStatementCrawler(BaseDataCrawler):
             "equity_changes": [],
         }
 
-        # 三張全市場報表在任一市場失敗時會回 None，不能直接 extend
-        df_dict["balance_sheet"].extend(self.crawl_balance_sheet(year, season) or [])
+        # 失敗或查無資料時 `tables` 為空 list，直接 extend 即可
+        df_dict["balance_sheet"].extend(self.crawl_balance_sheet(year, season).tables)
         df_dict["comprehensive_income"].extend(
-            self.crawl_comprehensive_income(year, season) or []
+            self.crawl_comprehensive_income(year, season).tables
         )
-        df_dict["cash_flow"].extend(self.crawl_cash_flow(year, season) or [])
-        # 權益變動表查無資料或站方過載時會回 None，不能直接 extend
-        equity_changes: Optional[List[pd.DataFrame]] = self.crawl_equity_changes(
-            year, season, stock_id
+        df_dict["cash_flow"].extend(self.crawl_cash_flow(year, season).tables)
+        df_dict["equity_changes"].extend(
+            self.crawl_equity_changes(year, season, stock_id).tables
         )
-        df_dict["equity_changes"].extend(equity_changes or [])
 
         return df_dict
 
@@ -118,7 +116,7 @@ class FinancialStatementCrawler(BaseDataCrawler):
         self,
         year: int,
         season: int,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """爬取資產負債表（全市場，上市與上櫃各一次請求）"""
 
         """
@@ -137,7 +135,7 @@ class FinancialStatementCrawler(BaseDataCrawler):
         self,
         year: int,
         season: int,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """爬取綜合損益表（全市場，上市與上櫃各一次請求）"""
 
         """
@@ -156,7 +154,7 @@ class FinancialStatementCrawler(BaseDataCrawler):
         self,
         year: int,
         season: int,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """爬取現金流量表（全市場，上市與上櫃各一次請求）"""
 
         """
@@ -174,10 +172,10 @@ class FinancialStatementCrawler(BaseDataCrawler):
         label: str,
         year: int,
         season: int,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """
         - Description:
-            逐市場（上市、上櫃）查詢同一張全市場報表；**任一市場失敗即回 `None`**
+            逐市場（上市、上櫃）查詢同一張全市場報表；**任一市場失敗即整季 `FAILED`**
 
             只回傳問到的那個市場的話，updater 會把半份年季清洗入庫，看起來一切正常
             ——資產負債表 2021Q1 整季缺、綜合損益表 2021Q1 上櫃只剩 3 檔、現金流量表
@@ -196,8 +194,9 @@ class FinancialStatementCrawler(BaseDataCrawler):
             - season: int
                 季別
         - Return:
-            - Optional[List[pd.DataFrame]]
-                兩個市場的所有表格；任一市場失敗時為 None
+            - CrawlResult
+                `OK` 時 `tables` 為兩個市場的所有表格；任一市場失敗時為 `FAILED`。
+                兩個市場自 2013 年起都有申報，本方法不會回 `NO_DATA`
         """
 
         self.payload.year = TimeUtils.convert_ad_to_roc_year(year)
@@ -222,11 +221,11 @@ class FinancialStatementCrawler(BaseDataCrawler):
                     f"Cannot get {market}（{type(error).__name__}: {error}）；"
                     f"整季視為失敗"
                 )
-                return None
+                return CrawlResult.failed(f"{market}: {type(error).__name__}")
 
             if res is None:
                 logger.warning(f"Cannot get {market}；整季視為失敗")
-                return None
+                return CrawlResult.failed(f"{market}: 無回應")
 
             try:
                 df_list.extend(pd.read_html(StringIO(res.text)))
@@ -237,26 +236,26 @@ class FinancialStatementCrawler(BaseDataCrawler):
                     f"No tables found in {market}（{type(error).__name__}）；"
                     f"整季視為失敗"
                 )
-                return None
+                return CrawlResult.failed(f"{market}: 解析不出表格")
 
-        return df_list
+        return CrawlResult.ok_tables(df_list)
 
     def crawl_equity_changes(
         self,
         year: int,
         season: int,
         stock_id: str,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """爬取權益變動表（逐檔查詢）"""
 
         """
         資料區間：上市與上櫃皆自民國 102（2013）年起至今。
 
         與其他三張報表不同，本端點是「逐檔查詢」（一次一檔股票），
-        故回傳值要能分辨三種結果，讓逐檔回補的呼叫端決定要不要重試：
-        - None: 暫時性失敗（站方過載或連線失敗），本檔尚未確認有無資料，應留待重跑
-        - []:   查無資料（例如 ETF、當季未申報），重跑也不會有結果
-        - 非空 list: 正常取得，內容為該頁的所有表格
+        故三態缺一不可，逐檔回補的呼叫端靠它決定要不要重試：
+        - FAILED:  暫時性失敗（站方過載或連線失敗），本檔尚未確認有無資料，應留待重跑
+        - NO_DATA: 查無資料（例如 ETF、當季未申報），重跑也不會有結果
+        - OK:      正常取得，`tables` 為該頁的所有表格
         """
 
         logger.debug(f"* Start crawling equity changes: {stock_id} {year}/Q{season}")
@@ -293,7 +292,7 @@ class FinancialStatementCrawler(BaseDataCrawler):
         year: int,
         season: int,
         stock_id: str,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """送出權益變動表請求，暫時性失敗就地重試；回傳語意見 crawl_equity_changes"""
 
         for attempt in range(self.EQUITY_CHANGE_MAX_RETRIES):
@@ -312,34 +311,34 @@ class FinancialStatementCrawler(BaseDataCrawler):
             if res is not None:
                 if self.EQUITY_CHANGE_NO_DATA_MARKER in res.text:
                     logger.debug(f"No equity changes data: {stock_id} {year}Q{season}")
-                    return []
+                    return CrawlResult.no_data("站方回覆查無資料")
 
                 if self.EQUITY_CHANGE_UNREACHABLE_MARKER not in res.text:
                     try:
-                        return pd.read_html(StringIO(res.text))
+                        return CrawlResult.ok_tables(pd.read_html(StringIO(res.text)))
                     except self.HTML_PARSE_ERRORS:
                         # 同一份判準（見 `HTML_PARSE_ERRORS`）。這裡漏接的代價特別大：
                         # 逃出去會被算成一次非預期例外，連三檔就把整段回補斷路掉
-                        # 導流到「採 IFRSs 前」端點：回 [] 讓它寫進查無資料的永久名單，
-                        # 回 None（待重試）的話每輪整段回補都會重打，而結果永遠一樣
+                        # 導流到「採 IFRSs 前」端點：回 NO_DATA 讓它寫進查無資料的永久名單，
+                        # 回 FAILED（待重試）的話每輪整段回補都會重打，而結果永遠一樣
                         if self.EQUITY_CHANGE_PRE_IFRS_MARKER in res.text:
                             logger.debug(
                                 f"Pre-IFRS equity changes not served here: "
                                 f"{stock_id} {year}Q{season}"
                             )
-                            return []
+                            return CrawlResult.no_data("採 IFRSs 前的年季不在本端點")
 
                         # 既非「查無資料」也非過載，卻解不出表格：版面可能已改制。
-                        # **回 None（待重試）而不是 []（確定沒有資料）**——站方真的
+                        # **回 FAILED（待重試）而不是 NO_DATA（確定沒有資料）**——站方真的
                         # 沒資料時會回明確訊息，上面已經攔下了；解析不出來代表拿到
-                        # 非預期的頁面，那是要人看的狀況。回 [] 會讓這檔被寫進
+                        # 非預期的頁面，那是要人看的狀況。回 NO_DATA 會讓這檔被寫進
                         # 「查無資料」永久名單，從此不再被嘗試（判準見
                         # `BaseDataCrawler` 的三態說明）
                         logger.warning(
                             f"No tables found on equity changes {stock_id} "
                             f"{year}Q{season}；計為待重試，不當成查無資料"
                         )
-                        return None
+                        return CrawlResult.failed("解析不出表格")
 
             # 走到這裡代表站方過載或連線失敗，等一下再試同一檔
             if attempt < self.EQUITY_CHANGE_MAX_RETRIES - 1:
@@ -349,4 +348,4 @@ class FinancialStatementCrawler(BaseDataCrawler):
             f"Equity changes unreachable after {self.EQUITY_CHANGE_MAX_RETRIES} "
             f"retries: {stock_id} {year}Q{season}"
         )
-        return None
+        return CrawlResult.failed(f"重試 {self.EQUITY_CHANGE_MAX_RETRIES} 次仍無回應")

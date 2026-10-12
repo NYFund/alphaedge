@@ -6,7 +6,7 @@ import pandas as pd
 import requests
 from loguru import logger
 
-from core.pipeline.shared.base_crawler import BaseDataCrawler
+from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import RequestUtils
 from core.pipeline.tw.utils.url_manager import URLManager
 
@@ -69,21 +69,22 @@ class FuturesStockUniverseCrawler(BaseDataCrawler):
         """Set Up the Config of Crawler"""
         pass
 
-    def crawl(self) -> Optional[pd.DataFrame]:
+    def crawl(self) -> CrawlResult:
         """爬取標的證券一覽表（整份清單一次回傳，不需逐日／逐商品）"""
 
         return self.crawl_stock_universe()
 
-    def crawl_stock_universe(self) -> Optional[pd.DataFrame]:
+    def crawl_stock_universe(self) -> CrawlResult:
         """
         - Description:
             取得 TAIFEX 股票期貨、選擇權標的證券一覽表的原始表格
 
-            **查不到一律回傳 None 而不拋錯**，與 `futures_price_crawler` 一致：
+            **查不到一律回 `FAILED` 而不拋錯**，與 `futures_price_crawler` 一致：
             站方改版、暫時無回應等成因在此層分不出來，交由 updater 判斷。
+            這份清單任何時候都存在，故不會有 `NO_DATA`。
         - Return:
-            - Optional[pd.DataFrame]
-                原始清單表；解析失敗時為 None
+            - CrawlResult
+                `OK` 時 `data` 為原始清單表；取不到或解析失敗時為 `FAILED`
         """
 
         logger.info("* Start crawling TAIFEX stock futures universe")
@@ -93,9 +94,12 @@ class FuturesStockUniverseCrawler(BaseDataCrawler):
 
         if response is None:
             logger.warning("[Futures Universe] 取得標的清單頁失敗")
-            return None
+            return CrawlResult.failed("取得標的清單頁失敗")
 
-        return self.extract_universe_table(response.text)
+        table: Optional[pd.DataFrame] = self.extract_universe_table(response.text)
+        if table is None:
+            return CrawlResult.failed("頁面上找不到標的清單表")
+        return CrawlResult.ok(table)
 
     @classmethod
     def extract_universe_table(cls, html: str) -> Optional[pd.DataFrame]:

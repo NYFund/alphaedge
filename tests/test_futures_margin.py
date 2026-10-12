@@ -12,6 +12,7 @@ from core.config import (
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
 from core.pipeline.tw.updaters.futures_margin_updater import FuturesMarginUpdater
@@ -1269,11 +1270,14 @@ class _RecordingCrawler:
             return None
         return f"https://taifex/attach/{link}.csv"
 
-    def crawl_announcement_csv(self, csv_url: str) -> Optional[str]:
+    def crawl_announcement_csv(self, csv_url: str) -> CrawlResult:
         """回傳附件原文；內容設為 None 時模擬下載失敗"""
 
         self.downloaded_urls.append(csv_url)
-        return self.contents[csv_url]
+        text: Optional[str] = self.contents[csv_url]
+        if text is None:
+            return CrawlResult.failed("下載失敗")
+        return CrawlResult.ok_text(text)
 
 
 def make_history_updater(

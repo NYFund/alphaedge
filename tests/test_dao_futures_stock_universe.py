@@ -220,17 +220,28 @@ def test_empty_universe_fails_the_target(
     from core.pipeline.utils.exceptions import DataLoadError
 
     raw: pd.DataFrame = pd.DataFrame({"x": [1]})
+    from core.pipeline.shared.base_crawler import CrawlResult
+
     monkeypatch.setattr(
         updater.crawler,
         "crawl_stock_universe",
-        lambda: None if stage == "crawl" else raw,
+        lambda: (
+            CrawlResult.failed("取得標的清單頁失敗")
+            if stage == "crawl"
+            else CrawlResult.ok(raw)
+        ),
     )
     monkeypatch.setattr(
         updater.cleaner, "clean_stock_universe", lambda df, date: pd.DataFrame()
     )
 
-    with pytest.raises(DataLoadError):
+    with pytest.raises(DataLoadError) as exc_info:
         updater.update(snapshot_date=datetime.date(2026, 8, 3))
+
+    # 兩個階段都要失敗，但失敗原因要分得開：抓不到不可被記成「洗完是空的」
+    message: str = exc_info.value.failed_files[0]
+    assert ("未取得標的清單" in message) == (stage == "crawl")
+    assert ("清洗後無有效資料" in message) == (stage == "clean")
 
 
 def test_underlying_match_without_stock_db(

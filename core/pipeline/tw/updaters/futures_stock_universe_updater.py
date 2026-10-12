@@ -8,6 +8,7 @@ from core.config import PRICE_TABLE_NAME, TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.cleaners.futures_stock_universe_cleaner import (
     FuturesStockUniverseCleaner,
@@ -109,14 +110,15 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         # **抓空與洗空都要讓 target 失敗**：只記 warning 就回傳的話，行程以成功
         # 結束，下游 `futures_stock_price` 悄悄沿用舊快照，缺漏要事後對帳才發現。
         # 與 `FuturesMarginUpdater` 取不到一覽表時的處理一致
-        raw_df: Optional[pd.DataFrame] = self.crawler.crawl_stock_universe()
-        if raw_df is None or raw_df.empty:
+        result: CrawlResult = self.crawler.crawl_stock_universe()
+        if not result.is_ok or result.data.empty:
             raise DataLoadError(
-                "futures_stock_universe", [f"{snapshot_date}: 未取得標的清單"]
+                "futures_stock_universe",
+                [f"{snapshot_date}: 未取得標的清單（{result.reason or '空表'}）"],
             )
 
         cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_stock_universe(
-            raw_df, snapshot_date
+            result.data, snapshot_date
         )
         if cleaned_df is None or cleaned_df.empty:
             raise DataLoadError(

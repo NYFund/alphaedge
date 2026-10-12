@@ -6,7 +6,7 @@ import pandas as pd
 from FinMind.data import DataLoader
 from loguru import logger
 
-from core.pipeline.shared.base_crawler import BaseDataCrawler
+from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.utils import (
     FinMindError,
     FinMindPermissionError,
@@ -56,7 +56,7 @@ class FinMindCrawler(BaseDataCrawler):
         """本爬蟲沒有單一入口，各資料集請改呼叫對應的 `crawl_*` 方法"""
         pass
 
-    def crawl_stock_info(self) -> Optional[pd.DataFrame]:
+    def crawl_stock_info(self) -> CrawlResult:
         """
         - Description:
             爬取台股總覽（TaiwanStockInfo）
@@ -68,8 +68,9 @@ class FinMindCrawler(BaseDataCrawler):
             - type: str  掛牌板別
             - date: str  更新日期
         - Return:
-            - Optional[pd.DataFrame]
-                總覽表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            - CrawlResult
+                `OK` 時 `data` 為總覽表；API 正常回傳空表時為 `NO_DATA`
+                （呼叫失敗一律拋 FinMindError，不會回 `FAILED`）
         """
 
         logger.info("* Start crawling Taiwan Stock Info")
@@ -79,15 +80,15 @@ class FinMindCrawler(BaseDataCrawler):
 
             if df is None or df.empty:
                 logger.warning("No data available for Taiwan Stock Info")
-                return None
+                return CrawlResult.no_data("API 回傳空表")
 
             logger.info(f"Successfully crawled {len(df)} records")
-            return df
+            return CrawlResult.ok(df)
 
         except Exception as e:
             raise self.to_request_error(e, "Taiwan Stock Info") from e
 
-    def crawl_stock_info_with_warrant(self) -> Optional[pd.DataFrame]:
+    def crawl_stock_info_with_warrant(self) -> CrawlResult:
         """
         - Description:
             爬取台股總覽（含權證）（TaiwanStockInfoWithWarrant）
@@ -99,8 +100,9 @@ class FinMindCrawler(BaseDataCrawler):
             - type: str  掛牌板別
             - date: str  更新日期
         - Return:
-            - Optional[pd.DataFrame]
-                總覽表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            - CrawlResult
+                `OK` 時 `data` 為總覽表；API 正常回傳空表時為 `NO_DATA`
+                （呼叫失敗一律拋 FinMindError，不會回 `FAILED`）
         """
 
         logger.info("* Start crawling Taiwan Stock Info With Warrant")
@@ -110,15 +112,15 @@ class FinMindCrawler(BaseDataCrawler):
 
             if df is None or df.empty:
                 logger.warning("No data available for Taiwan Stock Info With Warrant")
-                return None
+                return CrawlResult.no_data("API 回傳空表")
 
             logger.info(f"Successfully crawled {len(df)} records")
-            return df
+            return CrawlResult.ok(df)
 
         except Exception as e:
             raise self.to_request_error(e, "Taiwan Stock Info With Warrant") from e
 
-    def crawl_broker_info(self) -> Optional[pd.DataFrame]:
+    def crawl_broker_info(self) -> CrawlResult:
         """
         - Description:
             爬取證券商資訊表（TaiwanSecuritiesTraderInfo）
@@ -131,8 +133,9 @@ class FinMindCrawler(BaseDataCrawler):
             - address: str  地址
             - phone: str  電話
         - Return:
-            - Optional[pd.DataFrame]
-                券商資訊表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            - CrawlResult
+                `OK` 時 `data` 為券商資訊表；API 正常回傳空表時為 `NO_DATA`
+                （呼叫失敗一律拋 FinMindError，不會回 `FAILED`）
         """
 
         logger.info("* Start crawling Broker Info")
@@ -142,10 +145,10 @@ class FinMindCrawler(BaseDataCrawler):
 
             if df is None or df.empty:
                 logger.warning("No data available for Broker Info")
-                return None
+                return CrawlResult.no_data("API 回傳空表")
 
             logger.info(f"Successfully crawled {len(df)} records")
-            return df
+            return CrawlResult.ok(df)
 
         except Exception as e:
             raise self.to_request_error(e, "Broker Info") from e
@@ -156,7 +159,7 @@ class FinMindCrawler(BaseDataCrawler):
         securities_trader_id: Optional[str] = None,
         start_date: Optional[Union[datetime.date, str]] = None,
         end_date: Optional[Union[datetime.date, str]] = None,
-    ) -> Optional[pd.DataFrame]:
+    ) -> CrawlResult:
         """
         - Description:
             爬取「當日券商分點統計表」（TaiwanStockTradingDailyReportSecIdAgg）
@@ -184,8 +187,9 @@ class FinMindCrawler(BaseDataCrawler):
             - end_date: Optional[Union[datetime.date, str]]
                 結束日期，格式同 start_date
         - Return:
-            - Optional[pd.DataFrame]
-                分點統計表；API 正常回傳空表時為 None（呼叫失敗一律拋 FinMindError）
+            - CrawlResult
+                `OK` 時 `data` 為分點統計表；API 正常回傳空表時為 `NO_DATA`
+                （呼叫失敗一律拋 FinMindError，不會回 `FAILED`）
         """
 
         logger.info(
@@ -220,10 +224,10 @@ class FinMindCrawler(BaseDataCrawler):
 
             if df is None or df.empty:
                 logger.warning(f"No data available for {start_date} to {end_date}")
-                return None
+                return CrawlResult.no_data("API 回傳空表")
 
             logger.info(f"Successfully crawled {len(df)} records")
-            return df
+            return CrawlResult.ok(df)
 
         except Exception as e:
             raise self.to_request_error(

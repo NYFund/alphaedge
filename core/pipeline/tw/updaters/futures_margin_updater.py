@@ -8,6 +8,7 @@ from loguru import logger
 from core.config import FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH, TW_FUTURES_DB_PATH
 from core.dao.connection import DBConnection, DBError
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
@@ -225,13 +226,17 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
         logger.info("* Start Updating TAIFEX Futures Margin (Index)")
 
-        text: Optional[str] = self.crawler.crawl_index_margin()
-        if text is None:
+        result: CrawlResult = self.crawler.crawl_index_margin()
+        if not result.is_ok:
             # **「跳過」不能是靜默的**：保證金一覽表沒抓到就代表這次沒有任何
             # 新資料，若只記 warning，行程仍以成功結束，缺漏要事後對帳才會發現
-            raise DataLoadError("futures_margin", ["index: 取得一覽表失敗"])
+            raise DataLoadError(
+                "futures_margin", [f"index: 取得一覽表失敗（{result.reason}）"]
+            )
 
-        cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_index_margin(text)
+        cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_index_margin(
+            result.text
+        )
         if cleaned_df is None or cleaned_df.empty:
             raise DataLoadError("futures_margin", ["index: 清洗結果為空"])
 
@@ -254,12 +259,14 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
         logger.info("* Start Updating TAIFEX Futures Margin (Stock)")
 
-        text: Optional[str] = self.crawler.crawl_stock_margin()
-        if text is None:
-            raise DataLoadError("futures_margin", ["stock: 取得一覽表失敗"])
+        result: CrawlResult = self.crawler.crawl_stock_margin()
+        if not result.is_ok:
+            raise DataLoadError(
+                "futures_margin", [f"stock: 取得一覽表失敗（{result.reason}）"]
+            )
 
         cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
-            self.cleaner.clean_stock_margin(text)
+            self.cleaner.clean_stock_margin(result.text)
         )
         if cleaned is None:
             raise DataLoadError("futures_margin", ["stock: 清洗結果為空"])
@@ -479,8 +486,8 @@ class FuturesMarginUpdater(BaseDataUpdater):
                     stats["no_csv"] += 1
                     continue
 
-                text: Optional[str] = self.crawler.crawl_announcement_csv(csv_url)
-                if text is None:
+                attachment: CrawlResult = self.crawler.crawl_announcement_csv(csv_url)
+                if not attachment.is_ok:
                     # 下載失敗不記進處理紀錄，下次回補重試
                     stats["download_failed"] += 1
                     throttle.tick(stop)
@@ -489,7 +496,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 try:
                     cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
                         self.cleaner.clean_margin_announcement(
-                            text, announcement["title"], announcement_date
+                            attachment.text, announcement["title"], announcement_date
                         )
                     )
                 except AnnouncementParseError as error:

@@ -12,6 +12,7 @@ from core.config import (
     TW_FUTURES_DB_PATH,
 )
 from core.dao.connection import DBConnection, connect_sqlite
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.shared.request_utils import RateLimitPolicy
@@ -338,18 +339,19 @@ class FuturesChipUpdater(BaseDataUpdater):
 
         with GracefulStop(label=f"futures_chip:{label}") as stop:
             for window_start, window_end in self.split_months(start_date, end_date):
-                raw: Optional[str] = self.crawl_window(
+                result: CrawlResult = self.crawl_window(
                     crawl, label, window_start, window_end, stop
                 )
-                if raw is None:
-                    if self.has_trading_days(window_start, window_end):
+                if not result.is_ok:
+                    # FAILED ＝ 該有交易日卻沒拿到（被擋或來源異常）；NO_DATA ＝ 真的沒資料
+                    if result.is_failed:
                         blocked_windows.append((window_start, window_end))
                     throttle.tick(stop)
                     if stop.requested:
                         break
                     continue
 
-                df: Optional[pd.DataFrame] = clean(raw)
+                df: Optional[pd.DataFrame] = clean(result.text)
                 if df is None or df.empty:
                     throttle.tick(stop)
                     if stop.requested:
@@ -388,14 +390,14 @@ class FuturesChipUpdater(BaseDataUpdater):
         window_start: datetime.date,
         window_end: datetime.date,
         stop: Optional[GracefulStop] = None,
-    ) -> Optional[str]:
+    ) -> CrawlResult:
         """
         - Description:
             取得單一月份的資料；**疑似被擋就重試**
 
             判準是「這個月有沒有交易日」——有交易日卻拿不到 CSV，就不可能是
-            「非交易日」，只會是被擋或來源異常。等待時間隨次數遞增，
-            與 `futures_price_updater` 同一種作法。
+            「非交易日」，只會是被擋或來源異常；crawler 回的 `NO_DATA` 在這裡
+            升級成 `FAILED`。等待時間隨次數遞增，與 `futures_price_updater` 同一種作法。
         - Parameters:
             - crawl: Callable
                 該資料集的爬取方法
@@ -406,13 +408,16 @@ class FuturesChipUpdater(BaseDataUpdater):
             - stop: Optional[GracefulStop]
                 中止旗標；退避期間收到訊號就不再重試
         - Return:
-            - Optional[str]
-                CSV 原文；重試後仍拿不到時為 None
+            - CrawlResult
+                `OK` 時 `text` 為 CSV 原文；沒有交易日的月份為 `NO_DATA`；
+                有交易日卻重試後仍拿不到時為 `FAILED`
         """
 
-        raw: Optional[str] = crawl(window_start, window_end)
-        if raw is not None or not self.has_trading_days(window_start, window_end):
-            return raw
+        result: CrawlResult = crawl(window_start, window_end)
+        if result.is_ok:
+            return result
+        if not self.has_trading_days(window_start, window_end):
+            return CrawlResult.no_data(f"{window_start}~{window_end} 沒有交易日")
 
         for attempt in range(1, self.BLOCKED_RETRY_ATTEMPTS):
             wait: int = self.BLOCKED_RETRY_DELAY_SECONDS * attempt
@@ -423,13 +428,15 @@ class FuturesChipUpdater(BaseDataUpdater):
             # 退避也要可中斷：這裡一次可能睡數十秒，裸 sleep 會讓 Ctrl+C 沒反應
             self.sleep(wait, stop)
             if stop is not None and stop.requested:
-                return None
+                return CrawlResult.failed("收到中止要求，未重試完")
 
-            raw = crawl(window_start, window_end)
-            if raw is not None:
-                return raw
+            result = crawl(window_start, window_end)
+            if result.is_ok:
+                return result
 
-        return None
+        return CrawlResult.failed(
+            f"{label} {window_start}~{window_end} 該有交易日卻沒拿到 CSV（{result.reason}）"
+        )
 
     def has_trading_days(
         self, start_date: datetime.date, end_date: datetime.date
