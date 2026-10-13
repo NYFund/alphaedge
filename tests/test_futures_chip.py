@@ -1,7 +1,8 @@
 import datetime
 import sqlite3
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from types import SimpleNamespace
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pytest
@@ -15,9 +16,12 @@ from core.config import (
 )
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
+from core.pipeline.shared import date_planner as date_planner_module
 from core.pipeline.shared.base_crawler import CrawlResult
+from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
+from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
 
 """
 台期貨籌碼 ETL 與前視偏差測試
@@ -440,110 +444,186 @@ def test_institutional_start_date_is_clamped_to_source_earliest() -> None:
     )
 
 
-def test_update_resolves_start_dates_for_every_dataset(monkeypatch) -> None:
-    """
-    `update()` 會替三個資料集各自解出起點並跑一輪
+class StubChipDAO:
+    """`DatePlanner` 需要的三件事 ＋ 最早日期；模擬一張籌碼表"""
 
-    **這條測試存在的理由**：改寫 `update_dataset()` 時曾把 `resolve_start_date()`
-    一起刪掉，而所有既有測試都只測個別方法，沒有一條會呼叫 `update()`，
-    於是問題直到實跑回補才炸出來（`AttributeError`）。
-    """
+    def __init__(self, table: str, dates: Optional[List[datetime.date]] = None) -> None:
+        self.TABLE_NAME: str = table
+        self.dates: List[datetime.date] = dates or []
 
-    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
+    def table_exists(self) -> bool:
+        return bool(self.dates)
 
+    def get_earliest_date(self) -> Optional[str]:
+        return min(self.dates).isoformat() if self.dates else None
+
+    def get_distinct_dates(
+        self, start: datetime.date, end: datetime.date
+    ) -> List[datetime.date]:
+        return sorted(date for date in self.dates if start <= date <= end)
+
+
+class StubChipLoader:
+    """只提供 `get_dao()`：每張表的日期由測試給定"""
+
+    def __init__(self, tables: Dict[str, List[datetime.date]]) -> None:
+        self.tables: Dict[str, List[datetime.date]] = tables
+
+    def get_dao(self, table: str) -> StubChipDAO:
+        return StubChipDAO(table, self.tables.get(table))
+
+
+class StubPriceAPI:
+    """期貨行情表：交易日曆的來源；沒給交易日就當表不存在"""
+
+    def __init__(self, trading_days: List[datetime.date]) -> None:
+        self.trading_days: List[datetime.date] = trading_days
+        self.dao = SimpleNamespace(table_exists=lambda: bool(trading_days))
+
+    def get_trading_days(
+        self, start: datetime.date, end: datetime.date
+    ) -> List[datetime.date]:
+        return sorted(date for date in self.trading_days if start <= date <= end)
+
+
+def make_chip_updater(
+    monkeypatch,
+    tmp_path: Path,
+    tables: Dict[str, List[datetime.date]],
+    trading_days: List[datetime.date],
+    datasets: List[Tuple[str, str]],
+) -> Tuple[FuturesChipUpdater, List[tuple]]:
+    """不走 `__init__` 的籌碼 updater：表內日期、交易日曆與資料集都由測試給；錄下每次請求的月份"""
+
+    monkeypatch.setattr(date_planner_module, "DOWNLOADS_METADATA_DIR_PATH", tmp_path)
     updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
-
-    class StubLoader:
-        def get_latest_date(self, table):
-            return None
-
-    updater.loader = StubLoader()
+    updater.loader = StubChipLoader(tables)
+    updater.price_api = StubPriceAPI(trading_days)
     updater.get_datasets = lambda: [
-        (FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME, "institutional", None, None),
-        (FUTURES_LARGE_TRADER_TABLE_NAME, "large_trader", None, None),
-        (FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr", None, None),
+        (table, label, None, None) for table, label in datasets
     ]
-
     called: List[tuple] = []
 
-    def record_dataset(table, label, crawl, clean, start, end):
+    def record_dataset(table, label, crawl, clean, windows, candidates, progress=None):
         """`update_dataset()` 回傳「（新增列數, 被擋的月份）」，替身要照著回"""
 
-        called.append((table, start, end))
+        called.append((table, windows, sorted(candidates)))
         return 0, []
 
     updater.update_dataset = record_dataset
+    return updater, called
 
-    updater.update(
-        start_date=datetime.date(2015, 1, 1),
-        end_date=datetime.date(2026, 9, 2),
-        resume=False,
+
+ALL_DATASETS: List[Tuple[str, str]] = [
+    (FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME, "institutional"),
+    (FUTURES_LARGE_TRADER_TABLE_NAME, "large_trader"),
+    (FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr"),
+]
+
+
+def test_update_plans_every_dataset_from_its_own_start(monkeypatch, tmp_path) -> None:
+    """
+    `update()` 會替三個資料集各自規劃並跑一輪；三大法人夾到來源下限、其餘從 2015 起
+
+    **這條測試存在的理由**：改寫 `update_dataset()` 時曾把起點的決策一起刪掉，
+    而所有既有測試都只測個別方法，沒有一條會呼叫 `update()`。
+    """
+
+    updater, called = make_chip_updater(monkeypatch, tmp_path, {}, [], ALL_DATASETS)
+    end: datetime.date = FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE + (
+        datetime.timedelta(days=4)
     )
 
-    assert [row[0] for row in called] == [
-        FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
-        FUTURES_LARGE_TRADER_TABLE_NAME,
-        FUTURES_PUT_CALL_RATIO_TABLE_NAME,
-    ]
-    # 三大法人被夾到來源下限，其餘兩個維持 2015
-    assert called[0][1] > datetime.date(2015, 1, 1)
-    assert called[1][1] == datetime.date(2015, 1, 1)
+    updater.update(start_date=datetime.date(2015, 1, 1), end_date=end, resume=False)
+
+    assert [row[0] for row in called] == [table for table, _ in ALL_DATASETS]
+    assert called[0][1][0][0] == FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE
+    assert called[1][1][0][0] == datetime.date(2015, 1, 1)
 
 
-def test_gap_month_inside_the_table_is_backfilled_on_resume() -> None:
+def test_gap_inside_the_table_is_planned_again_on_resume(monkeypatch, tmp_path) -> None:
     """
-    表內中間缺的月份，下一次續跑會先補
+    表內中間缺的交易日，下一次續跑會請求它所在的月份
 
-    被擋的月份以前只記 error、叫人「稍後重跑」，但預設 `resume=True` 的起點是
-    表內最新 +1，那個月被後面已入庫的月份蓋過去——結束碼 0、缺口仍在。
+    被擋的月份以前只記 error、叫人「稍後重跑」，但 `MAX(date)+1` 的起點會越過它——
+    結束碼 0、缺口仍在。差集直接把 07-01 列為候選。
     """
 
-    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
-
-    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
-    chip_dates: List[datetime.date] = [
+    june, july, august = (
         datetime.date(2026, 6, 1),
+        datetime.date(2026, 7, 1),
         datetime.date(2026, 8, 3),
+    )
+    updater, called = make_chip_updater(
+        monkeypatch,
+        tmp_path,
+        {FUTURES_PUT_CALL_RATIO_TABLE_NAME: [june, august]},
+        [june, july, august],
+        [(FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr")],
+    )
+
+    updater.update(end_date=august)
+
+    assert called == [
+        (
+            FUTURES_PUT_CALL_RATIO_TABLE_NAME,
+            [(datetime.date(2026, 7, 1), datetime.date(2026, 7, 31))],
+            [july],
+        )
     ]
-    trading_days: List[datetime.date] = chip_dates + [datetime.date(2026, 7, 1)]
-
-    class StubLoader:
-        def get_earliest_date(self, table):
-            return "2026-06-01"
-
-        def get_latest_date(self, table):
-            return "2026-08-03"
-
-        def get_dates(self, table, start, end):
-            return chip_dates
-
-    class StubPriceAPI:
-        dao = type("DAO", (), {"table_exists": staticmethod(lambda: True)})()
-
-        def get_trading_days(self, start, end):
-            return sorted(trading_days)
-
-    updater.loader = StubLoader()
-    updater.price_api = StubPriceAPI()
-    updater.get_datasets = lambda: [
-        (FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr", None, None),
-    ]
-    called: List[tuple] = []
-
-    def record_dataset(table, label, crawl, clean, start, end):
-        called.append((start, end))
-        return 0, []
-
-    updater.update_dataset = record_dataset
-
-    updater.update(end_date=datetime.date(2026, 8, 3))
-
-    assert called[0] == (datetime.date(2026, 7, 1), datetime.date(2026, 7, 31))
-    # 之後照常從表內最新 +1 接續
-    assert called[-1][0] == datetime.date(2026, 8, 4)
 
 
-def test_update_only_touches_requested_tables(monkeypatch) -> None:
+def test_resume_does_not_look_before_the_first_row(monkeypatch, tmp_path) -> None:
+    """
+    續跑不回頭看該表第一筆之前：三大法人的來源只回溯到 2023-09，更早的交易日每次都問只會白打
+
+    表內 07-01、08-03 齊全、06-01 有交易卻在第一筆之前：沒有任何候選，一個月都不請求。
+    往前擴張要用 `resume=False`。
+    """
+
+    june, july, august = (
+        datetime.date(2026, 6, 1),
+        datetime.date(2026, 7, 1),
+        datetime.date(2026, 8, 3),
+    )
+    updater, called = make_chip_updater(
+        monkeypatch,
+        tmp_path,
+        {FUTURES_PUT_CALL_RATIO_TABLE_NAME: [july, august]},
+        [june, july, august],
+        [(FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr")],
+    )
+
+    updater.update(end_date=august)
+
+    assert called == []
+
+
+def test_progress_file_drives_the_plan(monkeypatch, tmp_path) -> None:
+    """已確認無資料的日子不再問；上次沒跑完的即使表內已有也重來"""
+
+    days: List[datetime.date] = [datetime.date(2026, 6, day) for day in (1, 2, 3, 4)]
+    updater, called = make_chip_updater(
+        monkeypatch,
+        tmp_path,
+        {FUTURES_PUT_CALL_RATIO_TABLE_NAME: [days[0], days[2]]},
+        days,
+        [(FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr")],
+    )
+    progress: DateProgressStore = updater.progress_store(
+        FUTURES_PUT_CALL_RATIO_TABLE_NAME
+    )
+    progress.no_data.add(days[1])
+    progress.incomplete.add(days[2])
+    progress.save()
+
+    updater.update(end_date=days[3])
+
+    assert called[0][2] == [days[2], days[3]]
+    assert called[0][1] == [(days[2], days[3])]
+
+
+def test_update_only_touches_requested_tables(monkeypatch, tmp_path) -> None:
     """
     `tables` 指定時只跑那幾個資料集
 
@@ -552,22 +632,7 @@ def test_update_only_touches_requested_tables(monkeypatch) -> None:
     已經完整到 2015 的表整段重抓。少了這個開關，一次回補就是上百次多餘請求。
     """
 
-    from core.pipeline.tw.updaters.futures_chip_updater import FuturesChipUpdater
-
-    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
-    updater.get_datasets = lambda: [
-        (FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME, "institutional", None, None),
-        (FUTURES_LARGE_TRADER_TABLE_NAME, "large_trader", None, None),
-        (FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr", None, None),
-    ]
-
-    called: List[tuple] = []
-
-    def record_dataset(table, label, crawl, clean, start, end):
-        called.append((table, start, end))
-        return 0, []
-
-    updater.update_dataset = record_dataset
+    updater, called = make_chip_updater(monkeypatch, tmp_path, {}, [], ALL_DATASETS)
 
     updater.update(
         start_date=datetime.date(2023, 9, 4),
@@ -577,12 +642,89 @@ def test_update_only_touches_requested_tables(monkeypatch) -> None:
     )
 
     assert [row[0] for row in called] == [FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME]
-    assert called[0][1] == FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE
+    assert called[0][1][0][0] == FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE
 
     # `tables` 對不到任何資料集時安靜收工，不要當成「三張全做」
     called.clear()
     updater.update(tables=["no_such_table"])
     assert called == []
+
+
+@pytest.mark.parametrize(
+    "has_trading_days, expect_blocked, expect_incomplete, expect_no_data",
+    [(True, 1, True, False), (False, 0, False, True)],
+    ids=["blocked-month", "month-without-trading-days"],
+)
+def test_month_outcome_is_recorded_on_every_candidate_day(
+    tmp_path,
+    has_trading_days: bool,
+    expect_blocked: int,
+    expect_incomplete: bool,
+    expect_no_data: bool,
+) -> None:
+    """
+    拿不到 CSV 的月份：有交易日就是被擋，該月的候選日全部記成待重試；沒有交易日就記成無資料
+
+    記錯邊的後果不對稱：被擋記成無資料，那一個月永遠不會再補。
+    """
+
+    updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
+    updater.BLOCKED_RETRY_DELAY_SECONDS = 0
+    updater.MIN_DELAY_SECONDS = 0
+    updater.MAX_DELAY_SECONDS = 0
+    updater.has_trading_days = lambda start, end: has_trading_days
+    updater.loader = SimpleNamespace(
+        save_csv=lambda df, name: None,
+        add_to_db=lambda table, df: 0,
+        commit=lambda: None,
+    )
+    first, second = datetime.date(2026, 6, 1), datetime.date(2026, 6, 2)
+    progress: DateProgressStore = DateProgressStore("pcr", path=tmp_path / "pcr.json")
+
+    _, blocked = updater.update_dataset(
+        FUTURES_PUT_CALL_RATIO_TABLE_NAME,
+        "pcr",
+        lambda s, e: CrawlResult.no_data("回的是 HTML"),
+        lambda text: pd.DataFrame(),
+        [(first, datetime.date(2026, 6, 30))],
+        {first, second},
+        progress,
+    )
+
+    assert len(blocked) == expect_blocked
+    assert (progress.incomplete == {first, second}) is expect_incomplete
+    assert (progress.no_data == {first, second}) is expect_no_data
+
+
+def test_loaded_month_records_each_candidate_day(monkeypatch, tmp_path) -> None:
+    """
+    入庫成功的月份：月檔裡有的記完成、不是交易日的記無資料、是交易日卻缺的留著下次再問
+
+    最後一種不可記成無資料：來源偶發漏日時那一天就永遠補不回來。
+    """
+
+    first, second, third = (datetime.date(2026, 6, day) for day in (1, 2, 3))
+    updater, _ = make_chip_updater(
+        monkeypatch,
+        tmp_path,
+        {},
+        [first, second],
+        [(FUTURES_PUT_CALL_RATIO_TABLE_NAME, "pcr")],
+    )
+    progress: DateProgressStore = DateProgressStore("pcr", path=tmp_path / "pcr.json")
+    progress.incomplete.update({first, second, third})
+
+    updater.record_loaded_window(
+        progress,
+        {first, second, third},
+        pd.DataFrame({"date": [first.isoformat()], "x": [1]}),
+        first,
+        datetime.date(2026, 6, 30),
+    )
+
+    # 月檔裡有的那天清掉重試標記；是交易日卻缺的那天維持待重試；不是交易日的記成無資料
+    assert progress.incomplete == {second}
+    assert progress.no_data == {third}
 
 
 @pytest.mark.parametrize(

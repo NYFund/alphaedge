@@ -272,8 +272,8 @@ def test_chip_dataset_records_a_blocked_month_only_when_it_had_trading_days(
         "三大法人",
         lambda s, e: CrawlResult.no_data("回的是 HTML"),
         lambda text: pd.DataFrame(),
-        start,
-        end,
+        [(start, end)],
+        set(),
     )
 
     assert inserted == 0

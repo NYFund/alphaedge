@@ -43,12 +43,12 @@ updater 負責串起流程與決定要處理哪些日期。
 | `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinMindUpdater`（台股總覽、含權證、證券商資訊） | 每張表一次 | 無（現況快照，每次整份重抓） | `INSERT OR REPLACE`（同鍵以最新快照覆蓋；快照裡已沒有的舊列保留） | `DataLoadError` |
 | `StockTickUpdater` | 每個「股票 × 交易日」一個交易 | 固定起日 ＋ `stock_tick_load_log`（不晚於已入庫最後一天就跳過） | **整天刪除後重寫**（沒有唯一鍵，見下方〈台股 tick〉） | `DataLoadError` |
-| `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1，**加上**表內最早與最新之間、現貨有開市卻沒有行情的日子（日曆取自 `tw_stock.db` 的 `price` 表，2013 年前偵測不到） | `INSERT OR IGNORE` | `DataLoadError` |
+| `FuturesPriceUpdater` | **每 100 天** | 逐**商品**的**差集**：平日 ＋ 補行交易日（取自 `tw_stock.db` 的 `price` 表）− 該商品已有 − 已確認無資料 ＋ 上次沒跑完；進度檔逐商品一份。續跑不回頭看該商品第一筆之前，往前擴張用 `resume=False` | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesStockUniverseUpdater` | 一次（單次請求） | 當日快照是否已入庫 | `INSERT OR IGNORE` | `DataLoadError` |
-| `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品最新 `date` +1；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | `DataLoadError` |
+| `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品差集（同上）；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesMarginUpdater` | 一次（單次請求） | 主鍵 `(effective_date, product)` 相同即略過 | `INSERT OR IGNORE` | `DataLoadError` |
 | `FuturesContinuousUpdater` | 每組（商品, 換月規則）寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
-| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1，**加上**表內最早與最新之間、期貨有交易卻沒有籌碼的月份（交易日取自 `futures_price_daily`） | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
+| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自的**差集**：交易日曆（`futures_price_daily`）− 該表已有 − 已確認無資料 ＋ 上次沒跑完，落在哪些月份就請求那些月份；被擋的月份記成待重試 | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
 | `MarketHolidayUpdater` | 每年度寫完 | 逐年度重抓前一年、今年與明年（**先刪後寫**，站方更正公告時舊列才不會留著） | `INSERT OR IGNORE`（先刪該年度） | `DataLoadError`（全部年度跑完才拋） |
 
 **未分批的幾個並非疏漏**：dividend／mrr／fs 的量級是十餘年 × 數十個年月或年季，
@@ -131,9 +131,10 @@ quota 耗盡瞬間多個在途組合要重試。**真正能縮短回補時間的
 ### 期貨線
 
 **期貨的 updater 寫的是 `tw_futures.db` 不是 `tw_stock.db`**（主鍵語意不同，見
-`futures_price_loader` 的說明）。`FuturesPriceUpdater` 的 resume **以商品為單位而非
-全表最新日**：各商品上市日不同、且會陸續加進爬取範圍，用全表最新日會讓新加的商品
-被既有商品的進度擋住而整段歷史都補不到。`FuturesStockUniverseUpdater` 則沒有回補
+`futures_price_loader` 的說明）。`FuturesPriceUpdater` 的 resume **以商品為單位算差集**
+（`DatePlanner` ＋ 逐商品的進度檔）：各商品上市日不同、且會陸續加進爬取範圍，用全表的
+日期會讓新加的商品被既有商品擋住而整段歷史都補不到；中間被擋掉的日子下次仍會被請求。
+`FuturesStockUniverseUpdater` 則沒有回補
 區間——來源是一張當下的完整清單，一次請求就結束，故「resume」退化成「今天抓過沒有」。
 
 ### 台股 tick（TimescaleDB）

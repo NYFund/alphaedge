@@ -9,6 +9,7 @@ import pytest
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import DataLoadError
@@ -143,9 +144,11 @@ def updater(
     futures_updater.close()
 
 
-def test_start_date_query_error_is_raised(updater: FuturesPriceUpdater) -> None:
+def test_start_date_query_error_is_raised(
+    updater: FuturesPriceUpdater, tmp_path: Path
+) -> None:
     """
-    查續跑起點失敗時往外拋
+    規劃候選日期時查表失敗要往外拋
 
     舊版吞掉 `sqlite3.Error` 後改用預設起日：「DB 被鎖住」會讓該商品從 1998 年
     靜默重跑整段回補，數千次請求。
@@ -158,7 +161,12 @@ def test_start_date_query_error_is_raised(updater: FuturesPriceUpdater) -> None:
     )
 
     with pytest.raises(sqlite3.OperationalError):
-        updater.get_actual_update_start_date("TX", datetime.date(1998, 7, 21))
+        updater.plan_dates(
+            "TX",
+            datetime.date(1998, 7, 21),
+            datetime.date(1998, 7, 31),
+            DateProgressStore("test", path=tmp_path / "progress.json"),
+        )
 
 
 def test_updater_and_loader_share_one_connection(updater: FuturesPriceUpdater) -> None:

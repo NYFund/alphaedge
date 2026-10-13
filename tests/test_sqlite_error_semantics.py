@@ -1,6 +1,7 @@
 import datetime
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, Iterator, List, Optional
 
 import pytest
@@ -25,6 +26,7 @@ from core.dao.base import table_exists
 from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
 from core.pipeline.tw.updaters.financial_statement_updater import (
     FinancialStatementUpdater,
@@ -152,7 +154,7 @@ def test_loader_latest_date_raises_when_db_locked(
     """
     資料庫被鎖住時必須拋，**不可回 None**
 
-    回 None 會讓 `futures_chip_updater.resolve_start_date()` 退回
+    回 None 會讓 `futures_chip_updater.plan_dates()` 退回
     `DEFAULT_START_DATE`，整段歷史重爬好幾個小時，而 log 只顯示一個
     看起來正常的起始日期。
     """
@@ -288,29 +290,37 @@ def test_margin_api_returns_none_when_table_missing(tmp_path: Path) -> None:
 
 
 def test_updater_falls_back_to_default_start_when_table_missing(
-    chip_loader: FuturesChipLoader,
+    chip_loader: FuturesChipLoader, tmp_path: Path
 ) -> None:
     """
-    表還沒建時，續跑起點退回 `DEFAULT_START_DATE`——這是全新環境的正常路徑
+    表還沒建時，候選從 `DEFAULT_START_DATE` 起算（三大法人再夾到來源下限）——全新環境的正常路徑
 
     修 S1 時最容易連帶改壞的就是這條：把「表不存在」也改成拋例外，
     剛 clone 的機器第一次跑 `--target futures_chip` 就會當場失敗。
 
     **只組出 `loader` 而不走 `__init__`**：`FuturesChipUpdater.setup()` 會一併建
     crawler、cleaner 與 `FuturesPriceAPI`（連正式的 `tw_futures.db`），
-    而本測試要驗的只有 `resolve_start_date()` 這一個純決策。
+    而本測試要驗的只有 `plan_dates()` 這一個純決策。
     """
 
     updater: FuturesChipUpdater = FuturesChipUpdater.__new__(FuturesChipUpdater)
     updater.loader = chip_loader
+    updater.price_api = SimpleNamespace(
+        dao=SimpleNamespace(table_exists=lambda: False),
+        get_trading_days=lambda start, end: [],
+    )
 
-    start: datetime.date = updater.resolve_start_date(
+    dates: List[datetime.date] = updater.plan_dates(
         table=FUTURES_INSTITUTIONAL_CHIP_TABLE_NAME,
+        label="institutional",
         start_date=None,
+        end_date=FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE
+        + datetime.timedelta(days=4),
+        progress=DateProgressStore("test", path=tmp_path / "progress.json"),
         resume=True,
     )
 
-    assert start == FuturesChipUpdater.DEFAULT_START_DATE
+    assert dates[0] == FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE
 
 
 # -----------------------------------------------------------------------
@@ -436,7 +446,12 @@ def test_futures_price_updater_start_raises_when_db_locked(tmp_path: Path) -> No
     updater.dao = FuturesPriceDAO(conn=conn)
 
     with pytest.raises(sqlite3.Error):
-        updater.get_actual_update_start_date("TX", datetime.date(2015, 1, 1))
+        updater.plan_dates(
+            "TX",
+            datetime.date(2015, 1, 1),
+            datetime.date(2015, 1, 31),
+            DateProgressStore("test", path=tmp_path / "progress.json"),
+        )
 
 
 def test_futures_traded_weekends_raise_when_db_locked(tmp_path: Path) -> None:

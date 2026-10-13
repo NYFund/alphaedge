@@ -1,12 +1,11 @@
 import datetime
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Protocol, Set
 
 from loguru import logger
 
 from core.config import DOWNLOADS_METADATA_DIR_PATH
-from core.dao.base import BaseDAO
 from core.pipeline.shared.base_crawler import CrawlStatus
 
 """
@@ -43,6 +42,23 @@ from core.pipeline.shared.base_crawler import CrawlStatus
 
 # 週六的 `weekday()` 值；用於判斷是否為週末
 SATURDAY: int = 5
+
+
+class DateSource(Protocol):
+    """
+    `DatePlanner` 需要的資料表形狀：表名、表在不在、區間內已有的日期
+
+    `BaseDAO` 自然滿足。一張表放多個商品（期貨行情）時差集要以商品為單位算，
+    由逐商品的視圖提供同樣三件事即可，不必另寫一套 planner。
+    """
+
+    TABLE_NAME: str
+
+    def table_exists(self) -> bool: ...
+
+    def get_distinct_dates(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> List[datetime.date]: ...
 
 
 class DateProgressStore:
@@ -200,7 +216,7 @@ class DatePlanner:
 
     @staticmethod
     def get_existing_dates(
-        dao: BaseDAO,
+        dao: DateSource,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> Set[datetime.date]:
@@ -208,7 +224,7 @@ class DatePlanner:
         - Description:
             取得目標資料表在區間內已有的日期
         - Parameters:
-            - dao: BaseDAO
+            - dao: DateSource
                 目標資料表的 DAO
             - start_date / end_date: datetime.date
                 查詢區間
@@ -224,7 +240,7 @@ class DatePlanner:
 
     @staticmethod
     def get_trading_dates(
-        dao: BaseDAO,
+        dao: DateSource,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> Set[datetime.date]:
@@ -239,7 +255,7 @@ class DatePlanner:
             `price` 通常比 chip／margin 早一步更新，若完全以它為準，
             最新的那幾天會等到下一次執行才被請求。
         - Parameters:
-            - dao: BaseDAO
+            - dao: DateSource
                 作為日曆來源的資料表 DAO
             - start_date / end_date: datetime.date
                 查詢區間
@@ -252,7 +268,7 @@ class DatePlanner:
 
     @staticmethod
     def get_weekend_dates(
-        daos: Iterable[BaseDAO],
+        daos: Iterable[DateSource],
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> Set[datetime.date]:
@@ -334,7 +350,7 @@ class DatePlanner:
 
     @staticmethod
     def plan(
-        dao: BaseDAO,
+        dao: DateSource,
         start_date: datetime.date,
         end_date: datetime.date,
         no_data_dates: Optional[Iterable[datetime.date]] = None,
@@ -346,7 +362,7 @@ class DatePlanner:
         - Description:
             算出這次要請求的日期清單（見模組說明的差集公式）
         - Parameters:
-            - dao: BaseDAO
+            - dao: DateSource
                 目標資料表的 DAO
             - start_date / end_date: datetime.date
                 更新區間
