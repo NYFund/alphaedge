@@ -40,7 +40,8 @@ from core.backtest.report.reporter import StockBacktestReporter
   會在跑到那個事件時才 KeyError。
 """
 
-# 台股事件報表的順序（2026-10 以前的 `EVENT_KEYS` 原文）；動到這裡就是破壞報表相容
+# 台股事件報表的順序：既有 key 的順序不可動（事件報表與 SHORT 回歸基準以它為欄位），
+# 新 key 只能加在尾端
 LEGACY_STOCK_EVENT_KEYS: List[str] = [
     "rejected_direction",
     "rejected_fill_price",
@@ -71,6 +72,7 @@ LEGACY_STOCK_EVENT_KEYS: List[str] = [
     "share_adjustment_applied",
     "share_adjustment_unknown",
     "forced_exit_no_quote",
+    "rejected_short_exposure",  # 2026-10 加在尾端：放空曝險超限的拒單原本不計數
 ]
 
 # 市場無關、兩邊都會計入的程式碼

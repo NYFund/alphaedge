@@ -66,6 +66,8 @@ _STOCK_EVENT_KEY_SCOPES: Tuple[Tuple[str, str], ...] = (
         "forced_exit_no_quote",
         SHARED,
     ),  # 連續無報價（停牌／下市／契約到期）強制出場的做多部位
+    # 新 key 一律加在尾端：事件報表與 SHORT 回歸基準以這份順序為欄位
+    ("rejected_short_exposure", STOCK),  # 放空曝險超過單一標的上限被拒的開倉單
 )
 
 # 台股事件報表的 key（原順序）；名稱維持 `EVENT_KEYS`，既有呼叫端與測試都以它為台股清單

@@ -57,6 +57,43 @@ def test_long_open_rejected_by_balance_is_counted(make_order) -> None:
     assert manager.account.balance == 100000.0  # 餘額未被扣
 
 
+def test_short_open_rejected_by_balance_is_counted(make_order) -> None:
+    """放空保證金付不出時同樣要計數：與做多共用 `rejected_insufficient_balance`"""
+
+    event_counts: Dict[str, int] = new_event_counts()
+    # 1 張 100 元融券要押 90,000 元保證金＋開倉成本，餘額 50,000 開不成
+    manager: StockPositionManager = build_manager(
+        init_capital=50000.0, event_counts=event_counts
+    )
+
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(action=Action.SELL, position_type=PositionType.SHORT, price=100.0)
+    )
+
+    assert position is None
+    assert event_counts["rejected_insufficient_balance"] == 1
+    assert manager.account.balance == 50000.0
+
+
+def test_short_open_rejected_by_exposure_is_counted(make_order) -> None:
+    """放空曝險超過單一標的上限時計入 `rejected_short_exposure`；原本只回 None"""
+
+    event_counts: Dict[str, int] = new_event_counts()
+    # 上限 5% × 1,000,000 ＝ 50,000；1 張 100 元的曝險是 100,000
+    manager: StockPositionManager = build_manager(
+        constraint=ShortConstraint(max_short_exposure_ratio=0.05),
+        event_counts=event_counts,
+    )
+
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(action=Action.SELL, position_type=PositionType.SHORT, price=100.0)
+    )
+
+    assert position is None
+    assert event_counts["rejected_short_exposure"] == 1
+    assert event_counts["rejected_insufficient_balance"] == 0
+
+
 def test_long_open_with_enough_balance_is_not_counted(make_order) -> None:
     """餘額足夠時照常開倉且不計數（防止改過頭）"""
 

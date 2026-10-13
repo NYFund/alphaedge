@@ -154,7 +154,8 @@ class StockPositionManager(BasePositionManager):
                 開倉部位價值（賣出價金）
         - Return:
             - position: Optional[StockPosition]
-                開倉成功回傳部位，被風控擋下則回傳 None
+                開倉成功回傳部位；保證金付不出（`rejected_insufficient_balance`）或
+                曝險超限（`rejected_short_exposure`）時計數並回傳 None
         """
 
         short_method: ShortMethod = (
@@ -189,6 +190,8 @@ class StockPositionManager(BasePositionManager):
                 f"[Open Short] {stock_order.stock_id} 餘額不足："
                 f"需要 {margin + open_cost}，可用 {self.account.balance}，拒絕開倉"
             )
+            # 與做多共用同一個 key：只回 None 的話引擎會靜默跳過，報表上只是少一筆交易
+            self.count_event("rejected_insufficient_balance")
             return None
 
         # 單一標的曝險上限。**公式與實盤共用**
@@ -206,6 +209,7 @@ class StockPositionManager(BasePositionManager):
                 f"[Open Short] {stock_order.stock_id} 曝險 {position_value} "
                 f"超過上限 {cap}，拒絕開倉"
             )
+            self.count_event("rejected_short_exposure")
             return None
 
         logger.info(f"* Place Open Order: {stock_order.stock_id}")

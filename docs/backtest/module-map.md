@@ -119,7 +119,7 @@ sequenceDiagram
 | 5 | 成交價可信度（無成交、OHLC 區間——只成交一筆、來源沒給高低價時為 `[close, close]`、漲跌停、全日鎖漲跌停；檔位未對齊只警告） | `FillModel.validate()` | `rejected_fill_price`／`rejected_limit_up_locked`／`rejected_limit_down_locked` |
 | 6 | 成交假設（交易所名單、券源、停券、成交量上限、滑價） | `FillModel.fill()`（經 `BaseSimulator.apply_fill_model()`） | `rejected_short_halted`／`rejected_below_reference`／`rejected_not_day_tradable`／`rejected_no_borrow`／`rejected_short_suspended`／`rejected_volume_cap` 等 |
 
-通過六關後才交給 `PositionManager.open_position()`（餘額不足、同標的反向持倉在那一層再擋）。
+通過六關後才交給 `PositionManager.open_position()`（餘額不足計入 `rejected_insufficient_balance`、放空曝險超限計入 `rejected_short_exposure`、同標的反向持倉在那一層再擋）。
 
 ---
 
