@@ -77,6 +77,63 @@ def resolve_close_action(position_type: PositionType) -> Action:
     return Action.SELL if position_type == PositionType.LONG else Action.BUY
 
 
+def is_opening(order: BaseOrder) -> bool:
+    """
+    - Description:
+        這張委託是不是開倉單：LONG 的買進、SHORT 的賣出
+
+        開倉／平倉的判定**只寫這一份**（連同 `is_closing()` 與吃資料列字串的
+        `is_opening_record()`／`is_closing_record()`）。實盤的 parity、當沖回補、
+        跨策略守門、事前風控、帳戶同步、日終補單與部位管理層原本各寫一份 if；
+        散在多處會漂移，而漂移的後果是平倉單被當成開倉擋掉（部位失去出場能力），
+        或開倉單被當成平倉去補（憑空建出一個新部位），兩種都不會有任何錯誤訊息。
+    - Parameters:
+        - order: BaseOrder
+            委託
+    - Return:
+        - bool
+            開倉為 True
+    """
+
+    return order.action is resolve_open_action(order.position_type)
+
+
+def is_closing(order: BaseOrder) -> bool:
+    """這張委託是不是平倉單：LONG 的賣出、SHORT 的買進回補；與 `is_opening()` 互補"""
+
+    return order.action is resolve_close_action(order.position_type)
+
+
+def is_opening_record(position_type: str, action: str) -> bool:
+    """
+    - Description:
+        資料列版的 `is_opening()`：parity 讀的是 `live_order` 的字串欄位
+
+        字串先轉回 enum 再走同一條判定，**轉不回來就拋錯、不猜**：這兩欄只會由
+        我們自己的程式以 enum 的值寫入，看不懂代表資料壞了，靜靜回 False 會把
+        壞掉的列當成平倉單處理。
+    - Parameters:
+        - position_type: str
+            `PositionType` 的值（`LONG`／`SHORT`）
+        - action: str
+            `Action` 的值（`Buy`／`Sell`）
+    - Return:
+        - bool
+            開倉為 True
+    - Raise:
+        - ValueError
+            任一欄位不是已知的 enum 值
+    """
+
+    return Action(action) is resolve_open_action(PositionType(position_type))
+
+
+def is_closing_record(position_type: str, action: str) -> bool:
+    """資料列版的 `is_closing()`：日終補單讀的是 `live_order` 的字串欄位；看不懂的值拋 ValueError"""
+
+    return Action(action) is resolve_close_action(PositionType(position_type))
+
+
 def validate_orders(
     orders: List[BaseOrder],
     stage: str,

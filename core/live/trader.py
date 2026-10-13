@@ -37,11 +37,7 @@ from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError, RollPlan
 from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
-from core.live.intraday.session_guard import (
-    SessionGuard,
-    cover_action,
-    stops_after_cover,
-)
+from core.live.intraday.session_guard import SessionGuard, stops_after_cover
 from core.live.notify.base import NotifyLevel, notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
@@ -816,7 +812,7 @@ class LiveTrader:
         return context.build_filled_order(
             position.symbol,
             self._now(),
-            cover_action(position),
+            order_rules.resolve_close_action(position.position_type),
             position.position_type,
             float(quote.cur_price),
             int(position.volume),
@@ -1574,7 +1570,7 @@ class LiveTrader:
 
         if context.calculate_opening_requirement is None:
             return None
-        if order.action is order_rules.resolve_close_action(order.position_type):
+        if order_rules.is_closing(order):
             return None
 
         try:

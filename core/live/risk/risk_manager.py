@@ -14,8 +14,11 @@ from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import BaseOrder
-from core.portfolio.order_rules import exceeds_symbol_exposure, symbol_exposure_cap
-from core.utils import Action, PositionType
+from core.portfolio.order_rules import (
+    exceeds_symbol_exposure,
+    is_closing,
+    symbol_exposure_cap,
+)
 
 """
 事前風控：策略或程式出錯時，損失要有硬上限
@@ -263,7 +266,7 @@ def truncate_batch_by_exposure(
     per_symbol: Dict[str, float] = dict(existing_symbol_exposure)
 
     for item in items:
-        if is_closing_order(item.order):
+        if is_closing(item.order):
             allowed.append(item)
             continue
 
@@ -293,26 +296,6 @@ def truncate_batch_by_exposure(
         per_symbol[symbol] = per_symbol.get(symbol, 0.0) + item.amount
 
     return (allowed, truncated)
-
-
-def is_closing_order(order: BaseOrder) -> bool:
-    """
-    - Description:
-        判斷是否為平倉單
-
-        LONG 的賣出、SHORT 的買進都是平倉。**這條判定散在多處會漂移**，
-        而漂移的後果是平倉單被當成開倉擋掉——部位因此失去出場能力。
-    - Parameters:
-        - order: BaseOrder
-            訂單
-    - Return:
-        - bool
-            是否為平倉
-    """
-
-    if order.position_type is PositionType.LONG:
-        return order.action is Action.SELL
-    return order.action is Action.BUY
 
 
 # === 依賴行程狀態的規則 ===
@@ -439,7 +422,7 @@ class PreTradeRiskManager:
             )
             return RiskDecision.reject("KILL_SWITCH", "kill switch 生效，拒絕所有委託")
 
-        closing: bool = is_closing_order(order)
+        closing: bool = is_closing(order)
         if closing and not self.mode_state.allows_close(strategy_name):
             return RiskDecision.reject(
                 "MODE_HALTED",

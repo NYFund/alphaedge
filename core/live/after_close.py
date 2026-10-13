@@ -18,7 +18,7 @@ from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.trading_mode import TradingModeState
 from core.models import RealizedTradeSnapshot
 from core.portfolio import order_rules
-from core.utils import Action, PositionType, Units
+from core.utils import Action, Units
 
 """
 盤後作業：把當天發生的事收攏成可稽核的結果
@@ -409,7 +409,9 @@ class AfterCloseRunner:
             if remainder <= 0:
                 continue
 
-            if not self._is_exit_row(order_row):
+            if not order_rules.is_closing_record(
+                str(order_row["position_type"]), str(order_row["action"])
+            ):
                 logger.info(
                     f"開倉單 {order_row['client_order_id']} 殘量 {remainder} 放棄，"
                     "不追價（追價等於在偏離訊號價的位置建倉）"
@@ -457,21 +459,6 @@ class AfterCloseRunner:
             client_order_id=client_order_id,
         )
         self._notify(NotifyLevel.CRITICAL, "平倉單未成交", message)
-
-    @staticmethod
-    def _is_exit_row(order_row: Dict[str, Any]) -> bool:
-        """
-        這張委託是不是出場單
-
-        以持倉方向與買賣別推導，與 `order_rules.resolve_close_action()` 同一套
-        規則——散在多處會漂移，而漂移的後果是開倉單被當成平倉單去補，
-        那會憑空建出一個新部位。
-        """
-
-        position_type: PositionType = PositionType(str(order_row["position_type"]))
-        return str(order_row["action"]) == (
-            order_rules.resolve_close_action(position_type).value
-        )
 
     def _notify(self, level: NotifyLevel, title: str, body: str) -> None:
         """推播；失敗一律吞掉，監控不可拖垮被監控的東西"""

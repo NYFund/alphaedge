@@ -5,7 +5,6 @@ import pytest
 
 from core.live.intraday.session_guard import (
     SessionGuard,
-    cover_action,
     is_night_session,
     resolve_accounting_date,
     resolve_live_policy,
@@ -14,6 +13,7 @@ from core.live.intraday.session_guard import (
     uncovered_day_trade_positions,
 )
 from core.models import StockAccount, StockOrder, StockPosition
+from core.portfolio.order_rules import resolve_close_action
 from core.utils import Action, DayTradeUncoveredPolicy, PositionType
 
 """
@@ -238,12 +238,6 @@ def test_only_open_day_trade_shorts_are_collected() -> None:
     assert [p.symbol for p in found] == ["2330"]
 
 
-def test_cover_action_is_buy_for_a_short() -> None:
-    """回補空單就是買進"""
-
-    assert cover_action(make_position()) is Action.BUY
-
-
 def test_guard_waits_until_the_cover_time() -> None:
     """13:20 之前不該動作——提早回補等於放棄當沖的後半段"""
 
@@ -283,7 +277,7 @@ def test_build_cover_orders_reports_the_rewritten_policy() -> None:
         return StockOrder(
             stock_id=position.symbol,
             date=at(2026, 9, 21, 13, 20),
-            action=cover_action(position),
+            action=resolve_close_action(position.position_type),
             position_type=PositionType.SHORT,
             price=1000.0,
             volume=position.volume,
@@ -343,6 +337,10 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
     harness.trader._run_session_guard()
 
     assert harness.broker.placed_count == before + 1
+    # 回補空單就是買進；送成賣出會再開一口空單而不是平掉它
+    sent: Any = list(harness.broker.tickets.values())[-1].order
+    assert (sent.action, sent.position_type) == (Action.BUY, PositionType.SHORT)
+    assert resolve_close_action(sent.position_type) is sent.action
 
 
 def test_heartbeat_does_nothing_before_the_cover_time() -> None:

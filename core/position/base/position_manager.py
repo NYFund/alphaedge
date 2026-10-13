@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Union
 from loguru import logger
 
 from core.models import BaseAccount, BaseOrder, BasePosition, BaseTradeRecord
+from core.portfolio import order_rules
 from core.utils import Action, PositionType, TimeUtils
 
 """BasePositionManager: 市場與商品皆無關的部位管理骨架（開倉樣板、FIFO 拆單與方向篩選）"""
@@ -76,7 +77,7 @@ class BasePositionManager(ABC):
                 開倉成功的部位；被判準或餘額擋下時為 None
         """
 
-        if order.action != self.resolve_open_action(order.position_type):
+        if not order_rules.is_opening(order):
             logger.warning(
                 f"[Open Position] 方向與動作不一致：{order.symbol} "
                 f"{order.position_type} / {order.action}，拒絕開倉"
@@ -129,12 +130,6 @@ class BasePositionManager(ABC):
         """一單位的計價單位數：台股一張 1,000 股、期貨為該契約的乘數（供滑價統計）"""
 
         pass
-
-    @staticmethod
-    def resolve_open_action(position_type: PositionType) -> Action:
-        """開倉動作：LONG 為買進、SHORT 為賣出"""
-
-        return Action.BUY if position_type == PositionType.LONG else Action.SELL
 
     @abstractmethod
     def close_single_position(

@@ -15,7 +15,6 @@ from core.live.risk.risk_manager import (
     check_price_deviation,
     check_single_order_amount,
     check_volume_cap,
-    is_closing_order,
     truncate_batch_by_exposure,
 )
 from core.live.risk.trading_mode import TradingMode, TradingModeState
@@ -187,30 +186,6 @@ def test_market_orders_pass_the_price_check() -> None:
 
     assert check_price_deviation(None, 1000.0, config).passed is True
     assert check_price_deviation(0.0, 1000.0, config).passed is True
-
-
-@pytest.mark.parametrize(
-    "position_type, action, expected",
-    [
-        (PositionType.LONG, Action.SELL, True),
-        (PositionType.LONG, Action.BUY, False),
-        (PositionType.SHORT, Action.BUY, True),
-        (PositionType.SHORT, Action.SELL, False),
-    ],
-)
-def test_closing_order_detection(
-    position_type: PositionType, action: Action, expected: bool
-) -> None:
-    """
-    平倉的判定只寫一份
-
-    散在多處會漂移，而漂移的後果是平倉單被當成開倉擋掉——部位因此失去出場能力。
-    """
-
-    assert (
-        is_closing_order(make_order(position_type=position_type, action=action))
-        is expected
-    )
 
 
 # === 批次曝險 ===

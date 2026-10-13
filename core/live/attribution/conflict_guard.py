@@ -9,8 +9,8 @@ from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder
+from core.portfolio import order_rules
 from core.portfolio.aggregation import resolve_symbol_conflicts
-from core.portfolio.order_rules import resolve_close_action
 
 """
 跨策略衝突守門：同一標的同時只允許一支策略持有（先搶先贏）
@@ -98,7 +98,8 @@ class CrossStrategyConflictGuard:
 
         holders: Dict[str, str] = self._collect_holders(orders, pending_holders)
         closing: Dict[int, bool] = {
-            index: self._is_closing(order) for index, (_, order) in enumerate(orders)
+            index: order_rules.is_closing(order)
+            for index, (_, order) in enumerate(orders)
         }
 
         allowed, blocked = resolve_symbol_conflicts(orders, holders, closing)
@@ -134,17 +135,6 @@ class CrossStrategyConflictGuard:
             holders.setdefault(symbol, strategy_name)
 
         return holders
-
-    @staticmethod
-    def _is_closing(order: BaseOrder) -> bool:
-        """
-        是否為平倉單
-
-        判定委派給共用的動作推導，**不在這裡自己寫一份** if——
-        散在多處會漂移，而漂移的後果是平倉單被當成新倉擋掉。
-        """
-
-        return order.action is resolve_close_action(order.position_type)
 
     def _write_event(self, message: str, strategy_name: str, symbol: str) -> None:
         """寫一筆風控事件；類別固定為 parity 認得的那一個"""

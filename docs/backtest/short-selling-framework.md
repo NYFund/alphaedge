@@ -233,14 +233,21 @@ class TwStockCostModel:
 
 ### 3.5 方向中立機制
 
-前三個是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
-`Backtester` 以 `validate_orders()` 薄包裝呼叫，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
+以下都是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
+`Backtester` 以 `validate_orders()` 薄包裝呼叫，其餘由呼叫端直接呼叫，引擎上沒有同名方法。
 
 ```python
 resolve_open_action(position_type)   # LONG → BUY；SHORT → SELL
 resolve_close_action(position_type)  # LONG → SELL；SHORT → BUY
+is_opening(order) / is_closing(order)              # 這張單是開倉還是平倉（互補）
+is_opening_record(position_type, action)           # 同一條判定，吃 `live_order` 的字串欄位；
+is_closing_record(position_type, action)           # 看不懂的值拋 ValueError，不猜
 validate_orders(orders, stage)       # 白名單 + action 與方向是否相符，不符 warning 剔除
 ```
+
+「這張單是開倉還是平倉」只有這一份：實盤的 parity、當沖回補、跨策略守門、事前風控、
+帳戶同步、日終補單與部位管理層都呼叫它，不自己寫 if（券商閘道層因分層限制保留一份，
+由測試與這裡互相釘住）。
 
 隨單欄位補值屬市場規則，住在 `TwStockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
 

@@ -140,7 +140,7 @@ def finish_day(self, date, close_quotes):
 
 ### 2.3 方向與商品類別是兩條獨立的軸
 
-**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以同名方法薄包裝呼叫。
+**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()`、`is_opening()`／`is_closing()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以 `validate_orders()` 薄包裝呼叫，其餘由呼叫端直接呼叫。
 
 [放空回測框架規格](short-selling-framework.md) §1 原則 2「方向來自訂單，策略只做白名單」是本架構的**基礎**。
 

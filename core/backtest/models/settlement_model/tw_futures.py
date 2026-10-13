@@ -19,7 +19,6 @@ from core.models import (
 from core.portfolio import order_rules
 from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import (
-    Action,
     MarginCallPolicy,
     PositionType,
 )
@@ -354,9 +353,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
                 product=new_quote.product,
                 expiry=new_quote.expiry,
                 date=date,
-                action=(
-                    Action.BUY if position_type == PositionType.LONG else Action.SELL
-                ),
+                action=order_rules.resolve_open_action(position_type),
                 position_type=position_type,
                 price=entry_price,
                 volume=volume,

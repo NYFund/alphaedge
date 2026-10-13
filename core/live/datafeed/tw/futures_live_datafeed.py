@@ -20,6 +20,7 @@ from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import BaseQuote, FuturesOrder, PreOpenFuturesQuote
+from core.portfolio import order_rules
 from core.strategies.base import BaseStrategy
 from core.utils import (
     FUTURES_MULTIPLIER,
@@ -301,10 +302,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             return None
 
         position_type: PositionType = position.position_type
-        opening: Action = (
-            Action.BUY if position_type is PositionType.LONG else Action.SELL
-        )
-        closing: Action = Action.SELL if opening is Action.BUY else Action.BUY
+        opening: Action = order_rules.resolve_open_action(position_type)
+        closing: Action = order_rules.resolve_close_action(position_type)
 
         def leg(expiry: str, action: Action, price: float) -> FuturesOrder:
             return FuturesOrder(

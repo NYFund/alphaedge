@@ -12,12 +12,12 @@ from core.config.paths import LIVE_RESULT_DIR_PATH
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import NotifyLevel
 from core.models import BaseOrder
+from core.portfolio import order_rules
 from core.utils import (
     Action,
     ExecutionStyle,
     LiveOrderStatus,
     OrderType,
-    PositionType,
 )
 
 """
@@ -508,7 +508,7 @@ def compare(
             missing_note: str = ""
             category: Optional[str] = blocked.get(symbol)
             if category is None:
-                if ran_cleanly and all(_is_opening_order(o) for o in bt_orders):
+                if ran_cleanly and all(order_rules.is_opening(o) for o in bt_orders):
                     category = CATEGORY_SNAPSHOT_GAP
                     missing_note = (
                         "回測以收盤價觸發開倉、實盤決策時的快照未觸發；當天段落正常結束"
@@ -567,7 +567,10 @@ def _is_threshold_gap(live_rows: Sequence[Dict[str, Any]]) -> bool:
     """
 
     return all(
-        str(row.get("position_type", "")) and _is_opening(row) for row in live_rows
+        str(row.get("position_type", ""))
+        and str(row.get("action", ""))
+        and order_rules.is_opening_record(str(row["position_type"]), str(row["action"]))
+        for row in live_rows
     )
 
 
@@ -623,24 +626,6 @@ def _run_strategies(run: Dict[str, Any]) -> Set[str]:
         return {str(name) for name in json.loads(str(raw)).get("strategies", [])}
     except (ValueError, AttributeError):
         return set()
-
-
-def _is_opening_order(order: BaseOrder) -> bool:
-    """回測的這張委託是不是開倉單"""
-
-    return (
-        order.position_type is PositionType.LONG and order.action is Action.BUY
-    ) or (order.position_type is PositionType.SHORT and order.action is Action.SELL)
-
-
-def _is_opening(row: Dict[str, Any]) -> bool:
-    """這筆 `live_order` 是不是開倉單"""
-
-    action: str = str(row.get("action", ""))
-    position_type: str = str(row.get("position_type", ""))
-    return (position_type == "LONG" and action == "Buy") or (
-        position_type == "SHORT" and action == "Sell"
-    )
 
 
 def _compare_volume(
