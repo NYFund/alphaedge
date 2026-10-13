@@ -219,6 +219,53 @@ class AccountSynchronizer:
 
         return order.action is resolve_close_action(order.position_type)
 
+    def book_backfilled_fill(
+        self,
+        report: ExecutionReport,
+        strategy_name: str,
+        position_type: PositionType,
+        closing: bool,
+    ) -> None:
+        """
+        - Description:
+            盤後回填的成交只記進歸屬帳，不動部位管理
+
+            盤後作業的部位管理接著會由 `rebuild_from_broker()` 從歸屬帳重建，這裡再動它
+            等於記兩次。方向與開平倉由**委託列**決定而不是像 `apply_fill()` 那樣由歸屬帳
+            推：歸屬帳正因為少記了這筆成交而對不上，拿它推方向會把「平多」推成「開空」。
+            開倉成交若先前已在某次盤後被收成 `__unattributed__`（當時沒認出擁有者），
+            先把那部分從未歸屬 lot 沖掉再開到策略名下，否則歸屬帳多出一份、對帳一定不一致。
+        - Parameters:
+            - report: ExecutionReport
+                成交回報（由 `live_fill` 還原）
+            - strategy_name: str
+                擁有這筆成交的策略
+            - position_type: PositionType
+                委託列的部位方向
+            - closing: bool
+                委託列是否為出場單
+        """
+
+        if closing:
+            self.ledger.close_lots(
+                strategy_name, report.symbol, report.volume, position_type
+            )
+            return
+
+        unattributed: int = self.ledger.get_strategy_positions(
+            UNATTRIBUTED_STRATEGY
+        ).get((report.symbol, position_type.value), 0)
+        if unattributed > 0:
+            reclaimed: int = min(unattributed, report.volume)
+            self.ledger.close_lots(
+                UNATTRIBUTED_STRATEGY, report.symbol, reclaimed, position_type
+            )
+            logger.info(
+                f"回填成交 {report.symbol} {reclaimed} 先前收在 {UNATTRIBUTED_STRATEGY}，"
+                f"改歸 {strategy_name}"
+            )
+        self.ledger.open_lot(strategy_name, report, position_type)
+
     # === 啟動時：以券商為準 ===
     def rebuild_from_broker(
         self,
