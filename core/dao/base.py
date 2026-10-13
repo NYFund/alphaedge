@@ -492,6 +492,31 @@ class BaseDAO:
 
         return self._get_latest_value(self.DATE_COLUMN)
 
+    def get_latest_date_before(self, date: datetime.date) -> Optional[str]:
+        """
+        - Description:
+            **嚴格早於** `date` 的最近一個資料日；表不存在或沒有時為 None
+
+            盤後才公布的資料（籌碼、融資融券餘額）站在 `date` 早上只能知道前一次公布的
+            那份，`<=` 那一個等號就是前視偏差。API 層的 `get_available()` 以它為底。
+        - Parameters:
+            - date: datetime.date
+                回測當前日
+        - Return:
+            - Optional[str]
+                日期字串（`YYYY-MM-DD`）
+        """
+
+        if not self.table_exists():
+            return None
+
+        row: Optional[Tuple[Any, ...]] = self.fetch_one(
+            f"SELECT MAX({self.DATE_COLUMN}) FROM {self.TABLE_NAME} "
+            f"WHERE {self.DATE_COLUMN} < ?",
+            (date,),
+        )
+        return row[0] if row and row[0] else None
+
     # === 寫入與交易 ===
     def insert_or_ignore(self, df: pd.DataFrame) -> Tuple[int, int]:
         """以 `INSERT OR IGNORE` 寫入本表，回傳（寫入列數, 跳過列數）；不 commit"""

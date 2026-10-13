@@ -41,6 +41,8 @@ class FuturesChipAPI(BaseDataAPI):
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     LOG_FILE_NAME: str = "futures_chip_api.log"
+    # 期貨籌碼盤後才公布；多表的 `get_available(date, table)` 由本類自己實作
+    PUBLISHED_AFTER_CLOSE: bool = True
 
     def setup(self) -> None:
         """建連線與主 DAO 由基底負責；此處只補本 API 多出來的 DAO"""

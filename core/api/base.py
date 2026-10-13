@@ -1,3 +1,4 @@
+import datetime
 from abc import ABC
 from pathlib import Path
 from typing import Any, Dict, Optional, Type
@@ -45,6 +46,11 @@ class BaseDataAPI(ABC):  # noqa: B024
     DEFAULT_DB_PATH: Optional[Path] = None
     DAO_CLASS: Optional[Type[BaseDAO]] = None
     LOG_FILE_NAME: str = ""
+
+    # 資料集是否**盤後才公布**（籌碼、融資融券餘額）：True 的資料集，回測站在某一天早上
+    # 只能知道前一次公布的那份，一律經 `get_available(date)` 取用；拿當天日期直接查表
+    # 就是前視偏差。盤中就有的資料（價格、名單、除權息公告）維持 False
+    PUBLISHED_AFTER_CLOSE: bool = False
 
     def __init__(self, conn: Optional[DBConnection] = None) -> None:
         """
@@ -164,6 +170,46 @@ class BaseDataAPI(ABC):  # noqa: B024
         )
         series.name = cls.CLOSE_SERIES_NAME
         return series
+
+    def get_latest_available_date(self, date: datetime.date) -> Optional[str]:
+        """
+        - Description:
+            站在 `date` 早上能知道的最近一個資料日：**嚴格早於** `date`
+
+            只有宣告 `PUBLISHED_AFTER_CLOSE` 的資料集有這個語意；盤中就有的資料
+            呼叫它會拋錯，而不是悄悄回前一天——那會讓呼叫端以為自己在防前視。
+        - Parameters:
+            - date: datetime.date
+                回測當前日
+        - Return:
+            - Optional[str]
+                日期字串（`YYYY-MM-DD`）；之前沒有任何資料時為 None
+        """
+
+        if not self.PUBLISHED_AFTER_CLOSE:
+            raise NotImplementedError(
+                f"{type(self).__name__} 不是盤後公布的資料集，沒有「可知時點」的語意"
+            )
+        return self.dao.get_latest_date_before(date)
+
+    def get_available(self, date: datetime.date) -> pd.DataFrame:
+        """
+        - Description:
+            站在 `date` 早上能知道的最新一份資料：前一次公布的全市場資料
+
+            實作即「取資料日 < `date` 的最大者」。**不是 `<=`**：那一個等號就是前視偏差。
+        - Parameters:
+            - date: datetime.date
+                回測當前日
+        - Return:
+            - pd.DataFrame
+                前一次公布的資料；之前沒有任何資料時為空 DataFrame
+        """
+
+        latest: Optional[str] = self.get_latest_available_date(date)
+        if latest is None:
+            return pd.DataFrame()
+        return self.dao.get_by_date(latest)
 
     def close(self) -> None:
         """

@@ -21,6 +21,8 @@ class StockChipAPI(BaseDataAPI):
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = StockChipDAO
     LOG_FILE_NAME: str = "stock_chip_api.log"
+    # 三大法人籌碼盤後才公布：訊號只能用 `get_available(date)` 或自行取前一交易日
+    PUBLISHED_AFTER_CLOSE: bool = True
 
     # 建構、連線與 log 由 `BaseDataAPI` 負責；本類只寫查詢
 

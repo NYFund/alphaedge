@@ -593,7 +593,8 @@ class TwStockFillModel(BaseFillModel):
         self.short_sale_list: Optional[ShortSaleListSnapshot] = None
         self.day_trade_list: Optional[DayTradeListSnapshot] = None
 
-        # 當日可借券餘額（張）：{stock_id: 融券今日餘額}，由 DataFeed 於每根 bar 開始時提供
+        # 可借券餘額（張）：{stock_id: 前一次公布的融券今日餘額}，由 DataFeed 於每根 bar 開始時提供
+        # （餘額盤後才公布，當天盤中只知道前一交易日的數字）
         self.short_balance: Dict[str, int] = {}
 
         # 今日停券的標的，`prepare_day()` 每天從 DataFeed 取
@@ -708,13 +709,13 @@ class TwStockFillModel(BaseFillModel):
     def apply_short_balance(self, balance: Dict[str, int]) -> None:
         """
         - Description:
-            更新當日可借券餘額（融券今日餘額，單位：張）
+            更新可借券餘額（前一次公布的融券今日餘額，單位：張）
 
             **空 dict 代表「今日查無融券資料」而非「所有標的都借不到券」**——
             `fill()` 在查不到餘額時一律放行並記錄，不可預設拒單。
         - Parameters:
             - balance: Dict[str, int]
-                `{stock_id: 融券今日餘額}`，由 DataFeed 依當日信用交易資料提供
+                `{stock_id: 融券今日餘額}`，由 DataFeed 以「前一次公布」的口徑提供
         """
 
         self.short_balance = balance
