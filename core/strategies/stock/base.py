@@ -174,14 +174,5 @@ class BaseStockStrategy(BaseStrategy):
             if not signal.volume or signal.volume <= 0:
                 continue
 
-            orders.append(
-                StockOrder(
-                    stock_id=signal.symbol,
-                    date=signal.quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=signal.volume,
-                )
-            )
+            orders.append(StockOrder.from_signal(signal, signal.volume))
         return orders

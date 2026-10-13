@@ -297,16 +297,5 @@ class BaseFuturesStrategy(BaseStrategy):
             if not signal.volume or signal.volume <= 0:
                 continue
 
-            quote: FuturesQuote = signal.quote
-            orders.append(
-                FuturesOrder(
-                    product=quote.product,
-                    expiry=quote.expiry,
-                    date=quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=signal.volume,
-                )
-            )
+            orders.append(FuturesOrder.from_signal(signal, signal.volume))
         return orders

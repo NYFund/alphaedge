@@ -1,7 +1,7 @@
 import datetime
 from typing import Optional
 
-from core.models.base.order import BaseOrder
+from core.models.base.order import BaseOrder, OrderSignal
 from core.utils import (
     Action,
     ExecutionTiming,
@@ -74,6 +74,34 @@ class StockOrder(BaseOrder):
         # 送單前的轉換依 `position_type` ＋ `short_method` ＋ `is_day_trade` 推導，
         # 不開放策略填寫。策略能填的話，就會出現「回測走融券成本、實盤送現股」
         # 這種兩邊各自成立、合起來錯的組合
+
+    @classmethod
+    def from_signal(cls, signal: OrderSignal, volume: int) -> "StockOrder":
+        """
+        - Description:
+            由訊號組出訂單：標的、日期、動作、方向、下單價抄自訊號，數量由呼叫端決定
+
+            開倉的張數來自部位建構層的 sizer、平倉的張數由策略在訊號裡決定，
+            所以 `volume` 不從訊號拿。**訊號到訂單的欄位搬運只有這一份**，
+            策略基底的平倉與部位建構層的開倉都呼叫它。
+        - Parameters:
+            - signal: OrderSignal
+                策略產生的訊號（`Signal`）
+            - volume: int
+                下單張數
+        - Return:
+            - StockOrder
+                組好的訂單；信用交易欄位留給 `TwStockCostModel.enrich_orders()` 補值
+        """
+
+        return cls(
+            stock_id=signal.symbol,
+            date=signal.quote.date,
+            action=signal.action,
+            position_type=signal.position_type,
+            price=signal.order_price,
+            volume=volume,
+        )
 
     @property
     def stock_id(self) -> str:

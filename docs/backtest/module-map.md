@@ -232,7 +232,7 @@ sequenceDiagram
 
 | 動作 | 檔案 |
 |------|------|
-| 新增 | `core/models/<instrument>/`（五個領域模型） |
+| 新增 | `core/models/<instrument>/`（五個領域模型；訂單要提供 `from_signal(signal, volume)`，策略基底與部位建構層只走它組單） |
 | 新增 | `core/strategies/<instrument>/base.py`（設定 `self.market` 與 `self.instrument_type`，並實作 `make_portfolio_constructor()` 與 `build_close_orders()`） |
 | 新增 | `core/portfolio/construction.py` 的對應建構器（若部位約束與既有兩者都不同） |
 | 新增 | `core/market/<market>/` 的該組合 `InstrumentSpec`／`CostModel`；`core/backtest/models/` 的 `FillModel`／`SettlementModel`（後者在 `settlement_model/__init__.py` 登記 re-export） |

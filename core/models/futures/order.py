@@ -1,7 +1,7 @@
 import datetime
-from typing import Optional
+from typing import Any, Optional
 
-from core.models.base.order import BaseOrder
+from core.models.base.order import BaseOrder, OrderSignal
 from core.utils import (
     Action,
     ExecutionTiming,
@@ -60,6 +60,35 @@ class FuturesOrder(BaseOrder):
         # **沒有 `octype` 欄位**：開平倉別由 mapper 依 `Action` 與當前持倉推導。
         # 交給券商的 `Auto` 猜是不行的——它在同時有多空部位或換月時的行為不透明，
         # 而換月正是「平舊月＋開新月」兩張單同時在場上的時候
+
+    @classmethod
+    def from_signal(cls, signal: OrderSignal, volume: int) -> "FuturesOrder":
+        """
+        - Description:
+            由訊號組出訂單：契約、日期、動作、方向、下單價抄自訊號，口數由呼叫端決定
+
+            開倉的口數來自部位建構層的保證金計算、平倉的口數由策略在訊號裡決定，
+            所以 `volume` 不從訊號拿。**訊號到訂單的欄位搬運只有這一份**。
+        - Parameters:
+            - signal: OrderSignal
+                策略產生的訊號（`Signal`）；`signal.quote` 須為期貨報價（帶 `product`／`expiry`）
+            - volume: int
+                下單口數
+        - Return:
+            - FuturesOrder
+                組好的訂單
+        """
+
+        quote: Any = signal.quote
+        return cls(
+            product=quote.product,
+            expiry=quote.expiry,
+            date=quote.date,
+            action=signal.action,
+            position_type=signal.position_type,
+            price=signal.order_price,
+            volume=volume,
+        )
 
     @property
     def contract_id(self) -> str:

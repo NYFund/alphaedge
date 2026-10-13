@@ -1,9 +1,26 @@
 import datetime
-from typing import Optional
+from typing import Any, Optional, Protocol
 
 from core.utils import Action, ExecutionStyle, ExecutionTiming, OrderType, PositionType
 
 """BaseOrder: 市場與商品皆無關的訂單骨架（識別欄位一律為 symbol）"""
+
+
+class OrderSignal(Protocol):
+    """
+    `from_signal()` 吃的訊號形狀
+
+    真正的 `Signal` 住在部位建構層（`core/portfolio/signal.py`），領域層不往上 import；
+    這裡只宣告訂單工廠會讀的欄位，型別檢查以結構比對。
+    """
+
+    quote: Any
+    action: Action
+    position_type: PositionType
+    order_price: float
+
+    @property
+    def symbol(self) -> str: ...
 
 
 class BaseOrder:

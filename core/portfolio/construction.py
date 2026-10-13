@@ -108,16 +108,7 @@ class StockPortfolioConstructor(BasePortfolioConstructor):
         orders: List[StockOrder] = []
         for quote, _, volume in self.sizer.size(account, candidates, self.max_holdings):
             signal: Signal = signal_by_quote[id(quote)]
-            orders.append(
-                StockOrder(
-                    stock_id=signal.symbol,
-                    date=quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=volume,
-                )
-            )
+            orders.append(StockOrder.from_signal(signal, volume))
         return orders
 
 
@@ -169,17 +160,7 @@ class FuturesPortfolioConstructor(BasePortfolioConstructor):
                 )
                 continue
 
-            orders.append(
-                FuturesOrder(
-                    product=quote.product,
-                    expiry=quote.expiry,
-                    date=quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=volume,
-                )
-            )
+            orders.append(FuturesOrder.from_signal(signal, volume))
             remaining_lots -= volume
 
         return orders

@@ -21,12 +21,6 @@ class FuturesAccount(BaseAccount):
     不等到平倉才實現——這是期貨與股票在記帳上最根本的不同。
     """
 
-    def __init__(self, init_capital: float = 0.0) -> None:
-        super().__init__(init_capital=init_capital)
-
-        # Margin
-        self.margin_used: float = 0.0  # 未平倉部位佔用的原始保證金總額
-
     @property
     def equity(self) -> float:
         """帳戶總權益 ＝ 可動用餘額 ＋ 被佔用的保證金"""
@@ -69,8 +63,3 @@ class FuturesAccount(BaseAccount):
             )
 
         return lots
-
-    def update_transaction_cost(self) -> None:
-        """更新交易成本；期貨沒有持有期間的計提費用，故與基底相同"""
-
-        super().update_transaction_cost()

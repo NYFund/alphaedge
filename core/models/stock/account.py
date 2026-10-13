@@ -13,15 +13,12 @@ class StockAccount(BaseAccount):
     """
     庫存及餘額資訊
 
-    相對於 BaseAccount 多的是台股信用交易專屬的部分：保證金佔用、空頭曝險，
+    相對於 BaseAccount 多的是台股信用交易專屬的部分：空頭曝險，
     以及把借券費與融券利息納入的總交易成本口徑。
     """
 
     def __init__(self, init_capital: float = 0.0) -> None:
         super().__init__(init_capital)
-
-        # Short Positions
-        self.margin_used: float = 0.0  # 放空部位佔用的保證金總額
 
         # Positions & Trading History（型別窄化為台股專屬 model）
         self.positions: List[StockPosition] = []  # 持有未平倉的股票庫存
