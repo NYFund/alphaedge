@@ -18,7 +18,7 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 ```
 
 `uv sync` 依 `uv.lock` 安裝每個套件的精確版本，並把專案本身裝成 editable，
-因此**一行指令就完成環境建置**。安裝後 `core` / `tasks` / `tests` 於**任意工作目錄**皆可 import，
+因此**一行指令就完成環境建置**。安裝後 `core` / `apps` / `strategies` / `tasks` / `tests` 於**任意工作目錄**皆可 import，
 不需再設 `PYTHONPATH`。`.venv` 是可以隨時重建的產物：壞了就 `rm -rf .venv && uv sync`。
 
 開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `pyproject.toml` 的 `[dependency-groups].dev`，

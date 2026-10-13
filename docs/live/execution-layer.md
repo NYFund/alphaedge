@@ -18,7 +18,7 @@
 策略只表達意圖，換算集中在執行層：
 
 ```
-策略訊號 → 部位建構（算量）→ 資金保留（只有開倉單）→ 執行層（決定怎麼送）→ 事前風控 → 券商轉換層 → 券商
+策略訊號 → 部位建構（算量）→ 跨策略守門 → 保證金閘（期貨開倉）→ 資金保留（只有開倉單）→ 執行層（決定怎麼送）→ 事前風控 → 券商轉換層 → 券商
 ```
 
 | 層 | 位置 | 回答什麼 |
@@ -27,7 +27,7 @@
 | 執行層 | `core/live/execution/` | 價格類型、送出的委託價、ROD／IOC |
 | 券商轉換層 | `core/broker/tw/shioaji_order_mapper.py` | 只做機械轉換成 Shioaji 物件；價格類型未決定就拋錯，不補值 |
 
-> `core/broker/` 裡的 `shioaji_execution_handler.py`、`execution_dedup.py` 的 execution 指**成交回報**
+> `core/broker/execution_dedup.py` 與 `core/broker/tw/shioaji_execution_handler.py` 的 execution 指**成交回報**
 > （FIX 的 ExecutionReport），與本層「決定怎麼送單」（業界的 Execution Model）不同義。
 
 ---
@@ -148,9 +148,13 @@ market-on-close，與回測「以收盤價成交」的假設最一致。
 | 類別 | 條件 | 意思 |
 |------|------|------|
 | `LIMIT_UNFILLED` | `LIMIT` | 照價掛單沒等到價 |
-| `LOCKED_AT_LIMIT` | `MARKET`＋ROD | 集合競價掛到漲跌停仍排不到，即收盤鎖漲停／跌停 |
-| `UNFILLED` | 其他（例如連續交易保護價＋IOC 沒成交） | 沒成交 |
+| `LOCKED_AT_LIMIT` | `MARKET`＋ROD，**且當日收盤價等於該方向的漲跌停**（買比漲停、賣比跌停） | 集合競價掛到漲跌停仍排不到，即收盤鎖漲停／跌停 |
+| `UNFILLED` | 其他：連續交易保護價＋IOC 沒成交、集合競價但收盤沒鎖住或查不到收盤、沒有執行方式紀錄的舊委託 | 沒成交；note 寫出收盤價與漲跌停價 |
 | `SEND_FAILED` | 委託狀態為 `FAILED`／`REJECTED` | 送單失敗或被券商拒單，談不上成交與否 |
+
+parity 判定「有沒有鎖住」用的收盤價與漲跌停取自歷史日線（`core/live/factory.py` 的
+`make_closing_limit_lookup()`，以前一交易日收盤推算），**不是**送單時用的券商合約值；
+除權息日可能偏，寧可歸 `UNFILLED` 多一筆要人看。
 
 這幾類累積夠多之後，再決定回測要不要開始依執行方式成交。
 

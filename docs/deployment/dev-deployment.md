@@ -32,13 +32,14 @@ python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB
 python -m apps.backtest --strategy MomentumStrategy1                  # 台股做多動能
 python -m apps.backtest --strategy InvestmentTrustMomentumSwingStrategy        # 台股投信認同強勢股短波段
 python -m apps.backtest --strategy ForeignSellingReversalShortStrategy   # 台股外資大賣強勢股當沖放空
+python -m apps.backtest --strategy IntradayMomentumStrategy           # 台股盤中動能（目前只有日 K 近似版本）
 python -m apps.backtest --strategy MomentumFuturesStrategy            # 台指期動能（示範用，非交易邏輯）
 
 # 覆寫回測區間與初始資金（皆選填，不帶時沿用策略預設）
 python -m apps.backtest --strategy MomentumStrategy1 --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
-策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 自動收錄；
+策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 收錄（頂層 `strategies/` 目前只是空門面，載入器不掃它）；
 怎麼寫策略見 [策略開發指南](../../core/strategies/README.md)。
 
 動到 `core/backtest/`、`core/position/`、`core/models/` 之後，先跑回歸雙線：

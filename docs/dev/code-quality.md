@@ -11,7 +11,7 @@
 |------|------|------|
 | 套件定義 | `pyproject.toml` `[project]` | 唯一的相依宣告；`uv sync` 以 editable 安裝後任意目錄可 `import core` |
 | Lint／格式 | `pyproject.toml` `[tool.ruff]` | 執行 `CLAUDE.md` §2.5（import 排序）、§2.10（行寬 88、雙引號） |
-| CI | `.github/workflows/ci.yml` | 每次 push 跑 lint、格式、分層相依檢查、文件路徑檢查、pre-commit 其餘 hook、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"`（覆蓋率併在同一次）；另一個平行的 `docker` job 建置 core 與 frontend 映像並各跑一次冒煙 |
+| CI | `.github/workflows/ci.yml` | 每次 push 與 pull request 跑 lint、格式、分層相依檢查、文件路徑檢查、pre-commit 其餘 hook、API 死介面檢查、SHORT 回歸線、`pytest -m "not slow"`（覆蓋率併在同一次）；另一個平行的 `docker` job 建置 core 與 frontend 映像並跑冒煙（core 兩步、frontend 一步） |
 | 本機防線 | `.pre-commit-config.yaml` | commit 前先跑一次同一組檢查（需自行 `uv tool install pre-commit` ＋ `pre-commit install`） |
 
 `uv.lock` 由 `uv lock` 從 `pyproject.toml` 解析產生，鎖定整棵相依樹；本機、CI（`--locked`）與 Docker build（`--frozen`）都從同一份安裝。
@@ -19,7 +19,7 @@
 ### 常用指令
 
 ```bash
-uv sync                             # 相依 + 專案本身 + pytest / pytest-cov / ruff（dev group 預設即裝）
+uv sync                             # 相依 + 專案本身 + pytest / pytest-timeout / pytest-cov / ruff（dev group 預設即裝）
                                     # 要前端與 lab 時用 uv sync --extra frontend --extra lab；
                                     # 不帶 extra 的 uv sync／uv run 會把已裝的 extras 移除
 
