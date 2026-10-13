@@ -94,6 +94,34 @@ def test_short_open_rejected_by_exposure_is_counted(make_order) -> None:
     assert event_counts["rejected_insufficient_balance"] == 0
 
 
+def test_close_specific_position_closes_only_that_lot(make_order) -> None:
+    """指定平哪一筆就平哪一筆：較早開的那筆留著，數量以該筆為上限；標的不符要拋錯"""
+
+    manager: StockPositionManager = build_manager(init_capital=1000000.0)
+    first: StockPosition = manager.open_position(
+        make_order(action=Action.BUY, position_type=PositionType.LONG, volume=1)
+    )
+    second: StockPosition = manager.open_position(
+        make_order(action=Action.BUY, position_type=PositionType.LONG, volume=3)
+    )
+
+    records: List[StockTradeRecord] = manager.close_specific_position(
+        second,
+        make_order(action=Action.SELL, position_type=PositionType.LONG, volume=10),
+    )
+
+    assert [record.id for record in records] == [second.id]
+    assert records[0].sell_volume == 3
+    assert [position.id for position in manager.account.get_positions()] == [first.id]
+    with pytest.raises(ValueError):
+        manager.close_specific_position(
+            first,
+            make_order(
+                stock_id="2317", action=Action.SELL, position_type=PositionType.LONG
+            ),
+        )
+
+
 def test_long_open_with_enough_balance_is_not_counted(make_order) -> None:
     """餘額足夠時照常開倉且不計數（防止改過頭）"""
 

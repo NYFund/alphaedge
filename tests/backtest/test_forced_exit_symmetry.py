@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from core.backtest.models.event_counts import FUTURES_EVENT_KEYS, new_event_counts
 from core.backtest.models.fill_model import TwFuturesFillModel, TwStockFillModel
@@ -81,8 +81,9 @@ def open_stock(
     position_type: PositionType,
     volume: int = 1,
     stock_id: str = "2330",
+    short_method: Optional[ShortMethod] = None,
 ) -> StockPosition:
-    """開倉一檔股票"""
+    """開倉一檔股票；放空管道未指定時沿用成本設定的預設"""
 
     return settlement.position_manager.open_position(
         StockOrder(
@@ -92,6 +93,7 @@ def open_stock(
             position_type=position_type,
             price=100.0,
             volume=volume,
+            short_method=short_method,
         )
     )
 
@@ -185,10 +187,10 @@ def test_both_markets_pay_the_same_kind_of_slippage_on_forced_exits() -> None:
 
 def test_long_no_quote_exit_closes_every_position_of_the_symbol_in_order() -> None:
     """
-    台股多單改走同標的 FIFO：同一檔加碼的兩筆在同一天一起達到門檻，依開倉順序全部出場
+    同一檔加碼的兩筆在同一天一起達到無報價門檻：逐筆出場、順序不變、全部出場
 
-    舊版指定部位出場；無報價是標的層級的狀態，兩種寫法平掉的集合一樣，
-    只是這裡要釘住「全部出場、順序不變」。
+    每一筆平的是自己（`close_specific_position()`）；無報價是標的層級的狀態，
+    平掉的集合與 FIFO 相同，這裡釘住「全部出場、順序不變」。
     """
 
     settlement: TwStockSettlementModel = make_stock_settlement(max_no_quote_days=1)
@@ -205,6 +207,36 @@ def test_long_no_quote_exit_closes_every_position_of_the_symbol_in_order() -> No
     assert event_counts["forced_exit_no_quote"] == 2
     assert [record.id for record in account.trade_records] == [first.id, second.id]
     assert [record.sell_volume for record in account.trade_records] == [1, 3]
+
+
+def test_suspension_cover_closes_the_margin_lot_not_the_older_sbl_lot() -> None:
+    """
+    同標的先借券（SBL）再融券（MARGIN）：停券回補只能平 MARGIN 那一筆
+
+    舊版走同標的 FIFO，會先平到較早開的 SBL；SBL 不受停券約束，平錯筆之後
+    MARGIN 的空單反而留在場上，而且不會有任何錯誤訊息。
+    """
+
+    settlement: TwStockSettlementModel = make_stock_settlement()
+    settlement.reference_prices["2330"] = 100.0
+    sbl: StockPosition = open_stock(
+        settlement, PositionType.SHORT, volume=1, short_method=ShortMethod.SBL
+    )
+    margin: StockPosition = open_stock(
+        settlement, PositionType.SHORT, volume=2, short_method=ShortMethod.MARGIN
+    )
+    account: StockAccount = settlement.position_manager.account
+
+    settlement.force_close_position(
+        margin, DAY_2, 100.0, build_stock_quote("2330", date=DAY_2, cur_price=100.0)
+    )
+
+    remaining: List[StockPosition] = account.get_positions()
+    assert [position.id for position in remaining] == [sbl.id]
+    assert remaining[0].short_method is ShortMethod.SBL
+    assert [record.id for record in account.trade_records] == [margin.id]
+    assert account.trade_records[0].short_method is ShortMethod.MARGIN
+    assert account.trade_records[0].buy_volume == 2
 
 
 def test_futures_expiry_exit_goes_through_the_shared_path() -> None:
