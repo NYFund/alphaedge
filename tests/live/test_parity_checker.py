@@ -126,7 +126,7 @@ def test_cross_strategy_block_is_not_unexplained() -> None:
     diffs: List[ParityDiff] = compare(
         [],
         [make_backtest_order("2317")],
-        [make_event("CROSS_STRATEGY_CONFLICT", "2317")],
+        [make_event("CROSS_STRATEGY_BLOCKED", "2317")],
     )
 
     assert [diff.category for diff in diffs] == [CATEGORY_CROSS_STRATEGY_BLOCKED]
@@ -144,10 +144,43 @@ def test_capital_exhausted_has_its_own_category() -> None:
     diffs: List[ParityDiff] = compare(
         [],
         [make_backtest_order("2317")],
-        [make_event("CAPITAL_RESERVE_FAILED", "2317")],
+        [make_event("CAPITAL_EXHAUSTED", "2317")],
     )
 
     assert [diff.category for diff in diffs] == [CATEGORY_CAPITAL_EXHAUSTED]
+    assert "CAPITAL_EXHAUSTED" in diffs[0].note
+
+
+@pytest.mark.parametrize(
+    "event_category",
+    [
+        "MARGIN_INSUFFICIENT",
+        "EXECUTION_UNAVAILABLE",
+        "PRICE_LIMIT",
+        "PRICE_DEVIATION",
+        "ORDER_RATE",
+        "KILL_SWITCH",
+    ],
+)
+def test_every_pre_send_block_is_attributed_not_filed_as_snapshot_gap(
+    event_category: str,
+) -> None:
+    """
+    引擎在送出前擋下的每一種原因都要歸到制度性差異，並在 note 寫出是哪一條
+
+    對照表曾只認得四種名字、其中三個引擎從未寫出：被保證金閘、執行層或風控擋下的
+    開倉單，在段落正常結束時一律被歸成「快照口徑」，真正的原因被蓋掉。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order("2317")],
+        [make_event(event_category, "2317")],
+        ran_cleanly=True,
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_RISK_REJECTED]
+    assert diffs[0].note == f"實盤在送出前被 {event_category} 擋下"
 
 
 def test_extra_live_opening_order_is_a_snapshot_gap() -> None:

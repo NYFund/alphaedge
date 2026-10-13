@@ -463,26 +463,43 @@ class PreTradeRiskManager:
         limit_down: Optional[float],
         is_futures: bool,
     ) -> RiskDecision:
-        """金額、數量、價格與頻率"""
+        """
+        金額、數量、價格與頻率
 
-        for decision in (
-            check_single_order_amount(amount, capital_limit, self.config),
-            check_daily_amount(
-                self.daily_amount.get(strategy_name, 0.0),
-                amount,
-                capital_limit,
-                self.config,
-            ),
-            check_volume_cap(order.volume, is_futures, self.config),
-            check_price_deviation(
-                decision_price_of(order),
-                reference_price,
-                self.config,
-                limit_up,
-                limit_down,
-            ),
-            self._check_order_rate(strategy_name),
-        ):
+        **金額與數量上限只管開倉**（單筆金額、當日累計、張數／口數）：那三條防的是一次拿太多
+        曝險，出場是釋放曝險。對出場也套用的話，持倉漲價超過單筆上限、或累積多日的部位一次
+        平掉，就會被自己的風控擋在場內——補平單隔天進同一道檢查再被擋、再順延，部位實際上
+        平不掉。價格（漲跌停、偏離）與頻率防的是錯價與失控，與方向無關，出場照樣檢查。
+        """
+
+        closing: bool = is_closing_order(order)
+        checks: List[RiskDecision] = []
+        if not closing:
+            checks.extend(
+                (
+                    check_single_order_amount(amount, capital_limit, self.config),
+                    check_daily_amount(
+                        self.daily_amount.get(strategy_name, 0.0),
+                        amount,
+                        capital_limit,
+                        self.config,
+                    ),
+                    check_volume_cap(order.volume, is_futures, self.config),
+                )
+            )
+        checks.extend(
+            (
+                check_price_deviation(
+                    decision_price_of(order),
+                    reference_price,
+                    self.config,
+                    limit_up,
+                    limit_down,
+                ),
+                self._check_order_rate(strategy_name),
+            )
+        )
+        for decision in checks:
             if not decision.passed:
                 return decision
         return RiskDecision.ok()

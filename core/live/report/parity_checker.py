@@ -11,6 +11,7 @@ from loguru import logger
 from core.config.paths import LIVE_RESULT_DIR_PATH
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import NotifyLevel
+from core.live.risk import event_categories as risk_events
 from core.models import BaseOrder
 from core.utils import (
     Action,
@@ -99,15 +100,26 @@ GROUP_STRUCTURAL: str = "制度性差異"
 GROUP_EXECUTION: str = "執行差異"
 
 # 風控與守門寫進 `live_risk_event` 的類別 → parity 類別。
-# **以事件為準而不是猜**：哪一張單被誰擋下來，當下就已經寫進紀錄庫了
+# **以事件為準而不是猜**：哪一張單被誰擋下來，當下就已經寫進紀錄庫了。
+# 鍵一律取自 `core/live/risk/event_categories.py`，且必須涵蓋那裡的
+# `ORDER_BLOCK_CATEGORIES` 全部（有測試盯住）：少一個，那一類被擋下的單就會被歸成
+# 快照口徑或未解釋，真正的原因被蓋掉——對照表與引擎實際寫出的名字曾因各抄一份而脫節
 RISK_EVENT_TO_CATEGORY: Dict[str, str] = {
-    "CROSS_STRATEGY_CONFLICT": CATEGORY_CROSS_STRATEGY_BLOCKED,
-    "SAME_SYMBOL_HELD": CATEGORY_CROSS_STRATEGY_BLOCKED,
-    "CAPITAL_RESERVE_FAILED": CATEGORY_CAPITAL_EXHAUSTED,
-    "MAX_HOLDINGS": CATEGORY_RISK_REJECTED,
-    "DAILY_LOSS": CATEGORY_RISK_REJECTED,
-    "ACCOUNT_DAILY_LOSS": CATEGORY_RISK_REJECTED,
-    "DEGRADE": CATEGORY_RISK_REJECTED,
+    risk_events.CROSS_STRATEGY_BLOCKED: CATEGORY_CROSS_STRATEGY_BLOCKED,
+    risk_events.CAPITAL_EXHAUSTED: CATEGORY_CAPITAL_EXHAUSTED,
+    risk_events.MAX_HOLDINGS: CATEGORY_RISK_REJECTED,
+    risk_events.SINGLE_ORDER_AMOUNT: CATEGORY_RISK_REJECTED,
+    risk_events.DAILY_AMOUNT: CATEGORY_RISK_REJECTED,
+    risk_events.VOLUME_CAP: CATEGORY_RISK_REJECTED,
+    risk_events.PRICE_LIMIT: CATEGORY_RISK_REJECTED,
+    risk_events.PRICE_DEVIATION: CATEGORY_RISK_REJECTED,
+    risk_events.ORDER_RATE: CATEGORY_RISK_REJECTED,
+    risk_events.BATCH_EXPOSURE: CATEGORY_RISK_REJECTED,
+    risk_events.KILL_SWITCH: CATEGORY_RISK_REJECTED,
+    risk_events.MODE_HALTED: CATEGORY_RISK_REJECTED,
+    risk_events.MODE_REDUCE_ONLY: CATEGORY_RISK_REJECTED,
+    risk_events.MARGIN_INSUFFICIENT: CATEGORY_RISK_REJECTED,
+    risk_events.EXECUTION_UNAVAILABLE: CATEGORY_RISK_REJECTED,
 }
 
 CATEGORY_GROUP: Dict[str, str] = {
@@ -504,9 +516,13 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            # 優先序：風控／守門事件 → 快照口徑（反方向）→ 未解釋
+            # 優先序：風控／守門事件 → 快照口徵（反方向）→ 未解釋
             missing_note: str = ""
-            category: Optional[str] = blocked.get(symbol)
+            category: Optional[str] = None
+            if symbol in blocked:
+                # 類別只分三種，事件名才說得出是哪一條規則擋的，寫進 note 留給人看
+                category, event_category = blocked[symbol]
+                missing_note = f"實盤在送出前被 {event_category} 擋下"
             if category is None:
                 if ran_cleanly and all(_is_opening_order(o) for o in bt_orders):
                     category = CATEGORY_SNAPSHOT_GAP
@@ -544,16 +560,17 @@ def compare(
     return diffs
 
 
-def _blocked_symbols(events: Sequence[Dict[str, Any]]) -> Dict[str, str]:
-    """由風控事件推出「這個標的被哪一類原因擋下」"""
+def _blocked_symbols(events: Sequence[Dict[str, Any]]) -> Dict[str, Tuple[str, str]]:
+    """由風控事件推出「這個標的被哪一類原因擋下」：`symbol → (parity 類別, 事件類別)`"""
 
-    blocked: Dict[str, str] = {}
+    blocked: Dict[str, Tuple[str, str]] = {}
     for event in events:
-        category: Optional[str] = RISK_EVENT_TO_CATEGORY.get(str(event.get("category")))
+        event_category: str = str(event.get("category"))
+        category: Optional[str] = RISK_EVENT_TO_CATEGORY.get(event_category)
         symbol: Optional[str] = event.get("symbol")
         if category is None or not symbol:
             continue
-        blocked.setdefault(str(symbol), category)
+        blocked.setdefault(str(symbol), (category, event_category))
     return blocked
 
 
