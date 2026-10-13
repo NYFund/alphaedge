@@ -98,6 +98,7 @@ core/strategies/
 │   ├── investment_trust_momentum_swing_strategy.py  # 投信認同的強勢股短波段（日線，LONG）
 │   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；目前只有日 K 近似）
 └── futures/                       # 期貨策略
+    ├── __init__.py
     ├── base.py                    # BaseFuturesStrategy
     ├── momentum_futures_strategy.py
     └── futures_rollover_rehearsal_strategy.py  # 換月演練專用（2026-10 模擬環境，不是交易策略）
@@ -105,7 +106,9 @@ core/strategies/
 core/portfolio/                    # 部位建構層（回測與實盤共用，不屬於任一市場）
 ├── signal.py                      # Signal：Alpha 層的輸出型別
 ├── sizing.py                      # 資金切分公式（BasePositionSizer／EqualWeightSizer）
-└── construction.py                # Signal → Order 的開倉組裝（股票／期貨兩個實作）
+├── construction.py                # Signal → Order 的開倉組裝（股票／期貨兩個實作）
+├── order_rules.py                 # 方向白名單、檔數上限、bar 內執行順序、決定性排序（回測與實盤共用）
+└── aggregation.py                 # 多策略共用帳戶的資金分配與同標的衝突解決
 ```
 
 > **子目錄承載的是「商品類別」（軸 B），不是市場。** 市場由 `self.market` 宣告、
@@ -156,7 +159,6 @@ def __init__(self):
     self.max_holdings: Optional[int] = 10  # 最大持倉 10 檔
 
     # === 回測設定 ===
-    self.is_backtest: bool = True
     self.scale: str = Scale.DAY  # 使用日線回測
     self.start_date: datetime.date = datetime.date(2020, 1, 1)
     self.end_date: datetime.date = datetime.date(2025, 5, 31)
@@ -530,6 +532,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `position_type` | `Optional[PositionType]` | 被補平的部位方向 |
 | `volume` | `int` | 要補平的數量（**已截到目前實際持有量**） |
 | `due_date` | `datetime.date` | 到期日 |
+| `status` | `str` | 待辦狀態（必填；由引擎維護） |
 | `reason` | `Optional[str]` | 為什麼產生這筆待辦 |
 
 > **`volume` 拿到手就是最終數量，不要再自己調整。** 待辦寫下之後部位可能已經變了
@@ -568,6 +571,9 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `live_ready` | `bool` | 策略可上實盤；標 `True` 前要確認內部狀態能由「歷史資料 ＋ 當前部位」重建 | `False` |
 | `live_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫 | `{}` |
 | `live_execution` | `Optional[ExecutionStyle]` | `MARKET`（要成交）或 `LIMIT`（照價掛單），開倉與平倉共用；**停損一律 `MARKET`**。沒宣告時啟動檢查拒絕。回測假設以收盤價成交的策略應宣告 `MARKET` | `None` |
+| `live_tag` | `str` | 策略代號，只寫進本地紀錄庫，不送券商 | `""` |
+| `live_capital` | `Optional[float]` | 實盤資金額度；`None` 沿用 `init_capital` | `None` |
+| `live_max_holdings` | `Optional[int]` | 實盤最大持倉檔數；`None` 沿用 `max_holdings`，與 `live_capital` 成對調整 | `None` |
 
 > **不要填 `price_type`，也不要把 `live_execution` 設成 `StockPriceType.MKT`。**
 > 價格類型、委託價與 ROD／IOC 由實盤執行層（`core/live/execution/`）依段落換算：
@@ -578,7 +584,6 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 
 | 參數 | 類型 | 說明 | 預設值 |
 |------|------|------|--------|
-| `is_backtest` | `bool` | 是否為回測模式 | `True` |
 | `scale` | `str` | 回測級別：`Scale.DAY`、`Scale.TICK` | `Scale.DAY` |
 | `start_date` | `datetime.date` | 回測起始日期 | `None` |
 | `end_date` | `datetime.date` | 回測結束日期 | `None` |
@@ -781,13 +786,13 @@ fs = self.fs.get(table_name="balance_sheet", year=2024, season=1)
 
 ## 策略載入機制
 
-AlphaEdge 使用 `StrategyLoader` 自動載入策略。它以 `pkgutil.iter_modules` 走過 `core/strategies/` 底下**所有子套件**（`stock/` 與 `futures/`），找出**非抽象的 `BaseStrategy` 子類**——期貨策略就是靠同一條路徑載入的。
+AlphaEdge 使用 `StrategyLoader` 載入策略。入口的 `--strategy` 走 `StrategyLoader.load(names)`：先以 AST 讀檔找出每個類別名定義在哪個模組（不執行程式碼），只 import 那幾個模組——研究中策略的 module-level 程式碼不會在實盤行程被執行；類別名重複會直接拋 `ValueError`。`load_strategies()` 才是全掃描：以 `pkgutil.iter_modules` 走過 `core/strategies/` 底下**所有子套件**（`stock/` 與 `futures/`），找出**非抽象的 `BaseStrategy` 子類**，壞掉的模組逐模組隔離並記 error——期貨策略就是靠同一條路徑載入的。
 
 ### 自動載入規則
 
 1. **檔案位置**: 策略檔案必須放在 `core/strategies/<商品類別>/` 目錄下（台股現貨放 `stock/`、期貨放 `futures/`）
 2. **類別命名**: 策略類別名稱會作為策略識別名稱
-3. **繼承要求**: 必須繼承 `BaseStockStrategy` 且不能是 `BaseStockStrategy` 本身
+3. **繼承要求**: 必須是 `BaseStrategy` 的**非抽象**子類（台股繼承 `BaseStockStrategy`、期貨繼承 `BaseFuturesStrategy`），且類別**定義在該檔內**——從別處 import 進來的類別不會被收錄
 
 ### 使用策略名稱
 
@@ -808,7 +813,7 @@ python -m apps.backtest --strategy <StrategyName>
 
 ### 參數說明
 
-- 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（必須帶 `--phase`）
+- 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（跑段落時必須帶 `--phase`，可選 `open`／`close`／`after_close`／`intraday`／`parity`；`--resync-from-broker` 重建歸屬帳時則不可帶）
 - `--strategy`: 指定要使用的策略類別名稱（必填）
 
 ### 使用範例
@@ -852,7 +857,7 @@ python -m apps.live --strategy MomentumStrategy1 --phase open
 - 如何設定策略參數
 - 如何實作開倉、平倉、停損邏輯
 - 如何使用資料 API
-- 如何計算部位大小
+- 如何在 `Signal` 給 `order_price` 與 `sizing_price`，把張數交給 portfolio 層
 
 ### 快速開始範例
 
@@ -1018,7 +1023,7 @@ class SimpleShortStrategy(BaseStockStrategy):
         self.strategy_name: str = "Simple-Short"
         self.init_capital: float = 1000000.0
         self.max_holdings: int = 5
-        self.scale: Scale = Scale.DAY
+        self.scale: str = Scale.DAY
 
         # 放空設定：融券留倉，最長持有 20 個曆日
         self.direction: TradeDirection = TradeDirection.SHORT

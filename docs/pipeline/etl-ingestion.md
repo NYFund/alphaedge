@@ -14,7 +14,7 @@
 ## 一、四層流程與入庫時機
 
 pipeline 為 crawler → cleaner → loader → updater 四層：crawler 回傳 DataFrame、
-cleaner 落地成 `downloads/<source>/{market}_{YYYYMMDD}.csv`、loader 把 CSV 寫進資料庫、
+cleaner 落地成 `data/downloads/tw_stock/<source>/{market}_{YYYYMMDD}.csv`（期貨為 `data/downloads/tw_futures/<source>/`）、loader 把 CSV 寫進資料庫、
 updater 負責串起流程與決定要處理哪些日期。
 
 **入庫時機是這一層最關鍵的設計選擇。** 「整段日期全部爬完才一次 `add_to_db()`」

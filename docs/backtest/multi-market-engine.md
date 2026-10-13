@@ -36,7 +36,7 @@ import `core.backtest.models`／`datafeed`／`report`，搬出去的東西不會
 
 | 性質 | 內容 |
 |------|------|
-| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`execute_bar()` 執行順序、委託前處理（`validate_orders()` 方向白名單、`resolve_open/close_action()`、`check_max_holdings()`、`sort_orders()`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
+| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`execute_bar()` 執行順序、委託前處理（`validate_orders()` 方向白名單、`check_max_holdings()`、`sort_orders()`，皆薄包裝 `core/portfolio/order_rules.py`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
 | **市場規則**（介面共用、實作不同） | 成交價驗證、價格區間、開盤判定 |
 | **台股信用交易專屬** | 成本設定推導、隨單欄位補值、當沖強制回補、轉融券留倉、持有成本計提、維持率追繳 |
 
@@ -127,7 +127,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 ### 2.3 方向與商品類別是兩條獨立的軸
 
-**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以同名方法薄包裝呼叫。
+**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；`validate_orders()`／`check_max_holdings()`／`sort_orders()` 由引擎以同名方法薄包裝呼叫，`resolve_open_action()`／`resolve_close_action()` 則只在 `order_rules.py` 提供（回測引擎沒有同名方法，目前由實盤端呼叫）。
 
 [放空回測框架規格](short-selling-framework.md) §1 原則 2「方向來自訂單，策略只做白名單」是本架構的**基礎**。
 
@@ -155,7 +155,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 | 路徑 | 位置 | 輸入 | 命名 |
 |---|---|---|---|
-| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_rows()`／`combine_sessions()` |
+| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_rows()`／`combine_sessions()`（期貨的 `generate_futures_quotes()` 是 `from_day_rows()` 的內部工廠，外部一律走 `from_*`） |
 | 實盤 | `core/broker/tw/shioaji_quote_stream.py` | 券商的 `Snapshot`／逐筆推播 | `from_stock_snapshot()`／`from_futures_snapshot()`／`from_tick_message()` |
 
 ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心。
@@ -179,7 +179,7 @@ ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心
 
 - **`close` 的語意兩邊不同**：回測是當日收盤（定值），實盤是盤中最新成交價
   （會變）。策略若拿它算「今天漲幅」，實盤得到的是此刻漲幅。這是制度性差異，
-  不是缺陷——盤中本來就還沒收盤。盤前段落另走 `PreOpenQuote`（讀 OHLC 直接拋）。
+  不是缺陷——盤中本來就還沒收盤。盤前段落另走 `PreOpenQuoteMixin`（讀 OHLC 直接拋）。
 - **重複代號只警告不排除**：要留哪一筆屬資料修正的範疇，靜默挑一筆是更糟的選擇。
 - **字串型的價格目前會通過驗證**（`float("600")` 成立）。嚴格說它代表上游型別
   已經跑掉了，但收緊判準會改變回測結果、須重產回歸基準。
@@ -222,7 +222,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 1. `core/models/<instrument>/`：繼承 `core/models/base/` 的五個 model（識別欄位用 `symbol`）。
 2. `core/strategies/<instrument>/base.py`：繼承 `BaseStrategy`，設定 `self.market` 與 `self.instrument_type`。
-3. `core/position/<instrument>/position_manager.py`：繼承 `BasePositionManager`，實作 `close_single_position()` 與 `settle_daily()`。
+3. `core/position/<instrument>/position_manager.py`：繼承 `BasePositionManager`，實作 `setup()`／`open_position()`／`close_single_position()`／`settle_daily()` 四個抽象方法；FIFO 拆單主幹 `close_position()` 由基底提供。
 
 **市場側**（新市場才需要；目錄承載市場軸，子目錄名 `<market>` 如 `tw`／`us`）：
 
@@ -255,7 +255,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 | **per-instrument 粒度的 model 掛載** | 無法在同一次回測同時持有台股與台指期（跨市場組合／避險） | 業界（Lean 掛在 `Security`、Nautilus 掛在 `Instrument`）確實是這個粒度，本專案採 per-run 簡化。升級路徑乾淨：把 model 從 `Backtester` 移到 `InstrumentSpec` 物件上，引擎迴圈不動 |
 | 事件驅動 order queue（T+1 延遲成交、限價單未成交、部分成交） | 追繳仍只能以觸發當日收盤價回補 | 本質是引擎典範轉移，見 [§5.1](#51-事件驅動迴圈長期方向) |
 | `core/utils/instrument.py` 未移出 | `core/utils/` 仍留一個領域模組 | `StockUtils` 有 `core/backtest/` 以外的使用者（pipeline、adapters、broker、market、position、`strategy_lab`）。移進 `core/backtest/` 會讓資料管線反過來相依於回測引擎，是更嚴重的層級問題；其各函式的歸屬需先拆解 |
-| 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「基準價 ±幅度後往內對齊檔位」推算（除權息日的基準價已改用公告的開盤競價基準）；修正浮點誤差、ETF 檔位表與槓桿型 ETF 幅度後，28 個抽樣交易日與交易所公告值僅 0.07% 不一致，仍會微幅影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 接公告值要新增資料表、兩支爬蟲與長時間回補，成本與效益不成比例而暫緩；公告值日後可經 `DataFeed.get_price_limit_basis()` 同一掛點推入、公式版退為 fallback。見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S6 |
+| 漲跌停價以公式推算 | `TwStockSpec.get_price_limits()` 以「基準價 ±幅度後往內對齊檔位」推算（除權息日的基準價已改用公告的開盤競價基準）；修正浮點誤差、ETF 檔位表與槓桿型 ETF 幅度後，四個抽樣交易日（2013／2016／2020／2024 各一）3,763 檔中 3,761 檔與交易所公告值相符（99.95%），仍會微幅影響 `validate()` 的邊界拒單與 `limit_up_cover_failed` 計數 | 接公告值要新增資料表、兩支爬蟲與長時間回補，成本與效益不成比例而暫緩；公告值日後可經 `DataFeed.get_price_limit_basis()` 同一掛點推入、公式版退為 fallback。見 [暫緩工作彙整](../../backlog/暫緩工作彙整.md) S6 |
 
 ### 5.1 事件驅動迴圈（長期方向）
 
