@@ -247,13 +247,23 @@ class AfterCloseRunner:
 
             ROD 單在券商端日終自動失效，**本地要跟著標**：不標的話，
             明天的恢復流程會把它們當成「還在場上」去接管，然後撤一張不存在的單。
+
+            **標之前先認領段落中沒進帳的成交**：回報可能只被另一個行程收到，
+            本行程的委託因此停在送出狀態。不先認領的話，已成交的出場單會被當成
+            未成交而排隔日補平——對已經平掉的部位再賣一次。認領也要排在刷新之前：
+            刷新先把狀態轉成已成交，認領的成交再套上去就是非法轉移。
         - Return:
             - List[Any]
                 被標記的委託
         """
 
+        today: datetime.date = self._now().date()
+        for strategy_name, report in self.order_manager.claim_unattributed_fills(today):
+            if self.account_sync is not None:
+                self.account_sync.apply_fill_to_ledger(report, strategy_name)
+
         self.order_manager.refresh_from_broker()
-        return self.order_manager.expire_unfinished(self._now().date())
+        return self.order_manager.expire_unfinished(today)
 
     def calibrate_costs(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
