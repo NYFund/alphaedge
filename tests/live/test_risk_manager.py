@@ -564,6 +564,62 @@ def test_batch_check_records_truncations(
     )
 
 
+def test_exit_orders_skip_the_amount_and_volume_caps(
+    mode_state: TradingModeState, dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    出場單不受單筆金額、當日累計與數量上限約束；同一張換成開倉就被擋
+
+    三條上限防的是一次拿太多曝險，出場是釋放曝險。持倉漲價超過單筆上限後若連出場也擋，
+    部位會被自己的風控鎖在場內，補平單隔天進同一道檢查再被擋、再順延。
+    """
+
+    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
+    huge: float = CAPITAL * 10  # 遠超單筆與當日上限
+
+    closing: RiskDecision = manager.check(
+        make_order(action=Action.SELL, volume=999),
+        "A",
+        CAPITAL,
+        amount=huge,
+        reference_price=1000.0,
+    )
+    opening: RiskDecision = manager.check(
+        make_order(volume=999), "A", CAPITAL, amount=huge, reference_price=1000.0
+    )
+
+    assert closing.passed is True
+    assert (opening.passed, opening.category) == (False, "SINGLE_ORDER_AMOUNT")
+
+
+def test_exit_orders_still_face_the_price_checks(
+    mode_state: TradingModeState, dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """漲跌停與偏離檢查防的是錯價，與方向無關，出場照樣過"""
+
+    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
+
+    beyond_limit: RiskDecision = manager.check(
+        make_order(action=Action.SELL, price=1200.0),
+        "A",
+        CAPITAL,
+        amount=100_000,
+        reference_price=1000.0,
+        limit_up=1100.0,
+        limit_down=900.0,
+    )
+    deviated: RiskDecision = manager.check(
+        make_order(action=Action.SELL, price=1080.0),
+        "A",
+        CAPITAL,
+        amount=100_000,
+        reference_price=1000.0,
+    )
+
+    assert (beyond_limit.passed, beyond_limit.category) == (False, "PRICE_LIMIT")
+    assert (deviated.passed, deviated.category) == (False, "PRICE_DEVIATION")
+
+
 def test_pure_checks_need_no_manager_instance() -> None:
     """
     純判定不必建立 `PreTradeRiskManager`

@@ -44,7 +44,11 @@ from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
-from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
+from core.live.risk.risk_manager import (
+    ExposureItem,
+    PreTradeRiskManager,
+    RiskDecision,
+)
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.strategy_guard import verify_strategies
 from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
@@ -120,6 +124,10 @@ class StrategyContext:
     # 執行層：把執行方式換成券商委託。換算規則是市場特性（集合競價的時段、
     # 連續交易時段的保護方式），故由外部注入；未注入時本策略的委託一律不送
     execution_model: Optional[BaseExecutionModel] = None
+    # 本段落餵給策略的報價：symbol → 最新成交價（盤前段為參考價）。
+    # 風控的決策價偏離檢查拿它當市場基準；策略決定要買 108 時，市場在 100 還是 107
+    # 只有這份報價知道。每個段落重取，不跨段落沿用
+    quote_prices: Dict[str, float] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -857,6 +865,8 @@ class LiveTrader:
             return
 
         try:
+            # 逐筆只更新這一檔的市場價，其餘標的沿用本段落先前的報價
+            context.quote_prices.update(quote_prices_of([quote]))
             orders: List[BaseOrder] = self._invoke_hooks(
                 context, ExecutionTiming.IMMEDIATE, [quote]
             )
@@ -987,7 +997,8 @@ class LiveTrader:
         survivors: List[Tuple[StrategyContext, BaseOrder]] = self.apply_cross_checks(
             candidates
         )
-        self.dispatch(survivors, window)
+        # 策略自己產生的出場單沒送出時要排次日補平；其他送單路徑各有自己的失敗處理
+        self.dispatch(survivors, window, cover_unsent_exits=True)
 
     # === 換月 ===
     def execute_rolls(self, window: Optional[SegmentWindow]) -> int:
@@ -1179,6 +1190,8 @@ class LiveTrader:
             quotes: List[BaseQuote] = context.data_feed.get_live_quotes(
                 timing, self.quote_symbols(context)
             )
+            # 先記下市場價再呼叫鉤子：鉤子產生的每一張委託都要拿同一份報價當偏離基準
+            context.quote_prices = quote_prices_of(quotes)
             orders: List[BaseOrder] = self._invoke_hooks(context, timing, quotes)
         except Exception as exc:
             self._halt_strategy(context, f"鉤子執行失敗：{exc}")
@@ -1425,6 +1438,7 @@ class LiveTrader:
         self,
         candidates: List[Tuple[StrategyContext, BaseOrder]],
         window: Optional[SegmentWindow],
+        cover_unsent_exits: bool = False,
     ) -> List[Tuple[StrategyContext, BaseOrder]]:
         """
         - Description:
@@ -1438,6 +1452,10 @@ class LiveTrader:
                 通過跨策略檢查的委託
             - window: Optional[SegmentWindow]
                 段落時窗
+            - cover_unsent_exits: bool
+                出場單沒送出時是否排次日補平（見 `_record_unsent_exit()`）。只有段落收訊號
+                那一條路徑開啟；補平、換月兩腿、當沖回補與逐筆路徑各有自己的失敗處理
+                （順延待辦、換月事件、回補重試、下一筆 tick 再試），再排一筆會重複
         - Return:
             - List[Tuple[StrategyContext, BaseOrder]]
                 沒有送出的委託（額度不足、風控擋下、送單失敗、已過時限）。
@@ -1451,6 +1469,11 @@ class LiveTrader:
             if self._past(window, "submit_end"):
                 logger.warning("已過送單時限，其餘委託不再送出")
                 unsent.extend(candidates[index:])
+                if cover_unsent_exits:
+                    for late_context, late_order in candidates[index:]:
+                        self._record_unsent_exit(
+                            late_context, late_order, "已過送單時限"
+                        )
                 break
 
             blocked: Optional[str] = self._check_margin(margin_gate, context, order)
@@ -1459,14 +1482,24 @@ class LiveTrader:
                 unsent.append((context, order))
                 continue
 
+            # **平倉與停損不保留資金**：出場是釋放資金，不是占用。可用額度是
+            # 「額度 − 持倉占用」，滿倉的策略趨近 0，若出場也要先保留，之後每一張
+            # 平倉／停損都會在這裡被擋下、永遠出不了場。開倉才保留；
+            # 與 `_check_margin()` 對平倉單免檢查是同一條原則。金額仍算出來給風控
+            closing: bool = order_rules.is_closing(order)
             amount: float = context.notional(order)
-            if not self.allocator.reserve(context.name, amount):
+            reserved: float = 0.0 if closing else amount
+            if not closing and not self.allocator.reserve(
+                context.name, amount, symbol=order.symbol
+            ):
                 unsent.append((context, order))
                 continue
 
             limits: Optional[PriceLimits] = self._apply_execution(context, order)
             if limits is None:
-                self.allocator.release(context.name, amount)
+                self.allocator.release(context.name, reserved)
+                if cover_unsent_exits:
+                    self._record_unsent_exit(context, order, "執行層換不出券商委託")
                 unsent.append((context, order))
                 continue
 
@@ -1475,12 +1508,21 @@ class LiveTrader:
                 context.name,
                 context.capital_limit,
                 amount,
-                reference_price=self._reference_price(order),
+                reference_price=self._reference_price(context, order),
                 limit_up=limits.limit_up,
                 limit_down=limits.limit_down,
             )
             if not decision.passed:
-                self.allocator.release(context.name, amount)
+                self.allocator.release(context.name, reserved)
+                if (
+                    cover_unsent_exits
+                    and decision.category not in self.DELIBERATE_EXIT_BLOCKS
+                ):
+                    self._record_unsent_exit(
+                        context,
+                        order,
+                        f"風控擋下 {decision.category}：{decision.reason}",
+                    )
                 unsent.append((context, order))
                 continue
 
@@ -1488,15 +1530,78 @@ class LiveTrader:
                 ticket = self.order_manager.submit(order, context.name)
             except Exception as exc:
                 # 送單失敗的保留一定要放掉，否則額度會單向消耗到策略再也送不出單
-                self.allocator.release(context.name, amount)
+                self.allocator.release(context.name, reserved)
                 logger.opt(exception=True).error(f"{context.name} 送單失敗：{exc}")
+                if cover_unsent_exits:
+                    self._record_unsent_exit(context, order, f"送單失敗：{exc}")
                 unsent.append((context, order))
                 continue
 
-            self._reserved_by_order[ticket.client_order_id] = (context.name, amount)
+            self._reserved_by_order[ticket.client_order_id] = (context.name, reserved)
             self.drain_once()
 
         return unsent
+
+    # 刻意連出場都不送的風控類別：kill switch 與 HALTED 是人為或系統決定「現在什麼都不動」，
+    # 替這兩種排次日補平等於繞過那個決定
+    DELIBERATE_EXIT_BLOCKS: Set[str] = {"KILL_SWITCH", "MODE_HALTED"}
+
+    def _record_unsent_exit(
+        self, context: StrategyContext, order: BaseOrder, reason: str
+    ) -> None:
+        """
+        - Description:
+            出場單從未送出：寫次日補平待辦與 CRITICAL 事件，並推播
+
+            「出場必補」原本只由盤後掃 `live_order` 的未成交殘量承接；被風控、執行層
+            或送單失敗擋在送出**之前**的出場單沒有 `live_order` 列，掃不到，部位會無聲
+            留到隔夜。這裡補上同一條路：待辦交給次日開盤段的 `apply_pending_actions()`，
+            數量到時再截到實際持有量。開倉單不補（開倉未送出一律放棄）。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - order: BaseOrder
+                未送出的委託
+            - reason: str
+                沒送出的原因
+        """
+
+        if not order_rules.is_closing(order):
+            return
+
+        now: datetime.datetime = self._now()
+        today: datetime.date = now.date()
+        message: str = (
+            f"{order.symbol} 出場單未送出（{reason}），已成為預期外的隔夜部位；"
+            "次日開盤段第一件事補平"
+        )
+        logger.error(f"[Unsent Exit] {context.name}：{message}")
+
+        self.dao.insert_pending_action(
+            {
+                "action_id": f"{today.isoformat()}-unsent-{order.symbol}-"
+                f"{now.strftime('%H%M%S%f')}",
+                "strategy_name": context.name,
+                "symbol": order.symbol,
+                "action": order.action.value,
+                "position_type": order.position_type.value,
+                "volume": int(order.volume),
+                "due_date": today + datetime.timedelta(days=1),
+                "status": self.dao.ACTION_PENDING,
+                "reason": f"出場單未送出：{reason}",
+                "source_client_order_id": order.client_order_id,
+                "created_at": now,
+            }
+        )
+        self.events.write(
+            category="UNSENT_EXIT",
+            severity=NotifyLevel.CRITICAL,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        self._notify(NotifyLevel.CRITICAL, "出場單未送出", f"{context.name}：{message}")
 
     def _apply_execution(
         self, context: StrategyContext, order: BaseOrder
@@ -2347,21 +2452,49 @@ class LiveTrader:
             return self.fetch_account()
         return self.broker.get_account()
 
-    def _reference_price(self, order: BaseOrder) -> float:
+    def _reference_price(self, context: StrategyContext, order: BaseOrder) -> float:
         """
-        風控用的基準價
+        - Description:
+            風控偏離檢查用的**市場**基準價
 
-        取決策價：訊號階段算出來的價格就是這張單的意圖，
-        而基準價偏離檢查要擋的是「意圖與市場差太多」。**不可取委託價**——
-        執行層改寫過之後，集合競價的 `MARKET` 買單委託價是漲停價，拿它當基準
-        只會讓偏離檢查擋下每一張要成交的單。真正的市場基準價要由
-        資料源在報價上帶過來，目前尚未接上。
+            偏離檢查比的是「策略的決策價離市場多遠」，基準必須是市場價，不能是這張單
+            自己的任何價：拿決策價當基準是自己比自己、偏離恆為 0，檢查形同不存在；
+            拿委託價更不行——集合競價的 `MARKET` 買單委託價是漲停價，每一張要成交的單
+            都會被擋下。
+
+            來源依序：本段落餵給策略的報價（尾盤段是 13:20 快照的成交價、盤前段是參考價）
+            → 券商合約的參考價（系統委託沒有報價時的退路）。**都取不到就放行並記 WARN**：
+            資料源缺一檔報價不該讓那一檔的出場送不出去，但要留下「這張單沒檢查到」的紀錄。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡（持有本段落的報價）
+            - order: BaseOrder
+                待檢查的委託
+        - Return:
+            - float
+                市場基準價；取不到為 0（`check_price_deviation()` 對 0 放行）
         """
 
-        decision: Optional[float] = getattr(order, "decision_price", None)
-        if decision is not None:
-            return float(decision)
-        return float(getattr(order, "price", 0.0) or 0.0)
+        price: Optional[float] = context.quote_prices.get(order.symbol)
+        if price is None or price <= 0:
+            price = context.data_feed.get_reference_price(order.symbol)
+        if price is not None and price > 0:
+            return float(price)
+
+        message: str = (
+            f"{order.symbol} 取不到市場基準價（本段落報價與合約參考價皆無），"
+            "本張決策價偏離檢查放行"
+        )
+        logger.warning(f"[Risk] {context.name}：{message}")
+        self.events.write(
+            category="REFERENCE_PRICE_MISSING",
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        return 0.0
 
     def _halt_strategy(self, context: StrategyContext, reason: str) -> None:
         """
@@ -2432,6 +2565,25 @@ class LiveTrader:
         if window is None:
             return False
         return self._now().time() >= getattr(window, attribute)
+
+
+def quote_prices_of(quotes: Sequence[BaseQuote]) -> Dict[str, float]:
+    """
+    報價 → `symbol → 市場價`；沒有正的價格的報價略過
+
+    先取 `cur_price`（最新成交價），沒有才退回 `close`：尾盤段的快照兩者相同，
+    盤前段的參考價報價只填其中一邊。0 或負值不算價格，留著會讓偏離檢查除以 0
+    或把「沒有報價」當成真實價格。
+    """
+
+    prices: Dict[str, float] = {}
+    for quote in quotes:
+        price: float = float(getattr(quote, "cur_price", 0.0) or 0.0)
+        if price <= 0:
+            price = float(getattr(quote, "close", 0.0) or 0.0)
+        if price > 0 and quote.symbol:
+            prices[quote.symbol] = price
+    return prices
 
 
 def mark_execution(
