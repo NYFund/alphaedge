@@ -7,6 +7,7 @@ from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.notify.base import NotifyLevel
+from core.live.risk.event_categories import CROSS_STRATEGY_BLOCKED
 from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder
 from core.portfolio.aggregation import resolve_symbol_conflicts
@@ -28,8 +29,8 @@ from core.portfolio.order_rules import resolve_close_action
 查未終結委託、寫風控事件。
 """
 
-# parity 比對用的歸因類別；被這道守門擋下的差異一律歸在這裡
-CROSS_STRATEGY_BLOCKED: str = "CROSS_STRATEGY_BLOCKED"
+# parity 比對用的歸因類別 `CROSS_STRATEGY_BLOCKED` 定義在 `core/live/risk/event_categories.py`，
+# 這裡只是沿用；被這道守門擋下的差異一律歸在那一類
 
 
 class CrossStrategyConflictGuard:
