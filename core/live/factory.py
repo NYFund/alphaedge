@@ -51,10 +51,10 @@ from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.trader import LiveTrader, StrategyContext
+from core.market.cost_model import BaseCostModel
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
-from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
@@ -70,9 +70,14 @@ from core.models import (
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.portfolio.order_rules import resolve_open_action
+from core.position.assembly import (
+    TwFuturesModels,
+    TwStockModels,
+    build_tw_futures_models,
+    build_tw_stock_models,
+)
 from core.position.base.position_manager import BasePositionManager
 from core.position.futures.position_manager import FuturesPositionManager
-from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     FUTURES_MULTIPLIER,
@@ -471,7 +476,7 @@ def build_live_trader(
         schedule=_merge_schedules(schedules),
         dry_run=dry_run,
         simulation=simulation,
-        cost_estimator=make_trade_cost_estimator(),
+        cost_estimator=make_trade_cost_estimator(contexts),
         # 查哪個帳戶是商品語意，由這裡決定後注入（引擎本體不認得「股票」「期貨」）
         fetch_account=make_account_fetcher(resolved_broker, strategies, resolved_dao),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
@@ -590,8 +595,11 @@ def _build_context(
 
     if market == Market.TW and instrument == InstrumentType.STOCK:
         account: StockAccount = StockAccount(init_capital=live_capital(strategy))
-        cost_model: TwStockCostModel = TwStockCostModel(CostConfig.default())
-        manager: BasePositionManager = StockPositionManager(account, cost_model)
+        # 與回測同一組法：成本設定依策略宣告推導（當沖策略的空單走現股當沖沖賣），
+        # 不再一律用預設費率——否則實盤本地帳與回測記出不同的帳，且不會有任何錯誤訊息
+        stock_models: TwStockModels = build_tw_stock_models(strategy, account)
+        cost_model: BaseCostModel = stock_models.cost_model
+        manager: BasePositionManager = stock_models.position_manager
         feed: BaseLiveDataFeed = TwStockLiveDataFeed(broker, now_provider=now_provider)
         spec: TwStockSpec = TwStockSpec()
         schedule: SegmentSchedule = TW_STOCK_SEGMENTS
@@ -612,26 +620,28 @@ def _build_context(
             getattr(strategy, "margin_config", None) or FuturesMarginConfig.default()
         )
         strategy.margin_config = margin_config
-        # 與回測同一條：策略層的 sizer 與部位管理層共用同一個保證金模型
-        margin_model: FuturesMarginModel = FuturesMarginModel(margin_config)
-        strategy.margin_model = margin_model
-        futures_manager: FuturesPositionManager = FuturesPositionManager(
-            futures_account,
-            TwFuturesCostModel(FuturesCostConfig.default()),
-            margin_config=margin_config,
-            margin_model=margin_model,
-        )
-        manager = futures_manager
         roll_config: FuturesRollConfig = to_live_roll_config(
             getattr(strategy, "roll_config", None) or FuturesRollConfig()
         )
         strategy.roll_config = roll_config
-        feed = TwFuturesLiveDataFeed(
+        futures_feed: TwFuturesLiveDataFeed = TwFuturesLiveDataFeed(
             broker,
             now_provider=now_provider,
             margin_config=margin_config,
             roll_config=roll_config,
         )
+        feed = futures_feed
+        # 與回測同一組法：成本設定讀策略宣告、保證金模型與部位管理層共用同一個、
+        # 乘數由資料源解析（股期的契約單位不在常數表，退回常數表會 KeyError）。
+        # 股期標的股價在實盤沒有來源，比例表那條路暫不接
+        futures_models: TwFuturesModels = build_tw_futures_models(
+            strategy,
+            futures_account,
+            multiplier_resolver=futures_feed.resolve_multiplier,
+        )
+        cost_model = futures_models.cost_model
+        futures_manager: FuturesPositionManager = futures_models.position_manager
+        manager = futures_manager
         opening_requirement = _make_opening_requirement(futures_manager, now_provider)
         spec = TwFuturesSpec()
         schedule = TW_FUTURES_SEGMENTS
@@ -648,6 +658,7 @@ def _build_context(
         strategy=strategy,
         account=account,
         position_manager=manager,
+        cost_model=cost_model,
         data_feed=feed,
         symbols=list(getattr(strategy, "symbols", []) or []),
         calculate_notional=_make_notional_calculator(spec),
@@ -658,13 +669,16 @@ def _build_context(
     return (context, schedule)
 
 
-def make_trade_cost_estimator() -> TradeCostEstimator:
+def make_trade_cost_estimator(
+    contexts: Optional[Sequence[StrategyContext]] = None,
+) -> TradeCostEstimator:
     """
     - Description:
         盤後校正成本用的估算器：依成本模型重算一筆已平倉交易的手續費與稅
 
-        成本模型與實盤部位管理用的是同一組預設設定（`CostConfig.default()`、
-        `FuturesCostConfig.default()`），校正比對的才是「實盤記帳用的那套」估得準不準。
+        **成本模型取實盤記帳用的那一個**（各策略脈絡裡的 `cost_model`），校正比對的
+        才是「實盤記帳用的那套」估得準不準。費率是帳戶層級的設定，同一個帳戶跑多支
+        策略時取第一支該市場策略的成本模型；沒有該市場的策略才退回預設費率。
         - 期貨：**只估平倉那一腿**（一次手續費＋平倉價的期交稅），與券商欄位的範圍一致——
           2026-09-22 模擬環境實測，台指期一口來回的已實現紀錄 `fee=50`、`tax=193`，
           正好是單邊手續費與單邊期交稅（開平倉價的稅在這個價位都是 193，分不出是哪一腿；
@@ -672,13 +686,30 @@ def make_trade_cost_estimator() -> TradeCostEstimator:
           乘數取 `FUTURES_MULTIPLIER`，不在表內（股票期貨）時回 None。
         - 股票：手續費開平倉各一次；證交稅只課賣出那一腿——多單課在平倉價、
           空單課在開倉價；開倉日與交易日同一天時用當沖稅率。缺開倉成交時回 None。
+    - Parameters:
+        - contexts: Optional[Sequence[StrategyContext]]
+            已組好的策略脈絡；None 或沒有該市場的策略時用預設費率
     - Return:
         - TradeCostEstimator
             估算器
     """
 
-    stock_cost: TwStockCostModel = TwStockCostModel(CostConfig.default())
-    futures_cost: TwFuturesCostModel = TwFuturesCostModel(FuturesCostConfig.default())
+    stock_cost: TwStockCostModel = next(
+        (
+            context.cost_model
+            for context in contexts or []
+            if isinstance(context.cost_model, TwStockCostModel)
+        ),
+        TwStockCostModel(CostConfig.default()),
+    )
+    futures_cost: TwFuturesCostModel = next(
+        (
+            context.cost_model
+            for context in contexts or []
+            if isinstance(context.cost_model, TwFuturesCostModel)
+        ),
+        TwFuturesCostModel(FuturesCostConfig.default()),
+    )
 
     def estimate(
         trade: RealizedTradeSnapshot,

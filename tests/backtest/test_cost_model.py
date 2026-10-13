@@ -470,7 +470,7 @@ def test_factory_injects_the_backtest_range_into_the_cost_config() -> None:
     `CostConfig` 多兩個欄位而沒有人填，等於這條警告換一種方式繼續不會觸發。
     """
 
-    from core.backtest.factory import build_cost_config
+    from core.position.assembly import build_cost_config
 
     class _Strategy:
         allow_day_trade = True
@@ -505,7 +505,7 @@ def test_factory_derives_day_trade_from_allow_day_trade_only(
     做多當沖會以一般稅率計算，回測成本高估。
     """
 
-    from core.backtest.factory import build_cost_config
+    from core.position.assembly import build_cost_config
 
     class _Strategy:
         cost_config = None

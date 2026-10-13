@@ -472,6 +472,47 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
 
         raise KeyError(f"取不到 {product} 的契約乘數（登錄表與合約欄位皆無）")
 
+    def resolve_multiplier(self, product: str, date: datetime.date) -> int:
+        """
+        - Description:
+            給部位管理層的契約乘數 resolver：登錄表優先，沒登錄的商品查券商合約
+
+            與回測資料源同一個契約（`TwFuturesDataFeed.resolve_multiplier()`），部位管理層
+            才不必退回常數表——股期不在常數表內，退回等於第一筆開倉就 KeyError。
+            `date` 用不到：實盤只有當下的合約檔，股期的契約單位隨除權息調整，當下的值
+            就是現在要用的值。兩邊都查不到就拋 `KeyError`，猜一個值會讓保證金與 PnL
+            靜默偏掉。
+        - Parameters:
+            - product: str
+                商品代碼
+            - date: datetime.date
+                交易日（為對齊回測的簽名而收，實盤用不到）
+        - Return:
+            - int
+                契約乘數
+        - Raise:
+            - KeyError
+                登錄表與券商合約都查不到
+        """
+
+        if product in FUTURES_MULTIPLIER:
+            return int(FUTURES_MULTIPLIER[product])
+
+        resolver: Any = getattr(self.broker, "resolver", None)
+        if resolver is not None:
+            try:
+                expiries: List[str] = list(
+                    resolver.list_index_futures_expiries(product)
+                )
+                if expiries:
+                    return self._resolve_multiplier(
+                        product, resolver.resolve_index_futures(product, expiries[0])
+                    )
+            except LookupError:
+                pass
+
+        raise KeyError(f"取不到 {product} 的契約乘數（登錄表與券商合約皆無）")
+
     def close(self) -> None:
         """
         關閉兩條唯讀連線；可重複呼叫

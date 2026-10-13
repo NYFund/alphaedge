@@ -149,7 +149,7 @@ def finish_day(self, date, close_quotes):
 | 層 | 路徑 | 內容 |
 |---|---|---|
 | 引擎 | `core/backtest/backtester.py` | 唯一引擎，不含任何 `Stock*` |
-| 組裝 | `core/backtest/factory.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_tw_futures_backtester()`／`build_cost_config()`；回測區間與初始資金的覆寫（`core/backtest/overrides.py` 的 `BacktestOverrides`）在組裝任何元件前套用 |
+| 組裝 | `core/backtest/factory.py`、`core/position/assembly.py` | `build_backtester()`／`build_tw_stock_backtester()`／`build_tw_futures_backtester()`；成本設定、成本模型、保證金模型與部位管理層由 `core/position/assembly.py` 的 `build_cost_config()`／`build_tw_stock_models()`／`build_tw_futures_models()` 組出，實盤 factory 走同一份；回測區間與初始資金的覆寫（`core/backtest/overrides.py` 的 `BacktestOverrides`）在組裝任何元件前套用 |
 | 行為 model | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | `InstrumentSpec` ＋ `TwStockSpec`／`TwFuturesSpec` |
 | | `core/backtest/models/fill_model.py` | `BaseFillModel` ＋ `TwStockFillModel`／`TwFuturesFillModel` |
 | | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | `BaseCostModel`／`TwStockCostModel`／`TwFuturesCostModel`（設定類別 `CostConfig`／`FuturesCostConfig`／`ShortConstraint` 在 `core/models/cost_config.py`，回測與實盤共用）|

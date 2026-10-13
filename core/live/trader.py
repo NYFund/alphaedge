@@ -51,6 +51,7 @@ from core.live.risk.risk_manager import (
 )
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.strategy_guard import verify_strategies
+from core.market.cost_model import BaseCostModel
 from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.models import (
     BaseAccount,
@@ -110,6 +111,9 @@ class StrategyContext:
     account: BaseAccount
     position_manager: BasePositionManager
     data_feed: BaseLiveDataFeed
+    # 成本模型：委託前處理用它補市場專屬欄位（台股空單的放空管道與當沖旗標），
+    # 與本地帳記帳用的是同一個；None 時不補值（純記憶體測試）
+    cost_model: Optional[BaseCostModel] = None
     # 本策略要處理的標的；實盤不掃全市場，標的池由策略決定
     symbols: List[str] = field(default_factory=list)
     # 把一張委託換算成金額（風控與資金保留都要用）。
@@ -1276,10 +1280,15 @@ class LiveTrader:
     def _preprocess(
         self, context: StrategyContext, orders: List[BaseOrder], stage: str
     ) -> List[BaseOrder]:
-        """方向白名單 ＋ 持倉檔數上限 ＋ 決定性排序；與回測共用同一份實作"""
+        """方向白名單 → 市場欄位補值 → 決定性排序 → 持倉檔數上限；與回測同一個順序、同一份實作"""
 
         allowed = order_rules.get_allowed_directions(context.strategy.direction)
         valid: List[BaseOrder] = order_rules.validate_orders(orders, stage, allowed)
+        # 台股空單的放空管道與當沖旗標由成本模型依策略設定補上，與回測同一步。
+        # 少了這一步，SHORT 委託到券商轉換層才因 `short_method` 為 None 被拒，
+        # 當沖空單的部位也不會被日終回補認出來
+        if context.cost_model is not None:
+            valid = context.cost_model.enrich_orders(valid)
         sorted_orders: List[BaseOrder] = order_rules.sort_orders(valid)
 
         # 只擋開倉，與回測一致（`Backtester` 也只在開倉分支呼叫）。

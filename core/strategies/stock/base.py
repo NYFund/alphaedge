@@ -44,7 +44,8 @@ class BaseStockStrategy(BaseStrategy):
 
         `allow_day_trade=True` 在台股另有一項市場專屬效果：空單一律走現股當沖沖賣
         （`ShortMethod.DAY_TRADE`，證交稅減半、收盤前必須回補），`short_method`
-        不再參與判斷，由 `factory.build_cost_config()` 強制。要留倉放空（融券或借券）
+        不再參與判斷，由 `core/position/assembly.py` 的 `build_cost_config()` 強制
+        （回測與實盤同一份）。要留倉放空（融券或借券）
         就把 `allow_day_trade` 設為 False。
         """
         self.short_method: ShortMethod = ShortMethod.MARGIN  # 放空管道

@@ -133,7 +133,8 @@ sequenceDiagram
 | `apps/_common.py` | 兩個入口共用的策略名解析：只載入指定策略，找不到時才全掃描列出可用策略並以退出碼 2 結束 | `apps/backtest.py`、`apps/live.py` |
 | `strategies/loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描頂層 `strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
 | `core/backtest/overrides.py` | `BacktestOverrides`：命令列的回測區間與初始資金覆寫，在組裝任何元件之前套用到策略 | `apps/backtest.py`、實盤 parity |
-| `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `apps/backtest.py`、`core/live/factory.py`、測試 |
+| `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；成本模型、保證金模型與部位管理層經 `core/position/assembly.py` 的 `build_tw_stock_models()`／`build_tw_futures_models()` 組出，與實盤同一份 | `apps/backtest.py`、`core/live/factory.py`、測試 |
+| `core/position/assembly.py` | 台股／台期貨的記帳 model 組：`build_cost_config()` 依策略宣告推導成本設定（允許當沖時空單一律走現股當沖沖賣）、`build_tw_stock_models()`、`build_tw_futures_models()`（回寫 `margin_config`／`margin_model` 給策略）；回測與實盤 factory 都呼叫它 | `core/backtest/factory.py`、`core/live/factory.py` |
 
 ### 引擎與可插拔 model
 
