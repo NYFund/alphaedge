@@ -122,6 +122,32 @@ def test_close_specific_position_closes_only_that_lot(make_order) -> None:
         )
 
 
+def test_long_roi_on_capital_equals_roi(make_order) -> None:
+    """多單的佔用資金就是名目價金，資金效率等於名目報酬率；空單以保證金為分母才會不同"""
+
+    manager: StockPositionManager = build_manager(init_capital=1000000.0)
+    manager.open_position(
+        make_order(action=Action.BUY, position_type=PositionType.LONG, price=100.0)
+    )
+    manager.open_position(
+        make_order(
+            stock_id="2317", action=Action.SELL, position_type=PositionType.SHORT
+        )
+    )
+
+    manager.close_position(
+        make_order(action=Action.SELL, position_type=PositionType.LONG, price=110.0)
+    )
+    manager.close_position(
+        make_order(stock_id="2317", action=Action.BUY, position_type=PositionType.SHORT)
+    )
+    long_record, short_record = manager.account.trade_records
+
+    assert long_record.roi > 0
+    assert long_record.roi_on_capital == long_record.roi
+    assert short_record.roi_on_capital != short_record.roi
+
+
 def test_long_open_with_enough_balance_is_not_counted(make_order) -> None:
     """餘額足夠時照常開倉且不計數（防止改過頭）"""
 

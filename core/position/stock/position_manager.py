@@ -346,6 +346,9 @@ class StockPositionManager(BasePositionManager):
             transaction_cost=total_transaction_cost,
             realized_pnl=realized_pnl,
             roi=roi,
+            # 多單的佔用資金就是名目價金，資金效率與名目報酬率相同；
+            # 原本漏傳，交易明細的 `ROI on Capital` 對多單一直是 0
+            roi_on_capital=roi,
         )
 
         position.volume -= close_volume
