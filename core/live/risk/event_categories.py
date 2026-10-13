@@ -75,6 +75,15 @@ ROLL_OPEN_FAILED: str = "ROLL_OPEN_FAILED"
 UNFILLED_EXIT: str = "UNFILLED_EXIT"
 COST_MODEL_DRIFT: str = "COST_MODEL_DRIFT"
 RECONCILE_MISMATCH: str = "RECONCILE_MISMATCH"
+# 成交回報的跨行程歸屬（`core/live/oms/order_manager.py`、`core/live/after_close.py`）：
+# 兩條線是兩個行程、同收一筆成交，先寫入的若不是擁有者，擁有者要認領；盤後再以成交事實回填
+FILL_CLAIMED: str = "FILL_CLAIMED"
+FILL_BACKFILLED: str = "FILL_BACKFILLED"
+# OMS 的回報與接管異常（`core/live/oms/order_manager.py`）
+FILL_UNMATCHED: str = "FILL_UNMATCHED"
+FILL_REPORT_MISSING: str = "FILL_REPORT_MISSING"
+ORDER_STATE_INVALID: str = "ORDER_STATE_INVALID"
+RECOVER_AMBIGUOUS: str = "RECOVER_AMBIGUOUS"
 
 OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
     {
@@ -92,6 +101,12 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         UNFILLED_EXIT,
         COST_MODEL_DRIFT,
         RECONCILE_MISMATCH,
+        FILL_CLAIMED,
+        FILL_BACKFILLED,
+        FILL_UNMATCHED,
+        FILL_REPORT_MISSING,
+        ORDER_STATE_INVALID,
+        RECOVER_AMBIGUOUS,
     }
 )
 

@@ -857,6 +857,76 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return str(rows[0][0]) if rows else None
 
+    def find_order_by_broker_seqno(self, broker_seqno: str) -> Optional[Dict[str, Any]]:
+        """
+        - Description:
+            以券商委託序號找委託列，**不限策略、不限行程**
+
+            股票線與期貨線是兩個行程、共用同一個紀錄庫，券商的成交回報兩個行程都會收到。
+            收到的行程若在自己的委託裡找不到序號，要先問紀錄庫「這是不是另一個行程的委託」，
+            才能決定成交該歸給誰——直接判成未歸屬，會讓擁有者的那張單永遠停在送出狀態。
+        - Parameters:
+            - broker_seqno: str
+                券商委託序號
+        - Return:
+            - Optional[Dict[str, Any]]
+                委託列；查不到時為 None
+        """
+
+        if not broker_seqno:
+            return None
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} WHERE broker_seqno = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (broker_seqno,),
+        ).fetchall()
+        dicts: List[Dict[str, Any]] = self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
+        return dicts[0] if dicts else None
+
+    def attribute_fill(
+        self,
+        broker_seqno: str,
+        broker_trade_id: str,
+        client_order_id: str,
+        strategy_name: str,
+    ) -> bool:
+        """
+        - Description:
+            把一筆成交歸屬到指定委託；**只動尚未歸屬、或已歸屬到同一張委託的列**
+
+            成交列可能先由另一個行程以空的 `client_order_id` 寫入（它收到回報時找不到
+            委託），擁有者後到時 `insert_fill()` 會被忽略，要靠這裡把歸屬補上。
+            已歸屬到**別張**委託的列不動並回 False：兩張單搶同一筆成交是接管配錯，
+            要讓它浮出來，不是誰後到誰贏。
+        - Parameters:
+            - broker_seqno: str
+                券商委託序號
+            - broker_trade_id: str
+                券商成交序號
+            - client_order_id: str
+                要歸屬到的委託
+            - strategy_name: str
+                該委託的策略
+        - Return:
+            - bool
+                True 代表這筆成交現在歸屬於指定委託（本次補上或原本就是）
+        """
+
+        cursor: sqlite3.Cursor = self.conn.execute(
+            f"UPDATE {LIVE_FILL_TABLE_NAME} SET client_order_id = ?, strategy_name = ? "
+            "WHERE broker_seqno = ? AND broker_trade_id = ? "
+            "AND (client_order_id IS NULL OR client_order_id = '' OR client_order_id = ?)",
+            (
+                client_order_id,
+                strategy_name,
+                broker_seqno,
+                broker_trade_id,
+                client_order_id,
+            ),
+        )
+        self.conn.commit()
+        return cursor.rowcount > 0
+
     def get_orders_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:
