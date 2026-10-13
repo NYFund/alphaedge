@@ -160,3 +160,32 @@ def test_unsent_open_does_not_create_a_cover() -> None:
     assert harness.broker.placed_count == 0
     assert pending_covers(harness) == []
     assert events(harness, "UNSENT_EXIT") == []
+
+
+# === 金額與數量上限 ===
+class BigExit(ScriptedStrategy):
+    """持有 30 張（名目 300 萬）一次全平；單筆上限預設 20% × 1,000 萬 ＝ 200 萬"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "BigExit",
+            close_orders=[make_order(action=Action.SELL, price=100.0, volume=30)],
+        )
+        self.live_execution = ExecutionStyle.MARKET
+
+
+def test_exit_above_the_single_order_cap_is_still_sent() -> None:
+    """
+    持倉名目超過單筆金額上限，一次全平仍送得出去
+
+    上限防的是一次拿太多曝險，出場是釋放曝險；對出場也套用的話，持倉漲價超過上限後
+    就平不掉，補平單隔天進同一道檢查又被擋。
+    """
+
+    harness: Harness = Harness([BigExit()])
+    seed_holding(harness, "BigExit", 30)
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    (order,) = sent_orders(harness)
+    assert (order.action, order.volume) == (Action.SELL, 30)
+    assert events(harness, "SINGLE_ORDER_AMOUNT") == []
