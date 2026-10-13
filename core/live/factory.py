@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
+from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
@@ -856,6 +857,7 @@ def make_daily_backtest_runner(
 
 def make_closing_limit_lookup(
     api_factory: Callable[[], StockPriceAPI] = StockPriceAPI,
+    dividend_api_factory: Callable[[], StockDividendAPI] = StockDividendAPI,
 ) -> Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]:
     """
     - Description:
@@ -864,14 +866,18 @@ def make_closing_limit_lookup(
         集合競價的 `MARKET` 委託掛在漲跌停卻沒成交時，parity 要確認收盤是不是真的鎖住，
         才能歸「鎖漲跌停」；收盤沒鎖住卻沒成交是另一回事（例如模擬環境不撮合集合競價）。
 
-        **漲跌停以前一交易日收盤為基準自行計算**（`TwStockSpec.get_price_limits()`）：
-        除權息日的真正基準是開盤競價基準，算出來的漲跌停會偏，該日鎖住的單會被歸到
-        `UNFILLED`、`note` 寫出兩個價——寧可多一筆要人看，不會把沒鎖住的誤判成鎖住。
+        **漲跌停基準與回測同一口徑**：前一交易日收盤，除權息日改用交易所公告的
+        開盤競價基準（`StockDividendAPI.get_opening_reference_price_map()`，與
+        `TwStockFillModel.apply_price_limit_basis()` 同一來源），再以
+        `TwStockSpec.get_price_limits()` 推算。兩邊口徑不同時，除權息日鎖住的單會被
+        歸到 `UNFILLED`，沒鎖住的也可能被誤判成鎖住。
 
         **同一天只查一次資料庫**：一天的差異可能有好幾檔，逐檔連線查詢沒有意義。
     - Parameters:
         - api_factory: Callable[[], StockPriceAPI]
             建立價格 API 的函式；測試以此注入假的資料來源
+        - dividend_api_factory: Callable[[], StockDividendAPI]
+            建立除權息 API 的函式（開盤競價基準）；測試以此注入假的資料來源
     - Return:
         - Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
             `(標的, 買賣別, 交易日) → (收盤價, 該方向的漲跌停價)`；當日或前一交易日
@@ -893,19 +899,24 @@ def make_closing_limit_lookup(
                 prev_closes: Dict[str, Any] = (
                     api.get_close_map(days[-1]) if days else {}
                 )
-            cache[run_date] = (closes, prev_closes)
+            # 除權息日的開盤競價基準覆寫前收：與回測 `apply_price_limit_basis()` 同一條規則
+            with dividend_api_factory() as dividend:
+                basis: Dict[str, float] = dividend.get_opening_reference_price_map(
+                    run_date
+                )
+            cache[run_date] = (closes, {**prev_closes, **basis})
         return cache[run_date]
 
     def lookup(
         symbol: str, side: str, run_date: datetime.date
     ) -> Optional[Tuple[float, float]]:
-        closes, prev_closes = load(run_date)
+        closes, references = load(run_date)
         close: Optional[float] = _positive_price(closes.get(symbol))
-        prev_close: Optional[float] = _positive_price(prev_closes.get(symbol))
-        if close is None or prev_close is None:
+        reference: Optional[float] = _positive_price(references.get(symbol))
+        if close is None or reference is None:
             return None
 
-        limits: PriceLimits = spec.get_price_limits(prev_close, run_date, symbol)
+        limits: PriceLimits = spec.get_price_limits(reference, run_date, symbol)
         limit: Optional[float] = (
             limits.limit_up if side == Action.BUY.value else limits.limit_down
         )

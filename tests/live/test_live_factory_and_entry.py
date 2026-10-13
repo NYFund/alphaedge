@@ -545,8 +545,26 @@ class FakePriceAPI:
 
     def get_close_map(self, date: datetime.date) -> Dict[str, Any]:
         if date == datetime.date(2026, 10, 7):
-            return {"2305": 58.9, "4157": 8.55, "9999": 10.0}
-        return {"2305": 64.7, "4157": 9.33, "9999": float("nan")}
+            return {"2305": 58.9, "4157": 8.55, "9999": 10.0, "2454": 953.0}
+        return {"2305": 64.7, "4157": 9.33, "9999": float("nan"), "2454": 1020.0}
+
+
+class FakeDividendAPI:
+    """假的除權息 API：10/8 只有 2454 除權息，開盤競價基準 928；記錄被開啟幾次"""
+
+    opened: int = 0
+
+    def __enter__(self) -> "FakeDividendAPI":
+        FakeDividendAPI.opened += 1
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def get_opening_reference_price_map(self, date: datetime.date) -> Dict[str, float]:
+        if date == datetime.date(2026, 10, 8):
+            return {"2454": 928.0}
+        return {}
 
 
 def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
@@ -558,7 +576,10 @@ def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
     """
 
     FakePriceAPI.opened = 0
-    lookup = make_closing_limit_lookup(api_factory=FakePriceAPI)
+    FakeDividendAPI.opened = 0
+    lookup = make_closing_limit_lookup(
+        api_factory=FakePriceAPI, dividend_api_factory=FakeDividendAPI
+    )
     day: datetime.date = datetime.date(2026, 10, 8)
 
     locked: Optional[Tuple[float, float]] = lookup("2305", "Buy", day)
@@ -569,4 +590,23 @@ def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
     assert lookup("4157", "Sell", day) == (9.33, 7.7)
     assert lookup("9999", "Buy", day) is None
     assert lookup("0000", "Buy", day) is None
-    assert FakePriceAPI.opened == 1
+    assert (FakePriceAPI.opened, FakeDividendAPI.opened) == (1, 1)
+
+
+def test_closing_limit_lookup_uses_the_ex_dividend_basis() -> None:
+    """
+    除權息日的漲跌停以公告的開盤競價基準算，與回測同一口徑
+
+    聯發科 2024-01-04 的公告值：開盤競價基準 928，漲停 1020、跌停 836；
+    前收 953 算出來的漲停是 1048——收在 1020 的鎖漲停單會被當成「沒鎖住」。
+    """
+
+    lookup = make_closing_limit_lookup(
+        api_factory=FakePriceAPI, dividend_api_factory=FakeDividendAPI
+    )
+    day: datetime.date = datetime.date(2026, 10, 8)
+
+    assert lookup("2454", "Buy", day) == (1020.0, 1020.0)
+    assert lookup("2454", "Sell", day) == (1020.0, 836.0)
+    # 非除權息日沒有基準可覆寫，照舊用前一交易日收盤
+    assert lookup("2305", "Buy", day) == (64.7, 64.7)
