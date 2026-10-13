@@ -1,9 +1,16 @@
-from typing import Any, List, Tuple
+import datetime
+from typing import Any, Dict, List, Tuple
 
 from core.utils import Action, ExecutionStyle, ExecutionTiming
 
 from .test_live_execution_layer import events, sent_orders
-from .test_live_trader_day import Harness, ScriptedStrategy, make_order, seed_holding
+from .test_live_trader_day import (
+    TODAY,
+    Harness,
+    ScriptedStrategy,
+    make_order,
+    seed_holding,
+)
 
 """
 送單路徑對**出場單**的安全性
@@ -61,3 +68,95 @@ def test_open_still_needs_capital_reservation() -> None:
     assert harness.broker.placed_count == 0
     assert len(exhausted) == 1
     assert exhausted[0][0] == "PlainOpen"
+
+
+# === 未送出的出場單 ===
+class BlockedExit(ScriptedStrategy):
+    """平倉賣單決策價 80 低於跌停 90：風控 PRICE_LIMIT 擋下，從未送出"""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "BlockedExit", close_orders=[make_order(action=Action.SELL, price=80.0)]
+        )
+        self.live_execution = ExecutionStyle.MARKET
+
+
+class BlockedOpen(ScriptedStrategy):
+    """開倉買單決策價 120 高於漲停 110：風控 PRICE_LIMIT 擋下"""
+
+    def __init__(self) -> None:
+        super().__init__("BlockedOpen", [make_order(price=120.0)])
+        self.live_execution = ExecutionStyle.MARKET
+
+
+class KillSwitchOn:
+    """kill switch 檔案存在"""
+
+    def exists(self) -> bool:
+        return True
+
+
+def pending_covers(harness: Harness) -> List[Dict[str, Any]]:
+    """次日到期的補平待辦"""
+
+    return harness.dao.get_pending_actions(TODAY + datetime.timedelta(days=1))
+
+
+def test_exit_blocked_by_risk_creates_a_next_day_cover() -> None:
+    """
+    風控擋下的出場單要留下次日補平的待辦
+
+    盤後的「出場必補」只掃 `live_order` 的未成交殘量；從未送出的出場單沒有這一列，
+    不在這裡補的話部位會無聲留到隔夜、而且隔天沒有人處理。
+    """
+
+    harness: Harness = Harness([BlockedExit()])
+    seed_holding(harness, "BlockedExit", 1)
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    (action,) = pending_covers(harness)
+    assert (
+        action["symbol"],
+        action["action"],
+        action["position_type"],
+        action["volume"],
+        action["status"],
+    ) == ("2330", "Sell", "LONG", 1, harness.dao.ACTION_PENDING)
+    assert events(harness, "UNSENT_EXIT") == [("BlockedExit", "2330", "CRITICAL")]
+
+
+def test_exit_skipped_by_the_execution_layer_creates_a_next_day_cover() -> None:
+    """取不到漲跌停、執行層略過該檔，同樣要補"""
+
+    harness: Harness = Harness([PlainExit()], price_limits=(None, None))
+    seed_holding(harness, "PlainExit", 1)
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert len(events(harness, "EXECUTION_UNAVAILABLE")) == 1
+    assert [action["symbol"] for action in pending_covers(harness)] == ["2330"]
+
+
+def test_exit_blocked_by_the_kill_switch_is_not_scheduled_for_cover() -> None:
+    """kill switch 是「現在什麼都不動」的決定，替它排次日補平等於繞過那個決定"""
+
+    harness: Harness = Harness([PlainExit()])
+    seed_holding(harness, "PlainExit", 1)
+    harness.risk.kill_switch_path = KillSwitchOn()
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert pending_covers(harness) == []
+    assert events(harness, "UNSENT_EXIT") == []
+
+
+def test_unsent_open_does_not_create_a_cover() -> None:
+    """開倉未送出一律放棄，不會變成待辦"""
+
+    harness: Harness = Harness([BlockedOpen()])
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert pending_covers(harness) == []
+    assert events(harness, "UNSENT_EXIT") == []

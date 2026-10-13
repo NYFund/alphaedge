@@ -949,7 +949,8 @@ class LiveTrader:
         survivors: List[Tuple[StrategyContext, BaseOrder]] = self.apply_cross_checks(
             candidates
         )
-        self.dispatch(survivors, window)
+        # 策略自己產生的出場單沒送出時要排次日補平；其他送單路徑各有自己的失敗處理
+        self.dispatch(survivors, window, cover_unsent_exits=True)
 
     # === 換月 ===
     def execute_rolls(self, window: Optional[SegmentWindow]) -> int:
@@ -1364,6 +1365,7 @@ class LiveTrader:
         self,
         candidates: List[Tuple[StrategyContext, BaseOrder]],
         window: Optional[SegmentWindow],
+        cover_unsent_exits: bool = False,
     ) -> List[Tuple[StrategyContext, BaseOrder]]:
         """
         - Description:
@@ -1377,6 +1379,10 @@ class LiveTrader:
                 通過跨策略檢查的委託
             - window: Optional[SegmentWindow]
                 段落時窗
+            - cover_unsent_exits: bool
+                出場單沒送出時是否排次日補平（見 `_record_unsent_exit()`）。只有段落收訊號
+                那一條路徑開啟；補平、換月兩腿、當沖回補與逐筆路徑各有自己的失敗處理
+                （順延待辦、換月事件、回補重試、下一筆 tick 再試），再排一筆會重複
         - Return:
             - List[Tuple[StrategyContext, BaseOrder]]
                 沒有送出的委託（額度不足、風控擋下、送單失敗、已過時限）。
@@ -1390,6 +1396,11 @@ class LiveTrader:
             if self._past(window, "submit_end"):
                 logger.warning("已過送單時限，其餘委託不再送出")
                 unsent.extend(candidates[index:])
+                if cover_unsent_exits:
+                    for late_context, late_order in candidates[index:]:
+                        self._record_unsent_exit(
+                            late_context, late_order, "已過送單時限"
+                        )
                 break
 
             blocked: Optional[str] = self._check_margin(margin_gate, context, order)
@@ -1414,6 +1425,8 @@ class LiveTrader:
             )
             if limits is None:
                 self.allocator.release(context.name, reserved)
+                if cover_unsent_exits:
+                    self._record_unsent_exit(context, order, "執行層換不出券商委託")
                 unsent.append((context, order))
                 continue
 
@@ -1428,6 +1441,15 @@ class LiveTrader:
             )
             if not decision.passed:
                 self.allocator.release(context.name, reserved)
+                if (
+                    cover_unsent_exits
+                    and decision.category not in self.DELIBERATE_EXIT_BLOCKS
+                ):
+                    self._record_unsent_exit(
+                        context,
+                        order,
+                        f"風控擋下 {decision.category}：{decision.reason}",
+                    )
                 unsent.append((context, order))
                 continue
 
@@ -1437,6 +1459,8 @@ class LiveTrader:
                 # 送單失敗的保留一定要放掉，否則額度會單向消耗到策略再也送不出單
                 self.allocator.release(context.name, reserved)
                 logger.opt(exception=True).error(f"{context.name} 送單失敗：{exc}")
+                if cover_unsent_exits:
+                    self._record_unsent_exit(context, order, f"送單失敗：{exc}")
                 unsent.append((context, order))
                 continue
 
@@ -1444,6 +1468,67 @@ class LiveTrader:
             self.drain_once()
 
         return unsent
+
+    # 刻意連出場都不送的風控類別：kill switch 與 HALTED 是人為或系統決定「現在什麼都不動」，
+    # 替這兩種排次日補平等於繞過那個決定
+    DELIBERATE_EXIT_BLOCKS: Set[str] = {"KILL_SWITCH", "MODE_HALTED"}
+
+    def _record_unsent_exit(
+        self, context: StrategyContext, order: BaseOrder, reason: str
+    ) -> None:
+        """
+        - Description:
+            出場單從未送出：寫次日補平待辦與 CRITICAL 事件，並推播
+
+            「出場必補」原本只由盤後掃 `live_order` 的未成交殘量承接；被風控、執行層
+            或送單失敗擋在送出**之前**的出場單沒有 `live_order` 列，掃不到，部位會無聲
+            留到隔夜。這裡補上同一條路：待辦交給次日開盤段的 `apply_pending_actions()`，
+            數量到時再截到實際持有量。開倉單不補（開倉未送出一律放棄）。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - order: BaseOrder
+                未送出的委託
+            - reason: str
+                沒送出的原因
+        """
+
+        if not is_closing_order(order):
+            return
+
+        now: datetime.datetime = self._now()
+        today: datetime.date = now.date()
+        message: str = (
+            f"{order.symbol} 出場單未送出（{reason}），已成為預期外的隔夜部位；"
+            "次日開盤段第一件事補平"
+        )
+        logger.error(f"[Unsent Exit] {context.name}：{message}")
+
+        self.dao.insert_pending_action(
+            {
+                "action_id": f"{today.isoformat()}-unsent-{order.symbol}-"
+                f"{now.strftime('%H%M%S%f')}",
+                "strategy_name": context.name,
+                "symbol": order.symbol,
+                "action": order.action.value,
+                "position_type": order.position_type.value,
+                "volume": int(order.volume),
+                "due_date": today + datetime.timedelta(days=1),
+                "status": self.dao.ACTION_PENDING,
+                "reason": f"出場單未送出：{reason}",
+                "source_client_order_id": order.client_order_id,
+                "created_at": now,
+            }
+        )
+        self.events.write(
+            category="UNSENT_EXIT",
+            severity=NotifyLevel.CRITICAL,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        self._notify(NotifyLevel.CRITICAL, "出場單未送出", f"{context.name}：{message}")
 
     def _apply_execution(
         self, context: StrategyContext, order: BaseOrder
