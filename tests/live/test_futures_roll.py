@@ -360,15 +360,18 @@ def test_open_leg_failure_after_close_fill_is_critical(dao: LiveTradeDAO) -> Non
     trader, broker = build_trader(dao, fill_ratio=1.0)
     calls: List[str] = []
 
-    def reserve_only_once(name: str, amount: float) -> bool:
+    # 平倉腿是出場、不保留資金，只有開倉腿會來保留：讓保留一律失敗，
+    # 平倉腿照樣送得出去、開倉腿送不出去
+    def reserve_never(name: str, amount: float) -> bool:
         calls.append(name)
-        return len(calls) == 1
+        return False
 
-    trader.allocator.reserve = reserve_only_once  # type: ignore[assignment]
+    trader.allocator.reserve = reserve_never  # type: ignore[assignment]
 
     assert trader.execute_rolls(None) == 0
     assert placed_symbols(broker) == ["TX202610"]
     assert roll_events(dao) == [("ROLL_OPEN_FAILED", "CRITICAL")]
+    assert len(calls) == 1
 
 
 def test_reduce_only_mode_skips_the_roll(dao: LiveTradeDAO) -> None:

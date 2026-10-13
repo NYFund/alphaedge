@@ -38,7 +38,12 @@ from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
-from core.live.risk.risk_manager import ExposureItem, PreTradeRiskManager, RiskDecision
+from core.live.risk.risk_manager import (
+    ExposureItem,
+    PreTradeRiskManager,
+    RiskDecision,
+    is_closing_order,
+)
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.live.strategy_guard import resolve_hook_timing, verify_strategies
@@ -1393,8 +1398,14 @@ class LiveTrader:
                 unsent.append((context, order))
                 continue
 
+            # **平倉與停損不保留資金**：出場是釋放資金，不是占用。可用額度是
+            # 「額度 − 持倉占用」，滿倉的策略趨近 0，若出場也要先保留，之後每一張
+            # 平倉／停損都會在這裡被擋下、永遠出不了場。開倉才保留；
+            # 與 `_check_margin()` 對平倉單免檢查是同一條原則。金額仍算出來給風控
+            closing: bool = is_closing_order(order)
             amount: float = context.notional(order)
-            if not self.allocator.reserve(context.name, amount):
+            reserved: float = 0.0 if closing else amount
+            if not closing and not self.allocator.reserve(context.name, amount):
                 unsent.append((context, order))
                 continue
 
@@ -1402,7 +1413,7 @@ class LiveTrader:
                 self._apply_execution(context, order)
             )
             if limits is None:
-                self.allocator.release(context.name, amount)
+                self.allocator.release(context.name, reserved)
                 unsent.append((context, order))
                 continue
 
@@ -1416,7 +1427,7 @@ class LiveTrader:
                 limit_down=limits[1],
             )
             if not decision.passed:
-                self.allocator.release(context.name, amount)
+                self.allocator.release(context.name, reserved)
                 unsent.append((context, order))
                 continue
 
@@ -1424,12 +1435,12 @@ class LiveTrader:
                 ticket = self.order_manager.submit(order, context.name)
             except Exception as exc:
                 # 送單失敗的保留一定要放掉，否則額度會單向消耗到策略再也送不出單
-                self.allocator.release(context.name, amount)
+                self.allocator.release(context.name, reserved)
                 logger.opt(exception=True).error(f"{context.name} 送單失敗：{exc}")
                 unsent.append((context, order))
                 continue
 
-            self._reserved_by_order[ticket.client_order_id] = (context.name, amount)
+            self._reserved_by_order[ticket.client_order_id] = (context.name, reserved)
             self.drain_once()
 
         return unsent
