@@ -6,6 +6,7 @@ from loguru import logger
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import NotifyLevel
+from core.live.risk.event_categories import CAPITAL_EXHAUSTED
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 from core.portfolio.aggregation import allocate_capital, check_quota_against_equity
@@ -135,7 +136,9 @@ class CapitalAllocator:
             self.quotas, self.reserved, self.used, self.available_balance
         ).get(strategy_name, 0.0)
 
-    def reserve(self, strategy_name: str, amount: float) -> bool:
+    def reserve(
+        self, strategy_name: str, amount: float, symbol: Optional[str] = None
+    ) -> bool:
         """
         - Description:
             送單前保留金額；不足時回 False 並寫風控事件
@@ -148,6 +151,9 @@ class CapitalAllocator:
                 策略名
             - amount: float
                 要保留的金額
+            - symbol: Optional[str]
+                這筆保留是為了哪一檔；寫進事件讓盤後 parity 能把「回測有單、實盤沒有」
+                歸到資金排擠，沒有 symbol 的事件歸不到任何一檔
         - Return:
             - bool
                 是否保留成功
@@ -159,10 +165,10 @@ class CapitalAllocator:
         if amount > self.available(strategy_name):
             reason: str = (
                 f"{strategy_name} 可用資金 {self.available(strategy_name):,.0f} "
-                f"不足以保留 {amount:,.0f}"
+                f"不足以保留 {amount:,.0f}" + (f"（{symbol}）" if symbol else "")
             )
             logger.warning(reason)
-            self._write_event("CAPITAL_EXHAUSTED", reason, strategy_name)
+            self._write_event(CAPITAL_EXHAUSTED, reason, strategy_name, symbol)
             return False
 
         self.reserved[strategy_name] += amount
@@ -214,7 +220,13 @@ class CapitalAllocator:
         self.reserved[strategy_name] = 0.0
         return released
 
-    def _write_event(self, category: str, message: str, strategy_name: str) -> None:
+    def _write_event(
+        self,
+        category: str,
+        message: str,
+        strategy_name: str,
+        symbol: Optional[str] = None,
+    ) -> None:
         """寫一筆風控事件；沒有 DAO 時只留 log"""
 
         self.events.write(
@@ -222,4 +234,5 @@ class CapitalAllocator:
             severity=NotifyLevel.WARN,
             message=message,
             strategy_name=strategy_name,
+            symbol=symbol,
         )
