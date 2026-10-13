@@ -18,7 +18,12 @@ LIVE_ROOT: Path = Path(__file__).resolve().parents[2] / "core" / "live"
 
 # 會寫出事件類別的呼叫：方法名 → 類別參數的位置（關鍵字名或位置索引）
 CATEGORY_KEYWORD: str = "category"
-POSITIONAL_CATEGORY_ARG: dict = {"reject": 0, "_write_event": 0, "_write_roll_event": 3}
+POSITIONAL_CATEGORY_ARG: dict = {
+    "reject": 0,
+    "_write_event": 0,
+    "_write_risk_event": 0,
+    "_write_roll_event": 3,
+}
 
 
 def category_literals(path: Path) -> List[Tuple[int, str]]:
