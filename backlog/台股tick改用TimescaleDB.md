@@ -5,7 +5,7 @@
 - **背景／問題**：台股 tick 原本（**main 上至今仍是**）的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 main 上的 tick 級回測**沒有可用的資料源**。
   **2026-10-09 使用者把完整歷史 CSV 補回本機**（1,856 檔、56 GB、2020-04-01～2024-05-10、約 10.6 億列，曾放 `data/tick_history/`；全量匯入並比對通過後，2026-10-10 依使用者指示刪除本機這份），並確認**這批就是要入庫的全部資料**；
   **Google 雲端仍保有同一份**，本機這份不是唯一備份。原本那 541 檔（2024-05-13～05-15）已不存在，資料庫的歷史止於 2024-05-10。全量盤點結果見〈CSV 樣式〉與 Phase4-1 的盤點紀錄。
-- **目前狀態（2026-10-12）**：**原規劃 16 步全數在 `feature/tick-timescaledb` 完成，尚未 merge 進 main**；另有 2026-10-12 健檢立項的 Phase5-4、Phase5-5（P2，⬜）待做。該分支從 `feature/post-rehearsal` 分出，要等後者在模擬演練結束後部署進 main 才能合併；合併前 main 仍是 DolphinDB 程式。合併與部署時剩下的收尾見下方〈現況與合併部署〉。
+- **目前狀態（2026-10-13）**：**全部 18 步在 `feature/tick-timescaledb` 完成，尚未 merge 進 main**（原規劃 16 步，加上 2026-10-12 健檢立項、2026-10-13 完成的 Phase5-4、Phase5-5）。該分支從 `feature/post-rehearsal` 分出，要等後者在模擬演練結束後部署進 main 才能合併；合併前 main 仍是 DolphinDB 程式。合併與部署時剩下的收尾見下方〈現況與合併部署〉。
 - **目標**：落地目標改成 TimescaleDB（PostgreSQL extension）：
   - 寫入路徑改用 `COPY`，以「股票 × 交易日」為單位做到冪等寫入。
   - 讀取路徑改用 ConnectorX 直接產生 pandas DataFrame。
@@ -54,7 +54,7 @@
 
 ## 進度追蹤表
 
-原規劃的 16 步都在 `feature/tick-timescaledb` 完成、**尚未 merge 進 main**；Phase5-4、Phase5-5 是 2026-10-12 健檢立項的 P2（⬜）。「備註」欄只留結論，細節與偏離原規格的理由在各步驟的實作紀錄。
+全部 18 步都在 `feature/tick-timescaledb` 完成、**尚未 merge 進 main**；Phase5-4、Phase5-5 是 2026-10-12 健檢立項的 P2，2026-10-13 完成。「備註」欄只留結論，細節與偏離原規格的理由在各步驟的實作紀錄。
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
@@ -74,8 +74,8 @@
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ✅ | 2026-10-09（分散在 `b4ad012`～`a288df4`）：最後兩條 `TICK_DB_PATH` 測試隨 Phase5-2 刪除 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ✅ | 2026-10-09（`a288df4`，期貨 tick 選項 A）：台股與期貨 tick 的 DolphinDB 程式、設定、extra 全數移除；沒等 Phase4-3（偏離原規格）；本機資料留到合併部署時刪 |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ✅ | 2026-10-09（`a288df4`）：16 份文件改完，`etl-ingestion.md` 新增 tick 小節（含 schema 設計理由） |
-| Phase5-4 | `get_chunk_ranges()` 的 chunk 邊界改以 `AT TIME ZONE 'UTC'` 取值 | `core/dao/tw/stock_tick_dao.py`、`tests/test_stock_tick_timescale.py` | 整合測試：連線 `SET timezone = 'Asia/Taipei'` 後 `get_chunk_ranges()` 回傳的邊界與 UTC 下相同 | ⬜ | 2026-10-12 健檢立項（P2）：`timestamptz` 去時區依賴 session TimeZone，實測 UTC 得 `00:00`、Asia/Taipei 得 `08:00`；目前映像預設 UTC 所以結果正確，只有歷史匯入腳本用到 |
-| Phase5-5 | CI 加 TimescaleDB service，讓整合測試在 CI 執行 | `.github/workflows/ci.yml` | CI 的 pytest 輸出裡 `tests/test_stock_tick_timescale.py` 為 passed 而非 skipped | ⬜ | 2026-10-12 健檢立項（P2）：23 條整合測試在 CI 整個模組 skip，整條 tick 寫入／讀取路徑在 CI 沒有護欄；專案自己的原則是「skip 不算通過」（`scripts/run_regression.sh`） |
+| Phase5-4 | `get_chunk_ranges()` 的 chunk 邊界改以 `AT TIME ZONE 'UTC'` 取值 | `core/dao/tw/stock_tick_dao.py`、`tests/test_stock_tick_timescale.py` | 整合測試：連線 `SET timezone = 'Asia/Taipei'` 後 `get_chunk_ranges()` 回傳的邊界與 UTC 下相同 | ✅ | 2026-10-13（`e47a236`）：查詢改為 `AT TIME ZONE 'UTC'`，新增 UTC／Asia/Taipei 兩種 session 的參數化測試；突變 2 個皆紅；正式表 213 個 chunk 兩種時區下逐筆相同、邊界皆 00:00 |
+| Phase5-5 | CI 加 TimescaleDB service，讓整合測試在 CI 執行 | `.github/workflows/ci.yml` | CI 的 pytest 輸出裡 `tests/test_stock_tick_timescale.py` 為 passed 而非 skipped | ✅ | 2026-10-13（`e47a236`）：TimescaleDB service＋`--extra tick`＋「不得 skip」專屬步驟；CI run 38347064704 該步驟 `19 passed`、整套 2,861 綠；本機模擬拿掉連線字串時該步驟 19 skipped、結束碼 1 |
 
 ---
 
@@ -736,7 +736,7 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   驗證：`grep -rni dolphin` 只剩 etl-ingestion 的〈與 DolphinDB 版的語意差異〉與期貨平台文件的「已移除」說明。
 - **相依**：Phase5-2。
 
-### Phase5-4. `get_chunk_ranges()` 的 chunk 邊界改以 `AT TIME ZONE 'UTC'` 取值 ⬜
+### Phase5-4. `get_chunk_ranges()` 的 chunk 邊界改以 `AT TIME ZONE 'UTC'` 取值 ✅
 
 - **目的**：`StockTickDAO.get_chunk_ranges()` 讀 `timescaledb_information.chunks` 的 `range_start`／`range_end`
   後直接 `.replace(tzinfo=None)`。`stock_tick.time` 是不帶時區的 `TIMESTAMP`，TimescaleDB 把它的 chunk 邊界以
@@ -752,8 +752,14 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   `SET timezone = 'Asia/Taipei'` 前後 `get_chunk_ranges()` 結果相同，並等於 `show_chunks()` 的範圍）。
 - **驗證方式**：上述整合測試在 UTC 與 Asia/Taipei 兩種 session 設定下都通過；`manual_tick_history_import.py --verify-only` 的比對 5 結果不變。
 - **相依**：無。只動歷史匯入用到的查詢，日常更新與回測讀取不經過它；合併前後做都可以。
+- **實作紀錄（2026-10-13，`e47a236`）**：查詢改為 `range_start／range_end AT TIME ZONE 'UTC'`，Python 端不再 `replace(tzinfo=None)`，
+  理由寫在 `get_chunk_ranges()` 的註解。測試是 `test_chunk_ranges_do_not_depend_on_session_timezone`（UTC、Asia/Taipei 參數化），
+  斷言結果為 `[(2024-05-02, 2024-05-09, False)]` 且不帶時區；**偏離原規格一處**：不另外對照 `show_chunks()`——它只回 chunk 名稱、
+  不回範圍，直接寫死 epoch 對齊後的邊界值反而更嚴。突變「改回舊查詢」「只換 `range_start`」皆在 Asia/Taipei 那一項轉紅。
+  以 `--verify-only` 比對 5 的輸入（`get_chunk_ranges()`）對正式表唯讀實測：213 個 chunk 在兩種 session 時區下逐筆相同、
+  邊界皆 00:00、14 天前未壓縮 0 個；匯入腳本端到端測試（同檔）照常通過。未實際執行 `--verify-only`：全表比對耗時長，且比對 5 只讀這支查詢。
 
-### Phase5-5. CI 加 TimescaleDB service，讓整合測試在 CI 執行 ⬜
+### Phase5-5. CI 加 TimescaleDB service，讓整合測試在 CI 執行 ✅
 
 - **目的**：`tests/test_stock_tick_timescale.py` 的 23 條整合測試（建表冪等、整天重寫、`load_log`、續跑、
   讀取排序與 dtype 契約、DataFeed、匯入腳本端到端）在未設 `TICK_DATABASE_URL` 時整個模組 skip，CI 照樣全綠；
@@ -767,6 +773,12 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
 - **產出**：`.github/workflows/ci.yml`。
 - **驗證方式**：CI 的 pytest 摘要中該檔為 passed（不是 skipped）；刻意把 `TICK_DATABASE_URL` 拿掉時 CI 要紅（護欄要能證明自己活著，不是只在有資料庫時碰巧通過）。
 - **相依**：無；建議與本分支一起合併，否則合併後 CI 對這條路徑仍是盲的。
+- **實作紀錄（2026-10-13，`e47a236`）**：`check` job 加 `services: postgres`（同版映像、`pg_isready` 健康檢查）、job 層 `TICK_DATABASE_URL`、
+  安裝改 `uv sync --locked --extra frontend --extra tick`。另加專屬步驟「tick 整合測試（TimescaleDB，不得 skip）」：單獨跑該檔、
+  輸出出現 `skipped` 就 `exit 1`（`shell: bash` 帶 pipefail）。**原規格的「拿掉 `TICK_DATABASE_URL` 時 CI 要紅」由這一步保證**：
+  模組層級的 skip 會讓 pytest 照樣結束碼 0，只看結束碼的話 service 哪天沒起來也不會紅。
+  驗證：CI run `38347064704` 該步驟 `19 passed in 4.02s`、整套 `2861 passed, 16 skipped`（tick 檔 0 skip）；
+  本機模擬該步驟，連線字串設為空時 19 skipped、結束碼 1。該檔目前收集到 19 項（含本次新增的 2 項），文件原寫的 23 條是立項時的估計。
 
 ---
 
