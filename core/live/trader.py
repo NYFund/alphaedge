@@ -1424,7 +1424,9 @@ class LiveTrader:
             closing: bool = is_closing_order(order)
             amount: float = context.notional(order)
             reserved: float = 0.0 if closing else amount
-            if not closing and not self.allocator.reserve(context.name, amount):
+            if not closing and not self.allocator.reserve(
+                context.name, amount, symbol=order.symbol
+            ):
                 unsent.append((context, order))
                 continue
 

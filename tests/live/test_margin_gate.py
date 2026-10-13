@@ -151,7 +151,7 @@ def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
         run_id="20260922133500",
         now_provider=lambda: NOW,
     )
-    trader.allocator.reserve = lambda name, amount: True  # type: ignore[assignment]
+    trader.allocator.reserve = lambda name, amount, symbol=None: True  # type: ignore[assignment]
     return trader
 
 
