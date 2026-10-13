@@ -179,12 +179,16 @@ class FuturesMarginAPI(BaseDataAPI):
             "原始保證金適用比例": row[2],
         }
 
-    def get_contract_size(self, product_id: str, date: datetime.date) -> Optional[int]:
+    def get_margin_contract_size(
+        self, product_id: str, date: datetime.date
+    ) -> Optional[int]:
         """
         - Description:
-            取得股期的契約單位（股數）
+            取得算**保證金**用的股期契約單位（股數）
 
-            來源是 `futures_stock_universe` 的**快照序列**，故同樣取
+            名字帶 `margin`：與 `FuturesStockUniverseAPI.get_contract_size()`（回測乘數）
+            是兩種語意，同一個 (product, date) 可能給出不同的數字——這裡以該商品自己的
+            快照序列為準，那邊看該日全表快照。來源是 `futures_stock_universe` 的**快照序列**，故同樣取
             `snapshot_date <= date` 的最大者。
 
             ⚠️ **快照序列只回溯到本表建立之日**（2026-08-29），更早的日期會取到
@@ -301,7 +305,7 @@ class FuturesMarginAPI(BaseDataAPI):
         rates: Optional[Dict[str, float]] = self.get_margin_rates(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )
-        contract_size: Optional[int] = self.get_contract_size(product_id, date)
+        contract_size: Optional[int] = self.get_margin_contract_size(product_id, date)
 
         if rates is None or contract_size is None:
             return None

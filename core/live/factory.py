@@ -54,6 +54,7 @@ from core.live.trader import LiveTrader, StrategyContext
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
@@ -611,10 +612,14 @@ def _build_context(
             getattr(strategy, "margin_config", None) or FuturesMarginConfig.default()
         )
         strategy.margin_config = margin_config
+        # 與回測同一條：策略層的 sizer 與部位管理層共用同一個保證金模型
+        margin_model: FuturesMarginModel = FuturesMarginModel(margin_config)
+        strategy.margin_model = margin_model
         futures_manager: FuturesPositionManager = FuturesPositionManager(
             futures_account,
             TwFuturesCostModel(FuturesCostConfig.default()),
             margin_config=margin_config,
+            margin_model=margin_model,
         )
         manager = futures_manager
         roll_config: FuturesRollConfig = to_live_roll_config(

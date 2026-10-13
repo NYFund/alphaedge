@@ -17,6 +17,7 @@ from core.backtest.simulator.bar_simulator import BarSimulator
 from core.backtest.simulator.tick_simulator import TickSimulator
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.market.tw.segment_schedule import TW_STOCK_SEGMENTS
@@ -248,6 +249,13 @@ def build_tw_futures_backtester(
     # 期貨用自己的 key 清單，事件報表才不會列出二十個永遠是 0 的台股列
     event_counts: dict = new_event_counts(FUTURES_EVENT_KEYS)
 
+    # **保證金查表只有一份**：策略層的 sizer 算可開口數、部位管理層算應繳保證金，
+    # 都用同一個模型（含股期比例表那條路），兩邊的數字才會一致
+    margin_model: FuturesMarginModel = FuturesMarginModel(
+        margin_config, underlying_price_resolver=data_feed.resolve_underlying_price
+    )
+    strategy.margin_model = margin_model
+
     position_manager: FuturesPositionManager = FuturesPositionManager(
         account,
         cost_model=cost_model,
@@ -255,6 +263,7 @@ def build_tw_futures_backtester(
         multiplier_resolver=data_feed.resolve_multiplier,
         underlying_price_resolver=data_feed.resolve_underlying_price,
         event_counts=event_counts,
+        margin_model=margin_model,
     )
 
     instrument: TwFuturesSpec = TwFuturesSpec()

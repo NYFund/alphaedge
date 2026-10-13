@@ -4,6 +4,7 @@ from typing import List
 import pytest
 
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.models import (
     BaseOrder,
     BaseQuote,
@@ -196,21 +197,24 @@ def test_stock_constructor_reads_max_holdings_set_after_init() -> None:
     assert strategy.make_portfolio_constructor().max_holdings == 7
 
 
-def test_futures_constructor_reads_margin_config_injected_by_factory() -> None:
+def test_futures_constructor_reads_margin_model_injected_by_factory() -> None:
     """
-    `margin_config` 由 `core/backtest/factory.py` 在策略建構完成後才注入
+    保證金模型由 `core/backtest/factory.py` 在策略建構完成後才注入
 
-    快取住建構器的話，這裡會拿到 `None` 而**靜默退回比率近似**——
+    快取住建構器的話，這裡會拿到沒有 API 的模型而**靜默退回比率近似**——
     可開口數整段偏掉，且不會有任何錯誤訊息。
     """
 
     strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
-    assert strategy.make_portfolio_constructor().margin_config is None
+    assert strategy.make_portfolio_constructor().margin_model.config.api is None
 
     injected: FuturesMarginConfig = FuturesMarginConfig.default()
     strategy.margin_config = injected
+    assert strategy.make_portfolio_constructor().margin_model.config is injected
 
-    assert strategy.make_portfolio_constructor().margin_config is injected
+    model: FuturesMarginModel = FuturesMarginModel(injected)
+    strategy.margin_model = model
+    assert strategy.make_portfolio_constructor().margin_model is model
 
 
 def test_constructor_types_match_market() -> None:

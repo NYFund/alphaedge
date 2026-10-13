@@ -150,13 +150,13 @@ def test_contract_size_per_product_uses_its_own_snapshots(
 def test_margin_api_uses_per_product_contract_size(
     dao: FuturesStockUniverseDAO,
 ) -> None:
-    """`FuturesMarginAPI.get_contract_size()` 走「該商品自己的快照」那一種"""
+    """`FuturesMarginAPI.get_margin_contract_size()` 走「該商品自己的快照」那一種"""
 
     from core.api.tw.futures_margin_api import FuturesMarginAPI
 
     api: FuturesMarginAPI = FuturesMarginAPI(conn=dao.conn)
 
-    assert api.get_contract_size("OLF", datetime.date(2026, 9, 1)) == 2000
+    assert api.get_margin_contract_size("OLF", datetime.date(2026, 9, 1)) == 2000
 
 
 # === updater／loader ===

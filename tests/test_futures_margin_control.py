@@ -9,6 +9,7 @@ from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesPosition, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
+from core.portfolio.signal import Signal
 from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import Action, MarginCallPolicy, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
@@ -163,6 +164,25 @@ def test_margin_follows_the_effective_date() -> None:
     assert after == 292000
 
 
+def lots_for(strategy, quote: FuturesQuote) -> int:
+    """策略目前的部位建構器會替這筆報價開幾口；費率歸零、口數上限放寬，只看保證金"""
+
+    strategy.cost_config = FuturesCostConfig.free()
+    strategy.max_lots = 100
+    orders = strategy.make_portfolio_constructor().build(
+        [
+            Signal(
+                quote=quote,
+                action=Action.BUY,
+                position_type=PositionType.LONG,
+                order_price=quote.close,
+            )
+        ],
+        strategy.account,
+    )
+    return orders[0].volume if orders else 0
+
+
 def test_affordable_lots_change_across_an_adjustment() -> None:
     """
     調整生效日前後的**可開口數不同**——這是本步驟的驗收條件
@@ -189,8 +209,8 @@ def test_affordable_lots_change_across_an_adjustment() -> None:
     after: FuturesQuote = make_quote(date=datetime.date(2024, 8, 23))
 
     # 800,000 ÷ 265,000 = 3 口；800,000 ÷ 292,000 = 2 口
-    assert strategy.calculate_max_lots(before) == 3
-    assert strategy.calculate_max_lots(after) == 2
+    assert lots_for(strategy, before) == 3
+    assert lots_for(strategy, after) == 2
 
 
 def test_floating_profit_supports_more_lots() -> None:
@@ -212,11 +232,11 @@ def test_floating_profit_supports_more_lots() -> None:
     strategy.max_capital_usage = 1.0
 
     position: FuturesPosition = manager.open_position(make_order(volume=1))
-    lots_before: int = strategy.calculate_max_lots(make_quote())
+    lots_before: int = lots_for(strategy, make_quote())
 
     # 一天大賺 1,000 點：(19000 − 18000) × 200 = 200,000 進帳戶
     manager.settle_daily(position, 19000.0)
-    lots_after: int = strategy.calculate_max_lots(make_quote(close=19000.0))
+    lots_after: int = lots_for(strategy, make_quote(close=19000.0))
 
     assert manager.account.balance == INIT_CAPITAL - 200000 + 200000
     assert lots_after == lots_before + 1

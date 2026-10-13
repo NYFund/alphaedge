@@ -283,7 +283,7 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 | 與股票策略的差異 | 基底提供的東西 |
 |------------------|----------------|
 | **一天不只一個報價**（多個到期月） | `select_near_month()`；換月規則由 `roll_config` 決定，要別的政策就覆寫它 |
-| **口數由保證金決定，不是契約價值** | `calculate_max_lots()`；用契約價值會低估可開口數十倍以上 |
+| **口數由保證金決定，不是契約價值** | `MarginSizer`（每口需要的資金 ＝ 原始保證金 ＋ 開倉手續費與稅，保證金取自與部位管理層共用的 `FuturesMarginModel`）；用契約價值會低估可開口數十倍以上 |
 | **日盤與夜盤是兩筆獨立行情** | `filter_session()`；不過濾會讓訊號被算兩次 |
 | 需要知道離到期還有幾天 | `calendar`、`get_trading_days_to_expiry()` |
 | 沒有券源／借券費／平盤下限制 | `BaseStockStrategy` 的那一整組欄位不存在 |

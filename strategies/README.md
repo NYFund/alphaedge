@@ -485,9 +485,12 @@ def make_portfolio_constructor(self) -> StockPortfolioConstructor:
 > `super().__init__()` **之後**才填的，期貨的 `margin_config` 更是由 factory 在策略
 > 建構完成後才注入——存起來會永遠讀到舊值，而症狀是部位大小整段偏掉，不會報錯。
 
-**期貨走的是保證金約束，不是資金切分**：`FuturesPortfolioConstructor` 以
-「可動用餘額 × `max_capital_usage` ÷ 每口保證金」算可開口數，再與 `max_lots` 取小值。
-拿契約價值去除餘額會嚴重低估（TX 一口契約價值 900 萬、保證金只有 70 萬）。
+**期貨走的是保證金約束，不是資金切分**：預設的 `MarginSizer(max_lots, max_capital_usage)`
+以「可動用餘額 × `max_capital_usage` ÷ 每口需要的資金（原始保證金 ＋ 開倉手續費與稅）」
+算可開口數，再與剩餘口數取小值；`max_lots`／`max_capital_usage` 照常在策略上設定，
+要自訂演算法才覆寫 `self.sizer`。每口保證金由 `FuturesMarginModel` 查表，與部位管理層
+是同一個實例（個股期貨走比例表也查得到）。拿契約價值去除餘額會嚴重低估
+（TX 一口契約價值 900 萬、保證金只有 70 萬）。
 
 > **⚠️ `max_holdings` 另有引擎側硬上限**：即使策略回傳超額開倉單，引擎也會剔除超出
 > `max_holdings` 的部分並計數，所以 `max_holdings` 是真正的硬上限而非建議值。

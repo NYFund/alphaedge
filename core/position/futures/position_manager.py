@@ -5,6 +5,7 @@ from loguru import logger
 
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.models import (
     FuturesAccount,
     FuturesOrder,
@@ -48,14 +49,17 @@ class FuturesPositionManager(BasePositionManager):
             Callable[[str, datetime.date], Optional[float]]
         ] = None,
         event_counts: Optional[Dict[str, int]] = None,
+        margin_model: Optional[FuturesMarginModel] = None,
     ) -> None:
         super().__init__(account, event_counts)
         self.account: FuturesAccount = account
         # 成本一律走 CostModel（與 `StockPositionManager` 同一種接法）：
         # 本層只決定「什麼時候收」，費率與公式全在 model，兩處各算一份必然漂移
         self.cost_model: TwFuturesCostModel = cost_model or TwFuturesCostModel()
-        self.margin_config: FuturesMarginConfig = (
-            margin_config or FuturesMarginConfig.default()
+        # 保證金查表同理只有一份：factory 把同一個 `FuturesMarginModel` 交給本層與
+        # 部位建構層，可開口數與應繳保證金才會是同一個數字；未注入時自己建一個
+        self.margin_model: FuturesMarginModel = margin_model or FuturesMarginModel(
+            margin_config or FuturesMarginConfig.default(), underlying_price_resolver
         )
 
         # 乘數解析器，由 DataFeed 注入（見 `get_multiplier()`）。
@@ -65,17 +69,23 @@ class FuturesPositionManager(BasePositionManager):
             multiplier_resolver
         )
 
-        # 股期保證金要用**標的證券**的價格，而它在 `tw_stock.db`（另一個 DB 檔）。
-        # 同樣由 DataFeed 注入：連線一律由 DataFeed 持有，本層不自行開連線
-        self.underlying_price_resolver: Optional[
-            Callable[[str, datetime.date], Optional[float]]
-        ] = underlying_price_resolver
-
     @property
     def cost_config(self) -> FuturesCostConfig:
         """費率設定；唯一來源是 `cost_model.config`"""
 
         return self.cost_model.config
+
+    @property
+    def margin_config(self) -> FuturesMarginConfig:
+        """保證金設定；唯一來源是 `margin_model.config`"""
+
+        return self.margin_model.config
+
+    @margin_config.setter
+    def margin_config(self, config: FuturesMarginConfig) -> None:
+        """換設定就是換模型的設定：建構後改成比率模式時模型要跟著變，否則兩邊各一份"""
+
+        self.margin_model.config = config
 
     def setup(self, *args, **kwargs) -> None:
         """Set Up the Config of Futures Position Manager"""
@@ -160,37 +170,10 @@ class FuturesPositionManager(BasePositionManager):
                 查表模式下查不到該商品在該日期的保證金
         """
 
-        if self.margin_config.api is None:
-            contract_value: float = self.calculate_contract_value(
-                price, volume, multiplier
-            )
-            return contract_value * self.margin_config.initial_margin_ratio
-
-        if product is None or date is None:
-            raise ValueError("查表模式必須提供 product 與 date——保證金隨商品與日期變動")
-
-        query_date: datetime.date = TimeUtils.to_date(date)
-
-        per_lot: Optional[float] = self.margin_config.api.get_initial_margin(
-            product,
-            query_date,
-            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        per_lot: float = self.margin_model.initial_margin_per_lot(
+            product, date, price, multiplier
         )
-
-        if per_lot is None:
-            per_lot = self.calculate_stock_futures_margin(product, query_date)
-
-        if per_lot is None:
-            covered = self.margin_config.api.get_covered_date_range(product)
-            raise ValueError(
-                f"查無 {product} 在 {date} 生效的保證金"
-                f"（金額表涵蓋 {covered}，比例表也查不到）。"
-                f"**刻意不退回近似值**：靜默套一個比率會讓資金效率與可開口數"
-                f"整段偏掉卻毫無徵兆。保證金資料只回溯到 2020-03，"
-                f"要回測更早的期間請明確改用 `FuturesMarginConfig.ratio()`"
-            )
-
-        return float(per_lot * volume)
+        return per_lot * volume
 
     def calculate_opening_requirement(
         self,
@@ -253,23 +236,8 @@ class FuturesPositionManager(BasePositionManager):
                 每口保證金；比例、契約單位或標的股價任一查不到時為 None
         """
 
-        if self.underlying_price_resolver is None:
-            return None
-
-        price: Optional[float] = self.underlying_price_resolver(product, date)
-        if not price:
-            return None
-
-        calculate = (
-            self.margin_config.api.calculate_stock_futures_maintenance_margin
-            if maintenance
-            else self.margin_config.api.calculate_stock_futures_margin
-        )
-        return calculate(
-            product,
-            date,
-            price,
-            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        return self.margin_model.stock_futures_margin_per_lot(
+            product, date, maintenance=maintenance
         )
 
     def calculate_maintenance_margin(
@@ -301,18 +269,9 @@ class FuturesPositionManager(BasePositionManager):
         if self.margin_config.api is None or date is None:
             return position.margin
 
-        query_date: datetime.date = TimeUtils.to_date(date)
-
-        per_lot: Optional[float] = self.margin_config.api.get_maintenance_margin(
-            position.product,
-            query_date,
-            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        per_lot: Optional[float] = self.margin_model.maintenance_margin_per_lot(
+            position.product, date
         )
-
-        if per_lot is None:
-            per_lot = self.calculate_stock_futures_margin(
-                position.product, query_date, maintenance=True
-            )
 
         if per_lot is None:
             logger.warning(
