@@ -118,6 +118,10 @@ class StrategyContext:
     # 執行層：把執行方式換成券商委託。換算規則是市場特性（集合競價的時段、
     # 連續交易時段的保護方式），故由外部注入；未注入時本策略的委託一律不送
     execution_model: Optional[BaseExecutionModel] = None
+    # 本段落餵給策略的報價：symbol → 最新成交價（盤前段為參考價）。
+    # 風控的決策價偏離檢查拿它當市場基準；策略決定要買 108 時，市場在 100 還是 107
+    # 只有這份報價知道。每個段落重取，不跨段落沿用
+    quote_prices: Dict[str, float] = field(default_factory=dict)
 
     @property
     def name(self) -> str:
@@ -819,6 +823,8 @@ class LiveTrader:
             return
 
         try:
+            # 逐筆只更新這一檔的市場價，其餘標的沿用本段落先前的報價
+            context.quote_prices.update(quote_prices_of([quote]))
             orders: List[BaseOrder] = self._invoke_hooks(
                 context, ExecutionTiming.IMMEDIATE, [quote]
             )
@@ -1119,6 +1125,8 @@ class LiveTrader:
             quotes: List[BaseQuote] = context.data_feed.get_live_quotes(
                 timing, context.symbols
             )
+            # 先記下市場價再呼叫鉤子：鉤子產生的每一張委託都要拿同一份報價當偏離基準
+            context.quote_prices = quote_prices_of(quotes)
             orders: List[BaseOrder] = self._invoke_hooks(context, timing, quotes)
         except Exception as exc:
             self._halt_strategy(context, f"鉤子執行失敗：{exc}")
@@ -1435,7 +1443,7 @@ class LiveTrader:
                 context.name,
                 context.strategy.init_capital,
                 amount,
-                reference_price=self._reference_price(order),
+                reference_price=self._reference_price(context, order),
                 limit_up=limits[0],
                 limit_down=limits[1],
             )
@@ -2380,21 +2388,49 @@ class LiveTrader:
             return self.fetch_account()
         return self.broker.get_account()
 
-    def _reference_price(self, order: BaseOrder) -> float:
+    def _reference_price(self, context: StrategyContext, order: BaseOrder) -> float:
         """
-        風控用的基準價
+        - Description:
+            風控偏離檢查用的**市場**基準價
 
-        取決策價：訊號階段算出來的價格就是這張單的意圖，
-        而基準價偏離檢查要擋的是「意圖與市場差太多」。**不可取委託價**——
-        執行層改寫過之後，集合競價的 `MARKET` 買單委託價是漲停價，拿它當基準
-        只會讓偏離檢查擋下每一張要成交的單。真正的市場基準價要由
-        資料源在報價上帶過來，目前尚未接上。
+            偏離檢查比的是「策略的決策價離市場多遠」，基準必須是市場價，不能是這張單
+            自己的任何價：拿決策價當基準是自己比自己、偏離恆為 0，檢查形同不存在；
+            拿委託價更不行——集合競價的 `MARKET` 買單委託價是漲停價，每一張要成交的單
+            都會被擋下。
+
+            來源依序：本段落餵給策略的報價（尾盤段是 13:20 快照的成交價、盤前段是參考價）
+            → 券商合約的參考價（系統委託沒有報價時的退路）。**都取不到就放行並記 WARN**：
+            資料源缺一檔報價不該讓那一檔的出場送不出去，但要留下「這張單沒檢查到」的紀錄。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡（持有本段落的報價）
+            - order: BaseOrder
+                待檢查的委託
+        - Return:
+            - float
+                市場基準價；取不到為 0（`check_price_deviation()` 對 0 放行）
         """
 
-        decision: Optional[float] = getattr(order, "decision_price", None)
-        if decision is not None:
-            return float(decision)
-        return float(getattr(order, "price", 0.0) or 0.0)
+        price: Optional[float] = context.quote_prices.get(order.symbol)
+        if price is None or price <= 0:
+            price = context.data_feed.get_reference_price(order.symbol)
+        if price is not None and price > 0:
+            return float(price)
+
+        message: str = (
+            f"{order.symbol} 取不到市場基準價（本段落報價與合約參考價皆無），"
+            "本張決策價偏離檢查放行"
+        )
+        logger.warning(f"[Risk] {context.name}：{message}")
+        self.events.write(
+            category="REFERENCE_PRICE_MISSING",
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        return 0.0
 
     def _halt_strategy(self, context: StrategyContext, reason: str) -> None:
         """
@@ -2442,6 +2478,25 @@ class LiveTrader:
         if window is None:
             return False
         return self._now().time() >= getattr(window, attribute)
+
+
+def quote_prices_of(quotes: Sequence[BaseQuote]) -> Dict[str, float]:
+    """
+    報價 → `symbol → 市場價`；沒有正的價格的報價略過
+
+    先取 `cur_price`（最新成交價），沒有才退回 `close`：尾盤段的快照兩者相同，
+    盤前段的參考價報價只填其中一邊。0 或負值不算價格，留著會讓偏離檢查除以 0
+    或把「沒有報價」當成真實價格。
+    """
+
+    prices: Dict[str, float] = {}
+    for quote in quotes:
+        price: float = float(getattr(quote, "cur_price", 0.0) or 0.0)
+        if price <= 0:
+            price = float(getattr(quote, "close", 0.0) or 0.0)
+        if price > 0 and quote.symbol:
+            prices[quote.symbol] = price
+    return prices
 
 
 def mark_execution(
