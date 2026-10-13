@@ -5,7 +5,7 @@
 - **背景／問題**：台股 tick 原本（**main 上至今仍是**）的流程是：Shioaji 爬取 → `data/downloads/tw_stock/tick/{stock_id}.csv` → `loadTextEx` 寫入 DolphinDB（`dfs://tickDB`，TSDB 引擎）→ 回測用 `StockTickAPI` 以 DolphinDB script 查詢。DolphinDB 放在另一台 Windows 主機，2026-09-14 已裁示往後不再使用（台股 tick 不回補、期貨 tick 不做）。於是 main 上的 tick 級回測**沒有可用的資料源**。
   **2026-10-09 使用者把完整歷史 CSV 補回本機**（1,856 檔、56 GB、2020-04-01～2024-05-10、約 10.6 億列，曾放 `data/tick_history/`；全量匯入並比對通過後，2026-10-10 依使用者指示刪除本機這份），並確認**這批就是要入庫的全部資料**；
   **Google 雲端仍保有同一份**，本機這份不是唯一備份。原本那 541 檔（2024-05-13～05-15）已不存在，資料庫的歷史止於 2024-05-10。全量盤點結果見〈CSV 樣式〉與 Phase4-1 的盤點紀錄。
-- **目前狀態（2026-10-10）**：**16 步全數在 `feature/tick-timescaledb` 完成，尚未 merge 進 main**。該分支從 `feature/post-rehearsal` 分出，要等後者在模擬演練結束後部署進 main 才能合併；合併前 main 仍是 DolphinDB 程式。合併與部署時剩下的收尾見下方〈現況與合併部署〉。
+- **目前狀態（2026-10-12）**：**原規劃 16 步全數在 `feature/tick-timescaledb` 完成，尚未 merge 進 main**；另有 2026-10-12 健檢立項的 Phase5-4、Phase5-5（P2，⬜）待做。該分支從 `feature/post-rehearsal` 分出，要等後者在模擬演練結束後部署進 main 才能合併；合併前 main 仍是 DolphinDB 程式。合併與部署時剩下的收尾見下方〈現況與合併部署〉。
 - **目標**：落地目標改成 TimescaleDB（PostgreSQL extension）：
   - 寫入路徑改用 `COPY`，以「股票 × 交易日」為單位做到冪等寫入。
   - 讀取路徑改用 ConnectorX 直接產生 pandas DataFrame。
@@ -54,7 +54,7 @@
 
 ## 進度追蹤表
 
-全部步驟都在 `feature/tick-timescaledb` 完成、**尚未 merge 進 main**；「備註」欄只留結論，細節與偏離原規格的理由在各步驟的實作紀錄。
+原規劃的 16 步都在 `feature/tick-timescaledb` 完成、**尚未 merge 進 main**；Phase5-4、Phase5-5 是 2026-10-12 健檢立項的 P2（⬜）。「備註」欄只留結論，細節與偏離原規格的理由在各步驟的實作紀錄。
 
 | 編號 | 步驟名稱 | 產出檔案 | 驗證方式 | 狀態 | 備註／中斷點 |
 |------|----------|----------|----------|:----:|--------------|
@@ -74,6 +74,8 @@
 | Phase5-1 | 測試改寫與新增 | `tests/test_api_public_interfaces.py`、`tests/test_strategy_data_access.py`、`tests/test_entrypoint_and_logging.py`、`tests/test_stock_tick_timescale.py` | `pytest` 全數通過；無 DB 的環境整合測試自動 skip | ✅ | 2026-10-09（分散在 `b4ad012`～`a288df4`）：最後兩條 `TICK_DB_PATH` 測試隨 Phase5-2 刪除 |
 | Phase5-2 | 移除台股 tick 的 DolphinDB 程式與設定 | 見步驟詳述 | `grep -rn "dolphindb\|DDB_" core/api core/pipeline/tw/*/stock_tick* apps` 無結果 | ✅ | 2026-10-09（`a288df4`，期貨 tick 選項 A）：台股與期貨 tick 的 DolphinDB 程式、設定、extra 全數移除；沒等 Phase4-3（偏離原規格）；本機資料留到合併部署時刪 |
 | Phase5-3 | 更新文件 | `README.md`、`README_en.md`、`docs/` 相關頁、`core/backtest/README.md`、`strategies/README.md` | 文件中不再描述 tick 存在 DolphinDB | ✅ | 2026-10-09（`a288df4`）：16 份文件改完，`etl-ingestion.md` 新增 tick 小節（含 schema 設計理由） |
+| Phase5-4 | `get_chunk_ranges()` 的 chunk 邊界改以 `AT TIME ZONE 'UTC'` 取值 | `core/dao/tw/stock_tick_dao.py`、`tests/test_stock_tick_timescale.py` | 整合測試：連線 `SET timezone = 'Asia/Taipei'` 後 `get_chunk_ranges()` 回傳的邊界與 UTC 下相同 | ⬜ | 2026-10-12 健檢立項（P2）：`timestamptz` 去時區依賴 session TimeZone，實測 UTC 得 `00:00`、Asia/Taipei 得 `08:00`；目前映像預設 UTC 所以結果正確，只有歷史匯入腳本用到 |
+| Phase5-5 | CI 加 TimescaleDB service，讓整合測試在 CI 執行 | `.github/workflows/ci.yml` | CI 的 pytest 輸出裡 `tests/test_stock_tick_timescale.py` 為 passed 而非 skipped | ⬜ | 2026-10-12 健檢立項（P2）：23 條整合測試在 CI 整個模組 skip，整條 tick 寫入／讀取路徑在 CI 沒有護欄；專案自己的原則是「skip 不算通過」（`scripts/run_regression.sh`） |
 
 ---
 
@@ -733,6 +735,38 @@ CREATE TABLE IF NOT EXISTS stock_tick_load_log (
   寫入與排除規則、續跑、讀取與歷史匯入。`dolphindb` 移除後 `uv sync --all-extras` 恢復可用，README 與 dev-setup 一併改回。
   驗證：`grep -rni dolphin` 只剩 etl-ingestion 的〈與 DolphinDB 版的語意差異〉與期貨平台文件的「已移除」說明。
 - **相依**：Phase5-2。
+
+### Phase5-4. `get_chunk_ranges()` 的 chunk 邊界改以 `AT TIME ZONE 'UTC'` 取值 ⬜
+
+- **目的**：`StockTickDAO.get_chunk_ranges()` 讀 `timescaledb_information.chunks` 的 `range_start`／`range_end`
+  後直接 `.replace(tzinfo=None)`。`stock_tick.time` 是不帶時區的 `TIMESTAMP`，TimescaleDB 把它的 chunk 邊界以
+  `timestamptz` 呈現，**顯示值隨 session 的 TimeZone 轉換**：2026-10-12 對正在跑的容器實測，預設 TimeZone 為 UTC 時
+  首個 chunk 顯示 `2020-03-26 00:00:00+00`，`SET timezone = 'Asia/Taipei'` 後同一列顯示 `2020-03-26 08:00:00+08`——
+  去掉時區就變成 `08:00`，與資料的台北當地時間相差 8 小時。任何人以 `PGTZ=Asia/Taipei` 或連線字串帶 `timezone`
+  連上去跑歷史匯入，chunk 邊界核對（`check_chunk_boundary()`）與「14 天前的 chunk 是否都已壓縮」（比對 5）會整組偏移。
+  `docker-compose.yml` 沒有釘 TZ，現在正確只是靠映像預設。
+- **做法**：查詢改成 `SELECT range_start AT TIME ZONE 'UTC', range_end AT TIME ZONE 'UTC', is_compressed`，
+  `timestamptz AT TIME ZONE 'UTC'` 回傳不帶時區的 UTC 牆上時間，與 session 設定無關，正好就是 `TIMESTAMP` 欄的邊界值；
+  Python 端不再 `replace(tzinfo=None)`。
+- **產出**：`core/dao/tw/stock_tick_dao.py`、`tests/test_stock_tick_timescale.py`（新增一條：同一個 DAO 連線
+  `SET timezone = 'Asia/Taipei'` 前後 `get_chunk_ranges()` 結果相同，並等於 `show_chunks()` 的範圍）。
+- **驗證方式**：上述整合測試在 UTC 與 Asia/Taipei 兩種 session 設定下都通過；`manual_tick_history_import.py --verify-only` 的比對 5 結果不變。
+- **相依**：無。只動歷史匯入用到的查詢，日常更新與回測讀取不經過它；合併前後做都可以。
+
+### Phase5-5. CI 加 TimescaleDB service，讓整合測試在 CI 執行 ⬜
+
+- **目的**：`tests/test_stock_tick_timescale.py` 的 23 條整合測試（建表冪等、整天重寫、`load_log`、續跑、
+  讀取排序與 dtype 契約、DataFeed、匯入腳本端到端）在未設 `TICK_DATABASE_URL` 時整個模組 skip，CI 照樣全綠；
+  之後任何人改壞 DAO 或 API，只有本機開著 Docker 的人會發現。Phase5-1 把「CI 在沒有 DB 的機器上照常通過」
+  當成目的是當時的取捨；專案在 `scripts/run_regression.sh` 寫的原則是「skip 不算通過」，整條 tick 寫入／讀取路徑
+  不該是例外。
+- **做法**：`.github/workflows/ci.yml` 的測試 job 加 `services: postgres`（`timescale/timescaledb:2.29.2-pg17`，
+  與 `docker-compose.yml` 同版；帳密與資料庫名沿用 `alphaedge`），`env` 設 `TICK_DATABASE_URL=postgresql://alphaedge:alphaedge@localhost:5432/alphaedge`，
+  並以 `options: --health-cmd pg_isready` 等待就緒；pytest 步驟加 `uv sync --extra tick`（或 `--all-extras`，dolphindb 已移除、不再撞名）。
+  測試已各自用暫存 schema，不需要額外清理。
+- **產出**：`.github/workflows/ci.yml`。
+- **驗證方式**：CI 的 pytest 摘要中該檔為 passed（不是 skipped）；刻意把 `TICK_DATABASE_URL` 拿掉時 CI 要紅（護欄要能證明自己活著，不是只在有資料庫時碰巧通過）。
+- **相依**：無；建議與本分支一起合併，否則合併後 CI 對這條路徑仍是盲的。
 
 ---
 
