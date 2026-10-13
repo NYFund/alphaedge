@@ -627,43 +627,6 @@ class LiveTradeDAO(BaseDAO):
         self.conn.commit()
         return cursor.rowcount > 0
 
-    def claim_fill(
-        self,
-        broker_seqno: str,
-        broker_trade_id: str,
-        client_order_id: str,
-        strategy_name: str,
-    ) -> bool:
-        """
-        - Description:
-            把一筆尚未歸屬的成交認領給指定委託；已有歸屬時不動
-
-            股票線與期貨線是兩個行程、登入同一個帳號，券商回呼兩邊都收得到。
-            先收到的若不是送單的那個行程，它只能以空的 `client_order_id` 寫入；
-            擁有者之後再寫同一筆會被主鍵擋掉。**空的歸屬就是「還沒有人把它套進委託」
-            的標記**：認領與判定在同一句 `UPDATE` 裡完成，兩個行程同時認領也只會有一個成功。
-        - Parameters:
-            - broker_seqno: str
-                券商委託序號
-            - broker_trade_id: str
-                券商成交序號
-            - client_order_id: str
-                認領的委託
-            - strategy_name: str
-                認領的策略
-        - Return:
-            - bool
-                True 代表本次認領成功；該列不存在或已有歸屬時為 False
-        """
-
-        cursor: sqlite3.Cursor = self.conn.execute(
-            f"UPDATE {LIVE_FILL_TABLE_NAME} SET client_order_id = ?, strategy_name = ? "
-            "WHERE broker_seqno = ? AND broker_trade_id = ? AND client_order_id IS NULL",
-            (client_order_id, strategy_name, broker_seqno, broker_trade_id),
-        )
-        self.conn.commit()
-        return cursor.rowcount > 0
-
     def backfill_fill_costs(
         self,
         broker_seqno: str,

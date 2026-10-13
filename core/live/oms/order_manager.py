@@ -1,6 +1,6 @@
 import datetime
 import itertools
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set
 
 from loguru import logger
 
@@ -11,7 +11,7 @@ from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
 from core.models import BaseOrder, ExecutionReport, OrderStatusEvent, OrderTicket
-from core.utils import Action, ExecutionStyle, ExecutionTiming, LiveOrderStatus
+from core.utils import ExecutionStyle, ExecutionTiming, LiveOrderStatus
 
 """
 OrderManager：委託狀態機、送單、回報消化與重啟接管
@@ -392,111 +392,46 @@ class OrderManager:
         return None
 
     def _apply_fill(self, report: ExecutionReport) -> bool:
-        """
-        - Description:
-            把一筆成交套進對應的委託
-
-            **寫入被主鍵擋掉不一定是重複回報**：另一個行程可能先收到同一筆、
-            以空的歸屬寫進去了。這時要認領那一列並照常套進委託；只有該列
-            已經有歸屬，才是真正處理過的重複。否則先收到回呼的行程就佔走成交，
-            擁有者的委託永遠停在送出狀態，盤後還會對已經平掉的部位排補平。
-        - Parameters:
-            - report: ExecutionReport
-                成交回報
-        - Return:
-            - bool
-                True 代表這筆成交由本行程套進了委託，要交給帳戶同步
-        """
+        """把一筆成交套進對應的委託；找不到委託時記事件但仍保留成交"""
 
         ticket: Optional[OrderTicket] = self._find_by_seqno(report.broker_seqno)
         if ticket is None:
-            return self._record_fill_without_ticket(report)
-
-        is_new: bool = self.dao.insert_fill(self._fill_row(report, ticket))
-        if not is_new:
-            is_new = self.dao.claim_fill(
-                report.broker_seqno,
-                report.broker_trade_id,
-                ticket.client_order_id,
-                ticket.strategy_name,
+            self._write_risk_event(
+                "FILL_UNMATCHED",
+                f"成交回報找不到對應委託（seqno={report.broker_seqno}）；"
+                "該筆成交仍會寫入，但無法歸屬到策略",
+                None,
             )
-        if is_new:
-            self._apply_to_ticket(ticket, report)
+
+        filled: int = (ticket.filled_volume if ticket else 0) + report.volume
+        is_new: bool = self.dao.insert_fill(
+            {
+                "broker_seqno": report.broker_seqno,
+                "broker_trade_id": report.broker_trade_id,
+                "client_order_id": ticket.client_order_id if ticket else None,
+                "strategy_name": ticket.strategy_name if ticket else None,
+                "symbol": report.symbol,
+                "action": report.action.value,
+                "price": report.price,
+                "volume": report.volume,
+                "filled_at": report.ts,
+                "raw_json": str(report.raw),
+            }
+        )
+
+        if ticket is not None and is_new:
+            self._update_average_price(ticket, report)
+            ticket.filled_volume = filled
+            if ticket.is_terminal and ticket.status is not LiveOrderStatus.FILLED:
+                self._record_fill_after_terminal(ticket)
+            else:
+                target: LiveOrderStatus = (
+                    LiveOrderStatus.FILLED
+                    if ticket.order is not None and filled >= ticket.order.volume
+                    else LiveOrderStatus.PARTIALLY_FILLED
+                )
+                self.transition(ticket, target, op_type="fill")
         return is_new
-
-    def _record_fill_without_ticket(self, report: ExecutionReport) -> bool:
-        """
-        - Description:
-            本行程找不到委託的成交：照樣寫入，但不歸屬
-
-            **另一個行程的委託不算未歸屬**：兩個行程同收一筆回呼是常態，
-            這裡寫事件的話，每一筆對方的成交都會多一則 CRITICAL。
-            寫入時歸屬留空，讓擁有者收到同一筆時認領（見 `_apply_fill()`），
-            擁有者漏接時由盤後的 `claim_unattributed_fills()` 補上。
-            回傳 False：那不是本行程的成交，不交給本行程的帳戶同步。
-        - Parameters:
-            - report: ExecutionReport
-                成交回報
-        - Return:
-            - bool
-                True 代表這是新寫入、且不屬於任何已知委託的成交
-        """
-
-        owner: Optional[str] = self.dao.find_strategy_by_broker_seqno(
-            report.broker_seqno
-        )
-        if owner is not None and not self._is_own_strategy(owner):
-            self.dao.insert_fill(self._fill_row(report, None))
-            return False
-
-        self._write_risk_event(
-            "FILL_UNMATCHED",
-            f"成交回報找不到對應委託（seqno={report.broker_seqno}）；"
-            "該筆成交仍會寫入，但無法歸屬到策略",
-            None,
-        )
-        return self.dao.insert_fill(self._fill_row(report, None))
-
-    def _is_own_strategy(self, strategy_name: str) -> bool:
-        """這支策略是否由本行程負責；未限定策略時一律視為本行程的"""
-
-        return self.strategy_names is None or strategy_name in self.strategy_names
-
-    @staticmethod
-    def _fill_row(
-        report: ExecutionReport, ticket: Optional[OrderTicket]
-    ) -> Dict[str, Any]:
-        """成交回報 → `live_fill` 的一列；沒有委託時歸屬留空"""
-
-        return {
-            "broker_seqno": report.broker_seqno,
-            "broker_trade_id": report.broker_trade_id,
-            "client_order_id": ticket.client_order_id if ticket else None,
-            "strategy_name": ticket.strategy_name if ticket else None,
-            "symbol": report.symbol,
-            "action": report.action.value,
-            "price": report.price,
-            "volume": report.volume,
-            "filled_at": report.ts,
-            "raw_json": str(report.raw),
-        }
-
-    def _apply_to_ticket(self, ticket: OrderTicket, report: ExecutionReport) -> None:
-        """累加成交量與均價並推進狀態；已終結的委託成交照收、狀態不動"""
-
-        filled: int = ticket.filled_volume + report.volume
-        self._update_average_price(ticket, report)
-        ticket.filled_volume = filled
-        if ticket.is_terminal and ticket.status is not LiveOrderStatus.FILLED:
-            self._record_fill_after_terminal(ticket)
-            return
-
-        target: LiveOrderStatus = (
-            LiveOrderStatus.FILLED
-            if ticket.order is not None and filled >= ticket.order.volume
-            else LiveOrderStatus.PARTIALLY_FILLED
-        )
-        self.transition(ticket, target, op_type="fill")
 
     def _record_fill_after_terminal(self, ticket: OrderTicket) -> None:
         """
@@ -644,78 +579,6 @@ class OrderManager:
                 logger.warning(f"刷新狀態與本地矛盾，已跳過本筆：{exc}")
 
         return broker_tickets
-
-    def claim_unattributed_fills(
-        self, run_date: datetime.date
-    ) -> List[Tuple[str, ExecutionReport]]:
-        """
-        - Description:
-            盤後認領本行程委託名下、還沒有歸屬的成交，並套回委託
-
-            段落中擁有者收到回呼時會自己認領（見 `_apply_fill()`）；這裡是保險絲，
-            接住擁有者整筆漏接的情況——回報只被另一個行程收到、或擁有者的段落已經結束。
-            **要排在日終失效與殘量處理之前**：否則已成交的出場單會被標成未成交，
-            隔天對已經平掉的部位再送一次平倉，那是把部位做反。
-            每認領一筆寫一則事件：它代表段落中那筆成交沒有進帳，事後要查得到。
-        - Parameters:
-            - run_date: datetime.date
-                交易日
-        - Return:
-            - List[Tuple[str, ExecutionReport]]
-                `(策略名, 成交)`，交給帳戶同步補進歸屬帳
-        """
-
-        claimed: List[Tuple[str, ExecutionReport]] = []
-        for row in self._own_rows(self.dao.get_orders_by_date(run_date)):
-            broker_seqno: str = str(row.get("broker_seqno") or "")
-            if not broker_seqno:
-                continue
-
-            client_order_id: str = str(row["client_order_id"])
-            strategy_name: str = str(row["strategy_name"])
-            for fill in self.dao.get_fills_by_seqno(broker_seqno):
-                if fill.get("client_order_id") is not None:
-                    continue
-                if not self.dao.claim_fill(
-                    broker_seqno,
-                    str(fill["broker_trade_id"]),
-                    client_order_id,
-                    strategy_name,
-                ):
-                    continue
-
-                ticket: Optional[OrderTicket] = self.tickets.get(client_order_id)
-                if ticket is None:
-                    ticket = self._rebuild_ticket(row)
-                    self.tickets[client_order_id] = ticket
-
-                report: ExecutionReport = self._fill_to_report(fill)
-                try:
-                    self._apply_to_ticket(ticket, report)
-                except OrderStateError as exc:
-                    logger.warning(f"盤後認領的成交與本地狀態矛盾，已跳過本筆：{exc}")
-                self._write_risk_event(
-                    "FILL_CLAIMED_AFTER_CLOSE",
-                    f"委託 {client_order_id} 的成交（trade={fill['broker_trade_id']}，"
-                    f"{report.symbol} {report.volume}）段落中沒有進帳，盤後補認領",
-                    ticket,
-                )
-                claimed.append((strategy_name, report))
-
-        return claimed
-
-    def _fill_to_report(self, fill: Dict[str, Any]) -> ExecutionReport:
-        """`live_fill` 的一列 → 成交回報"""
-
-        return ExecutionReport(
-            broker_seqno=str(fill["broker_seqno"]),
-            broker_trade_id=str(fill["broker_trade_id"]),
-            symbol=str(fill["symbol"]),
-            action=Action(str(fill["action"])),
-            price=float(fill["price"]),
-            volume=int(fill["volume"]),
-            ts=self._parse_time(fill.get("filled_at")),
-        )
 
     def expire_unfinished(self, run_date: datetime.date) -> List[OrderTicket]:
         """

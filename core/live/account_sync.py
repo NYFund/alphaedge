@@ -160,30 +160,6 @@ class AccountSynchronizer:
 
         return name
 
-    def apply_fill_to_ledger(self, report: ExecutionReport, strategy_name: str) -> None:
-        """
-        - Description:
-            只把一筆成交補進歸屬帳，不動記帳 model
-
-            給盤後補認領的成交用：盤後行程的記帳 model 隨後由
-            `rebuild_from_broker()` 以歸屬帳整份重建，這裡再記一次帳會重複。
-            **一定要排在重建之前**：重建會把券商多出來的量收進 `__unattributed__`，
-            先重建的話，這筆成交就變成同一標的兩個持有者。
-        - Parameters:
-            - report: ExecutionReport
-                成交回報
-            - strategy_name: str
-                歸屬策略
-        """
-
-        direction: PositionType = self._resolve_direction(strategy_name, report)
-        if report.action is resolve_close_action(direction):
-            self.ledger.close_lots(
-                strategy_name, report.symbol, report.volume, direction
-            )
-        else:
-            self.ledger.open_lot(strategy_name, report, direction)
-
     def _resolve_strategy(self, report: ExecutionReport) -> Optional[str]:
         """由委託序號反查策略；查不到回 None"""
 

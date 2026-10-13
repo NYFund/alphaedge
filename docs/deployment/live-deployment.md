@@ -116,9 +116,8 @@ CRON_TZ=Asia/Taipei
 uv run --no-sync python -m apps.live --strategy <策略> --resync-from-broker
 # 2. 看過計畫後才寫入
 uv run --no-sync python -m apps.live --strategy <策略> --resync-from-broker --confirm-resync
-# 3. 確認重建結果無誤後，另外解除降級（--resume-trading 要搭配段落；
-#    非交易時段用 after_close：不送新倉單，並在恢復後重新對帳一次）
-uv run --no-sync python -m apps.live --strategy <策略> --phase after_close --resume-trading
+# 3. 確認重建結果無誤後，另外解除降級
+uv run --no-sync python -m apps.live --strategy <策略> --resume-trading
 ```
 
 計畫沒有任何異動時不回 7，而是照一般段落的規則決定退出碼（例如帳戶層仍降級時回 6）。
