@@ -39,6 +39,9 @@ services:
     # **不可換成 `-oss` 結尾的 tag**：那是只含 Apache 授權功能的版本，沒有壓縮
     image: timescale/timescaledb:2.29.2-pg17
     container_name: alphaedge-postgres
+    # 常駐服務：Docker Desktop 重啟後要自己起來，否則 tick 更新與整合測試會以連不上收場；
+    # 手動 `docker stop` 的則維持停止
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-alphaedge}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-alphaedge}
