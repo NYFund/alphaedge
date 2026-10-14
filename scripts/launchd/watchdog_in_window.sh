@@ -11,5 +11,10 @@ if [ "$now" -lt 0800 ] || [ "$now" -ge 1500 ]; then
 fi
 
 cd "$(dirname "$0")/../.." || exit 1
-# 帶 --no-sync 的理由同 rehearsal_schedule.py 的 _UV_RUN_ARGS：不讓排程依賴網路
-exec "$UV_BIN" run --no-sync python -m scripts.live_watchdog
+# 帶 --no-sync 的理由同 rehearsal_schedule.py 的 _UV_RUN_ARGS：不讓排程依賴網路。
+# 段落表逐市場指定，與 rehearsal_schedule.py 的 _DAILY_JOBS 對齊：股票與期貨是兩個行程、
+# 段落名相同，不帶市場的話股票尾盤的紀錄會把「期貨尾盤沒跑」遮住
+exec "$UV_BIN" run --no-sync python -m scripts.live_watchdog --expect \
+    open:stock=08:30 open:futures=08:40 intraday:stock=09:06 \
+    close:stock=13:20 close:futures=13:28 \
+    after_close:stock=14:30 after_close:futures=14:35

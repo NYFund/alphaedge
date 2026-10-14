@@ -384,8 +384,9 @@ def make_row(
     started_at: Optional[str] = "2026-09-21 08:30:00",
     ended_at: Optional[str] = "2026-09-21 09:05:00",
     end_reason: Optional[str] = "正常結束",
+    instrument_type: Optional[str] = None,
 ) -> Tuple[Any, ...]:
-    return (phase, started_at, ended_at, end_reason)
+    return (phase, started_at, ended_at, end_reason, instrument_type)
 
 
 def test_missing_phase_is_detected() -> None:
@@ -543,9 +544,89 @@ def test_expect_argument_parsing() -> None:
 
     assert parse_expected(["open=08:30"]) == {"open": datetime.time(8, 30)}
     assert parse_expected(None)  # 預設表
+    assert parse_expected(["close:Futures=13:28"]) == {
+        "close:futures": datetime.time(13, 28)
+    }
 
     with pytest.raises(ValueError):
         parse_expected(["open 08:30"])
+    # 市場字樣打錯要當場拋出：那個鍵永遠比不到任何紀錄、每天都告警，然後被靜音
+    with pytest.raises(ValueError):
+        parse_expected(["close:stocks=13:20"])
+
+
+def test_market_specific_key_is_not_satisfied_by_the_other_market() -> None:
+    """
+    股票尾盤跑了、期貨尾盤沒跑 → 要報期貨那一筆
+
+    兩條線是兩個行程、段落名相同；只看段落名的話，股票的紀錄會把期貨沒跑遮住。
+    """
+
+    statuses: List[PhaseStatus] = check_phases(
+        [make_row("close", instrument_type="Stock")],
+        {"close:stock": datetime.time(13, 20), "close:futures": datetime.time(13, 28)},
+        datetime.datetime(2026, 9, 21, 14, 0),
+        grace_minutes=15,
+    )
+
+    by_market = {status.market: status for status in statuses}
+    assert by_market["Stock"].is_healthy is True
+    assert "close:futures" in by_market["Future"].problem
+    assert "沒有任何紀錄" in by_market["Future"].problem
+
+
+def test_phase_only_key_accepts_any_market() -> None:
+    """不帶市場的鍵維持舊語意：該段落任一市場有跑就算"""
+
+    statuses: List[PhaseStatus] = check_phases(
+        [make_row("close", instrument_type="Future")],
+        {"close": datetime.time(13, 20)},
+        datetime.datetime(2026, 9, 21, 14, 0),
+        grace_minutes=15,
+    )
+
+    assert statuses[0].is_healthy is True
+    assert statuses[0].market is None
+
+
+def test_legacy_record_without_market_satisfies_a_market_specific_key() -> None:
+    """
+    欄位後加之前的舊紀錄沒有市場，視為任一市場都算
+
+    舊紀錄補不出內容，拿它們告警只會製造假警報。4 欄的舊形狀同理。
+    """
+
+    statuses: List[PhaseStatus] = check_phases(
+        [("close", "2026-09-21 13:21:00", "2026-09-21 13:30:00", "正常結束")],
+        {"close:futures": datetime.time(13, 28)},
+        datetime.datetime(2026, 9, 21, 14, 0),
+        grace_minutes=15,
+    )
+
+    assert statuses[0].is_healthy is True
+
+
+def test_fetch_runs_returns_the_instrument_type(tmp_path: Path) -> None:
+    """watchdog 讀回的紀錄要帶商品類別，逐市場比對才有依據"""
+
+    path: Path = tmp_path / "tw_trading.db"
+    dao: LiveTradeDAO = LiveTradeDAO(db_path=path)
+    dao.ensure_tables()
+    dao.insert_run(
+        {
+            "run_id": "run-futures",
+            "started_at": "2026-09-21 13:28:00",
+            "phase": "close",
+            "simulation": 1,
+            "instrument_type": "Future",
+        }
+    )
+    dao.conn.commit()
+    dao.close()
+
+    rows: List[Tuple[Any, ...]] = fetch_runs(str(path), TODAY)
+
+    assert rows[0][4] == "Future"
 
 
 def test_watchdog_reads_the_database_read_only(tmp_path: Path) -> None:
