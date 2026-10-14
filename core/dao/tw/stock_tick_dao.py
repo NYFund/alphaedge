@@ -518,21 +518,24 @@ class StockTickDAO:
                 chunk 範圍與壓縮狀態
         """
 
+        # `TIMESTAMP` 欄的 chunk 範圍以 timestamptz 呈現，**顯示值隨 session 的 TimeZone 轉換**：
+        # 以 Asia/Taipei 連線時同一個邊界會顯示成 08:00+08，直接去掉時區就差 8 小時。
+        # `AT TIME ZONE 'UTC'` 在資料庫端換回不帶時區的牆上時間，與 session 設定無關，
+        # 正好就是 `TIMESTAMP` 欄的邊界值
         with self.conn.transaction():
             rows: List[Tuple[Any, ...]] = self.conn.execute(
                 """
-                SELECT range_start, range_end, is_compressed
+                SELECT
+                    range_start AT TIME ZONE 'UTC',
+                    range_end AT TIME ZONE 'UTC',
+                    is_compressed
                 FROM timescaledb_information.chunks
                 WHERE hypertable_schema = %s AND hypertable_name = %s
                 ORDER BY range_start
                 """,
                 (self.schema, self.TABLE_NAME),
             ).fetchall()
-        # `TIMESTAMP` 欄的 chunk 範圍以 UTC 的 timestamptz 呈現，去掉時區才和資料的時間同一基準
-        return [
-            (start.replace(tzinfo=None), end.replace(tzinfo=None), compressed)
-            for start, end, compressed in rows
-        ]
+        return [(start, end, compressed) for start, end, compressed in rows]
 
     # === 內部 ===
     def _empty_result(self) -> pd.DataFrame:

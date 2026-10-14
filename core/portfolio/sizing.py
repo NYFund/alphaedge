@@ -72,7 +72,7 @@ class EqualWeightSizer(BasePositionSizer):
     ```
 
     **`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定
-    LONG 回歸 baseline 的 915 筆結果。
+    LONG 回歸 baseline（VolumeBreakoutMomentumStrategy 2024 全年，1,861 筆）的逐筆結果。
     """
 
     def size(

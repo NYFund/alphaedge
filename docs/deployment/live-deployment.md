@@ -13,6 +13,7 @@
 | 尾盤 | `close` | 期貨先換月 → 收收盤訊號 → 送單 |
 | 盤後 | `after_close` | 以成交明細回填委託與歸屬帳 → 刷新委託、對帳、回填費用、殘量處理、輸出報表 |
 | 盤中 | `intraday` | 逐筆行情驅動，跑到收盤（只有 `is_tick_triggered` 的策略需要） |
+| 補比 | `parity` | 次日資料更新後補比前一交易日的訊號 parity（不連券商、不送單；`--date YYYY-MM-DD` 指定交易日，預設歷史資料最新日），結果寫 `live_parity_diff` 與 `results/live/` |
 
 每個段落各自連線、各自結束，狀態全靠 `data/db/tw_trading.db`（委託、成交、歸屬帳、交易模式）
 在段落之間延續。某一段崩潰不會拖到下一段：下一段啟動時會先把沒有結束紀錄的舊執行標成崩潰、
@@ -72,6 +73,8 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 - `--dry-run`：走完整流程但不真的送出委託。
 - `--broker fake`：測試用的假券商，正式環境一律拒絕（退出碼 2）。
 - `--resume-trading [策略名 ...]`：人工恢復交易模式，不給策略名時恢復帳戶層。
+- `--simulation`（預設）／`--production --confirm-production`：連模擬或正式環境。
+- `--date YYYY-MM-DD`：只與 `--phase parity` 併用，否則退出碼 2。
 - `--resync-from-broker [--confirm-resync]`：以券商部位重建歸屬帳，見第 5 節。
 
 ## 4) 排程
@@ -95,7 +98,7 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  8 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db
+0  6 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db && uv run --no-sync python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase parity
 30 8 * * 1-5  ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
 20 13 * * 1-5 ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase close
@@ -108,8 +111,8 @@ CRON_TZ=Asia/Taipei
 - **排程裡的 `uv run` 一律帶 `--no-sync`**：不帶的話 `uv run` 會先同步環境，`pyproject.toml` 一變動就要連 PyPI 重建；排程時段網路不通時，段落會在進入口之前就失敗。改完相依後手動 `uv sync` 一次即可。
 
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
-- **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商；期貨的尾盤段也要監控時加上 `--expect open=08:30 close=13:28 after_close=14:30`。
-- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`），存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
+- **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商，預設以 `open=08:30 close=13:20 after_close=14:30` 比對，且**只看段落名、不分市場**：股票與期貨同一段落只要有任一筆紀錄就算有跑。期貨尾盤 13:28 才啟動時可帶 `--expect ... close=13:28` 放寬截止，但這不會分別監控兩個市場。
+- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`）；資料更新排在台北 06:00（留時間給 08:30 開盤段），跑完接著對股票與期貨示範策略各跑一次 `--phase parity`，前一步失敗不中斷後面，存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
 ## 5) 對帳不一致後以券商部位重建歸屬帳

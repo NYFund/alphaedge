@@ -44,7 +44,7 @@ A failing target does not stop the others, but the run exits with code 1 at the 
 | `futures_chip` | Futures chips (institutional investors, large traders, option PCR) |
 | `market_holiday` | Market holiday schedule (TWSE announcement; re-fetches last / this / next year every run, written to `tw_stock.db`). Primary source for the live pre-open trading-day check |
 | `all` | All datasets (including tick; excludes `futures_stock_price` and `finmind`) |
-| `no_tick` | All datasets except `tick` (default). Tick needs Shioaji credentials, the `[tick]` extra and a running TimescaleDB; without the exclusion a machine lacking them would exit 1 every night |
+| `no_tick` | All datasets except `tick`, also excluding the explicit-only `futures_stock_price` / `finmind` (default). Tick needs Shioaji credentials, the `[tick]` extra and a running TimescaleDB; without the exclusion a machine lacking them would exit 1 every night |
 
 ### Single Target Examples
 
@@ -103,7 +103,7 @@ python -m apps.update_db --target futures_price
 # The source has no listing / delisting date columns, so both are inferred by diffing
 # snapshots — update daily, the sparser the snapshots the larger the date error.
 # Downstream code must get the product list from
-# FuturesStockUniverseUpdater.get_active_products(), never a hand-written list.
+# FuturesStockUniverseAPI.get_products(), never a hand-written list.
 python -m apps.update_db --target futures_stock_universe
 
 # short-sale-below-reference list and cash day-trading list (already part of all / no_tick; this runs them alone)
@@ -213,7 +213,8 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 | Flag | Description |
 |------|-------------|
 | `--strategy` | Strategy class name; comma-separate several (they share one account; stocks and futures cannot be mixed) |
-| `--phase` | `open` / `close` / `after_close` / `intraday`; required except with `--resync-from-broker` |
+| `--phase` | `open` / `close` / `after_close` / `intraday` / `parity`; required except with `--resync-from-broker`. `parity` re-compares the previous trading day's signal parity after the next-day data update; no broker connection, no orders |
+| `--date YYYY-MM-DD` | Only with `--phase parity`: the trading day to compare, defaults to the latest date in the historical data |
 | `--simulation` / `--production` | Simulation (default) / production; `--production` requires `--confirm-production` |
 | `--broker` | `shioaji` (default) or `fake` (tests only, refused in production) |
 | `--dry-run` | Run the full flow without actually sending orders |
@@ -226,7 +227,7 @@ Live trading **returns 1 only for unexpected exceptions**; every other outcome h
 |:---:|---|
 | 0 | Normal exit |
 | 1 | Unexpected exception |
-| 2 | Usage error: unknown strategy name, missing `--phase`, `--production` without `--confirm-production`, or an invalid flag combination |
+| 2 | Usage error: unknown strategy name, missing `--phase`, `--date` without `--phase parity`, `--production` without `--confirm-production`, or an invalid flag combination |
 | 3 | Data not updated through the previous trading day, or today's trading-day status cannot be determined |
 | 4 | Reconciliation mismatch, or a refused rebuild from broker positions |
 | 5 | Kill switch triggered |
