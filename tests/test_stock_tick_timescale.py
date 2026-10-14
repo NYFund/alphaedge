@@ -10,7 +10,8 @@ import pytest
 """
 台股 tick 的 TimescaleDB 整合測試
 
-**需要真的 TimescaleDB**：未設定 `TICK_DATABASE_URL`（CI、只跑日線的機器）時整個模組 skip。
+**需要真的 TimescaleDB**：未設定 `TICK_DATABASE_URL`（只跑日線的機器）時整個模組 skip。
+CI 以 service 起一個同版的 TimescaleDB，並把「這個檔有任何 skip」當成失敗（見 `.github/workflows/ci.yml`）。
 本機以 `docker compose up -d postgres` 啟動後，設定環境變數再跑：
 
     TICK_DATABASE_URL=postgresql://alphaedge:alphaedge@localhost:5432/alphaedge \\
@@ -155,6 +156,38 @@ def test_compress_chunks_before_compresses_old_chunks(dao: StockTickDAO) -> None
         ).fetchone()[0]
     assert compressed == 1
     assert count == 1
+
+
+@pytest.mark.parametrize("session_timezone", ["UTC", "Asia/Taipei"])
+def test_chunk_ranges_do_not_depend_on_session_timezone(
+    dao: StockTickDAO, session_timezone: str
+) -> None:
+    """
+    chunk 邊界與連線的 TimeZone 無關，而且就是 `TIMESTAMP` 欄的牆上時間
+
+    chunk 範圍以 timestamptz 呈現、顯示值隨 session TimeZone 轉換：以 Asia/Taipei 連線時，
+    直接去掉時區會得到 08:00，匯入腳本的 chunk 邊界核對與「舊 chunk 都已壓縮」的比對整組偏 8 小時。
+    """
+
+    _insert_rows(
+        dao,
+        [
+            ("2330", datetime.datetime(2024, 5, 8, 9, 0, 1), 0)
+            + (800.0, 1, 799.0, 2, 800.0, 3, 1)
+        ],
+    )
+    dao.conn.execute(f"SET timezone = '{session_timezone}'")
+    dao.conn.commit()
+
+    ranges: List[Tuple[datetime.datetime, datetime.datetime, bool]] = (
+        dao.get_chunk_ranges()
+    )
+
+    # 7 天一個 chunk、以 epoch 對齊：2024-05-08 落在 05-02 00:00 起的那一格
+    assert ranges == [
+        (datetime.datetime(2024, 5, 2), datetime.datetime(2024, 5, 9), False)
+    ]
+    assert all(start.tzinfo is None and end.tzinfo is None for start, end, _ in ranges)
 
 
 def test_shared_connection_is_not_closed_by_dao(dao: StockTickDAO) -> None:

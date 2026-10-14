@@ -22,7 +22,7 @@ uv sync --extra frontend
 ```
 
 Docker 映像**不安裝本專案**：只 COPY `frontend/`（前端完全不 import `core`，績效指標一律讀
-reporter 落地的 `<策略>_metrics_summary.csv`），相依一律來自 `frontend/requirements.txt`（streamlit、pandas、plotly）。
+reporter 落地的 `<策略>_metrics_summary.csv`），相依一律來自 `frontend/requirements.txt`（streamlit、pandas、plotly，另釘 urllib3 安全下限）。
 
 ```bash
 docker build -f frontend/Dockerfile -t alphaedge-frontend .

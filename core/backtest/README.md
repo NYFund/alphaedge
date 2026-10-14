@@ -67,16 +67,11 @@ TICK 回測由 `TickSimulator` 照時間順序一筆一筆重放，與實盤逐�
 
 回測系統的執行流程如下：
 
-1. **初始化策略**: 載入策略類別並初始化
-2. **設定帳戶**: 建立虛擬帳戶，設定初始資金
-3. **載入資料 API**: 根據回測級別載入對應的資料 API
-4. **資料適配**: 透過 `core/adapters/tw/` 的 `StockQuoteAdapter`／`FuturesQuoteAdapter` 將 API 資料轉成統一的 `StockQuote`／`FuturesQuote`
-5. **執行回測**: 逐日（或逐筆）執行策略邏輯
-   - 檢查停損訊號
-   - 檢查平倉訊號
-   - 檢查開倉訊號
-   - 執行訂單
-6. **生成報告**: 計算績效指標並生成視覺化圖表
+1. **載入策略**: `apps/backtest.py` 解析參數，`StrategyLoader.load()` 只 import `--strategy` 指定的策略模組
+2. **組裝引擎**: `build_backtester()` 先套用 `BacktestOverrides`（`--start`／`--end`／`--capital`），再依策略宣告的 `(market, instrument_type)` 組出帳戶、`PositionManager`、`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel` 與 `DataFeed`
+3. **啟動**: `Backtester.setup()` → `DataFeed.setup()` 開連線並建資料 API、檢查交易所名單涵蓋、呼叫 `strategy.setup_apis(feed)`
+4. **逐日執行**: 每個交易日 `is_market_open()` → `simulator.load_day()`（`core/adapters/tw/` 把表資料轉成 `StockQuote`／`FuturesQuote`；當天沒有報價就整天跳過）→ `prepare_day()`：各 model 向資料源取當天的市場狀態 → `simulator.run_day()`：`BarSimulator` 依 `BarExecutionSequence` 執行開倉與平倉（預設先平後開；`allow_day_trade=True` 時先開後平；平倉階段固定先停損再一般平倉），`TickSimulator` 則逐筆重放 → `finish_day()`：`settle_day()` 結算 → 權益快照
+5. **生成報告**: 五份 CSV 與五張圖，績效指標由 `core/analysis/performance_metrics.py` 計算
 
 ## 價格口徑：訊號用還原價、成交用原始價
 
@@ -117,10 +112,10 @@ price_chg = quote.signal_close / self.price.get_close_map(yesterday)[...] - 1
 `FillModel` 回答「這張單成不成交、以什麼價量成交」。三項假設**預設全部關閉**，
 未啟用時回測結果與導入前逐筆相同。
 
-設定在 `FillConfig`（`core/backtest/models/fill_model.py`），由策略的 `fill_config` 帶入：
+設定在 `FillConfig`（`core/models/fill_config.py`，與 `cost_config.py` 對稱；策略層不得 import 回測套件），由策略的 `fill_config` 帶入：
 
 ```python
-from core.backtest.models.fill_model import FillConfig, VolumeCapPolicy
+from core.models.fill_config import FillConfig, VolumeCapPolicy
 
 class MyStrategy(BaseStockStrategy):
     def __init__(self):
@@ -147,7 +142,7 @@ class MyStrategy(BaseStockStrategy):
 #### 期貨：滑價以**跳動點**表達（`FuturesFillConfig`）
 
 ```python
-from core.backtest.models.fill_model import FuturesFillConfig
+from core.models.fill_config import FuturesFillConfig
 
 class MyFuturesStrategy(BaseFuturesStrategy):
     def __init__(self):
@@ -269,14 +264,16 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 
 ### 漲跌停的已知限制
 
-漲跌停幅度已依年代分段（**2015-06-01 前為 7%**，之後 10%）。以 23,972 筆交易所
-公告值比對，相符率 61.6%（分段前 54.5%）。
+漲跌停幅度依年代分段（**2015-06-01 前為 7%**，之後 10%），「基準價 × 幅度」以 `Decimal`
+相乘後往內對齊檔位，ETF 用兩段檔位表、槓桿型 ETF 幅度加倍，除權息日的基準價改用 `dividend`
+表的開盤競價基準。2026-10-01 以四個抽樣交易日（2013／2016／2020／2024 各一）的交易所公告值
+比對，3,763 檔中 3,761 檔相符（99.95%），不符的兩檔各差一個檔位。
 
-**剩餘落差來自檔位對齊規則**：現行做法是「基準價 ±幅度後往內對齊檔位」，與交易所
-實際的升降單位取值規則不完全一致，多數不符者相差一個檔位。此項**尚未解決**。
+**剩餘差異來自基準價本身**：`TwStockSpec.get_price_limits()` 只負責「基準 → 漲跌停」，
+減資恢復交易等情況的基準價要由資料源提供，目前沒有。
 
 影響有限——漲跌停只在拒單時用到，多數訂單不在邊界上；但放空的
-`limit_up_cover_failed`（漲停鎖死無法回補）直接依賴此判定，該計數會有偏差。
+`limit_up_cover_failed`（漲停鎖死無法回補）直接依賴此判定，邊界個案仍可能有偏差。
 
 ## 部位大小與檔數上限
 
@@ -312,8 +309,8 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
     ]
 ```
 
-要換配置演算法（波動度加權等），覆寫 `make_portfolio_constructor()` 傳入別的 sizer 即可，
-呼叫端不動。**建構器每次組裝都重建**：`max_holdings` 是策略在 `super().__init__()` 之後
+要換配置演算法（波動度加權等），在 `__init__` 指定 `self.sizer = <自訂 sizer>` 即可，
+不必覆寫 `make_portfolio_constructor()`，呼叫端不動。**建構器每次組裝都重建**：`max_holdings` 是策略在 `super().__init__()` 之後
 才填的，存成欄位會永遠讀到舊值。
 
 **平倉與停損不走這一層**：張數取自持倉（`position.volume`）、價格由策略的交易邏輯決定，
@@ -328,7 +325,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 下單條件 = 張數 >= 1；sizing_price <= 0 者跳過
 ```
 
-**`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定 LONG 回歸 baseline 的 915 筆結果。
+**`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定 LONG 回歸 baseline（`VolumeBreakoutMomentumStrategy` 2024 全年，1,861 筆）的逐筆結果。
 
 這段公式原本在五支策略內各寫一遍，收斂時發現兩處已經漂移，一併定案（2026-08-09）：
 
@@ -420,15 +417,10 @@ reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點�
 `SettlementModel` 寫在成交副本的 `BaseOrder.reference_price` 上，
 **被拒的單不計入**（沒有成交，價差也就不存在）。
 
-回測系統會自動計算以下績效指標：
-
-- **總報酬率**: 策略的總收益
-- **年化報酬率**: 年化後的報酬率
-- **Sharpe Ratio**: 風險調整後報酬率
-- **最大回撤 (MDD)**: 從高點到低點的最大跌幅
-- **勝率**: 獲利交易的比例
-- **平均獲利/虧損**: 平均每筆交易的獲利和虧損
-- **交易次數**: 總交易筆數
+`metrics_summary.csv` 實際輸出的 `Metric` 列：`Trades`、`Win Count`、`Loss Count`、`Win Rate (%)`、
+`Win/Loss Ratio`、`Profit Factor`、`Avg ROI (%)`、`Avg Holding Days`、`Total PnL`、`Slippage Cost`、
+`Slippage Cost / |Total PnL| (%)`、`Max Drawdown (%)`、`Annualized Volatility (%)`、`Sharpe Ratio`、
+`Sortino Ratio`、`Benchmark`、`Information Ratio`、`Equity Basis`。**沒有年化報酬率**；帳戶總 ROI 只印在 log。
 
 ## 使用方式
 
@@ -464,8 +456,8 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
 ### 注意事項
 
 - `--strategy` 吃的是**類別名稱**（例如 `VolumeBreakoutMomentumStrategy`）
-- 策略由 `strategy_loader` 逐一掃描 `core/strategies/` 底下的商品類別子目錄
-  （`stock/`、`futures/`）載入，新增商品類別不需要改程式
+- `StrategyLoader.load()` 以 AST 索引只載入 `--strategy` 指定的類別；找不到時才全掃描
+  `strategies/{stock,futures}/` 列出可用策略並以結束碼 2 退出。新增商品類別子套件不需要改程式
 - 回測前請確認資料庫中有所需的資料（使用 `python -m apps.update_db` 更新資料）
 - 回測結果會儲存在 `results/<策略>/` 目錄，其中 `<策略>` 是 **`strategy.strategy_name`**（例如 `Volume-Breakout-Momentum`），**與 `--strategy` 吃的類別名不同**
 

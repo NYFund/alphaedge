@@ -16,9 +16,9 @@ from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker, ParityDiff
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.trading_mode import TradingModeState
-from core.models import RealizedTradeSnapshot
+from core.models import ExecutionReport, RealizedTradeSnapshot
 from core.portfolio import order_rules
-from core.utils import Action, Units
+from core.utils import Action, PositionType, Units
 
 """
 盤後作業：把當天發生的事收攏成可稽核的結果
@@ -153,6 +153,11 @@ class AfterCloseRunner:
             self.broker.connect()
             self.mode_state.load()
 
+            # 0. 成交事實先於狀態：另一個行程先收到的成交回報已在 `live_fill`，
+            #    本行程的委託卻可能還停在送出狀態。不先回填的話，下一步會把已成交的單
+            #    標成「日終未成交」，殘量處理再對已經平掉的部位排補平
+            self.backfill_fills(today)
+
             # 1. 刷新委託狀態：ROD 未成交單在券商端日終自動失效
             self.expire_open_orders()
 
@@ -254,6 +259,121 @@ class AfterCloseRunner:
 
         self.order_manager.refresh_from_broker()
         return self.order_manager.expire_unfinished(self._now().date())
+
+    def backfill_fills(self, run_date: datetime.date) -> int:
+        """
+        - Description:
+            以 `live_fill` 的成交事實回填本行程策略的委託與歸屬帳
+
+            股票線與期貨線是兩個行程、同一個帳號，券商的成交回報兩個行程都收得到，
+            而 `live_fill` 只有一張。回報先到非擁有者那邊時，成交已經在表裡、擁有者的委託
+            卻沒有套進去——盤中的認領（`OrderManager._claim_fill()`）只在擁有者行程還活著時
+            有用，收線後才到的回報只剩這裡能補。對每張當日委託：把尚未歸屬的同序號成交
+            歸給它，成交合計多於委託已記的量就補套進委託、記進歸屬帳，並以 CRITICAL 事件
+            留下紀錄——它代表盤中有一筆成交沒有被擁有者即時處理。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - int
+                被回填的委託數
+        """
+
+        backfilled: int = 0
+        for row in self.order_manager.orders_of_day(run_date):
+            broker_seqno: str = str(row.get("broker_seqno") or "")
+            if not broker_seqno:
+                continue
+            client_order_id: str = str(row["client_order_id"])
+            strategy_name: str = str(row["strategy_name"])
+
+            fills: List[Dict[str, Any]] = self.dao.get_fills_by_seqno(broker_seqno)
+            for fill in fills:
+                if not fill.get("client_order_id") and self.dao.attribute_fill(
+                    broker_seqno,
+                    str(fill["broker_trade_id"]),
+                    client_order_id,
+                    strategy_name,
+                ):
+                    fill["client_order_id"] = client_order_id
+            mine: List[Dict[str, Any]] = [
+                fill for fill in fills if fill.get("client_order_id") == client_order_id
+            ]
+
+            recorded: int = int(row.get("filled_volume") or 0)
+            total: int = sum(int(fill.get("volume") or 0) for fill in mine)
+            if total <= recorded:
+                continue
+
+            reports: List[ExecutionReport] = self._reports_after(mine, recorded)
+            self.order_manager.book_backfilled_fills(row, reports)
+            if self.account_sync is not None:
+                position_type: PositionType = PositionType(str(row["position_type"]))
+                closing: bool = order_rules.is_closing_record(
+                    str(row["position_type"]), str(row["action"])
+                )
+                for report in reports:
+                    self.account_sync.book_backfilled_fill(
+                        report, strategy_name, position_type, closing
+                    )
+
+            message: str = (
+                f"委託 {client_order_id}（{row['symbol']}）本地只記到成交 {recorded}，"
+                f"成交明細合計 {total}；成交回報當時沒有套進本行程，"
+                f"盤後依成交明細回填 {total - recorded}，歸屬帳已更新"
+            )
+            logger.error(message)
+            self.events.write(
+                category="FILL_BACKFILLED",
+                severity=NotifyLevel.CRITICAL,
+                message=message,
+                strategy_name=strategy_name,
+                symbol=str(row["symbol"]),
+                client_order_id=client_order_id,
+            )
+            self._notify(NotifyLevel.CRITICAL, "成交回報盤後回填", message)
+            backfilled += 1
+
+        if backfilled:
+            logger.warning(f"盤後回填 {backfilled} 張委託的成交")
+        return backfilled
+
+    @staticmethod
+    def _reports_after(
+        fills: List[Dict[str, Any]], recorded: int
+    ) -> List[ExecutionReport]:
+        """
+        成交列 → 尚未套進委託的那部分成交回報
+
+        成交依時間排序，前面累計到 `recorded` 的量視為委託已經套過（委託只會依序累進）；
+        跨在邊界上的那一筆只取超出的部分。
+        """
+
+        reports: List[ExecutionReport] = []
+        skipped: int = 0
+        for fill in fills:
+            volume: int = int(fill.get("volume") or 0)
+            if skipped + volume <= recorded:
+                skipped += volume
+                continue
+            remaining: int = volume - max(recorded - skipped, 0)
+            skipped = recorded
+            filled_at: Any = fill.get("filled_at")
+            if filled_at and not isinstance(filled_at, datetime.datetime):
+                filled_at = datetime.datetime.fromisoformat(str(filled_at))
+            reports.append(
+                ExecutionReport(
+                    broker_seqno=str(fill["broker_seqno"]),
+                    broker_trade_id=str(fill["broker_trade_id"]),
+                    symbol=str(fill["symbol"]),
+                    action=Action(str(fill["action"])),
+                    price=float(fill.get("price") or 0.0),
+                    volume=remaining,
+                    ts=filled_at,
+                    raw={"source": "live_fill", "backfilled": True},
+                )
+            )
+        return reports
 
     def calibrate_costs(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """

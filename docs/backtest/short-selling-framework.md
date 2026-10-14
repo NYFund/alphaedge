@@ -1,6 +1,6 @@
 # Short Selling Framework — 台股放空回測框架規格
 
-`core/backtest` 的放空（SHORT）機制規格：方向中立的引擎設計、台股放空的摩擦成本與回補限制、成本公式與手算驗收範例。
+回測框架（`core/backtest`、`core/market`、`core/position`、`core/portfolio`）的放空（SHORT）機制規格：方向中立的引擎設計、台股放空的摩擦成本與回補限制、成本公式與手算驗收範例。
 
 ---
 
@@ -58,7 +58,7 @@
 | 手續費折扣 | `Commission.Discount` | 0.3 | 約 3 折，電子下單常見 |
 | 最低手續費 | `Commission.MinFee` | 20 元 | — |
 | 一般證交稅 | `Commission.TaxRate` | 0.3% | — |
-| 現股當沖證交稅 | `Commission.DayTradeTaxRate` | **0.15%** | 減半優惠，**適用至 2027-12-31**（`DAY_TRADE_TAX_EXPIRY`，逐筆依成交日判斷） |
+| 現股當沖證交稅 | `Commission.DayTradeTaxRate` | **0.15%** | 減半優惠，適用區間 **2017-04-28～2027-12-31**（`DAY_TRADE_TAX_START`～`DAY_TRADE_TAX_EXPIRY`，逐筆依成交日判斷；起始日之前的當沖賣出課 0.3%） |
 | 融券保證金成數 | `ShortCost.MarginRate` | **90%** | 現行法定成數 |
 | 融券手續費（借券費） | `ShortCost.MarginBorrowFeeRate` | **0.08%** | 賣出價金一次性 |
 | 融券利息（客戶收） | `ShortCost.MarginInterestRate` | **年 0.2%** | 保守可設 0 |
@@ -74,8 +74,8 @@
 
 | 限制 | 影響 | 框架處理 |
 |------|------|----------|
-| 融券／借券資格與平盤下放空 | 只有可融資融券的證券能融券；個股可能被暫停融券或借券；前一交易日收盤跌停者本日不得平盤下融（借）券 | `ShortConstraint.check_short_sale_list`，預設關閉；資料來自 `short_sale_list` 表（交易所每日公告，2013-09-23 起），拒單計入 `rejected_short_halted`／`rejected_below_reference` |
-| 現股當沖標的清單 | 只有名單內的證券能現股當沖；個股可能被暫停先賣後買 | `ShortConstraint.check_day_trade_list`，預設關閉；資料來自 `day_trade_list` 表（2014-01-06 起），拒單計入 `rejected_not_day_tradable` |
+| 融券／借券資格與平盤下放空 | 只有可融資融券的證券能融券；個股可能被暫停融券或借券；前一交易日收盤跌停者本日不得平盤下融（借）券 | `ShortConstraint.check_short_sale_list`，預設關閉；資料來自 `short_sale_list` 表（交易所每日公告，2013-09-23 起，`SHORT_SALE_LIST_START_DATE`），拒單計入 `rejected_short_halted`／`rejected_below_reference` |
+| 現股當沖標的清單 | 只有名單內的證券能現股當沖；個股可能被暫停先賣後買 | `ShortConstraint.check_day_trade_list`，預設關閉；資料來自 `day_trade_list` 表（2014-01-06 起，`DAY_TRADE_LIST_START_DATE`），拒單計入 `rejected_not_day_tradable` |
 | 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表，拒單計入 `rejected_no_borrow` |
 | 停券期間（除權息） | 強制回補；停券期間不得新增融券賣出 | 由 `dividend` 表推導融券最後回補日（`auto_force_cover_on_ex_dividend`，預設開啟）；另可用 `ShortConstraint.force_cover_dates` 手動指定。回補日之後到除權息交易日之間的融券開倉由 `TwStockFillModel.check_short_not_suspended()` 拒單，計入 `rejected_short_suspended` |
 | 停券期間（股東會） | 強制回補 | **無資料源**，仍以 `max_holding_days` 保險絲近似 |
@@ -96,7 +96,7 @@
 比較的是委託價（滑價前），平盤本身可以賣。
 
 **開啟名單檢核時，資料缺口一律拒絕執行而不是放行**（與券源檢核相反）：
-- 回測起日早於制度起點：平盤下名單 2013-09-23、現股當沖先賣後買 **2014-06-30**（名單 2014-01-06 就有，但當時只開放先買後賣）。
+- 回測起日早於制度起點：平盤下名單 2013-09-23、現股當沖先賣後買 **2014-06-30**（`SELL_FIRST_DAY_TRADE_START_DATE`；名單 2014-01-06 就有，但當時只開放先買後賣）。
   起點之前的制度是「平盤下不得融（借）券賣出」「不能先賣」，不是不限制，名單無法表達，故拒絕。
 - 區間內有交易日沒有名單（ETL 沒跑或缺日）：`TwStockDataFeed.ensure_trading_list_coverage()` 在回測開始前列出缺幾天與該跑的 ETL 指令。
 
@@ -128,9 +128,9 @@
 ### 3.1 分層
 
 ```
-strategy (宣告方向與管道)
-    ↓ direction / allow_day_trade / short_method
-Backtester (統一迴圈、方向驗證、執行順序、逐日盯市)
+strategy (宣告 direction / allow_day_trade / short_method；generate_*_signals → List[Signal])
+    ↓ core/portfolio (construction + sizing → StockOrder；order_rules：方向白名單、執行順序、檔數上限、排序)
+Backtester (統一迴圈、逐日盯市；以同名方法薄包裝 order_rules)
     ↓ StockOrder
 StockPositionManager (方向分派：open/close × LONG/SHORT)
     ↓
@@ -140,7 +140,7 @@ StockUtils (純數學工具：手續費、稅、股數換算)
 
 TwStockFillModel (開倉前：成交價驗證、交易所名單、券源、停券、成交量上限、滑價)
 
-TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償)
+TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計提、股利補償、配股等股數調整、最長持有天數／停券回補／維持率追繳、做多連續無報價出場)
 ```
 
 ### 3.2 型別（`core/utils/constant/`）
@@ -163,19 +163,22 @@ TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計
 class TwStockCostModel:
     # --- 單邊成本 ---
     def commission(self, price, volume, product=None) -> int: ...
-    def tax(self, price, volume, *, action, position_type, is_day_trade) -> int:
-        """買進恆為 0；賣出依 is_day_trade 選 0.15% / 0.3%"""
+    def tax(self, price, volume, action, is_day_trade=None, date=None) -> int:
+        """買進恆為 0；賣出依 is_day_trade 與成交日 date 選 0.15% / 0.3%
+           （is_day_trade_tax_effective(date) 看 DAY_TRADE_TAX_START～EXPIRY）"""
+    def check_day_trade_tax_expiry(self) -> None: ...   # 回測區間跨過優惠到期日時警告
 
-    # --- 放空專屬 ---
-    def borrow_fee(self, price, volume, holding_days) -> int:
+    # --- 放空專屬（short_method 隨單帶入，不只讀 CostConfig 的固定值）---
+    def borrow_fee(self, price, volume, holding_days=0, short_method=None) -> int:
         """MARGIN: 賣出價金 × 0.08%（一次性，holding_days 無關）
            SBL:    Σ 每日市值 × 年化率 / 365（逐日計提）
            DAY_TRADE: 0"""
-    def margin_required(self, price, volume) -> int:
+    def margin_required(self, price, volume, short_method=None) -> int:
         """MARGIN: 賣出價金 × 90%；SBL: 依設定；DAY_TRADE: 0"""
-    def short_interest(self, proceeds, margin, holding_days) -> int:
+    def short_interest(self, proceeds, margin, holding_days, short_method=None) -> int:
         """(擔保價款 + 保證金) × 年利率 × 天數 / 365；DAY_TRADE / SBL 為 0"""
     def maintenance_ratio(self, proceeds, margin, cur_price, volume) -> float: ...
+    def check_margin_call(self, proceeds, margin, cur_price, volume) -> bool: ...  # 純判定，執行在 SettlementModel
 
     # --- 損益與報酬率：公式在 BaseCostModel，台股只提供兩種分母 ---
     def realized_pnl(self, position_type, entry_price, exit_price, volume,
@@ -195,10 +198,10 @@ class TwStockCostModel:
 
 | 項目 | 計算時點 | 負責函式 |
 |------|----------|----------|
-| `MARGIN` 融券手續費 0.08% | **開倉時**一次收 | `open_position()` |
-| `MARGIN` 融券利息（收入） | **平倉時**用 `exit_date − entry_date` 一次算 | `close_position()` |
-| `SBL` 借券費（年化） | **逐日計提**到 `position.accrued_borrow_fee` | `accrue_holding_cost()` |
-| 維持率／強制回補判定 | 每日收盤 | `check_margin_call()`（單一迴圈；無報價、最長持有、停券三種強制回補由 `check_short_forced_exits()` 判定，維持率由它自己做） |
+| `MARGIN` 融券手續費 0.08% | **開倉時**一次收 | `StockPositionManager.open_short_position()` |
+| `MARGIN` 融券利息（收入） | **平倉時**用 `exit_date − entry_date` 一次算 | `StockPositionManager.close_short_position()` |
+| `SBL` 借券費（年化） | **逐日計提**到 `position.accrued_borrow_fee`，平倉當天最後一段另補足 | `TwStockSettlementModel.accrue_holding_cost()`、`StockPositionManager.accrue_final_borrow_fee()` |
+| 維持率／強制回補判定 | 每日收盤 | `TwStockSettlementModel.check_margin_call()`（單一迴圈；無報價、最長持有、停券三種強制回補由 `check_short_forced_exits()` 判定，維持率由它自己做，判定式在 `TwStockCostModel.check_margin_call()`） |
 
 即：每日部位檢查**不碰融券利息**（`MARGIN` 的利息只在平倉時算一次），`accrued_borrow_fee` 欄位**只有 `SBL` 會用**。這條規則同時寫在 `StockPosition` 的 docstring，否則很容易在兩個地方各算一次。
 
@@ -213,6 +216,8 @@ class TwStockCostModel:
 | `short_method` | `ShortMethod` | `MARGIN` | 放空管道 |
 | `cost_config` | `Optional[CostConfig]` | `None` → `CostConfig.default(...)` | 成本參數覆寫 |
 | `short_constraint` | `Optional[ShortConstraint]` | `None` → `ShortConstraint()` | 可成交限制（§2.4） |
+| `fill_config` | `Optional[FillConfig]` | `None` | 成交假設（滑價、成交量上限），見 `core/backtest/README.md` |
+| `max_no_quote_days` | `Optional[int]` | `None` | 做多部位連續無報價達此天數即出場 |
 | `max_holding_days` | `Optional[int]` | `None` | 留倉放空保險絲 |
 | `day_trade_uncovered_policy` | `DayTradeUncoveredPolicy` | `FORCE_COVER_AT_CLOSE` | §5.1 |
 | `margin_call_policy` | `MarginCallPolicy` | `FORCE_COVER` | §5.2 |
@@ -271,7 +276,8 @@ if order == BarExecutionSequence.OPEN_THEN_CLOSE:
 else:
     execute_close_signal(quotes); execute_open_signal(quotes)
 settlement.settle_day(date, quotes, account, event_counts)
-    # 當沖日終強制回補 → 借券費計提 ＋ 維持率追繳 → 停券回補 → 股利補償
+    # 當沖日終強制回補 → 無報價天數更新 → 借券費計提 → 現金股利（補償／收取）
+    # → 配股等股數調整 → 最長持有天數／停券回補／維持率追繳 → 做多連續無報價出場
 snapshot_daily_equity(date, quotes)
 ```
 
