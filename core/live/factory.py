@@ -494,9 +494,27 @@ def build_live_trader(
         now_provider,
         phase,
         [type(strategy).__name__ for strategy in strategies],
+        _run_instrument_type(strategies),
     )
 
     return trader
+
+
+def _run_instrument_type(strategies: Sequence[BaseStrategy]) -> Optional[str]:
+    """
+    本次行程載入的商品類別；只有一種才寫，混合或沒宣告時為 None
+
+    股票與期貨各是一個行程、段落名相同，存活監控靠這一欄分辨是哪一條線沒跑。
+    混合市場的行程組裝時就會被拒絕，這裡回 None 只是不替未定義的情況編一個值。
+    """
+
+    instruments: Set[Optional[InstrumentType]] = {
+        strategy.instrument_type for strategy in strategies
+    }
+    if len(instruments) != 1:
+        return None
+    (instrument,) = instruments
+    return instrument.value if instrument is not None else None
 
 
 def make_order_rebuilder(
@@ -1067,6 +1085,7 @@ def _record_run(
     now_provider: Callable[[], datetime.datetime],
     phase: str,
     strategy_names: Sequence[str] = (),
+    instrument_type: Optional[str] = None,
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -1082,6 +1101,9 @@ def _record_run(
     **本次載入的策略寫進 `strategy_params_json`**（`{"strategies": [...]}`）：盤後 parity
     要知道某支策略當天的段落有沒有正常跑完，才分得出「回測多出的開倉單」是快照口徑
     還是實盤根本沒跑到。這一欄先前從未寫入，2026-10-08 以前的紀錄為 NULL。
+
+    **商品類別寫進 `instrument_type`**：股票與期貨是兩個行程、段落名相同，存活監控
+    要靠它分辨「期貨尾盤沒跑」而不是被股票尾盤的紀錄遮住。更早的紀錄為 NULL。
     """
 
     if not notify_enabled:
@@ -1106,6 +1128,7 @@ def _record_run(
             "strategy_params_json": json.dumps(
                 {"strategies": list(strategy_names)}, ensure_ascii=False
             ),
+            "instrument_type": instrument_type,
         }
     )
     dao.commit()

@@ -234,6 +234,19 @@ def test_run_record_carries_the_loaded_strategies(dao: LiveTradeDAO) -> None:
     }
 
 
+def test_run_record_carries_the_instrument_type(dao: LiveTradeDAO) -> None:
+    """
+    啟動紀錄寫下本次行程的商品類別
+
+    股票與期貨是兩個行程、段落名相同，存活監控靠這一欄分辨是哪一條線沒跑。
+    """
+
+    build([LiveStockStrategy()], dao)
+
+    (instrument,) = dao.conn.execute("SELECT instrument_type FROM live_run").fetchone()
+    assert instrument == "Stock"
+
+
 def test_run_record_carries_the_phase(dao: LiveTradeDAO) -> None:
     """
     啟動紀錄要寫段落名
