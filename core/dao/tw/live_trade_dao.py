@@ -168,6 +168,9 @@ class LiveTradeDAO(BaseDAO):
     # 而讀取端必須自己處理「這一列沒有這項資訊」
     ADDED_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
         (LIVE_RUN_TABLE_NAME, "pid", "INTEGER"),
+        # 本次行程載入的商品類別（`InstrumentType` 的值）：股票與期貨是兩個行程、
+        # 段落名相同，存活監控要靠它分辨「期貨尾盤沒跑」而不是被股票尾盤的紀錄遮住
+        (LIVE_RUN_TABLE_NAME, "instrument_type", "TEXT"),
         # 執行層改寫委託價之前的決策價與執行方式：`price` 記的是實際送出的價
         # （集合競價買單是漲停價），事後比對執行品質要靠這兩欄
         (LIVE_ORDER_TABLE_NAME, "execution_style", "TEXT"),
