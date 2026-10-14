@@ -9,7 +9,7 @@
 
 | 面向 | 現況 |
 |------|------|
-| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 股期）、連續合約（3 種調整 × 3 種換月）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池；**沒有逐筆成交**（期貨 tick 已裁示不做，原 DolphinDB 程式已移除） |
+| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 股期）、連續合約（3 種調整；換月規則預設只建 `LAST_TRADING_DAY`）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池；**沒有逐筆成交**（期貨 tick 已裁示不做，原 DolphinDB 程式已移除） |
 | 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price` |
 | 回測 | 與台股**共用同一支引擎**：`(TW, FUTURE)` 的 model 組（規格／成交／成本／結算／資料源）由 `core/backtest/factory.py` 注入 |
 | 期貨語意 | 逐日盯市、保證金查表與追繳、換月轉倉、日夜盤整併、期交稅與跳動點滑價 |
@@ -37,8 +37,8 @@ crawler 到 loader 之間的暫存，不是資料真相來源。理由：唯一�
 | `futures_continuous` | 連續合約，衍生自 `futures_price_daily` | `(date, product, session, method, roll_rule)` |
 | `futures_margin_history` | 指數類與 ETF 股期的**每口金額**（原始／維持），變動序列 | `(effective_date, product)` |
 | `stock_futures_margin_rate_history` | 股票類的**適用比例**，變動序列 | `(effective_date, product_id)` |
-| `futures_institutional_chip` | 三大法人期貨買賣超與未平倉 | `(date, 商品名稱, 身份別)` |
-| `futures_large_trader` | 大額交易人未平倉 | 另含到期月份與交易人類別 |
+| `futures_institutional_chip` | 三大法人期貨買賣超與未平倉 | `(date, product_name, investor)`；`product_name` 存中文商品名 |
+| `futures_large_trader` | 大額交易人未平倉 | `(date, product, expiry, trader_type)` |
 | `futures_put_call_ratio` | 台指選擇權 PCR | 一天一列 |
 | `futures_stock_universe` | 股期標的池**快照序列** | `(snapshot_date, product_id)` |
 
@@ -123,7 +123,7 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 | 保證金公告 | 金額欄順序與一覽表相反；同一個表頭底下，股票期貨給的是適用比例而非金額 | 依欄名取值；以值有沒有小數點區分比例與金額 |
 | 保證金一覽表（股票類） | 一份檔案四段（股期比例／ETF 股期金額／兩段選擇權），每段各有更新日期；公司名含逗號、代碼帶尾端空白 | 先切掉選擇權段、逐段解析生效日；以 `csv` 模組解析並 strip 代碼 |
 | Shioaji | 契約代碼與 TAIFEX 沒有規律（MTX→MXF、TE→EXF、TF→FXF；TMF／ZEF／ZFF 兩邊同名） | `SHIOAJI_FUTURES_CATEGORY` 是實際登入逐一核對的對照表 |
-| Shioaji | `code` 是「月份字母 ＋ 年末碼」，每 10 年重複 | 一律用 `symbol`（`TXF202609`） |
+| Shioaji | `code` 是「月份字母 ＋ 年末碼」，每 10 年重複 | 一律在分類內以 `delivery_month`（`YYYYMM`）比對，並排除 `R1`／`R2` 連續月別名 |
 | Shioaji | 回傳整個交易日的逐筆，**含前一日 15:00 開始的夜盤** | 時段一律由時間戳判定 |
 
 籌碼代碼的正式定義（取自來源檔尾）：到期月份 `999999` ＝ 所有契約合計、`666666` ＝ 所有週到期契約合計；

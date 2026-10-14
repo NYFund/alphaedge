@@ -20,7 +20,7 @@ AlphaEdge/
 │       ├── tw_stock/      # price, chip, margin, short_sale_list, day_trade_list, dividend,
 │       │                  # corporate_action, financial_statement, monthly_revenue_report,
 │       │                  # tick, finmind, meta
-│       └── tw_futures/    # price, chip, continuous, universe, margin, tick
+│       └── tw_futures/    # price, chip, continuous, universe, margin, tick, meta
 │
 ├── results/               # 回測產出：只放要給人看的東西（CSV ＋ PNG）
 │   ├── <StrategyName>/
@@ -94,7 +94,7 @@ ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 s
 
 - **設定** — `core/pipeline/tw/cleaners/schema/**/*.json`（欄位對照表）。
   被 cleaner 讀取，**缺檔只會 warning 後靜默降級清洗**，所以一定要進版控。
-- **產物** — `broker_trading_metadata.json`（爬蟲 resume 狀態）。台股 tick 的續跑紀錄在 TimescaleDB 的 `stock_tick_load_log`，不落檔。
+- **產物** — `broker_trading_metadata.json`、`futures_margin_announcements.json`（爬蟲 resume 狀態）。台股 tick 的續跑紀錄在 TimescaleDB 的 `stock_tick_load_log`，不落檔。
 
 > **package data 是 `core/` 內唯一正當的非程式碼檔案**：小、唯讀、隨套件發佈、
 > 以 `importlib.resources` 或路徑常數讀取。判準是「唯讀 ＋ 隨套件發佈 ＋ 小」，
@@ -109,8 +109,8 @@ ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 s
 | 模組 | 內容 | 什麼時候會改 |
 |------|------|--------------|
 | `paths.py` | 原始碼路徑、產物三根與其下所有目錄 | 目錄搬遷時 |
-| `schema.py` | 分庫檔名、完整路徑、資料表名稱 | 新增資料表時 |
-| `settings.py` | 爬取範圍、預設區間、TimescaleDB 連線、Shioaji 憑證、實盤參數（時區、通知管道） | 調整營運參數時 |
+| `schema.py` | 分庫檔名、完整路徑、資料表名稱、資料表欄位名與 Column Enum | 新增資料表或欄位時 |
+| `settings.py` | 爬取範圍、預設區間、TimescaleDB 連線、Shioaji 憑證、實盤參數（時區、通知管道）、日誌層級、回測報表開圖開關 | 調整營運參數時 |
 
 新程式碼建議直接 import 子模組（`from core.config.paths import DATA_DIR_PATH`），語意較明確。
 

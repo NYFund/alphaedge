@@ -97,7 +97,8 @@ sequenceDiagram
         BT->>BT: snapshot_daily_equity(date, quotes)
     end
 
-    BT->>R: generate_trading_report() / direction_summary / event_report
+    BT->>R: generate_trading_report() / generate_direction_summary() / generate_event_report() / generate_metrics_summary()
+    BT->>R: save_report(<策略>_daily_equity.csv)
     BT->>R: 五張圖
     BT->>Feed: close()
 ```
@@ -135,14 +136,14 @@ sequenceDiagram
 
 | 檔案 | 職責 | 持有的狀態 |
 |------|------|------------|
-| `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts` |
+| `core/backtest/backtester.py` | 日期迴圈、單根 bar 流程、訂單關卡、逐日權益快照、觸發報表 | `daily_equity`、`event_counts`、`submitted_orders`（通過白名單／檔數上限／排序後、進成交模擬前的委託，只記錄供實盤 parity 比對） |
 | `core/portfolio/order_rules.py` | 方向白名單、執行順序推導、持倉檔數上限、決定性排序的純函式；回測與實盤共用 | 無（純函式，事件計數由呼叫端傳入） |
 | `core/market/instrument_spec.py`、`core/market/tw/instrument_spec.py` | 一張／一口的計價單位換算、跳動點對齊（ETF 另用兩段檔位表）、漲跌停區間（槓桿型 ETF 幅度加倍） | 無（純規則） |
 | `core/backtest/models/fill_model.py` | 這張單在這根 bar 有沒有可能以這個價格成交；交易所名單、券源、停券、成交量上限、滑價 | `prev_close`、`intraday_range`、當日名單與券源快照 |
 | `core/market/cost_model.py`、`core/market/tw/cost_model.py` | 手續費／證交稅／融券手續費／借券費／保證金／利息；`enrich_orders()` 補市場欄位 | `CostConfig`（含 `ShortConstraint`），**定義在 `core/models/cost_config.py`** |
 | `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.prev_close`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
 | `core/backtest/models/event_counts.py` | `EVENT_KEYS` 與 `new_event_counts()`：事件計數 key 的唯一清單 | 無 |
-| `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線 | **單次回測唯一的 SQLite 連線**（台股、期貨各一條，分屬兩個 DB；以 `connect_sqlite()` 開啟，API 與其 DAO 共用） |
+| `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線 | **單次回測的 SQLite 連線**（台股回測一條 `tw_stock.db`；期貨回測以 `tw_futures.db` 為主，查現貨收盤時再惰性開一條 `tw_stock.db`；皆以 `connect_sqlite()` 開啟、API 與其 DAO 共用、由 `DataFeed.close()` 關閉） |
 | `core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日）；建構子收交易日清單，要從資料庫取清單時用 `MarketCalendar.from_api()`（與 `FuturesCalendar` 同形狀） | 由 `DataFeed`、策略建立；持有交易日清單 |
 
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞，model 之間不互相 import：
@@ -156,7 +157,7 @@ sequenceDiagram
 |------|------|
 | `core/position/base/position_manager.py` | `BasePositionManager`：開倉／平倉／`settle_daily()` 的市場無關骨架 |
 | `core/position/stock/position_manager.py` | 台股實作：FIFO 平倉、多空分流記帳、成本攤提、融券轉換 |
-| `core/models/base/` | `BaseAccount`／`BaseOrder`／`BasePosition`／`BaseQuote`／`BaseTradeRecord`；識別欄位一律 `symbol` |
+| `core/models/base/` | 回測用的五個基底模型 `BaseAccount`／`BaseOrder`／`BasePosition`／`BaseQuote`／`BaseTradeRecord`（識別欄位一律 `symbol`）；實盤另有 `execution.py`（委託票、成交回報、券商部位快照） |
 | `core/models/stock/` | 台股實作，含 `stock_id` 與 `symbol` 的對應 |
 
 ### 資料存取
@@ -171,6 +172,7 @@ sequenceDiagram
 | `core/api/tw/stock_dividend_api.py` | 除權息（現金股利、配股率、除權息日的開盤競價基準） |
 | `core/api/tw/stock_short_sale_list_api.py`／`stock_day_trade_list_api.py` | 交易所每日的平盤下得融（借）券賣出名單、現股當沖標的名單（放空名單檢核用） |
 | `core/adapters/tw/stock_quote_adapter.py` | 日 K／Tick 的 `DataFrame` → `StockQuote` 物件 |
+| `core/adapters/tw/futures_quote_adapter.py` | 期貨日 K 的 `DataFrame` → `FuturesQuote`；日夜盤合併 `combine_sessions()` |
 | `core/dao/connection.py` | 連線的單一入口 `connect_sqlite()`（含唯讀模式）；`DBConnection`／`DBError` 型別別名 |
 | `core/dao/base.py` | `BaseDAO`：`owns_conn` 語意、`table_exists()`、`query_df()`、寫入（`insert_or_ignore`／`insert_or_replace`）與 `savepoint()` |
 | `core/dao/tw/*_dao.py` | 一張表（或一組緊密相關的表）一個 DAO；清單與設計見[資料存取層](../dev/data-access-layer.md) |
@@ -182,7 +184,7 @@ sequenceDiagram
 | `core/backtest/report/base.py` | `BaseBacktestReporter`：報表介面與存檔工具 |
 | `core/backtest/report/plotting.py` | `EquityChartRenderer`：只負責畫圖，資料（含權益口徑）一律向報表端取 |
 | `core/backtest/report/reporter.py` | 台股報表：交易明細、多空統計、事件計數、五張圖、benchmark（`0050` 還原價）比較 |
-| `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、對標序列（連續合約優先，查不到退回近月拼接） |
+| `core/backtest/report/futures_reporter.py` | 期貨報表：繼承台股報表，只覆寫交易明細欄位（`Contract ID`，台股為 `Symbol`）、多空統計欄位、`Avg ROI` 口徑註記（改為保證金報酬率）、價格不還原、對標序列（連續合約優先，查不到退回近月拼接） |
 | `core/analysis/performance_metrics.py` | 績效指標的純函式（Sharpe、Sortino、MDD 等），由 reporter 呼叫並輸出 `<策略>_metrics_summary.csv`；前端只讀這份 CSV、不 import `core` |
 
 ---
@@ -227,7 +229,7 @@ sequenceDiagram
 
 | 動作 | 檔案 |
 |------|------|
-| 新增 | `core/models/<instrument>/`（五個領域模型） |
+| 新增 | `core/models/<instrument>/`（回測用的五個領域模型：帳戶、訂單、部位、報價、交易紀錄；要上實盤再加 `execution.py`） |
 | 新增 | `core/strategies/<instrument>/base.py`（設定 `self.market` 與 `self.instrument_type`，並實作 `make_portfolio_constructor()` 與 `build_close_orders()`） |
 | 新增 | `core/portfolio/construction.py` 的對應建構器（若部位約束與既有兩者都不同） |
 | 新增 | `core/market/<market>/` 的該組合 `InstrumentSpec`／`CostModel`；`core/backtest/models/` 的 `FillModel`／`SettlementModel`（後者在 `settlement_model/__init__.py` 登記 re-export） |
