@@ -185,16 +185,17 @@ class TwStockDataFeed(BaseDataFeed):
 
     def get_short_balance(self, date: datetime.date) -> Dict[str, int]:
         """
-        當日融券今日餘額（張），供券源檢核使用
+        站在當天早上能知道的融券餘額（張）：前一次公布的「融券今日餘額」，供券源檢核使用
 
-        `margin` 表尚未建立或該日無資料時回傳空 dict——`FillModel` 會據此放行並記錄，
+        餘額盤後才公布，當天盤中借得到多少券只能看前一交易日的數字；拿當天的就是前視偏差。
+        `margin` 表尚未建立或之前沒有資料時回傳空 dict——`FillModel` 會據此放行並記錄，
         不會把「查無資料」當成「借不到券」
         """
 
         if self.margin is None:
             return {}
 
-        return self.margin.get_short_balance_map(date)
+        return self.margin.get_available_short_balance_map(date)
 
     def get_short_sale_list(
         self, date: datetime.date

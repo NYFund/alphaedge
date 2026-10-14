@@ -76,7 +76,7 @@
 |------|------|----------|
 | 融券／借券資格與平盤下放空 | 只有可融資融券的證券能融券；個股可能被暫停融券或借券；前一交易日收盤跌停者本日不得平盤下融（借）券 | `ShortConstraint.check_short_sale_list`，預設關閉；資料來自 `short_sale_list` 表（交易所每日公告，2013-09-23 起，`SHORT_SALE_LIST_START_DATE`），拒單計入 `rejected_short_halted`／`rejected_below_reference` |
 | 現股當沖標的清單 | 只有名單內的證券能現股當沖；個股可能被暫停先賣後買 | `ShortConstraint.check_day_trade_list`，預設關閉；資料來自 `day_trade_list` 表（2014-01-06 起，`DAY_TRADE_LIST_START_DATE`），拒單計入 `rejected_not_day_tradable` |
-| 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表，拒單計入 `rejected_no_borrow` |
+| 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表**前一交易日公布**的餘額（盤後才公布，當天的數字當天不可知），拒單計入 `rejected_no_borrow` |
 | 停券期間（除權息） | 強制回補；停券期間不得新增融券賣出 | 由 `dividend` 表推導融券最後回補日（`auto_force_cover_on_ex_dividend`，預設開啟）；另可用 `ShortConstraint.force_cover_dates` 手動指定。回補日之後到除權息交易日之間的融券開倉由 `TwStockFillModel.check_short_not_suspended()` 拒單，計入 `rejected_short_suspended` |
 | 停券期間（股東會） | 強制回補 | **無資料源**，仍以 `max_holding_days` 保險絲近似 |
 | 除息日的股利補償 | 放空者須補償出借方現金股利 | `CostConfig.compensate_cash_dividend`（預設開啟），逐筆計入 `dividend_compensation` |

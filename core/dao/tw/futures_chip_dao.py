@@ -1,4 +1,3 @@
-import datetime
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -202,28 +201,6 @@ class FuturesChipDAO(BaseDAO):
             f"SELECT MIN(date) FROM {self.TABLE_NAME}"
         )
         return row[0] if row else None
-
-    def get_latest_date_before(self, date: datetime.date) -> Optional[str]:
-        """
-        - Description:
-            **嚴格早於** `date` 的最近一個有籌碼的日期；表不存在或沒有時為 None
-
-            籌碼盤後才公布，當天的資料當天不可能知道——`<=` 那一個等號就是前視偏差。
-        - Parameters:
-            - date: datetime.date
-                回測當前日
-        - Return:
-            - Optional[str]
-                日期字串
-        """
-
-        if not self.table_exists():
-            return None
-
-        row: Optional[Tuple[Any, ...]] = self.fetch_one(
-            f"SELECT MAX(date) FROM {self.TABLE_NAME} WHERE date < ?", (date,)
-        )
-        return row[0] if row and row[0] else None
 
     def get_covered_date_range(self) -> Optional[Tuple[str, str]]:
         """表的（最早, 最晚）資料日期；表不存在或為空時為 None"""

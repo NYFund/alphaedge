@@ -167,7 +167,9 @@ tick 回測根本跑不了，直接拋錯。
     updater 驗證公告問「這次調整之前是多少」用 `<`（同一生效日已有列時 `<=` 會拿到調整後的值）。
   - `FuturesStockUniverseDAO.get_contract_size(per_product=...)`：回測乘數看「該日全表快照」，
     快照中沒有該商品就回 None；保證金試算看「該商品自己的快照序列」。
-  - `FuturesChipDAO.get_latest_date_before(date)` 是**嚴格小於**：籌碼盤後才公布，`<=` 那一個等號就是前視偏差。
+  - `BaseDAO.get_latest_date_before(date)` 是**嚴格小於**：籌碼、融資融券餘額盤後才公布，`<=` 那一個等號就是前視偏差。
+    API 層以 `PUBLISHED_AFTER_CLOSE` 宣告盤後公布的資料集（`StockChipAPI`、`StockMarginAPI`、`FuturesChipAPI`），
+    回測一律經 `get_available(date)`／`get_available_short_balance_map(date)` 取前一次公布的那份；沒宣告的資料集呼叫它會拋錯。
 - **區間查詢不可年、月（季）各自 `BETWEEN`**：月營收與財報的 `get_range` 以 `year * 100 + month`／
   `year * 10 + season` 比較，否則 2023-11～2024-02 這類跨年區間一筆都查不到。
 - **來源優先序去重是清洗規則，不放 DAO**：`core/pipeline/shared/source_priority.py`。

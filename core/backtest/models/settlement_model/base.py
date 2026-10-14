@@ -117,9 +117,10 @@ class BaseSettlementModel(ABC):
             原本台股空單、台股多單、期貨各有一支，滑價口徑與入帳方式三處各走各的。
             要拆開不同口徑得先在此分流，而不是各自繞過 `apply_fill_price()`。
 
-            **走 `close_position()` 的同標的 FIFO**，不指定部位：引擎強制出場的判準
-            （無報價、到期、停券）都是標的層級的狀態，同標的的各筆部位會在同一天
-            一起達到門檻，依開倉順序逐筆平掉就是全部平掉。
+            **平的就是傳入的這一筆**（`close_specific_position()`），不走同標的 FIFO：
+            停券回補只對 `MARGIN` 的融券生效、持有天數逐筆起算，同標的先借券（SBL）再
+            融券時 FIFO 會平到不該平的 SBL 那一筆，而且不會有任何錯誤訊息。無報價、到期
+            這類標的層級的判準逐筆呼叫，平掉的集合與 FIFO 相同。
         - Parameters:
             - position: BasePosition
                 要平掉的部位
@@ -136,7 +137,9 @@ class BaseSettlementModel(ABC):
         """
 
         order: BaseOrder = self.build_exit_order(position, date, price)
-        return self.position_manager.close_position(self.apply_fill_price(order, quote))
+        return self.position_manager.close_specific_position(
+            position, self.apply_fill_price(order, quote)
+        )
 
     @abstractmethod
     def build_exit_order(

@@ -267,3 +267,46 @@ class BasePositionManager(ABC):
         self.account.remove_closed_positions()
 
         return close_records
+
+    def close_specific_position(
+        self, position: BasePosition, order: BaseOrder
+    ) -> List[BaseTradeRecord]:
+        """
+        - Description:
+            平掉**指定的這一筆**部位（數量以該筆部位為上限），不走同標的 FIFO
+
+            引擎強制出場的判準有的是部位層級：停券回補只對 `MARGIN` 的融券生效、持有天數
+            逐筆起算。同標的先借券（SBL）再融券時，FIFO 會平到不該平的 SBL 那一筆，
+            MARGIN 的空單反而留在場上，而且不會有任何錯誤訊息。策略下的平倉單仍走
+            `close_position()` 的 FIFO。
+        - Parameters:
+            - position: BasePosition
+                要平的部位
+            - order: BaseOrder
+                平倉訂單（方向、價格、數量）；數量超過部位時只平到該部位的量
+        - Return:
+            - List[BaseTradeRecord]
+                平倉產生的交易紀錄；部位已平或沒有量可平時為空
+        - Raise:
+            - ValueError
+                訂單的標的或方向與部位不符（組單的程式有錯，不可靜默吞掉）
+        """
+
+        if (
+            order.symbol != position.symbol
+            or self.resolve_target_position_type(order) != position.position_type
+        ):
+            raise ValueError(
+                f"[Close Position] 平倉單 {order.symbol} {order.action} 與部位 "
+                f"{position.symbol} {position.position_type} 不符"
+            )
+
+        close_volume: int = min(position.volume, order.volume)
+        if position.is_closed or close_volume <= 0:
+            return []
+
+        record: Optional[BaseTradeRecord] = self.close_single_position(
+            position, order, close_volume
+        )
+        self.account.remove_closed_positions()
+        return [record] if record is not None else []
