@@ -44,6 +44,12 @@ class TwFuturesDataFeed(BaseDataFeed):
     # 日曆往回測結束日之後多取的曆日數：末段契約的最後交易日可能落在區間外
     CALENDAR_LOOKAHEAD_DAYS: int = 45
 
+    # 回測區間內沒有交易日時，錯誤訊息建議的補資料指令
+    BACKFILL_COMMAND: str = (
+        "python -m apps.update_db --target futures_price；"
+        "股票期貨為 --target futures_stock_price"
+    )
+
     def __init__(
         self,
         margin_config: Optional[FuturesMarginConfig] = None,

@@ -400,12 +400,21 @@ def isolated_futures_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     `setup()` 會以寫入模式連 `TW_FUTURES_DB_PATH`：沒有資料庫的機器上，這會在
     `data/db/` 建出 0 byte 的 `tw_futures.db`，之後「檔案存在才跑」的測試就不再
     跳過、改以 no such table 失敗——第一次跑 1 skipped、第二次 FAILED。
+
+    暫存資料庫是空的，`setup()` 建出的是空日曆，會被「區間內沒有交易日」的擋板拒絕；
+    這裡要驗的是保證金 API 的注入，擋板本身另有測試（`tests/backtest/test_empty_calendar.py`），
+    故在此關掉。
     """
 
     import core.backtest.datafeed.tw.futures_datafeed as datafeed_module
 
     db_path: Path = tmp_path / "tw_futures.db"
     monkeypatch.setattr(datafeed_module, "TW_FUTURES_DB_PATH", db_path)
+    monkeypatch.setattr(
+        datafeed_module.TwFuturesDataFeed,
+        "ensure_trading_days_in_range",
+        lambda self: None,
+    )
     return db_path
 
 

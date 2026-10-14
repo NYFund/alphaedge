@@ -49,6 +49,9 @@ class TwStockDataFeed(BaseDataFeed):
     # 21 個曆日足以涵蓋 4 個營業日加上農曆年連假
     FORCE_COVER_LOOKBACK_DAYS: int = 21
 
+    # 回測區間內沒有交易日時，錯誤訊息建議的補資料指令
+    BACKFILL_COMMAND: str = "python -m apps.update_db --target price"
+
     def __init__(self) -> None:
         super().__init__()
 

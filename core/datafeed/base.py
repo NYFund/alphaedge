@@ -39,6 +39,10 @@ class TradingListCoverageError(RuntimeError):
     """開啟了交易所名單檢核，但回測區間早於名單起點或名單有缺日"""
 
 
+class EmptyCalendarError(RuntimeError):
+    """回測區間內一個交易日都沒有：行情表缺表、是空的，或沒有這段期間的資料"""
+
+
 class BaseDataFeed(ABC):
     """
     資料源：把某個市場的原始資料變成引擎看得懂的報價
@@ -46,6 +50,9 @@ class BaseDataFeed(ABC):
     不算「行為 model」，但必須一起抽——否則引擎的資料載入仍會直接 import
     各（市場, 商品）組合的具體 API，`Backtester` 就不可能與兩者無關。
     """
+
+    # 區間內沒有交易日時，錯誤訊息建議的補資料指令；各市場覆寫成自己的行情 target
+    BACKFILL_COMMAND: str = "python -m apps.update_db"
 
     def __init__(self) -> None:
         # 回測區間；由 `setup()` 從策略記下。停券日推導、交易日曆、缺日報告都要知道區間
@@ -80,6 +87,7 @@ class BaseDataFeed(ABC):
         self.open_data_sources(strategy)
 
         self.calendar = self.build_calendar()
+        self.ensure_trading_days_in_range()
         self.report_calendar_gaps()
 
     @abstractmethod
@@ -111,6 +119,34 @@ class BaseDataFeed(ABC):
         """
 
         pass
+
+    def ensure_trading_days_in_range(self) -> None:
+        """
+        - Description:
+            回測區間內一個交易日都沒有就拋出，不讓回測靜默跑完
+
+            缺表在查詢層回空是對的（`OPTIONAL_TABLE`），但整場回測能不能跑是這一層的判斷：
+            空日曆會讓每個曆日都判成休市，回測照樣跑完、結束碼 0、報表全零，
+            批次跑的時候只剩一行 warning。行情表存在但為空（剛建表、尚未更新）也是同一個結果。
+            **只算區間內的交易日**：期貨日曆會往結束日之後多取幾天給換月用，
+            那幾天有資料不代表回測區間有。沒有區間或不建日曆的資料源（實盤）不檢查。
+        - Raise:
+            - EmptyCalendarError
+                有區間、有日曆，但區間內沒有任何交易日
+        """
+
+        if not self.start_date or not self.end_date or self.calendar is None:
+            return
+
+        start: datetime.date = self.start_date
+        end: datetime.date = self.end_date
+        if any(start <= day <= end for day in self.calendar.trading_days):
+            return
+
+        raise EmptyCalendarError(
+            f"回測區間 {start}～{end} 內沒有任何交易日：行情表缺表、是空的，或沒有這段期間的資料。"
+            f"請先補資料（{self.BACKFILL_COMMAND}）或調整回測區間（--start／--end）"
+        )
 
     def is_market_open(self, date: datetime.date) -> bool:
         """

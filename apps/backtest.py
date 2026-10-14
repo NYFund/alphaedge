@@ -7,7 +7,7 @@ from core.backtest.backtester import Backtester, InvalidTickUniverseError
 from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides, InvalidBacktestOverridesError
 from core.config import SHOW_FIGURES_ENV_VAR, resolve_show_figures
-from core.datafeed.base import TradingListCoverageError
+from core.datafeed.base import EmptyCalendarError, TradingListCoverageError
 from core.strategies.base import (
     BaseStrategy,
     RemovedStrategySettingError,
@@ -149,8 +149,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         # 訊息已寫明怎麼改，不需要 traceback
         print(str(exc), file=sys.stderr)
         return 1
-    except TradingListCoverageError as exc:
-        # 名單缺日或區間早於制度起點：訊息已寫明要改起日或先跑哪個 ETL，不需要 traceback
+    except (TradingListCoverageError, EmptyCalendarError) as exc:
+        # 名單缺日、區間早於制度起點，或區間內根本沒有行情：
+        # 訊息已寫明要改區間或先跑哪個 ETL，不需要 traceback
         print(str(exc), file=sys.stderr)
         return 1
     # 命令列旗標優先於環境變數；兩者都沒給就是不開圖
