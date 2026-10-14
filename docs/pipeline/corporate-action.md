@@ -30,7 +30,7 @@
 |------|------|----------|------|
 | 上市 | `www.twse.com.tw/rwd/zh/reducation/TWTAUU` | 西元 `YYYYMMDD` | 欄位：恢復買賣日期、股票代號、名稱、停止買賣前收盤價格、恢復買賣參考價、漲跌停價格、開盤競價基準、除權參考價、減資原因、詳細資料 |
 | 上櫃 | `www.tpex.org.tw/www/zh-tw/bulletin/revivt` | `YYYY/MM/DD` | 第 4 欄名為「最後交易日之收盤價格」；`詳細資料` 是一段 HTML，內含停止買賣日期與每仟股換發股數 |
-| 偵測 | 由行情偵測候選、人工確認後寫入（`scripts/manual/manual_corporate_action_detect.py`：不帶參數唯讀列出候選，帶 `--date`／`--symbol`／`--reason` ＋ `--ratio` 或 `--reference-price` 列出寫入計畫，另加 `--confirm` 才寫入） | — | ETF 受益權單位分割（例如 0050 在 2025-06-18 一拆四）**不在任何結構化端點裡**，只能走這條路徑 |
+| 偵測 | 由行情偵測候選、人工確認後寫入（`scripts/manual/manual_corporate_action_detect.py`：不帶參數唯讀列出候選（`--start`／`--threshold` 調整偵測起日與變動門檻），帶 `--date`／`--symbol`／`--reason` ＋ `--ratio` 或 `--reference-price` 列出寫入計畫，另加 `--confirm` 才寫入） | — | ETF 受益權單位分割（例如 0050 在 2025-06-18 一拆四）**不在任何結構化端點裡**，只能走這條路徑 |
 
 兩個端點回傳的日期都是民國年。兩者都直接提供「停止買賣前收盤價」與「恢復買賣參考價」，相除即為調整倍率。
 

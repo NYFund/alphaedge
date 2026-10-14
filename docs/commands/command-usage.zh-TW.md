@@ -43,7 +43,7 @@
 | `market_holiday`          | 市場開休市日期（TWSE 公告；每次重抓去年／今年／明年，寫入 `tw_stock.db`）。實盤盤前判定交易日的主來源 |
 | `futures_tick`            | 台期貨逐筆成交（Shioaji → DolphinDB；需 `[tick]` 相依與金鑰）。**不含在 `all`／`no_tick` 內**：沒有續跑紀錄、重跑會重複寫入，只在明確點名時才跑 |
 | `all`                     | 全部資料（含 tick；不含 `futures_tick`、`futures_stock_price` 與 `finmind`） |
-| `no_tick`                 | 全部資料（不含 `tick` **與** `futures_tick`，預設）。兩者都需要 Shioaji 金鑰與 `[tick]` 選用相依，不排除的話，沒有金鑰的機器每晚都會以結束碼 1 收場 |
+| `no_tick`                 | 全部資料（不含 `tick`、`futures_tick`，也不含只能點名的 `futures_stock_price`／`finmind`；預設）。兩種 tick 都需要 Shioaji 金鑰與 `[tick]` 選用相依，不排除的話，沒有金鑰的機器每晚都會以結束碼 1 收場 |
 
 ### 單一 target 範例
 
@@ -99,7 +99,7 @@ python -m apps.update_db --target futures_price
 # 整份清單一次 GET 就結束，同一天重跑不會產生第二份快照。
 # 來源沒有掛牌日／下市日欄位，兩者由快照序列差分推得，故建議每日更新——
 # 快照愈稀疏，推出來的日期誤差愈大。
-# 下游要取商品清單一律用 FuturesStockUniverseUpdater.get_active_products()，不要另外手寫清單。
+# 下游要取商品清單一律用 FuturesStockUniverseAPI.get_products()，不要另外手寫清單。
 python -m apps.update_db --target futures_stock_universe
 
 # 平盤下得融（借）券賣出名單、現股當沖名單（每日更新已含在 all／no_tick 內，這裡是單獨補跑）
@@ -108,7 +108,7 @@ python -m apps.update_db --target short_sale_list day_trade_list
 
 # 市場開休市日期（寫入 tw_stock.db 的 market_holiday 表）
 # 一年一次請求，每次重抓去年、今年、明年並整年替換。明年的公告通常 12 月才出來，
-# 那之前明年會被記為「尚未公告」跳過，屬正常；實盤查到未入庫年度的日期會拒絕啟動。
+# 那之前明年會被記為「尚未公告」跳過，屬正常；實盤查到未入庫年度的日期會拒絕啟動（除非其他日曆來源能判定）。
 python -m apps.update_db --target market_holiday
 
 # 全部資料（含 tick）
@@ -205,7 +205,8 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 | 旗標 | 說明 |
 |------|------|
 | `--strategy` | 策略類別名稱，可用逗號分隔多支（共用一個帳戶；不可混合台股與期貨） |
-| `--phase` | `open`／`close`／`after_close`／`intraday`；除 `--resync-from-broker` 外必填 |
+| `--phase` | `open`／`close`／`after_close`／`intraday`／`parity`；除 `--resync-from-broker` 外必填。`parity` 為次日資料更新後補比前一交易日的訊號 parity，不連券商、不送單 |
+| `--date YYYY-MM-DD` | 只與 `--phase parity` 併用：要補比的交易日，預設為歷史資料最新日 |
 | `--simulation`／`--production` | 模擬（預設）／正式環境；`--production` 必須同時帶 `--confirm-production` |
 | `--broker` | `shioaji`（預設）或 `fake`（測試用，正式環境拒絕） |
 | `--dry-run` | 走完整流程但不真的送出委託 |
@@ -218,7 +219,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 |:---:|---|
 | 0 | 正常結束 |
 | 1 | 未預期的例外 |
-| 2 | 用法錯誤：策略名找不到、缺 `--phase`、`--production` 沒帶 `--confirm-production`、旗標組合不合法 |
+| 2 | 用法錯誤：策略名找不到、缺 `--phase`、`--date` 沒搭 `--phase parity`、`--production` 沒帶 `--confirm-production`、旗標組合不合法 |
 | 3 | 資料未更新到前一個交易日，或判定不出今天是否為交易日 |
 | 4 | 對帳不一致，或以券商部位重建被拒絕 |
 | 5 | kill switch 生效 |
