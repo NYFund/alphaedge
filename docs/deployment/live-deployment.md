@@ -70,7 +70,7 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 - `--strategy A,B`：逗號分隔多支策略，共用一個帳戶（同一行不可混合台股與期貨策略，見下節）。
 - `--dry-run`：走完整流程但不真的送出委託。
 - `--broker fake`：測試用的假券商，正式環境一律拒絕（退出碼 2）。
-- `--resume-trading [策略名 ...]`：人工恢復交易模式，不給策略名時恢復帳戶層。
+- `--resume-trading [策略名 ...]`：人工恢復交易模式，不給策略名時恢復帳戶層。要搭配 `--phase`（單獨使用是用法錯誤）；非交易時段用 `--phase after_close`，不送新倉單，並在恢復後重新對帳一次。
 - `--simulation`（預設）／`--production --confirm-production`：連模擬或正式環境。
 - `--date YYYY-MM-DD`：只與 `--phase parity` 併用，否則退出碼 2。
 - `--resync-from-broker [--confirm-resync]`：以券商部位重建歸屬帳，見第 5 節。
@@ -123,8 +123,9 @@ CRON_TZ=Asia/Taipei
 uv run --no-sync python -m apps.live --strategy <策略> --resync-from-broker
 # 2. 看過計畫後才寫入
 uv run --no-sync python -m apps.live --strategy <策略> --resync-from-broker --confirm-resync
-# 3. 確認重建結果無誤後，另外解除降級
-uv run --no-sync python -m apps.live --strategy <策略> --resume-trading
+# 3. 確認重建結果無誤後，另外解除降級（--resume-trading 要搭配段落；
+#    非交易時段用 after_close：不送新倉單，並在恢復後重新對帳一次）
+uv run --no-sync python -m apps.live --strategy <策略> --phase after_close --resume-trading
 ```
 
 計畫沒有任何異動時不回 7，而是照一般段落的規則決定退出碼（例如帳戶層仍降級時回 6）。
