@@ -12,6 +12,7 @@ from core.live.datafeed.calendar import (
     resolve_trading_day,
 )
 from core.models import BaseOrder, BaseQuote, PriceLimits
+from core.strategies.base import BaseStrategy
 from core.utils import ExecutionTiming, Scale
 
 """
@@ -281,6 +282,21 @@ class BaseLiveDataFeed(BaseDataFeed):
         if not raw:
             return None
         return datetime.date.fromisoformat(str(raw))
+
+    def fill_default_symbols_after_connect(self, strategy: BaseStrategy) -> None:
+        """
+        - Description:
+            券商登入後，替還沒有標的池的策略補上預設標的；預設不做事
+
+            `setup()` 在組裝時執行，那時券商還沒登入。標的池要靠券商查的市場
+            （期貨的掛牌月份）在那裡補不到，必須在登入後再補一次；標的池靠
+            歷史資料庫就能組出的市場（股票）在 `setup()` 已補完，不必覆寫。
+        - Parameters:
+            - strategy: BaseStrategy
+                本次要跑的策略
+        """
+
+        return None
 
     # === 即時報價 ===
     @abstractmethod
