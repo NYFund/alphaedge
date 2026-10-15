@@ -71,6 +71,8 @@ ROLL_SKIPPED: str = "ROLL_SKIPPED"
 ROLL_FAILED: str = "ROLL_FAILED"
 ROLL_ABANDONED: str = "ROLL_ABANDONED"
 ROLL_OPEN_FAILED: str = "ROLL_OPEN_FAILED"
+# 券商登入後仍組不出標的池：策略拿到 0 筆報價、永遠不會出訊號，而鉤子照常被呼叫、不會報錯
+UNIVERSE_EMPTY: str = "UNIVERSE_EMPTY"
 # 盤後處理與對帳（`core/live/after_close.py`、`core/live/reconciler.py`）
 UNFILLED_EXIT: str = "UNFILLED_EXIT"
 COST_MODEL_DRIFT: str = "COST_MODEL_DRIFT"
@@ -98,6 +100,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         ROLL_FAILED,
         ROLL_ABANDONED,
         ROLL_OPEN_FAILED,
+        UNIVERSE_EMPTY,
         UNFILLED_EXIT,
         COST_MODEL_DRIFT,
         RECONCILE_MISMATCH,
