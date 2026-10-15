@@ -410,6 +410,7 @@ class LiveTrader:
         """
 
         self.broker.connect()
+        self.fill_default_symbols()
 
         # **先標記崩潰的舊紀錄再讀模式**：`get_last_account_mode()` 只讀已結束的
         # 那些，不先標記就會跳過上次崩潰的那一列，等於把它的降級狀態擦掉
@@ -523,6 +524,40 @@ class LiveTrader:
             for context in self.contexts:
                 context.data_feed.close()
             self.record_finish(error)
+
+    def fill_default_symbols(self) -> None:
+        """
+        - Description:
+            券商登入後替沒有標的池的策略補上預設標的，並更新 `context.symbols`
+
+            組裝時資料源的 `setup()` 就補過一次，但那時券商還沒登入：要靠券商查的
+            標的池（期貨的掛牌月份）在那裡一定補不到，`context.symbols` 抄到的是空清單，
+            之後每個段落都以空清單取報價、鉤子照常被呼叫卻永遠沒有訊號，**不會有任何錯誤**。
+
+            補完仍是空的就寫 CRITICAL 事件並推播：沒有標的的策略等於沒有在跑。
+        """
+
+        for context in self.contexts:
+            if context.symbols:
+                continue
+
+            context.data_feed.fill_default_symbols_after_connect(context.strategy)
+            context.symbols = list(getattr(context.strategy, "symbols", []) or [])
+            if context.symbols:
+                continue
+
+            message: str = (
+                f"{context.name} 在券商登入後仍組不出標的池："
+                "本段落取不到任何報價，不會產生任何訊號"
+            )
+            logger.error(message)
+            self.events.write(
+                category="UNIVERSE_EMPTY",
+                severity=NotifyLevel.CRITICAL,
+                message=message,
+                strategy_name=context.name,
+            )
+            self._notify(NotifyLevel.CRITICAL, "標的池為空", message)
 
     def mark_previous_crash(self) -> List[str]:
         """
