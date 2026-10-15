@@ -2,7 +2,7 @@ import argparse
 import datetime
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
@@ -318,6 +318,10 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
 
         以 `substr(started_at, 1, 10)` 取日期而不是 SQLite 的 `date()`：
         後者會把帶時區的時間換算成 UTC，台北早上 08:00 以前開始的段落會被算到前一天。
+
+        **`instrument_type` 欄不存在時讀成 NULL**：這欄由實盤行程啟動時補上，唯讀的
+        watchdog 補不了。新版部署後到下一個段落啟動前，直接選這欄會讓每一輪都報
+        「讀不到紀錄庫」——假警報之外，那段時間也完全沒在檢查段落。
     - Parameters:
         - db_path: str
             紀錄庫路徑
@@ -333,8 +337,15 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
 
     connection = connect_live_trading(db_path, read_only=True)
     try:
+        columns: Set[str] = {
+            row[1] for row in connection.execute("PRAGMA table_info(live_run)")
+        }
+        instrument_column: str = (
+            "instrument_type" if "instrument_type" in columns else "NULL"
+        )
         return connection.execute(
-            "SELECT phase, started_at, ended_at, end_reason, instrument_type "
+            "SELECT phase, started_at, ended_at, end_reason, "
+            f"{instrument_column} AS instrument_type "
             "FROM live_run "
             "WHERE substr(started_at, 1, 10) = ? ORDER BY started_at, rowid",
             (today.isoformat(),),

@@ -629,6 +629,43 @@ def test_fetch_runs_returns_the_instrument_type(tmp_path: Path) -> None:
     assert rows[0][4] == "Future"
 
 
+def test_fetch_runs_reads_a_database_without_the_instrument_column(
+    tmp_path: Path,
+) -> None:
+    """
+    紀錄庫還沒補 `instrument_type` 欄時，商品類別讀成 None，不能報讀不到紀錄庫
+
+    這欄由實盤行程啟動時補上、唯讀的 watchdog 補不了；新版部署後到下一個段落
+    啟動前，直接選這欄會讓每一輪都假告警，且那段時間完全沒在檢查段落。
+    """
+
+    path: Path = tmp_path / "tw_trading.db"
+    conn: sqlite3.Connection = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE live_run (run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL, "
+        "ended_at TEXT, phase TEXT NOT NULL, end_reason TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO live_run VALUES "
+        "('run1', '2026-09-21 13:28:00', '2026-09-21 13:40:00', 'close', '正常結束')"
+    )
+    conn.commit()
+    conn.close()
+
+    rows: List[Tuple[Any, ...]] = fetch_runs(str(path), TODAY)
+    statuses: List[PhaseStatus] = check_phases(
+        rows,
+        {"close:futures": datetime.time(13, 28)},
+        datetime.datetime(2026, 9, 21, 14, 0),
+        grace_minutes=15,
+    )
+
+    assert rows == [
+        ("close", "2026-09-21 13:28:00", "2026-09-21 13:40:00", "正常結束", None)
+    ]
+    assert statuses[0].is_healthy is True
+
+
 def test_watchdog_reads_the_database_read_only(tmp_path: Path) -> None:
     """
     watchdog **只以唯讀開啟紀錄庫、不連券商**
