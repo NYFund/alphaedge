@@ -14,6 +14,7 @@ from core.live.strategy_guard import inspect_strategy
 from core.live.trader import LiveTrader
 from core.market.tw.market_calendar import MarketCalendar
 from core.models.stock.trading_list import DayTradeListSnapshot
+from core.utils import Action, PositionType
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from strategies.stock.volume_breakout_momentum_strategy import (
     VolumeBreakoutMomentumStrategy,
@@ -257,3 +258,28 @@ def test_context_reads_the_universe_after_setup() -> None:
     )
 
     assert trader.contexts[0].symbols == ["2330", "2317"]
+
+
+def test_parity_checker_gets_the_order_phase_lookup() -> None:
+    """
+    組裝層要把「回測委託該在哪個段落送出」交給 parity
+
+    沒接上的話，段落中止的日子回測多出的單全都落在未解釋（2026-10-14 股票尾盤段就是這樣）。
+    """
+
+    dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
+    dao.ensure_tables()
+    # 開平倉都宣告在尾盤段（與演練的股票策略相同）、自帶標的池，不必讀價格表
+    strategy: LiveStockStrategy = LiveStockStrategy()
+    trader: LiveTrader = build_live_trader(
+        [strategy],
+        broker=FakeBroker(),
+        dao=dao,
+        run_id="20260922140000",
+        now_provider=lambda: datetime.datetime(2026, 9, 22, 14, 0),
+    )
+
+    checker: Any = trader.after_close.parity_checker
+    assert checker is not None and checker.order_phases is not None
+    order: Any = SimpleNamespace(action=Action.BUY, position_type=PositionType.LONG)
+    assert checker.order_phases(type(strategy).__name__, order) == {"close"}

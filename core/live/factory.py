@@ -46,7 +46,7 @@ from core.live.notify.base import BaseNotifier, NullNotifier
 from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
-from core.live.report.parity_checker import ParityChecker
+from core.live.report.parity_checker import TIMING_TO_PHASE, ParityChecker
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
@@ -69,7 +69,7 @@ from core.models import (
     StockPositionSnapshot,
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
-from core.portfolio.order_rules import resolve_open_action
+from core.portfolio.order_rules import is_opening, resolve_open_action
 from core.position.assembly import (
     TwFuturesModels,
     TwStockModels,
@@ -78,13 +78,14 @@ from core.position.assembly import (
 )
 from core.position.base.position_manager import BasePositionManager
 from core.position.futures.position_manager import FuturesPositionManager
-from core.strategies.base import BaseStrategy
+from core.strategies.base import BaseStrategy, resolve_hook_timing
 from core.utils import (
     FUTURES_MULTIPLIER,
     Action,
     ExecutionTiming,
     FuturesRollRule,
     InstrumentType,
+    LiveHook,
     Market,
     PositionType,
     Units,
@@ -456,6 +457,7 @@ def build_live_trader(
         make_daily_backtest_runner(strategies, resolved_dao.get_lots_held_at_start),
         strategy_names=[type(strategy).__name__ for strategy in strategies],
         closing_limit=make_closing_limit_lookup(),
+        order_phases=make_order_phase_lookup(strategies),
     )
     # 先組好引擎、再寫 `live_run`：組裝過程中任何一步拋錯（例如兩個市場的時窗
     # 沒有交集）都是設定錯誤，那時不該留下一筆沒有結束時間的執行紀錄——
@@ -907,6 +909,48 @@ def make_daily_backtest_runner(
         return [order for _, _, order in backtester.submitted_orders]
 
     return run
+
+
+def make_order_phase_lookup(
+    strategies: Sequence[BaseStrategy],
+) -> Callable[[str, BaseOrder], Set[str]]:
+    """
+    - Description:
+        產生 parity 用的「回測這張單該在哪些段落送出」查詢
+
+        開倉單看 `open` 鉤子的段落；平倉單同時看 `close` 與 `stop_loss`——回測的委託分不出
+        是一般平倉還是停損，兩個段落都要中止，parity 才能把它歸給段落中止。
+        段落沿用實盤引擎同一套解析（`resolve_hook_timing()`，沒宣告的鉤子會退回 `close`），
+        兩邊各算一份的話，宣告改了只有一邊跟上。
+    - Parameters:
+        - strategies: Sequence[BaseStrategy]
+            本次行程載入的策略
+    - Return:
+        - Callable[[str, BaseOrder], Set[str]]
+            `(策略名, 回測委託) → 段落名集合`；認不得的策略或沒有段落時為空集合
+    """
+
+    by_name: Dict[str, BaseStrategy] = {
+        type(strategy).__name__: strategy for strategy in strategies
+    }
+
+    def lookup(strategy_name: str, order: BaseOrder) -> Set[str]:
+        strategy: Optional[BaseStrategy] = by_name.get(strategy_name)
+        if strategy is None:
+            return set()
+        opening: bool = is_opening(order)
+        hooks: List[LiveHook] = (
+            [LiveHook.OPEN] if opening else [LiveHook.CLOSE, LiveHook.STOP_LOSS]
+        )
+        phases: Set[str] = set()
+        for hook in hooks:
+            timing: Optional[ExecutionTiming] = resolve_hook_timing(strategy, hook)
+            if timing is None or timing not in TIMING_TO_PHASE:
+                return set()
+            phases.add(TIMING_TO_PHASE[timing])
+        return phases
+
+    return lookup
 
 
 def make_closing_limit_lookup(

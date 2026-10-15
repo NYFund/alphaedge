@@ -10,6 +10,7 @@ from loguru import logger
 
 from core.config.paths import LIVE_RESULT_DIR_PATH
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.attribution.position_ledger import ACCOUNT_STRATEGY
 from core.live.notify.base import NotifyLevel
 from core.live.risk import event_categories as risk_events
 from core.models import BaseOrder
@@ -17,6 +18,7 @@ from core.portfolio import order_rules
 from core.utils import (
     Action,
     ExecutionStyle,
+    ExecutionTiming,
     LiveOrderStatus,
     OrderType,
 )
@@ -43,6 +45,21 @@ CATEGORY_SNAPSHOT_GAP: str = "SNAPSHOT_GAP"
 # 交易段落：parity 判斷「實盤當天有沒有正常跑到策略」時只看這些，
 # 盤後與補比不呼叫策略鉤子，它們正不正常與訊號無關
 TRADING_PHASES: Set[str] = {"open", "close", "intraday"}
+
+# 執行時點 → `live_run.phase` 的段落名；與入口 `apps/live.py` 的 `PHASE_TO_TIMING` 互為反向，兩邊要一致
+TIMING_TO_PHASE: Dict[ExecutionTiming, str] = {
+    ExecutionTiming.AT_OPEN: "open",
+    ExecutionTiming.AT_CLOSE: "close",
+    ExecutionTiming.IMMEDIATE: "intraday",
+}
+
+# 回測的這張單該在哪些段落送出（`(策略名, 委託) → 段落名集合`）；由組裝層依策略的段落宣告提供
+OrderPhaseLookup = Callable[[str, BaseOrder], Set[str]]
+
+# 回測有、實盤沒有，而**這張單該送出的段落當天非正常結束**（登入失敗、資料新鮮度擋下等）。
+# 原因已知、也已由段落的結束碼與 watchdog 報過，不該再以 `UNEXPLAINED` 發一次 CRITICAL；
+# 但只在段落對得上時才歸這一類——開盤段中止不能拿來解釋尾盤段該送的單
+CATEGORY_SEGMENT_ABORTED: str = "SEGMENT_ABORTED"
 CATEGORY_RISK_REJECTED: str = "RISK_REJECTED"
 
 # 送出但未成交所造成的差異，成因是「開倉未成交一律放棄、平倉與停損未成交必須補」。
@@ -133,6 +150,8 @@ CATEGORY_GROUP: Dict[str, str] = {
     CATEGORY_LIMIT_UNFILLED: GROUP_EXECUTION,
     CATEGORY_LOCKED_AT_LIMIT: GROUP_EXECUTION,
     CATEGORY_SEND_FAILED: GROUP_EXECUTION,
+    # 策略該做的決定沒機會做，屬於「沒執行到」而不是訊號漂移
+    CATEGORY_SEGMENT_ABORTED: GROUP_EXECUTION,
 }
 
 
@@ -234,6 +253,7 @@ class ParityChecker:
         closing_limit: Optional[
             Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
         ] = None,
+        order_phases: Optional[OrderPhaseLookup] = None,
     ) -> None:
         """
         - Description:
@@ -252,6 +272,9 @@ class ParityChecker:
             - closing_limit: Optional[Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]]
                 `(標的, 買賣別, 交易日) → (收盤價, 漲跌停價)`；判斷集合競價沒成交是不是
                 收盤鎖住。`None` 時一律查不到，集合競價沒成交歸 `UNFILLED`
+            - order_phases: Optional[OrderPhaseLookup]
+                `(策略名, 回測委託) → 該送出的段落名集合`；判斷「回測有、實盤沒有」是不是
+                該段落中止造成。`None` 時一律判不出，那些差異留在原本的類別
         """
 
         self.dao: LiveTradeDAO = dao
@@ -265,6 +288,7 @@ class ParityChecker:
         self.closing_limit: Optional[
             Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
         ] = closing_limit
+        self.order_phases: Optional[OrderPhaseLookup] = order_phases
 
     def check(self, run_date: datetime.date) -> Dict[str, List[ParityDiff]]:
         """
@@ -301,6 +325,12 @@ class ParityChecker:
                 logger.debug(f"略過不在本次行程的策略：{sorted(skipped)}")
             names = set(self.strategy_names)
 
+        # 帳戶層的逐單擋下（例如同一批委託合計超過單一標的曝險上限）記在
+        # `__account__` 名下而不是策略名下；不納入的話，被它擋下的單對每支策略都成了未解釋
+        account_events: List[Dict[str, Any]] = [
+            event for event in events if event.get("strategy_name") == ACCOUNT_STRATEGY
+        ]
+
         result: Dict[str, List[ParityDiff]] = {}
         for name in sorted(names):
             own_events: List[Dict[str, Any]] = [
@@ -310,9 +340,12 @@ class ParityChecker:
                 name,
                 run_date,
                 [row for row in live_orders if row["strategy_name"] == name],
-                own_events,
+                own_events + account_events,
                 [row for row in resolved if row.get("strategy_name") == name],
+                # 「段落正常」只看策略自己的事件：帳戶層的 CRITICAL 另有歸屬，
+                # 拿來否定快照口徑的話，一筆帳戶層事件會讓所有策略的差異都升成未解釋
                 segments_ran_cleanly(name, runs, own_events),
+                aborted_phases(name, runs),
             )
             result[name] = diffs
             self._persist(name, run_date, diffs)
@@ -331,6 +364,7 @@ class ParityChecker:
         events: List[Dict[str, Any]],
         resolved_actions: Sequence[Dict[str, Any]] = (),
         ran_cleanly: bool = False,
+        aborted: Optional[Set[str]] = None,
     ) -> List[ParityDiff]:
         """比對單一策略；回測跑不起來時視為整批未解釋，不是靜靜跳過"""
 
@@ -363,6 +397,13 @@ class ParityChecker:
             def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
                 return closing_limit(symbol, side, run_date)
 
+        phases_of: Optional[Callable[[BaseOrder], Set[str]]] = None
+        if self.order_phases is not None:
+            order_phases: OrderPhaseLookup = self.order_phases
+
+            def phases_of(order: BaseOrder) -> Set[str]:
+                return order_phases(strategy_name, order)
+
         return compare(
             live_orders,
             backtest_orders,
@@ -370,6 +411,8 @@ class ParityChecker:
             resolved_actions,
             ran_cleanly,
             closing_limit=lookup,
+            aborted_phases=aborted or set(),
+            order_phases=phases_of,
         )
 
     def _persist(
@@ -443,6 +486,8 @@ def compare(
     resolved_actions: Sequence[Dict[str, Any]] = (),
     ran_cleanly: bool = False,
     closing_limit: Optional[ClosingLimitLookup] = None,
+    aborted_phases: Optional[Set[str]] = None,
+    order_phases: Optional[Callable[[BaseOrder], Set[str]]] = None,
 ) -> List[ParityDiff]:
     """
     - Description:
@@ -466,6 +511,10 @@ def compare(
             （見 `segments_ran_cleanly()`）；決定「回測多出的開倉單」能不能歸給快照口徑
         - closing_limit: Optional[ClosingLimitLookup]
             `(標的, 買賣別) → (收盤價, 漲跌停價)`；集合競價沒成交時用來確認收盤是否鎖住
+        - aborted_phases: Optional[Set[str]]
+            這支策略當天非正常結束的交易段落（見 `aborted_phases()`）
+        - order_phases: Optional[Callable[[BaseOrder], Set[str]]]
+            回測委託 → 該送出的段落名集合；與 `aborted_phases` 一起判斷「段落中止」
     - Return:
         - List[ParityDiff]
             差異清單；兩邊完全一致時為空
@@ -516,13 +565,22 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            # 優先序：風控／守門事件 → 快照口徵（反方向）→ 未解釋
+            # 優先序：風控／守門事件 → 段落中止 → 快照口徵（反方向）→ 未解釋
             missing_note: str = ""
             category: Optional[str] = None
             if symbol in blocked:
                 # 類別只分三種，事件名才說得出是哪一條規則擋的，寫進 note 留給人看
                 category, event_category = blocked[symbol]
                 missing_note = f"實盤在送出前被 {event_category} 擋下"
+            matched: Set[str] = _aborted_phases_of(
+                bt_orders, aborted_phases or set(), order_phases
+            )
+            if category is None and matched:
+                category = CATEGORY_SEGMENT_ABORTED
+                missing_note = (
+                    f"該送出這張單的段落（{'、'.join(sorted(matched))}）"
+                    "當天非正常結束，策略沒有機會做決定"
+                )
             if category is None:
                 if ran_cleanly and all(order_rules.is_opening(o) for o in bt_orders):
                     category = CATEGORY_SNAPSHOT_GAP
@@ -570,8 +628,67 @@ def _blocked_symbols(events: Sequence[Dict[str, Any]]) -> Dict[str, Tuple[str, s
         symbol: Optional[str] = event.get("symbol")
         if category is None or not symbol:
             continue
-        blocked.setdefault(str(symbol), (category, event_category))
+        # 帳戶層的擋下要看得出來：同一條規則擋策略與擋整批，查的地方不同
+        label: str = (
+            f"帳戶層 {event_category}"
+            if event.get("strategy_name") == ACCOUNT_STRATEGY
+            else event_category
+        )
+        blocked.setdefault(str(symbol), (category, label))
     return blocked
+
+
+def aborted_phases(strategy_name: str, runs: Sequence[Dict[str, Any]]) -> Set[str]:
+    """
+    - Description:
+        這支策略當天**非正常結束、而且沒有重跑成功**的交易段落
+
+        同一段落重跑過、最後一次正常結束的不算：那一段的決定還是做了。
+        認不出策略的執行紀錄不算（理由同 `segments_ran_cleanly()`）；
+        段落根本沒有啟動紀錄（排程沒跑）也不算——沒有紀錄就沒有證據，留給未解釋。
+    - Parameters:
+        - strategy_name: str
+            策略名
+        - runs: Sequence[Dict[str, Any]]
+            當日 `live_run` 的列
+    - Return:
+        - Set[str]
+            段落名（`open`／`close`／`intraday`）
+    """
+
+    reasons: Dict[str, List[str]] = {}
+    for run in runs:
+        phase: str = str(run.get("phase"))
+        if phase in TRADING_PHASES and strategy_name in _run_strategies(run):
+            reasons.setdefault(phase, []).append(str(run.get("end_reason")))
+    return {
+        phase
+        for phase, ends in reasons.items()
+        if LiveTradeDAO.END_REASON_NORMAL not in ends
+    }
+
+
+def _aborted_phases_of(
+    bt_orders: Sequence[BaseOrder],
+    aborted: Set[str],
+    order_phases: Optional[Callable[[BaseOrder], Set[str]]],
+) -> Set[str]:
+    """
+    回測多出的這幾張單，是不是**全部**都該在中止的段落送出；是的話回傳對到的段落，否則回空集合
+
+    任何一張判不出段落、或該送的段落有一個正常跑完，都不算：那張單可能是在
+    正常的段落裡沒送出，原因未知，不可拿別的段落中止來解釋
+    """
+
+    if order_phases is None or not aborted:
+        return set()
+    matched: Set[str] = set()
+    for order in bt_orders:
+        phases: Set[str] = order_phases(order)
+        if not phases or not phases <= aborted:
+            return set()
+        matched |= phases
+    return matched
 
 
 def _is_threshold_gap(live_rows: Sequence[Dict[str, Any]]) -> bool:
