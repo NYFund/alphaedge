@@ -161,6 +161,17 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         strategy.symbols = symbols
         logger.info(f"{type(strategy).__name__} 未宣告標的池，以 {symbols} 為標的")
 
+    def fill_default_symbols_after_connect(self, strategy: BaseStrategy) -> None:
+        """
+        券商登入後再補一次標的池
+
+        掛牌月份要靠券商的 `resolver` 查，而 `resolver` 在登入時才建立；`setup()`
+        在組裝時呼叫，那一次一定補不到。不在這裡補的話，沒宣告 `symbols` 的期貨策略
+        每個段落都拿到 0 筆報價、永遠不出訊號，而且不會有任何錯誤。
+        """
+
+        self.fill_default_contracts(strategy)
+
     def inject_margin_api(self) -> None:
         """
         - Description:
