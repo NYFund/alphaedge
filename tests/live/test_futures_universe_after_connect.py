@@ -9,10 +9,10 @@ from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import build_live_trader
 from core.live.trader import LiveTrader, StrategyContext
-from core.strategies.futures.futures_rollover_rehearsal_strategy import (
+from strategies.futures.futures_rollover_rehearsal_strategy import (
     FuturesRolloverRehearsalStrategy,
 )
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 
 from .conftest import FakeBroker
 
