@@ -260,6 +260,8 @@ class _FakeArgs:
     def __init__(self, target: List[str], from_date=None) -> None:
         self.target: List[str] = target
         self.from_date = from_date
+        self.retry_failed: int = 0
+        self.retry_wait: int = 0
 
 
 # === S3：每個 loader 的「壞檔 → DataLoadError」 ===

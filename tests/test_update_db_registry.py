@@ -47,7 +47,9 @@ def test_shortcuts_follow_the_declared_flags() -> None:
 def test_main_has_a_single_loop_not_a_block_per_target() -> None:
     """`main()` 不再逐 target 手寫：原始碼裡沒有任何 `if DataType.X ... in targets` 區塊"""
 
-    source: str = inspect.getsource(update_db.main)
+    source: str = inspect.getsource(update_db.main) + inspect.getsource(
+        update_db.run_targets
+    )
 
     assert "if DataType." not in source
     assert "for spec in TARGETS" in source
@@ -169,6 +171,8 @@ def test_main_runs_each_target_with_its_range_and_closes(monkeypatch) -> None:
         lambda: argparse.Namespace(
             target=["price", "tick", "futures_chip"],
             from_date=datetime.date(2024, 1, 1),
+            retry_failed=0,
+            retry_wait=0,
         ),
     )
 

@@ -16,6 +16,8 @@ A failing target does not stop the others, but the run exits with code 1 at the 
 
 - `--target <target> [<target> ...]`: one or multiple update targets.
 - `--from YYYY-MM-DD`: pull the start date earlier than the default (see below).
+- `--retry-failed ROUNDS`: rerun **only the failed targets** up to this many more rounds (default `0`, no retry). It stops early once every target has succeeded; the exit code reflects the targets that still fail after the last round.
+- `--retry-wait MINUTES`: minutes to wait before each retry round (default `60`; an exchange that blocks the source IP usually takes tens of minutes to lift it). The scheduled run uses `--retry-failed 4 --retry-wait 60`.
 
 ### Target Reference
 

@@ -14,6 +14,8 @@
 
 - `--target <target> [<target> ...]`：欲更新的資料類型，可指定一個或多個。
 - `--from YYYY-MM-DD`：把起日往前拉（見下方說明）。
+- `--retry-failed ROUNDS`：**只重跑失敗的 target**，最多再跑幾輪（預設 `0`，不重試）；全部補上就提前結束，結束碼以最後一輪仍失敗的 target 為準。
+- `--retry-wait MINUTES`：每輪重跑前等幾分鐘（預設 `60`；交易所封鎖來源 IP 通常要數十分鐘以上才解除）。排程用的是 `--retry-failed 4 --retry-wait 60`。
 
 ### Target 對照表
 

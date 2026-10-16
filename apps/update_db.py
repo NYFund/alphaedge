@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import sys
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
@@ -58,6 +59,10 @@ from core.pipeline.utils import DataLoadError, DataType, FinMindDataType
 
 # api 桶日誌的保留天數（`update_db` 收尾會自動清理）
 API_LOG_RETENTION_DAYS: int = 7
+
+# 失敗 target 重跑前的預設等待（分鐘）：交易所封鎖來源 IP 通常要數十分鐘以上才解除，
+# 等太短只會再被擋一次
+DEFAULT_RETRY_WAIT_MINUTES: int = 60
 
 """
 資料更新任務主程式 (update_db)
@@ -120,6 +125,7 @@ Target 對照表
   python -m apps.update_db --target chip price tick         # 多個 target
   python -m apps.update_db --target futures_stock_price     # 只能這樣點名才會跑
   python -m apps.update_db --target all --from 2024-01-01   # 覆寫起日
+  python -m apps.update_db --retry-failed 4 --retry-wait 60 # 失敗的 target 每小時重跑，最多 4 輪
 """
 
 
@@ -390,7 +396,26 @@ def parse_arguments() -> argparse.Namespace:
             "要把起點往前拉到比預設更早時才用得到"
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--retry-failed",
+        dest="retry_failed",
+        type=int,
+        default=0,
+        metavar="ROUNDS",
+        help="失敗的 target 最多再重跑幾輪（只重跑失敗的那幾個）；預設 0 不重試",
+    )
+    parser.add_argument(
+        "--retry-wait",
+        dest="retry_wait",
+        type=int,
+        default=DEFAULT_RETRY_WAIT_MINUTES,
+        metavar="MINUTES",
+        help=f"每輪重跑前等幾分鐘（預設 {DEFAULT_RETRY_WAIT_MINUTES}）",
+    )
+    args: argparse.Namespace = parser.parse_args()
+    if args.retry_failed < 0 or args.retry_wait < 0:
+        parser.error("--retry-failed 與 --retry-wait 不可為負數")
+    return args
 
 
 def get_update_time_config(
@@ -552,18 +577,21 @@ def cleanup_api_logs() -> None:
         logger.warning(f"清理 api 日誌失敗（不影響更新結果）：{error}")
 
 
-def main() -> None:
-    """依 `--target` 逐一更新；任一 target 失敗仍跑完其餘，最後以非零結束碼收尾"""
+def run_targets(targets: Set[str], from_date: Optional[datetime.date]) -> List[str]:
+    """
+    - Description:
+        依註冊表順序更新 `targets` 裡的每個 target；任一失敗仍跑完其餘
+    - Parameters:
+        - targets: Set[str]
+            要更新的 target（已展開捷徑；捷徑名稱本身會被略過）
+        - from_date: Optional[datetime.date]
+            `--from` 的覆寫起日
+    - Return:
+        - List[str]
+            失敗的 target
+    """
 
-    args: argparse.Namespace = parse_arguments()
-    targets: Set[str] = set(args.target)
-    from_date: Optional[datetime.date] = args.from_date
     failed_targets: List[str] = []
-
-    if from_date is not None:
-        logger.info(f"--from {from_date}：以日期為單位的 target 一律由此日起算")
-
-    targets = expand_targets(targets)
 
     for spec in TARGETS:
         if spec.name not in targets:
@@ -583,6 +611,75 @@ def main() -> None:
                 close: Optional[Callable[[], None]] = getattr(updater, "close", None)
                 if close is not None:
                     close()
+
+    return failed_targets
+
+
+def retry_failed_targets(
+    failed_targets: List[str],
+    from_date: Optional[datetime.date],
+    rounds: int,
+    wait_minutes: int,
+) -> List[str]:
+    """
+    - Description:
+        只重跑失敗的 target，最多 `rounds` 輪，每輪之前先等 `wait_minutes` 分鐘
+
+        失敗多半是暫時的：交易所封鎖來源 IP、網路中斷，過一陣子就恢復。
+        整批重跑要數十分鐘到數小時，而成功的 target 已經入庫，只需要補失敗的那幾個；
+        全部補上就提前結束，不會白等剩下的輪數。
+    - Parameters:
+        - failed_targets: List[str]
+            第一次執行失敗的 target
+        - from_date: Optional[datetime.date]
+            `--from` 的覆寫起日
+        - rounds: int
+            最多重跑幾輪；0 表示不重試
+        - wait_minutes: int
+            每輪之前等幾分鐘
+    - Return:
+        - List[str]
+            最後仍失敗的 target
+    """
+
+    remaining: List[str] = list(failed_targets)
+
+    for round_no in range(1, rounds + 1):
+        if not remaining:
+            break
+        logger.warning(
+            f"{wait_minutes} 分鐘後第 {round_no}/{rounds} 輪重跑失敗的 target："
+            f"{', '.join(sorted(remaining))}"
+        )
+        time.sleep(wait_minutes * 60)
+        still_failed: List[str] = run_targets(set(remaining), from_date)
+        recovered: List[str] = sorted(set(remaining) - set(still_failed))
+        if recovered:
+            logger.info(f"第 {round_no} 輪重跑成功：{', '.join(recovered)}")
+        remaining = still_failed
+
+    return remaining
+
+
+def main() -> None:
+    """依 `--target` 逐一更新；失敗的 target 依 `--retry-failed` 重跑，仍失敗就以非零結束碼收尾"""
+
+    args: argparse.Namespace = parse_arguments()
+    targets: Set[str] = set(args.target)
+    from_date: Optional[datetime.date] = args.from_date
+
+    if from_date is not None:
+        logger.info(f"--from {from_date}：以日期為單位的 target 一律由此日起算")
+
+    targets = expand_targets(targets)
+
+    failed_targets: List[str] = run_targets(targets, from_date)
+    failed_targets = retry_failed_targets(
+        failed_targets,
+        from_date,
+        rounds=args.retry_failed,
+        wait_minutes=args.retry_wait,
+    )
 
     # **一定要在結束碼判斷之前**：失敗的那幾天正是 `logs/api/` 長最多的時候，
     # 放在 `sys.exit(1)` 之後等於永遠跑不到
