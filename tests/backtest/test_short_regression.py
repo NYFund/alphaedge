@@ -69,7 +69,7 @@ def assert_matches_snapshot(actual: pd.DataFrame, file_name: str) -> None:
 
 
 def test_short_regression_snapshot() -> None:
-    """重跑六組放空情境並與 baseline 逐筆比對交易紀錄"""
+    """重跑所有放空情境並與 baseline 逐筆比對交易紀錄"""
 
     trades, _, _ = run_all_scenarios()
     assert_matches_snapshot(trades, BASELINE_FILE_NAME)

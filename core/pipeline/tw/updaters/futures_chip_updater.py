@@ -87,7 +87,7 @@ class FuturesChipUpdater(BaseDataUpdater):
     # 「固定起點」還是「滾動視窗」**。兩種寫法猜錯的代價不對稱——
     # 猜成滾動而實際是固定，夾擠點會逐年往後跑、把真的拿得到的資料擋在外面且無聲；
     # 猜成固定而實際是滾動，最多只是每次回補多問幾個已經滑出視窗的月份，
-    # 而月批次一個月只有一次請求，且日常續跑本來就從表內最新日接續、根本走不到這裡。
+    # 而月批次一個月只有一次請求，且日常續跑本來就不回頭看表內第一筆之前、根本走不到這裡。
     INSTITUTIONAL_EARLIEST_DATE: datetime.date = datetime.date(2023, 9, 4)
 
     def __init__(self) -> None:
@@ -156,13 +156,13 @@ class FuturesChipUpdater(BaseDataUpdater):
         - Description:
             以**月批次**更新三個籌碼資料集
 
-            **每個資料集各自續跑**：以自己表內的最新日為起點，避免已補到的那一張
-            重爬一整段。`resume=False` 則一律使用傳入的 `start_date`（歷史回補用）。
+            **每個資料集各自續跑**：各自從表內第一筆起取差集、只補缺的日子，避免已補到的那一張
+            重爬一整段（見 `plan_dates()`）。`resume=False` 則一律使用傳入的 `start_date`（歷史回補用）。
         - Parameters:
             - start_date / end_date: Optional[datetime.date]
                 回補區間；None 分別取 `DEFAULT_START_DATE` 與今天
             - resume: bool
-                是否從各表的最新日接續
+                True 各表走差集續跑（不回頭看表內第一筆之前）；False 照 `start_date` 整段重抓
             - tables: Optional[List[str]]
                 只更新這幾張表；None 表示三張全做。
 

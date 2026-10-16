@@ -96,8 +96,8 @@ SELL_FIRST_DAY_TRADE_START_DATE: datetime.date = datetime.date(2014, 6, 30)
 # 此處取 2015-01-01 是**刻意收窄**，不是資料限制。
 #
 # 要改回更早的起點，改這一行即可——**已入庫的資料不受影響**（loader 走
-# INSERT OR IGNORE），續跑會從表內該商品的最新日接續，
-# 故往前擴張需要另行指定區間重跑，見 `FuturesPriceUpdater.update()`。
+# INSERT OR IGNORE），但續跑只補表內該商品第一筆之後缺的日子、不會往前，
+# 故往前擴張要以 `resume=False` 另行重跑，見 `FuturesPriceUpdater.update()`。
 DEFAULT_FUTURES_START_DATE: datetime.date = datetime.date(2015, 1, 1)
 
 # 各商品在 TAIFEX 第一個有行情的日期（2026-09-02 以 crawler 逐日實測）。

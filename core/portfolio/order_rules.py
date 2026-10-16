@@ -323,8 +323,9 @@ def sort_orders(orders: List[BaseOrder]) -> List[BaseOrder]:
         **穩定排序**：同一標的的多筆委託維持策略給定的先後，
         分批建倉與部分平倉的意圖不會被打散。
 
-        **已知限制**：Tick 級別的 `order.date` 只到「日」，因此同一 bar 內的
-        tick 委託無法依成交時間排序，會被壓成依代號排序。
+        **`order.date` 只到「日」不影響逐筆回測**：逐筆 simulator 依時間逐筆重放，
+        每次只把同一時刻（同一筆 tick 或同一次集合競價）產生的委託交給這裡排序，
+        跨時刻的先後由重放順序決定，不靠這個排序鍵。
     - Parameters:
         - orders: List[BaseOrder]
             同一根 bar 內、同一個階段（開倉或平倉）的委託

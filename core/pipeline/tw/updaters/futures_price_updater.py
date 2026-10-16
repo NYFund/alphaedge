@@ -270,15 +270,16 @@ class FuturesPriceUpdater(BaseDataUpdater):
             未指定 `products` 時取用 `FUTURES_TARGET_PRODUCTS`。
         - Parameters:
             - start_date: datetime.date
-                起日；`resume=True` 時會被該商品在表內的最新日覆蓋
+                起日（會先夾到該商品的上市日）；`resume=True` 時不會早於該商品在表內的第一筆
             - end_date: Optional[datetime.date]
                 迄日；None 取當日
             - products: Optional[List[str]]
                 要更新的商品；None 表示取設定檔
             - resume: bool
-                True（日常更新）：起點取「表內該商品最新日 +1」，只補新的。
-                False（歷史回補）：一律照 `start_date` 跑。**把起點往前拉時
-                必須用這個**——日常路徑會被表內既有資料擋住而整段補不到，
+                True（日常更新）：差集——從該商品在表內的第一筆起，補區間內缺的日子
+                （含中間被擋掉的），已確認無資料的不再問（見 `plan_dates()`）。
+                False（歷史回補）：一律照 `start_date` 整段重抓。**把起點往前拉到表內第一筆之前
+                必須用這個**——日常路徑不回頭看第一筆之前，整段補不到，
                 且不會有任何錯誤訊息，只會顯示「已是最新」。
                 重複的日期由 loader 的 `INSERT OR IGNORE` 吸收，不會產生重複列。
         - Raise:
@@ -359,7 +360,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
             - products: Optional[List[str]]
                 直接指定商品，優先於 `top_n`
             - resume: bool
-                是否從各商品表內的最新日接續
+                True 各商品走差集續跑（不回頭看表內第一筆之前）；False 照 `start_date` 整段重抓
         """
 
         end_date: datetime.date = end_date or datetime.date.today()
