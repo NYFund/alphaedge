@@ -12,7 +12,7 @@
 | 開盤 | `open` | 補平前一天沒成交的平倉單 → 收開盤訊號 → 送單 |
 | 尾盤 | `close` | 期貨先換月 → 收收盤訊號 → 送單 |
 | 盤後 | `after_close` | 以成交明細回填委託與歸屬帳 → 刷新委託、對帳、回填費用、殘量處理、輸出報表 |
-| 盤中 | `intraday` | 逐筆行情驅動，跑到收盤（只有 `is_tick_triggered` 的策略需要） |
+| 盤中 | `intraday` | 逐筆行情驅動，09:05～13:18 送單、到 13:18 收線（只有 `is_tick_triggered` 的策略需要）；時窗刻意夾在開盤段收線與尾盤段啟動之間，因為同一帳號的委託回報會推給每一條連線 |
 | 補比 | `parity` | 次日資料更新後補比前一交易日的訊號 parity（不連券商、不送單；`--date YYYY-MM-DD` 指定交易日，預設歷史資料最新日），結果寫 `live_parity_diff` 與 `results/live/` |
 
 每個段落各自連線、各自結束，狀態全靠 `data/db/tw_trading.db`（委託、成交、歸屬帳、交易模式）
@@ -71,8 +71,8 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 
 - `--strategy A,B`：逗號分隔多支策略，共用一個帳戶（同一行不可混合台股與期貨策略，見下節）。
 - `--dry-run`：走完整流程但不真的送出委託。
-- `--broker fake`：測試用的假券商，正式環境一律拒絕（退出碼 2）。
-- `--resume-trading [策略名 ...]`：人工恢復交易模式，不給策略名時恢復帳戶層。要搭配 `--phase`（單獨使用是用法錯誤）；非交易時段用 `--phase after_close`，不送新倉單，並在恢復後重新對帳一次。
+- `--broker fake`：測試用的假券商，只能由測試直接注入；從命令列使用一律拒絕（退出碼 2，模擬環境也一樣）。
+- `--resume-trading [策略名 ...]`：人工恢復交易模式。**目前不論有沒有給策略名，都會把帳戶層與所有已記錄的策略層一起恢復**（說明文字寫的「只恢復指定策略」尚未實作）。要搭配 `--phase`（單獨使用是用法錯誤）；非交易時段用 `--phase after_close`，不送新倉單，並在恢復後重新對帳一次。
 - `--simulation`（預設）／`--production --confirm-production`：連模擬或正式環境。
 - `--date YYYY-MM-DD`：只與 `--phase parity` 併用，否則退出碼 2。
 - `--resync-from-broker [--confirm-resync]`：以券商部位重建歸屬帳，見第 5 節。
@@ -86,34 +86,36 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 | 時間 | 指令 | 說明 |
 |------|------|------|
 | 06:00 | `uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它。失敗的 target 每 60 分鐘只重跑失敗的那幾個、最多 4 輪 |
-| 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59） |
+| 06:00（接在資料更新後） | `uv run --no-sync python -m apps.live --strategy <策略> --phase parity` | 逐條線各跑一次，補比前一交易日 |
+| 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59）；有盤中策略時要一起載入，它的隔日出場在這一段 |
 | 08:40 | `... run --rm live --strategy <期貨策略> --phase open` | 期貨開盤段（送單時窗 08:45～08:59） |
+| 09:06 | `... run --rm live --strategy <盤中策略> --phase intraday` | 台股盤中逐筆段落（只有 `is_tick_triggered` 的策略）；開盤段 09:05 收線後才啟動 |
 | 13:20 | `... run --rm live --strategy <股票策略> --phase close` | 台股尾盤段；程式會等到 13:25 才送單 |
 | 13:28 | `... run --rm live --strategy <期貨策略> --phase close` | 期貨尾盤段；**換月在這一段的開頭執行** |
-| 14:30 | `... run --rm live --strategy <股票策略> --phase after_close` | 台股盤後作業 |
+| 14:30 | `... run --rm live --strategy <股票策略> --phase after_close` | 台股盤後作業；同樣要載入盤中策略 |
 | 14:35 | `... run --rm live --strategy <期貨策略> --phase after_close` | 期貨盤後作業 |
-| 08:00～15:00 每 5 分鐘 | `uv run --no-sync python -m scripts.live_watchdog --expect open:stock=08:30 open:futures=08:40 close:stock=13:20 close:futures=13:28 after_close:stock=14:30 after_close:futures=14:35` | 存活監控，**在主機上跑、和 `live` 分開**；段落表逐市場指定 |
+| 08:00～15:00 每 5 分鐘 | `uv run --no-sync python -m scripts.live_watchdog --expect open:stock=08:30 open:futures=08:40 intraday:stock=09:06 close:stock=13:20 close:futures=13:28 after_close:stock=14:30 after_close:futures=14:35` | 存活監控，**在主機上跑、和 `live` 分開**；段落表逐市場指定 |
 
 `crontab` 範例（`...` 為 `docker compose -f /path/to/AlphaEdge/docker-compose.yml --profile live`）：
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  6 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60; uv run --no-sync python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase parity
-30 8 * * 1-5  ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase open
+0  6 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60; for s in VolumeBreakoutMomentumStrategy IntradayMomentumStrategy MomentumFuturesStrategy; do uv run --no-sync python -m apps.live --strategy $s --phase parity; done
+30 8 * * 1-5  ... run --rm live --strategy VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
+6  9 * * 1-5  ... run --rm live --strategy IntradayMomentumStrategy --phase intraday
 20 13 * * 1-5 ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase close
 28 13 * * 1-5 ... run --rm live --strategy MomentumFuturesStrategy --phase close
-30 14 * * 1-5 ... run --rm live --strategy VolumeBreakoutMomentumStrategy --phase after_close
+30 14 * * 1-5 ... run --rm live --strategy VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy --phase after_close
 35 14 * * 1-5 ... run --rm live --strategy MomentumFuturesStrategy --phase after_close
-*/5 8-14 * * 1-5 cd /path/to/AlphaEdge && uv run --no-sync python -m scripts.live_watchdog --expect open:stock=08:30 open:futures=08:40 close:stock=13:20 close:futures=13:28 after_close:stock=14:30 after_close:futures=14:35
+*/5 8-14 * * 1-5 cd /path/to/AlphaEdge && uv run --no-sync python -m scripts.live_watchdog --expect open:stock=08:30 open:futures=08:40 intraday:stock=09:06 close:stock=13:20 close:futures=13:28 after_close:stock=14:30 after_close:futures=14:35
 ```
 
-- **資料更新要帶重試**：交易所會暫時封鎖來源 IP，整批更新常常只差一兩個 target（例如上市股價），股票段落卻全被資料新鮮度檢查擋下（退出碼 3）。`--retry-failed 4 --retry-wait 60` 只重跑失敗的 target，06:00 失敗時 07:xx、08:xx 兩輪趕得上開盤段，之後兩輪趕得上尾盤段；全部補上就提前結束。補比接在資料更新之後，所以會跟著延後；它用 `;` 而不是 `&&` 串接，資料更新最後仍失敗也照樣執行，由自己的新鮮度檢查拒絕並留下原因。
+- **資料更新要帶重試**：交易所會暫時封鎖來源 IP，整批更新常常只差一兩個 target（例如上市股價），股票段落卻全被資料新鮮度檢查擋下（退出碼 3）。`--retry-failed 4 --retry-wait 60` 只重跑失敗的 target，06:00 失敗時 07:xx、08:xx 兩輪趕得上開盤段，之後兩輪趕得上尾盤段；全部補上就提前結束。補比接在資料更新之後（它要用前一交易日的日 K，資料更新後才入庫），所以會跟著延後；它用 `;` 而不是 `&&` 串接，資料更新最後仍失敗也照樣執行，由自己的新鮮度檢查拒絕（退出碼 3）並留下原因。
 - **排程裡的 `uv run` 一律帶 `--no-sync`**：不帶的話 `uv run` 會先同步環境，`pyproject.toml` 一變動就要連 PyPI 重建；排程時段網路不通時，段落會在進入口之前就失敗。改完相依後手動 `uv sync` 一次即可。
-
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
-- **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商。段落鍵寫成 `段落[:市場]=HH:MM`（市場為 `stock`／`futures`）：股票與期貨是兩個行程、段落名相同，**兩條線都跑時一定要逐市場指定**，否則股票尾盤的紀錄會把「期貨尾盤沒跑」遮住。預設表 `open=08:30 intraday=09:06 close=13:20 after_close=14:30` 不帶市場（該段落任一市場有跑就算），只給單一市場的部署用；`live_run.instrument_type` 補欄之前的舊紀錄沒有市場，視為任一市場都算。
-- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`）；資料更新排在台北 06:00（留時間給 08:30 開盤段，失敗的 target 每小時重跑、最多 4 輪），跑完接著對股票與期貨示範策略各跑一次 `--phase parity`，前一步失敗不中斷後面，存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
+- **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商。段落鍵寫成 `段落[:市場]=HH:MM`（市場為 `stock`／`futures`）：股票與期貨是兩個行程、段落名相同，**兩條線都跑時一定要逐市場指定**，否則股票尾盤的紀錄會把「期貨尾盤沒跑」遮住。預設表 `open=08:30 intraday=09:06 close=13:20 after_close=14:30` 不帶市場（該段落任一市場有跑就算），只給單一市場的部署用；沒有市場欄位的舊紀錄視為任一市場都算。判定規則：應執行時刻過 15 分鐘（`--grace-minutes`）仍無 `live_run` 紀錄、開始後超過 90 分鐘（盤中段落 270 分鐘）沒有結束紀錄、或以非正常原因結束，都推播 CRITICAL；連紀錄庫都讀不到時也推播。退出碼 0 正常、1 已告警、2 讀不到紀錄庫或 `--expect` 格式錯誤。它不判斷休市日：休市日的段落照排照跑、判定休市後正常結束，`live_run` 照樣有紀錄，所以不會誤報；排程若跳過休市日，watchdog 也要一起跳過。
+- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組**模擬環境**演練排程（不經容器，直接 `uv run --no-sync python -m ...`，標籤前綴 `com.alphaedge.live.`，log 在 `logs/launchd/`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`）。段落與上表相同（實際載入的策略以檔內 `_DAILY_JOBS` 為準）：資料更新後依序跑三次 `--phase parity`（尾盤股票策略、盤中策略、期貨策略；前一步失敗不中斷後面，結束碼取第一個失敗的），存活監控由 `scripts/launchd/watchdog_in_window.sh` 每 5 分鐘觸發、限定在台北 08:00～15:00 執行。**排程內容（策略名、入口模組、時刻）改過，或本機夏令時間切換後，都要重新安裝**：plist 的參數與換算後的時刻是安裝當下寫死的；程式本身則每次從磁碟讀，改程式不必重裝。它沒有正式環境選項，正式排程要另外撰寫。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
 ## 5) 對帳不一致後以券商部位重建歸屬帳
@@ -175,6 +177,7 @@ uv run --no-sync python -m apps.live --strategy <策略> --phase after_close --r
 
 ## 8) 已知限制
 
-- **期貨換月比回測早一天**：回測可以撐過最後交易日、隔天以結算價平掉舊月；實盤在最後交易日的尾盤段舊月已收盤，故一律在最後交易日的前一個交易日換月。
+- **期貨換月最晚在最後交易日的前一個交易日**：回測的 `LAST_TRADING_DAY` 可以撐過最後交易日、隔天以結算價平掉舊月；實盤在最後交易日的尾盤段舊月已收盤，故 `LAST_TRADING_DAY` 與「提前 0 日」都改為提前 1 個交易日，與回測差一天。`OPEN_INTEREST` 換月規則要當日未沖銷量、盤中取不到，實盤不支援（組裝時拒絕，退出碼 2）。
+- **期貨段落時窗尚未逐條對過期交所公告**：開盤段 08:45～08:59、尾盤段 13:30～13:44 是依日盤 08:45～13:45 的常識值訂的（`core/market/tw/segment_schedule.py`）；寫錯不會報錯，只會讓整段安靜地不送單。
 - **官方開休市日曆只涵蓋已入庫的年度**：換月判定的未來交易日取平日扣掉官方休市日；落在未入庫年度（例如 12 月公告前的明年）的國定假日排除不了，距到期日之間夾著假日時可能晚一天換月。颱風等臨時停市不在公告表上。
 - **模擬環境的期貨保證金查詢一律回 0**：送單前的帳戶層保證金檢查在模擬環境會略過（只做策略層），正式環境查不到就擋單。

@@ -46,7 +46,7 @@
 | `FuturesStockUniverseAPI` | `core/api/tw/futures_stock_universe_api.py` | SQLite | `futures_stock_universe` |
 | `MarketHolidayAPI` | `core/api/tw/market_holiday_api.py` | SQLite | `market_holiday` |
 
-起始日期常數皆定義於 `core/config/settings.py`。
+起始日期常數除另行註明者外皆定義於 `core/config/settings.py`。
 
 ## 更新入口
 
@@ -56,10 +56,14 @@
 python -m apps.update_db --target <targets...>
 ```
 
-不帶 `--target` 時等同 `--target no_tick`。`all`／`no_tick` 兩個捷徑**都不含**
-`futures_stock_price`、`finmind`
-（`EXPLICIT_ONLY_DATA_TYPES`），這兩個只在明確點名時才跑；`no_tick` 另外排除 `tick`。
-`--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 不受影響）。
+不帶 `--target` 時等同 `--target no_tick`。各 target 註冊在 `apps/update_db.py` 的 `TARGETS`，
+執行順序固定為註冊表順序（與點名順序無關）。
+
+- `all`／`no_tick` 兩個捷徑**都不含** `futures_stock_price` 與 `finmind`（含 `stock_info`、`stock_info_with_warrant`、
+  `broker_info`、`broker_trading` 四個子項）；這些 target 標為 `explicit_only`，只在明確點名時才跑。
+- `no_tick` 另外排除 `tick`（需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB）。
+- `--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 與沒有區間的 target 不受影響）。
+- `--retry-failed N` 讓失敗的 target 最多再重跑 N 輪（只重跑失敗的那幾個），每輪前等 `--retry-wait` 分鐘（預設 60）。
 
 各 target 的預設起始（與 `get_update_time_config`／各 updater 行為一致）：
 
@@ -75,17 +79,17 @@ python -m apps.update_db --target <targets...>
 | `fs` | 2013 年第 1 季；`equity_change` 為逐檔查詢，整段回補以十萬次請求計 |
 | `mrr` | 2013 年 1 月 |
 | `tick` | 2024-05-10（`TICK_UPDATE_START_DATE`）；Shioaji 可查約自 2020-03-02 |
-| `finmind` | `broker_trading` 區間自 2021-06-30；其餘子項見下 |
-| `stock_info` | 快照更新，無日期區間 |
-| `stock_info_with_warrant` | 快照更新，無日期區間 |
-| `broker_info` | 快照更新，無日期區間 |
-| `broker_trading` | 2021-06-30 |
+| `finmind` | 只在點名時跑；`broker_trading` 區間自 2021-06-30（`FINMIND_BROKER_TRADING_START_DATE`），其餘子項見下 |
+| `stock_info` | 只在點名時跑；快照更新，無日期區間 |
+| `stock_info_with_warrant` | 只在點名時跑；快照更新，無日期區間 |
+| `broker_info` | 只在點名時跑；快照更新，無日期區間 |
+| `broker_trading` | 只在點名時跑；2021-06-30 |
 | `futures_price` | 2015-01-01（`DEFAULT_FUTURES_START_DATE`）；寫入 `tw_futures.db` |
 | `futures_stock_universe` | 快照更新，無日期區間；同一天重跑不產生第二份快照 |
-| `futures_stock_price` | 2015-01-01；商品清單取自標的池、預設流動性前 20 檔（`STOCK_FUTURES_TOP_N`） |
+| `futures_stock_price` | 只在點名時跑；2015-01-01；商品清單取自標的池、預設流動性前 20 檔（`STOCK_FUTURES_TOP_N`） |
 | `futures_continuous` | 無區間；由 `futures_price_daily` 整段重建 |
 | `futures_margin` | 快照更新（現行一覽表），沒調整時不新增列 |
-| `futures_chip` | 各表最新日 +1，另回補表內中間缺口的月份（盤後公布，盤中跑到「無資料」屬正常） |
+| `futures_chip` | 無區間參數；三張表各自以交易日曆（`futures_price_daily`）的差集決定要請求的月份，三大法人起日夾到 2023-09-04（`FuturesChipUpdater.INSTITUTIONAL_EARLIEST_DATE`）；盤後公布，盤中跑到「無資料」屬正常 |
 | `market_holiday` | 無區間；固定抓去年／今年／明年，每年整年替換；尚未公告的年度跳過 |
 
 完整參數與範例見 [指令教學](../commands/command-usage.zh-TW.md)。
@@ -122,13 +126,14 @@ python -m apps.update_db --target <targets...>
 
 - 專案目前無內建加密貨幣 / prediction market collectors。
 - **`equity_change`（權益變動表）的形狀與其他三張財報表不同**：長表、單位仟元。
-  爬取清單取自 `taiwan_stock_info` 現況，**不含已下市公司與興櫃**（倖存者偏誤來源）；
+  爬取清單是 `taiwan_stock_info` 現況聯集當季資產負債表的公司，**當季資產負債表也沒有的已下市公司仍會漏、不含興櫃**；
   另有少數公司的 2013~2014 年季站方導向「採 IFRSs 前」的另一組端點、本表沒有。
   詳見 [權益變動表](../pipeline/equity-change.md)〈已知限制〉。
 - **`balance_sheet`、`comprehensive_income`、`cash_flow` 的主鍵含 `公司名稱`**：來源在公司名稱後加註 `*`，
   或公司更名後重爬，同一檔同一年季就會多一列（例如 `5904` 的 `寶雅`／`寶雅*`）。以 `stock_id` 聚合的查詢需自行去重；
-  改主鍵屬 schema 變更，排在 [PostgreSQL 遷移計畫](../../backlog/PostgreSQL遷移計畫.md) 評估。
+  改主鍵屬 schema 變更，尚未處理。
 - `tick` 依賴執行中的 TimescaleDB 與 `TICK_DATABASE_URL`，未設定時無法使用 tick 相關流程（連不上時錯誤訊息會說明啟動方式）。
+  `stock_tick` 沒有主鍵，冪等靠「整天刪除後重寫 ＋ `stock_tick_load_log`」；儲存與匯入設計見 [ETL 入庫約定](../pipeline/etl-ingestion.md)〈台股 tick〉。
 
 ### 指數期貨日行情
 

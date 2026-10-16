@@ -4,7 +4,8 @@
 
 # AlphaEdge
 
-AlphaEdge 是一個聚焦台灣市場工作流程的策略研究與交易框架（回測 + 報表 + 資料更新流程 + Streamlit 結果檢視器）。
+AlphaEdge 是一個聚焦台灣市場的策略研究與交易框架：同一支策略類別可以跑日 K 與逐筆（tick）回測，也能不改寫就接上永豐 Shioaji 實盤（目前在模擬環境演練）。
+另附台股／台期貨資料更新流程（SQLite ＋ TimescaleDB）與檢視回測結果的 Streamlit 前端。
 
 ## 架構總覽
 
@@ -31,7 +32,8 @@ graph TB
 
     subgraph backtest_layer ["回測引擎（市場無關）"]
         BTFactory["core/backtest/factory.py<br/>（回測唯一 if market ==；實盤見 core/live/factory.py）"]
-        Backtester["core/backtest/backtester.py"]
+        Backtester["core/backtest/backtester.py<br/>（逐日迴圈）"]
+        BTSim["core/backtest/simulator<br/>BarSimulator（日 K）／TickSimulator（逐筆）"]
         BTModels["core/backtest/models<br/>FillModel／SettlementModel"]
         BTFeed["core/backtest/datafeed"]
         BTReport["core/backtest/report"]
@@ -57,7 +59,8 @@ graph TB
         Adapters["core/adapters"]
         DAO["core/dao<br/>（SQL／連線／交易）"]
         Pipeline["core/pipeline"]
-        DB["data/db"]
+        DB["data/db<br/>（tw_stock.db／tw_futures.db）"]
+        TickDB["TimescaleDB<br/>（台股 tick）"]
         TradingDB["data/db/tw_trading.db<br/>（實盤紀錄庫）"]
         Data["data/downloads"]
     end
@@ -83,11 +86,12 @@ graph TB
     BTFactory --> Backtester
     BTFactory --> BTModels
     BTFactory --> BTFeed
-    Backtester --> Strategies
-    Backtester --> Portfolio
-    Backtester --> BTModels
+    Backtester --> BTSim
+    BTSim --> Strategies
+    BTSim --> Portfolio
+    BTSim --> BTModels
     Backtester --> BTFeed
-    Backtester --> Managers
+    BTSim --> Managers
     Backtester --> BTReport
     BTReport --> Analysis
 
@@ -120,6 +124,7 @@ graph TB
     BTFeed --> Adapters
     API --> DAO
     DAO --> DB
+    DAO --> TickDB
     Adapters --> API
     API --> Config
     DAO --> Config
@@ -140,7 +145,24 @@ graph TB
 
 **共用契約層是兩個引擎的交集**：部位建構（`core/portfolio/`）、資料源契約（`core/datafeed/`）、市場結構（`core/market/`）與部位帳務（`core/position/`）都不屬於任何一個引擎，兩邊各自 import。**同一條規則只寫一份**——例如持倉檔數上限與單一標的曝險，回測擋得住的實盤也擋得住。
 
+**一天怎麼跑交給 simulator。** `Backtester` 只負責逐日迴圈、每日前後處理與報表；當天的報價怎麼交給策略、委託怎麼成交，由 factory 依回測級別注入的 `BarSimulator`（日 K，一根 K 棒一次）或 `TickSimulator`（逐筆重放：下一筆 tick 才成交、市價吃 bid/ask，與實盤的逐筆觸發同一份契約）決定。
+
 詳見[多市場回測引擎架構](docs/backtest/multi-market-engine.md)與[模組使用關係](docs/backtest/module-map.md)。
+
+## 現有策略
+
+策略放在 `strategies/`，類別名稱就是 `--strategy` 的值。寫新策略見[策略開發指南](strategies/README.md)。
+
+| 策略 | 市場 × 商品 | 方向 | 回測級別 | 實盤 |
+| ---- | ----------- | ---- | -------- | ---- |
+| `VolumeBreakoutMomentumStrategy` | 台股 | LONG | `DAY` | ✅ 模擬環境演練中（尾盤進出） |
+| `IntradayMomentumStrategy` | 台股 | LONG（當日跌破停損即當沖出場） | `DAY`（近似）、`TICK` | ✅ 盤中逐筆進場與停損（模擬環境尚未實跑） |
+| `InvestmentTrustMomentumSwingStrategy` | 台股 | LONG | `DAY` | — |
+| `ForeignSellingReversalShortStrategy` | 台股 | SHORT（現股當沖） | `DAY` | — |
+| `MomentumFuturesStrategy` | 台指數期貨 | LONG | `DAY` | ✅ 模擬環境演練中（示範用） |
+| `FuturesRolloverRehearsalStrategy` | 台指數期貨 | LONG | `DAY` | 只供模擬環境驗證換月，不是交易策略 |
+
+「實盤」欄指策略宣告了 `live_ready`；沒宣告的策略會被實盤入口拒絕。
 
 ## 回測支援範圍
 
@@ -162,6 +184,7 @@ graph TB
 
 ### 主要限制
 
+- 台股逐筆回測只對 `supported_scales` 含 `TICK` 的策略開放（目前只有 `IntradayMomentumStrategy`），其餘策略帶 `--scale TICK` 會當場被拒絕；逐筆資料要先匯入 TimescaleDB。
 - 期貨 Tick 級別回測未實作（`TwFuturesDataFeed.get_quotes()` 回空 list）。
 - 期貨保證金查表的起點依商品而異（最早 2020-03，見上表）；早於起點的區間只能用 `FuturesMarginConfig.ratio()` 近似，可開口數與追繳門檻會失真。
 - 期貨跳動點只涵蓋已查證的七檔指數期貨（TX／MTX／TMF 1 點、TE／ZEF 0.05 點、TF／ZFF 0.2 點）；未登錄的商品退回 1 點並記 warning，以跳動點數設定的滑價會失真（預設滑價為 0，不受影響）。
@@ -176,6 +199,7 @@ graph TB
 
 | 模組            | 說明                                                                  |
 | --------------- | --------------------------------------------------------------------- |
+| `apps/`         | 命令列入口：`backtest`（回測）、`live`（實盤）、`update_db`（資料更新）、`clean_logs`、`delete_price_data` |
 | `core/`         | 交易領域核心程式碼（策略、管理器、模型、介接層、API、資料存取層、ETL 與回測引擎；回測輸出落在根目錄的 `results/`） |
 | `core/live/`    | 實盤交易：逐段落生命週期、委託管理（OMS）、執行層（策略的 `MARKET`／`LIMIT` 執行方式換成券商委託）、部位歸屬、對帳、風控與盤後作業 |
 | `core/broker/`  | 券商介接：`BaseBroker` 介面、回報去重與分類限流；`tw/` 為 Shioaji 實作（登入、合約解析、委託轉換、回報正規化、行情訂閱與重放） |
@@ -201,10 +225,11 @@ graph TB
 | [開發部署](docs/deployment/dev-deployment.md)      | 本機更新資料、執行回測、檢視結果的日常流程      |
 | [正式環境部署](docs/deployment/prod-deployment.md) | Docker 映像建置、容器執行與角色切分             |
 | [實盤部署與排程](docs/deployment/live-deployment.md) | 實盤逐段落啟動、容器與 cron 排程、停止與退出碼 |
+| [實盤引擎架構](docs/live/live-engine.md) | 段落生命週期、委託路徑與風控閘門、交易模式狀態機、OMS、多策略歸屬、對帳、盤中迴圈、盤後與 parity、通知與已知限制 |
 | [實盤執行層](docs/live/execution-layer.md) | 策略的執行方式（`MARKET`／`LIMIT`）如何依時段換成券商委託、決策價、parity 歸類與已知限制 |
 | [正式環境上線檢查表（股票線）](docs/live/production-checklist-stock.md) | 股票線第一次連正式環境前逐項勾選：憑證、風控與資金、通知與監控、首日 dry-run、股票線專屬事項 |
 | [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
-| [指令教學](docs/commands/command-usage.zh-TW.md)   | `update_db` target 對照與完整執行範例           |
+| [指令教學](docs/commands/command-usage.zh-TW.md)   | `apps/` 各入口（資料更新、回測、實盤、日誌與資料維護）的參數、範例與退出碼 |
 | [策略開發指南](strategies/README.md)          | 本專案策略實作方式                              |
 | [多市場回測引擎架構](docs/backtest/multi-market-engine.md) | 單一引擎 ＋ 五個可插拔 model 的設計與已知簡化 |
 | [模組使用關係](docs/backtest/module-map.md)        | 回測路徑上誰呼叫誰、逐檔案職責與輸出檔案        |
@@ -214,6 +239,7 @@ graph TB
 | [權益變動表資料](docs/pipeline/equity-change.md) | `equity_change` 的資料形狀、已知限制與節流設定 |
 | [非除權息的公司行動](docs/pipeline/corporate-action.md) | `corporate_action` 表的資料源、調整倍率與假跳空護欄 |
 | [程式碼品質工具鏈](docs/dev/code-quality.md) | pyproject／ruff／CI／pre-commit 設定與 lint ignore 理由 |
+| [測試與回歸](docs/dev/testing.md) | 測試目錄配置、守門測試、需要外部資源的測試、回歸線與 baseline 重產、突變測試慣例 |
 | [命名軸線](docs/dev/naming-axes.md) | 市場軸與商品類別軸的目錄命名定案，以及哪些目錄不分市場 |
 | [資料存取層（DAO）](docs/dev/data-access-layer.md) | `core/dao/` 的分層、連線所有權、savepoint 與 commit 時點、錯誤語意與新增資料表檢查表 |
 | [執行期產物](docs/dev/runtime-artifacts.md) | `data/`／`results/`／`logs/` 的目錄約定、日誌分桶與保留策略 |
@@ -301,7 +327,8 @@ streamlit run frontend/app.py
 
 #### 方式 2：Docker Compose
 
-一個指令建好並啟動兩個容器：`core` 跑完一次回測就結束，`frontend` 會持續提供網頁。
+一個指令建好並啟動三個容器：`core` 跑完一次回測就結束；`postgres`（TimescaleDB，存台股 tick）會先起來並通過健康檢查，`core` 才開始；`frontend` 持續提供網頁。
+實盤的 `live` service 掛在 `live` profile 下，`up` 不會帶起它（用法見[實盤部署與排程](docs/deployment/live-deployment.md)）。
 
 ```bash
 # 建立映像並啟動（預設策略為 VolumeBreakoutMomentumStrategy）
@@ -368,6 +395,9 @@ cp .env.example .env
 | `ALPHAEDGE_LIVE_NOTIFY_CHANNEL`、`ALPHAEDGE_LIVE_NOTIFY_TOKEN`、`ALPHAEDGE_LIVE_NOTIFY_TARGET` | 實盤告警推播（Discord 或 Telegram） | 實盤要收告警時 |
 | `ALPHAEDGE_DATA_DIR`、`ALPHAEDGE_RESULTS_DIR`、`ALPHAEDGE_LOGS_DIR` | 覆寫執行期產物根目錄 | 容器掛 volume 時 |
 | `ALPHAEDGE_SHOW_FIGURES` | 回測畫完圖是否在瀏覽器開啟（等同 `--show`） | 不想每次帶旗標時 |
+| `STRATEGY` | `docker compose` 的 `core` 要跑哪支策略（預設 `VolumeBreakoutMomentumStrategy`） | 用 compose 換策略時 |
+| `POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_DB` | compose 的 `postgres`（TimescaleDB）建庫帳密與庫名（預設皆為 `alphaedge`；改了要同步改 `TICK_DATABASE_URL`） | 不想用預設帳密時 |
+| `ALPHAEDGE_CA_DIR`、`SHIOAJI_CA_FILE` | compose 的 `live` 唯讀掛入的憑證目錄與檔名（預設 `~/.alphaedge/ca`、`Sinopac.pfx`） | 用容器跑正式環境實盤時 |
 
 `.env` 由本機程式讀取；Docker 映像不會帶入這個檔。細節見[開發環境設定](docs/setup/dev-setup.md)。
 
@@ -407,7 +437,8 @@ pre-commit run --all-files
 **CI**：每次 push 時 GitHub Actions 會依序跑 `ruff check`、`ruff format --check`、
 分層相依檢查（`scripts/check_layer_deps.py`）、文件路徑檢查（`scripts/check_doc_paths.py`）、
 `pre-commit run --all-files` 的其餘檢查、API 死介面檢查（`scripts/check_api_orphan_methods.py`）、
-SHORT 回歸線、`pytest -m "not slow"`（覆蓋率報告併在同一次跑，不另跑一遍整套）；
+SHORT 回歸線、tick 整合測試（job 內附 TimescaleDB service，**任何一項被 skip 就算失敗**）、
+`pytest -m "not slow"`（覆蓋率報告併在同一次跑，不另跑一遍整套）；
 **另有一個平行的 job** 建置 `core` 與 `frontend` 兩個 Docker 映像並跑冒煙（`core` 跑 `--help` 與策略套件 import 兩步，`frontend` 一步）
 ——它沒有宣告 `needs:`，所以與上面那串同時開始，不是最後才跑
 （見 `.github/workflows/ci.yml`）。**LONG 回歸線需要 `data/db/tw_stock.db`，
@@ -420,7 +451,9 @@ CI 沒有該檔，只能在本機跑。**
 完整 target 對照表與單一/組合範例請見：[指令教學](docs/commands/command-usage.zh-TW.md)。
 
 ```bash
-python -m apps.update_db --target no_tick
+python -m apps.update_db                              # 等同 --target no_tick：全部資料，不含 tick
+python -m apps.update_db --target price chip          # 只更新指定的 target
+python -m apps.update_db --retry-failed 4             # 失敗的 target 每 60 分鐘重跑一次，最多 4 輪
 ```
 
 ### 執行回測
@@ -429,8 +462,19 @@ python -m apps.update_db --target no_tick
 
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
-# 選用：--start／--end YYYY-MM-DD、--capital 覆寫策略預設；--show／--no-show 決定是否在瀏覽器開圖。實盤走 python -m apps.live，見 docs/deployment/live-deployment.md
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy --start 2024-01-01 --end 2024-12-31 --capital 1000000
+python -m apps.backtest --strategy IntradayMomentumStrategy --scale TICK --tick-universe strategy   # 逐筆回測
 ```
+
+### 實盤
+
+實盤以「段落」為單位由排程逐段啟動（開盤、盤中、尾盤、盤後），預設連模擬環境：
+
+```bash
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase close
+```
+
+段落、排程、退出碼與對帳重建見[實盤部署與排程](docs/deployment/live-deployment.md)。
 
 ## 專案結構
 
@@ -450,7 +494,7 @@ AlphaEdge/
 │   │   ├── quote_validation.py # 來源無關的報價驗證：價格有效性、重複代號
 │   │   └── tw/               # StockQuoteAdapter（日線與 tick 各一條完整路徑）、FuturesQuoteAdapter
 │   ├── datafeed/              # 中立的 BaseDataFeed 契約（回測與實盤共用，誰都不 import 對方）
-│   ├── market/                # 市場結構與規則：交易日曆、期貨換月、保證金設定、商品規格、成本模型（tw/ 為台灣市場實作）
+│   ├── market/                # 市場結構與規則：交易日曆、交易段落、期貨換月、保證金、商品規格、成本模型（tw/ 為台灣市場實作）
 │   ├── portfolio/             # 部位建構（回測與實盤共用）：signal／sizing／construction／aggregation／order_rules（方向白名單、持倉上限、曝險、排序）
 │   ├── position/              # 部位記帳（base/ ＋ stock/ ＋ futures/ 的 position_manager.py）
 │   ├── models/                # 領域模型（base/ ＋ stock/ ＋ futures/；cost_config.py／fill_config.py 為策略宣告的成本與成交參數）
@@ -460,22 +504,21 @@ AlphaEdge/
 │   ├── pipeline/              # ETL / 更新流程
 │   │   ├── shared/           # 跨市場共用：四層 base ＋ HTTP 工具、日期／年季差集、來源優先序、優雅中止
 │   │   ├── tw/               # 台股／台期貨 ETL（crawlers／cleaners／loaders／updaters）
-│   │   │   └── utils/        # 只有台灣市場用得到的工具（URL 總表、tick metadata、MOPS payload、TPEX 區間）
+│   │   │   └── utils/        # 只有台灣市場用得到的工具（URL 總表、tick 多金鑰與續跑判斷、MOPS payload、TPEX 區間）
 │   │   └── utils/            # 跨市場通用：常數、DataFrame 與 SQLite 工具、例外類別
 │   ├── backtest/              # 回測引擎
 │   │   ├── README.md          # 回測級別、價格口徑、成交假設、績效指標
 │   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類；逐日迴圈與每日前後處理
-│   │   ├── simulator/         # 一天怎麼跑：BarSimulator（日 K，開平倉執行在基底 BaseSimulator）
+│   │   ├── simulator/         # 一天怎麼跑：BarSimulator（日 K）、TickSimulator（逐筆重放）、在途委託、逐筆標的範圍；開平倉執行在基底 BaseSimulator
 │   │   ├── factory.py         # 依（market, instrument_type）組合組裝 model 組合
 │   │   ├── overrides.py       # --start／--end／--capital 的命令列覆寫，組裝前寫回策略
 │   │   ├── models/            # FillModel／SettlementModel／事件計數（回測模擬；商品規格與成本模型在 core/market/）
-│   │   ├── datafeed/          # 依市場實作 BaseDataFeed（tw/stock_datafeed.py、tw/futures_datafeed.py）
+│   │   ├── datafeed/          # 依市場實作 BaseDataFeed（tw/stock_datafeed.py、tw/stock_tick_datafeed.py、tw/futures_datafeed.py）
 │   │   └── report/            # 交易報表、多空統計、圖表
 │   ├── broker/                # 券商閘道：BaseBroker 介面、回報去重、分類限流
 │   │   └── tw/                # Shioaji：登入／CA、合約解析、委託轉換、回報正規化、帳務、即時行情與行情重放
 │   └── live/                  # 實盤引擎
-│       ├── trader.py          # 逐段落生命週期（開盤／尾盤／盤中／盤後）
-│       ├── segment.py         # 段落定義與「現在該跑哪一段」的判定
+│       ├── trader.py          # 逐段落生命週期（開盤／尾盤／盤中／盤後）；段落定義與時窗在 core/market/segment.py
 │       ├── factory.py         # 依（market, instrument_type）組裝實盤元件
 │       ├── reconciler.py      # 收盤後與券商部位對帳
 │       ├── account_sync.py    # 對帳不一致時以券商部位重建歸屬帳
@@ -486,8 +529,8 @@ AlphaEdge/
 │       ├── oms/               # 委託狀態機、回報佇列、重啟接管
 │       ├── execution/         # 執行層：策略的 MARKET／LIMIT 執行方式依時段換成券商委託（base／stock／futures）
 │       ├── risk/              # 事前風控、交易模式狀態機、保證金閘門、風控事件紀錄與類別登錄
-│       ├── attribution/       # 多策略部位歸屬帳與跨策略衝突守門
-│       ├── datafeed/          # 歷史資料到 T−1，今天的報價由券商提供
+│       ├── attribution/       # 多策略部位歸屬帳、跨策略衝突守門、以券商部位重建歸屬帳
+│       ├── datafeed/          # 歷史資料到 T−1，今天的報價由券商提供；交易日判定
 │       ├── intraday/          # 盤中事件迴圈與日終強制動作
 │       ├── notify/            # 告警推播（Discord、Telegram；失敗不影響主流程）
 │       └── report/            # 實盤日報與實盤／回測訊號 parity 比對
@@ -512,12 +555,12 @@ AlphaEdge/
 ├── backlog/                   # 內部規劃筆記
 ├── docs/                      # 專案文件
 │   ├── backtest/              # 引擎架構、模組使用關係、放空框架規格
-│   ├── dev/                   # 程式碼品質、命名軸線、資料存取層、執行期產物
+│   ├── dev/                   # 程式碼品質、測試與回歸、命名軸線、資料存取層、執行期產物
 │   ├── futures/               # 台期貨平台：資料、回測語意與已知限制
 │   ├── pipeline/              # ETL 入庫約定、權益變動表、公司行動
 │   ├── setup/                 # 開發環境設定
 │   ├── deployment/            # 開發與正式環境部署
-│   ├── live/                  # 實盤執行層（執行方式如何換成券商委託）
+│   ├── live/                  # 實盤引擎架構、執行層、正式環境上線檢查表
 │   ├── exchanges/             # 資料覆蓋範圍
 │   └── commands/              # 指令教學（中文／英文）
 ├── scripts/                   # 護欄檢查與一次性工具
@@ -531,10 +574,10 @@ AlphaEdge/
 │   ├── launchd/               # macOS launchd 排程產生器與存活監控包裝腳本（逐段落啟動模擬環境演練）
 │   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
 ├── Dockerfile                 # 後端映像（core、apps、strategies；回測、資料更新與實盤共用）
-├── docker-compose.yml         # compose：core ＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ 共用 results volume
+├── docker-compose.yml         # compose：core ＋ postgres（TimescaleDB）＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ results／pgdata 兩個 volume
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）
-├── apps/                      # 入口：backtest.py（回測）、live.py（實盤）、_common.py（兩者共用）
+├── apps/                      # 入口：backtest.py（回測）、live.py（實盤）、update_db.py（資料更新）、clean_logs.py（舊日誌清理）、delete_price_data.py（刪除指定日 price）、_common.py（共用）
 ├── README.md                  # 中文（權威版本）
 └── README_en.md               # 英譯
 ```

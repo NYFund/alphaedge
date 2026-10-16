@@ -59,6 +59,8 @@ docker run --rm \
 映像的 `ENTRYPOINT` 是 `python -m apps.backtest`（`CMD` 預設 `--help`），`docker run` 映像名稱之後的參數直接交給回測入口。
 
 只跑回測時 `data/` 以唯讀掛載：主機上的 ETL 可能正在寫同一個資料庫檔。
+`.env` 的 `TICK_DATABASE_URL` 指向 `localhost`，在容器裡連不到主機的 TimescaleDB；要跑 TICK 回測或 `--target tick` 時，
+以 `-e TICK_DATABASE_URL=...` 改成容器連得到的位址，或直接用第 5 節的 compose。
 要在容器內更新資料時才改為可寫掛載，並以 `--entrypoint` 換掉回測入口：
 
 ```bash
@@ -85,7 +87,8 @@ docker run --rm -d \
 
 ## 5) Docker Compose
 
-根目錄的 `docker-compose.yml` 一次起 `core` 與 `frontend`（實盤的 `live` service 掛在 `live` profile 下，`docker compose up` 不會帶起它，見 [實盤部署與排程](live-deployment.md)）：
+根目錄的 `docker-compose.yml` 一次起 `core`、`postgres` 與 `frontend`（實盤的 `live` service 掛在 `live` profile 下，`docker compose up` 不會帶起它，見 [實盤部署與排程](live-deployment.md)）。
+專案名稱寫死為 `alphaedge`：不寫的話 compose 以目錄名當專案名，在 git worktree 裡啟動會分出另一份具名 volume（另一份 TimescaleDB 資料）。
 
 ```bash
 docker compose up --build
@@ -94,8 +97,9 @@ STRATEGY=MomentumFuturesStrategy docker compose up core   # 換策略
 
 | 服務 | 掛載 | 說明 |
 |------|------|------|
-| `core` | `./data` → `/app/data`（唯讀）、`./logs` → `/app/logs`、具名 volume `alphaedge_results` → `/app/results` | 跑一場回測就結束；策略由 `STRATEGY` 決定（compose 解析設定檔時替換，可寫在命令列前綴或 `.env`，不設時為 `VolumeBreakoutMomentumStrategy`） |
-| `frontend` | 具名 volume `alphaedge_results` → `/results` | 開 `http://localhost:8501` |
+| `core` | `./data` → `/app/data`（唯讀）、`./logs` → `/app/logs`、具名 volume `alphaedge_results` → `/app/results` | 跑一場回測就結束；策略由 `STRATEGY` 決定（compose 解析設定檔時替換，可寫在命令列前綴或 `.env`，不設時為 `VolumeBreakoutMomentumStrategy`）。相依 `postgres` 健康後才啟動，`TICK_DATABASE_URL` 在容器內覆寫成指向 service `postgres` |
+| `postgres` | 具名 volume `alphaedge_pgdata` → `/var/lib/postgresql/data`；主機 port 5432 | 台股 tick 的 TimescaleDB（映像鎖定版本，不可換成 `-oss` tag：那一版沒有壓縮）。常駐（`restart: unless-stopped`），帳密與庫名取 `.env` 的 `POSTGRES_*`，預設皆為 `alphaedge`。實盤不讀 tick，`live` 不相依它 |
+| `frontend` | 具名 volume `alphaedge_results` → `/results` | 開 `http://localhost:8501`；有 healthcheck（`/_stcore/health`） |
 
 回測結果放在**具名 volume** 而非主機的 `results/`，要在主機上看 CSV 請改用第 3、4 節的 `docker run`。
 
