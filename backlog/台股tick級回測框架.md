@@ -348,7 +348,7 @@
     提供 `add()`、`get_orders(symbol)`、`remove()`、`expire_ioc(symbol)`、`cancel_all()`。委託送出後，**同一檔的下一筆 tick** 才嘗試撮合。
   - `TwStockFillModel` 新增 `match_tick(pending, quote) -> Optional[BaseOrder]` 與 `get_tick_fill_price(order, quote) -> Optional[float]`。
   - 市價（`ExecutionStyle.MARKET`）：買吃 `ask_price`、賣吃 `bid_price`；該值為 0（漲停鎖死沒有委賣、跌停鎖死沒有委買）時不成交。
-    實盤盤中的市價是「決策價加保護價的限價＋IOC」，所以下一筆沒成交就作廢，不追價（與 `實盤委託價格類型設計.md` 的執行層一致）。
+    實盤盤中的市價是「決策價加保護價的限價＋IOC」，所以下一筆沒成交就作廢，不追價（與實盤執行層一致，見 [docs/live/execution-layer.md](../docs/live/execution-layer.md)）。
   - 限價（`ExecutionStyle.LIMIT`）：之後的成交價穿越限價才成交，成交價取限價；ROD 留到收盤未成交作廢。
   - 成交量上限：以下一筆 tick 的 `ask_volume`／`bid_volume` 或成交量為上限，超過的部分依 `VolumeCapPolicy` 截斷或拒單——具體分母在實作時定並寫回本步驟。
   - 漲跌停、價格對齊檔位、可當沖／可融券名單等既有檢查沿用現行 `TwStockFillModel` 的邏輯。
