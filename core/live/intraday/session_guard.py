@@ -24,8 +24,11 @@ from core.utils import (
 """
 
 # 現股當沖的回補時點。**不等到 13:30**：收盤前最後幾分鐘流動性會變差，
-# 而回補單送不出去的代價是違約交割
-DAY_TRADE_COVER_TIME: datetime.time = datetime.time(13, 20)
+# 而回補單送不出去的代價是違約交割。
+# **必須落在盤中段落的送單時窗之內**（台股送單迄 13:18）：回補只掛在盤中迴圈的心跳上，
+# 迴圈收線之後才到的時點永遠不會觸發，而尾盤段是另一個行程、不跑回補。
+# 取 13:15 留 3 分鐘給失敗重試（`LiveTrader.MAX_COVER_ATTEMPTS`）
+DAY_TRADE_COVER_TIME: datetime.time = datetime.time(13, 15)
 
 
 def resolve_live_policy(

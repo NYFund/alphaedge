@@ -666,11 +666,43 @@ class LiveTrader:
         logger.info(f"盤中逐筆開始，訂閱 {len(symbols)} 檔，收線 {deadline}")
 
         stats: LoopStats = loop.run_until(deadline)
+        self._close_intraday_loop(loop, stats)
         logger.info(
             f"盤中逐筆結束：行情 {stats.quotes} 筆、回報 {stats.executions} 筆、"
             f"心跳 {stats.heartbeats} 次、處理失敗 {stats.handler_errors} 筆"
         )
         return stats
+
+    def _close_intraday_loop(self, loop: IntradayEventLoop, stats: LoopStats) -> None:
+        """
+        - Description:
+            盤中收線：回報改回直接的 queue → 清掉迴圈裡剩下的回報
+
+            **收線前一刻送出的單可能在收線後才成交**（台股盤中段落送單迄 13:18、收回報到 13:19）。
+            迴圈導向期間 `drain_execution_queue()` 恆為空，不改回的話，這段時間的成交與撤單回報
+            會留在迴圈那個已經沒人讀的 queue 裡，本行程的委託與歸屬帳都看不到。改回之後，
+            `finish()` 照日頻段落的同一套流程在直接的 queue 上收回報到 `drain_end`、撤單、收撤單回報。
+
+            **先改回 queue、再清迴圈裡的回報**：改道前進來的回報比之後進來的早，先處理完，順序才不會亂。
+
+            **不退訂行情**：改回之後行情進到一個沒人讀的 queue，只到段落收尾登出為止；
+            為這一兩分鐘另外退訂，失敗時還得決定要不要中止段落，不值得。
+        - Parameters:
+            - loop: IntradayEventLoop
+                本段的事件迴圈
+            - stats: LoopStats
+                本段統計；收線後清出的回報與失敗一併累計進去
+        """
+
+        self.broker.restore_event_routing()
+        flushed: LoopStats = loop.flush_executions()
+
+        stats.executions += flushed.executions
+        stats.handler_errors += flushed.handler_errors
+        if flushed.executions:
+            logger.info(
+                f"盤中收線時 queue 裡還有 {flushed.executions} 筆回報，已套進委託與歸屬帳"
+            )
 
     def _resolve_intraday_deadline(
         self, window: Optional[SegmentWindow]

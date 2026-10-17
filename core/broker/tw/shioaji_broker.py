@@ -180,6 +180,19 @@ class ShioajiBroker(BaseBroker):
         self.quote_queue = CallbackQueue(forward_quote)
         self._bind_session()
 
+    def restore_event_routing(self) -> None:
+        """
+        撤銷導向：行情與回報都改回各自的 queue，並把回呼重新掛到新的 queue 上
+
+        元件在 `_bind_session()` 時拿走的是當下的 queue 物件，只換屬性不重綁的話，
+        回呼仍會往迴圈那個已經沒人讀的 queue 塞。連線已斷時不重綁（重連時會綁）。
+        """
+
+        super().restore_event_routing()
+        self.quote_queue = queue.Queue()
+        if self.session.is_connected():
+            self._bind_session()
+
     def reconnect(self) -> bool:
         """
         以 session 的退避重連；**不用骨架那個「關掉再連」的預設**

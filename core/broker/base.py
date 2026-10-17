@@ -274,6 +274,17 @@ class BaseBroker(ABC):
 
         self.execution_queue = CallbackQueue(on_execution)
 
+    def restore_event_routing(self) -> None:
+        """
+        - Description:
+            撤銷 `route_events()`：回報改回直接的 queue（盤中迴圈收線後）
+
+            迴圈收線之後就沒有人在讀它的 queue，回報若仍導過去就會被丟在那裡；
+            段落收尾（撤單、收撤單回報）走的是 `drain_execution_queue()`，要讀得到東西。
+        """
+
+        self.execution_queue = queue.Queue()
+
     def reconnect(self) -> bool:
         """
         - Description:
