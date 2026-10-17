@@ -209,7 +209,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 | `--simulation`／`--production` | 模擬（預設）／正式環境；`--production` 必須同時帶 `--confirm-production` |
 | `--broker` | `shioaji`（預設）或 `fake`（測試用，正式環境拒絕） |
 | `--dry-run` | 走完整流程但不真的送出委託 |
-| `--resume-trading [策略名 ...]` | 人工恢復交易模式 |
+| `--resume-trading [策略名 ...]` | 人工恢復交易模式：不給策略名時恢復帳戶層與所有策略；給策略名時只恢復那幾支（須在 `--strategy` 之中），帳戶層不動 |
 | `--resync-from-broker`／`--confirm-resync` | 以券商部位重建歸屬帳；不帶 `--confirm-resync` 只列計畫 |
 
 實盤**只有未預期的例外才回傳 1**，其餘結果各有自己的退出碼。排程要攔的是下列各碼：
