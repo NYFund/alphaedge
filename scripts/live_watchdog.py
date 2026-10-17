@@ -6,15 +6,28 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
-from core.config import TW_TRADING_DB_PATH
+from core.api.tw.market_holiday_api import MarketHolidayAPI
+from core.config import TW_STOCK_DB_PATH, TW_TRADING_DB_PATH
 from core.config.settings import (
     LIVE_NOTIFY_CHANNEL,
     LIVE_NOTIFY_TARGET,
     LIVE_NOTIFY_TOKEN,
     now_live,
 )
-from core.dao.connection import DBError, connect_live_trading
+from core.dao.connection import (
+    DBConnection,
+    DBError,
+    connect_live_trading,
+    connect_sqlite,
+)
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.datafeed.calendar import (
+    OfficialHolidayCalendarSource,
+    TradingCalendarSource,
+    TradingCalendarUnavailableError,
+    WeekendCalendarSource,
+    resolve_trading_day,
+)
 from core.live.notify.base import BaseNotifier, NotifyLevel
 from core.live.notify.factory import build_notifier
 
@@ -28,7 +41,8 @@ from core.live.notify.factory import build_notifier
 會跟著行程一起死——那等於沒有監控。
 
 它只做三件事，而且**只以唯讀開啟紀錄庫、不連券商**：
-1. 比對「當日應執行的段落表」與 `live_run` 的實際紀錄。
+1. 先判斷今天是不是交易日（週末＋官方開休市日曆，與實盤段落同一套判定），
+   休市日直接結束；再比對「當日應執行的段落表」與 `live_run` 的實際紀錄。
 2. 找出「該跑而沒有紀錄」與「有開始紀錄但停在未正常結束」。
 3. 推播。
 
@@ -94,6 +108,11 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--db-path", default=str(TW_TRADING_DB_PATH), help="實盤紀錄庫路徑"
+    )
+    parser.add_argument(
+        "--stock-db-path",
+        default=str(TW_STOCK_DB_PATH),
+        help="研究庫路徑（讀官方開休市日曆判斷今天是否為交易日）",
     )
     parser.add_argument(
         "--grace-minutes",
@@ -227,6 +246,50 @@ def _minutes_since(started_at: Optional[str], now: datetime.datetime) -> float:
     return (now - started).total_seconds() / 60.0
 
 
+def resolve_today(
+    stock_db_path: str, today: datetime.date
+) -> Tuple[Optional[bool], Optional[str]]:
+    """
+    - Description:
+        判斷今天是否為交易日：週末來源＋官方開休市日曆，與實盤段落用同一個 `resolve_trading_day()`
+
+        **不放行、也不在休市日告警**：沒有這一步時，週末與國定假日整天每 5 分鐘都會
+        推一則「段落沒跑」的 CRITICAL，真正的告警會被淹沒。
+
+        **判斷不出來時回 None，由呼叫端照交易日檢查並另外告警**（寧可誤報，不可漏報）：
+        平日遇到官方日曆尚未入庫的年度、或研究庫開不了，就是這種情況。
+        研究庫開不了時仍保留週末來源，週六日照樣判得出休市。
+
+        不用券商合約檔來源：watchdog 刻意不連券商，不佔同帳號的連線與限流額度。
+    - Parameters:
+        - stock_db_path: str
+            研究庫路徑（`market_holiday` 表所在）
+        - today: datetime.date
+            要判斷的日期
+    - Return:
+        - Tuple[Optional[bool], Optional[str]]
+            `(是否為交易日, 判斷不出來的原因)`；判斷得出來時原因為 None
+    """
+
+    sources: List[TradingCalendarSource] = [WeekendCalendarSource()]
+    conn: Optional[DBConnection] = None
+    note: Optional[str] = None
+    try:
+        conn = connect_sqlite(stock_db_path, read_only=True)
+        sources.insert(0, OfficialHolidayCalendarSource(MarketHolidayAPI(conn=conn)))
+    except (DBError, OSError) as exc:
+        note = f"研究庫開不了（{stock_db_path}）：{exc}"
+
+    try:
+        return resolve_trading_day(today, sources), None
+    except (TradingCalendarUnavailableError, DBError) as exc:
+        reason: str = str(exc) if note is None else f"{note}；{exc}"
+        return None, reason
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
     """
     - Description:
@@ -282,6 +345,11 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return EXIT_UNREACHABLE
 
+    trading_day, calendar_problem = resolve_today(args.stock_db_path, now.date())
+    if trading_day is False:
+        logger.info(f"{now.date()} 不是交易日，不檢查段落")
+        return EXIT_OK
+
     try:
         rows: List[Tuple[Any, ...]] = fetch_runs(args.db_path, now.date())
     except (DBError, OSError) as exc:
@@ -299,6 +367,11 @@ def main() -> int:
     problems: List[str] = [
         status.problem for status in statuses if status.problem is not None
     ]
+    if calendar_problem is not None:
+        problems.insert(
+            0,
+            f"無法判定 {now.date()} 是否為交易日，已照交易日檢查：{calendar_problem}",
+        )
 
     if not problems:
         logger.info(f"watchdog 檢查通過（已檢查 {len(statuses)} 個段落）")
