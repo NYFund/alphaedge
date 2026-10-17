@@ -181,7 +181,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 | `--simulation`／`--production` | 模擬（預設）／正式環境；`--production` 必須同時帶 `--confirm-production`。正式環境刻意沒有對應的環境變數 |
 | `--broker` | `shioaji`（預設）或 `fake`。`fake` 只供測試直接注入，從命令列使用一律以結束碼 2 拒絕 |
 | `--dry-run` | 走完整流程但不真的送出委託 |
-| `--resume-trading [策略名 ...]` | 人工恢復交易模式；目前不論有沒有給策略名，都會恢復帳戶層與所有已記錄的策略層（逐策略恢復尚未實作） |
+| `--resume-trading [策略名 ...]` | 人工恢復交易模式：不給策略名時恢復帳戶層與所有策略；給策略名時只恢復那幾支（須在 `--strategy` 之中），帳戶層不動 |
 | `--resync-from-broker`／`--confirm-resync` | 以券商部位重建歸屬帳；不帶 `--confirm-resync` 只列計畫 |
 
 所有防呆都在建立任何券商連線之前完成。實盤**只有未預期的例外才回傳 1**，其餘結果各有自己的結束碼，排程要依碼處理：
@@ -190,7 +190,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 |:---:|---|
 | 0 | 正常結束 |
 | 1 | 未預期的例外 |
-| 2 | 用法錯誤：策略名找不到或重複、缺 `--phase`、`--date` 沒搭 `--phase parity`、`--production` 沒帶 `--confirm-production`、使用 `fake` 券商、重建相關旗標的組合不合法、多支策略的段落時窗沒有交集、策略設定實盤不支援（例如期貨的 `OPEN_INTEREST` 換月規則） |
+| 2 | 用法錯誤：策略名找不到或重複、缺 `--phase`、`--date` 沒搭 `--phase parity`、`--production` 沒帶 `--confirm-production`、使用 `fake` 券商、`--resume-trading` 指名的策略不在 `--strategy` 之中、重建相關旗標的組合不合法、多支策略的段落時窗沒有交集、策略設定實盤不支援（例如期貨的 `OPEN_INTEREST` 換月規則） |
 | 3 | 資料未更新到前一個交易日，或判定不出今天是否為交易日 |
 | 4 | 對帳不一致，或以券商部位重建被拒絕 |
 | 5 | kill switch 生效 |

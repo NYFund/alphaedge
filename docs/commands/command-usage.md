@@ -183,7 +183,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 | `--simulation` / `--production` | Simulation (default) / production; `--production` requires `--confirm-production`. There is deliberately no environment variable for production |
 | `--broker` | `shioaji` (default) or `fake`. `fake` is only for tests that inject it directly; from the command line it is always rejected with exit code 2 |
 | `--dry-run` | Run the full flow without actually sending orders |
-| `--resume-trading [name ...]` | Manually restore the trading mode; currently restores the account level and every recorded strategy level whether or not names are given (per-strategy resume is not implemented) |
+| `--resume-trading [name ...]` | Manually restore the trading mode: with no names, the account level and every strategy; with names, only those strategies (they must be in `--strategy`), leaving the account level as is |
 | `--resync-from-broker` / `--confirm-resync` | Rebuild the attribution ledger from broker positions; without `--confirm-resync` it only prints the plan |
 
 All validation happens before any broker connection is made. Live trading **returns 1 only for unexpected exceptions**; every other outcome has its own exit code for the scheduler to act on:
@@ -192,7 +192,7 @@ All validation happens before any broker connection is made. Live trading **retu
 |:---:|---|
 | 0 | Normal exit |
 | 1 | Unexpected exception |
-| 2 | Usage error: unknown or duplicated strategy name, missing `--phase`, `--date` without `--phase parity`, `--production` without `--confirm-production`, the `fake` broker, an invalid combination of the resync flags, strategies whose phase windows do not overlap, or a strategy setting live trading does not support (for example the futures `OPEN_INTEREST` roll rule) |
+| 2 | Usage error: unknown or duplicated strategy name, missing `--phase`, `--date` without `--phase parity`, `--production` without `--confirm-production`, the `fake` broker, a `--resume-trading` name that is not in `--strategy`, an invalid combination of the resync flags, strategies whose phase windows do not overlap, or a strategy setting live trading does not support (for example the futures `OPEN_INTEREST` roll rule) |
 | 3 | Data not updated through the previous trading day, or today's trading-day status cannot be determined |
 | 4 | Reconciliation mismatch, or a refused rebuild from broker positions |
 | 5 | Kill switch triggered |
