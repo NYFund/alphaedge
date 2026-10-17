@@ -1,6 +1,6 @@
 import queue
 from abc import ABC, abstractmethod
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Tuple
 
 from loguru import logger
 
@@ -14,6 +14,14 @@ from core.models import (
 )
 
 """BaseBroker: 市場與券商皆無關的下單、回報、帳務與行情介面"""
+
+# 定義券商連線層的降級事件類別：閘道只回報發生了什麼，要不要降級由引擎決定
+# 連線中斷：可能幾秒後就重連成功，是否降級要看重連與對帳的結果
+BROKER_SESSION_DOWN: str = "SESSION_DOWN"
+# 當日重連次數用完：持續性故障，今天不會自己恢復
+BROKER_RECONNECT_EXHAUSTED: str = "RECONNECT_EXHAUSTED"
+# 本機時鐘與券商回報時戳相差過大：段落時窗與報價過期判斷都建立在本機時鐘上
+BROKER_CLOCK_SKEW: str = "CLOCK_SKEW"
 
 
 class CallbackQueue:
@@ -75,6 +83,39 @@ class BaseBroker(ABC):
         # **刻意只有一個 queue**：Python 的 `queue.Queue` 不能像 socket 一樣
         # `select` 多個，分開幾個就得輪詢，還會讓回報與行情的處理順序變得不確定
         self.execution_queue: queue.Queue = queue.Queue()
+        # 降級事件 `(類別, 原因)`：連線中斷與時鐘偏差的偵測跑在券商的執行緒上，
+        # 而降級要寫紀錄庫（SQLite 連線不可跨執行緒），故同樣只入列、由引擎主執行緒取出處理
+        self._degrade_events: queue.Queue = queue.Queue()
+
+    # === 降級事件 ===
+    def report_degrade(self, kind: str, reason: str) -> None:
+        """
+        - Description:
+            回報一筆降級事件；**任何執行緒都可以呼叫**，這裡只入列
+        - Parameters:
+            - kind: str
+                事件類別（`BROKER_SESSION_DOWN` 等）
+            - reason: str
+                原因說明
+        """
+
+        self._degrade_events.put((kind, reason))
+
+    def drain_degrade_events(self) -> List[Tuple[str, str]]:
+        """
+        - Description:
+            取出所有尚未處理的降級事件；由引擎主執行緒呼叫
+        - Return:
+            - List[Tuple[str, str]]
+                `(類別, 原因)`，依發生順序
+        """
+
+        events: List[Tuple[str, str]] = []
+        while True:
+            try:
+                events.append(self._degrade_events.get_nowait())
+            except queue.Empty:
+                return events
 
     # === 連線 ===
     @abstractmethod

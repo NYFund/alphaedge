@@ -81,6 +81,9 @@ class ShioajiBroker(BaseBroker):
         super().__init__()
 
         self.session: ShioajiSession = session
+        # session 偵測到的連線中斷、重連用完與時鐘偏差一律進本閘道的降級佇列，
+        # 由引擎主執行緒決定要不要降級（那些偵測跑在券商的執行緒上，不可直接寫紀錄庫）
+        session.set_degrade_handler(self.report_degrade)
         self.rate_limiter: RateLimiter = (
             rate_limiter if rate_limiter is not None else session.rate_limiter
         )

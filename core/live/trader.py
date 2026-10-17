@@ -16,7 +16,7 @@ from typing import (
 
 from loguru import logger
 
-from core.broker.base import BaseBroker
+from core.broker.base import BROKER_SESSION_DOWN, BaseBroker
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
@@ -46,6 +46,7 @@ from core.live.notify.base import NotifyLevel, notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
+from core.live.risk import event_categories
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
 from core.live.risk.risk_manager import (
@@ -283,7 +284,8 @@ class LiveTrader:
             - cost_estimator: Optional[TradeCostEstimator]
                 盤後校正成本用的估算器（依市場重算一筆已平倉交易的費用與稅）
             - resume_trading: bool
-                人工恢復交易模式（**只能由命令列旗標傳入**）
+                帳戶層已人工恢復（**只能由命令列旗標傳入**）；指名只恢復部分策略時為 False，
+                帳戶層的降級仍然有效
             - notifier: Optional[Any]
                 事件推播；None 時不推播
             - now_provider: Callable[[], datetime.datetime]
@@ -704,6 +706,7 @@ class LiveTrader:
             連不回來時不跑日終動作，留給下一次心跳再試。
         """
 
+        self._apply_broker_degrades()
         if not self.ensure_connected():
             return
         self._run_session_guard()
@@ -939,6 +942,40 @@ class LiveTrader:
         self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
         self._notify(NotifyLevel.CRITICAL, "行情中斷", reason)
 
+    def _apply_broker_degrades(self) -> None:
+        """
+        - Description:
+            取出券商閘道回報的降級事件，依類別決定要不要降級
+
+            偵測跑在券商的執行緒上，只入列；這裡在主執行緒處理，因為降級要寫紀錄庫。
+
+            - **連線中斷**：不降級，只寫 WARN 事件並推播。短暫斷線不該停掉之後的開倉——
+              降級會落地並延續到之後的段落，要人工解除。盤中由心跳重連並走完恢復流程，
+              斷線期間若有漏接，重連後的對帳會抓到並由對帳器降級。
+            - **重連次數用完、時鐘偏差過大**：帳戶層降為 `REDUCE_ONLY` 並推 CRITICAL。
+              前者是今天不會自己恢復的故障；後者讓段落時窗與報價過期判斷都失準。
+              **不降 `HALTED`**（同 `_on_market_data_lost()`）：部位還在場上，停損要送得出去。
+        """
+
+        drain: Optional[Callable[[], List[Tuple[str, str]]]] = getattr(
+            self.broker, "drain_degrade_events", None
+        )
+        if drain is None:
+            return
+
+        for kind, reason in drain():
+            if kind == BROKER_SESSION_DOWN:
+                self.events.write(
+                    category=event_categories.BROKER_SESSION_DOWN,
+                    severity=NotifyLevel.WARN,
+                    message=reason,
+                )
+                self._notify(NotifyLevel.WARN, "券商連線中斷", reason)
+                continue
+
+            self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
+            self._notify(NotifyLevel.CRITICAL, "券商連線降級", reason)
+
     def ensure_connected(self) -> bool:
         """
         - Description:
@@ -957,10 +994,21 @@ class LiveTrader:
 
         logger.error("偵測到連線中斷，嘗試重連")
         if not self.broker.reconnect():
+            # 次數用完時閘道會回報降級事件，當場套用，不等下一次心跳
+            self._apply_broker_degrades()
             self._notify(NotifyLevel.CRITICAL, "重連失敗", "已停止送單，請人工確認")
             return False
 
         self.recover_after_reconnect()
+        # 恢復流程含對帳：不一致時對帳器已經降級，走到這裡代表狀態確認過，不降級只留紀錄
+        message: str = "券商重連成功，已重新訂閱、接管委託並對帳"
+        logger.warning(message)
+        self.events.write(
+            category=event_categories.BROKER_RECONNECTED,
+            severity=NotifyLevel.WARN,
+            message=message,
+        )
+        self._notify(NotifyLevel.WARN, "券商重連成功", message)
         return True
 
     def recover_after_reconnect(self) -> None:
@@ -1501,6 +1549,9 @@ class LiveTrader:
                 一般段落不需要它；日終回補靠它判斷要不要重試
         """
 
+        # 券商執行緒回報的降級要在送單前套用，否則時鐘已不可信的這一批照樣送出
+        self._apply_broker_degrades()
+
         unsent: List[Tuple[StrategyContext, BaseOrder]] = []
         # 每批一份保證金預算：同一批的開倉單逐張累計，不各自拿同一份可用保證金比
         margin_gate: MarginGate = MarginGate(self.margin_query, self.simulation)
@@ -1842,6 +1893,9 @@ class LiveTrader:
             - aborted: bool
                 段落是否因例外或終止訊號結束
         """
+
+        # 段落中途發生、還沒被送單或心跳取走的降級事件，在寫結束紀錄之前落地
+        self._apply_broker_degrades()
 
         try:
             if aborted:

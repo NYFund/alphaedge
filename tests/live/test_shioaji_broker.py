@@ -1,6 +1,6 @@
 import inspect
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 import shioaji as sj
@@ -164,6 +164,10 @@ class FakeSession:
         self.rate_limiter: RateLimiter = limiter
         self.connected: bool = False
         self.skew_checks: List[Any] = []
+        self.degrade_handler: Optional[Callable[[str, str], None]] = None
+
+    def set_degrade_handler(self, handler: Callable[[str, str], None]) -> None:
+        self.degrade_handler = handler
 
     def connect(self) -> None:
         self.connected = True
