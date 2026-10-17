@@ -297,6 +297,7 @@ def build_live_trader(
     simulation: bool = True,
     dry_run: bool = False,
     resume_trading: bool = False,
+    resume_strategies: Optional[Sequence[str]] = None,
     run_id: Optional[str] = None,
     dao: Optional[LiveTradeDAO] = None,
     risk_config: Optional[RiskConfig] = None,
@@ -322,6 +323,8 @@ def build_live_trader(
             走完整流程但不真的送出
         - resume_trading: bool
             人工恢復交易模式
+        - resume_strategies: Optional[Sequence[str]]
+            只恢復這幾支策略、帳戶層不動；None 時恢復帳戶層與所有已記錄的策略
         - run_id: Optional[str]
             本次啟動的識別碼；None 時以時戳產生
         - dao: Optional[LiveTradeDAO]
@@ -366,7 +369,11 @@ def build_live_trader(
     )
 
     mode_state: TradingModeState = TradingModeState(
-        resolved_dao, resolved_run_id, now_provider, resume_trading=resume_trading
+        resolved_dao,
+        resolved_run_id,
+        now_provider,
+        resume_trading=resume_trading,
+        resume_strategies=resume_strategies,
     )
     risk_manager: PreTradeRiskManager = PreTradeRiskManager(
         mode_state,
@@ -482,7 +489,9 @@ def build_live_trader(
             )
             else None
         ),
-        resume_trading=resume_trading,
+        # 引擎用它放行「帳戶層非 NORMAL」的送單路徑：只有帳戶層真的被恢復時才成立，
+        # 指名恢復策略時帳戶層不動，不可讓它放行
+        resume_trading=resume_trading and resume_strategies is None,
         notifier=notifier,
         now_provider=now_provider,
         parity_checker=parity_checker,

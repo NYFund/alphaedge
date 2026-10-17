@@ -218,7 +218,7 @@ python -m apps.live --strategy VolumeBreakoutMomentumStrategy --resync-from-brok
 | `--simulation` / `--production` | Simulation (default) / production; `--production` requires `--confirm-production` |
 | `--broker` | `shioaji` (default) or `fake` (tests only, refused in production) |
 | `--dry-run` | Run the full flow without actually sending orders |
-| `--resume-trading [name ...]` | Manually restore the trading mode |
+| `--resume-trading [name ...]` | Manually restore the trading mode: with no names, the account level and every strategy; with names, only those strategies (they must be in `--strategy`), leaving the account level as is |
 | `--resync-from-broker` / `--confirm-resync` | Rebuild the attribution ledger from broker positions; without `--confirm-resync` it only prints the plan |
 
 Live trading **returns 1 only for unexpected exceptions**; every other outcome has its own code. These are the codes a scheduler should act on:

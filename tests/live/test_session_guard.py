@@ -3,7 +3,9 @@ from typing import Any, List
 
 import pytest
 
+from core.live.factory import TW_STOCK_SEGMENTS
 from core.live.intraday.session_guard import (
+    DAY_TRADE_COVER_TIME,
     SessionGuard,
     cover_action,
     is_night_session,
@@ -14,7 +16,7 @@ from core.live.intraday.session_guard import (
     uncovered_day_trade_positions,
 )
 from core.models import StockAccount, StockOrder, StockPosition
-from core.utils import Action, DayTradeUncoveredPolicy, PositionType
+from core.utils import Action, DayTradeUncoveredPolicy, ExecutionTiming, PositionType
 
 """
 日終強制動作
@@ -245,15 +247,35 @@ def test_cover_action_is_buy_for_a_short() -> None:
 
 
 def test_guard_waits_until_the_cover_time() -> None:
-    """13:20 之前不該動作——提早回補等於放棄當沖的後半段"""
+    """回補時點之前不該動作——提早回補等於放棄當沖的後半段"""
 
-    clock: List[datetime.datetime] = [at(2026, 9, 21, 13, 19)]
+    cover_at: datetime.datetime = datetime.datetime.combine(
+        datetime.date(2026, 9, 21), DAY_TRADE_COVER_TIME
+    )
+    clock: List[datetime.datetime] = [cover_at - datetime.timedelta(minutes=1)]
     guard: SessionGuard = SessionGuard(lambda: clock[0])
 
     assert guard.should_cover_now() is False
 
-    clock[0] = at(2026, 9, 21, 13, 20)
+    clock[0] = cover_at
     assert guard.should_cover_now() is True
+
+
+def test_cover_time_falls_inside_the_intraday_submit_window() -> None:
+    """
+    回補時點必須落在台股盤中段落的送單時窗之內，且留得下重試
+
+    回補只掛在盤中迴圈的心跳上：時點排在送單迄之後的話，迴圈先收線、回補永遠不會觸發，
+    先賣後買的當沖空單就留到收盤（曾經的設定是 13:20，而送單迄是 13:18）。
+    """
+
+    window = TW_STOCK_SEGMENTS[ExecutionTiming.IMMEDIATE]
+
+    assert window.submit_start < DAY_TRADE_COVER_TIME < window.submit_end
+    retry_room: datetime.timedelta = datetime.datetime.combine(
+        datetime.date.today(), window.submit_end
+    ) - datetime.datetime.combine(datetime.date.today(), DAY_TRADE_COVER_TIME)
+    assert retry_room >= datetime.timedelta(minutes=2)
 
 
 def test_guard_covers_once_per_trading_day() -> None:
@@ -360,7 +382,7 @@ def test_heartbeat_does_nothing_before_the_cover_time() -> None:
     harness.trader._last_quotes["2330"] = harness.broker.quotes["2330"]
 
     before: int = harness.broker.placed_count
-    harness.trader.session_guard = SessionGuard(lambda: at(2026, 9, 21, 13, 19))
+    harness.trader.session_guard = SessionGuard(lambda: at(2026, 9, 21, 13, 14))
     harness.trader._run_session_guard()
 
     assert harness.broker.placed_count == before

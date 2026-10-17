@@ -6,6 +6,11 @@ from typing import Any, Callable, List, Optional, Sequence, Tuple
 import shioaji as sj
 from loguru import logger
 
+from core.broker.base import (
+    BROKER_CLOCK_SKEW,
+    BROKER_RECONNECT_EXHAUSTED,
+    BROKER_SESSION_DOWN,
+)
 from core.broker.rate_limiter import RateLimiter
 from core.config.settings import (
     API_KEY,
@@ -77,7 +82,7 @@ class ShioajiSession:
         api_factory: Optional[Callable[[bool], Any]] = None,
         sleep: Callable[[float], None] = time.sleep,
         now_provider: Callable[[], datetime.datetime] = now_live,
-        on_degrade: Optional[Callable[[str], None]] = None,
+        on_degrade: Optional[Callable[[str, str], None]] = None,
         credentials: Optional[Tuple[str, str]] = None,
         verify_contract_date: bool = True,
     ) -> None:
@@ -100,9 +105,11 @@ class ShioajiSession:
                 等待函式；測試注入假時鐘用
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間（台北時區 aware）
-            - on_degrade: Optional[Callable[[str], None]]
-                降級回呼。**session 不自己改交易模式**，只送事件給風控——
-                散在各元件各自切換的話，沒有任何一處知道「現在到底能不能送單」
+            - on_degrade: Optional[Callable[[str, str], None]]
+                降級回呼，收 `(類別, 原因)`（類別見 `core.broker.base` 的 `BROKER_*`）。
+                **session 不自己改交易模式**，只送事件——散在各元件各自切換的話，
+                沒有任何一處知道「現在到底能不能送單」。會在券商的執行緒上被呼叫，
+                回呼本身只能入列，不可碰紀錄庫
             - credentials: Optional[Tuple[str, str]]
                 `(api_key, secret_key)`；None 時讀環境變數 `API_KEY`／`API_SECRET_KEY`。
                 tick 爬蟲以多組帳號輪替時逐組傳入
@@ -124,7 +131,7 @@ class ShioajiSession:
         )
         self._sleep: Callable[[float], None] = sleep
         self._now: Callable[[], datetime.datetime] = now_provider
-        self._on_degrade: Optional[Callable[[str], None]] = on_degrade
+        self._on_degrade: Optional[Callable[[str, str], None]] = on_degrade
         self._credentials: Optional[Tuple[str, str]] = credentials
         self._verify_contract_date_enabled: bool = verify_contract_date
 
@@ -347,7 +354,7 @@ class ShioajiSession:
                 "段落判定與報價過期偵測都建立在本機時鐘上"
             )
             logger.error(message)
-            self._degrade(message)
+            self._degrade(BROKER_CLOCK_SKEW, message)
         return skew
 
     def _register_session_callbacks(self) -> None:
@@ -374,7 +381,7 @@ class ShioajiSession:
 
         self.connected = False
         logger.error("Shioaji session 中斷")
-        self._degrade("Shioaji session 中斷")
+        self._degrade(BROKER_SESSION_DOWN, "Shioaji session 中斷")
 
     # === 重連 ===
     def reconnect(self) -> bool:
@@ -395,7 +402,7 @@ class ShioajiSession:
                 f"重連次數已達單日上限 {self.MAX_DAILY_RECONNECTS} 次，停止重試"
             )
             logger.error(message)
-            self._degrade(message)
+            self._degrade(BROKER_RECONNECT_EXHAUSTED, message)
             return False
 
         self.reconnect_count += 1
@@ -459,12 +466,26 @@ class ShioajiSession:
 
         return self.connected and self.api is not None
 
-    def _degrade(self, reason: str) -> None:
-        """送降級事件給風控；沒有註冊回呼時只記 log"""
+    def set_degrade_handler(self, handler: Callable[[str, str], None]) -> None:
+        """
+        - Description:
+            註冊降級回呼；建構時沒有給的話由閘道補上
+
+            閘道（`ShioajiBroker`）在 session 之後才建立，降級事件要進的是閘道的佇列，
+            所以留這個入口，而不是要求呼叫端先建閘道再建 session。
+        - Parameters:
+            - handler: Callable[[str, str], None]
+                收 `(類別, 原因)`；會在券商的執行緒上被呼叫，只能入列
+        """
+
+        self._on_degrade = handler
+
+    def _degrade(self, kind: str, reason: str) -> None:
+        """送出降級事件；沒有註冊回呼時只記 log"""
 
         if self._on_degrade is None:
             return
-        self._on_degrade(reason)
+        self._on_degrade(kind, reason)
 
 
 def login_read_only_sessions(
