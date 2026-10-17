@@ -112,6 +112,7 @@ CRON_TZ=Asia/Taipei
 
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
 - **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商。段落鍵寫成 `段落[:市場]=HH:MM`（市場為 `stock`／`futures`）：股票與期貨是兩個行程、段落名相同，**兩條線都跑時一定要逐市場指定**，否則股票尾盤的紀錄會把「期貨尾盤沒跑」遮住。預設表 `open=08:30 intraday=09:06 close=13:20 after_close=14:30` 不帶市場（該段落任一市場有跑就算），只給單一市場的部署用；`live_run.instrument_type` 補欄之前的舊紀錄沒有市場，視為任一市場都算。
+  **非交易日不告警**：檢查前先以週末＋官方開休市日曆（`tw_stock.db` 的 `market_holiday` 表，與實盤段落同一套判定、不連券商）判斷今天是否為交易日，休市日直接以 0 結束；判斷不出來（平日遇到官方日曆尚未入庫的年度、或研究庫開不了）時照交易日檢查，並把「無法判定交易日」列為告警。每年 12 月公告隔年日曆後要跑一次 `--target market_holiday`，否則隔年第一個交易日起每次都會告警。
 - macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`）；資料更新排在台北 06:00（留時間給 08:30 開盤段），跑完接著對股票與期貨示範策略各跑一次 `--phase parity`，前一步失敗不中斷後面，存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
