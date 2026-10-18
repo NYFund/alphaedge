@@ -16,7 +16,7 @@ from core.live.datafeed.calendar import TradingCalendarUnavailableError
 from core.live.execution.stock import StockExecutionModel
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
-from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO, RiskConfig
+from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.trader import LiveTrader, StrategyContext
@@ -32,14 +32,17 @@ from core.models import (
     StockPosition,
     StockQuote,
 )
+from core.models.risk_config import StockRiskConfig
 from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
     ExecutionStyle,
     ExecutionTiming,
+    InstrumentType,
     LiveHook,
     LiveOrderStatus,
+    Market,
     PositionType,
     Scale,
 )
@@ -130,6 +133,9 @@ class ScriptedStrategy(BaseStrategy):
         self._orders: List[BaseOrder] = orders or []
         self._close_orders: List[BaseOrder] = close_orders or []
         self._raises: bool = raises
+        # 腳本化的委託都是台股；風控門檻依它取股票預設值（與組裝層同一條規則）
+        self.market = Market.TW
+        self.instrument_type = InstrumentType.STOCK
         self.init_capital = CAPITAL
         self.live_ready = True
         self.execution_schedule = {
@@ -208,7 +214,7 @@ class Harness:
         quota: Optional[float] = None,
         price_limits: PriceLimits = LIMITS,
         live_capital: Optional[float] = None,
-        risk_config: Optional[RiskConfig] = None,
+        risk_config: Optional[StockRiskConfig] = None,
     ) -> None:
         # 實盤額度：與組裝層一致，帳戶與額度分配用同一個值（未指定時等於研究本金）
         capital: float = live_capital if live_capital is not None else CAPITAL
@@ -232,7 +238,7 @@ class Harness:
         )
         self.risk: PreTradeRiskManager = PreTradeRiskManager(
             self.mode_state,
-            risk_config or RiskConfig(),
+            None,
             self.dao,
             "run1",
             kill_switch_path=_MissingPath(),
@@ -269,6 +275,8 @@ class Harness:
                     ),
                     symbols=["2330"],
                     calculate_notional=lambda order: order.price * order.volume * 1000,
+                    # 逐策略的風控門檻；None 時用股票預設值（與組裝層同一條規則）
+                    risk_config=risk_config,
                     # 與 `factory._build_context()` 一致；少了它，
                     # 任何需要還原訂單的路徑（帳戶同步、當沖回補）都會靜靜做不了事
                     build_filled_order=build_stock_order,
@@ -566,9 +574,9 @@ def test_risk_rejection_releases_the_reservation() -> None:
     "risk_config",
     [
         # 只有批次曝險（單一標的 25%）擋得住，逐筆單筆上限 40% 放行
-        RiskConfig(single_order_amount_ratio=0.40, single_symbol_exposure_ratio=0.25),
+        StockRiskConfig(single_order_ratio=0.40, single_symbol_exposure_ratio=0.25),
         # 只有逐筆單筆上限（25%）擋得住，批次的單一標的上限 40% 放行
-        RiskConfig(single_order_amount_ratio=0.25, single_symbol_exposure_ratio=0.40),
+        StockRiskConfig(single_order_ratio=0.25, single_symbol_exposure_ratio=0.40),
     ],
     ids=["batch_exposure", "single_order"],
 )
@@ -582,7 +590,7 @@ def test_risk_rejection_releases_the_reservation() -> None:
     ],
 )
 def test_risk_limits_use_live_capital(
-    risk_config: RiskConfig, live_capital: Optional[float], placed: int
+    risk_config: StockRiskConfig, live_capital: Optional[float], placed: int
 ) -> None:
     """
     批次曝險與逐筆檢查都以實盤額度為基準，不是研究回測的 `init_capital`

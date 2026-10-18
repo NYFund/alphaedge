@@ -47,7 +47,7 @@
 | `manual_tick_crawler.py` | tick 爬蟲的手動驗證（需 Shioaji 金鑰） | — |
 | `manual_tick_history_import.py` | 台股 tick 歷史 CSV（`data/tick_history/`）全量匯入 TimescaleDB：依 chunk 切檔、逐 chunk 載入並壓縮，跑完做完整性比對（每個股票 × 交易日的列數、抽樣逐列、每日成交量對照）。**不帶 `--apply` 只列計畫**；中斷後加 `--resume` 續跑，`--verify-only` 只比對。要先開 Docker Desktop 並 `docker compose up -d postgres` | 寫入（需 `--apply`） |
 | `manual_corporate_action_detect.py` | 公司行動偵測與人工補登：先列出「單日變動超過門檻、且無法由除權息或已知公司行動解釋」的候選（唯讀），逐筆判斷後補登。ETF 的受益權單位分割不在任何結構化端點裡，只能走這條路；**不帶 `--confirm` 只列計畫**，停止買賣前收盤價由腳本自己從 `price` 表取（不讓人手打） | 寫入（需 `--confirm`） |
-| `manual_probe_pnl_fields.py` | 單日損益的來源欄位實際取得到什麼值？連模擬環境唯讀核對。單日虧損檢查（`RiskConfig.daily_loss_ratio`）一律以券商端為準，所以要先確認期貨 `Margin` 與股票帳戶快照的各欄位語意 | — |
+| `manual_probe_pnl_fields.py` | 單日損益的來源欄位實際取得到什麼值？連模擬環境唯讀核對。單日虧損檢查（`BaseRiskConfig.daily_loss_ratio`／`AccountRiskConfig.daily_loss_ratio`）一律以券商端為準，所以要先確認期貨 `Margin` 與股票帳戶快照的各欄位語意 | — |
 | `manual_verify_contract_probe.py` | 期貨合約有沒有 `update_date`？連模擬環境唯讀核對。實盤的交易日判定在平日只剩「券商合約檔更新日」一個佐證，而**必須問期貨合約**——拿股票合約去問，兩個市場開休市不一致的那天會誤判為開市 | — |
 | `manual_verify_quota_basis.py` | 資金額度的計算基準與券商實際權益對不對得上？連模擬環境唯讀核對 `check_quota_against_equity()` 與 `CAPITAL_SAFETY_RATIO` 的實際效果 | — |
 | `../check_overnight_positions.py` | 模擬環境是否保留隔夜部位？（**不在本目錄**）唯讀分析 `live_position_snapshot`：模擬環境若每晚清倉，從第 2 天起本地歸屬帳與券商部位必然不一致，多日演練建立在隔夜部位上的驗收項目就達不到。不連券商、不寫任何東西 | 唯讀 |

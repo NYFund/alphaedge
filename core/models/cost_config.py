@@ -51,7 +51,7 @@ class ShortConstraint:
     auto_force_cover_on_ex_dividend: bool = True
     # 單一空單曝險上限（佔初始本金比例）；`None` ＝ 不限制。
     #
-    # **實盤有一份對應的設定**：`RiskConfig.single_symbol_exposure_ratio`，
+    # **實盤有一份對應的設定**：`StockRiskConfig.single_symbol_exposure_ratio`，
     # 預設 0.35、多空皆適用、超限是批次截斷而非整筆拒絕。
     # 公式兩邊共用（`order_rules.exceeds_symbol_exposure()`），四個面向的
     # 差異寫在那支函式的 docstring——**改這一邊之前先看那份對照表**，

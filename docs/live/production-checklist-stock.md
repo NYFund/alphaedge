@@ -29,9 +29,10 @@
 
 ## 二、風控與資金（共通）
 
-- [ ] **`RiskConfig` 調到小額**：實盤入口不提供覆寫管道，要改 `core/live/risk/risk_config.py` 的預設值
-      （不可超過同檔的 `RISK_LIMIT_CAPS`，超過會在組裝時拋錯）。單筆金額比例、單日金額比例、單筆張數上限（`max_stock_lots`）、
+- [ ] **風控門檻收緊到小額**：在 `deploy/live_risk.toml` 以策略類別名分段寫要收緊的欄位（只能收緊，寫寬了啟動時報錯），
+      帳戶層寫 `[account]` 段。單筆比例（`single_order_ratio`）、單日比例（`daily_ratio`）、單筆張數上限（`max_order_volume`）、
       單一標的曝險比例都要對照首日預計的額度重新決定；單筆與單一標的比例不可小於 1 ÷ `live_max_holdings`，否則每張買單都會被擋。
+      啟動後查 `live_run.risk_config_json` 確認實際生效的值。
 - [ ] **跨行程的資金總量**：股票的盤中段落與開盤／尾盤段落是**不同行程**，啟動時各自只檢查自己載入的策略額度。
       手動確認 **Σ 全部股票策略的 `live_capital`（跨行程加總）≤ 帳戶總權益 × 0.95**（`CAPITAL_SAFETY_RATIO`）。
 - [ ] **kill switch 演練**：建立 `ALPHAEDGE_LIVE_KILL_SWITCH_PATH`（未設定時為 `data/live/KILL_SWITCH`），

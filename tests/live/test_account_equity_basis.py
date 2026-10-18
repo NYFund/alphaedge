@@ -382,11 +382,14 @@ def test_changing_live_capital_leaves_backtest_capital_alone() -> None:
 def test_base_strategies_default_to_no_override() -> None:
     """預設 `None`：沒有人宣告時，實盤與回測用同一個數字"""
 
-    from strategies.futures.momentum_futures_strategy import (
-        MomentumFuturesStrategy,
+    # 取一支沒有宣告實盤額度的策略（`MomentumFuturesStrategy` 已宣告，見其 docstring〈資金額度〉）
+    from strategies.stock.investment_trust_momentum_swing_strategy import (
+        InvestmentTrustMomentumSwingStrategy,
     )
 
-    strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
+    strategy: InvestmentTrustMomentumSwingStrategy = (
+        InvestmentTrustMomentumSwingStrategy()
+    )
 
     assert strategy.live_capital is None
     assert live_capital(strategy) == strategy.init_capital

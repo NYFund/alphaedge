@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Set
 from loguru import logger
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
+from core.models.risk_config import BaseRiskConfig
 from core.portfolio.construction import BasePortfolioConstructor
 from core.portfolio.signal import Signal
 from core.utils import (
@@ -171,6 +172,13 @@ class BaseStrategy(ABC):
         # sizer 無條件捨去成 0 張，訊號整批被丟掉而不報錯。
         # 同樣不能直接改 `max_holdings`：它也是回歸基準的一部分。
         self.live_max_holdings: Optional[int] = None
+
+        # 實盤風控門檻；`None` 表示用該市場的預設值（`StockRiskConfig()`／`FuturesRiskConfig()`）。
+        #
+        # 宣告整份物件、只填要改的欄位，例如 `FuturesRiskConfig(max_leverage=3.0)`；
+        # 類別要與策略的市場相符，打錯欄位名建構時就報錯。不能超過全域上限，
+        # 部署端可再以 `deploy/live_risk.toml` 收緊（不能放寬）。**回測不讀這個屬性。**
+        self.live_risk_config: Optional[BaseRiskConfig] = None
 
     def check_removed_settings(self) -> List[str]:
         """

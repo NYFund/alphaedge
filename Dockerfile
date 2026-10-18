@@ -50,6 +50,9 @@ COPY core /app/core
 COPY apps /app/apps
 # `strategies/` 是具體策略（框架只留契約），回測與實盤都要載入
 COPY strategies /app/strategies
+# `deploy/` 是部署端的實盤風控收緊設定（進版控）；少了它容器內的實盤只用策略宣告，
+# 以為收緊了的門檻在容器裡不生效
+COPY deploy /app/deploy
 
 # 裝本專案本身，與本機、CI 同一種安裝方式。
 # **必須是 editable**（uv sync 對本專案預設即是）：`core/config/paths.py` 以 `__file__`

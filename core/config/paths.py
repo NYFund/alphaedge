@@ -125,6 +125,16 @@ LIVE_KILL_SWITCH_PATH: Path = get_env_path(
     get_static_resolved_path(base_dir=DATA_DIR_PATH, dir_name="live") / "KILL_SWITCH",
 )
 
+# 部署端的風控設定（只能收緊策略宣告的上限，見 `core/config/live_risk.py`）。
+#
+# **放專案根的 `deploy/` 而不是 `data/`、且進版控**：風控值的每一次變更都要留在
+# git 歷史裡——事後要回答「那天的上限是多少、誰改的、為什麼」。`data/` 是執行期產物、
+# 不進版控，放那裡就只剩檔案當下的值。**目錄不叫 `config/`**：前端以 `from config import`
+# 取自己的 `frontend/config.py`，專案根多一個同名目錄會讓那行 import 解析到錯的地方
+LIVE_RISK_CONFIG_PATH: Path = get_env_path(
+    "ALPHAEDGE_LIVE_RISK_CONFIG_PATH", PROJECT_ROOT / "deploy" / "live_risk.toml"
+)
+
 
 # -----------------------------------------------------------------------
 # === Crawl Data Downloads Path ===

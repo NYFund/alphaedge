@@ -6,7 +6,6 @@ from typing import Dict, List, Optional
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.risk.risk_config import RISK_LIMIT_CAPS, RiskConfig
 from core.live.risk.risk_manager import (
     ExposureItem,
     PreTradeRiskManager,
@@ -19,6 +18,11 @@ from core.live.risk.risk_manager import (
 )
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import FuturesOrder, StockOrder
+from core.models.risk_config import (
+    AccountRiskConfig,
+    FuturesRiskConfig,
+    StockRiskConfig,
+)
 from core.utils import Action, PositionType, StockPriceType
 
 """
@@ -33,6 +37,8 @@ from core.utils import Action, PositionType, StockPriceType
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 CAPITAL: float = 1_000_000.0
+STOCK: StockRiskConfig = StockRiskConfig()
+CONFIG_CLASSES: List[type] = [StockRiskConfig, FuturesRiskConfig, AccountRiskConfig]
 
 
 def make_order(
@@ -62,9 +68,9 @@ def test_config_caps_cover_every_field() -> None:
     「調鬆一點」是逐次發生的，每一次都有當下看起來合理的理由。
     """
 
-    from dataclasses import fields
-
-    assert {field.name for field in fields(RiskConfig)} == set(RISK_LIMIT_CAPS)
+    for config_cls in CONFIG_CLASSES:
+        names = {field.name for field in dataclasses.fields(config_cls)}
+        assert names == set(config_cls.CAPS), config_cls.__name__
 
 
 def test_every_threshold_is_enforced_somewhere() -> None:
@@ -75,30 +81,37 @@ def test_every_threshold_is_enforced_somewhere() -> None:
     唯一被讀到的地方是上限驗證——設多少都不擋單，也沒有任何警告。
     """
 
-    source: str = (
-        Path(__file__).resolve().parents[2] / "core/live/risk/risk_manager.py"
-    ).read_text(encoding="utf-8")
+    root: Path = Path(__file__).resolve().parents[2]
+    manager_source: str = (root / "core/live/risk/risk_manager.py").read_text(
+        encoding="utf-8"
+    )
+    # 曝險上限由設定自己換算（`exposure_limits()`），執行端在模型檔內
+    model_source: str = (root / "core/models/risk_config.py").read_text(
+        encoding="utf-8"
+    )
     unenforced: List[str] = [
-        field.name
-        for field in dataclasses.fields(RiskConfig)
-        if f"config.{field.name}" not in source
+        f"{config_cls.__name__}.{field.name}"
+        for config_cls in CONFIG_CLASSES
+        for field in dataclasses.fields(config_cls)
+        if f"config.{field.name}" not in manager_source
+        and f"self.{field.name}" not in model_source.split("def exposure_limits", 1)[1]
     ]
 
-    assert not unenforced, f"RiskConfig 有欄位沒有執行端：{unenforced}"
+    assert not unenforced, f"風控設定有欄位沒有執行端：{unenforced}"
 
 
 def test_config_rejects_values_above_the_cap() -> None:
     """超過上限的設定在建立時就拋出，不等到盤中第一次拒單才發現"""
 
     with pytest.raises(ValueError, match="超過全域上限"):
-        RiskConfig(max_stock_lots=RISK_LIMIT_CAPS["max_stock_lots"] + 1)
+        StockRiskConfig(max_order_volume=StockRiskConfig.CAPS["max_order_volume"] + 1)
 
 
 def test_config_rejects_negative_values() -> None:
     """負值也擋：`-1` 的門檻等於全部拒單，而錯誤訊息會指向每一張單"""
 
     with pytest.raises(ValueError, match="不可為負"):
-        RiskConfig(daily_loss_ratio=-0.01)
+        StockRiskConfig(daily_loss_ratio=-0.01)
 
 
 def test_config_is_frozen() -> None:
@@ -108,17 +121,17 @@ def test_config_is_frozen() -> None:
     那是最難查的一種事故：拒單數突然變了，而程式碼看起來完全一樣。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
 
     with pytest.raises(dataclasses.FrozenInstanceError):
-        config.max_stock_lots = 100  # type: ignore[misc]
+        config.max_order_volume = 100  # type: ignore[misc]
 
 
 # === 純判定 ===
 def test_single_order_amount_cap() -> None:
     """單筆委託金額上限"""
 
-    config: RiskConfig = RiskConfig(single_order_amount_ratio=0.2)
+    config: StockRiskConfig = StockRiskConfig(single_order_ratio=0.2)
 
     assert check_single_order_amount(200_000, CAPITAL, config).passed is True
     assert check_single_order_amount(200_001, CAPITAL, config).passed is False
@@ -132,26 +145,34 @@ def test_daily_amount_is_a_flow_not_a_stock() -> None:
     那正是迴圈 bug 的形狀。只留曝險那條就擋不住它。
     """
 
-    config: RiskConfig = RiskConfig(daily_amount_ratio=1.0)
+    config: StockRiskConfig = StockRiskConfig(daily_ratio=1.0)
 
     assert check_daily_amount(900_000, 100_000, CAPITAL, config).passed is True
     assert check_daily_amount(900_000, 100_001, CAPITAL, config).passed is False
 
 
-def test_volume_cap_differs_between_stock_and_futures() -> None:
-    """張與口是不同的單位，上限也不同"""
+def test_volume_cap_follows_the_config_class() -> None:
+    """
+    張與口是不同的單位，上限跟著設定的類別走
 
-    config: RiskConfig = RiskConfig(max_stock_lots=50, max_futures_contracts=5)
+    不再由呼叫端傳「是不是期貨」：漏傳一次，期貨就被套上股票的張數上限，而且沒有錯誤訊息。
+    """
 
-    assert check_volume_cap(50, is_futures=False, config=config).passed is True
-    assert check_volume_cap(51, is_futures=False, config=config).passed is False
-    assert check_volume_cap(6, is_futures=True, config=config).passed is False
+    stock: StockRiskConfig = StockRiskConfig(max_order_volume=50)
+    futures: FuturesRiskConfig = FuturesRiskConfig(max_order_volume=5)
+
+    assert check_volume_cap(50, stock).passed is True
+    assert check_volume_cap(51, stock).passed is False
+    assert check_volume_cap(5, futures).passed is True
+    decision: RiskDecision = check_volume_cap(6, futures)
+    assert decision.passed is False
+    assert "口" in decision.reason
 
 
 def test_price_deviation_uses_the_reference_price() -> None:
     """委託價偏離基準價超過門檻就拒"""
 
-    config: RiskConfig = RiskConfig(price_deviation_ratio=0.03)
+    config: StockRiskConfig = StockRiskConfig(price_deviation_ratio=0.03)
 
     assert check_price_deviation(1030.0, 1000.0, config).passed is True
     assert check_price_deviation(1031.0, 1000.0, config).passed is False
@@ -165,7 +186,7 @@ def test_price_limits_use_the_announced_values() -> None:
     除權息日的基準價是另行公告的，公式推出來的區間會整段偏移。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     decision: RiskDecision = check_price_deviation(
         1100.0, 1000.0, config, limit_up=1050.0, limit_down=950.0
     )
@@ -182,7 +203,7 @@ def test_market_orders_pass_the_price_check() -> None:
     成交後由盤後流程以實際成交價回頭比對。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
 
     assert check_price_deviation(None, 1000.0, config).passed is True
     assert check_price_deviation(0.0, 1000.0, config).passed is True
@@ -197,7 +218,7 @@ def test_batch_truncates_instead_of_rejecting_everything() -> None:
     """
 
     # 單一標的占比放到全域上限（0.5），讓這條測試只驗總曝險那一維
-    config: RiskConfig = RiskConfig(
+    config: StockRiskConfig = StockRiskConfig(
         total_exposure_ratio=1.0, single_symbol_exposure_ratio=0.5
     )
     items: List[ExposureItem] = [
@@ -219,7 +240,7 @@ def test_closing_orders_are_never_truncated() -> None:
     它讓曝險變小，擋它沒有道理。
     """
 
-    config: RiskConfig = RiskConfig(total_exposure_ratio=0.1)
+    config: StockRiskConfig = StockRiskConfig(total_exposure_ratio=0.1)
     items: List[ExposureItem] = [
         ExposureItem(
             make_order(
@@ -242,7 +263,7 @@ def test_single_symbol_exposure_is_a_separate_dimension() -> None:
     總曝險沒滿不代表可以把全部資金壓在一檔上。
     """
 
-    config: RiskConfig = RiskConfig(
+    config: StockRiskConfig = StockRiskConfig(
         total_exposure_ratio=1.0, single_symbol_exposure_ratio=0.25
     )
     items: List[ExposureItem] = [
@@ -268,11 +289,9 @@ def test_live_holdings_fit_within_single_symbol_cap() -> None:
     from core.strategies.stock.base import BaseStockStrategy
     from strategies.loader import StrategyLoader
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     # 兩條上限都要容得下一檔的完整份額：單一標的管存量、單筆管一張單
-    cap: float = min(
-        config.single_symbol_exposure_ratio, config.single_order_amount_ratio
-    )
+    cap: float = min(config.single_symbol_exposure_ratio, config.single_order_ratio)
     checked: List[str] = []
     for name, strategy_class in StrategyLoader.load_strategies().items():
         if not issubclass(strategy_class, BaseStockStrategy):
@@ -297,7 +316,7 @@ def test_live_holdings_fit_within_single_symbol_cap() -> None:
 def test_existing_exposure_is_counted(dao_factory: object = None) -> None:
     """既有持倉要算進去：只看本批的話，隔日續跑會把額度重新算一次"""
 
-    config: RiskConfig = RiskConfig(total_exposure_ratio=1.0)
+    config: StockRiskConfig = StockRiskConfig(total_exposure_ratio=1.0)
     items: List[ExposureItem] = [ExposureItem(make_order(), 200_000)]
 
     allowed, truncated = truncate_batch_by_exposure(
@@ -320,7 +339,7 @@ def make_manager(
     mode_state: TradingModeState,
     dao: LiveTradeDAO,
     tmp_path: Path,
-    config: Optional[RiskConfig] = None,
+    account_config: Optional[AccountRiskConfig] = None,
     clock: Optional[List[datetime.datetime]] = None,
 ) -> PreTradeRiskManager:
     """建立風控；kill switch 指向一個不存在的暫存檔"""
@@ -330,7 +349,7 @@ def make_manager(
 
     return PreTradeRiskManager(
         mode_state=mode_state,
-        config=config,
+        account_config=account_config,
         dao=dao,
         run_id="run1",
         kill_switch_path=tmp_path / "KILL_SWITCH",
@@ -351,7 +370,7 @@ def test_kill_switch_blocks_everything(
     (tmp_path / "KILL_SWITCH").touch()
 
     decision: RiskDecision = manager.check(
-        make_order(), "A", CAPITAL, amount=100_000, reference_price=1000.0
+        make_order(), "A", CAPITAL, amount=100_000, config=STOCK, reference_price=1000.0
     )
 
     assert decision.passed is False
@@ -388,13 +407,14 @@ def test_reduce_only_blocks_opens_but_not_closes(
     mode_state.degrade(TradingMode.REDUCE_ONLY, "對帳不一致")
 
     opening: RiskDecision = manager.check(
-        make_order(), "A", CAPITAL, amount=100_000, reference_price=1000.0
+        make_order(), "A", CAPITAL, amount=100_000, config=STOCK, reference_price=1000.0
     )
     closing: RiskDecision = manager.check(
         make_order(action=Action.SELL),
         "A",
         CAPITAL,
         amount=100_000,
+        config=STOCK,
         reference_price=1000.0,
     )
 
@@ -409,7 +429,12 @@ def test_rejection_is_written_to_the_risk_event_table(
 
     manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
     manager.check(
-        make_order(volume=999), "A", CAPITAL, amount=100_000, reference_price=1000.0
+        make_order(volume=999),
+        "A",
+        CAPITAL,
+        amount=100_000,
+        config=STOCK,
+        reference_price=1000.0,
     )
 
     row = dao.conn.execute(
@@ -430,7 +455,12 @@ def test_rejected_orders_do_not_consume_the_daily_budget(
 
     manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
     manager.check(
-        make_order(volume=999), "A", CAPITAL, amount=500_000, reference_price=1000.0
+        make_order(volume=999),
+        "A",
+        CAPITAL,
+        amount=500_000,
+        config=STOCK,
+        reference_price=1000.0,
     )
 
     assert manager.daily_amount.get("A", 0.0) == 0.0
@@ -445,11 +475,18 @@ def test_order_rate_degrades_the_strategy(
     每分鐘送出幾十張單通常是迴圈 bug，而 bug 不會因為被拒一次就停下來。
     """
 
-    config: RiskConfig = RiskConfig(max_orders_per_minute=3)
-    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path, config)
+    config: StockRiskConfig = StockRiskConfig(max_orders_per_minute=3)
+    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
 
     decisions: List[RiskDecision] = [
-        manager.check(make_order(), "A", CAPITAL, amount=1000, reference_price=1000.0)
+        manager.check(
+            make_order(),
+            "A",
+            CAPITAL,
+            amount=1000,
+            config=config,
+            reference_price=1000.0,
+        )
         for _ in range(4)
     ]
 
@@ -464,21 +501,24 @@ def test_order_rate_window_slides(
     """頻率是滑動視窗：一分鐘前的單不該還佔著名額"""
 
     clock: List[datetime.datetime] = [NOW]
-    config: RiskConfig = RiskConfig(max_orders_per_minute=2)
-    manager: PreTradeRiskManager = make_manager(
-        mode_state, dao, tmp_path, config, clock
-    )
+    config: StockRiskConfig = StockRiskConfig(max_orders_per_minute=2)
+    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path, clock=clock)
 
-    manager.check(make_order(), "A", CAPITAL, amount=1000, reference_price=1000.0)
-    manager.check(make_order(), "A", CAPITAL, amount=1000, reference_price=1000.0)
+    def send() -> RiskDecision:
+        return manager.check(
+            make_order(),
+            "A",
+            CAPITAL,
+            amount=1000,
+            config=config,
+            reference_price=1000.0,
+        )
+
+    send()
+    send()
     clock[0] = NOW + datetime.timedelta(seconds=61)
 
-    assert (
-        manager.check(
-            make_order(), "A", CAPITAL, amount=1000, reference_price=1000.0
-        ).passed
-        is True
-    )
+    assert send().passed is True
 
 
 def test_strategy_daily_loss_only_degrades_that_strategy(
@@ -488,7 +528,7 @@ def test_strategy_daily_loss_only_degrades_that_strategy(
 
     manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
 
-    assert manager.check_daily_loss("A", 31_000, CAPITAL) is True
+    assert manager.check_daily_loss("A", 31_000, CAPITAL, STOCK) is True
     assert mode_state.effective_mode("A") is TradingMode.REDUCE_ONLY
     assert mode_state.effective_mode("B") is TradingMode.NORMAL
 
@@ -537,7 +577,12 @@ def test_futures_volume_cap_is_applied(
     )
 
     decision: RiskDecision = manager.check(
-        order, "A", CAPITAL, amount=100_000, reference_price=20000.0, is_futures=True
+        order,
+        "A",
+        CAPITAL,
+        amount=100_000,
+        config=FuturesRiskConfig(),
+        reference_price=20000.0,
     )
 
     assert decision.passed is False
@@ -549,11 +594,11 @@ def test_batch_check_records_truncations(
 ) -> None:
     """截斷的單也要留下紀錄：盤後要回答「為什麼那張單沒送」"""
 
-    config: RiskConfig = RiskConfig(total_exposure_ratio=0.1)
-    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path, config)
+    config: StockRiskConfig = StockRiskConfig(total_exposure_ratio=0.1)
+    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
     items: List[ExposureItem] = [ExposureItem(make_order(), 500_000)]
 
-    allowed: List[ExposureItem] = manager.check_batch(items, "A", CAPITAL)
+    allowed: List[ExposureItem] = manager.check_batch(items, "A", CAPITAL, config)
 
     assert allowed == []
     assert (
@@ -582,10 +627,16 @@ def test_exit_orders_skip_the_amount_and_volume_caps(
         "A",
         CAPITAL,
         amount=huge,
+        config=STOCK,
         reference_price=1000.0,
     )
     opening: RiskDecision = manager.check(
-        make_order(volume=999), "A", CAPITAL, amount=huge, reference_price=1000.0
+        make_order(volume=999),
+        "A",
+        CAPITAL,
+        amount=huge,
+        config=STOCK,
+        reference_price=1000.0,
     )
 
     assert closing.passed is True
@@ -604,6 +655,7 @@ def test_exit_orders_still_face_the_price_checks(
         "A",
         CAPITAL,
         amount=100_000,
+        config=STOCK,
         reference_price=1000.0,
         limit_up=1100.0,
         limit_down=900.0,
@@ -613,6 +665,7 @@ def test_exit_orders_still_face_the_price_checks(
         "A",
         CAPITAL,
         amount=100_000,
+        config=STOCK,
         reference_price=1000.0,
     )
 
@@ -628,11 +681,11 @@ def test_pure_checks_need_no_manager_instance() -> None:
     綁死在長駐狀態上就得再搬一次。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     symbol_exposure: Dict[str, float] = {}
 
     assert check_single_order_amount(1.0, CAPITAL, config).passed is True
-    assert check_volume_cap(1, False, config).passed is True
+    assert check_volume_cap(1, config).passed is True
     assert truncate_batch_by_exposure([], 0.0, symbol_exposure, CAPITAL, config) == (
         [],
         [],

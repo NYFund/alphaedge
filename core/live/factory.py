@@ -3,6 +3,7 @@ import json
 import math
 import os
 import subprocess
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
@@ -14,6 +15,8 @@ from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimiter
+from core.config.live_risk import LiveRiskOverrides, load_live_risk_overrides
+from core.config.paths import LIVE_RISK_CONFIG_PATH
 from core.config.settings import (
     LIVE_NOTIFY_CHANNEL,
     LIVE_NOTIFY_TARGET,
@@ -47,7 +50,6 @@ from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.report.parity_checker import TIMING_TO_PHASE, ParityChecker
-from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.trader import LiveTrader, StrategyContext
@@ -56,10 +58,11 @@ from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
-from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
+from core.market.tw.instrument_spec import TwStockSpec
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
 from core.models import (
     BaseOrder,
+    BasePosition,
     BrokerAccountSnapshot,
     FuturesAccount,
     FuturesOrder,
@@ -69,6 +72,11 @@ from core.models import (
     StockPositionSnapshot,
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
+from core.models.risk_config import (
+    RISK_CONFIG_BY_INSTRUMENT,
+    AccountRiskConfig,
+    BaseRiskConfig,
+)
 from core.portfolio.order_rules import is_opening, resolve_open_action
 from core.position.assembly import (
     TwFuturesModels,
@@ -308,7 +316,7 @@ def build_live_trader(
     resume_strategies: Optional[Sequence[str]] = None,
     run_id: Optional[str] = None,
     dao: Optional[LiveTradeDAO] = None,
-    risk_config: Optional[RiskConfig] = None,
+    live_risk_path: Optional[Path] = None,
     now_provider: Callable[[], datetime.datetime] = now_live,
     phase: str = "",
 ) -> LiveTrader:
@@ -337,8 +345,9 @@ def build_live_trader(
             本次啟動的識別碼；None 時以時戳產生
         - dao: Optional[LiveTradeDAO]
             實盤紀錄庫；None 時自行開啟
-        - risk_config: Optional[RiskConfig]
-            風控設定；None 時用預設值
+        - live_risk_path: Optional[Path]
+            部署端的風控設定檔（只能收緊）；None 時用 `LIVE_RISK_CONFIG_PATH`。
+            檔案不存在時只用策略宣告與預設值
         - now_provider: Callable[[], datetime.datetime]
             取得目前時間
         - phase: str
@@ -351,7 +360,8 @@ def build_live_trader(
         - UnsupportedMarketError
             某支策略的（市場, 商品）組合沒有對應實作
         - ValueError
-            策略清單為空、或策略名稱重複
+            策略清單為空、策略名稱重複，或風控設定不合法（宣告的類別與市場不符、
+            部署設定比策略宣告寬或寫了不存在的欄位）
     """
 
     if not strategies:
@@ -365,6 +375,18 @@ def build_live_trader(
             "（`live_order.strategy_name`、`live_position_lot`），"
             "重名會讓兩支策略的部位與損益混在一起，而合計仍然正確——對帳看不出來"
         )
+
+    # 風控設定在組裝任何元件之前解析完：設定不合法是啟動錯誤，不該留下半套元件
+    overrides: LiveRiskOverrides = load_live_risk_overrides(
+        live_risk_path if live_risk_path is not None else LIVE_RISK_CONFIG_PATH
+    )
+    account_risk: AccountRiskConfig = AccountRiskConfig().with_overrides(
+        overrides.account
+    )
+    strategy_risks: Dict[str, BaseRiskConfig] = {
+        name: resolve_strategy_risk_config(name, strategy, overrides)
+        for name, strategy in zip(names, strategies)
+    }
 
     resolved_run_id: str = run_id or now_provider().strftime("%Y%m%d%H%M%S")
     resolved_dao: LiveTradeDAO = dao if dao is not None else LiveTradeDAO()
@@ -385,7 +407,7 @@ def build_live_trader(
     )
     risk_manager: PreTradeRiskManager = PreTradeRiskManager(
         mode_state,
-        risk_config,
+        account_risk,
         resolved_dao,
         resolved_run_id,
         now_provider=now_provider,
@@ -419,7 +441,7 @@ def build_live_trader(
         # 要在組裝任何讀 `max_holdings` 的元件之前寫回
         apply_live_max_holdings(strategy)
         context, schedule = _build_context(
-            name, strategy, resolved_broker, risk_config, now_provider
+            name, strategy, resolved_broker, strategy_risks[name], now_provider
         )
         contexts.append(context)
         managers[name] = context.position_manager
@@ -514,9 +536,61 @@ def build_live_trader(
         phase,
         [type(strategy).__name__ for strategy in strategies],
         _run_instrument_type(strategies),
+        risk_config={
+            "account": account_risk.to_dict(),
+            "strategies": {
+                name: {"class": type(config).__name__, **config.to_dict()}
+                for name, config in strategy_risks.items()
+            },
+        },
     )
 
     return trader
+
+
+def resolve_strategy_risk_config(
+    name: str, strategy: BaseStrategy, overrides: LiveRiskOverrides
+) -> BaseRiskConfig:
+    """
+    - Description:
+        決定一支策略實際套用的風控門檻：策略宣告（沒有就用該市場預設）→ 部署設定收緊
+
+        **宣告的類別必須與策略的市場相符**：股票策略宣告了 `FuturesRiskConfig` 的話，
+        它的欄位（口數、名目槓桿）在股票的送單路徑上一條都用不到，等於沒有宣告，
+        而且不會有任何錯誤訊息。
+    - Parameters:
+        - name: str
+            策略名（部署設定以它分段）
+        - strategy: BaseStrategy
+            策略實例
+        - overrides: LiveRiskOverrides
+            部署設定
+    - Return:
+        - BaseRiskConfig
+            實際套用的門檻
+    - Raise:
+        - ValueError
+            宣告的類別與市場不符，或部署設定不合法
+    """
+
+    expected: Optional[type] = RISK_CONFIG_BY_INSTRUMENT.get(strategy.instrument_type)
+    if expected is None:
+        raise ValueError(
+            f"{name} 的商品類別 {strategy.instrument_type} 沒有對應的實盤風控設定"
+        )
+
+    declared: Optional[BaseRiskConfig] = getattr(strategy, "live_risk_config", None)
+    if declared is not None and type(declared) is not expected:
+        raise ValueError(
+            f"{name} 宣告的 live_risk_config 是 {type(declared).__name__}，"
+            f"但它是 {strategy.instrument_type.value} 策略，應使用 {expected.__name__}"
+        )
+
+    base: BaseRiskConfig = declared if declared is not None else expected()
+    try:
+        return base.with_overrides(overrides.for_strategy(name))
+    except ValueError as exc:
+        raise ValueError(f"{name}：{exc}") from exc
 
 
 def _run_instrument_type(strategies: Sequence[BaseStrategy]) -> Optional[str]:
@@ -614,7 +688,7 @@ def _build_context(
     name: str,
     strategy: BaseStrategy,
     broker: BaseBroker,
-    risk_config: Optional[RiskConfig],
+    risk_config: BaseRiskConfig,
     now_provider: Callable[[], datetime.datetime],
 ) -> Tuple[StrategyContext, SegmentSchedule]:
     """依 `(market, instrument_type)` 分派出這支策略需要的一整組元件"""
@@ -634,6 +708,9 @@ def _build_context(
         schedule: SegmentSchedule = TW_STOCK_SEGMENTS
         build_order: FilledOrderBuilder = build_stock_order
         opening_requirement: Optional[Callable[[BaseOrder], float]] = None
+        # 股票的資金占用與曝險是同一個數（價 × 股數）
+        notional: Callable[[BaseOrder], float] = _make_notional_calculator(spec)
+        exposure: Callable[[BaseOrder], float] = notional
         execution_model: BaseExecutionModel = StockExecutionModel(
             price_limits=feed.get_price_limits
         )
@@ -672,7 +749,11 @@ def _build_context(
         futures_manager: FuturesPositionManager = futures_models.position_manager
         manager = futures_manager
         opening_requirement = _make_opening_requirement(futures_manager, now_provider)
-        spec = TwFuturesSpec()
+        # 資金占用是保證金、曝險是契約價值：一口台指期押約 70 萬、承擔約 900 萬的風險
+        notional = _make_futures_margin_calculator(futures_manager, now_provider)
+        exposure = _make_futures_contract_value_calculator(
+            futures_manager, now_provider
+        )
         schedule = TW_FUTURES_SEGMENTS
         build_order = _build_futures_order
         execution_model = FuturesExecutionModel(price_limits=feed.get_price_limits)
@@ -690,7 +771,9 @@ def _build_context(
         cost_model=cost_model,
         data_feed=feed,
         symbols=list(getattr(strategy, "symbols", []) or []),
-        calculate_notional=_make_notional_calculator(spec),
+        calculate_notional=notional,
+        calculate_exposure=exposure,
+        risk_config=risk_config,
         build_filled_order=build_order,
         calculate_opening_requirement=opening_requirement,
         execution_model=execution_model,
@@ -1105,14 +1188,82 @@ def _build_futures_order(
 
 def _make_notional_calculator(spec: Any) -> Callable[[BaseOrder], float]:
     """
-    以 `InstrumentSpec` 的計價單位換算委託金額
+    以 `InstrumentSpec` 的計價單位換算委託金額（股票：價 × 股數）
 
-    **單位是市場特性**：台股一張是 1000 股、期貨一口要乘契約乘數。
-    引擎本體算不出來也不該知道，故在這裡包成一個函式注入進去。
+    **單位是市場特性**：台股一張是 1000 股。引擎本體算不出來也不該知道，
+    故在這裡包成一個函式注入進去。期貨不走這裡：資金占用與曝險是兩個不同的數，
+    見 `_make_futures_margin_calculator()`、`_make_futures_contract_value_calculator()`。
     """
 
     def calculate(order: BaseOrder) -> float:
         return float(order.price) * float(spec.to_units(order.volume))
+
+    return calculate
+
+
+def _make_futures_margin_calculator(
+    manager: FuturesPositionManager, now_provider: Callable[[], datetime.datetime]
+) -> Callable[[BaseOrder], float]:
+    """
+    - Description:
+        期貨的資金占用：原始保證金（**以今天查保證金表**）
+
+        風控的單筆與當日上限、資金保留、已用額度都用它。以契約價值計的話，
+        一口台指期就是千萬級，任何合理的額度連一口都送不出去；只算點數 × 口數
+        （不乘乘數）則一口只算幾萬元，金額類風控等於沒有作用。
+
+        **未平倉部位用它記帳時繳的保證金，不重新查表**：已用額度與權益在段落一開始就要算，
+        當天的保證金表若查不到，重新查表會讓整個段落起不來——連平倉都送不出去。
+        委託才查表；查不到時拋 `ValueError`，開倉單在那之前已被保證金檢查擋下。
+    - Parameters:
+        - manager: FuturesPositionManager
+            部位管理層（保證金表與乘數來源與記帳同一份）
+        - now_provider: Callable[[], datetime.datetime]
+            取得目前時間；保證金與乘數都以今天為準
+    - Return:
+        - Callable[[BaseOrder], float]
+            委託或部位 → 原始保證金
+    """
+
+    def calculate(order: BaseOrder) -> float:
+        recorded: float = float(getattr(order, "margin", 0.0) or 0.0)
+        if isinstance(order, BasePosition) and recorded > 0:
+            return recorded
+
+        today: datetime.date = now_provider().date()
+        product: str = order.product
+        multiplier: int = manager.get_multiplier(product, today)
+        return float(
+            manager.calculate_margin(
+                order.price, order.volume, multiplier, product=product, date=today
+            )
+        )
+
+    return calculate
+
+
+def _make_futures_contract_value_calculator(
+    manager: FuturesPositionManager, now_provider: Callable[[], datetime.datetime]
+) -> Callable[[BaseOrder], float]:
+    """
+    - Description:
+        期貨的曝險：契約價值（點數 × 契約乘數 × 口數）
+
+        名目槓桿上限（`FuturesRiskConfig.max_leverage`）以它計。乘數走部位管理層的
+        解析器（登錄表優先、沒登錄查券商合約），股期也算得出來，且與記帳同一個來源。
+    - Parameters:
+        - manager: FuturesPositionManager
+            部位管理層
+        - now_provider: Callable[[], datetime.datetime]
+            取得目前時間；乘數以今天為準
+    - Return:
+        - Callable[[BaseOrder], float]
+            委託或部位 → 契約價值
+    """
+
+    def calculate(order: BaseOrder) -> float:
+        multiplier: int = manager.get_multiplier(order.product, now_provider().date())
+        return float(order.price) * float(multiplier) * float(order.volume)
 
     return calculate
 
@@ -1189,6 +1340,7 @@ def _record_run(
     phase: str,
     strategy_names: Sequence[str] = (),
     instrument_type: Optional[str] = None,
+    risk_config: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -1207,6 +1359,10 @@ def _record_run(
 
     **商品類別寫進 `instrument_type`**：股票與期貨是兩個行程、段落名相同，存活監控
     要靠它分辨「期貨尾盤沒跑」而不是被股票尾盤的紀錄遮住。更早的紀錄為 NULL。
+
+    **實際生效的風控門檻寫進 `risk_config_json`**（帳戶層一份、各策略各一份，已套用部署設定）：
+    風控值會因策略宣告與部署設定而不同，拒單數突然變了時要能回答「那天的上限是多少」。
+    這一欄先前從未寫入。
     """
 
     if not notify_enabled:
@@ -1232,6 +1388,11 @@ def _record_run(
                 {"strategies": list(strategy_names)}, ensure_ascii=False
             ),
             "instrument_type": instrument_type,
+            "risk_config_json": (
+                json.dumps(risk_config, ensure_ascii=False)
+                if risk_config is not None
+                else None
+            ),
         }
     )
     dao.commit()

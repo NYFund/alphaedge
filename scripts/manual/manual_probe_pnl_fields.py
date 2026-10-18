@@ -10,7 +10,7 @@ from core.broker.tw.shioaji_session import ShioajiSession
 """
 單日損益的來源欄位長什麼樣？——連模擬環境唯讀核對
 
-**動機**：單日虧損檢查（`RiskConfig.daily_loss_ratio`）的損益一律以券商端為準，
+**動機**：單日虧損檢查（`BaseRiskConfig.daily_loss_ratio`／`AccountRiskConfig.daily_loss_ratio`）的損益一律以券商端為準，
 所以要確認的是各欄位**實際取得到什麼值**：
 
 - 期貨：`Margin` 的 `future_open_position`（疑為未沖銷部位損益）與

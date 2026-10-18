@@ -1,0 +1,16 @@
+# 部署端的實盤風控設定：只能「收緊」策略宣告的上限，不能放寬。
+#
+# - 以策略類別名分段（例如 [MomentumFuturesStrategy]），只寫要收緊的欄位；
+#   欄位名見 core/models/risk_config.py 的 StockRiskConfig／FuturesRiskConfig。
+# - [account] 段設帳戶層（AccountRiskConfig.daily_loss_ratio）。
+# - 寫了比策略宣告更寬的值、不存在的欄位或格式錯，實盤啟動時當場報錯，不會被略過。
+# - 本檔進版控：風控值的每一次變更都要留在 git 歷史裡。實際生效的值記在 live_run.risk_config_json。
+#
+# 範例（取消註解後生效）：
+#
+# [account]
+# daily_loss_ratio = 0.02
+#
+# [MomentumFuturesStrategy]
+# max_leverage = 3.0
+# max_order_volume = 2

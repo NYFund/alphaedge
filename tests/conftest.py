@@ -177,6 +177,21 @@ def dao_factory(memory_conn: sqlite3.Connection) -> Callable[..., BaseDAO]:
     return make
 
 
+@pytest.fixture(autouse=True)
+def no_deployed_live_risk_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """
+    組裝實盤引擎時不讀專案裡的 `deploy/live_risk.toml`
+
+    那是部署端的收緊設定，會隨正式環境調整；測試讀到它的話，改一次部署設定就可能讓
+    一批與風控無關的測試轉紅。要驗部署設定的測試自己傳 `live_risk_path`。
+    """
+
+    missing = tmp_path_factory.getbasetemp() / "no_live_risk.toml"
+    monkeypatch.setattr("core.live.factory.LIVE_RISK_CONFIG_PATH", missing)
+
+
 @pytest.fixture
 def dao() -> LiveTradeDAO:
     """

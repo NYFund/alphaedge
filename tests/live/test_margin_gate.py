@@ -155,6 +155,16 @@ def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
     return trader
 
 
+def stub_margin_amount(context: StrategyContext) -> None:
+    """
+    資金占用改用固定值：本檔的測試庫沒有保證金表，查表會拋例外
+
+    保證金檢查本身另由各測試改 `calculate_opening_requirement` 控制。
+    """
+
+    context.calculate_notional = lambda order: 100_000.0
+
+
 def futures_order(action: Action) -> FuturesOrder:
     """與策略鉤子產出的委託同形狀：不帶價格類型，由送單路徑標註後交給執行層"""
 
@@ -215,6 +225,7 @@ def test_sufficient_margin_order_is_sent(dao: LiveTradeDAO) -> None:
     trader: LiveTrader = build_futures_trader(dao, simulation=True)
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 100_000.0
+    stub_margin_amount(context)
 
     unsent: List[Tuple[StrategyContext, BaseOrder]] = trader.dispatch(
         [(context, futures_order(Action.BUY))], None
@@ -225,7 +236,12 @@ def test_sufficient_margin_order_is_sent(dao: LiveTradeDAO) -> None:
 
 
 def test_closing_order_skips_the_margin_check(dao: LiveTradeDAO) -> None:
-    """平倉釋放保證金，擋下它只會讓部位留在場上"""
+    """
+    平倉釋放保證金，擋下它只會讓部位留在場上
+
+    測試庫沒有保證金表，出場單的資金占用也算不出來——那同樣不可擋下出場
+    （`LiveTrader._order_amount()` 記 0 照送）。
+    """
 
     trader: LiveTrader = build_futures_trader(dao, simulation=False)
     context: StrategyContext = trader.contexts[0]

@@ -265,6 +265,9 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
     trader._sleep = lambda seconds: None
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 0.0
+    # 測試庫沒有保證金表、測試策略的額度也撐不起一口台指期：資金占用與曝險一併放行
+    context.calculate_notional = lambda order: 0.0
+    context.calculate_exposure = lambda order: 0.0
     # 測試的資料庫沒有保證金表：部位管理改用比率模式，再先開好一口 10 月多單，
     # 平倉腿的成交才會被帳戶同步認成「平多」而不是「開空」
     context.position_manager.margin_config = FuturesMarginConfig.ratio()

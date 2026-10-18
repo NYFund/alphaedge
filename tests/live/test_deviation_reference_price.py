@@ -11,7 +11,7 @@ from .test_live_trader_day import TODAY, FakeFeed, Harness, ScriptedStrategy, ma
 決策價偏離檢查的市場基準價
 
 偏離檢查要擋的是「策略算出來的價格離市場太遠」。基準價若取自這張單自己
-（決策價或委託價），就是自己比自己、偏離恆為 0，`RiskConfig.price_deviation_ratio`
+（決策價或委託價），就是自己比自己、偏離恆為 0，`BaseRiskConfig.price_deviation_ratio`
 在實盤形同不存在。這裡盯住基準價真的來自市場報價，以及取不到時的行為。
 """
 

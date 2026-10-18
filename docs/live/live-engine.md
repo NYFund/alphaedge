@@ -158,9 +158,29 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 4 | `PRICE_LIMIT`、`PRICE_DEVIATION` | 全部 | 比的是**決策價**對漲跌停與市場基準價（本段落餵給策略的報價，取不到退回合約參考價，都沒有時放行並寫 `REFERENCE_PRICE_MISSING`） |
 | 5 | `ORDER_RATE` | 全部 | 超過每分鐘上限時拒單**並**把該策略降到 `REDUCE_ONLY`——迴圈 bug 不會因為被拒一次就停 |
 
-門檻在 `RiskConfig`（`core/live/risk/risk_config.py`，frozen），比率一律以策略的實盤額度（`live_capital`）為基準；
-建立時就與全域上限 `RISK_LIMIT_CAPS` 比對，超過直接拋錯。帳戶總曝險沒有獨立欄位，而是由
-「啟動時 Σ 額度 ≤ 總權益 × `CAPITAL_SAFETY_RATIO`」與「各策略曝險 ≤ 自己額度 × `total_exposure_ratio`」間接保證。
+門檻是**每支策略一份**（`core/models/risk_config.py`，frozen），股票與期貨各一個類別、同性質的欄位同名：
+
+| | `StockRiskConfig` | `FuturesRiskConfig` |
+|---|---|---|
+| `single_order_ratio`／`daily_ratio` | 委託金額（價 × 股數）÷ 額度 | 原始保證金 ÷ 額度 |
+| `max_order_volume` | 張（預設 50） | 口（預設 5） |
+| 批次曝險 | `total_exposure_ratio`、`single_symbol_exposure_ratio`（持倉金額） | `max_leverage`：總契約價值 ÷ 額度（預設 4 倍） |
+| 共用 | `price_deviation_ratio`、`max_orders_per_minute`、`daily_loss_ratio` | 同左 |
+
+比率一律以策略的實盤額度（`live_capital`）為基準。期貨分成保證金與契約價值兩種金額：單筆與當日上限、資金保留、已用額度
+看的是**實際占用的錢**（保證金）；批次曝險看的是**實際承擔的風險**（契約價值）。以契約價值計單筆上限的話一口台指期就是千萬級，
+任何合理的額度都送不出去；兩者都不乘乘數的話一口只算幾萬元，金額類上限等於沒有作用。
+
+門檻分三層，由寬到嚴：
+1. **全域上限**（各類別的 `CAPS`，程式寫死）：建立設定時就比對，超過直接拋錯。改它要有人明確決定並留下 commit。
+2. **策略宣告**（`self.live_risk_config = FuturesRiskConfig(max_leverage=3.0)`）：只填要改的欄位，沒宣告就用該市場預設值。
+   類別要與策略的市場相符，宣告錯市場在組裝時就報錯。
+3. **部署設定**（`deploy/live_risk.toml`，進版控）：以策略類別名分段，**只能收緊**；寫了比策略宣告更寬的值、
+   不存在的欄位或格式錯，啟動時當場報錯。`[account]` 段設帳戶層的 `AccountRiskConfig`（策略類別不能設）。
+
+實際生效的值（帳戶層一份、各策略各一份）寫進 `live_run.risk_config_json`。帳戶層的批次曝險依市場分組、各用該市場的預設上限，
+不讀策略宣告。帳戶總曝險沒有獨立欄位，而是由「啟動時 Σ 額度 ≤ 總權益 × `CAPITAL_SAFETY_RATIO`」與
+「各股票策略曝險 ≤ 自己額度 × `total_exposure_ratio`」間接保證。
 
 ### 出場單沒送出時
 
@@ -197,7 +217,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | kill switch 檔案存在 | 送單前的風控檢查 | 帳戶層 → `HALTED` |
 | 策略鉤子拋例外 | `LiveTrader._halt_strategy()` | 該策略 → `HALTED`，並釋放它的資金保留（否則佔住的是其他策略的可用資金） |
 | 對帳不一致 | `Reconciler.check()` | 帳戶層 → `REDUCE_ONLY`（差異無法歸因到單支策略） |
-| 帳戶當日虧損 ＞ 權益 × `account_daily_loss_ratio` | `prepare()`，券商端已實現＋未實現 | 帳戶層 → `REDUCE_ONLY`；取不到損益時略過並記 warning，不當成沒虧損 |
+| 帳戶當日虧損 ＞ 權益 × `AccountRiskConfig.daily_loss_ratio` | `prepare()`，券商端已實現＋未實現 | 帳戶層 → `REDUCE_ONLY`；取不到損益時略過並記 warning，不當成沒虧損 |
 | 策略當日虧損 ＞ 額度 × `daily_loss_ratio` | `prepare()`，本地帳 | 該策略 → `REDUCE_ONLY`（目前恆不觸發，見第十一節） |
 | 一分鐘送單數超限 | 事前風控 | 該策略 → `REDUCE_ONLY` |
 | 盤中全市場靜默 30 秒 | 盤中事件迴圈 | 帳戶層 → `REDUCE_ONLY` |
@@ -434,8 +454,8 @@ parity 回答「同一支策略在回測與實盤有沒有送出同一批委託�
 以下都是程式碼現況，修改前請先讀對應的註解：
 
 - **策略層當日虧損檢查目前恆不觸發**：啟動時帳戶以原始開倉價重建、未實現為 0，接管也不回放已成交的回報，本地帳沒有當日損益可比；接線刻意保留，缺的是逐策略損益來源。帳戶層虧損用的是券商端數字，不受影響，但兩者都**只在段落啟動時算一次**，盤中跌破門檻不會即時觸發。
-- **一個行程共用一份 `RiskConfig`**：實盤入口不傳風控設定，所有策略用預設值；`_build_context()` 雖收到 `risk_config` 但未使用，策略逐支覆寫的路徑尚未接上。
-- **送單路徑沒有帶入幾個風控參數**：`dispatch()` 呼叫 `PreTradeRiskManager.check()` 時未傳 `is_futures`，期貨委託的 `VOLUME_CAP` 套的是股票張數上限（`max_stock_lots`）而非口數上限；批次曝險呼叫 `check_batch()` 時未傳既有曝險，只試算本批，持倉占用改由資金保留的「額度 − 已用」擋。
+- **批次曝險只試算本批**：`check_batch()` 時未傳既有曝險，持倉占用改由資金保留的「額度 − 已用」擋。
+- **期貨出場單算不出保證金時以 0 計**：出場單不做保證金檢查，當天的保證金表若缺資料，資金占用記 0 照送（只影響當日流量統計），不讓整批送單中斷。
 - **帳戶總曝險的間接保證有空隙**（`CAPITAL_SAFETY_RATIO` 的註解）：權益只在啟動時比一次、盤中縮水不重算；模擬環境略過；系統外的部位不在任何策略的曝險裡；只涵蓋同一行程載入的策略——股票盤中段與尾盤段是不同行程、共用帳戶，各自只比自己的額度。
 - **段落啟動的重建可能自己造出「兩個持有者」**：券商多出的量一律收進 `__unattributed__`，即使該標的已有策略持有；之後這一檔的以券商部位重建會被拒絕，只能人工處理。
 - **期貨段落時窗未逐條對過期交所公告**（`TW_FUTURES_SEGMENTS` 的註解）：寫錯不會報錯，只會讓整段安靜地不送單。

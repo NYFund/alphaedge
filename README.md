@@ -549,6 +549,7 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend 容器映像
 │   ├── README.md              # frontend 使用說明
 │   └── __init__.py
+├── deploy/                    # 部署設定（進版控）：live_risk.toml（實盤風控只能收緊的覆寫）
 ├── strategies/                # 具體策略與策略載入器（stock／futures；策略契約留在 core/strategies/，相依只能 strategies → core）
 ├── strategy_lab/              # 策略研究工作區（strategies/ / data_analysis/ / notebooks/ / ideas/）
 ├── tests/                     # 測試套件（`backtest/` 引擎與回歸線、`live/` 實盤、`portfolio/` 共用契約層、`analysis/` 績效指標、`fixtures/` 測試資料；`downloads/` 為執行期產物）

@@ -6,9 +6,10 @@ import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.factory import build_live_trader
-from core.live.risk.risk_manager import RiskDecision
+from core.live.risk.risk_manager import ExposureItem, RiskDecision
 from core.live.trader import LiveTrader, StrategyContext
 from core.models import FuturesOrder
+from core.models.risk_config import FuturesRiskConfig
 from core.utils import Action, PositionType
 from strategies.futures.futures_rollover_rehearsal_strategy import (
     FuturesRolloverRehearsalStrategy,
@@ -26,6 +27,8 @@ from .conftest import FakeBroker
 
 # 2026-10 實盤報價量級（TXFJ6 參考價約 50,000 點）
 TX_PRICE: float = 50000.0
+# 台指期每口原始保證金（2026-08-12 起）
+TX_MARGIN: float = 701000.0
 
 
 @pytest.fixture(autouse=True)
@@ -63,19 +66,36 @@ def test_both_futures_strategies_share_one_process(dao: LiveTradeDAO) -> None:
     assert names == ["MomentumFuturesStrategy", "FuturesRolloverRehearsalStrategy"]
 
 
-def test_one_lot_of_tx_clears_the_risk_checks(dao: LiveTradeDAO) -> None:
-    """
-    演練策略的一口台指期通過實盤逐單風控（金額走 context 的換算器，與送單時相同）
+def stub_tx_margin(context: StrategyContext) -> None:
+    """測試庫沒有保證金表：每口原始保證金固定為 2026-08 起的台指期公告值"""
 
-    換月日的兩腿走同一道檢查，平倉腿通過之後開倉腿也要通過（單日累計）。
-    金額的口徑若日後改成含契約乘數，這條會先紅——提醒額度要跟著調。
+    context.position_manager.margin_model.initial_margin_per_lot = (  # type: ignore[method-assign]
+        lambda product, date, price, multiplier: TX_MARGIN
+    )
+
+
+@pytest.mark.parametrize(
+    ("strategy_name", "lots"),
+    [("FuturesRolloverRehearsalStrategy", 1), ("MomentumFuturesStrategy", 2)],
+)
+def test_futures_strategies_clear_the_risk_checks(
+    dao: LiveTradeDAO, strategy_name: str, lots: int
+) -> None:
+    """
+    兩支期貨策略的正常口數通過實盤風控：逐單以保證金計、批次以名目槓桿計
+
+    換月日的兩腿走同一道逐單檢查，平倉腿通過之後開倉腿也要通過（單日累計）。
+    期貨金額口徑曾經不乘契約乘數（一口台指期只算幾萬元），改成保證金與契約價值之後，
+    `MomentumFuturesStrategy` 在 300 萬額度下開 2 口會同時超過單筆保證金與槓桿上限——
+    額度與口數改了任何一邊，這條會先紅。
     """
 
     trader: LiveTrader = build_trader(dao)
     contexts: Dict[str, StrategyContext] = {
         context.name: context for context in trader.contexts
     }
-    context: StrategyContext = contexts["FuturesRolloverRehearsalStrategy"]
+    context: StrategyContext = contexts[strategy_name]
+    stub_tx_margin(context)
 
     decisions: List[RiskDecision] = []
     for expiry, action in (("202610", Action.SELL), ("202611", Action.BUY)):
@@ -86,17 +106,59 @@ def test_one_lot_of_tx_clears_the_risk_checks(dao: LiveTradeDAO) -> None:
             action=action,
             position_type=PositionType.LONG,
             price=TX_PRICE,
-            volume=1,
+            volume=lots,
         )
-        amount: float = context.notional(order)
         decisions.append(
             trader.risk_manager.check(
                 order,
                 context.name,
-                context.strategy.init_capital,
-                amount,
+                context.capital_limit,
+                context.notional(order),
+                context.risk_limits,
                 reference_price=TX_PRICE,
             )
         )
 
+    opening: FuturesOrder = FuturesOrder(
+        product="TX",
+        expiry="202611",
+        date=datetime.date(2026, 10, 20),
+        action=Action.BUY,
+        position_type=PositionType.LONG,
+        price=TX_PRICE,
+        volume=lots,
+    )
+    allowed: List[ExposureItem] = trader.risk_manager.check_batch(
+        [ExposureItem(opening, context.exposure(opening))],
+        context.name,
+        context.capital_limit,
+        context.risk_limits,
+    )
+
     assert [decision.passed for decision in decisions] == [True, True]
+    assert len(allowed) == 1, "名目槓桿超過上限，開倉單被批次曝險截掉"
+
+
+def test_futures_amounts_are_margin_and_contract_value(dao: LiveTradeDAO) -> None:
+    """
+    期貨的資金占用是保證金、曝險是契約價值（點數 × 乘數 × 口數）
+
+    兩者都不能退回「點數 × 口數」：那樣一口台指期只算幾萬元，金額類風控等於沒有作用。
+    """
+
+    trader: LiveTrader = build_trader(dao)
+    context: StrategyContext = trader.contexts[0]
+    stub_tx_margin(context)
+    order: FuturesOrder = FuturesOrder(
+        product="TX",
+        expiry="202611",
+        date=datetime.date(2026, 10, 20),
+        action=Action.BUY,
+        position_type=PositionType.LONG,
+        price=TX_PRICE,
+        volume=2,
+    )
+
+    assert context.notional(order) == 2 * TX_MARGIN
+    assert context.exposure(order) == TX_PRICE * 200 * 2
+    assert isinstance(context.risk_limits, FuturesRiskConfig)

@@ -273,7 +273,7 @@ def exceeds_symbol_exposure(
 
         | | 回測 | 實盤 |
         |---|---|---|
-        | 設定 | `ShortConstraint.max_short_exposure_ratio` | `RiskConfig.single_symbol_exposure_ratio` |
+        | 設定 | `ShortConstraint.max_short_exposure_ratio` | `StockRiskConfig.single_symbol_exposure_ratio` |
         | 預設 | `None`（關閉） | `0.35` |
         | 適用 | **只有空單** | 多空皆適用 |
         | 超限行為 | 整筆拒絕開倉 | 批次截斷 |

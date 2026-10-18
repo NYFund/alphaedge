@@ -552,6 +552,7 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend container image
 │   ├── README.md              # frontend usage notes
 │   └── __init__.py
+├── deploy/                    # deployment settings (version-controlled): live_risk.toml (live risk overrides that may only tighten)
 ├── strategies/                # concrete strategies and the strategy loader (stock / futures; strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
 ├── strategy_lab/              # research workspace (strategies/ / data_analysis/ / notebooks/ / ideas/)
 ├── tests/                     # test suites (`backtest/` engine and regression lines, `live/` live trading, `portfolio/` shared contracts, `analysis/` performance metrics, `fixtures/` test data; `downloads/` is a runtime artifact)
