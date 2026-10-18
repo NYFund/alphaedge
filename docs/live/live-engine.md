@@ -6,7 +6,7 @@
 >
 > - 委託價格類型、ROD／IOC 怎麼由 `MARKET`／`LIMIT` 換算出來：[實盤執行層](execution-layer.md)
 > - 命令列、排程、退出碼、存活監控、kill switch、以券商部位重建的操作步驟：[實盤部署與排程](../deployment/live-deployment.md)
-> - 上正式環境前的逐項檢查：[正式環境小額上線檢查表](production-checklist-stock.md)
+> - 上正式環境前的逐項檢查：[股票線](production-checklist-stock.md)、[期貨線](production-checklist-futures.md)小額上線檢查表
 > - 策略端要宣告的實盤欄位（`live_ready`、`execution_schedule`、`live_execution` 等）：[策略撰寫指南](../../strategies/README.md)
 
 ---
