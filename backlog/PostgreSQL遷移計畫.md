@@ -2,10 +2,10 @@
 
 ## Abstract
 
-- **背景／問題**：專案以 SQLite3 為主要儲存，分成 `data/db/tw_stock.db`（台股）、`data/db/tw_futures.db`（台期貨）兩個**研究庫**，以及實盤紀錄庫 `data/db/tw_trading.db`。資料存取層（`core/dao/`）完成後，SQL 與 SQLite 專屬語法已集中在 `BaseDAO` 與 19 支 DAO（研究庫 18 支＋實盤的 `LiveTradeDAO`，2026-10-10 實查 main），`core/`、`apps/`、`strategies/`（main 另含 `tasks/`）內 `core/dao/` 以外不再 `import sqlite3`（分層檢查強制）；`scripts/` 不在檢查範圍，main 上仍有 1 檔（研究庫），`feature/post-rehearsal` 起多 1 檔實盤紀錄庫的。DAO 內部仍是 `sqlite3`（`INSERT OR IGNORE／REPLACE`、`SAVEPOINT`、`sqlite_master`、`GLOB`），研究庫有 17 處呼叫點以 `connect_sqlite()` 開連線，57 個測試檔直接建立 SQLite 連線（數字明細見下方〈2026-10-10：依現行程式重測改動面〉）。
+- **背景／問題**：專案以 SQLite3 為主要儲存，分成 `data/db/tw_stock.db`（台股）、`data/db/tw_futures.db`（台期貨）兩個**研究庫**，以及實盤紀錄庫 `data/db/tw_trading.db`。資料存取層（`core/dao/`）完成後，SQL 與 SQLite 專屬語法已集中在 `BaseDAO` 與繼承它的 DAO（2026-10-18 以含全部功能分支的 `feature/framework-symmetry` 實查：20 支＝研究庫 19 支＋實盤的 `LiveTradeDAO`；main 為 18＋1），`core/`、`apps/`、`strategies/`（main 另含 `tasks/`）內 `core/dao/` 以外不再 `import sqlite3`（分層檢查強制）；`scripts/` 不在檢查範圍，研究庫 1 檔、實盤紀錄庫 1 檔（後者 main 沒有）。DAO 內部仍是 `sqlite3`（`INSERT OR IGNORE／REPLACE`、`SAVEPOINT`、`sqlite_master`、`GLOB`），研究庫有 14 處呼叫點以 `connect_sqlite()` 開連線（main 17 處；DataFeed 的開連線已在功能分支收成 `BaseDataFeed.connect_db()` 一處），67 個測試檔直接建立 SQLite 連線（main 59 檔；數字明細見下方〈2026-10-18：依現行程式重測改動面〉）。
 - **目標**：導入 SQLAlchemy Engine 作為研究庫的統一資料庫介面，分階段把讀取、寫入、測試與部署路徑遷移到 PostgreSQL（兩個研究庫併入單一 `alphaedge` 資料庫），並保留可回退方案至少一個版本週期。
-- **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：台股 tick 由 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 改落地 TimescaleDB（2026-10-10 已在 `feature/tick-timescaledb` 全部完成、尚未進 main），本計畫不碰 `stock_tick`／`stock_tick_load_log`，但要和它**共用同一個 PostgreSQL 實例與 `alphaedge` 資料庫**（見下方〈TimescaleDB 計畫先完成後的交互影響〉）。
-  **實盤紀錄庫 `tw_trading.db` 不在範圍、維持 SQLite**（2026-09-25 使用者定案，理由見下方〈決策：實盤紀錄庫維持 SQLite〉）：`connect_live_trading()`、`LiveTradeDAO` 與只讀它的 `scripts/live_watchdog.py`、`scripts/check_overnight_positions.py` 都不改；`get_engine()` 只涵蓋兩個研究庫。
+- **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：台股 tick 由 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 改落地 TimescaleDB（2026-10-10 已在 `feature/tick-timescaledb` 全部完成、尚未進 main；`feature/tick-backtest` 起的逐筆回測也從那裡讀），本計畫不碰 `stock_tick`／`stock_tick_load_log`，但要和它**共用同一個 PostgreSQL 實例與 `alphaedge` 資料庫**（見下方〈TimescaleDB 計畫先完成後的交互影響〉）。
+  **實盤紀錄庫 `tw_trading.db` 不在範圍、維持 SQLite**（2026-09-25 使用者定案，理由見下方〈決策：實盤紀錄庫維持 SQLite〉）：`connect_live_trading()`、`LiveTradeDAO` 與只讀它的 `scripts/check_overnight_positions.py` 都不改；`scripts/live_watchdog.py` 讀紀錄庫的部分不改，但它自 `實盤下單架構規劃.md` Phase7-28（尚未進 main）起另以 `connect_sqlite()` 唯讀讀研究庫的 `market_holiday` 判斷交易日，那一處屬本計畫範圍（Phase2-4）；`get_engine()` 只涵蓋兩個研究庫。
   **實作完成後不自動遷移資料、也不自動切換 backend**（2026-09-18 使用者裁示）：Phase3-2 的一次性資料遷移與 Phase5-1 的灰度切換（把 `DATABASE_URL` 指向 PostgreSQL，日更就會寫進新庫）都**等使用者明確下指令才執行**。遷移腳本可以先寫好，並以小表或測試資料驗證；正式庫的搬遷與切換時機由使用者決定。這與 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 的同一條裁示一致。
 - **驗收標準**（**Phase3-2 之後的項目要等使用者下令遷移才驗得到**）：主要流程（資料更新、查詢、回測讀取、實盤 DataFeed 讀研究庫）在 PostgreSQL 可完整執行；核心 smoke ＋ integration 測試在 PostgreSQL 環境通過；文件與部署配置已更新且可重現；研究庫的 SQLite 依賴已降到可移除或已完全移除（實盤紀錄庫的 SQLite 路徑刻意保留）。
 
@@ -28,7 +28,7 @@
 > 影響：`core/dao/connection.py` 的連線入口現有兩個——`connect_sqlite()`（研究庫，本計畫改造對象）與 `connect_live_trading()`（實盤紀錄庫，**維持原樣**）；後者內部呼叫 `connect_sqlite()` 再下 WAL／FULL 兩個 PRAGMA，改造 `connect_sqlite()` 時必須保住這條純 SQLite 路徑。`LiveTradeDAO` 繼承 `BaseDAO`，故 `BaseDAO` 改造後仍要能承載 `sqlite3.Connection`（見 Phase2-2）。
 > 單一 `alphaedge` 資料庫的表名前綴議題中，`tw_trading.db` 的 `live_` 前綴不再相關。
 
-> **2026-10-10：TimescaleDB 計畫先完成後的交互影響**（[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 16 步已在 `feature/tick-timescaledb` 完成，**尚未進 main**；合併順序是 `feature/post-rehearsal` 演練後部署 → 合併 tick 分支）。
+> **2026-10-10：TimescaleDB 計畫先完成後的交互影響**（[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 18 步已在 `feature/tick-timescaledb` 完成，**尚未進 main**；合併順序是 `feature/post-rehearsal` 演練後部署 → 合併 tick 分支）。
 > 原本兩份計畫寫的是「先做的建立、後做的沿用」，現在確定是 tick 先做，本計畫改為**沿用**下列既成的基礎設施（以功能分支實查）：
 >
 > | 項目 | tick 分支已有的 | 本計畫要做的 |
@@ -37,33 +37,43 @@
 > | 資料庫 | 同一個 `alphaedge` 資料庫的 `public` schema 已有 `stock_tick`（hypertable，約 10.5 億列、壓縮後 12 GB）與 `stock_tick_load_log` | 遷移（Phase3-2）與測試不可動到這兩張表；表名收斂（〈關聯與狀態〉）不可與之重名；部署文件的備份方式要涵蓋 tick（Phase5-3） |
 > | 連線設定 | `core/config/settings.py` 的 `TICK_DATABASE_URL`＋`require_tick_database_url()`，註解已寫明「`DATABASE_URL` 留給日頻遷移」；`.env.example` 列本機版（`localhost`），`core` 容器以 `environment` 覆寫成主機名 `postgres` | Phase0-2 比照同一套寫法新增 `DATABASE_URL` |
 > | Python 相依 | `[tick]` extra＝`psycopg[binary]>=3.2`、`connectorx>=0.4`、`pyarrow>=18`；`Dockerfile` 兩行 `uv sync` 都帶 `--extra tick` | Phase0-3 把 `psycopg` 搬到主相依、只新增 `sqlalchemy` |
-> | 連線入口與分層 | `core/dao/timescale.py`（`connect_tick_db()`、`get_connectorx_uri()`、`tick_db_error_types()`）；`_DB_DRIVER_MODULES` 已是 `sqlite3`／`psycopg`／`connectorx` | Phase1-1 只需補 `sqlalchemy`，並決定 tick 連線是否併入 `get_engine()` |
+> | 連線入口與分層 | `core/dao/timescale.py`（`get_tick_database_url()`、`connect_tick_db()`、`get_connectorx_uri()`、`tick_db_error_types()`）；`_DB_DRIVER_MODULES` 已是 `sqlite3`／`psycopg`／`connectorx` | Phase1-1 只需補 `sqlalchemy`，並決定 tick 連線是否併入 `get_engine()` |
 > | 測試模式 | 整合測試以 `TICK_DATABASE_URL` 未設定時 skip、每個測試一個暫存 schema、`search_path` 含 `public` | Phase4-1 可直接沿用 |
 >
-> **排序**：本計畫的程式改動以「兩個功能分支都合併後的 main」為基底，否則 compose、`settings.py`、`pyproject.toml`、`scripts/check_layer_deps.py` 會和 tick 分支衝突。
+> 2026-10-18 於 `feature/framework-symmetry` 複查，上表各項仍成立（compose、`settings.py` 註解、`.env.example`、`Dockerfile` 兩行 `--extra tick`、`_DB_DRIVER_GUARDED_DIRS` 為 `core`／`apps`／`strategies`）。
+>
+> **排序**：本計畫的程式改動以**分支鏈四個功能分支**（`feature/post-rehearsal` → `feature/tick-timescaledb` → `feature/tick-backtest` → `feature/framework-symmetry`，`實盤下單架構規劃.md` Phase7-1 演練結束後依序合併）**都進 main 之後**為基底：
+> 前兩個帶來 compose、`settings.py`、`pyproject.toml`、`scripts/check_layer_deps.py` 的 tick 改動；最後一個重整了 DAO 的形狀與 DataFeed 的開連線（見下方〈2026-10-18：依現行程式重測改動面〉），早於它動工會和它衝突、SQL 也要改兩次。
 
-> **2026-10-10：依現行程式重測改動面**（main＝`c80c8d3`；功能分支＝`feature/tick-timescaledb` 的 `73a076b`，含 `feature/post-rehearsal`）。
-> 「研究庫」欄是本計畫要改的，「live」欄屬 `tw_trading.db`、依上方決策**不遷移、不需處理**；`StockTickDAO` 屬 PostgreSQL，不計入。兩邊相同時只寫一個數字。
-> 指令的目錄在 main 上是 `core tasks apps scripts strategy_lab strategies`；功能分支沒有 `tasks/`（已併入 `apps/`）。
+> **2026-10-18：依現行程式重測改動面**（取代 2026-10-10 的版本）。**以 `feature/framework-symmetry`（`c95fc3f4`）為準**——它是分支鏈最末端、含 `feature/post-rehearsal`、`feature/tick-timescaledb`、`feature/tick-backtest` 的全部程式碼，本計畫施作時的基底就是這條鏈合併後的 main；main（`a7d0a2a1`）不同時另列，供對照。
+> 「研究庫」欄是本計畫要改的，「live」欄屬 `tw_trading.db`、依上方決策**不遷移、不需處理**；`StockTickDAO` 屬 TimescaleDB，不計入。
+> 指令的目錄在功能分支是 `core apps scripts strategy_lab strategies`；main 另有 `tasks/`（功能分支已併入 `apps/`）。
 >
 > | 項目 | 研究庫（需遷移） | live（不遷移） | 分布 | 指令 |
 > |------|-----:|-----:|------|------|
-> | 繼承 `BaseDAO` 的 DAO | 18 支 | 1 支 | 研究庫比 2026-09-25 多出 `stock_day_trade_list_dao.py`、`stock_short_sale_list_dao.py`；live：`LiveTradeDAO`。功能分支另有不繼承 `BaseDAO` 的 `StockTickDAO` | `grep -l "(BaseDAO)" core/dao/tw/*.py` |
-> | 非測試 `import sqlite3` | 7 檔 | main 1 檔／功能分支 2 檔 | 研究庫：`core/dao/` 的 `base.py`、`financial_statement_dao.py`、`futures_chip_dao.py`、`futures_continuous_dao.py`、`stock_price_dao.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`，另 `core/dao/connection.py` 兩邊共用（`connect_live_trading()` 要留）；live：`live_trade_dao.py`，功能分支另有 `manual_rename_live_strategy.py`（走 `connect_live_trading()`、以 `sqlite3.connect` 做備份） | `grep -rlE "^\s*import sqlite3" <目錄> --include='*.py'` |
-> | `connect_sqlite()` 呼叫點 | 17 處 | — | `core/api/base.py` 1、`core/pipeline/tw/` 7、`core/backtest/datafeed/tw/` 3、`core/live/datafeed/tw/` 3（實盤 DataFeed **唯讀開研究庫**，屬遷移範圍）、`scripts/manual/` 3（`manual_db_tables.py`、`manual_fix_tpex_dealer_totals.py`、2026-09-25 之後新增的 `manual_corporate_action_detect.py`）；`futures_datafeed.py` 有一處是註解不計 | `grep -rn "connect_sqlite(" <目錄> --include='*.py' \| grep -v "^core/dao"` |
-> | `connect_live_trading()` 呼叫點 | — | main 3 處／功能分支 4 處 | `live_trade_dao.py`、`scripts/live_watchdog.py`、`scripts/check_overnight_positions.py`；功能分支另有 `manual_rename_live_strategy.py` | `grep -rn "connect_live_trading(" <目錄> --include='*.py'` |
-> | `DBConnection` 型別標註 | main 34 檔／功能分支 33 檔 | 1 檔 | `core/pipeline/` 25（功能分支 24）、`core/api/` 3、回測 DataFeed 2、`core/live/datafeed/` 2、`scripts/manual/` 2；live：`scripts/check_overnight_positions.py`；另 `scripts/check_layer_deps.py` 是說明文字不計。**只是別名**，改 `core/dao/connection.py` 一處即可 | `grep -rl "DBConnection" <目錄> --include='*.py' \| grep -v "^core/dao"` |
-> | DAO 外的交易生命週期呼叫（`conn.commit()`／`close()`） | 15 檔 | main 1 檔／功能分支 2 檔 | 研究庫：`core/api/base.py`、回測 DataFeed 2、實盤 DataFeed 2（`core/live/datafeed/base.py`、`futures_live_datafeed.py`）、`core/pipeline/tw/` 7（財報、FinMind、期貨籌碼的 loader／updater 6 與 `corporate_action_detector.py`）、`scripts/manual/` 3；live：`scripts/check_overnight_positions.py`，功能分支另有 `manual_rename_live_strategy.py` | `grep -rln "conn\.commit()\|conn\.close()" <目錄> --include='*.py' \| grep -v "^core/dao"` |
-> | `sqlite_master` | 1 處 | — | `core/dao/base.py`（`table_exists()`） | `grep -rn "sqlite_master" core --include='*.py'` |
+> | 繼承 `BaseDAO` 的 DAO | 19 支（main 18） | 1 支 | 功能分支比 main 多 `stock_futures_margin_rate_dao.py`（`框架對稱化重構.md` Phase4-3 把保證金比例表從 `futures_margin_dao.py` 拆出）；live：`LiveTradeDAO`。另有不繼承 `BaseDAO` 的 `StockTickDAO` | `grep -l "(BaseDAO)" core/dao/tw/*.py` |
+> | 非測試 `import sqlite3` | 7 檔 | 2 檔（main 1） | 研究庫：`core/dao/` 的 `base.py`、`financial_statement_dao.py`、`futures_chip_dao.py`、`futures_continuous_dao.py`、`stock_price_dao.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`，另 `core/dao/connection.py` 兩邊共用（`connect_live_trading()` 要留）；live：`live_trade_dao.py`、`manual_rename_live_strategy.py`（走 `connect_live_trading()`、以 `sqlite3.connect` 做備份，main 沒有這支） | `grep -rlE "^\s*import sqlite3" <目錄> --include='*.py'` |
+> | `connect_sqlite()` 呼叫點 | **14 處**（main 17） | — | `core/pipeline/tw/` 7、`core/datafeed/base.py` 1（**`BaseDataFeed.connect_db()`**：`框架對稱化重構.md` Phase3-6 把回測與實盤 DataFeed 的開連線收進基底，5 處 `self.connect_db()` 都經它，main 上是各 DataFeed 自己呼叫的 5 處）、回測 `futures_datafeed.py` 1（讀台股交易日曆的 `stock_conn`）、`core/api/base.py` 1、`scripts/live_watchdog.py` 1（**新增**：`實盤下單架構規劃.md` Phase7-28 讓存活監控唯讀讀研究庫的 `market_holiday` 判斷交易日，已在主目錄分支與各功能分支、尚未進 main）、`scripts/manual/` 3（`manual_db_tables.py`、`manual_fix_tpex_dealer_totals.py`、`manual_corporate_action_detect.py`）；`core/datafeed/base.py` 另一處是 docstring 不計 | `grep -rn "connect_sqlite(" <目錄> --include='*.py' \| grep -v "^core/dao"` |
+> | `connect_live_trading()` 呼叫點 | — | 4 處（main 3） | `live_trade_dao.py`、`scripts/live_watchdog.py`、`scripts/check_overnight_positions.py`、`manual_rename_live_strategy.py` | `grep -rn "connect_live_trading(" <目錄> --include='*.py'` |
+> | `DBConnection` 型別標註 | 33 檔（main 34） | 1 檔 | `core/pipeline/` 24、`core/api/` 3、`core/datafeed/base.py` 1、回測 DataFeed 1、實盤 DataFeed 1、`scripts/manual/` 2、`scripts/live_watchdog.py` 1（兩庫都用）；live：`scripts/check_overnight_positions.py`；另 `scripts/check_layer_deps.py` 是說明文字不計。**只是別名**，改 `core/dao/connection.py` 一處即可 | `grep -rl "DBConnection" <目錄> --include='*.py' \| grep -v "^core/dao"` |
+> | DAO 外的交易生命週期呼叫（`conn.commit()`／`close()`） | 15 檔 | 2 檔（main 1） | 研究庫：`core/pipeline/tw/` 7（財報、FinMind、期貨籌碼的 loader／updater 6 與 `corporate_action_detector.py`）、`core/datafeed/base.py`（`close()` 已收進基底）、回測 `futures_datafeed.py`（`stock_conn`）、實盤 `futures_live_datafeed.py`（`stock_conn`）、`core/api/base.py`、`scripts/manual/` 3、`scripts/live_watchdog.py`（兩庫都用）；live：`scripts/check_overnight_positions.py`、`manual_rename_live_strategy.py` | `grep -rln "conn\.commit()\|conn\.close()" <目錄> --include='*.py' \| grep -v "^core/dao"` |
+> | `sqlite_master` | 1 處 | — | `core/dao/base.py` 的模組函式 `table_exists()`；`BaseDAO.table_exists()` 與缺表語意 `missing_optional_table()`（`OPTIONAL_TABLE`，15 支 DAO 宣告可缺）都經它 | `grep -rn "sqlite_master" core --include='*.py'` |
 > | `PRAGMA`（實際 SQL） | 0 處 | 4 處 | `core/dao/connection.py` 的 `journal_mode=WAL`／`synchronous=FULL`、`live_trade_dao.py` 的 `table_info` 2 處；其餘出現是註解 | `grep -rn "PRAGMA" core --include='*.py'` |
-> | `INSERT OR IGNORE／REPLACE`（實際 SQL） | 4 處 | 1 處 | 研究庫：`core/dao/base.py` 2、`futures_chip_dao.py` 1、`futures_margin_dao.py` 1；live：`live_trade_dao.py` 1；其餘出現是註解與 docstring | `grep -rn "INSERT OR" core/dao --include='*.py'` |
-> | `SAVEPOINT` | 1 處 | 1 處 | 研究庫：`BaseDAO.savepoint()`；live：`LiveTradeDAO` 自己的 savepoint（`core/live/attribution/resync.py` 經 `ledger.dao.savepoint()` 使用，屬實盤紀錄庫） | `grep -rn "SAVEPOINT" core --include='*.py'` |
+> | `INSERT OR IGNORE／REPLACE`（實際 SQL） | 4 處 | 1 處 | 研究庫：`core/dao/base.py` 2（`insert_or_ignore()`／`insert_or_replace()`）、`futures_chip_dao.py` 1、`stock_futures_margin_rate_dao.py` 1（模組函式，`INSERT OR {conflict}` 依參數組 IGNORE／REPLACE，`futures_margin_dao.py` 也呼叫它；main 上這段在 `futures_margin_dao.py`）；live：`live_trade_dao.py` 1；其餘出現是註解與 docstring | `grep -rn "INSERT OR" core/dao --include='*.py'` |
+> | `SAVEPOINT` | 1 處 | 1 處 | 研究庫：`BaseDAO.savepoint()`；live：`LiveTradeDAO` 自己的 savepoint（`core/live/attribution/resync.py` 經 `ledger.dao.savepoint()` 使用） | `grep -rn "SAVEPOINT" core --include='*.py'` |
 > | `GLOB` | 1 處 | — | `stock_info_dao.py`（四碼代號） | `grep -rn "GLOB" core --include='*.py'` |
-> | `cursor.rowcount` | 3 處 | 1 處 | 研究庫：`core/dao/base.py`、`stock_price_dao.py`、`futures_continuous_dao.py`；live：`live_trade_dao.py`；`futures_margin_dao.py` 的出現是 docstring | `grep -rn "rowcount" core/dao --include='*.py'` |
-> | `AUTOINCREMENT`／`ALTER TABLE ADD COLUMN` | — | 各 1 處 | 皆在 `live_trade_dao.py` | `grep -rn "AUTOINCREMENT\|ALTER TABLE" core/dao --include='*.py'` |
-> | 測試 `import sqlite3` | main 57 檔／功能分支 59 檔 | | `sqlite3.connect` main 148 處／功能分支 150 處、手寫 `CREATE TABLE` 17 處（刻意壞掉的 schema 等）；正常建表已走 `dao_factory`。其中 13 檔涉及實盤紀錄庫（`tests/live/` 10 檔、`test_dao_live_trade.py`、`test_overnight_position_check.py`、`conftest.py`），`conftest.py` 與 `test_live_datafeed.py` 兩庫都用，需逐檔區分 | `grep -rlE "^\s*import sqlite3" tests --include='*.py'`；`grep -rn "sqlite3.connect" tests --include='*.py' \| wc -l`；`grep -rn "CREATE TABLE" tests --include='*.py' \| wc -l` |
+> | `cursor.rowcount` | 3 處 | 2 處 | 研究庫：`core/dao/base.py`、`stock_price_dao.py`、`futures_continuous_dao.py`；live：`live_trade_dao.py` 2；保證金兩支 DAO 的出現是 docstring | `grep -rn "rowcount" core/dao --include='*.py'` |
+> | `AUTOINCREMENT`／`ALTER TABLE ADD COLUMN` | — | 各 1 處 | 皆在 `live_trade_dao.py`；`stock_tick_dao.py` 的 `ALTER TABLE ... SET` 是 TimescaleDB 壓縮設定，不計 | `grep -rn "AUTOINCREMENT\|ALTER TABLE" core/dao --include='*.py'` |
+> | 動態 schema 的建表 | 3 支 | — | `futures_chip_dao.py`、`monthly_revenue_dao.py`、`financial_statement_dao.py` 依清洗後的欄位清單建表（`ensure_table_from_columns(columns)`，`框架對稱化重構.md` Phase4-3 統一簽名），型別寫死 `TEXT`／`INT`／`REAL`，PostgreSQL 下要確認型別對應與中文欄名的引號 | `grep -rn "def ensure_table_from_columns" core/dao` |
+> | 測試 `import sqlite3` | 67 檔（main 59） | | `sqlite3.connect` 168 處（main 150）、手寫 `CREATE TABLE` 20 處（main 17，刻意壞掉的 schema 等）；正常建表已走 `dao_factory`。路徑上屬實盤的有 17 檔（`tests/live/` 14 檔、`test_dao_live_trade.py`、`test_overnight_position_check.py`、`conftest.py`），但 `tests/live/` 裡有讀研究庫的（`test_live_datafeed.py`、`test_official_holiday_calendar.py`、`test_watchdog_trading_day.py` 等），`conftest.py` 兩庫都用，需逐檔區分 | `grep -rlE "^\s*import sqlite3" tests --include='*.py'`；`grep -rn "sqlite3.connect" tests --include='*.py' \| wc -l`；`grep -rn "CREATE TABLE" tests --include='*.py' \| wc -l` |
 >
-> 2026-09-16 的第一次盤點（`import sqlite3` 55 檔，當時 `sqlite_utils.py`、`finmind/schema.py` 尚未刪除）與 2026-09-25 的重測已被本表取代；連線入口是 `core/dao/connection.py`（不另建 `core/db/`，設計見 [資料存取層](../docs/dev/data-access-layer.md)），欄位 Enum 已下沉到 `core/config/schema.py`。各步驟的產出欄已依本表更新。
+> 2026-09-16、2026-09-25、2026-10-10 三次盤點已被本表取代；連線入口是 `core/dao/connection.py`（不另建 `core/db/`，設計見 [資料存取層](../docs/dev/data-access-layer.md)），欄位 Enum 已下沉到 `core/config/schema.py`。各步驟的產出欄已依本表更新。
+>
+> **`框架對稱化重構.md` 在 `feature/framework-symmetry` 先收斂了 DAO 的形狀**（2026-10-12，該文件的設計是「先收斂形狀、本計畫再改寫 SQL，SQL 只需改寫一次」），對本計畫的影響：
+> - `BaseDAO.KEY_COLUMNS`（同文件 Phase4-2）取代寫死的 `stock_id`，**但它是查詢用的鍵、不是主鍵**（例如 `futures_price_daily` 的鍵是 `(product, expiry, session)`，主鍵還有 `date`）；`ON CONFLICT` 要的衝突欄位仍只有 7 支 DAO 以 `PRIMARY_KEY_COLUMNS` 宣告，其餘只寫在 DDL。
+> - 缺表語意統一成 `BaseDAO.OPTIONAL_TABLE`＋`missing_optional_table()`（同文件 Phase4-4），API 層不再各自查表；改 `table_exists()` 一處即涵蓋全部。
+> - DataFeed 的開連線收成 `BaseDataFeed.connect_db()` 一處（同文件 Phase3-6），Phase1-2 的改動面因此變小。
+> - 同文件 Phase5-7（loader 拆成兩種契約）**明訂與本計畫 Phase2-2 同段施作**：Phase2-2 要清掉 DAO 外的 `conn.commit()`，名單正好是期貨籌碼、財報、FinMind 的 loader。
 
 ## 進度追蹤表
 
@@ -73,14 +83,14 @@
 | Phase0-2 | 新增環境變數 `DATABASE_URL` / `DB_BACKEND` | `.env.example`、`core/config/settings.py`、`tests/test_config_consistency.py` | `DATABASE_URL` 可由 `.env` 載入 | ⬜ | 比照 tick 分支的 `TICK_DATABASE_URL` 寫法（本機 `localhost`、容器內以 `environment` 覆寫成 `postgres`）；`DATABASE_URL` 只管研究庫，與 `TICK_DATABASE_URL` 分開 |
 | Phase0-3 | 新增 Python 依賴（`sqlalchemy`、`psycopg`） | `pyproject.toml` / `uv.lock`、`Dockerfile` | 安裝後可建立 engine | ⬜ | tick 分支已把 `psycopg[binary]` 3 放在 `[tick]` extra，本步驟把它搬到主相依（不再考慮 `psycopg2-binary`）並新增 `sqlalchemy`；driver 屬執行期才載入的相依，須加註解 |
 | Phase1-1 | 在 DAO 連線入口加入 engine | `core/dao/connection.py`、`scripts/check_layer_deps.py` | 提供 `get_engine()`／`db_dialect()`，`connect_sqlite()` 保留為 fallback | ⬜ | **關鍵步驟**；入口已存在（`connect_sqlite()`、`connect_live_trading()`、`DBConnection`／`DBError` 別名；tick 分支另有 `core/dao/timescale.py`）；`get_engine()` 只涵蓋研究庫；驅動清單只需補 `sqlalchemy`；建議把 `scripts` 納入 `_DB_DRIVER_GUARDED_DIRS` |
-| Phase1-2 | 研究庫連線來源改由 `DATABASE_URL` 決定（含 SQLite fallback） | `core/dao/connection.py`、`core/dao/base.py`（`BaseDAO.__init__`）、17 處 `connect_sqlite()` 呼叫點 | 不改業務邏輯前提下 API 可讀到資料 | ⬜ | 相依 Phase1-1；呼叫點分布：`core/api/base.py` 1、`core/pipeline/tw/` 7、回測 DataFeed 3、實盤 DataFeed 3、`scripts/manual/` 3；`connect_live_trading()` 維持純 SQLite |
-| Phase2-1 | 改造 `core/dao/` 的 SQLite 專屬語法 | `core/dao/base.py`、`core/dao/tw/futures_chip_dao.py`、`futures_margin_dao.py`、`futures_continuous_dao.py`、`stock_info_dao.py`、`stock_price_dao.py` | 改用 Inspector／`ON CONFLICT` 後 SQLite 下測試全過 | ⬜ | 相依 Phase1-1；研究庫 `sqlite_master` 1、`INSERT OR` 4、`SAVEPOINT` 1、`GLOB` 1、`rowcount` 3 處，全在 DAO 內；`live_trade_dao.py` 不改 |
-| Phase2-2 | 改造 DAO 的連線型別、交易與讀取 | `core/dao/connection.py`（`DBConnection`／`DBError` 別名）、`core/dao/base.py`（`query_df`、`savepoint`、`commit`／`close`）、`core/dao/tw/*.py`（研究庫 18 支）、DAO 外研究庫 15 檔的 `conn.commit()`／`close()` | 核心 update task 可在 PostgreSQL 跑完 | ⬜ | 相依 Phase2-1；loader／updater 的 SQL 已全在 DAO，不必逐檔改；`BaseDAO` 須仍能承載 `LiveTradeDAO` 的 `sqlite3.Connection` |
-| Phase2-3 | 驗證查詢 API、回測與實盤 DataFeed 兩種 backend 結果一致 | `core/api/base.py`、`core/api/tw/*.py`、`core/backtest/datafeed/tw/*.py`、`core/live/datafeed/tw/*.py`（僅連線取得與關閉） | 各 API 查詢結果與 SQLite 一致；回測回歸雙線逐筆相同 | ⬜ | 相依 Phase2-2；欄位 Enum 下沉 `core/config/schema.py` 已於 DAO 重構時完成 |
-| Phase2-4 | 改造 scripts | `scripts/manual/manual_db_tables.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`、`scripts/manual/manual_corporate_action_detect.py` | 可在 PostgreSQL 正常執行 | ⬜ | 相依 Phase1-2；`delete_price_data.py`（main 在 `tasks/`、功能分支在 `apps/`）已走 `StockPriceDAO`，不必改；`scripts/live_watchdog.py`、`scripts/check_overnight_positions.py`、`manual_rename_live_strategy.py`（功能分支）只碰 `tw_trading.db`，不動 |
+| Phase1-2 | 研究庫連線來源改由 `DATABASE_URL` 決定（含 SQLite fallback） | `core/dao/connection.py`、`core/dao/base.py`（`BaseDAO.__init__`）、14 處 `connect_sqlite()` 呼叫點 | 不改業務邏輯前提下 API 可讀到資料 | ⬜ | 相依 Phase1-1；呼叫點分布（功能分支）：`core/pipeline/tw/` 7、`core/datafeed/base.py` 的 `BaseDataFeed.connect_db()` 1（回測與實盤 DataFeed 都經它）、回測 `futures_datafeed.py` 的 `stock_conn` 1、`core/api/base.py` 1、`scripts/live_watchdog.py` 1、`scripts/manual/` 3；`connect_live_trading()` 維持純 SQLite |
+| Phase2-1 | 改造 `core/dao/` 的 SQLite 專屬語法 | `core/dao/base.py`、`core/dao/tw/futures_chip_dao.py`、`stock_futures_margin_rate_dao.py`、`futures_continuous_dao.py`、`stock_info_dao.py`、`stock_price_dao.py`；動態建表的 `monthly_revenue_dao.py`、`financial_statement_dao.py` | 改用 Inspector／`ON CONFLICT` 後 SQLite 下測試全過 | ⬜ | 相依 Phase1-1；研究庫 `sqlite_master` 1、`INSERT OR` 4、`SAVEPOINT` 1、`GLOB` 1、`rowcount` 3 處，全在 DAO 內；`INSERT OR` 的保證金那處在功能分支已從 `futures_margin_dao.py` 移到 `stock_futures_margin_rate_dao.py`；`live_trade_dao.py` 不改 |
+| Phase2-2 | 改造 DAO 的連線型別、交易與讀取 | `core/dao/connection.py`（`DBConnection`／`DBError` 別名）、`core/dao/base.py`（`query_df`、`savepoint`、`commit`／`close`）、`core/dao/tw/*.py`（研究庫 19 支）、DAO 外研究庫 15 檔的 `conn.commit()`／`close()` | 核心 update task 可在 PostgreSQL 跑完 | ⬜ | 相依 Phase2-1；與 `框架對稱化重構.md` Phase5-7（loader 拆成兩種契約）同段施作；loader／updater 的 SQL 已全在 DAO，不必逐檔改；`BaseDAO` 須仍能承載 `LiveTradeDAO` 的 `sqlite3.Connection` |
+| Phase2-3 | 驗證查詢 API、回測與實盤 DataFeed 兩種 backend 結果一致 | `core/api/base.py`、`core/api/tw/*.py`、`core/datafeed/base.py`（`connect_db()`／`close()`）、`core/backtest/datafeed/tw/futures_datafeed.py`（`stock_conn`）、`core/live/datafeed/tw/futures_live_datafeed.py`（`stock_conn` 的關閉） | 各 API 查詢結果與 SQLite 一致；回測回歸雙線逐筆相同 | ⬜ | 相依 Phase2-2；欄位 Enum 下沉 `core/config/schema.py` 已於 DAO 重構時完成 |
+| Phase2-4 | 改造 scripts | `scripts/manual/manual_db_tables.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`、`scripts/manual/manual_corporate_action_detect.py`、`scripts/live_watchdog.py`（只改讀研究庫那一處） | 可在 PostgreSQL 正常執行 | ⬜ | 相依 Phase1-2；`delete_price_data.py`（main 在 `tasks/`、功能分支在 `apps/`）已走 `StockPriceDAO`，不必改；`scripts/check_overnight_positions.py`、`manual_rename_live_strategy.py`（功能分支）只碰 `tw_trading.db`，不動；`live_watchdog.py` 讀紀錄庫那一半也不動 |
 | Phase3-1 | 選定資料遷移方案（pgloader 或 Python ETL） | 本文件（決策紀錄） | 決策與理由寫入本文件 | ⬜ | 相依 Phase2-1~Phase2-4；只遷兩個研究庫；中文欄位名稱需特別驗證 |
 | Phase3-2 | 執行一次性資料遷移與完整性比對 | 遷移腳本／指令紀錄 | 每張表 row count 比對、主鍵完整性、抽樣 20 筆查詢一致 | ⬜ | 相依 Phase3-1；**腳本可先寫好，實際遷移要等使用者指令**（見〈範圍界線〉）；目標庫已有 tick 的兩張表，遷移不可覆蓋或刪除 |
-| Phase4-1 | 測試 fixture 支援 PostgreSQL 測試資料庫 | `tests/conftest.py`（`memory_conn`、`dao_factory`）、直接 `import sqlite3` 的研究庫測試檔（57 檔扣除只涉及實盤紀錄庫者） | 不再直接建立 SQLite 連線灌樣本 | ⬜ | 相依 Phase2-1~Phase2-4；`sqlite3.connect` 148 處、手寫 `CREATE TABLE` 17 處（兩者皆含實盤紀錄庫測試）；可沿用 tick 整合測試的暫存 schema 模式 |
+| Phase4-1 | 測試 fixture 支援 PostgreSQL 測試資料庫 | `tests/conftest.py`（`memory_conn`、`dao_factory`）、直接 `import sqlite3` 的研究庫測試檔（功能分支 67 檔扣除只涉及實盤紀錄庫者） | 不再直接建立 SQLite 連線灌樣本 | ⬜ | 相依 Phase2-1~Phase2-4；`sqlite3.connect` 168 處、手寫 `CREATE TABLE` 20 處（兩者皆含實盤紀錄庫測試）；可沿用 tick 整合測試的暫存 schema 模式；`tests目錄結構重整.md` 若先做，測試檔路徑以搬完為準 |
 | Phase4-2 | 補齊核心路徑測試覆蓋 | `tests/` | `update_db` 各 target、FinMind loader/updater、API 查詢、去重與主鍵衝突 | ⬜ | 相依 Phase4-1 |
 | Phase5-1 | 灰度：開發環境全面改 PostgreSQL，保留 SQLite fallback | — | 觀察期內無資料不一致 | ⬜ | 相依 Phase4-2；**切換 backend 要等使用者指令**（見〈範圍界線〉） |
 | Phase5-2 | 移除研究庫的 SQLite 專屬程式碼與舊路徑 | 全專案（實盤紀錄庫路徑除外） | 全域搜尋 `import sqlite3` 只剩實盤紀錄庫路徑 | ⬜ | 相依 Phase5-1；至少保留一個版本週期後再執行；`connect_live_trading()`、`live_trade_dao.py` 保留 `sqlite3` |
@@ -121,7 +131,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 ### Phase0-1. `docker-compose.yml` 的 `postgres` service 讓研究庫沿用 ⬜
 
 - **目的**：提供本機與 CI 一致的 PostgreSQL 環境。
-- **現況（2026-10-10）**：**service 已由 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) Phase0-1 建立**（`feature/tick-timescaledb`，尚未進 main）：
+- **現況（2026-10-10，2026-10-18 複查不變）**：**service 已由 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) Phase0-1 建立**（`feature/tick-timescaledb`，尚未進 main）：
   image 鎖 `timescale/timescaledb:2.29.2-pg17`（不是 `-oss`，壓縮要 Timescale License）、named volume、`pg_isready` healthcheck、port 5432，compose 寫死 `name: alphaedge` 讓 worktree 與主目錄共用 volume；
   `core` 已 `depends_on` 它的 healthcheck，並以 `environment` 覆寫容器內的 `TICK_DATABASE_URL`。原本「image 用 TimescaleDB、不要先起純 `postgres`」的顧慮因此已解決。
 - **做法**：不再新增 service，只補研究庫要用的部分：
@@ -168,7 +178,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 - **目的**：所有 DB 存取已收斂到 `core/dao/connection.py`，在同一處加入 PostgreSQL 的連線方式。
 - **做法**：在 `core/dao/connection.py` 新增 `get_engine()`、`db_dialect()`（判斷 sqlite/postgresql）；既有 `connect_sqlite()` 保留為過渡期 fallback。
   連線入口現有兩個：`connect_sqlite()`（研究庫）與 `connect_live_trading()`（實盤紀錄庫）。**`get_engine()` 只涵蓋研究庫，`connect_live_trading()` 維持原樣**（見〈決策：實盤紀錄庫維持 SQLite〉）。
-  `core.dao` 已在 `scripts/check_layer_deps.py` 登記為第 2 層，且「`core/dao/` 以外不得 import 資料庫驅動」的檢查已存在。2026-10-10 實查：`_DB_DRIVER_MODULES` 在 main 只有 `sqlite3`、tick 分支已是 `sqlite3`／`psycopg`／`connectorx`；`_DB_DRIVER_GUARDED_DIRS` 在 main 是 `core`／`apps`／`strategies`／`tasks`，功能分支少了已併入 `apps/` 的 `tasks`：
+  `core.dao` 已在 `scripts/check_layer_deps.py` 登記為第 2 層，且「`core/dao/` 以外不得 import 資料庫驅動」的檢查已存在。2026-10-10 實查、2026-10-18 複查不變：`_DB_DRIVER_MODULES` 在 main 只有 `sqlite3`、tick 分支已是 `sqlite3`／`psycopg`／`connectorx`；`_DB_DRIVER_GUARDED_DIRS` 在 main 是 `core`／`apps`／`strategies`／`tasks`，功能分支少了已併入 `apps/` 的 `tasks`：
   - `sqlalchemy` 加入 `_DB_DRIVER_MODULES`（`psycopg` 已由 tick 分支加入）。
   - 建議把 `scripts` 納入 `_DB_DRIVER_GUARDED_DIRS`。`scripts/` 直接 `import sqlite3` 的：研究庫只剩 `manual_fix_tpex_dealer_totals.py`（隨 Phase2-4 改走入口）；但 `feature/post-rehearsal` 新增的 `manual_rename_live_strategy.py`（實盤紀錄庫）以 `sqlite3.Connection` 標註型別、並用 `sqlite3.connect` 做備份，納入前要先改走入口或列例外——這是 2026-09-25 時沒有的新阻礙。
   - tick 分支的 `core/dao/timescale.py` 與本步驟的 `get_engine()` 指向同一個資料庫：本步驟決定是否把 tick 的連線收進同一入口（例如由 `get_engine()` 的 URL 推出 ConnectorX URI），或維持兩個模組；`台股tick改用TimescaleDB.md` Phase1-1 已註明「那份計畫完成後可評估」。
@@ -180,9 +190,10 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 
 - **目的**：在不改業務邏輯的前提下切換研究庫的底層連線來源。
 - **做法**：優先讀 `DATABASE_URL`；若未設定則 fallback 到兩個 SQLite 檔（過渡期）。期貨線刻意寫 `tw_futures.db`（見 [ETL 入庫約定](../docs/pipeline/etl-ingestion.md)〈期貨線〉），fallback 時兩庫仍需分開。
-  連線取得點只有兩類：`BaseDAO.__init__()`（DAO 自己開連線）與 17 處 `connect_sqlite()` 呼叫點（API、回測 DataFeed、實盤 DataFeed、多表 updater 開一條連線交給多個 DAO 共用）。後者改為從入口取得連線即可，SQL 不必動。
+  連線取得點只有兩類：`BaseDAO.__init__()`（DAO 自己開連線）與 14 處 `connect_sqlite()` 呼叫點（API、DataFeed、多表 updater 開一條連線交給多個 DAO 共用、腳本）。後者改為從入口取得連線即可，SQL 不必動。
+  DataFeed 在功能分支已收成 `BaseDataFeed.connect_db()` 一處（`框架對稱化重構.md` Phase3-6）：回測與實盤 DataFeed 共 5 處 `self.connect_db()` 都經它，改這一支即可；它在非唯讀時會先建 `data/db/` 目錄，PostgreSQL 下這段不再需要。實盤 DataFeed 以 `read_only=True` 呼叫它（唯讀保證見 Phase2-3）。
   **`connect_live_trading()` 內部呼叫 `connect_sqlite()`**：若改寫 `connect_sqlite()` 讓它依 `DATABASE_URL` 分流，實盤紀錄庫會被一起帶走。研究庫呼叫點應改用新的入口函式，`connect_sqlite()` 本身保持純 SQLite（或 `connect_live_trading()` 改直接 `sqlite3.connect`），兩者擇一並以測試釘住。`LiveTradeDAO` 以 `conn=connect_live_trading(...)` 交給 `BaseDAO.__init__()`，不走 `DATABASE_URL`。
-- **產出**：`core/dao/connection.py`、`core/dao/base.py`、17 處 `connect_sqlite()` 呼叫點（`core/api/base.py` 1、`core/pipeline/tw/` 7、`core/backtest/datafeed/tw/` 3、`core/live/datafeed/tw/` 3、`scripts/manual/manual_db_tables.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`、`scripts/manual/manual_corporate_action_detect.py`）。
+- **產出**：`core/dao/connection.py`、`core/dao/base.py`、14 處 `connect_sqlite()` 呼叫點（功能分支：`core/pipeline/tw/` 7、`core/datafeed/base.py` 1、`core/backtest/datafeed/tw/futures_datafeed.py` 1、`core/api/base.py` 1、`scripts/live_watchdog.py` 1、`scripts/manual/manual_db_tables.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`、`scripts/manual/manual_corporate_action_detect.py`）。若施作時分支鏈尚未全部進 main，以當時 main 現查為準（main 上 DataFeed 仍各自呼叫，共 17 處）。
 - **驗證方式**：不改業務邏輯前提下，API 可透過 engine 讀到資料，結果與改動前一致；設定 `DATABASE_URL` 時 `LiveTradeDAO` 仍寫 `tw_trading.db`，且連線仍為 WAL ＋ `synchronous=FULL`。
 - **相依**：Phase1-1。
 
@@ -194,37 +205,42 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 
 - **目的**：研究庫的 SQLite 專屬語法已全部集中在 DAO，逐項換成方言中立或依 `db_dialect()` 分派的寫法。
 - **做法**：
-  - `sqlite_master` → SQLAlchemy Inspector：`core/dao/base.py` 的 `table_exists()`（模組函式與 `BaseDAO` 方法共用）。
-  - `INSERT OR IGNORE`／`INSERT OR REPLACE` → `INSERT ... ON CONFLICT DO NOTHING／DO UPDATE`：`core/dao/base.py` 的 `insert_or_ignore()`／`insert_or_replace()`、`futures_chip_dao.py` 的 `insert_new_rows()`、`futures_margin_dao.py` 的 `insert_rows()`。**`ON CONFLICT` 必須指名衝突欄位**，各表主鍵要能由 DAO 取得（2026-10-10 實查有 7 支定義 `PRIMARY_KEY_COLUMNS` 常數：`StockPriceDAO`、`StockChipDAO`、`StockMarginDAO`、`BrokerTradingDAO`、`MonthlyRevenueDAO`，以及新增的當沖與融券借券賣出名單兩支 DAO；其餘主鍵只寫在建表 DDL 裡）。
+  - `sqlite_master` → SQLAlchemy Inspector：`core/dao/base.py` 的 `table_exists()`（模組函式與 `BaseDAO` 方法共用）。功能分支上缺表語意已統一由 `BaseDAO.OPTIONAL_TABLE`＋`missing_optional_table()` 經它判斷（15 支 DAO 宣告可缺），改這一處即涵蓋全部可缺表的回空行為；不可缺的表在 SQLite 是 `no such table`、在 PostgreSQL 是 `UndefinedTable`，兩者都要以 `DBError` 接得到。
+  - `INSERT OR IGNORE`／`INSERT OR REPLACE` → `INSERT ... ON CONFLICT DO NOTHING／DO UPDATE`：`core/dao/base.py` 的 `insert_or_ignore()`／`insert_or_replace()`、`futures_chip_dao.py` 的 `insert_new_rows()`、保證金兩張表共用的模組函式（功能分支在 `stock_futures_margin_rate_dao.py`、以 `INSERT OR {conflict}` 依參數組 IGNORE／REPLACE，`FuturesMarginDAO.insert_rows()` 與 `StockFuturesMarginRateDAO` 都呼叫它；main 上在 `futures_margin_dao.py`）。
+    **`ON CONFLICT` 必須指名衝突欄位**，各表主鍵要能由 DAO 取得：2026-10-18 實查仍只有 7 支定義 `PRIMARY_KEY_COLUMNS`（`StockPriceDAO`、`StockChipDAO`、`StockMarginDAO`、`BrokerTradingDAO`、`MonthlyRevenueDAO`、當沖與融券借券賣出名單兩支），其餘主鍵只寫在建表 DDL 裡。
+    **不要拿 `BaseDAO.KEY_COLUMNS` 當衝突欄位**：它是 `框架對稱化重構.md` Phase4-2 加的「查詢用鍵欄」（例如 `futures_price_daily` 為 `(product, expiry, session)`，主鍵另含 `date`），與主鍵不同。可在本步驟補齊各 DAO 的 `PRIMARY_KEY_COLUMNS`，或在 PostgreSQL 下改用 `ON CONFLICT ON CONSTRAINT <pk 名稱>`，擇一並寫進本文件。
+  - **動態 schema 的建表**：`futures_chip_dao.py`、`monthly_revenue_dao.py`、`financial_statement_dao.py` 依欄位清單產生 DDL（功能分支統一為 `ensure_table_from_columns(columns)`），型別寫死 `TEXT`／`INT`／`REAL`、中文欄名以雙引號包住；兩種方言皆可用，但要確認 `REAL`（PostgreSQL 為 4 bytes 單精度）是否該改 `DOUBLE PRECISION`，避免財報與月營收數值在新庫失真。
   - `SAVEPOINT` → `Connection.begin_nested()`：`BaseDAO.savepoint()`。
   - `GLOB '[0-9][0-9][0-9][0-9]'` → PostgreSQL 的 `~ '^[0-9]{4}$'`：`stock_info_dao.py` 的 `get_listed_common_stock_ids()`。
   - `cursor.rowcount`：`insert_or_ignore()` 以它算實際寫入列數、`StockPriceDAO.delete_by_date()` 以它回傳刪除列數、`FuturesContinuousDAO` 的重建以它回傳刪除列數；psycopg 的 `executemany` 回傳的 `rowcount` 語意需實測。`futures_continuous_dao.py` 另有 `sqlite3.Cursor` 型別標註要一併改。
   - `CAST(year AS INTEGER)`（`monthly_revenue_dao.py`、`financial_statement_dao.py`）兩邊皆可用，不必改；遷移後欄位型別若改為整數可一併移除。
   - **不改** `live_trade_dao.py` 的 `INSERT OR IGNORE`、`SAVEPOINT`、`PRAGMA table_info`、`AUTOINCREMENT`、`ALTER TABLE ADD COLUMN`、`rowcount`：全屬實盤紀錄庫，不遷移。
-- **產出**：`core/dao/base.py`、`core/dao/tw/futures_chip_dao.py`、`futures_margin_dao.py`、`futures_continuous_dao.py`、`stock_info_dao.py`、`stock_price_dao.py`。
-- **驗證方式**：`grep -rn "sqlite_master\|INSERT OR\|SAVEPOINT\|GLOB" core/dao --include='*.py' | grep -v live_trade_dao` 只剩 SQLite fallback 分支與註解；SQLite 下 `pytest -m "not slow"` 全過。
+- **產出**：`core/dao/base.py`、`core/dao/tw/futures_chip_dao.py`、`stock_futures_margin_rate_dao.py`（main 為 `futures_margin_dao.py`）、`futures_continuous_dao.py`、`stock_info_dao.py`、`stock_price_dao.py`；動態建表的 `monthly_revenue_dao.py`、`financial_statement_dao.py`（若改型別）。
+- **驗證方式**：`grep -rn "sqlite_master\|INSERT OR\|SAVEPOINT\|GLOB" core/dao --include='*.py' | grep -v live_trade_dao` 只剩 SQLite fallback 分支與註解；SQLite 下 `pytest -m "not slow"` 全過；`tests/test_dao_key_columns.py` 等 DAO 契約測試不變。
 - **相依**：Phase1-1。
 
 ### Phase2-2. 改造 DAO 的連線型別、交易與讀取 ⬜
 
 - **目的**：讓研究庫 DAO 內部脫離 `sqlite3.Connection`，呼叫端（API、loader、updater、DataFeed）不必改。
 - **做法**：
-  - `DBConnection`／`DBError` 別名（`core/dao/connection.py`）改指 SQLAlchemy 的 `Connection`／`SQLAlchemyError`；DAO 外研究庫 34 檔（功能分支 33 檔）的型別標註只引用別名，不必逐檔改。
-  - `BaseDAO.query_df()` 已改用 cursor（查詢失敗不 rollback 共用連線），改為 `conn.execute(text(sql), params)` 後以 `Result.keys()` 與 `fetchall()` 組表；**不要改回 `pd.read_sql_query`**。參數佔位由 `?` 改為具名參數，DAO 內 SQL 要逐支調整（研究庫 18 支，`LiveTradeDAO` 除外）。
+  - `DBConnection`／`DBError` 別名（`core/dao/connection.py`）改指 SQLAlchemy 的 `Connection`／`SQLAlchemyError`；DAO 外研究庫 33 檔（功能分支；main 34 檔）的型別標註只引用別名，不必逐檔改。
+  - `BaseDAO.query_df()` 已改用 cursor（查詢失敗不 rollback 共用連線），改為 `conn.execute(text(sql), params)` 後以 `Result.keys()` 與 `fetchall()` 組表；**不要改回 `pd.read_sql_query`**。參數佔位由 `?` 改為具名參數，DAO 內 SQL 要逐支調整（研究庫 19 支，`LiveTradeDAO` 除外）。
+    **交易語意的方言差異要先定**：SQLite 下一句 SQL 失敗不影響同一交易的後續語句；PostgreSQL 下同一交易內任何一句失敗，整個交易進入 aborted 狀態、之後每一句都拋錯直到 rollback。現行「查詢失敗不 rollback 共用連線」的設計（多表 updater 與 loader 共用一條連線）在 PostgreSQL 下會讓一次查詢失敗拖垮後面所有寫入，`query_df()` 與 loader 的 savepoint 邊界要一起重新設計（例如查詢一律包 `begin_nested()`）。
   - **`LiveTradeDAO` 繼承 `BaseDAO`，而它的連線永遠是 `sqlite3.Connection`**：`BaseDAO` 的 `commit()`／`close()`／`query_df()` 等改造後必須對兩種連線都成立——這不是過渡期 fallback，Phase5-2 之後也要留。兩條路擇一並寫進本文件：① `BaseDAO` 永久保留依連線型別分派；② 把 `LiveTradeDAO` 改繼承一個獨立的 SQLite 基底（但那會動到實盤程式碼，需回歸實盤測試）。
-  - `commit()`／`close()`：DAO 外研究庫仍有 15 檔直接呼叫 `conn.commit()`／`conn.close()`（`core/api/base.py`、回測 DataFeed 2、實盤 DataFeed 2、財報／FinMind／期貨籌碼的多表 loader 與 updater 6、`corporate_action_detector.py`、`scripts/manual/` 的 `manual_db_tables.py`、`manual_fix_tpex_dealer_totals.py`、`manual_corporate_action_detect.py`），確認 SQLAlchemy `Connection` 下語意相同，或改為經由 DAO。
+  - `commit()`／`close()`：DAO 外研究庫仍有 15 檔直接呼叫 `conn.commit()`／`conn.close()`（功能分支：`core/api/base.py`、`core/datafeed/base.py`（DataFeed 的 `close()` 已收進基底）、回測 `futures_datafeed.py` 與實盤 `futures_live_datafeed.py` 各自的 `stock_conn`、財報／FinMind／期貨籌碼的多表 loader 與 updater 6、`corporate_action_detector.py`、`scripts/manual/` 的 `manual_db_tables.py`、`manual_fix_tpex_dealer_totals.py`、`manual_corporate_action_detect.py`、`scripts/live_watchdog.py` 讀研究庫那一條），確認 SQLAlchemy `Connection` 下語意相同，或改為經由 DAO。
+    **多表 loader 那 6 檔與 `框架對稱化重構.md` Phase5-7（loader 拆成兩種契約）同段施作**（該文件已定案），不要各改一次。
   - `core/live/` 原有 6 檔直接 `self.dao.conn.commit()` 繞過 `BaseDAO.commit()`，**2026-09-25 已全數收回 DAO**（`grep -rn "dao\.conn\.commit()" core scripts` 為 0）。連的是實盤紀錄庫，本來就不在本計畫改動面。
-- **產出**：`core/dao/connection.py`、`core/dao/base.py`、`core/dao/tw/*.py`（研究庫 18 支）、上述研究庫 15 檔。
+- **產出**：`core/dao/connection.py`、`core/dao/base.py`、`core/dao/tw/*.py`（研究庫 19 支）、上述研究庫 15 檔、`core/pipeline/shared/base_loader.py`（與 `框架對稱化重構.md` Phase5-7 同批）。
 - **驗證方式**：核心 update task 可在 PostgreSQL 正常跑完，且中斷後續跑行為不變（`DateProgressStore` 的 `no_data`／`incomplete` 語意不變）；`pytest tests/test_dao_live_trade.py tests/live` 全過（`LiveTradeDAO` 未受影響）。
-- **相依**：Phase2-1。
+- **相依**：Phase2-1；與 `框架對稱化重構.md` Phase5-7 同段。
 
 ### Phase2-3. 驗證查詢 API、回測與實盤 DataFeed ⬜
 
 - **目的**：讀取路徑的 SQL 已在 DAO（Phase2-1、Phase2-2 改完），本步驟確認兩種 backend 結果一致。
-- **做法**：API、回測 `TwStockDataFeed`／`TwFuturesDataFeed` 與實盤 `TwStockLiveDataFeed`／`TwFuturesLiveDataFeed`（`core/live/datafeed/tw/`，唯讀開研究庫）只在建構時取得連線、結束時關閉，隨 Phase1-2 改完；逐一比對 price／chip／margin／dividend／fs／mrr 與期貨各 API 的查詢結果。
+- **做法**：API、回測 `TwStockDataFeed`／`TwFuturesDataFeed` 與實盤 `TwStockLiveDataFeed`／`TwFuturesLiveDataFeed`（`core/live/datafeed/tw/`，唯讀開研究庫）只在建構時取得連線、結束時關閉，隨 Phase1-2 改完——功能分支上 DataFeed 的開與關都在 `BaseDataFeed`（`connect_db()`／`close()`），子類只剩期貨兩支各自的 `stock_conn`；逐一比對 price／chip／margin／dividend／fs／mrr 與期貨各 API 的查詢結果。
   實盤 DataFeed 以 `read_only=True` 開研究庫，PostgreSQL 下沒有對應的 URI 參數，改以唯讀角色或 `SET default_transaction_read_only = on` 保住「實盤不會寫到研究庫」的保證。
   欄位 Enum（`PriceColumn`、`ChipColumn` 等）已於 DAO 重構時下沉到 `core/config/schema.py`，原列於本步驟的下沉工作不再需要。
-- **產出**：`core/api/base.py`、`core/api/tw/*.py`、`core/backtest/datafeed/tw/*.py`、`core/live/datafeed/tw/*.py`（僅連線取得與關閉處）。
+- **產出**：`core/api/base.py`、`core/api/tw/*.py`、`core/datafeed/base.py`、`core/backtest/datafeed/tw/*.py`、`core/live/datafeed/tw/*.py`（僅連線取得與關閉處）。
 - **驗證方式**：各 API 在兩種 backend 下結果一致；`./scripts/run_regression.sh` 回歸雙線逐筆相同；`tests/live/test_live_datafeed.py` 在兩種 backend 下通過。
 - **相依**：Phase2-2。
 
@@ -235,10 +251,11 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
   - `scripts/manual/manual_db_tables.py` 以 `connect_sqlite()` 唯讀開兩個 DB 列出資料表，改為從入口取得連線。
   - `scripts/manual/manual_fix_tpex_dealer_totals.py` 以 `connect_sqlite()` 開 `tw_stock.db`、自行 `conn.commit()`，並以 `sqlite3.Connection`／`sqlite3.Cursor` 標註型別；改為從入口取得連線、型別改用 `DBConnection`。
   - `scripts/manual/manual_corporate_action_detect.py`（2026-09-25 之後新增的公司行動人工補登入口）以 `connect_sqlite()` 唯讀開 `tw_stock.db`、自行 `conn.close()`，改為從入口取得連線。
+  - `scripts/live_watchdog.py` 的交易日判斷（`實盤下單架構規劃.md` Phase7-28，尚未進 main）以 `connect_sqlite(stock_db_path, read_only=True)` 讀研究庫的 `market_holiday`，研究庫打不開時退回只看週末並註明原因。改為從入口取得唯讀連線，**「打不開就降級、不中斷監控」的語意要保住**——PostgreSQL 斷線時拋的錯誤型別要在它接的 `(DBError, OSError)` 之內。
   - `delete_price_data.py`（main 在 `tasks/`、`feature/post-rehearsal` 起在 `apps/`）已走 `StockPriceDAO`，不必改。
-  - **不動**：`scripts/live_watchdog.py`（走 `connect_live_trading()`）、`scripts/check_overnight_positions.py`（讀 `--db`，預設 `TW_TRADING_DB_PATH`，2026-09-25 已改走 `connect_live_trading(args.db, read_only=True)`），以及功能分支的 `manual_rename_live_strategy.py`，都只碰實盤紀錄庫，不遷移。
-- **產出**：`scripts/manual/manual_db_tables.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`、`scripts/manual/manual_corporate_action_detect.py`。
-- **驗證方式**：三支腳本可在 PostgreSQL 正常執行；`tests/test_manual_fix_tpex_dealer_totals.py` 通過。
+  - **不動**：`scripts/live_watchdog.py` 讀紀錄庫的部分（走 `connect_live_trading()`）、`scripts/check_overnight_positions.py`（讀 `--db`，預設 `TW_TRADING_DB_PATH`，2026-09-25 已改走 `connect_live_trading(args.db, read_only=True)`），以及功能分支的 `manual_rename_live_strategy.py`，都只碰實盤紀錄庫，不遷移。
+- **產出**：`scripts/manual/manual_db_tables.py`、`scripts/manual/manual_fix_tpex_dealer_totals.py`、`scripts/manual/manual_corporate_action_detect.py`、`scripts/live_watchdog.py`（只改讀研究庫那一處）。
+- **驗證方式**：三支 manual 腳本可在 PostgreSQL 正常執行；`tests/test_manual_fix_tpex_dealer_totals.py`、`tests/live/test_watchdog_trading_day.py` 通過。
 - **相依**：Phase1-2。
 
 ---
@@ -279,10 +296,11 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 
 ### Phase4-1. 測試 fixture 支援 PostgreSQL 測試資料庫 ⬜
 
-- **目的**：57 個測試檔（2026-10-10 main；功能分支 59 檔）直接以 SQLite（in-memory 或暫存檔）建立連線（`sqlite3.connect` 148 處），不改造就無法驗證 PostgreSQL 路徑。
+- **目的**：67 個測試檔（2026-10-18 `feature/framework-symmetry`；main 59 檔）直接以 SQLite（in-memory 或暫存檔）建立連線（`sqlite3.connect` 168 處），不改造就無法驗證 PostgreSQL 路徑。
 - **做法**：`tests/conftest.py` 已有 `memory_conn` 與 `dao_factory`（以 DAO 自己的建表方法建正式 schema，測試不再以 `to_sql` 建表），讓 `memory_conn` 可切換 backend（PostgreSQL 用 docker container），再把研究庫測試檔的 `sqlite3.connect(...)` 改為取用 fixture，DB 建立／清理自動化。
-  其中 13 檔涉及實盤紀錄庫（`tests/live/` 10 檔、`test_dao_live_trade.py`、`test_overnight_position_check.py`、`conftest.py`）：只測實盤紀錄庫的維持 SQLite 不改；`conftest.py` 與 `tests/live/test_live_datafeed.py` 兩庫都用，只改研究庫那一半。
-  手寫 `CREATE TABLE` 的 17 處多為刻意壞掉的 schema（缺欄位），逐處確認屬哪個庫，研究庫的在 PostgreSQL 下仍能觸發同樣的錯誤型別。
+  路徑上屬實盤的有 17 檔（`tests/live/` 14 檔、`test_dao_live_trade.py`、`test_overnight_position_check.py`、`conftest.py`）：只測實盤紀錄庫的維持 SQLite 不改；`conftest.py`、`tests/live/test_live_datafeed.py`、`test_official_holiday_calendar.py`、`test_watchdog_trading_day.py` 等會讀研究庫，只改研究庫那一半——動工時逐檔分類，不要以目錄判斷。
+  手寫 `CREATE TABLE` 的 20 處多為刻意壞掉的 schema（缺欄位），逐處確認屬哪個庫，研究庫的在 PostgreSQL 下仍能觸發同樣的錯誤型別。
+  [tests目錄結構重整.md](tests目錄結構重整.md) 規劃把 `tests/` 依層分目錄（尚未動工）；若它先做，上述測試檔路徑以搬完後為準。
   `@pytest.mark.slow` 的正式庫護欄（`tests/test_trading_calendar_guard.py` 等）另外處理。
   tick 分支的 `tests/test_stock_tick_timescale.py` 已有可沿用的模式：未設連線 URL 時整個模組 skip、每個測試建一個暫存 schema 並在結束時 `DROP SCHEMA ... CASCADE`、`search_path` 要含 `public`（extension 函式裝在那裡），不碰正式表。
 - **產出**：`tests/conftest.py`、直接 `import sqlite3` 的研究庫測試檔。
@@ -337,7 +355,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 | 衝突策略風險 | 冪等寫入依賴 `INSERT OR IGNORE` ＋ 主鍵，部分去重在 pandas 層 | 補上 DB 層 unique/PK，改為 `ON CONFLICT DO NOTHING`；缺 constraint 時會變成靜默重複 |
 | 主鍵語意風險 | 財報三表主鍵含 `公司名稱`，同一檔同一年季可能兩列（更名或名稱加註 `*`） | 遷移時不順手改主鍵；若要改屬 schema 變更，需另立工作 |
 | 效能風險 | 大表寫入速度變慢 | 批次寫入、COPY、索引延後建立、分批 commit |
-| 測試風險 | 57 個測試檔直接依賴 SQLite（其中 13 檔涉及實盤紀錄庫） | `memory_conn`／`dao_factory` 已集中建表，從它們切換 backend，DB 建立／清理自動化；實盤紀錄庫測試維持 SQLite |
+| 測試風險 | 67 個測試檔直接依賴 SQLite（功能分支；其中路徑屬實盤的 17 檔，部分也讀研究庫） | `memory_conn`／`dao_factory` 已集中建表，從它們切換 backend，DB 建立／清理自動化；實盤紀錄庫測試維持 SQLite |
 | 共用資料庫風險 | tick 合併後同一個 `alphaedge` 已有約 10.5 億列的 `stock_tick`；遷移工具或測試若清庫、`DROP` 或改 `search_path`，會波及 tick | 遷移只作用在本次匯入的表、試跑前備份（Phase3-1）；測試一律用暫存 schema（Phase4-1）；遷移後核對 tick 兩張表列數不變（Phase3-2） |
 | 實盤誤遷風險 | `connect_live_trading()` 內部呼叫 `connect_sqlite()`、`LiveTradeDAO` 繼承 `BaseDAO`，改研究庫時容易把實盤紀錄庫一起帶走 | Phase1-2、Phase2-2 以測試釘住「設了 `DATABASE_URL` 實盤仍寫 `tw_trading.db`、仍是 WAL ＋ FULL」 |
 
@@ -346,13 +364,14 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 ## 關聯與狀態
 
 - **優先級**：P3（影響面廣，建議在其他重構收斂後再動）
-- **前置條件（2026-10-10）**：
-  - `feature/post-rehearsal` 演練後部署進 main、`feature/tick-timescaledb` 隨後合併——本計畫沿用的 `postgres` service、`psycopg`、`core/dao/timescale.py` 都在後者（見〈TimescaleDB 計畫先完成後的交互影響〉）。
+- **前置條件（2026-10-18）**：
+  - 分支鏈 `feature/post-rehearsal` → `feature/tick-timescaledb` → `feature/tick-backtest` → `feature/framework-symmetry` 在 `實盤下單架構規劃.md` Phase7-1 演練結束後依序合併進 main——本計畫沿用的 `postgres` service、`psycopg`、`core/dao/timescale.py` 在 tick 分支，DAO 形狀與 DataFeed 開連線的收斂在 `feature/framework-symmetry`（見〈TimescaleDB 計畫先完成後的交互影響〉與〈2026-10-18：依現行程式重測改動面〉）。
+  - `框架對稱化重構.md` Phase4-2～Phase4-4（DAO 形狀收斂）已於 2026-10-12 在 `feature/framework-symmetry` 完成；同文件 Phase5-7（loader 拆兩種契約，⬜）與本計畫 Phase2-2 同段施作。
   - `重構後全專案健檢.md` Phase3-6（DAO 與 loader 的結構性重複上提）原本建議排在本計畫之前，**已於 2026-09-26 完成**，不再是前置。
   - `core目錄邊界收斂.md` Phase5-1（`core/pipeline/` 搬到頂層 `etl/`）暫緩到本計畫與 tick 計畫涉及 pipeline 的步驟完成；本計畫的 `core/pipeline/` 路徑以施作當下為準。
-- **相關程式**：`core/dao/`（SQL 與 SQLite 專屬語法的唯一所在）、`core/dao/connection.py`（`connect_sqlite()` 改造；`connect_live_trading()` 不變）、`connect_sqlite()` 呼叫點（`core/api/base.py`、`core/pipeline/tw/`、`core/backtest/datafeed/tw/`、`core/live/datafeed/tw/`、`scripts/manual/`）、`scripts/check_layer_deps.py`、`tests/conftest.py`、`tests/`
+- **相關程式**：`core/dao/`（SQL 與 SQLite 專屬語法的唯一所在）、`core/dao/connection.py`（`connect_sqlite()` 改造；`connect_live_trading()` 不變）、`connect_sqlite()` 呼叫點（`core/api/base.py`、`core/pipeline/tw/`、`core/datafeed/base.py`（功能分支）、`core/backtest/datafeed/tw/`、`core/live/datafeed/tw/`（main）、`scripts/manual/`、`scripts/live_watchdog.py`（功能分支））、`scripts/check_layer_deps.py`、`tests/conftest.py`、`tests/`
 - **刻意留到本計畫一起做的 schema 收斂**（來源皆為 [命名軸線](../docs/dev/naming-axes.md)，理由見該文件）：
-  1. **台股表名補上 `stock_` 前綴**：`tw_stock.db` 現有 17 張表（2026-10-10 以 `sqlite_master` 唯讀實測：`price`、`chip`、`margin`、`dividend`、財報 4 表、`monthly_revenue`、`corporate_action`、`market_holiday`、`day_trade_list`、`short_sale_list`、`taiwan_stock_info`、`taiwan_stock_info_with_warrant`、`taiwan_securities_trader_info`、`taiwan_stock_trading_daily_report_secid_agg`）皆不帶 `stock_` 前綴（`market_holiday` 屬市場層級，是否加前綴屆時一併決定），
+  1. **台股表名補上 `stock_` 前綴**：`tw_stock.db` 現有 17 張表（2026-10-18 以 `sqlite_master` 唯讀實測，與 2026-10-10 相同：`price`、`chip`、`margin`、`dividend`、財報 4 表、`monthly_revenue`、`corporate_action`、`market_holiday`、`day_trade_list`、`short_sale_list`、`taiwan_stock_info`、`taiwan_stock_info_with_warrant`、`taiwan_securities_trader_info`、`taiwan_stock_trading_daily_report_secid_agg`）皆不帶 `stock_` 前綴（`market_holiday` 屬市場層級，是否加前綴屆時一併決定），
      期貨表帶 `futures_` 前綴（後者為刻意決策，不改）；**例外**：`tw_futures.db` 8 張表中的 `stock_futures_margin_rate_history`（股票期貨保證金比例）以 `stock_` 開頭，併進單一資料庫後會和台股的 `stock_` 前綴混在一起，要不要改名屆時一併決定。
      已佔用的表名：tick 分支的 `stock_tick`、`stock_tick_load_log`（`台股tick改用TimescaleDB.md` 已照 `stock_` 前綴規則命名）。PostgreSQL 的目標是**單一**
      `alphaedge` 資料庫，兩個研究庫會併進同一個扁平命名空間，屆時前綴是必要的。`tw_trading.db` 不遷移，其 `live_` 前綴不在此議題內。
@@ -372,6 +391,8 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 - **相關 backlog**：
   - [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md)：2026-09-16 立項，2026-10-10 在 `feature/tick-timescaledb` 全部完成、尚未進 main。**它先做，本計畫沿用**它建立的 `postgres` service（`台股tick改用TimescaleDB.md` Phase0-1 → 本計畫 Phase0-1）、`TICK_DATABASE_URL` 的設定寫法（`台股tick改用TimescaleDB.md` Phase0-2 → 本計畫 Phase0-2）、`[tick]` extra 裡的 `psycopg`（`台股tick改用TimescaleDB.md` Phase0-3 → 本計畫 Phase0-3 搬到主相依）與 `core/dao/timescale.py`（`台股tick改用TimescaleDB.md` Phase1-1 → 本計畫 Phase1-1 決定是否併入 `get_engine()`）；兩邊共用同一個 `alphaedge` 資料庫。
   - [重構後全專案健檢.md](重構後全專案健檢.md) Phase3-6：原建議排在本計畫之前，2026-09-26 已完成。
+  - [框架對稱化重構.md](框架對稱化重構.md)：`框架對稱化重構.md` Phase4-2～Phase4-4 先收斂 DAO 形狀（2026-10-12 完成，在 `feature/framework-symmetry`），本計畫再改寫 SQL；`框架對稱化重構.md` Phase5-7 與本計畫 Phase2-2 同段施作。
+  - [tests目錄結構重整.md](tests目錄結構重整.md)：若先做，Phase4-1 的測試檔路徑以搬完後為準。
   - [core目錄邊界收斂.md](core目錄邊界收斂.md) Phase5-1：`core/pipeline/` → `etl/`，暫緩到本計畫涉及 pipeline 的步驟完成。
   - [美股ETL與回測架構規劃.md](美股ETL與回測架構規劃.md)：美股資料量較大，建議本計畫先收斂；`us_` 表名前綴同樣以單一資料庫為前提。
   - [實盤下單架構規劃.md](實盤下單架構規劃.md)：`tw_trading.db` 的擁有者；該文件原寫「本計畫動工時要把 `tw_trading.db` 列入」，已由 2026-09-25 決策改為不遷移。
