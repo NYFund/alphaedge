@@ -16,7 +16,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 """
 
 
-# 策略原始碼所在：`core/strategies/`（契約與尚未搬出的具體策略）與頂層 `strategies/`（具體策略）
+# 策略原始碼所在：`core/strategies/`（只剩契約基底；仍掃描是為了擋下具體策略被放回框架層）與頂層 `strategies/`（具體策略）
 STRATEGY_DIRS: Tuple[Path, ...] = (
     _PROJECT_ROOT / "core" / "strategies",
     _PROJECT_ROOT / "strategies",
