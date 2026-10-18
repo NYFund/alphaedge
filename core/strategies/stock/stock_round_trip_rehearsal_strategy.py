@@ -57,9 +57,10 @@ class StockRoundTripRehearsalStrategy(BaseStockStrategy):
     **只買一檔靠的是「持有中不再買」那道檢查**——拿掉的話，持有 1 檔時剩 2 檔可開、
     每檔 22.5 萬，會再買 2 張。
 
-    逐單風控的金額上限以 `init_capital` 為基準（100 萬的兩成 ＝ 20 萬），1 張 0050
-    （約 11 萬）過得了。**兩者分開設是必要的**：金額上限若改以 `live_capital` 為基準，
-    45 萬的兩成只有 9 萬，這張單會被擋下——屆時要一起重訂。
+    逐單風控的金額上限有兩種口徑，這支策略兩種都過得了：以 `init_capital` 為基準
+    （100 萬 × 20% ＝ 20 萬），或以 `live_capital` 為基準（45 萬 × 35% ＝ 15.75 萬）。
+    1 張 0050 以漲停價掛單約 12 萬。後一種口徑的比率若調到 27% 以下，這張單就會被擋下，
+    屆時要一起重訂 `live_capital`。
 
     〈回測〉
     建倉期間在 2026-10，回測區間內沒有交易；這支策略不提供回測意義，parity 補比也不比它。
@@ -77,7 +78,7 @@ class StockRoundTripRehearsalStrategy(BaseStockStrategy):
     def __init__(self) -> None:
         super().__init__()
         self.strategy_name: str = "Stock-Round-Trip-Rehearsal"
-        # 逐單風控的金額基準；張數不看它（見 class docstring〈資金額度〉）
+        # 逐單風控以它為金額基準的口徑下才有作用；張數不看它（見 class docstring〈資金額度〉）
         self.init_capital: float = 1000000.0
         self.live_capital: float = 450000.0  # 實盤額度（元），每檔切 15 萬 ＝ 1 張 0050
         self.max_holdings: int = self.DEFAULT_MAX_HOLDINGS
