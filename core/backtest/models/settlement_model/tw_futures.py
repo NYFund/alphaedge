@@ -524,9 +524,9 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             多數日子算出的未實現損益是 **0——那是對的，不是沒算到**；
             只有當日無結算價（沿用舊價）或報價缺漏時才會有殘值。
 
-            **`units` 用不到**：期貨的乘數逐契約不同，`InstrumentSpec.to_units()`
-            拿不到商品（見 `TwFuturesSpec`），乘數一律取自部位自身的
-            `multiplier`，損益公式直接走 `FuturesPositionManager.calculate_pnl()`。
+            **`units` 用不到**：損益公式直接走 `FuturesPositionManager.calculate_pnl()`，
+            乘數取自部位自身的 `multiplier`（開倉當時的契約單位）——股期的契約單位會隨
+            除權息調整，持倉期間要沿用開倉時那一個，不能每天以當日的計價單位重算。
         - Parameters:
             - position: FuturesPosition
                 未平倉部位；`unrealized_pnl` 與 `unrealized_roi` 會被就地更新

@@ -1,7 +1,7 @@
 import datetime
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Union
 
 from core.models import BaseOrder, PriceLimits
 from core.utils import (
@@ -112,16 +112,27 @@ class InstrumentSpec(ABC):
         return order.symbol
 
     @abstractmethod
-    def to_units(self, volume: int) -> int:
+    def get_unit_size(
+        self,
+        product: Optional[str],
+        date: Union[datetime.date, datetime.datetime],
+    ) -> int:
         """
         - Description:
-            下單數量 → 計價單位（台股：張 → 股 ×1000；期貨：口 → 契約乘數）
+            一個下單單位對應多少計價單位（台股：一張 1000 股；期貨：一口的契約乘數）
+
+            **要帶商品與日期**：期貨的乘數逐契約不同（TX 200、MTX 50），股票期貨的
+            契約單位還會隨除權息調整。只收數量的話，期貨無從查起，只能原樣回傳口數，
+            各呼叫端就得各自繞路去乘乘數——實盤的委託金額曾因此少乘了乘數。
+            金額 ＝ 價格 × 數量 × 本方法的回傳值。
         - Parameters:
-            - volume: int
-                下單數量（台股為張、期貨為口）
+            - product: Optional[str]
+                商品鍵（由 `resolve_product()` 取得：台股是代號、期貨是商品代碼）
+            - date: Union[datetime.date, datetime.datetime]
+                交易日
         - Return:
             - int
-                計價單位數量
+                每單位的計價單位數
         """
 
         pass

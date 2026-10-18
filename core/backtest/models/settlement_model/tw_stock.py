@@ -490,7 +490,10 @@ class TwStockSettlementModel(BaseSettlementModel):
                 continue
 
             # 純除權（現金股利為 0）不產生現金流
-            amount: int = int(dividend * self.instrument.to_units(position.volume))
+            shares: int = position.volume * self.instrument.get_unit_size(
+                position.symbol, date
+            )
+            amount: int = int(dividend * shares)
             if amount <= 0:
                 continue
 
@@ -574,8 +577,8 @@ class TwStockSettlementModel(BaseSettlementModel):
                 continue
 
             old_volume: int = position.volume
-            adjusted_units: float = self.instrument.to_units(old_volume) * ratio
-            lot_size: int = self.instrument.to_units(1)
+            lot_size: int = self.instrument.get_unit_size(position.symbol, date)
+            adjusted_units: float = old_volume * lot_size * ratio
             new_volume: int = int(adjusted_units // lot_size)
             odd_units: float = adjusted_units - new_volume * lot_size
 

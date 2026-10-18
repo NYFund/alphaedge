@@ -54,11 +54,12 @@ from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.trader import LiveTrader, StrategyContext
 from core.market.cost_model import BaseCostModel
+from core.market.instrument_spec import InstrumentSpec
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
-from core.market.tw.instrument_spec import TwStockSpec
+from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
 from core.models import (
     BaseOrder,
@@ -709,7 +710,9 @@ def _build_context(
         build_order: FilledOrderBuilder = build_stock_order
         opening_requirement: Optional[Callable[[BaseOrder], float]] = None
         # 股票的資金占用與曝險是同一個數（價 × 股數）
-        notional: Callable[[BaseOrder], float] = _make_notional_calculator(spec)
+        notional: Callable[[BaseOrder], float] = _make_contract_value_calculator(
+            spec, now_provider
+        )
         exposure: Callable[[BaseOrder], float] = notional
         execution_model: BaseExecutionModel = StockExecutionModel(
             price_limits=feed.get_price_limits
@@ -750,10 +753,14 @@ def _build_context(
         manager = futures_manager
         opening_requirement = _make_opening_requirement(futures_manager, now_provider)
         # 資金占用是保證金、曝險是契約價值：一口台指期押約 70 萬、承擔約 900 萬的風險
-        notional = _make_futures_margin_calculator(futures_manager, now_provider)
-        exposure = _make_futures_contract_value_calculator(
-            futures_manager, now_provider
+        # 乘數解析器與部位管理層同一個：spec 與記帳算出的乘數不會分岔
+        futures_spec: TwFuturesSpec = TwFuturesSpec(
+            multiplier_resolver=futures_feed.resolve_multiplier
         )
+        notional = _make_futures_margin_calculator(
+            futures_manager, futures_spec, now_provider
+        )
+        exposure = _make_contract_value_calculator(futures_spec, now_provider)
         schedule = TW_FUTURES_SEGMENTS
         build_order = _build_futures_order
         execution_model = FuturesExecutionModel(price_limits=feed.get_price_limits)
@@ -1186,23 +1193,38 @@ def _build_futures_order(
     )
 
 
-def _make_notional_calculator(spec: Any) -> Callable[[BaseOrder], float]:
+def _make_contract_value_calculator(
+    spec: InstrumentSpec, now_provider: Callable[[], datetime.datetime]
+) -> Callable[[BaseOrder], float]:
     """
-    以 `InstrumentSpec` 的計價單位換算委託金額（股票：價 × 股數）
+    - Description:
+        委託（或部位）的契約價值：價格 × 數量 × 計價單位（`InstrumentSpec.get_unit_size()`）
 
-    **單位是市場特性**：台股一張是 1000 股。引擎本體算不出來也不該知道，
-    故在這裡包成一個函式注入進去。期貨不走這裡：資金占用與曝險是兩個不同的數，
-    見 `_make_futures_margin_calculator()`、`_make_futures_contract_value_calculator()`。
+        **兩個市場同一個公式，單位由 spec 決定**：台股一張 1000 股、期貨一口乘契約乘數
+        （由注入 spec 的解析器查，與部位管理層同一個來源，股期也查得到）。
+        股票的資金占用與曝險都是它；期貨只有曝險（名目槓桿）用它，資金占用另算保證金，
+        見 `_make_futures_margin_calculator()`。
+    - Parameters:
+        - spec: InstrumentSpec
+            商品規格
+        - now_provider: Callable[[], datetime.datetime]
+            取得目前時間；計價單位以今天為準（股期的契約單位會隨除權息調整）
+    - Return:
+        - Callable[[BaseOrder], float]
+            委託或部位 → 契約價值
     """
 
     def calculate(order: BaseOrder) -> float:
-        return float(order.price) * float(spec.to_units(order.volume))
+        unit: int = spec.get_unit_size(spec.resolve_product(order), now_provider())
+        return float(order.price) * float(order.volume) * float(unit)
 
     return calculate
 
 
 def _make_futures_margin_calculator(
-    manager: FuturesPositionManager, now_provider: Callable[[], datetime.datetime]
+    manager: FuturesPositionManager,
+    spec: InstrumentSpec,
+    now_provider: Callable[[], datetime.datetime],
 ) -> Callable[[BaseOrder], float]:
     """
     - Description:
@@ -1217,7 +1239,9 @@ def _make_futures_margin_calculator(
         委託才查表；查不到時拋 `ValueError`，開倉單在那之前已被保證金檢查擋下。
     - Parameters:
         - manager: FuturesPositionManager
-            部位管理層（保證金表與乘數來源與記帳同一份）
+            部位管理層（保證金表與記帳同一份）
+        - spec: InstrumentSpec
+            商品規格；契約乘數由它提供，與契約價值同一個來源
         - now_provider: Callable[[], datetime.datetime]
             取得目前時間；保證金與乘數都以今天為準
     - Return:
@@ -1231,39 +1255,13 @@ def _make_futures_margin_calculator(
             return recorded
 
         today: datetime.date = now_provider().date()
-        product: str = order.product
-        multiplier: int = manager.get_multiplier(product, today)
+        product: Optional[str] = spec.resolve_product(order)
+        multiplier: int = spec.get_unit_size(product, today)
         return float(
             manager.calculate_margin(
                 order.price, order.volume, multiplier, product=product, date=today
             )
         )
-
-    return calculate
-
-
-def _make_futures_contract_value_calculator(
-    manager: FuturesPositionManager, now_provider: Callable[[], datetime.datetime]
-) -> Callable[[BaseOrder], float]:
-    """
-    - Description:
-        期貨的曝險：契約價值（點數 × 契約乘數 × 口數）
-
-        名目槓桿上限（`FuturesRiskConfig.max_leverage`）以它計。乘數走部位管理層的
-        解析器（登錄表優先、沒登錄查券商合約），股期也算得出來，且與記帳同一個來源。
-    - Parameters:
-        - manager: FuturesPositionManager
-            部位管理層
-        - now_provider: Callable[[], datetime.datetime]
-            取得目前時間；乘數以今天為準
-    - Return:
-        - Callable[[BaseOrder], float]
-            委託或部位 → 契約價值
-    """
-
-    def calculate(order: BaseOrder) -> float:
-        multiplier: int = manager.get_multiplier(order.product, now_provider().date())
-        return float(order.price) * float(multiplier) * float(order.volume)
 
     return calculate
 

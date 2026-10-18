@@ -51,7 +51,7 @@ import `core.backtest.models`／`datafeed`／`report`／`simulator`，搬出去�
 | 維持率追繳 | `SettlementModel` | `BuyingPowerModel` / `MarginCallModel` |
 | 持有成本計提 | `SettlementModel` | `MarginInterestRateModel` |
 | 當沖強制回補／轉融券留倉 | `SettlementModel` | `SettlementModel` |
-| 權益快照的單位換算 | `InstrumentSpec.to_units()` | `SymbolProperties.ContractMultiplier` |
+| 權益快照的單位換算 | `InstrumentSpec.get_unit_size()` | `SymbolProperties.ContractMultiplier` |
 | 權益快照的**部位計價** | `SettlementModel.mark_position()` | `BuyingPowerModel` |
 
 **關鍵洞察**：台股的「當沖日終強制回補」與期貨的「每日結算」，在架構上是**同一個掛點的兩種實作**——「一根 bar 收盤後，市場規則強制對部位做的事」。看出這點之後，切兩個引擎就沒有理由了。

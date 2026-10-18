@@ -580,7 +580,9 @@ def test_accrued_borrow_fee_is_deducted_from_daily_equity() -> None:
     account.positions.append(position)
     settlement: TwStockSettlementModel = make_settlement(account)
 
-    units: int = settlement.instrument.to_units(position.volume)
+    units: int = position.volume * settlement.instrument.get_unit_size(
+        position.symbol, position.date
+    )
     before: float = settlement.mark_position(position, 100.0, units)
 
     position.accrued_borrow_fee = 500.0

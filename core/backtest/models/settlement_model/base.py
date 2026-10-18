@@ -326,7 +326,7 @@ class BaseSettlementModel(ABC):
             - mark_price: float
                 盯市價（由 `get_mark_price()` 取得）
             - units: int
-                `InstrumentSpec.to_units()` 換算後的計價單位數量
+                計價單位數量（數量 × `InstrumentSpec.get_unit_size()`）
         - Return:
             - float
                 該部位計入當日權益的金額

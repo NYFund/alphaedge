@@ -25,14 +25,16 @@ def test_spec_is_instrument_spec(spec: TwStockSpec) -> None:
     assert isinstance(spec, InstrumentSpec)
 
 
-@pytest.mark.parametrize(
-    "lots, expected", [(0, 0), (1, 1000), (5, 5000), (100, 100000)]
-)
-def test_to_units(spec: TwStockSpec, lots: int, expected: int) -> None:
-    """張 → 股：1 張 ＝ 1000 股"""
+@pytest.mark.parametrize("symbol", ["2330", "0050", None])
+def test_unit_size_is_one_thousand_shares(
+    spec: TwStockSpec, symbol: Optional[str]
+) -> None:
+    """一張 ＝ 1000 股，與個股、日期無關"""
 
-    assert spec.to_units(lots) == expected
-    assert spec.to_units(lots) == StockUtils.convert_lot_to_share(lots)
+    unit: int = spec.get_unit_size(symbol, datetime.date(2026, 10, 20))
+
+    assert unit == 1000
+    assert unit == StockUtils.convert_lot_to_share(1)
 
 
 @pytest.mark.parametrize(

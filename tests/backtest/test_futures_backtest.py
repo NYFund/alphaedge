@@ -1,5 +1,5 @@
 import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pytest
@@ -400,14 +400,44 @@ def test_index_futures_still_use_the_constant_table(make_order) -> None:
 
 
 # === InstrumentSpec ===
-def test_to_units_returns_lots_not_contract_units() -> None:
+@pytest.mark.parametrize(("product", "expected"), [("TX", 200), ("MTX", 50)])
+def test_unit_size_is_the_contract_multiplier(product: str, expected: int) -> None:
     """
-    `to_units()` 回傳口數，**不乘契約乘數**
+    期貨一口的計價單位是契約乘數，逐商品不同
 
-    乘數逐契約不同（TX 200、MTX 50），而本方法拿不到商品；乘數一律取自部位自身。
+    曾經只收數量、拿不到商品，只能原樣回傳口數，實盤的委託金額因此少乘了乘數。
     """
 
-    assert TwFuturesSpec().to_units(3) == 3
+    assert (
+        TwFuturesSpec().get_unit_size(product, datetime.date(2026, 10, 20)) == expected
+    )
+
+
+def test_unit_size_uses_the_injected_resolver() -> None:
+    """
+    注入解析器時以它為準（股期的契約單位不在常數表、且隨除權息調整）
+
+    與部位管理層同一個解析器，兩邊算出的乘數才不會分岔。
+    """
+
+    calls: List[Tuple[str, datetime.date]] = []
+
+    def resolver(product: str, date: datetime.date) -> int:
+        calls.append((product, date))
+        return 2000
+
+    spec: TwFuturesSpec = TwFuturesSpec(multiplier_resolver=resolver)
+    when: datetime.datetime = datetime.datetime(2026, 10, 20, 13, 30)
+
+    assert spec.get_unit_size("CDF", when) == 2000
+    assert calls == [("CDF", datetime.date(2026, 10, 20))]
+
+
+def test_unit_size_without_a_product_is_an_error() -> None:
+    """沒有商品代碼查不到乘數：中斷，不猜一個值"""
+
+    with pytest.raises(KeyError):
+        TwFuturesSpec().get_unit_size(None, datetime.date(2026, 10, 20))
 
 
 def test_round_to_tick_respects_direction() -> None:

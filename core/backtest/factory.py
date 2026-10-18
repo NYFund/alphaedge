@@ -256,7 +256,10 @@ def build_tw_futures_backtester(
     cost_model: TwFuturesCostModel = futures_models.cost_model
     position_manager: FuturesPositionManager = futures_models.position_manager
 
-    instrument: TwFuturesSpec = TwFuturesSpec()
+    # 乘數解析器與部位管理層同一個：計價單位與記帳算出的乘數不會分岔
+    instrument: TwFuturesSpec = TwFuturesSpec(
+        multiplier_resolver=data_feed.resolve_multiplier
+    )
 
     # **型別標註擋不住這件事，這道檢查才擋得住**：期貨的滑價以跳動點表達，
     # 策略若寫成基底的 `FillConfig(slippage_bps_buy=...)` 照樣跑得完，只是

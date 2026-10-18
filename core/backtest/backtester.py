@@ -372,7 +372,9 @@ class Backtester:
 
         for position in self.account.get_positions():
             price: float = self.settlement.get_mark_price(position, quote_map)
-            units: int = self.instrument.to_units(position.volume)
+            units: int = position.volume * self.instrument.get_unit_size(
+                self.instrument.resolve_product(position), date
+            )
 
             # 「這個部位替權益貢獻多少」是**資金佔用方式**的問題，屬結算模型：
             # 股票買進是把現金換成標的（部位價值＝市值），期貨開倉只凍結保證金

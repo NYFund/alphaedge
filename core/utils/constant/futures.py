@@ -222,8 +222,8 @@ class FuturesProduct(str, Enum):
 # 乘數猜錯不會有任何徵兆，只會讓整條 PnL 靜默偏掉，那比中斷難查得多。
 #
 # 為什麼放程式碼而不是 DB：回測的 `InstrumentSpec` 是純規則層、不持有連線
-# （見 `TwStockSpec.to_units()` 也是寫死的「張 → 股 ×1000」）。乘數改成查 DB，
-# 就得讓 `InstrumentSpec` 抱著連線，會破壞它的定位。
+# （`TwStockSpec.get_unit_size()` 也是寫死的「一張 1000 股」）。查 DB 的股期契約單位由
+# 資料源的 `resolve_multiplier()` 負責、注入 spec，`InstrumentSpec` 本身不抱連線。
 #
 # ⚠️ **未登錄清單與原因**（登錄前必須先查證，不可憑印象填）：
 # - XIF 非金電：TAIFEX 現行規格為每點 10 元，但**曾為 100 元**。乘數變更過的商品
