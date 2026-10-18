@@ -52,7 +52,9 @@ class LiveHook(str, Enum):
 
 class ExecutionTiming(str, Enum):
     """
-    實盤的執行時點；**回測忽略此欄位**，仍用策略給的價成交
+    實盤與 TICK 回測的執行時點；**日 K 回測忽略此欄位**，仍用策略給的價成交
+
+    TICK 回測以同一份段落時窗決定委託在哪一段送出，與實盤同契約。
 
     台股的兩個日頻段落：
     - `AT_OPEN`：08:30~09:00 盤前委託，進開盤集合競價。
@@ -81,8 +83,9 @@ class ExecutionStyle(str, Enum):
     （集合競價掛漲跌停、連續交易時段加減幅度的限價或期貨的範圍市價），
     與券商列舉 `StockPriceType.MKT` 分屬不同型別，兩者不可混用。
 
-    **回測忽略此欄位**：回測一律以策略給的價成交，正是 `MARKET` 的假設；
-    `LIMIT` 在回測因此偏樂觀，差異由盤後 parity 量化。
+    **日 K 回測忽略此欄位**：日 K 一律以策略給的價成交，正是 `MARKET` 的假設；
+    `LIMIT` 在日 K 回測因此偏樂觀，差異由盤後 parity 量化。
+    TICK 回測則照此欄位成交：`MARKET` 以 IOC 吃下一筆對手價，`LIMIT` 以 ROD 掛著、價格穿越才成交。
     """
 
     MARKET = EXECUTION_STYLE_MARKET
