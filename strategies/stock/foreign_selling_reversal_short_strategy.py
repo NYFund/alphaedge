@@ -6,6 +6,7 @@ from loguru import logger
 from core.datafeed.base import BaseDataFeed
 from core.market.tw.market_calendar import MarketCalendar
 from core.models import StockAccount, StockPosition, StockQuote
+from core.models.cost_config import ShortConstraint
 from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
@@ -20,6 +21,8 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
     免融券保證金、免借券費、證交稅走當沖減半。`direction=SHORT` ＋
     `allow_day_trade=True` 會讓引擎自動採用 `ShortMethod.DAY_TRADE` 與
     `OPEN_THEN_CLOSE`，同一根 bar 內的開平倉才成立。
+    **沖賣只在當日現股當沖名單內、且未暫停先賣後買的標的**：依交易所每日公告的名單檢核
+    （`ShortConstraint.check_day_trade_list`），名單外的訊號被拒並計入 `rejected_not_day_tradable`。
 
     賣出（開倉）條件（全部以 T−1 已收盤的資料判斷，T 日開盤放空）：
     - T−1 外資賣超 ≥ 門檻（預設 1,000 張）
@@ -46,14 +49,14 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
 
       原因很直接：本策略放空的是**剛噴出的高波動股**，它們盤中常再衝高一段才拉回收低。
       停損砍掉的正是那些最終會獲利的部位，而這支策略的 edge 本來就集中在少數交易
-      （最賺的 50 筆貢獻 72.1% 總損益），截斷右尾等於自斷手腳。
+      （最賺的 50 筆貢獻約七成總損益），截斷右尾等於自斷手腳。
       上表的模擬還**假設停損恰好成交在觸發價**（不計滑價與檔位），
       也就是說真實的停損表現只會**比這更差**。
     - **風險上界不靠停損，靠三件事**：① 當日必平，損失以當日開盤到收盤的區間為限
       （實測當日進出的最差單筆 −12.36%）；② 漲跌停限制了單日的不利幅度；
       ③ 唯一會過夜的「鎖漲停轉融券留倉」路徑由 `max_holding_days`／`max_no_quote_days`
       封住（見 `__init__`）——**尾部風險確實在那條路上**：留倉部位的最差單筆是
-      **−21.65%**，幾乎是當日進出最差值的兩倍。
+      **−21.32%**，幾乎是當日進出最差值的兩倍。
     - **引擎的維持率追繳幫不上忙**：融券維持率 130% 要價格逆行約 **+46%** 才觸發
       （擔保價款 ＋ 90% 保證金 ÷ 市值），對本策略是極遙遠的後衛，實測 0 次。
 
@@ -61,20 +64,22 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
 
     ## 解讀回測結果時務必一併看的五件事
 
-    2020~2025 的實測（1,096 筆、勝率 59.8%、ROI 381.1%、CAGR 30.0%、MDD −11.4%、
-    Sharpe 1.93）**不是穩健結論**，以下五項全部是**樂觀方向**的偏差或穩定性疑慮：
+    2020~2025 的實測（987 筆、勝率 59.9%、ROI 414.5%、CAGR 31.4%、MDD −11.3%、
+    Sharpe 2.07；已開啟現股當沖名單檢核）**不是穩健結論**，以下五項全部是**樂觀方向**的偏差或穩定性疑慮：
 
     1. **當日部位的回補價以收盤價近似尾盤**。`Scale.DAY` 沒有真正的尾盤價，落差未量化；
-       要量化必須升級 `Scale.TICK`（tick 資料在 DolphinDB，非 `tw_stock.db`）。
+       要量化必須升級 `Scale.TICK`（tick 資料在 TimescaleDB，非 `tw_stock.db`）。
        被迫留倉的部位則以開盤價回補（見 `get_cover_price()`）。
-    2. **未排除處置股／非當沖標的**。兩者都沒有資料源（見 `REJECT_BELOW_REFERENCE_OPEN`
-       的說明），實際可交易的機會數會少於 1,096 筆。
+    2. **未排除處置股**。沒有資料源，實際可交易的機會數會少於回測筆數。
+       （非當沖標的已依交易所現股當沖名單排除，見 `__init__` 的 `short_constraint`。）
     3. **部位大小以「全額買進」為基準等權切分**。現股當沖沖賣其實不需保證金，
        此假設讓名目曝險上界等於本金；改用實際資金佔用的話，同樣訊號可開的部位會大得多，
-       **報酬與回撤會一起放大**。
+       **報酬與回撤會一起放大**。等權切分也讓結果對「同一天有幾個訊號」很敏感：
+       開啟名單檢核擋掉 123 筆（合計 +14.7 萬、現實做不到的獲利），但同日訊號變少後其餘部位分到更多資金，
+       總損益反而增加約 28 萬——那是資金集中，不是名單檢核帶來的 edge。
     4. **開倉價為開盤價**。訊號在 T−1 收盤後即可算出，時序上沒有未來函數，
        但實務上要在開盤集合競價全部成交仍有執行風險。
-    5. **報酬高度集中在少數交易**：最賺的 50 筆（4.6%）貢獻 **72.1%** 的總損益，
+    5. **報酬高度集中在少數交易**：最賺的 50 筆（5.1%）貢獻 **71.7%** 的總損益，
        最賺的 5 筆就佔 10.6%。這個 edge 是厚尾驅動而非廣泛穩定，
        **換區間或微調門檻可能大幅改變結論**。
     """
@@ -98,8 +103,8 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
     # **本策略的沖賣是現股當沖的先賣後買，那是現股賣出，交易所不以平盤下規則限制它**；
     # 平盤下限制只管融券與借券賣出（引擎側對應 `ShortConstraint.check_short_sale_list`）。
     # 真正約束本策略的是「當日是否在現股當沖名單內、是否暫停先賣後買」，
-    # 由 `ShortConstraint.check_day_trade_list` 依交易所每日名單檢核（預設關閉，
-    # 開啟時回測起日不得早於 2014-06-30 先賣後買開放日，且名單須已入庫）。
+    # 由 `ShortConstraint.check_day_trade_list` 依交易所每日名單檢核（本策略已開啟，見 `__init__`；
+    # 回測起日不得早於 2014-06-30 先賣後買開放日，且名單須已入庫）。
     #
     # 設為 True 是把平盤下規則套在現股沖賣上，屬**保守上界**而非真實規則，
     # 用來看「若限制真的存在，訊號還剩多少」。
@@ -128,10 +133,16 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
         # short_method 不設：當沖時由 factory 強制為 DAY_TRADE
         # cost_config 不設：設了會讓 factory 跳過 is_day_trade 的推導，當沖稅率減半失效
         #
-        # short_constraint 不設：沖賣是先賣後買、不吃券源
-        # （`TwStockFillModel.check_short_borrowable()` 本來就會跳過
-        # `ShortMethod.DAY_TRADE`，開啟也不會誤拒本策略的開倉單），
-        # 檢核對本策略沒有實際約束力，只會多一組每日融券餘額查詢。
+        # 交易所名單檢核：**現股當沖名單是真正約束本策略的規則**——名單外或暫停先賣後買的標的
+        # 現實中沖賣不了，不檢核的話回測會算進做不到的獲利。平盤下名單只管融券與借券賣出、
+        # 對現股沖賣沒有作用（撮合端對 `DAY_TRADE` 只看當沖名單），一併開啟是與其他放空策略一致。
+        # 開啟後回測起跑前會檢查名單涵蓋（起日不得早於 2014-06-30 先賣後買開放日），缺日即拒絕執行。
+        #
+        # 券源檢核維持關閉：沖賣是先賣後買、不吃券源（`TwStockFillModel.check_short_borrowable()`
+        # 本來就會跳過 `ShortMethod.DAY_TRADE`），開啟只會多一組每日融券餘額查詢。
+        self.short_constraint: ShortConstraint = ShortConstraint(
+            check_day_trade_list=True, check_short_sale_list=True
+        )
         self.direction: TradeDirection = TradeDirection.SHORT
         self.allow_day_trade: bool = True  # 現股當沖沖賣
 
@@ -464,7 +475,7 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
             挑一個當天最好的價格出場。用收盤價等於給了這個部位一個它沒有的權利：
             **有權等待盤中跌回來**。
 
-            實測這個差別很大：**整體 ROI 由 450.6% 降為 381.1%**、MDD 由 −9.99%
+            實測這個差別很大（名單檢核開啟前的樣本）：**整體 ROI 由 450.6% 降為 381.1%**、MDD 由 −9.99%
             惡化為 −11.43%，只因為 10 筆留倉部位換了回補價。
             最極端的是 2349（2024-07-09）——進場 18.10、開盤跳空 21.90、收盤跌回 18.05，
             用收盤價幾乎打平出場，用開盤價則虧 119,350。那個「跌回來」在現實中不屬於你。
