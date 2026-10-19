@@ -30,6 +30,7 @@
 1. 除非使用者明確要求英文，**回覆、文件與註解一律使用繁體中文**。
 2. 專有名詞保留英文原詞，不要硬翻（`tick`、`bid/ask`、`ROI`、`OHLC`、`Long/Short`、`Ridge`、`API`、`SQLite`）。
 3. 中文標點使用全形（`，`、`：`、`（）`）；同一檔案內標點與空白風格保持一致。
+   程式寫法（tuple、dict、函式呼叫、數學區間）維持半形並以反引號包住，例如 `` `(日期, 收盤價)` ``、`` `get_url(...)` ``；外部來源的原文（站方欄位名、官方章節編號）照錄不改。
 4. 既有程式碼的風格優先於個人偏好：新增或修改時沿用現有寫法，不要引入新風格。
 
 ---
@@ -47,7 +48,7 @@
 
 ### 2.2 Docstring
 
-1. 每個 class 與 public method 都要有 docstring；單行說明用一行三引號寫完：
+1. 每個 class 與 public method 都要有 docstring（`__init__` 視需要；`tests/` 的測試函式、fake 類別覆寫介面的方法與測試內的巢狀函式不強制）；單行說明用一行三引號寫完：
 
    ```python
    def get(self, date: datetime.date) -> pd.DataFrame:
@@ -63,7 +64,7 @@
    """
    - Description:
        開倉策略（Long & Short），需要包含買賣的標的、價位和數量
-   - Parameter:
+   - Parameters:
        - stock_quotes: List[StockQuote]
            目標股票的報價資訊
    - Return:
@@ -72,7 +73,7 @@
    """
    ```
 
-   不要改用 Google style 的 `Args:` / `Returns:`（專案中僅零星出現，屬例外）。
+   欄位名固定為 `- Description:`、`- Parameters:`（複數）、`- Return:`、`- Raise:`（後兩者單數），用不到的欄位省略；不要改用 Google style 的 `Args:` / `Returns:` / `Raises:`。
 4. 策略類別的 class docstring 格式見 [`core/strategies/CLAUDE.md`](core/strategies/CLAUDE.md)（在該目錄下工作時自動載入）。
 
 ### 2.3 模組層級說明字串
@@ -82,7 +83,7 @@
    ```python
    from core.api.base import BaseDataAPI
 
-   """Stock Price API: query SQLite price table"""
+   """Stock Price API：經 `StockPriceDAO` 查詢 `price` 表（台股日 K）"""
 
 
    class StockPriceAPI(BaseDataAPI):
@@ -134,7 +135,8 @@
    # -----------------------------------------------------------------------
    ```
 
-2. `__init__` 內部屬性分組，可沿用既有的三引號分組標記（`""" === Strategy Setting === """`）或一般 `#` 註解；新程式碼建議用 `#`，不要再新增三引號分組。
+2. 區塊標題可用中文或英文（既有的 `# === Signal Execution ===` 等英文標題保留）。
+3. `__init__` 內部屬性分組，可沿用既有的三引號分組標記（`""" === Strategy Setting === """`）或一般 `#` 註解；新程式碼建議用 `#`，不要再新增三引號分組。
 
 ### 2.9 日誌
 
@@ -164,7 +166,7 @@
 | 文件 | `Phase7-1` 是什麼 |
 |------|-------------------|
 | `實盤下單架構規劃.md` | 模擬環境端到端演練（連續 5 個交易日）|
-| `重構後全專案健檢.md` | 拆 `core/live/trader.py`（2,086 行）|
+| `重構後全專案健檢.md` | 拆 `core/live/trader.py`（純重構）|
 
 兩者毫無關係，一個要等交易日、一個是純重構。只講「Phase7-1」讀的人無從分辨。
 
