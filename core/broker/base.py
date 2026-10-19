@@ -13,7 +13,7 @@ from core.models import (
     OrderTicket,
 )
 
-"""BaseBroker: 市場與券商皆無關的下單、回報、帳務與行情介面"""
+"""BaseBroker：市場與券商皆無關的下單、回報、帳務與行情介面"""
 
 # 定義券商連線層的降級事件類別：閘道只回報發生了什麼，要不要降級由引擎決定
 # 連線中斷：可能幾秒後就重連成功，是否降級要看重連與對帳的結果
@@ -78,6 +78,8 @@ class BaseBroker(ABC):
     """
 
     def __init__(self) -> None:
+        """建立回報與降級事件佇列；連線由子類別的 `connect()` 負責"""
+
         # 回報佇列：委託狀態與成交事件都往這裡塞，由引擎主執行緒消化。
         #
         # **刻意只有一個 queue**：Python 的 `queue.Queue` 不能像 socket 一樣
@@ -121,16 +123,19 @@ class BaseBroker(ABC):
     @abstractmethod
     def connect(self) -> None:
         """建立連線（含登入與憑證啟用）；失敗時拋出，不回傳成功與否的旗標"""
+
         pass
 
     @abstractmethod
     def close(self) -> None:
         """關閉連線；必須可重複呼叫（引擎以 `try/finally` 保證它一定會跑到）"""
+
         pass
 
     @abstractmethod
     def is_connected(self) -> bool:
         """目前是否連線中"""
+
         pass
 
     # === 下單 ===
@@ -150,6 +155,7 @@ class BaseBroker(ABC):
             - OrderTicket
                 補上券商編號與最新狀態的同一張委託
         """
+
         pass
 
     @abstractmethod
@@ -164,6 +170,7 @@ class BaseBroker(ABC):
             - OrderTicket
                 更新後的委託
         """
+
         pass
 
     @abstractmethod
@@ -180,6 +187,7 @@ class BaseBroker(ABC):
             - OrderTicket
                 更新後的委託
         """
+
         pass
 
     @abstractmethod
@@ -195,17 +203,20 @@ class BaseBroker(ABC):
             - List[OrderTicket]
                 券商端當日的委託清單
         """
+
         pass
 
     # === 帳務 ===
     @abstractmethod
     def get_positions(self) -> List[BrokerPositionSnapshot]:
         """取得券商端的部位；這是對帳的右手邊"""
+
         pass
 
     @abstractmethod
     def get_account(self) -> BrokerAccountSnapshot:
         """取得**股票**帳戶的帳務快照（餘額、權益、損益）"""
+
         pass
 
     @abstractmethod
@@ -220,6 +231,7 @@ class BaseBroker(ABC):
         `maintenance_margin`）：送單前的保證金檢查讀 `available_margin`，
         只回骨架型別的話那道檢查會一律看到 0 而擋掉每一張期貨開倉單。
         """
+
         pass
 
     # === 行情 ===
@@ -238,16 +250,19 @@ class BaseBroker(ABC):
             - List[BaseQuote]
                 報價清單
         """
+
         pass
 
     @abstractmethod
     def subscribe_quotes(self, symbols: List[str]) -> None:
         """訂閱即時行情；超過券商單一連線的訂閱上限時要在訂閱前拋出"""
+
         pass
 
     @abstractmethod
     def unsubscribe_quotes(self, symbols: List[str]) -> None:
         """取消訂閱"""
+
         pass
 
     # === 共用工具 ===

@@ -32,7 +32,7 @@ from .constant import (
 
 
 class StockUtils:
-    """Stock Related Tools"""
+    """台股的張股換算、成本、損益與檔位工具"""
 
     @staticmethod
     def convert_share_to_lot(shares: int) -> int:
@@ -40,10 +40,10 @@ class StockUtils:
         - Description: 將股數轉換為張數
         - Parameters:
             - shares: int
-                股數 (Unit: Shares)
+                股數（Unit: Shares）
         - Return:
             - lots: int
-                張數 (Unit: Lots)
+                張數（Unit: Lots）
         """
 
         return int(shares / Units.LOT)
@@ -54,10 +54,10 @@ class StockUtils:
         - Description: 將張數轉換為股數
         - Parameters:
             - lots: int
-                張數 (Unit: Lots)
+                張數（Unit: Lots）
         - Return:
             - shares: int
-                股數 (Unit: Shares)
+                股數（Unit: Shares）
         """
 
         return int(lots * Units.LOT)
@@ -186,7 +186,7 @@ class StockUtils:
                 證券代號
         - Return:
             - List[Tuple[float, float]]
-                (價格上限, 檔位) 的清單
+                `(價格上限, 檔位)` 的清單
         """
 
         if symbol and symbol.startswith("00"):

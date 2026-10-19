@@ -170,7 +170,7 @@ def test_returns_a_copy_and_leaves_the_original_untouched() -> None:
     assert order.price == 100.0  # 傳入的那一張沒被動過
 
 
-# === S9：超出當日區間只警告不夾回 ===
+# === 超出當日區間只警告不夾回 ===
 def test_forced_cover_price_out_of_range_is_counted_not_clamped() -> None:
     """
     滑價把強制回補價推出當日區間時只計數，不夾回
@@ -331,7 +331,7 @@ ONE_TICK: FuturesFillConfig = FuturesFillConfig(
 )
 
 
-# === S3：期貨強制出場 ===
+# === 期貨強制出場 ===
 def test_margin_call_close_pays_the_slippage() -> None:
     """
     保證金追繳的強制平倉含滑價，方向對持有者不利
@@ -435,7 +435,7 @@ def test_futures_forced_exit_without_fill_model_is_unchanged() -> None:
     assert account.trade_records[-1].sell_price == 20000.0
 
 
-# === S4：換月轉倉兩腿 ===
+# === 換月轉倉兩腿 ===
 def test_roll_pays_the_slippage_on_both_legs() -> None:
     """
     轉倉的平舊月與開新月**兩腿都吃滑價**（D2）

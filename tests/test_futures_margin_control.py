@@ -244,9 +244,7 @@ def test_floating_profit_supports_more_lots() -> None:
 
 # === 維持保證金與追繳 ===
 def test_maintenance_margin_is_a_separate_published_value() -> None:
-    """
-    維持保證金與原始保證金是**兩個獨立的公告值**，不可用比率互推
-    """
+    """維持保證金與原始保證金是**兩個獨立的公告值**，不可用比率互推"""
 
     api: StubMarginAPI = StubMarginAPI(
         initial={datetime.date(2020, 1, 1): 338000},

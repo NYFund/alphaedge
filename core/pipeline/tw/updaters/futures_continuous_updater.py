@@ -21,7 +21,7 @@ from core.pipeline.utils.exceptions import DataLoadError, UnbuildableSeriesError
 from core.utils import FuturesAdjustMethod, FuturesRollRule, FuturesSession
 
 """
-Futures Continuous Updater: 由各月份契約建出可跨月的連續序列
+期貨連續月 updater：由各月份契約建出可跨月的連續序列
 
 **這一組沒有 crawler 也沒有 cleaner**：來源是同一個 DB 裡的
 `futures_price_daily`，不是網路。四層架構在此退化為「建表 ＋ 入庫」兩層，
@@ -73,7 +73,7 @@ class FuturesContinuousUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)

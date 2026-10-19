@@ -246,9 +246,7 @@ def _load_log(dao: StockTickDAO) -> List[Tuple]:
 
 
 def test_replace_day_is_idempotent_and_values_round_trip(dao: StockTickDAO) -> None:
-    """
-    同一天寫兩次列數不變；microsecond 時間、2 位小數價格、bid 為 0 都原樣存回
-    """
+    """同一天寫兩次列數不變；microsecond 時間、2 位小數價格、bid 為 0 都原樣存回"""
 
     day: pd.DataFrame = _day_frame(
         [

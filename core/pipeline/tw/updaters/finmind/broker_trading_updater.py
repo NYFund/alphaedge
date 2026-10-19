@@ -22,7 +22,7 @@ from core.utils.instrument import StockUtils
 券商分點統計表的更新流程（FinMind 四個資料集中唯一需要逐組合迴圈的）
 
 與另外三個資料集的差別：其餘三張表都是「一次查完整個市場」，本表是
-**(券商 × 股票) 的雙層迴圈**，動輒數十萬個組合，因此需要
+**（券商 × 股票）的雙層迴圈**，動輒數十萬個組合，因此需要
 1. 逐組合的 resume（靠 `BrokerTradingMetadataStore`）、
 2. 配額用盡時的等待與重試、
 3. 定期 commit 與定期回寫 metadata（中斷時不整段重來）。
@@ -52,7 +52,7 @@ class BrokerTradingUpdater:
     ) -> None:
         """
         - Description:
-            批量更新券商分點統計表：(券商 × 股票) 雙層迴圈
+            批量更新券商分點統計表：（券商 × 股票）雙層迴圈
 
             每個組合各自依 metadata 決定起算日，而不是整張表共用一個日期。
         - Parameters:
@@ -124,7 +124,7 @@ class BrokerTradingUpdater:
             f"(each combination will use its own start date based on metadata)"
         )
 
-        # Loop: 券商 -> 股票
+        # 迴圈：券商 → 股票
         processed_count: int = 0
         quota_exhausted: bool = False
         # 帳號等級不足：每個組合都會失敗，遇到第一次就中止整批
@@ -383,9 +383,9 @@ class BrokerTradingUpdater:
         - Return:
             - UpdateStatus
                 更新狀態
-                - UpdateStatus.SUCCESS: 成功更新（含 API 有回傳但本批皆為重複、saved_count==0 之情況）
-                - UpdateStatus.NO_DATA: 沒有資料（API 返回空結果）
-                - UpdateStatus.ERROR: 發生錯誤
+                - UpdateStatus.SUCCESS：成功更新（含 API 有回傳但本批皆為重複、saved_count==0 之情況）
+                - UpdateStatus.NO_DATA：沒有資料（API 返回空結果）
+                - UpdateStatus.ERROR：發生錯誤
         """
 
         logger.info(
@@ -395,7 +395,7 @@ class BrokerTradingUpdater:
         )
 
         try:
-            # Step 1: Crawl（配額用盡時由上層迴圈捕捉並等待重置）
+            # Step 1：Crawl（配額用盡時由上層迴圈捕捉並等待重置）
             result: CrawlResult = (
                 self.context.crawler.crawl_broker_trading_daily_report(
                     stock_id=stock_id,
@@ -412,7 +412,7 @@ class BrokerTradingUpdater:
                 )
                 return UpdateStatus.NO_DATA
 
-            # Step 2: Clean
+            # Step 2：清洗
             # 不寫 CSV：清洗結果下一步就直接入庫，resume 依據是 DB ＋ metadata 而非 CSV；
             # 代價是 `broker_trading/` 下的 CSV 不再反映本流程新抓的資料
             cleaned_df: Optional[pd.DataFrame] = (
@@ -424,7 +424,7 @@ class BrokerTradingUpdater:
                 logger.warning("Cleaned broker trading daily report data is empty")
                 return UpdateStatus.NO_DATA
 
-            # Step 3: Load（`do_commit=False` 時由批次迴圈定期 commit）
+            # Step 3：Load（`do_commit=False` 時由批次迴圈定期 commit）
             saved_count: int = self.context.loader.load_broker_trading_daily_report(
                 df=cleaned_df, commit=do_commit
             )

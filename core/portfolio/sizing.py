@@ -42,7 +42,7 @@ class BasePositionSizer(ABC):
             - account: BaseAccount
                 虛擬帳戶，提供餘額與現有持倉檔數
             - candidates: List[Tuple[BaseQuote, float]]
-                (報價, 該策略選定的參考價)
+                `(報價, 該策略選定的參考價)`
             - max_holdings: Optional[int]
                 最大持倉檔數；`None` 表示不限制。
 
@@ -53,7 +53,7 @@ class BasePositionSizer(ABC):
                 對方擋得住的情況
         - Return:
             - List[Tuple[BaseQuote, float, int]]
-                (報價, 參考價, 張數)；張數不足 1 張者不回傳
+                `(報價, 參考價, 張數)`；張數不足 1 張者不回傳
         """
 
         pass

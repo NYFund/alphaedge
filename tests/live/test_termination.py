@@ -25,6 +25,8 @@ from .test_live_trader_day import (
 
 
 def send_sigterm() -> None:
+    """對自己送 SIGTERM，模擬外部停止行程"""
+
     os.kill(os.getpid(), signal.SIGTERM)
 
 
@@ -70,6 +72,8 @@ def test_sigterm_mid_segment_cancels_open_orders_and_records_the_end() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出 2330、2317 兩張買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__(
                 "Alpha", [make_order(symbol="2330"), make_order(symbol="2317")]

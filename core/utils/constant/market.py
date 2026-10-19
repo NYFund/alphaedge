@@ -50,7 +50,7 @@ PRICE_LIMIT_RATIO_LEGACY: float = 0.07  # 放寬前的幅度
 PRICE_LIMIT_WIDENED_DATE: datetime.date = datetime.date(2015, 6, 1)  # 放寬生效日
 
 
-# 台股價格檔位：(價格上限, 檔位)，價格小於上限時適用該檔位
+# 台股價格檔位：`(價格上限, 檔位)`，價格小於上限時適用該檔位
 PRICE_TICK_TABLE: List[Tuple[float, float]] = [
     (10.0, 0.01),
     (50.0, 0.05),

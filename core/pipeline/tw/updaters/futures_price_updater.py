@@ -35,7 +35,7 @@ from core.utils import FuturesSession, TimeUtils
 1. **逐商品迴圈，不是逐日期迴圈；續跑是逐商品的差集**
    各商品的上市日不同（TX 1998-07、MTX 2001、TMF 2022 之後），且會陸續加入
    `FUTURES_TARGET_PRODUCTS`。若以「全表最新日」當續跑起點，新加的商品會被
-   既有商品的進度擋住而整段歷史都補不到，故候選日期一律以 (product) 為單位算
+   既有商品的進度擋住而整段歷史都補不到，故候選日期一律以商品（product）為單位算
    「平日 ＋ 補行交易日 − 該商品已有 − 已確認無資料 ＋ 上次沒跑完」（`DatePlanner`），
    中間被擋掉的日子下次仍會被請求；進度檔逐商品一份。
 
@@ -48,7 +48,7 @@ from core.utils import FuturesSession, TimeUtils
 """
 
 
-# 週六的 weekday() 值；用於判斷是否為週末
+# 週六的 `weekday()` 值；用於判斷是否為週末
 SATURDAY: int = 5
 
 # 一個「商品 × 日」固定送出日盤＋夜盤兩次請求（夜盤查無資料也照打），
@@ -84,7 +84,7 @@ class ProductDateSource:
 
 
 class FuturesPriceUpdater(BaseDataUpdater):
-    """Futures Price Updater"""
+    """期貨行情 updater"""
 
     LOG_FILE_NAME: str = "update_futures_price.log"
 
@@ -143,7 +143,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
 

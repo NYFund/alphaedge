@@ -49,6 +49,6 @@ def load_stock_info(conn: DBConnection, finmind_dir: Path) -> None:
 
 
 def load_stock_info_with_warrant(conn: DBConnection, finmind_dir: Path) -> None:
-    """載入台股總覽(含權證)資料到資料庫"""
+    """載入台股總覽（含權證）資料到資料庫"""
 
     load_reference_table(conn, finmind_dir, STOCK_INFO_WITH_WARRANT_SPEC)

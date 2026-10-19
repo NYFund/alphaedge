@@ -13,11 +13,11 @@ from core.dao.connection import DBConnection
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.utils.constant import Units
 
-"""Stock Price API: query price table through StockPriceDAO"""
+"""Stock Price API：經 `StockPriceDAO` 查詢 `price` 表（台股日 K）"""
 
 
 class StockPriceAPI(BaseDataAPI):
-    """Stock Price API"""
+    """台股日 K 價格 API（原始價與後復權還原價）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = StockPriceDAO

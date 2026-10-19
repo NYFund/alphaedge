@@ -6,7 +6,7 @@ from core.utils import PositionType
 from .position import StockPosition
 from .record import StockTradeRecord
 
-"""StockAccount: manages account-level state in backtesting (positions, balance, realized PnL, costs)"""
+"""StockAccount：台股帳戶（庫存、餘額、已實現損益與交易成本，含信用交易的空頭曝險）"""
 
 
 class StockAccount(BaseAccount):

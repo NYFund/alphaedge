@@ -1,3 +1,5 @@
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 """
 Pipeline 專用例外類別
 
@@ -21,8 +23,6 @@ Pipeline 專用例外類別
         # 其他 FinMind 錯誤
         ...
 """
-
-from typing import Any, Dict, List, Optional, Set, Tuple
 
 # -----------------------------------------------------------------------------
 # Pipeline 通用基底
@@ -69,7 +69,7 @@ class FinMindError(PipelineError):
         while err is not None and id(err) not in seen:
             seen.add(id(err))
 
-            # FinMind 配額用盡時常回傳無 "data" 的 JSON，套件內 pd.DataFrame(response["data"]) 會拋 KeyError
+            # FinMind 配額用盡時常回傳無 `"data"` 的 JSON，套件內 `pd.DataFrame(response["data"])` 會拋 KeyError
             if (
                 isinstance(err, KeyError)
                 and len(err.args) > 0
@@ -77,7 +77,7 @@ class FinMindError(PipelineError):
             ):
                 return True
 
-            # HTTP 402 (FinMind 配額用盡／用量超出上限)
+            # HTTP 402（FinMind 配額用盡／用量超出上限）
             if hasattr(err, "response") and getattr(err, "response", None) is not None:
                 status = getattr(err.response, "status_code", None)
                 if status == 402:

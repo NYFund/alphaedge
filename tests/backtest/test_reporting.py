@@ -206,7 +206,7 @@ def test_direction_summary_and_event_report(
     assert event_df[event_df["Event"] == "limit_up_cover_failed"]["Count"].iloc[0] == 1
 
 
-# === 分割調整：已由 corporate_action 經還原係數統一處理（還原價 S3）===
+# === 分割調整：已由 corporate_action 經還原係數統一處理===
 def test_adjustment_factor_covers_splits_and_reductions(
     dao_factory: Callable[..., BaseDAO],
 ) -> None:

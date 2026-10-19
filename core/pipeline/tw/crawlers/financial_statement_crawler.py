@@ -63,7 +63,7 @@ class FinancialStatementCrawler(BaseDataCrawler):
         self.setup()
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
 
         self.fs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -254,7 +254,7 @@ class FinancialStatementCrawler(BaseDataCrawler):
         與其他三張報表不同，本端點是「逐檔查詢」（一次一檔股票），
         故三態缺一不可，逐檔回補的呼叫端靠它決定要不要重試：
         - FAILED:  暫時性失敗（站方過載或連線失敗），本檔尚未確認有無資料，應留待重跑
-        - NO_DATA: 查無資料（例如 ETF、當季未申報），重跑也不會有結果
+        - NO_DATA：查無資料（例如 ETF、當季未申報），重跑也不會有結果
         - OK:      正常取得，`tables` 為該頁的所有表格
         """
 

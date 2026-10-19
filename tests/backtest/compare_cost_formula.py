@@ -225,6 +225,8 @@ def report(df: pd.DataFrame) -> None:
 
 
 def main() -> None:
+    """跑完整組參數比對、印出摘要並輸出明細 CSV"""
+
     df: pd.DataFrame = sweep()
     report(df)
 

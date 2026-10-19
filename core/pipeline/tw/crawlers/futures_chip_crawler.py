@@ -74,7 +74,8 @@ class FuturesChipCrawler(BaseDataCrawler):
         super().__init__()
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     def crawl(self, date: datetime.date) -> CrawlResult:

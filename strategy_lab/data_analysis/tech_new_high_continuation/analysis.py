@@ -1,3 +1,16 @@
+from __future__ import annotations
+
+import datetime as dt
+from pathlib import Path
+from typing import Iterable, Sequence, Tuple
+
+import pandas as pd
+from loguru import logger
+
+from core.api.tw.finmind_api import FinMindAPI
+from core.api.tw.stock_price_api import StockPriceAPI
+from core.utils.instrument import StockUtils
+
 """
 研究問題：台股科技業股票在「最高價創歷史新高」後，
          N 日收盤價高於創高日收盤價的機率為何？
@@ -14,19 +27,6 @@
 - output/tech_new_high_prob_by_stock.csv     逐檔機率 + 事件數
 - output/tech_new_high_prob_summary.csv      整體 + 分產業機率
 """
-
-from __future__ import annotations
-
-import datetime as dt
-from pathlib import Path
-from typing import Iterable, Sequence, Tuple
-
-import pandas as pd
-from loguru import logger
-
-from core.api.tw.finmind_api import FinMindAPI
-from core.api.tw.stock_price_api import StockPriceAPI
-from core.utils.instrument import StockUtils
 
 _ANALYSIS_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = _ANALYSIS_DIR / "output"

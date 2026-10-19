@@ -17,7 +17,7 @@ load_dotenv()
 
 
 def get_static_resolved_path(base_dir: Path, dir_name: str) -> Path:
-    """Resolve dir_name under base_dir to an absolute path"""
+    """取得 `base_dir` 底下 `dir_name` 的絕對路徑"""
 
     return (base_dir / dir_name).resolve()
 
@@ -30,7 +30,7 @@ def get_env_path(env_key: str, default: Path) -> Path:
 
 
 # -----------------------------------------------------------------------
-# Root Directory Path
+# === Root Directory Path ===
 # -----------------------------------------------------------------------
 #
 # 兩個錨點的分工是本專案的目錄分界：

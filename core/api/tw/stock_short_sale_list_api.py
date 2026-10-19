@@ -10,7 +10,7 @@ from core.dao.base import BaseDAO
 from core.dao.tw.stock_short_sale_list_dao import StockShortSaleListDAO
 from core.models import ShortSaleListSnapshot
 
-"""Stock short sale list API: 平盤下得融（借）券賣出名單（`short_sale_list` 表）"""
+"""Stock Short Sale List API：平盤下得融（借）券賣出名單（`short_sale_list` 表）"""
 
 
 class StockShortSaleListAPI(BaseDataAPI):

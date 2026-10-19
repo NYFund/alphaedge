@@ -24,7 +24,7 @@ from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoad
 
 
 class CorporateActionUpdater(YearlyRangeTwoMarketUpdater):
-    """Corporate Action Updater"""
+    """公司行動（減資、面額變更）updater"""
 
     SOURCE: str = "corporate_action"
     SOURCE_LABEL: str = "Corporate Action"

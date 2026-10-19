@@ -27,9 +27,13 @@ class _Recorder:
         self.sleeps: List[float] = []
 
     def make(self, name: str) -> type:
+        """建一個名為 `name` 的 updater 替身類別，呼叫結果記到本 recorder"""
+
         recorder: _Recorder = self
 
         class Fake:
+            """依 recorder 設定決定這次更新要不要失敗的 updater 替身"""
+
             def update(self, **kwargs) -> None:
                 recorder.calls.append(name)
                 if "start_date" in kwargs:

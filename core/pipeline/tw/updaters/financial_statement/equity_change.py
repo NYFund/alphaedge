@@ -141,7 +141,7 @@ class EquityChangeMixin:
     ) -> None:
         """
         - Description:
-            Update Equity Changes
+            更新權益變動表
 
             與其他三張報表不同，MOPS 的權益變動表端點是**逐檔查詢**，一個年季要打
             兩千多次請求、整段回補以十萬次計（數十小時）。因此這條流程的前提是
@@ -204,7 +204,7 @@ class EquityChangeMixin:
                         )
                     )
 
-                    # Step 1: 逐檔 resume——只補這個年季還沒入庫的公司
+                    # Step 1：逐檔 resume——只補這個年季還沒入庫的公司
                     pending_stock_ids: List[str] = self.plan_pending_stock_ids(
                         target_stock_ids=season_targets,
                         progress=progress,
@@ -216,7 +216,7 @@ class EquityChangeMixin:
                         logger.info(f"* {year}Q{season} already complete, skipped")
                         continue
 
-                    # Step 2: 有待補的公司才與磁碟對帳（整季已完成時掃全季 CSV 純屬浪費）
+                    # Step 2：有待補的公司才與磁碟對帳（整季已完成時掃全季 CSV 純屬浪費）
                     if self.reconcile_season_csv_files(year, season, failed_files):
                         pending_stock_ids = self.plan_pending_stock_ids(
                             target_stock_ids=season_targets,
@@ -250,7 +250,7 @@ class EquityChangeMixin:
                         )
                     )
 
-                    # Step 3: 逐檔爬取並分批入庫
+                    # Step 3：逐檔爬取並分批入庫
                     stats: EquityChangeSeasonStats = self.update_equity_changes_season(
                         year=year,
                         season=season,
@@ -343,7 +343,7 @@ class EquityChangeMixin:
 
         try:
             for stock_id in stock_ids:
-                # Step 1: Crawl
+                # Step 1：爬取
                 result: CrawlResult = self.crawl_equity_changes_one(
                     year, season, stock_id, stats
                 )
@@ -354,11 +354,11 @@ class EquityChangeMixin:
                     progress.record_incomplete(year, season, stock_id)
                 elif result.is_no_data:
                     # 該年季這檔沒有報表（多半是當時尚未上市）；本迴圈**不做任何早退**，
-                    # 見 update_equity_changes() 對「未申報年季」的處理
+                    # 見 `update_equity_changes()` 對「未申報年季」的處理
                     stats.no_data += 1
                     progress.record_no_data(year, season, stock_id, settled=settled)
                 else:
-                    # Step 2: Clean
+                    # Step 2：清洗
                     cleaned_df: Optional[pd.DataFrame] = self.clean_equity_changes_one(
                         result.tables, year, season, stock_id
                     )
@@ -378,7 +378,7 @@ class EquityChangeMixin:
 
                 stats.requested += 1
 
-                # Step 3: Load（分批入庫，中斷最多只損失最後一批）
+                # Step 3：Load（分批入庫，中斷最多只損失最後一批）
                 if len(cleaned_df_list) >= self.EQUITY_CHANGE_LOAD_BATCH_SIZE:
                     self.load_equity_changes_batch(
                         cleaned_df_list, year, season, failed_files
@@ -391,7 +391,7 @@ class EquityChangeMixin:
                 ):
                     progress.save()
 
-                # Step 4: 收工檢查放在節流之前——被中止時沒有理由再睡一輪
+                # Step 4：收工檢查放在節流之前——被中止時沒有理由再睡一輪
                 if stop.requested:
                     stats.stopped = True
                     break

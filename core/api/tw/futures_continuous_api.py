@@ -12,7 +12,7 @@ from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.utils.constant import FuturesAdjustMethod, FuturesRollRule, FuturesSession
 
 """
-Futures Continuous API: query futures_continuous table through FuturesContinuousDAO
+Futures Continuous API：經 `FuturesContinuousDAO` 查詢 `futures_continuous` 連續合約表
 
 **與 `FuturesPriceAPI` 的分工**：那一份回傳當日**所有**掛牌合約（一天多列），
 本份回傳**一天一列**的連續序列——換月已經接好、價差已經調整掉。
@@ -27,7 +27,7 @@ Futures Continuous API: query futures_continuous table through FuturesContinuous
 
 
 class FuturesContinuousAPI(BaseDataAPI):
-    """Futures Continuous API"""
+    """期貨連續合約 API（一天一列、換月已接好）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = FuturesContinuousDAO

@@ -94,6 +94,8 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def build(strategies: List[BaseStrategy], dao: LiveTradeDAO) -> LiveTrader:
+    """以替身券商組出實盤交易器"""
+
     return build_live_trader(
         strategies,
         broker=FakeBroker(),

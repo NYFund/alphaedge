@@ -65,7 +65,7 @@ API_LOG_RETENTION_DAYS: int = 7
 DEFAULT_RETRY_WAIT_MINUTES: int = 60
 
 """
-資料更新任務主程式 (update_db)
+資料更新任務主程式（update_db）
 
 本模組為資料更新系統的入口，依 --target 參數選擇要更新的資料類型，
 可單一更新或一次指定多個目標。預設為 no_tick（更新所有資料但不含 tick）。
@@ -89,7 +89,7 @@ Target 對照表
 
   選項                        說明
   -------------------------  -----------------------------------------------
-  tick                        逐筆成交 (Shioaji ticks)
+  tick                        逐筆成交（Shioaji ticks）
   chip                        三大法人籌碼
   margin                      信用交易（融資融券餘額）
   short_sale_list             平盤下得融（借）券賣出名單（2013-09-23 起；回測擋單用）
@@ -105,8 +105,8 @@ Target 對照表
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
   futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
                               **不含在 all／no_tick 內**，只在此處點名才會跑）
-  fs                          財報 (Financial Statement)
-  mrr                         月營收報表 (Monthly Revenue Report)
+  fs                          財報（Financial Statement）
+  mrr                         月營收報表（Monthly Revenue Report）
   finmind                     全部 FinMind（台股總覽 + 證券商 + 券商分點；
                               **不含在 all／no_tick 內**：帳號等級拿不到券商分點，只在點名時跑）
   stock_info                  FinMind 台股總覽（不含權證）
@@ -155,6 +155,8 @@ def run_date_range(method_name: str) -> Callable[[Any, Optional[Dict[str, Any]]]
     """以 `start_date`／`end_date` 呼叫 updater 的某個方法"""
 
     def run(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+        """把 `time_config` 的日期區間轉給 updater 的指定方法"""
+
         getattr(updater, method_name)(
             start_date=time_config["start_date"], end_date=time_config["end_date"]
         )
@@ -206,6 +208,8 @@ def run_finmind_subset(
     """FinMind 的單一資料集"""
 
     def run(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+        """只更新綁定的資料集；日期區間沿用 updater 的預設值，不讀 `time_config`"""
+
         updater.update(data_type=data_type)
 
     return run

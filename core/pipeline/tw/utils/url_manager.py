@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 
 class URLManager:
-    """URL Manager"""
+    """台股資料來源的 URL 總表"""
 
     # fmt: off
     # 本表刻意以空行分隔每一條 URL，維護時一眼就看得出邊界；
@@ -29,7 +29,7 @@ class URLManager:
         # 上市公司籌碼 URL
         "TWSE_CHIP_URL": "https://www.twse.com.tw/rwd/zh/fund/T86?date={date}&selectType=ALLBUT0999&response=html",
 
-        # 上櫃公司籌碼 URL (URL1: 2007/4/21 ~ 2014/11/30, URL2: 2014/12/1 ~ present)
+        # 上櫃公司籌碼 URL（URL1：2007/4/21～2014/11/30，URL2：2014/12/1 至今）
         "TPEX_CHIP_URL_1": "https://www.tpex.org.tw/www/zh-tw/insti/dailyTradeHis?type=Daily&cate=EW&date={date}&id=&response=html",
         "TPEX_CHIP_URL_2": "https://www.tpex.org.tw/www/zh-tw/insti/dailyTrade?type=Daily&sect=EW&date={date}&id=&response=html",
 
@@ -116,7 +116,7 @@ class URLManager:
 
         # 台期貨每日交易行情（TAIFEX）
         # **與本表其他 URL 不同：這是 POST 端點，參數走 form data 而非 query string**，
-        # 因此沒有 {} 佔位符——對它呼叫 get_url(..., date=...) 既不會報錯也不會生效
+        # 因此沒有 {} 佔位符——對它呼叫 `get_url(..., date=...)` 既不會報錯也不會生效
         # 必要的 form 欄位：
         #   queryDate: 查詢日（yyyy/MM/dd）
         #   commodity_id / commodity_idt: 商品代碼，兩者須帶相同值
@@ -154,7 +154,7 @@ class URLManager:
         # 現行保證金一覽表（股價指數類），純 GET，直接回 **CSV**（不是 HTML）
         # 編碼為 **big5**（`FileEncoding.BIG5`），非 UTF-8
         # 第一行是 `更新日期:YYYY/MM/DD`，那是這組保證金的生效日，資料表頭在第二行
-        # 欄位：商品別, 結算保證金, 維持保證金, 原始保證金（皆為**每口固定金額**，單位：元）
+        # 欄位：商品別、結算保證金、維持保證金、原始保證金（皆為**每口固定金額**，單位：元）
         # **回測要用的是「原始保證金」**（委託人繳交），不是結算保證金（交易所向結算會員收）
         # 金額與契約乘數等比例：TX(200) 701,000 → MTX(50) 175,250 → TMF(10) 35,050
         # 本表**只有現值、沒有歷史**，歷史須走下方的公告查詢

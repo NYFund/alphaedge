@@ -71,7 +71,7 @@ class TwStockDataFeed(BaseDataFeed):
             None  # 官方休市日（缺日診斷用）
         )
 
-        # {融券最後回補日: {stock_id}}；由除權息行事曆推導，整場回測只建一次
+        # `{融券最後回補日: {stock_id}}`；由除權息行事曆推導，整場回測只建一次
         self.force_cover_map: Optional[Dict[datetime.date, Set[str]]] = None
         # 停券期間（回補日 ~ 除權息交易日前一日）的逐日標的表，同樣只建一次
         self.short_suspended_map: Optional[Dict[datetime.date, Set[str]]] = None

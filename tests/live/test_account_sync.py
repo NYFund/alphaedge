@@ -40,16 +40,22 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 @pytest.fixture
 def ledger(dao: LiveTradeDAO) -> PositionAttributionLedger:
+    """部位歸屬帳本，時間固定在 `NOW`"""
+
     return PositionAttributionLedger(dao, now_provider=lambda: NOW)
 
 
 def make_manager(capital: float = 10_000_000.0) -> StockPositionManager:
+    """建立指定資金的台股部位管理器"""
+
     account: StockAccount = StockAccount(init_capital=capital)
     return StockPositionManager(account)
 
 
 @pytest.fixture
 def managers() -> Dict[str, StockPositionManager]:
+    """兩支策略（A、B）各自的部位管理器"""
+
     return {"A": make_manager(), "B": make_manager()}
 
 
@@ -59,6 +65,8 @@ def sync(
     ledger: PositionAttributionLedger,
     dao: LiveTradeDAO,
 ) -> AccountSynchronizer:
+    """接上兩支策略部位管理器的帳戶同步器"""
+
     return AccountSynchronizer(managers, ledger, dao, now_provider=lambda: NOW)
 
 
@@ -69,6 +77,8 @@ def make_fill(
     price: float = 1000.0,
     seqno: str = "000001",
 ) -> ExecutionReport:
+    """組一筆成交回報，預設為 2330 買進 2 張"""
+
     return ExecutionReport(
         broker_seqno=seqno,
         broker_trade_id=f"T{seqno}",
@@ -244,6 +254,8 @@ def test_rebuild_and_apply_fill_are_separate_functions() -> None:
 # === 對帳 ===
 @pytest.fixture
 def degradations() -> List[str]:
+    """收集對帳觸發的降級原因"""
+
     return []
 
 
@@ -254,6 +266,8 @@ def reconciler(
     dao: LiveTradeDAO,
     degradations: List[str],
 ) -> Reconciler:
+    """降級時把原因記進 `degradations` 的對帳器"""
+
     return Reconciler(
         ledger,
         managers,

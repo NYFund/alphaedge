@@ -163,7 +163,7 @@ class DataUtils:
         if remove_whitespace:
             word: str = re.sub(
                 r"\s+", "", word
-            )  # 清除所有空白（包含 tab, 換行, 全形空白）
+            )  # 清除所有空白（包含 tab、換行、全形空白）
 
         for old, new in replace_pairs.items():
             word: str = word.replace(old, new)
@@ -259,6 +259,8 @@ class DataUtils:
         items_list: List[str] = [str(item) for item in items]
 
         def normalize(s: str) -> str:
+            """依 `case_insensitive` 決定是否轉小寫，讓比對兩側一致"""
+
             return s.lower() if case_insensitive else s
 
         norm_starts: List[str] = [normalize(s) for s in startswith_list]
@@ -292,9 +294,9 @@ class DataUtils:
                 用來判斷重複的欄位名稱列表（Ex: ["year", "month", "stock_id"]）
             - keep: Union[str, bool]
                 要保留哪一筆重複資料：
-                    - "first": 保留第一筆（預設）
-                    - "last": 保留最後一筆
-                    - False: 移除所有重複的列
+                    - "first"：保留第一筆（預設）
+                    - "last"：保留最後一筆
+                    - False：移除所有重複的列
         - Return:
             - Optional[pd.DataFrame]
                 去除重複值並重設 index 的資料表；輸入為 None 或空表時回傳 None

@@ -55,6 +55,8 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def ledger(dao: LiveTradeDAO) -> PositionAttributionLedger:
+    """部位歸屬帳本，時間固定在 `NOW`"""
+
     return PositionAttributionLedger(dao, now_provider=lambda: NOW)
 
 
@@ -67,6 +69,8 @@ def add_lot(
     direction: str = "LONG",
     open_date: datetime.date = datetime.date(2026, 9, 1),
 ) -> None:
+    """直接在紀錄庫寫入一筆未平倉 lot"""
+
     dao.open_lot(
         {
             "lot_id": lot_id,
@@ -88,6 +92,8 @@ def broker_position(
     direction: PositionType = PositionType.LONG,
     avg_price: float = 1010.0,
 ) -> BrokerPositionSnapshot:
+    """組一筆券商端的持倉快照"""
+
     return BrokerPositionSnapshot(
         symbol=symbol, direction=direction, volume=volume, avg_price=avg_price
     )
@@ -102,6 +108,8 @@ def lot_state(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
 
 
 def resync_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
+    """已寫入的重新同步事件（策略，嚴重度，標的）"""
+
     return dao.conn.execute(
         "SELECT strategy_name, severity, symbol FROM live_risk_event "
         "WHERE category = ? ORDER BY event_id",
@@ -251,6 +259,8 @@ def test_apply_rolls_back_everything_on_failure(
 
 # === 引擎：只列計畫、確認寫入、拒絕 ===
 def build(dao: LiveTradeDAO, broker: FakeBroker) -> LiveTrader:
+    """以指定券商替身組出實盤交易器"""
+
     return build_live_trader(
         [LiveStockStrategy()],
         broker=broker,

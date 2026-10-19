@@ -20,7 +20,8 @@ class OrderSignal(Protocol):
     order_price: float
 
     @property
-    def symbol(self) -> str: ...
+    def symbol(self) -> str:
+        """訊號標的的商品代號"""
 
 
 class BaseOrder:

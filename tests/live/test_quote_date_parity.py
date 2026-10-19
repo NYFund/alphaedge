@@ -258,6 +258,8 @@ def build_pre_open_futures_quotes() -> List[Any]:
 
     # 與 shioaji 1.7 的 `FuturesInfo` 同形狀：沒有 `symbol`，只有月份字母碼
     class Contract:
+        """帶參考價與漲跌停價的期貨合約替身"""
+
         code: str = "TXFJ6"
         reference: float = 24000.0
         limit_up: float = 26400.0
@@ -265,10 +267,14 @@ def build_pre_open_futures_quotes() -> List[Any]:
         multiplier: int = 200
 
     class Resolver:
+        """把月份字母碼轉成專案契約代號的轉換器"""
+
         def to_futures_symbol(self, code: str) -> str:
             return {"TXFJ6": "TX202610"}.get(code, code)
 
     class Broker:
+        """只帶合約轉換器的券商替身"""
+
         resolver: Resolver = Resolver()
 
     feed: TwFuturesLiveDataFeed = TwFuturesLiveDataFeed(

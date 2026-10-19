@@ -21,7 +21,7 @@ class BrokerInfoUpdater:
 
         logger.info("* Start Updating Broker Info...")
 
-        # Step 1: Crawl
+        # Step 1：爬取
         try:
             result: CrawlResult = self.context.crawler.crawl_broker_info()
         except FinMindQuotaExhaustedError as e:
@@ -34,7 +34,7 @@ class BrokerInfoUpdater:
             logger.warning(f"No broker info data to update（{result.reason}）")
             return
 
-        # Step 2: Clean
+        # Step 2：清洗
         cleaned_df: Optional[pd.DataFrame] = self.context.cleaner.clean_broker_info(
             result.data
         )
@@ -42,7 +42,7 @@ class BrokerInfoUpdater:
             logger.warning("Cleaned broker info data is empty")
             return
 
-        # Step 3: Load
+        # Step 3：入庫
         self.context.ensure_loader_connected()
         self.context.loader.load_broker_info()
         self.context.loader.commit()

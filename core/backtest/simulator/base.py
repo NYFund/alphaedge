@@ -21,7 +21,7 @@ from core.utils import BarExecutionSequence, TickUniverse
 """
 回測 simulator 的共同介面與共用的開平倉執行
 
-日 K（`BarSimulator`）與逐筆（日後的 `TickSimulator`）差在「一天怎麼切、委託什麼時候成交」，
+日 K（`BarSimulator`）與逐筆（`TickSimulator`）差在「一天怎麼切、委託什麼時候成交」，
 訊號送進來之後的處理（方向驗證 → 補值 → 排序 → 成交 → 入帳）兩邊相同，所以放在基底。
 """
 

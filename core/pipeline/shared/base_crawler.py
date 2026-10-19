@@ -116,7 +116,7 @@ class CrawlResult:
 
 
 class BaseDataCrawler(ABC):
-    """Base Class of Data Crawler"""
+    """資料 crawler 的抽象基底"""
 
     # 站方「查無資料」的明確訊息。**只有這些字串出現才算休市**——
     # TWSE 與 TPEX 兩邊的措辭都收在這裡，五支 crawler 共用同一份判準。
@@ -146,18 +146,21 @@ class BaseDataCrawler(ABC):
 
     def __init__(self) -> None:
         """建立 crawler；連線與參數一律由子類的 `setup()` 負責"""
+
         pass
 
     @abstractmethod
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     @abstractmethod
     # 回傳型別由各 crawler 自行決定（`CrawlResult`、`DataFrame`、`None`……），
     # 故此處標 `Any`：來源的形狀差異太大，硬統一只會讓每個子類都得回傳包裝物件
     def crawl(self, *args, **kwargs) -> Any:
-        """Crawl Data"""
+        """爬取資料"""
+
         pass
 
     @classmethod

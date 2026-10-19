@@ -28,6 +28,8 @@ def make_order(
     position_type: PositionType = PositionType.LONG,
     date: Optional[datetime.date] = None,
 ) -> StockOrder:
+    """建一筆預設為多單買進的委託"""
+
     return StockOrder(
         stock_id=symbol,
         action=action,

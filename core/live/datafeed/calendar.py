@@ -51,6 +51,7 @@ class TradingCalendarSource(ABC):
             - Optional[bool]
                 True／False 為明確答案；**`None` 代表本來源判斷不出來**
         """
+
         pass
 
 

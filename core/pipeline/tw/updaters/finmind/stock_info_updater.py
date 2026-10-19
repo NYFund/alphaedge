@@ -21,7 +21,7 @@ class StockInfoUpdater:
 
         logger.info("* Start Updating Taiwan Stock Info...")
 
-        # Step 1: Crawl
+        # Step 1：爬取
         try:
             result: CrawlResult = self.context.crawler.crawl_stock_info()
         except FinMindQuotaExhaustedError as e:
@@ -34,7 +34,7 @@ class StockInfoUpdater:
             logger.warning(f"No stock info data to update（{result.reason}）")
             return
 
-        # Step 2: Clean
+        # Step 2：清洗
         cleaned_df: Optional[pd.DataFrame] = self.context.cleaner.clean_stock_info(
             result.data
         )
@@ -42,7 +42,7 @@ class StockInfoUpdater:
             logger.warning("Cleaned stock info data is empty")
             return
 
-        # Step 3: Load
+        # Step 3：入庫
         self.context.ensure_loader_connected()
         self.context.loader.load_stock_info()
         self.context.loader.commit()
@@ -50,11 +50,11 @@ class StockInfoUpdater:
         logger.info("✅ Taiwan Stock Info updated successfully")
 
     def update_stock_info_with_warrant(self) -> None:
-        """更新台股總覽(含權證)資料"""
+        """更新台股總覽（含權證）資料"""
 
         logger.info("* Start Updating Taiwan Stock Info With Warrant...")
 
-        # Step 1: Crawl
+        # Step 1：爬取
         try:
             result: CrawlResult = self.context.crawler.crawl_stock_info_with_warrant()
         except FinMindQuotaExhaustedError as e:
@@ -69,7 +69,7 @@ class StockInfoUpdater:
             )
             return
 
-        # Step 2: Clean
+        # Step 2：清洗
         cleaned_df: Optional[pd.DataFrame] = (
             self.context.cleaner.clean_stock_info_with_warrant(result.data)
         )
@@ -77,7 +77,7 @@ class StockInfoUpdater:
             logger.warning("Cleaned stock info with warrant data is empty")
             return
 
-        # Step 3: Load
+        # Step 3：入庫
         self.context.ensure_loader_connected()
         self.context.loader.load_stock_info_with_warrant()
         self.context.loader.commit()

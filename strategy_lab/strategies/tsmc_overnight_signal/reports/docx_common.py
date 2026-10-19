@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""
-TSMC 隔夜訊號 Word 報告的共用零件（樣式、表格、圖片、CSV 讀取）。
-
-**單獨成檔是為了解掉 `generate_docx` ↔ `docx_append` 的循環 import**：
-原本兩檔互相 import，靠 import 順序與函式內延遲 import 僥倖
-不炸。更實際的代價是它讓 `scripts/check_layer_deps.py` 的結束碼永遠是 1，
-於是這支專門為了守住分層而寫的腳本沒辦法接進 CI 或 pre-commit 當閘門——
-**唯一的違規把整個閘門鎖住了**。
-
-拆法：兩檔共用的零件（`_OUTPUT` 路徑、`sanitize_for_word()`、樣式設定、
-表格／圖片產生器、`_format_metrics_rows()`、`_method_usage_rows()`）搬到本檔，
-`generate_docx` 只留 `build_report()` 與 CLI，`docx_append` 只留敘事內容，
-兩者都單向 import 本檔。
-"""
 
 from __future__ import annotations
 
@@ -31,6 +17,22 @@ try:
 except ImportError as e:
     raise SystemExit("請先安裝 python-docx：uv sync --extra lab\n" + str(e)) from e
 
+
+"""
+TSMC 隔夜訊號 Word 報告的共用零件（樣式、表格、圖片、CSV 讀取）。
+
+**單獨成檔是為了解掉 `generate_docx` ↔ `docx_append` 的循環 import**：
+原本兩檔互相 import，靠 import 順序與函式內延遲 import 僥倖
+不炸。更實際的代價是它讓 `scripts/check_layer_deps.py` 的結束碼永遠是 1，
+於是這支專門為了守住分層而寫的腳本沒辦法接進 CI 或 pre-commit 當閘門——
+**唯一的違規把整個閘門鎖住了**。
+
+拆法：兩檔共用的零件（`_OUTPUT` 路徑、`sanitize_for_word()`、樣式設定、
+表格／圖片產生器、`_format_metrics_rows()`、`_method_usage_rows()`）搬到本檔，
+`generate_docx` 只留 `build_report()` 與 CLI，`docx_append` 只留敘事內容，
+兩者都單向 import 本檔。
+"""
+
 # reports/ 與 output/ 是 tsmc_overnight_signal/ 底下的同層姊妹資料夾
 _STRATEGY_DIR = Path(__file__).resolve().parent.parent
 _OUTPUT = _STRATEGY_DIR / "output"
@@ -48,13 +50,14 @@ def sanitize_for_word(text: str) -> str:
     - 替換全形／特殊連字與異常空白
     - 將 Unicode 減號統一為 ASCII 連字號（表格與數字可讀性）
     """
+
     if not text:
         return text
     s = text.replace("$", "")
-    s = s.replace("\u00a0", " ")  # nbsp
+    s = s.replace("\u00a0", " ")  # 不換行空白（nbsp）
     s = s.replace("\u2028", " ")
     s = s.replace("\u2029", " ")
-    s = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", s)  # zero-width
+    s = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", s)  # 零寬字元
     s = s.replace("\u2212", "-").replace("\u2013", "-").replace("\u2014", "-")
     s = s.replace("§", "")
     return s.strip()
@@ -90,7 +93,8 @@ def _ensure_style_eastasia(style, east: str = "Microsoft JhengHei") -> None:
 def _style_set_latin_font(
     style, ascii_font: str, east_asia: Optional[str] = None
 ) -> None:
-    """Set Word rFonts so body text renders with the intended Latin font (and matching eastAsia for Word UI)."""
+    """設定樣式的 Word rFonts，讓內文以指定的西文字型顯示，eastAsia 一併設定以免 Word 介面改用其他字型"""
+
     east = east_asia or ascii_font
     style.font.name = ascii_font
     rpr = style._element.get_or_add_rPr()
@@ -118,9 +122,10 @@ def _apply_run_font(run, ascii_font: str, east_asia: Optional[str] = None) -> No
 
 def _set_doc_styles_english(document: Document) -> None:
     """
-    English report typography: Cambria body (readable academic), Calibri headings (clear hierarchy),
-    justified body text, relaxed vertical rhythm.
+    英文報告排版：內文用 Cambria（學術文件易讀）、標題用 Calibri（層級分明），
+    內文左右對齊並放寬行距
     """
+
     navy = RGBColor(0x14, 0x36, 0x5C)
 
     normal = document.styles["Normal"]
@@ -323,6 +328,8 @@ def _format_metrics_rows(
     meta: Dict[str, str], metrics: Dict[str, str], lang: Lang
 ) -> List[List[str]]:
     def fmt_pct_from_decimal(x: str, scale: float = 100.0) -> str:
+        """小數轉百分比字串；無法轉數字時原樣（清洗後）輸出"""
+
         try:
             v = float(x)
             return f"{v * scale:.2f}%"
@@ -330,6 +337,8 @@ def _format_metrics_rows(
             return sanitize_for_word(x)
 
     def fmt_float(x: str, nd: int = 4) -> str:
+        """浮點數取固定小數位；無法轉數字時原樣（清洗後）輸出"""
+
         try:
             return f"{float(x):.{nd}f}"
         except (ValueError, TypeError):

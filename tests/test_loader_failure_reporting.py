@@ -264,7 +264,7 @@ class _FakeArgs:
         self.retry_wait: int = 0
 
 
-# === S3：每個 loader 的「壞檔 → DataLoadError」 ===
+# === 每個 loader 的「壞檔 → DataLoadError」 ===
 def make_price_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """建立指向暫存 DB 與暫存 downloads 目錄的 price loader"""
 

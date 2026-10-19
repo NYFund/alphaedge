@@ -93,7 +93,7 @@ class CorporateActionCleaner(BaseDataCleaner):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         self.corporate_action_dir.mkdir(parents=True, exist_ok=True)
 

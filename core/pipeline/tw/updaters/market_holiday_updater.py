@@ -26,7 +26,7 @@ Market Holiday Updater：每次重抓「去年、今年、明年」三個年度
 
 
 class MarketHolidayUpdater(BaseDataUpdater):
-    """Market Holiday Updater"""
+    """市場休市日 updater"""
 
     LOG_FILE_NAME: str = "update_market_holiday.log"
 
@@ -46,7 +46,7 @@ class MarketHolidayUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
 

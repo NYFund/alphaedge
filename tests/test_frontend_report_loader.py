@@ -62,17 +62,23 @@ def report() -> BacktestReport:
 
 @pytest.fixture
 def trading_df(report: BacktestReport) -> pd.DataFrame:
+    """fixture 策略的交易明細"""
+
     assert report.csv_path is not None
     return read_trading_report(report.csv_path)
 
 
 @pytest.fixture
 def daily_equity_df(report: BacktestReport) -> pd.DataFrame:
+    """fixture 策略的每日權益"""
+
     return read_daily_equity(report.daily_equity_path)
 
 
 @pytest.fixture
 def direction_summary_df(report: BacktestReport) -> pd.DataFrame:
+    """fixture 策略的多空方向摘要"""
+
     return read_direction_summary(report.direction_summary_path)
 
 

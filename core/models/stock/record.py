@@ -4,7 +4,7 @@ from typing import Optional
 from core.models.base.record import BaseTradeRecord
 from core.utils import PositionType, ShortMethod
 
-"""StockTradeRecord: single stock trade event in backtesting (transaction and performance details)"""
+"""StockTradeRecord：單筆台股交易紀錄（成交、成本與績效，含放空的借券費與股利補償）"""
 
 
 class StockTradeRecord(BaseTradeRecord):

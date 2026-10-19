@@ -1,3 +1,13 @@
+from pathlib import Path
+from typing import Callable, Dict, Optional, Set, Tuple
+
+from loguru import logger
+
+from core.config import (
+    BACKTEST_LOGS_DIR_PATH,
+    PIPELINE_LOGS_DIR_PATH,
+)
+
 """
 Log Manager：以 loguru 統一設定日誌
 
@@ -26,22 +36,12 @@ loguru 的 file sink 只在達到 `rotation` 條件時才重開檔案。目錄�
 已經寫進舊 inode 的內容救不回來，這個參數保證的是「之後不再繼續消失」。
 """
 
-from pathlib import Path
-from typing import Callable, Dict, Optional, Set, Tuple
-
-from loguru import logger
-
-from core.config import (
-    BACKTEST_LOGS_DIR_PATH,
-    PIPELINE_LOGS_DIR_PATH,
-)
-
 
 class LogManager:
-    """Unified Log Manager for the application"""
+    """全專案共用的日誌設定入口"""
 
     _configured_logs: Set[str] = set()
-    """Track which log files have been configured to prevent duplicates"""
+    """已設定過的日誌檔路徑；同一個檔案重複 `logger.add()` 會讓每一行寫兩次"""
 
     # 每個日誌桶收哪些套件發出的記錄（比對 `record["name"]` 的前綴）。
     # pipeline 桶不列前綴，代表「其餘全收」——新增的模組不會憑空消失。
@@ -93,6 +93,8 @@ class LogManager:
         if owned:
 
             def accept_owned(record) -> bool:
+                """只收本桶認領的套件發出的記錄"""
+
                 return str(record["name"]).startswith(owned)
 
             return accept_owned
@@ -102,6 +104,8 @@ class LogManager:
         )
 
         def accept_rest(record) -> bool:
+            """收所有沒被其他桶認領的記錄"""
+
             return not str(record["name"]).startswith(claimed)
 
         return accept_rest
@@ -116,25 +120,24 @@ class LogManager:
         format: str = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
     ) -> None:
         """
-        Set up a logger with specified configuration.
+        - Description:
+            新增一個寫入檔案的日誌 sink；同一個檔案只會設定一次
 
+            用法：`LogManager.setup_logger("update_tick.log")`，
+            或 `LogManager.setup_logger("backtest.log", log_dir=BACKTEST_LOGS_DIR_PATH)`
         - Parameters:
             - log_file: str
-                Name of the log file (e.g., "update_tick.log")
+                日誌檔名（例如 `"update_tick.log"`）
             - log_dir: Optional[Path]
-                Directory to store log files. Defaults to PIPELINE_LOGS_DIR_PATH.
+                日誌目錄；None 時用 `PIPELINE_LOGS_DIR_PATH`。目錄名同時決定日誌桶
             - rotation: str
-                When to rotate log files (e.g., "10 MB", "1 day")
+                輪替條件（例如 `"10 MB"`、`"1 day"`）
             - retention: str
-                How long to keep log files (e.g., "30 days", "10 files")
+                保留期限（例如 `"30 days"`、`"10 files"`）
             - level: str
-                Logging level (e.g., "DEBUG", "INFO", "WARNING", "ERROR")
+                日誌層級（例如 `"DEBUG"`、`"INFO"`、`"WARNING"`、`"ERROR"`）
             - format: str
-                Log message format string
-
-        Example:
-            LogManager.setup_logger("update_tick.log")
-            LogManager.setup_logger("backtest.log", log_dir=BACKTEST_LOGS_DIR_PATH)
+                loguru 的訊息格式字串
         """
 
         # 未指定時落在 pipeline 桶：多數呼叫端是爬取／清洗／入庫。
@@ -142,33 +145,28 @@ class LogManager:
         if log_dir is None:
             log_dir: Path = PIPELINE_LOGS_DIR_PATH
 
-        # Ensure log directory exists
         log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create full log file path
         log_path: Path = log_dir / log_file
 
-        # Check if this log file has already been configured
+        # 同一個檔案重複 add 會讓每一行寫兩次
         log_path_str: str = str(log_path)
         if log_path_str in LogManager._configured_logs:
-            # Logger already configured, skip to avoid duplicates
             return
 
-        # Add logger with specified configuration
         logger.add(
             log_path_str,
             rotation=rotation,
             retention=retention,
             level=level,
             format=format,
-            enqueue=True,  # Thread-safe logging
+            enqueue=True,  # 經佇列寫入，多執行緒／多行程同時寫同一檔才不會交錯
             # 沒有 filter 的話，這個 sink 會收下整個行程的每一行
             filter=LogManager.build_bucket_filter(log_dir),
             # **檔案被外部刪掉時要重建**，否則會繼續寫進已 unlink 的 inode
             watch=True,
         )
 
-        # Track this log file as configured
         LogManager._configured_logs.add(log_path_str)
 
     @staticmethod
@@ -179,20 +177,19 @@ class LogManager:
         level: str = "INFO",
     ) -> None:
         """
-        Set up a logger specifically for backtest results.
+        - Description:
+            為單一策略的回測設定日誌檔（落在 backtest 桶，檔名為策略名）
 
+            用法：`LogManager.setup_backtest_logger("volume_breakout_momentum_strategy")`
         - Parameters:
             - strategy_name: str
-                Name of the strategy (used as log file name)
+                策略名稱，同時作為日誌檔名
             - rotation: str
-                When to rotate log files
+                輪替條件
             - retention: str
-                How long to keep log files
+                保留期限
             - level: str
-                Logging level
-
-        Example:
-            LogManager.setup_backtest_logger("volume_breakout_momentum_strategy")
+                日誌層級
         """
 
         log_file: str = f"{strategy_name}.log"

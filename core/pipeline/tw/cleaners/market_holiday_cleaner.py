@@ -35,7 +35,8 @@ class MarketHolidayCleaner(BaseDataCleaner):
         super().__init__()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
+
         pass
 
     @classmethod

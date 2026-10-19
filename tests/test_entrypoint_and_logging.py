@@ -279,7 +279,7 @@ def test_pipeline_bucket_is_the_complement() -> None:
     assert not accept(make_record("core.api.tw.stock_price_api"))
 
 
-# === S7：日誌檔被外部刪除後要重建（2026-09-03 事故）===
+# === 日誌檔被外部刪除後要重建（2026-09-03 事故）===
 def test_log_file_is_recreated_after_external_deletion(tmp_path: Path) -> None:
     """
     檔案被刪掉之後，下一筆記錄要重新建立它

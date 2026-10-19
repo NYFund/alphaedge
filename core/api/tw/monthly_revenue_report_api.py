@@ -8,11 +8,11 @@ from core.config import TW_STOCK_DB_PATH
 from core.dao.base import BaseDAO
 from core.dao.tw.monthly_revenue_dao import MonthlyRevenueDAO
 
-"""Monthly Revenue Report Data API: query monthly revenue table through MonthlyRevenueDAO"""
+"""Monthly Revenue Report API：經 `MonthlyRevenueDAO` 查詢月營收表"""
 
 
 class MonthlyRevenueReportAPI(BaseDataAPI):
-    """Monthly Revenue Report Data API"""
+    """月營收報表 API"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = MonthlyRevenueDAO

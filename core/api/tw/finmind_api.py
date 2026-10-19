@@ -60,10 +60,10 @@ class FinMindAPI(BaseDataAPI):
         self.broker_trading_dao: BrokerTradingDAO = BrokerTradingDAO(conn=self.conn)
 
     # -----------------------------------------------------------------------
-    # 台股總覽 (taiwan_stock_info)
+    # 台股總覽（`taiwan_stock_info`）
     # -----------------------------------------------------------------------
-    # 欄位: industry_category, stock_id, stock_name, type, date
-    # PK: stock_id
+    # 欄位：industry_category, stock_id, stock_name, type, date
+    # 主鍵：stock_id
     #
 
     def get_stock_info(self, stock_id: str) -> pd.DataFrame:
@@ -77,9 +77,9 @@ class FinMindAPI(BaseDataAPI):
         return self.stock_info_dao.get_all()
 
     # -----------------------------------------------------------------------
-    # 台股總覽含權證 (taiwan_stock_info_with_warrant)
+    # 台股總覽含權證（`taiwan_stock_info_with_warrant`）
     # -----------------------------------------------------------------------
-    # 欄位同上，PK: stock_id
+    # 欄位同上，主鍵：stock_id
     #
 
     def get_stock_info_with_warrant(self, stock_id: str) -> pd.DataFrame:
@@ -93,10 +93,10 @@ class FinMindAPI(BaseDataAPI):
         return self.stock_info_with_warrant_dao.get_all()
 
     # -----------------------------------------------------------------------
-    # 證券商資訊 (taiwan_securities_trader_info)
+    # 證券商資訊（`taiwan_securities_trader_info`）
     # -----------------------------------------------------------------------
-    # 欄位: securities_trader_id, securities_trader, date, address, phone
-    # PK: securities_trader_id
+    # 欄位：securities_trader_id, securities_trader, date, address, phone
+    # 主鍵：securities_trader_id
     #
 
     def get_broker_info(self, securities_trader_id: str) -> pd.DataFrame:
@@ -110,11 +110,11 @@ class FinMindAPI(BaseDataAPI):
         return self.securities_trader_info_dao.get_all()
 
     # -----------------------------------------------------------------------
-    # 當日券商分點統計 (taiwan_stock_trading_daily_report_secid_agg)
+    # 當日券商分點統計（`taiwan_stock_trading_daily_report_secid_agg`）
     # -----------------------------------------------------------------------
-    # 欄位: securities_trader, securities_trader_id, stock_id, date,
+    # 欄位：securities_trader, securities_trader_id, stock_id, date,
     #       buy_volume, sell_volume, buy_price, sell_price
-    # PK: (stock_id, date, securities_trader_id)
+    # 主鍵：(stock_id, date, securities_trader_id)
     #
 
     def get_broker_trading_by_date(self, date: datetime.date) -> pd.DataFrame:

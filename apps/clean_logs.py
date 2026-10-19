@@ -1,4 +1,3 @@
-# Python standard library
 import argparse
 import datetime
 import sys

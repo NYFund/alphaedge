@@ -46,7 +46,7 @@ from core.utils import StockFuturesType, TimeUtils
 
 
 class FuturesStockUniverseUpdater(BaseDataUpdater):
-    """Futures Stock Universe Updater"""
+    """股票期貨標的 updater"""
 
     LOG_FILE_NAME: str = "futures_stock_universe_updater.log"
 
@@ -70,7 +70,7 @@ class FuturesStockUniverseUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
 

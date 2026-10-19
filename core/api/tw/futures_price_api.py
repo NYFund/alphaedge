@@ -12,7 +12,7 @@ from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.utils.constant import FuturesSession
 
 """
-Futures Price API: query futures_price_daily table through FuturesPriceDAO
+Futures Price API：經 `FuturesPriceDAO` 查詢 `futures_price_daily` 每日行情表
 
 **只讀 `tw_futures.db`，不讀 `downloads/` 下的中繼檔**：中繼檔只是 crawler 到
 loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才是唯一的真相來源。
@@ -31,7 +31,7 @@ loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才�
 
 
 class FuturesPriceAPI(BaseDataAPI):
-    """Futures Price API"""
+    """期貨每日行情 API（當日所有到期月的合約）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = FuturesPriceDAO

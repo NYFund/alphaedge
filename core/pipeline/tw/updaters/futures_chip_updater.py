@@ -104,7 +104,7 @@ class FuturesChipUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
         self.crawler = FuturesChipCrawler()
@@ -555,6 +555,8 @@ class FuturesChipUpdater(BaseDataUpdater):
         has_trading_days: Optional[bool] = None
 
         def is_blocked(crawled: CrawlResult) -> bool:
+            """沒拿到資料、但這段期間確實有交易日時才算被擋"""
+
             nonlocal has_trading_days
             if crawled.is_ok:
                 return False

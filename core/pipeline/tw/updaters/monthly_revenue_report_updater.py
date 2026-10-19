@@ -31,7 +31,7 @@ from core.pipeline.tw.loaders.monthly_revenue_report_loader import (
 
 
 class MonthlyRevenueReportUpdater(BaseDataUpdater):
-    """TWSE & TPEX Monthly Revenue Report Updater"""
+    """上市＋上櫃月營收 updater"""
 
     LOG_FILE_NAME: str = "update_monthly_revenue_report.log"
 
@@ -60,13 +60,13 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
             dao=self.dao
         )
 
-        # Data Directory
+        # 清洗後 CSV 的落地目錄
         self.mmr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH
 
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
 
@@ -83,11 +83,11 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         start_month: int,
         end_month: int,
     ) -> None:
-        """Update the Database"""
+        """更新資料庫"""
 
         logger.info("* Start Updating TWSE & TPEX Monthly Revenue Report Data...")
 
-        # Step 1: Crawl
+        # Step 1：爬取
         # 起點原樣交給差集，**不先改成表內最新 +1**：那樣會跳過中間缺的月份，
         # 也會讓申報期內只收到一部分公司的那個月從此不再重問
         year_months: List[Tuple[int, int]] = self.plan_pending_year_months(
@@ -103,7 +103,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
                 result: CrawlResult = self.crawler.crawl(year, month)
                 stats.record(result)
 
-                # Step 2: Clean
+                # Step 2：清洗
                 if not result.is_ok:
                     continue
 
@@ -129,7 +129,7 @@ class MonthlyRevenueReportUpdater(BaseDataUpdater):
         # `requested` 這裡的單位是「年月」而不是「天」
         stats.report("mrr（單位：年月）")
 
-        # Step 3: Load
+        # Step 3：入庫
         self.loader.add_to_db(remove_files=False)
 
         latest: Optional[Tuple[int, int]] = self.dao.get_latest_year_month()

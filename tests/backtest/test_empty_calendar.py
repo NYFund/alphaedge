@@ -47,6 +47,8 @@ class _Strategy:
 def stock_feed(
     days: List[datetime.date], monkeypatch: pytest.MonkeyPatch
 ) -> TwStockDataFeed:
+    """建立只看得到指定交易日的台股資料源，不連真的資料庫"""
+
     feed: TwStockDataFeed = TwStockDataFeed()
 
     def fake_open(strategy: Any) -> None:
@@ -60,6 +62,8 @@ def stock_feed(
 def futures_feed(
     days: List[datetime.date], monkeypatch: pytest.MonkeyPatch
 ) -> TwFuturesDataFeed:
+    """建立只看得到指定交易日的期貨資料源，不連真的資料庫"""
+
     feed: TwFuturesDataFeed = TwFuturesDataFeed(roll_config=FuturesRollConfig())
 
     def fake_open(strategy: Any) -> None:

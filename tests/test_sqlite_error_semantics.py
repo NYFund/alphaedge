@@ -295,7 +295,7 @@ def test_updater_falls_back_to_default_start_when_table_missing(
     """
     表還沒建時，候選從 `DEFAULT_START_DATE` 起算（三大法人再夾到來源下限）——全新環境的正常路徑
 
-    修 S1 時最容易連帶改壞的就是這條：把「表不存在」也改成拋例外，
+    修「查詢失敗不可被吞成 `None`」時最容易連帶改壞的就是這條：把「表不存在」也改成拋例外，
     剛 clone 的機器第一次跑 `--target futures_chip` 就會當場失敗。
 
     **只組出 `loader` 而不走 `__init__`**：`FuturesChipUpdater.setup()` 會一併建

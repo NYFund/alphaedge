@@ -16,7 +16,7 @@ from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
 """
-Futures Margin Loader
+期貨保證金 loader
 
 **負責兩張表**，分表依據是「金額 vs 比例」而不是「指數 vs 股票」：
 
@@ -56,7 +56,7 @@ class FuturesMarginLoader(BaseDataLoader):
                 比例表的 DAO 一律由本 loader 掛在同一條連線上（`rate_dao`）
         """
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.margin_dir: Path = FUTURES_MARGIN_DOWNLOADS_PATH
 
         # 比例表的 DAO 與金額表共用同一條連線；基底的 `__init__` 會跑 `setup()` →
@@ -66,11 +66,11 @@ class FuturesMarginLoader(BaseDataLoader):
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         self.margin_dir.mkdir(parents=True, exist_ok=True)
@@ -109,7 +109,7 @@ class FuturesMarginLoader(BaseDataLoader):
         )
 
     def create_db(self) -> None:
-        """Create New Database Table"""
+        """建立資料表"""
 
         self.dao.create_table()
         self.rate_dao.create_table()

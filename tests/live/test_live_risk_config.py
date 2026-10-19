@@ -47,12 +47,16 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def write_toml(tmp_path: Path, text: str) -> Path:
+    """把設定內容寫成暫存的 TOML 檔"""
+
     path: Path = tmp_path / "live_risk.toml"
     path.write_text(text, encoding="utf-8")
     return path
 
 
 def futures_order(volume: int = 1, price: float = 50000.0) -> FuturesOrder:
+    """組一張 TX 期貨買單"""
+
     return FuturesOrder(
         product="TX",
         expiry="202611",

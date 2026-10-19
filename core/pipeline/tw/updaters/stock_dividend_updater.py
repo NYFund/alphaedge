@@ -21,7 +21,7 @@ from core.pipeline.tw.loaders.stock_dividend_loader import StockDividendLoader
 
 
 class StockDividendUpdater(YearlyRangeTwoMarketUpdater):
-    """Stock Dividend Updater"""
+    """台股除權息 updater"""
 
     SOURCE: str = "dividend"
     SOURCE_LABEL: str = "Dividend"

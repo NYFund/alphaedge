@@ -32,6 +32,8 @@ from core.utils import Action, DayTradeUncoveredPolicy, ExecutionTiming, Positio
 def at(
     year: int, month: int, day: int, hour: int, minute: int = 0
 ) -> datetime.datetime:
+    """組一個本地時間點"""
+
     return datetime.datetime(year, month, day, hour, minute)
 
 
@@ -207,6 +209,8 @@ def test_quote_date_and_accounting_date_agree() -> None:
 def make_position(
     symbol: str = "2330", is_day_trade: bool = True, closed: bool = False
 ) -> StockPosition:
+    """組一筆 2330 部位，預設為未平倉的當沖部位"""
+
     position: StockPosition = StockPosition(
         id=1,
         stock_id=symbol,
@@ -221,6 +225,8 @@ def make_position(
 
 
 def make_account(*positions: StockPosition) -> StockAccount:
+    """建立持有指定部位的台股帳戶"""
+
     account: StockAccount = StockAccount(init_capital=10_000_000.0)
     account.positions = list(positions)
     return account
@@ -343,6 +349,8 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -371,6 +379,8 @@ def test_heartbeat_does_nothing_before_the_cover_time() -> None:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -393,6 +403,8 @@ def make_cover_harness(*symbols: str) -> Any:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 

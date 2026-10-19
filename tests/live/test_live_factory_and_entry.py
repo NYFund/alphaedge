@@ -103,6 +103,8 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 def build(
     strategies: List[BaseStrategy], dao: LiveTradeDAO, **kwargs: Any
 ) -> LiveTrader:
+    """以替身券商組出實盤交易器"""
+
     return build_live_trader(
         strategies,
         broker=FakeBroker(),
@@ -311,6 +313,8 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     captured: Dict[str, Any] = {}
 
     class StubBacktester:
+        """不跑真的回測、沒有委託的回測替身"""
+
         submitted_orders: List[Any] = []
 
         def run(self) -> None:
@@ -324,6 +328,8 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     monkeypatch.setattr(live_factory, "build_backtester", fake_build)
 
     class Sized(LiveStockStrategy):
+        """實盤與回測資金、檔數設定不同的策略"""
+
         def __init__(self) -> None:
             super().__init__()
             self.init_capital = 1_000_000.0
@@ -352,10 +358,14 @@ def test_parity_backtest_starts_from_the_live_holdings(
     seeded: List[Any] = []
 
     class StubPositionManager:
+        """記下開倉種子部位的部位管理器替身"""
+
         def open_position(self, order: Any) -> None:
             seeded.append(order)
 
     class StubBacktester:
+        """開跑時檢查持倉已先種好的回測替身"""
+
         submitted_orders: List[Any] = []
         position_manager: StubPositionManager = StubPositionManager()
 

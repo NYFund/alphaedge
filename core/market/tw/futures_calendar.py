@@ -245,7 +245,7 @@ class FuturesCalendar(BaseTradingCalendar):
                 交易時段
         - Return:
             - Tuple[datetime.datetime, datetime.datetime]
-                （開始時間, 結束時間）
+                （開始時間，結束時間）
         """
 
         if session == FuturesSession.DAY:

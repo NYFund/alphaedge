@@ -48,6 +48,8 @@ class FakeClock:
 
 
 def make_quote(symbol: str = "2330", price: float = 1000.0) -> StockQuote:
+    """組一筆逐筆報價"""
+
     return StockQuote(
         stock_id=symbol,
         scale=Scale.TICK,
@@ -58,6 +60,8 @@ def make_quote(symbol: str = "2330", price: float = 1000.0) -> StockQuote:
 
 
 def make_report(symbol: str = "2330") -> ExecutionReport:
+    """組一筆成交回報"""
+
     return ExecutionReport(
         broker_seqno="1",
         broker_trade_id="T1",
@@ -345,6 +349,8 @@ def test_immediate_timing_drives_the_event_loop() -> None:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 

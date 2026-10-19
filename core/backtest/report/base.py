@@ -539,7 +539,7 @@ class BaseBacktestReporter(ABC):
 
     def get_benchmark_note(self) -> str:
         """
-        對標序列的口徯註腳；只有一種口徑的市場不標示
+        對標序列的口徑註腳；只有一種口徑的市場不標示
 
         期貨覆寫它：連續合約與近月拼接是兩種口徑，圖上不標的話，
         換月接點有沒有假跳空完全看不出來。

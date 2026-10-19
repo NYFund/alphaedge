@@ -1,23 +1,4 @@
 #!/usr/bin/env python3
-"""
-將 TSMC 隔夜訊號策略 output/ 之圖表與 CSV 彙整為 Word 量化報告（.docx），支援中文／英文。
-
-使用方式（專案根目錄，**必須用 `-m`**，理由見同主題的 `run.py` 模組說明）：
-    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx
-    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang en
-    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang both
-
-若尚未有圖表／CSV，請先執行：
-    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.run
-
-共用零件（樣式、表格、圖片、CSV 讀取）在 `docx_common.py`，敘事內容在
-`docx_append.py`；三者單向相依，不再互相 import。
-
-產出的兩個 `.docx` 是**產出物、不進版控**（`.gitignore` 的
-`strategy_lab/**/reports/*.docx`）：`build_report()` 不傳 `output_path` 時
-預設就是 `_DOCX_ZH`／`_DOCX_EN`，而 `main()` 正是這樣呼叫——跑一次即產生
-約 3.3 MB 的二進位 diff。需要成品請自行執行本檔。
-"""
 
 from __future__ import annotations
 
@@ -45,11 +26,44 @@ from strategy_lab.strategies.tsmc_overnight_signal.reports.docx_common import (
     _set_doc_styles,
 )
 
+"""
+將 TSMC 隔夜訊號策略 output/ 之圖表與 CSV 彙整為 Word 量化報告（.docx），支援中文／英文。
+
+使用方式（專案根目錄，**必須用 `-m`**，理由見同主題的 `run.py` 模組說明）：
+    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx
+    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang en
+    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.reports.generate_docx --lang both
+
+若尚未有圖表／CSV，請先執行：
+    .venv/bin/python -m strategy_lab.strategies.tsmc_overnight_signal.run
+
+共用零件（樣式、表格、圖片、CSV 讀取）在 `docx_common.py`，敘事內容在
+`docx_append.py`；三者單向相依，不再互相 import。
+
+產出的兩個 `.docx` 是**產出物、不進版控**（`.gitignore` 的
+`strategy_lab/**/reports/*.docx`）：`build_report()` 不傳 `output_path` 時
+預設就是 `_DOCX_ZH`／`_DOCX_EN`，而 `main()` 正是這樣呼叫——跑一次即產生
+約 3.3 MB 的二進位 diff。需要成品請自行執行本檔。
+"""
+
 
 def build_report(
     lang: Lang,
     output_path: Optional[Path] = None,
 ) -> Path:
+    """
+    - Description:
+        讀取 `output/` 的執行參數與兩條回測路徑的摘要指標，組出單一語言的 Word 報告
+    - Parameters:
+        - lang: Lang
+            報告語言，`"zh"` 或 `"en"`
+        - output_path: Optional[Path]
+            輸出檔路徑；None 時依語言寫到 `_DOCX_ZH`／`_DOCX_EN`
+    - Return:
+        - Path
+            實際寫出的 `.docx` 路徑
+    """
+
     titles = TITLES_EN if lang == "en" else TITLES_ZH
     out_doc = output_path or (_DOCX_EN if lang == "en" else _DOCX_ZH)
     meta = _load_csv_kv(_OUTPUT / "run_meta.csv")
@@ -59,7 +73,7 @@ def build_report(
     doc = Document()
     section = doc.sections[0]
     if lang == "en":
-        # Slightly wider side margins + breathing room for formal English layout
+        # 英文正式排版：左右邊界略寬、上下多留一點空間
         section.top_margin = Cm(2.4)
         section.bottom_margin = Cm(2.6)
         section.left_margin = Cm(2.85)
@@ -83,6 +97,8 @@ def build_report(
 
 
 def main() -> None:
+    """CLI 入口：依 `--lang` 產出中文、英文或兩種語言的報告"""
+
     parser = argparse.ArgumentParser(
         description="Generate TSMC overnight-signal quant report DOCX."
     )

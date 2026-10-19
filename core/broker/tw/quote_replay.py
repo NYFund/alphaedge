@@ -152,6 +152,8 @@ class RecordedMessage:
         object.__setattr__(self, "_types", RECORDED_FIELD_TYPES.get(type_name, {}))
 
     def __getattr__(self, name: str) -> Any:
+        """依欄位名取錄製值並還原型別；錄製檔沒有的欄位照真品的行為拋 `AttributeError`"""
+
         payload: Dict[str, Any] = object.__getattribute__(self, "_payload")
         if name not in payload:
             raise AttributeError(name)

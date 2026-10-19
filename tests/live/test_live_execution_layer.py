@@ -60,6 +60,8 @@ def stock_order(action: Action = Action.BUY, price: float = 100.0) -> StockOrder
 
 
 def futures_order(action: Action = Action.BUY) -> FuturesOrder:
+    """組一張 TX 期貨委託"""
+
     return FuturesOrder(
         product="TX",
         expiry="202610",
@@ -74,6 +76,8 @@ def futures_order(action: Action = Action.BUY) -> FuturesOrder:
 def marked(
     order: BaseOrder, timing: ExecutionTiming, style: ExecutionStyle
 ) -> BaseOrder:
+    """對單張委託套上執行時點與下單方式"""
+
     return mark_execution([order], timing, style)[0]
 
 
@@ -284,10 +288,14 @@ class MarketAlpha(ScriptedStrategy):
 
 
 def sent_orders(harness: Harness) -> List[BaseOrder]:
+    """券商替身收到的所有委託"""
+
     return [ticket.order for ticket in harness.broker.tickets.values()]
 
 
 def events(harness: Harness, category: str) -> List[Tuple[Any, ...]]:
+    """指定類別的風控事件（策略，標的，嚴重度）"""
+
     return harness.dao.conn.execute(
         "SELECT strategy_name, symbol, severity FROM live_risk_event "
         "WHERE category = ?",
@@ -386,6 +394,8 @@ def test_risk_receives_the_price_limits_and_blocks_a_bad_decision_price() -> Non
     """
 
     class Wrong(ScriptedStrategy):
+        """以市價送出決策價超出漲停委託的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Wrong", [make_order(price=120.0)])
             self.live_execution = ExecutionStyle.MARKET
@@ -419,6 +429,8 @@ def test_stop_loss_is_always_market_even_for_a_limit_strategy() -> None:
     """停損固定要成交：出場不該因為價格掛不到而失敗"""
 
     class Patient(ScriptedStrategy):
+        """下單方式設為限價、自己不產生訊號的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Patient", [])
             self.live_execution = ExecutionStyle.LIMIT
@@ -439,6 +451,8 @@ def test_close_hook_follows_the_strategy_style() -> None:
     """一般平倉沿用策略宣告的執行方式"""
 
     class Patient(ScriptedStrategy):
+        """限價下單、平倉鉤子送出一張賣單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__(
                 "Patient", [], close_orders=[make_order(action=Action.SELL)]
@@ -457,6 +471,8 @@ def test_pending_cover_is_sent_as_must_fill_in_the_opening_auction() -> None:
     """隔日補平是系統產生的出場單：一律要成交，開盤集合競價賣掛跌停"""
 
     class Alpha(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、自己組補平單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [])
             self.execution_schedule = {
@@ -502,6 +518,8 @@ def test_engine_builds_the_pending_cover_when_the_strategy_does_not() -> None:
     """
 
     class Plain(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、不實作補平單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Plain", [])
             self.execution_schedule = {

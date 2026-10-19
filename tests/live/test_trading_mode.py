@@ -18,6 +18,8 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 @pytest.fixture
 def state(dao: LiveTradeDAO) -> TradingModeState:
+    """帳戶層交易模式狀態，時間固定在 `NOW`"""
+
     return TradingModeState(dao=dao, run_id="run1", now_provider=lambda: NOW)
 
 

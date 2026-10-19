@@ -61,6 +61,8 @@ def test_get_retries_then_returns_none(
     """
 
     class FailingSession:
+        """每次請求都拋出指定例外的 session 替身"""
+
         def get(self, *args, **kwargs) -> None:
             raise exception
 
@@ -95,6 +97,8 @@ def _install_session(monkeypatch: pytest.MonkeyPatch, send) -> None:
     """把共用 session 換成回傳指定結果的替身，並關掉所有等待"""
 
     class FakeSession:
+        """每次請求都回傳 `send()` 結果的 session 替身"""
+
         def get(self, *args, **kwargs):
             return send()
 

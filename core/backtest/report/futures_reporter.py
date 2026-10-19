@@ -131,7 +131,7 @@ class FuturesBacktestReporter(BaseBacktestReporter):
             時點不一致的話，兩條曲線在換月那幾天比的是不同的東西。
 
             這是衍生表，`--target futures_continuous` 沒跑過、或那一組
-            （商品, 調整方式, 換月規則）沒建過就會是空的——此時回空 Series，
+            （商品，調整方式，換月規則）沒建過就會是空的——此時回空 Series，
             由 `load_benchmark_series()` 決定退回近月拼接，**不在此自行換一組設定**。
         - Return:
             - pd.Series

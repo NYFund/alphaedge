@@ -9,7 +9,7 @@ from core.dao.tw.market_holiday_dao import MarketHolidayDAO
 from core.pipeline.shared.base_loader import BaseDataLoader
 
 """
-Market Holiday Loader
+市場休市日 loader
 
 資料量一年只有數十列，**不落地 CSV**：crawler → cleaner → 直接入庫。
 重跑同一年度是「整年替換」而不是追加，站方更正公告時表內才不會殘留舊列。
@@ -17,7 +17,7 @@ Market Holiday Loader
 
 
 class MarketHolidayLoader(BaseDataLoader):
-    """Market Holiday Loader"""
+    """市場休市日 loader"""
 
     def __init__(self, dao: Optional[MarketHolidayDAO] = None) -> None:
         """
@@ -32,7 +32,7 @@ class MarketHolidayLoader(BaseDataLoader):
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
         self.create_missing_tables()

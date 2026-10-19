@@ -236,6 +236,8 @@ def test_definite_missing_trading_day_is_rejected() -> None:
 
 # === 盤前報價 ===
 class FakeContract:
+    """帶參考價與漲跌停價的合約替身"""
+
     def __init__(self, reference: float = 1000.0, limit_up: float = 1100.0) -> None:
         self.reference: float = reference
         self.limit_up: float = limit_up
@@ -244,6 +246,8 @@ class FakeContract:
 
 
 class FakeResolver:
+    """依代號回合約替身的合約轉換器"""
+
     def __init__(self, contracts: Optional[dict] = None) -> None:
         self._contracts: dict = (
             contracts if contracts is not None else {"2330": FakeContract()}
@@ -256,6 +260,8 @@ class FakeResolver:
 
 
 class FakeBrokerForFeed:
+    """記下快照查詢的券商替身，快照一律回空"""
+
     def __init__(self, resolver: FakeResolver) -> None:
         self.resolver: FakeResolver = resolver
         self.snapshot_calls: List[List[str]] = []
@@ -267,6 +273,8 @@ class FakeBrokerForFeed:
 
 @pytest.fixture
 def feed() -> TwStockLiveDataFeed:
+    """開盤日、合約齊全的台股實盤資料源"""
+
     broker: FakeBrokerForFeed = FakeBrokerForFeed(FakeResolver())
     return TwStockLiveDataFeed(
         broker,
@@ -501,6 +509,8 @@ def test_probe_failure_is_visible_not_swallowed() -> None:
     """
 
     class BrokenResolver:
+        """查掛牌月份就拋錯的合約轉換器"""
+
         def list_index_futures_expiries(self, product: str) -> List[str]:
             raise RuntimeError("連線斷了")
 
@@ -610,6 +620,8 @@ def test_futures_pre_open_quote_without_a_contract_id_is_skipped() -> None:
     """換算不出代號就略過該契約，不送出一筆沒有代號的報價"""
 
     class Unmapped(LetterCodeResolver):
+        """把契約代號原樣傳回、對不到專案契約代號的轉換器"""
+
         def to_futures_symbol(self, code: str) -> str:
             return code
 

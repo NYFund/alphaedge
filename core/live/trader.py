@@ -1604,7 +1604,7 @@ class LiveTrader:
 
             **資金保留以決策價計算，在執行層改寫委託價之前**：集合競價的 `MARKET`
             買單掛漲停，以掛單價保留的話，額度切滿的策略最後一檔一定保留不到。
-            風控收到同一份漲跌停，並以決策價做偏離與漲跌停檢查（見 `RiskManager`）。
+            風控收到同一份漲跌停，並以決策價做偏離與漲跌停檢查（見 `PreTradeRiskManager.check()`）。
         - Parameters:
             - candidates: List[Tuple[StrategyContext, BaseOrder]]
                 通過跨策略檢查的委託

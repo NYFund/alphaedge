@@ -18,7 +18,7 @@ from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoad
 from core.pipeline.utils.exceptions import ColumnLayoutError
 
 """
-非除權息公司行動 ETL（還原價 S2）
+非除權息公司行動 ETL
 
 `dividend` 表只記除權息，**所有不走除權息流程的公司行動都不在裡面**。實測
 2013~2026 上市 360 筆減資事件、涵蓋 243 檔，沒有一筆出現在 `dividend`；
@@ -72,6 +72,8 @@ def tpex_detail(shares: float, refund: float) -> str:
 
 @pytest.fixture
 def cleaner() -> CorporateActionCleaner:
+    """不需外部資源的公司行動清洗器"""
+
     return CorporateActionCleaner()
 
 
@@ -345,6 +347,8 @@ def loader(tmp_path, monkeypatch) -> Iterator[CorporateActionLoader]:
 
 
 def make_row(source: str, ratio: float = 2.0) -> Dict[str, object]:
+    """建一列公司行動資料，`source` 決定資料來源欄"""
+
     return {
         "date": "2025-06-18",
         "stock_id": "0050",
@@ -434,7 +438,7 @@ def test_detector_flags_leveraged_etf(
 
     實測 2025-04-07 關稅重挫那天，00631L 等一整批同時跌到 −20%，那天它們
     **都沒有任何公司行動**。標記而不濾掉，是因為直接濾會連真正的反向分割
-    一起藏起來（S1 查到 00632R 在 2024-12-11 做過反向分割）。
+    一起藏起來（實查 00632R 在 2024-12-11 就做過反向分割）。
     """
 
     from core.pipeline.tw.cleaners.corporate_action_detector import (

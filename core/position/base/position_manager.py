@@ -13,7 +13,7 @@ from core.utils import Action, PositionType, TimeUtils
 
 class BasePositionManager(ABC):
     """
-    Base Class of Position Manager
+    部位管理層的抽象基底
 
     開倉前的判準（方向與動作一致、同標的不得雙向持倉）、FIFO 拆單、方向篩選與
     「平倉量不足時只平已有部位」的處理都與市場與商品皆無關，故收在此；
@@ -33,7 +33,7 @@ class BasePositionManager(ABC):
 
     @abstractmethod
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Position Manager"""
+        """部位管理層的設定掛點；由各市場實作"""
 
         pass
 

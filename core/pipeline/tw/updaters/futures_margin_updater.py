@@ -141,7 +141,7 @@ class AnnouncementMetadataStore:
 
 
 class FuturesMarginUpdater(BaseDataUpdater):
-    """Futures Margin Updater"""
+    """期貨保證金 updater"""
 
     LOG_FILE_NAME: str = "update_futures_margin.log"
 
@@ -174,7 +174,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         super().setup()
 

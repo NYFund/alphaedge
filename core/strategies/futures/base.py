@@ -55,7 +55,7 @@ BaseFuturesStrategy: 台期貨策略基底
 
 
 class BaseFuturesStrategy(BaseStrategy):
-    """Futures Strategy Framework (Base Template)"""
+    """期貨策略骨架：補上商品、時段、口數上限、保證金與換月設定"""
 
     def __init__(self) -> None:
         super().__init__()

@@ -49,7 +49,7 @@ class BaseSettlementModel(ABC):
         # 門檻是市場規則加上策略的選擇，由 factory 從策略帶入
         self.max_no_quote_days: Optional[int] = max_no_quote_days
 
-        # {代號: 連續無報價的 bar 數}。**記在 model 而不是部位上**：無報價是標的
+        # `{代號: 連續無報價的 bar 數}`。**記在 model 而不是部位上**：無報價是標的
         # （停牌、下市、契約到期）的狀態，不是部位的狀態；同一標的的多筆部位共用
         # 同一個答案，記在部位上只會存好幾份一樣的數
         self.no_quote_days: Dict[str, int] = {}

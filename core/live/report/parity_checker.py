@@ -395,6 +395,8 @@ class ParityChecker:
             ] = self.closing_limit
 
             def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
+                """把交易日綁成比對當天，換成 `compare()` 要的兩參數形狀"""
+
                 return closing_limit(symbol, side, run_date)
 
         phases_of: Optional[Callable[[BaseOrder], Set[str]]] = None
@@ -402,6 +404,8 @@ class ParityChecker:
             order_phases: OrderPhaseLookup = self.order_phases
 
             def phases_of(order: BaseOrder) -> Set[str]:
+                """把策略名綁成本次比對的策略，換成 `compare()` 要的單參數形狀"""
+
                 return order_phases(strategy_name, order)
 
         return compare(
@@ -565,7 +569,7 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            # 優先序：風控／守門事件 → 段落中止 → 快照口徵（反方向）→ 未解釋
+            # 優先序：風控／守門事件 → 段落中止 → 快照口徑（反方向）→ 未解釋
             missing_note: str = ""
             category: Optional[str] = None
             if symbol in blocked:
@@ -892,7 +896,7 @@ def _unfilled_category(
             `(標的, 買賣別) → (收盤價, 漲跌停價)`
     - Return:
         - Tuple[str, str]
-            （類別, 附加說明）；說明為空字串時不附加
+            （類別，附加說明）；說明為空字串時不附加
     """
 
     style: str = str(row.get("execution_style") or "")

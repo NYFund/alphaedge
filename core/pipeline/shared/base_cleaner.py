@@ -15,15 +15,17 @@ from core.pipeline.utils.exceptions import ColumnLayoutError
 
 
 class BaseDataCleaner(ABC):
-    """Base Class of Data Cleaner"""
+    """資料 cleaner 的抽象基底"""
 
     def __init__(self) -> None:
         """建立 cleaner；設定一律由子類的 `setup()` 負責"""
+
         pass
 
     @abstractmethod
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
+
         pass
 
     @staticmethod

@@ -27,7 +27,7 @@ from core.pipeline.shared.base_cleaner import BaseDataCleaner
 
 
 class StockTickCleaner(BaseDataCleaner):
-    """Stock Tick Cleaner (Transform)"""
+    """台股 tick cleaner（Transform）"""
 
     # 每檔股票一把鎖：多執行緒同時清同一檔時，落地的 CSV 會互相覆蓋
     _file_locks: Dict[str, Lock] = {}
@@ -42,14 +42,13 @@ class StockTickCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.tick_dir: Path = TICK_DOWNLOADS_PATH
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Create the tick downloads directory
         self.tick_dir.mkdir(parents=True, exist_ok=True)
 
     def clean_stock_tick(
@@ -134,7 +133,7 @@ class StockTickCleaner(BaseDataCleaner):
                     for attempt in range(max_retries):
                         try:
                             # Windows 不允許覆蓋既有檔案，只能先刪再搬（非原子）；
-                            # Unix 直接用 replace() 一步原子替換
+                            # Unix 直接用 `replace()` 一步原子替換
                             if os.name == "nt":  # Windows
                                 if csv_path.exists():
                                     csv_path.unlink()

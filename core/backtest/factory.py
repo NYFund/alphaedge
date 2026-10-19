@@ -35,7 +35,7 @@ from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
 from core.utils import InstrumentType, Market, Scale, TickUniverse
 
-"""Backtester factory: **回測路徑**唯一一處依（市場, 商品）組合分派的地方"""
+"""Backtester factory: **回測路徑**唯一一處依（市場，商品）組合分派的地方"""
 
 
 def build_backtester(
@@ -46,7 +46,7 @@ def build_backtester(
 ) -> Backtester:
     """
     - Description:
-        依策略宣告的（市場, 商品）組合組裝對應的 model 組合
+        依策略宣告的（市場，商品）組合組裝對應的 model 組合
 
         這是**回測路徑**唯一的分派點。新增一個組合只需在此加一個分支，
         `Backtester` 本身一行都不用改。
@@ -71,7 +71,7 @@ def build_backtester(
             回測區間與初始資金的覆寫；None 時沿用策略的預設
     - Return:
         - Backtester
-            已注入該（市場, 商品）組合對應 model 組合的引擎
+            已注入該（市場，商品）組合對應 model 組合的引擎
     - Raise:
         - InvalidBacktestOverridesError
             覆寫值不合法

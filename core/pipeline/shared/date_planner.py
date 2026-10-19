@@ -54,11 +54,13 @@ class DateSource(Protocol):
 
     TABLE_NAME: str
 
-    def table_exists(self) -> bool: ...
+    def table_exists(self) -> bool:
+        """資料表是否已存在；初次更新時不存在是正常狀態"""
 
     def get_distinct_dates(
         self, start_date: datetime.date, end_date: datetime.date
-    ) -> List[datetime.date]: ...
+    ) -> List[datetime.date]:
+        """區間內（含頭含尾）表內已有的日期"""
 
 
 class DateProgressStore:

@@ -41,11 +41,12 @@ class StockDividendCrawler(BaseDataCrawler):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     def crawl(self, start_date: datetime.date, end_date: datetime.date) -> None:
-        """Crawl TWSE & TPEX Ex-Rights/Ex-Dividend Data"""
+        """爬取上市與上櫃的除權息資料"""
 
         self.crawl_twse_dividend(start_date, end_date)
         self.crawl_tpex_dividend(start_date, end_date)

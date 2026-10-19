@@ -27,7 +27,7 @@ from core.utils import (
 
 
 class BaseStockStrategy(BaseStrategy):
-    """Stock Strategy Framework (Base Template)"""
+    """股票策略骨架：補上信用交易設定、部位大小模型與五個資料集"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -72,15 +72,11 @@ class BaseStockStrategy(BaseStrategy):
         self.sizer: BasePositionSizer = EqualWeightSizer()  # 部位大小模型
 
         """ === Datasets Setting=== """
-        self.tick: Optional[StockTickAPI] = None  # Ticks data (Optional)
-        self.price: Optional[StockPriceAPI] = None  # Day price data (Optional)
-        self.chip: Optional[StockChipAPI] = None  # Chips data (Optional)
-        self.mrr: Optional[MonthlyRevenueReportAPI] = (
-            None  # Monthly Revenue Report data (Optional)
-        )
-        self.fs: Optional[FinancialStatementAPI] = (
-            None  # Financial Statement data (Optional)
-        )
+        self.tick: Optional[StockTickAPI] = None  # 逐筆資料（可選）
+        self.price: Optional[StockPriceAPI] = None  # 日 K 價格（可選）
+        self.chip: Optional[StockChipAPI] = None  # 三大法人籌碼（可選）
+        self.mrr: Optional[MonthlyRevenueReportAPI] = None  # 月營收（可選）
+        self.fs: Optional[FinancialStatementAPI] = None  # 財報（可選）
 
     @abstractmethod
     def setup_account(self, account: StockAccount) -> None:

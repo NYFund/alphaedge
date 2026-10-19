@@ -49,6 +49,8 @@ def make_order(
     price: float = 1000.0,
     price_type: Optional[StockPriceType] = StockPriceType.LMT,
 ) -> StockOrder:
+    """組一張台股委託，預設為 2330 買進兩張"""
+
     return StockOrder(
         stock_id=symbol,
         action=action,
@@ -332,6 +334,8 @@ def test_existing_exposure_is_counted(dao_factory: object = None) -> None:
 
 @pytest.fixture
 def mode_state(dao: LiveTradeDAO) -> TradingModeState:
+    """帳戶層交易模式狀態，時間固定在 `NOW`"""
+
     return TradingModeState(dao=dao, run_id="run1", now_provider=lambda: NOW)
 
 
@@ -390,6 +394,8 @@ def test_unreadable_kill_switch_counts_as_on(
     manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
 
     class Exploding:
+        """檢查是否存在就拋錯的 kill switch 檔案替身"""
+
         def exists(self) -> bool:
             raise OSError("檔案系統無回應")
 

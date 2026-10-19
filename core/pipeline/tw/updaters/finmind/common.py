@@ -34,7 +34,7 @@ FinMind 各資料集共用的執行環境與 metadata 儲存
 class FinMindContext:
     """FinMind 四個資料集共用的執行環境：ETL 三件組、DB 連線與 API quota 狀態"""
 
-    # API Quota 相關常數（供 wait_for_quota_reset 使用）
+    # API quota 相關常數（供 `wait_for_quota_reset()` 使用）
     QUOTA_RESET_INTERVAL_SECONDS: int = (
         3600  # 配額重置間隔（秒），用於 fallback 推算下次重置時間
     )
@@ -417,7 +417,7 @@ class BrokerTradingMetadataStore:
             self.metadata_path,
             ensure_ascii=False,
         )
-        # 寫入成功後更新快取，迴圈內後續 load() 只讀快取
+        # 寫入成功後更新快取，迴圈內後續 `load()` 只讀快取
         self._cache = metadata
 
     def get_existing_dates(

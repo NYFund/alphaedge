@@ -150,6 +150,8 @@ def test_main_runs_each_target_with_its_range_and_closes(monkeypatch) -> None:
 
     def make_fake(name: str) -> type:
         class Fake:
+            """記錄建構、更新與關閉順序的 updater 替身"""
+
             def __init__(self) -> None:
                 calls.append((name, "init"))
 

@@ -10,7 +10,7 @@ from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 
 """
-Futures Margin API: query the two margin tables in tw_futures.db
+Futures Margin API：查詢 `tw_futures.db` 的兩張保證金表
 
 **兩張表、兩種取值方式**（分表依據是「金額 vs 比例」，不是「指數 vs 股票」——
 ETF 股期給的也是每口金額，語意與指數期貨相同）：
@@ -44,7 +44,7 @@ ETF 股期給的也是每口金額，語意與指數期貨相同）：
 
 
 class FuturesMarginAPI(BaseDataAPI):
-    """Futures Margin API"""
+    """期貨保證金 API（指數期貨金額表 ＋ 股票期貨比例表）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = FuturesMarginDAO

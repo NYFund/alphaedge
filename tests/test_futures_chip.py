@@ -391,6 +391,8 @@ def test_today_without_chips_is_not_treated_as_blocked() -> None:
     updater.today = lambda: today
 
     class StubPriceAPI:
+        """交易日只有三天前與今天的價格 API 替身"""
+
         dao = type("DAO", (), {"table_exists": staticmethod(lambda: True)})()
 
         def get_trading_days(self, start, end):

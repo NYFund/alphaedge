@@ -27,7 +27,7 @@ from core.utils.instrument import StockUtils
 
 class StockPositionManager(BasePositionManager):
     """
-    Stock Position Manager
+    台股部位管理
 
     多空的記帳差異全部收斂在此，兩邊的費用與損益一律走 `TwStockCostModel`：
     - LONG：手續費、賣出端證交稅、開倉成本等比例攤提
@@ -46,7 +46,7 @@ class StockPositionManager(BasePositionManager):
         )
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Stock Position Manager"""
+        """設定掛點；台股部位管理目前沒有額外設定"""
 
         pass
 
@@ -531,7 +531,7 @@ class StockPositionManager(BasePositionManager):
         if position.volume == 0:
             position.is_closed = True
 
-        # Update account：釋回保證金並結算損益
+        # 更新帳戶：釋回保證金並結算損益
         # realized_pnl 已扣掉開倉成本，而開倉成本在開倉當下就從餘額扣過了，
         # 故此處加回 entry_cost，避免同一筆成本被扣兩次（與 LONG 的現金流口徑一致）。
         # 股利補償同理：除息當日就已從餘額扣款（`settle_cash_dividend()`，

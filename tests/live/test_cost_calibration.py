@@ -101,10 +101,14 @@ def test_realized_trades_are_normalized_per_market() -> None:
 
 # === 估算器 ===
 def opening_fill(action: str, price: float, filled_at: str) -> Dict[str, Any]:
+    """組一筆開倉成交資料列"""
+
     return {"action": action, "price": price, "volume": 1, "filled_at": filled_at}
 
 
 def stock_trade(cover_price: float = 2475.0) -> RealizedTradeSnapshot:
+    """2330 一張的已實現交易快照，平倉價可調"""
+
     return RealizedTradeSnapshot(
         symbol="2330",
         quantity=1,
@@ -214,6 +218,8 @@ def make_runner(
     estimate: Optional[float],
     root: Path,
 ) -> AfterCloseRunner:
+    """只接券商已實現交易與成本估算的收盤後流程"""
+
     broker: Any = SimpleNamespace(get_realized_trades=lambda run_date: trades)
     reporter: Any = SimpleNamespace(output_root=root)
     return AfterCloseRunner(
@@ -248,6 +254,8 @@ def seed_opening_fill(dao: LiveTradeDAO) -> None:
 
 
 def drift_events(dao: LiveTradeDAO) -> List[Any]:
+    """已寫入的成本模型偏差事件"""
+
     return dao.conn.execute(
         "SELECT symbol FROM live_risk_event WHERE category = 'COST_MODEL_DRIFT'"
     ).fetchall()

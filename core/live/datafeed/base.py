@@ -176,6 +176,7 @@ class BaseLiveDataFeed(BaseDataFeed):
             - Optional[Any]
                 合約物件
         """
+
         pass
 
     # === 資料新鮮度 ===
@@ -318,6 +319,7 @@ class BaseLiveDataFeed(BaseDataFeed):
             - List[BaseQuote]
                 報價；查無資料的標的不會出現
         """
+
         pass
 
     def get_price_limit_basis(self, date: datetime.date) -> Dict[str, float]:

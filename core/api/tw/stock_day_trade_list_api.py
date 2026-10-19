@@ -10,7 +10,7 @@ from core.dao.base import BaseDAO
 from core.dao.tw.stock_day_trade_list_dao import StockDayTradeListDAO
 from core.models import DayTradeListSnapshot
 
-"""Stock day trade list API: 現股當沖標的名單（`day_trade_list` 表）"""
+"""Stock Day Trade List API：現股當沖標的名單（`day_trade_list` 表）"""
 
 
 class StockDayTradeListAPI(BaseDataAPI):

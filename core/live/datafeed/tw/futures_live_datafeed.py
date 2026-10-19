@@ -317,6 +317,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         closing: Action = order_rules.resolve_close_action(position_type)
 
         def leg(expiry: str, action: Action, price: float) -> FuturesOrder:
+            """組一腿轉倉單：方向與口數沿用原部位，只換到期月、買賣別與價格"""
+
             return FuturesOrder(
                 product=product,
                 expiry=expiry,

@@ -294,6 +294,8 @@ def test_custom_sizer_overrides_the_default(strategy: MomentumFuturesStrategy) -
     """預設依 `max_lots`／`max_capital_usage` 建 `MarginSizer`；要自訂演算法就覆寫 `self.sizer`"""
 
     class OneLot(BasePositionSizer):
+        """每個候選一律只給一口的自訂 sizer"""
+
         def size(self, account, candidates, max_holdings):
             return [(quote, requirement, 1) for quote, requirement in candidates]
 

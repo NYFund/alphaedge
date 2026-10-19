@@ -11,11 +11,11 @@ from core.config import (
 from core.dao.base import BaseDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 
-"""Stock margin trading API: query margin table through StockMarginDAO（融資融券餘額，單位：張）"""
+"""Stock Margin API：經 `StockMarginDAO` 查詢 `margin` 表（融資融券餘額，單位：張）"""
 
 
 class StockMarginAPI(BaseDataAPI):
-    """Stock margin trading API"""
+    """信用交易（融資融券餘額）API"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = StockMarginDAO

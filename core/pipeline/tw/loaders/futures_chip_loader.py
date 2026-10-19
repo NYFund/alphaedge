@@ -54,13 +54,13 @@ class FuturesChipLoader(BaseDataLoader):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
         self.chip_dir.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> None:
-        """Connect to the Database"""
+        """連線到資料庫"""
 
         if self.conn is None:
             # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫

@@ -9,7 +9,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 
 
 class StockDayTradeListLoader(BaseDataLoader):
-    """Stock DayTrade List Loader"""
+    """台股當沖名單 loader"""
 
     DAO_CLASS: Type[Any] = StockDayTradeListDAO
     SOURCE: str = "day_trade_list"

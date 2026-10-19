@@ -12,7 +12,7 @@ from core.utils import (
     StockPriceType,
 )
 
-"""StockOrder: structure for stock orders in backtesting (direction, quantity, price)"""
+"""StockOrder：台股訂單（方向、張數、價格與放空管道）"""
 
 
 class StockOrder(BaseOrder):

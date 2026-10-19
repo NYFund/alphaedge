@@ -38,7 +38,7 @@ class FinMindCrawler(BaseDataCrawler):
         self.setup()
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
 
         LogManager.setup_logger("crawl_finmind.log")
 
@@ -54,6 +54,7 @@ class FinMindCrawler(BaseDataCrawler):
 
     def crawl(self, *args, **kwargs) -> None:
         """本爬蟲沒有單一入口，各資料集請改呼叫對應的 `crawl_*` 方法"""
+
         pass
 
     def crawl_stock_info(self) -> CrawlResult:

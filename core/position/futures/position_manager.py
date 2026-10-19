@@ -37,7 +37,7 @@ __all__ = ["FuturesMarginConfig", "FuturesPositionManager"]
 
 
 class FuturesPositionManager(BasePositionManager):
-    """Futures Position Manager"""
+    """期貨部位管理"""
 
     def __init__(
         self,
@@ -88,7 +88,7 @@ class FuturesPositionManager(BasePositionManager):
         self.margin_model.config = config
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Futures Position Manager"""
+        """設定掛點；期貨部位管理目前沒有額外設定"""
 
         pass
 
@@ -119,7 +119,7 @@ class FuturesPositionManager(BasePositionManager):
         - Return:
             - int
                 乘數（股期為契約單位股數）
-        - Raises:
+        - Raise:
             - KeyError
                 未注入 resolver 且商品不在 `FUTURES_MULTIPLIER` 內
         """
@@ -165,7 +165,7 @@ class FuturesPositionManager(BasePositionManager):
         - Return:
             - float
                 應繳的原始保證金
-        - Raises:
+        - Raise:
             - ValueError
                 查表模式下查不到該商品在該日期的保證金
         """
@@ -531,7 +531,7 @@ class FuturesPositionManager(BasePositionManager):
             holding_days=self.calculate_holding_days(position.date, order.date),
         )
 
-        # Update position（等比例攤提後扣減）
+        # 更新部位（等比例攤提後扣減）
         position.volume -= close_volume
         position.commission -= proportional_open_commission
         position.tax -= proportional_open_tax
@@ -543,7 +543,7 @@ class FuturesPositionManager(BasePositionManager):
         if position.volume == 0:
             position.is_closed = True
 
-        # Update account：釋回保證金、最後一段損益進帳、扣平倉成本
+        # 更新帳戶：釋回保證金、最後一段損益進帳、扣平倉成本
         self.account.margin_used -= released_margin
         self.account.balance += (
             released_margin + final_leg_pnl - (close_commission + close_tax)

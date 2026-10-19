@@ -62,7 +62,7 @@ class EquityChartRenderer:
         )
 
     def plot_balance_and_benchmark_curve(self) -> None:
-        """繪製總資金 & benchmark 曲線圖"""
+        """繪製總資金與 benchmark 曲線圖"""
 
         # 剔除缺失值與 0（資料錯誤或停牌），並讓索引唯一且遞增；
         # 收盤價不可能為負，故不另外檢查負數

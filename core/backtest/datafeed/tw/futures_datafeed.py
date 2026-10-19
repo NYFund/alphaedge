@@ -77,7 +77,7 @@ class TwFuturesDataFeed(BaseDataFeed):
         # **延遲建立**：只跑指數期貨的回測一輩子不會用到它，沒有理由先開一條連線
         self.stock_conn: Optional[DBConnection] = None
         self.stock_price: Optional[StockPriceAPI] = None
-        # {交易日: {股票代號: 收盤價}}，一天只查一次全市場
+        # `{交易日: {股票代號: 收盤價}}`，一天只查一次全市場
         self.underlying_close_cache: Dict[datetime.date, Dict[str, float]] = {}
 
         # 本次回測的商品與時段（由策略宣告）
@@ -291,7 +291,7 @@ class TwFuturesDataFeed(BaseDataFeed):
         session: Optional[FuturesSession],
         resolver: Callable[[str], int],
     ) -> List[FuturesQuote]:
-        """查一個（日期, 商品, 時段）的行情並轉成報價；查詢責任留在資料源這一側"""
+        """查一個（日期，商品，時段）的行情並轉成報價；查詢責任留在資料源這一側"""
 
         price_df: pd.DataFrame = self.futures_price.get(
             date, product=product, session=session
@@ -316,7 +316,7 @@ class TwFuturesDataFeed(BaseDataFeed):
         - Return:
             - int
                 乘數（股期為契約單位股數）
-        - Raises:
+        - Raise:
             - KeyError
                 兩個來源都查不到——**刻意讓它中斷**，理由同 `FUTURES_MULTIPLIER`：
                 乘數猜錯只會讓 PnL 靜默偏掉，中斷比靜默錯誤好查

@@ -104,7 +104,7 @@ class FetchResult:
 
 
 class RequestUtils:
-    """Requests utils"""
+    """HTTP 請求工具：Session 建立、重試與結果分類"""
 
     # Session 建立與 HTTP 請求常數
     SESSION_INIT_MAX_ATTEMPTS: int = 10

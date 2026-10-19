@@ -168,7 +168,7 @@ class UpdateStats:
 
 
 class BaseDataUpdater(ABC):
-    """Base Class of Data Updater"""
+    """資料 updater 的抽象基底"""
 
     # 節流：每處理 N 個單位休息一次，其餘時候隨機短暫延遲（`build_rate_limit_policy()`）。
     # 放在基底是因為每一支長跑 updater 都需要同一組數字；各自寫一份的話，
@@ -183,6 +183,7 @@ class BaseDataUpdater(ABC):
 
     def __init__(self) -> None:
         """建立 updater；連線一律由子類的 `setup()` 負責，日誌由基底依 `LOG_FILE_NAME` 開"""
+
         pass
 
     # === 生命週期 ===
@@ -395,7 +396,8 @@ class BaseDataUpdater(ABC):
     @abstractmethod
     @abstractmethod
     def update(self, *args, **kwargs) -> None:
-        """Update the Database"""
+        """更新資料庫"""
+
         pass
 
 

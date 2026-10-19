@@ -50,6 +50,8 @@ class FakeSnapshot:
 
 
 class FakeContract:
+    """shioaji 合約替身"""
+
     def __init__(
         self,
         code: str = "2330",
@@ -104,10 +106,14 @@ class FakeApi:
 
 @pytest.fixture
 def limiter() -> RateLimiter:
+    """假時鐘限流器：測試不該真的睡"""
+
     return RateLimiter(time_source=lambda: 0.0, sleep=lambda seconds: None)
 
 
 def make_stream(api: FakeApi, limiter: RateLimiter) -> ShioajiQuoteStream:
+    """建立行情串流"""
+
     return ShioajiQuoteStream(api, limiter, queue.Queue())
 
 

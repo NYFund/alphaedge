@@ -31,7 +31,7 @@ Shioaji 的 tick 只回溯到 2020/03/02，更早的日期一律取不到資料�
 
 
 class StockTickUpdater(BaseDataUpdater):
-    """Stock Tick Updater"""
+    """台股 tick updater"""
 
     LOG_FILE_NAME: str = "update_tick.log"
 
@@ -47,7 +47,6 @@ class StockTickUpdater(BaseDataUpdater):
         self.cleaner: StockTickCleaner = StockTickCleaner()
         self.loader: StockTickLoader = StockTickLoader()
 
-        # Crawler Setting
         # Shioaji 連線（多組金鑰輪替）；`api_list` 是給爬蟲用的原生 API 物件
         self.sessions: List[ShioajiSession] = []
         self.api_list: List[sj.Shioaji] = []
@@ -80,7 +79,7 @@ class StockTickUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
         # 每組金鑰各登入一次正式環境（不啟用憑證，只查資料）；失敗的帳號略過
         self.sessions = login_read_only_sessions(
@@ -135,7 +134,6 @@ class StockTickUpdater(BaseDataUpdater):
                 f"Update date range: {start_date.isoformat()} ~ {end_date.isoformat()}"
             )
 
-            # Set Up Update Period
             dates: List[datetime.date] = TimeUtils.generate_date_range(
                 start_date, end_date
             )
@@ -148,7 +146,7 @@ class StockTickUpdater(BaseDataUpdater):
                 logger.info("Skipping crawl process. Proceeding to database loading...")
                 # 沒有新日期也要往下走，既有的 CSV 仍需入庫
             else:
-                # Step 1: Crawl + Clean（已入庫的日期依 load_log 跳過）
+                # Step 1：爬取＋清洗（已入庫的日期依 load_log 跳過）
                 self.loaded_last_dates = StockTickUtils.get_loaded_last_dates(
                     self.loader.dao
                 )
@@ -158,7 +156,7 @@ class StockTickUpdater(BaseDataUpdater):
 
                 self.update_multithreaded(dates)
 
-            # Step 2: Load - 存入資料庫
+            # Step 2：Load - 存入資料庫
             logger.info("=" * 80)
             logger.info("Starting database loading process...")
             logger.info("=" * 80)
@@ -198,7 +196,7 @@ class StockTickUpdater(BaseDataUpdater):
             self._print_update_summary(self.global_stats, start_date, end_date)
             raise
         finally:
-            # Step 4: Cleanup - 確保登出所有 API 連接（即使發生異常也會執行）
+            # Step 4：Cleanup - 確保登出所有 API 連接（即使發生異常也會執行）
             self.close()
 
     def remove_loaded_csv_files(self) -> int:
@@ -255,11 +253,11 @@ class StockTickUpdater(BaseDataUpdater):
             單一 thread 任務：爬 + 清洗，清洗後直接落地成 CSV
         - Parameters:
             - api: sj.Shioaji
-                Shioaji API
+                這個 thread 專用的 Shioaji API 物件
             - dates: List[datetime.date]
-                日期 List
+                要爬的交易日
             - stock_list: List[str]
-                Stock List
+                這個 thread 負責的股票代號
         - Return:
             - Dict[str, Any]
                 本 thread 的成功／失敗／略過檔數，交由 `update_multithreaded()` 匯總
@@ -272,7 +270,7 @@ class StockTickUpdater(BaseDataUpdater):
             "skipped_stocks": 0,
         }
 
-        # Crawl
+        # 逐檔爬取並清洗
         for stock_id in stock_list:
             try:
                 remaining_mb: float = api.usage().remaining_bytes / 1024**2
@@ -445,7 +443,7 @@ class StockTickUpdater(BaseDataUpdater):
         return stats
 
     def update_multithreaded(self, dates: List[datetime.date]) -> None:
-        """使用 Multi-threading 的方式 Update Tick Data"""
+        """以多執行緒更新 tick 資料"""
 
         logger.info(
             f"Start multi-thread Updating. Total stocks: {len(self.all_stock_list)}, "
@@ -457,7 +455,7 @@ class StockTickUpdater(BaseDataUpdater):
             self.all_stock_list, self.num_threads
         )
 
-        # Multi-threading
+        # 多執行緒
         futures: List[Future] = []
         thread_results: List[Dict[str, Any]] = []  # 收集每個線程的統計信息
 

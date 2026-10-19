@@ -10,7 +10,7 @@ from core.dao.base import BaseDAO
 from core.dao.connection import DBConnection, connect_sqlite
 from core.utils.log_manager import LogManager
 
-"""Abstract base class for data access APIs. Provides a common interface for querying data from the database"""
+"""資料 API 的抽象基底：建構骨架、連線所有權與各 API 共用的查詢介面"""
 
 
 # `noqa: B024`：骨架收回基底之後已經沒有抽象方法，但仍保留 ABC——

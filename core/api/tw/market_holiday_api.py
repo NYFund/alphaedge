@@ -8,7 +8,7 @@ from core.dao.base import BaseDAO
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
 
 """
-Market Holiday API: query the official TWSE holiday schedule in tw_stock.db
+Market Holiday API：查詢 `tw_stock.db` 中 TWSE 官方公告的開休市日期
 
 **三種答案，`None` 不可當成 True**：
 
@@ -24,7 +24,7 @@ Market Holiday API: query the official TWSE holiday schedule in tw_stock.db
 
 
 class MarketHolidayAPI(BaseDataAPI):
-    """Market Holiday API"""
+    """市場開休市日期 API（官方公告的事前行事曆）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = MarketHolidayDAO

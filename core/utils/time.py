@@ -140,6 +140,6 @@ class TimeUtils:
 
     @staticmethod
     def format_date(date: datetime.date, sep: str = "") -> str:
-        """Format date as 'YYYY{sep}MM{sep}DD'"""
+        """把日期格式化成 `YYYY{sep}MM{sep}DD`"""
 
         return date.strftime(f"%Y{sep}%m{sep}%d")

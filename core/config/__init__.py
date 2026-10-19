@@ -1,3 +1,7 @@
+from .paths import *  # noqa: F403
+from .schema import *  # noqa: F403
+from .settings import *  # noqa: F403
+
 """
 設定門面：維持 `from core.config import X` 這個既有的 import 路徑不變
 
@@ -16,7 +20,3 @@
 新增一個常數卻忘了補進這裡，`from core.config import NEW_PATH` 會以
 ImportError 收場，而錯誤訊息完全指不到真正的原因。
 """
-
-from .paths import *  # noqa: F403
-from .schema import *  # noqa: F403
-from .settings import *  # noqa: F403

@@ -73,11 +73,15 @@ def order_event(
 
 @pytest.fixture
 def event_queue() -> queue.Queue:
+    """回報處理器輸出事件的佇列"""
+
     return queue.Queue()
 
 
 @pytest.fixture
 def handler(event_queue: queue.Queue) -> ShioajiExecutionHandler:
+    """把事件寫進 `event_queue` 的回報處理器"""
+
     return ShioajiExecutionHandler(event_queue)
 
 
@@ -327,7 +331,7 @@ def replay(
     event_queue: queue.Queue,
     lines: List[Tuple[Any, Dict[str, Any]]],
 ) -> Tuple[int, int]:
-    """重放一批回報，回傳 (去重後的成交筆數, 成交總量)"""
+    """重放一批回報，回傳（去重後的成交筆數，成交總量）"""
 
     dedup: ExecutionEventDeduplicator = ExecutionEventDeduplicator()
     for stat, msg in lines:

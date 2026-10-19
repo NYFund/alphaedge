@@ -1074,6 +1074,8 @@ def test_shared_attachment_url_keeps_only_the_latest(
     urls = {"a": shared, "b": "https://taifex/attach/0101.csv", "c": shared}
 
     class Stub:
+        """附件網址照表回傳的爬蟲替身"""
+
         def resolve_announcement_csv(self, link: str):
             return urls[link]
 
@@ -1097,6 +1099,8 @@ def test_unique_attachment_urls_are_all_kept(
     ]
 
     class Stub:
+        """每則公告各有專屬附件網址的爬蟲替身"""
+
         def resolve_announcement_csv(self, link: str):
             return f"https://taifex/attach/{link}.csv"
 

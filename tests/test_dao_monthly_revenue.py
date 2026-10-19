@@ -148,15 +148,21 @@ def test_update_backfills_missing_months_instead_of_starting_after_latest(
     crawled: List[Tuple[int, int]] = []
 
     class RecordingCrawler:
+        """記錄被要求爬取的年月，一律回傳失敗"""
+
         def crawl(self, year: int, month: int) -> object:
             crawled.append((year, month))
             return type("Result", (), {"is_ok": False})()
 
     class NullLoader:
+        """不入庫的 loader 替身"""
+
         def add_to_db(self, remove_files: bool = False) -> None:
             pass
 
     class NullStats:
+        """不統計、不判定失敗的統計替身"""
+
         def record(self, result: object) -> None:
             pass
 

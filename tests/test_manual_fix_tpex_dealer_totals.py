@@ -28,6 +28,8 @@ COLUMNS: List[str] = [
 
 
 def make_conn(rows: List[Tuple[object, ...]]) -> sqlite3.Connection:
+    """以給定資料列建立只含 `chip` 表的記憶體資料庫"""
+
     conn: sqlite3.Connection = sqlite3.connect(":memory:")
     quoted: str = ",".join(f'"{column}"' for column in COLUMNS)
     conn.execute(f"CREATE TABLE chip ({quoted})")
@@ -37,6 +39,8 @@ def make_conn(rows: List[Tuple[object, ...]]) -> sqlite3.Connection:
 
 
 def totals(conn: sqlite3.Connection, date: str) -> Tuple[int, int]:
+    """查某日的自營商買進／賣出合計"""
+
     return conn.execute(
         'SELECT "自營商買進股數", "自營商賣出股數" FROM chip WHERE date = ?', (date,)
     ).fetchone()

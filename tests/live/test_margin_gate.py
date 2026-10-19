@@ -29,6 +29,8 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 22, 13, 35)
 
 
 def snapshot(available: float, equity: float) -> Any:
+    """只帶可用保證金與權益數的帳戶快照"""
+
     return SimpleNamespace(available_margin=available, total_equity=equity)
 
 
@@ -182,6 +184,8 @@ def futures_order(action: Action) -> FuturesOrder:
 
 
 def margin_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
+    """已寫入的保證金不足事件（策略，類別）"""
+
     return dao.conn.execute(
         "SELECT strategy_name, category FROM live_risk_event "
         "WHERE category = 'MARGIN_INSUFFICIENT'"

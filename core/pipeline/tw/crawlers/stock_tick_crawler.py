@@ -32,7 +32,7 @@ class StockTickCrawler(BaseDataCrawler):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
 
         LogManager.setup_logger("crawl_stock_tick.log")
 
@@ -40,6 +40,7 @@ class StockTickCrawler(BaseDataCrawler):
 
     def crawl(self) -> None:
         """本爬蟲沒有統一入口，逐檔取資料請用 `crawl_stock_tick()`"""
+
         pass
 
     def crawl_stock_tick(

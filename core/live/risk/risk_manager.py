@@ -256,7 +256,7 @@ def truncate_batch_by_exposure(
             風控設定
     - Return:
         - Tuple[List[ExposureItem], List[Tuple[ExposureItem, str]]]
-            （放行清單, [(被截斷的單, 原因)]）
+            （放行清單，`[(被截斷的單, 原因)]`）
     """
 
     total_cap: float

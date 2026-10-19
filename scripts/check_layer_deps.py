@@ -363,6 +363,8 @@ def strongly_connected(graph: Dict[str, Set[str]]) -> List[List[str]]:
     sys.setrecursionlimit(10000)
 
     def visit(v: str) -> None:
+        """Tarjan 演算法的深度優先走訪：以 low-link 判定強連通分量的根"""
+
         index[v] = low[v] = counter[0]
         counter[0] += 1
         stack.append(v)
@@ -844,6 +846,8 @@ def main() -> int:
     backtest_internal_hits: List[str] = check_backtest_internal_imports(files)
 
     def section(title: str, items: List[str]) -> None:
+        """印出一類違規的標題與逐筆明細"""
+
         print(f"\n=== {title}（{len(items)}）===")
         for item in items:
             print(f"  {item}")

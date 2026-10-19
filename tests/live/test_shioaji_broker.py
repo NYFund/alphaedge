@@ -28,6 +28,8 @@ from core.utils import (
 
 
 class FakeOrder:
+    """shioaji 委託物件替身"""
+
     def __init__(
         self, seqno: str = "000001", ordno: str = "AB123", custom_field: str = "010001"
     ) -> None:
@@ -37,6 +39,8 @@ class FakeOrder:
 
 
 class FakeStatus:
+    """shioaji 委託狀態物件替身"""
+
     def __init__(
         self, status: str = "Submitted", deal_quantity: int = 0, msg: str = ""
     ) -> None:
@@ -46,6 +50,8 @@ class FakeStatus:
 
 
 class FakeTrade:
+    """shioaji 交易物件替身（委託加狀態）"""
+
     def __init__(
         self,
         status: str = "Submitted",
@@ -59,6 +65,8 @@ class FakeTrade:
 
 
 class FakeContract:
+    """帶漲跌停價的股票合約替身"""
+
     def __init__(self, code: str = "2330") -> None:
         self.code: str = code
         self.limit_up: float = 1100.0
@@ -92,6 +100,8 @@ def make_account(account_id: str = "1234567") -> Any:
 
 
 class FakeApi:
+    """shioaji API 替身"""
+
     def __init__(self) -> None:
         self.stock_account: Any = make_account()
         self.futopt_account: Any = make_account("7654321")
@@ -159,6 +169,8 @@ class FakeApi:
 
 
 class FakeSession:
+    """連線狀態可控的 shioaji session 替身"""
+
     def __init__(self, api: FakeApi, limiter: RateLimiter) -> None:
         self.api: Optional[FakeApi] = api
         self.rate_limiter: RateLimiter = limiter
@@ -185,16 +197,22 @@ class FakeSession:
 
 @pytest.fixture
 def limiter() -> RateLimiter:
+    """假時鐘限流器：測試不該真的睡"""
+
     return RateLimiter(time_source=lambda: 0.0, sleep=lambda seconds: None)
 
 
 @pytest.fixture
 def api() -> FakeApi:
+    """shioaji API 替身"""
+
     return FakeApi()
 
 
 @pytest.fixture
 def broker(api: FakeApi, limiter: RateLimiter) -> ShioajiBroker:
+    """已連線的券商轉接器"""
+
     instance: ShioajiBroker = ShioajiBroker(FakeSession(api, limiter), limiter)
     instance.connect()
     return instance

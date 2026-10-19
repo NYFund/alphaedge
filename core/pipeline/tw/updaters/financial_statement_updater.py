@@ -35,25 +35,27 @@ from core.pipeline.utils import FinancialStatementType
 from core.pipeline.utils.exceptions import DataLoadError
 
 """
-* Crawl Balance Sheet (資產負債表)
-資料區間（但是只有 102 年以後才可以爬）
-上市: 民國 78 (1989) 年 ~ present
-上櫃: 民國 82 (1993) 年 ~ present
+四大報表在 MOPS 的資料區間：
 
-* Crawl Statement of Comprehensive Income (綜合損益表)
-資料區間（但是只有 102 年以後才可以爬）
-上市: 民國 77 (1988) 年 ~ present
-上櫃: 民國 82 (1993) 年 ~ present
+* 資產負債表（Balance Sheet）
+資料區間（但只有 102 年以後才爬得到）
+上市：民國 78（1989）年至今
+上櫃：民國 82（1993）年至今
 
-* Crawl Cash Flow Statement (現金流量表)
+* 綜合損益表（Statement of Comprehensive Income）
+資料區間（但只有 102 年以後才爬得到）
+上市：民國 77（1988）年至今
+上櫃：民國 82（1993）年至今
+
+* 現金流量表（Cash Flow Statement）
 資料區間
-上市: 民國 102 (2013) 年 ~ present
-上櫃: 民國 102 (2013) 年 ~ present
+上市：民國 102（2013）年至今
+上櫃：民國 102（2013）年至今
 
-* Crawl Statement of Changes in Equity (權益變動表)
+* 權益變動表（Statement of Changes in Equity）
 資料區間
-上市: 民國 102 (2013) 年 ~ present
-上櫃: 民國 102 (2013) 年 ~ present
+上市：民國 102（2013）年至今
+上櫃：民國 102（2013）年至今
 """
 
 """
@@ -103,7 +105,7 @@ class StatementSpec:
     crawl: Callable[[int, int], CrawlResult]  # crawler 的爬取函式
     clean: Callable[..., Optional[pd.DataFrame]]  # cleaner 的清洗函式
     dir_path: Path  # downloads 底下的落地目錄
-    label: str  # log 用的人話名稱，Title Case（Ex: "Balance Sheet"）
+    label: str  # log 用的人話名稱，Title Case（例如 `"Balance Sheet"`）
 
     @property
     def log_label(self) -> str:
@@ -119,7 +121,7 @@ class StatementSpec:
 
 
 class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
-    """Financial Statement Updater"""
+    """財報 updater：依年季更新四大報表"""
 
     LOG_FILE_NAME: str = "update_financial_statement.log"
 
@@ -158,7 +160,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         self.cleaner: FinancialStatementCleaner = FinancialStatementCleaner()
         self.loader: FinancialStatementLoader = FinancialStatementLoader(conn=self.conn)
 
-        # Data directories for each report
+        # 各報表的落地目錄
         self.fs_dir: Path = FINANCIAL_STATEMENT_DOWNLOADS_PATH
         self.balance_sheet_dir: Path = (
             self.fs_dir / FinancialStatementType.BALANCE_SHEET.lower()
@@ -180,9 +182,9 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        # 設定 log 檔案儲存路徑
+        # 由基底依 `LOG_FILE_NAME` 開日誌檔
         super().setup()
 
     def close(self) -> None:
@@ -258,7 +260,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         start_season: int,
         end_season: int,
     ) -> None:
-        """Update the Database"""
+        """更新資料庫"""
 
         # **拿不到最新資料要讓 target 失敗**：原本三張報表的迴圈只是 `continue`，
         # 站方整批失聯時行程照樣以結束碼 0 收場，表停在舊資料上而失敗清單列它成功。
@@ -274,7 +276,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
             if reason:
                 failures.append(f"{spec.table_name}: {reason}")
 
-        # Update Equity Changes
+        # 權益變動表
         # 逐檔查詢，量級與前三張報表差三個數量級（一個年季約兩千次請求），
         # 故放在最後：即使這裡耗時或中斷，前三張報表已經入庫完成
         try:
@@ -314,7 +316,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
 
         logger.info(f"* Start Updating {spec.label} Data...")
 
-        # Step 1: Crawl
+        # Step 1：爬取
         # 候選年季是差集而不是 `MAX + 1`（理由見 `plan_pending_year_seasons()`）
         year_seasons: List[Tuple[int, int]] = self.plan_pending_year_seasons(
             table_name=spec.table_name,
@@ -333,7 +335,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
                 result: CrawlResult = spec.crawl(year, season)
                 stats.record(result)
 
-                # Step 2: Clean
+                # Step 2：清洗
                 # 沒問到的年季下次執行會再進候選（候選是差集），這裡只記統計
                 if not result.is_ok:
                     continue
@@ -359,7 +361,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         # `requested` 的單位是「年季」而不是「天」：一個年季上市、上櫃各一次請求
         stats.report(f"{spec.table_name}（單位：年季）")
 
-        # Step 3: Load
+        # Step 3：入庫
         self.loader.add_to_db(
             dir_path=spec.dir_path,
             table_name=spec.table_name,

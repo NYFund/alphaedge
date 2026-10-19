@@ -63,6 +63,8 @@ class StubTwoTableAPI:
 
 
 def stock_futures_quote() -> FuturesQuote:
+    """股票期貨報價：標的價 `UNDERLYING`、契約乘數 `CONTRACT_SIZE`"""
+
     return build_futures_quote(
         product=STOCK_FUTURES,
         expiry="202403",

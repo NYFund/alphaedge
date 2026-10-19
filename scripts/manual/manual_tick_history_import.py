@@ -368,6 +368,8 @@ def verify(
     load_log_table: str = f'"{dao.schema}"."{dao.LOAD_LOG_TABLE_NAME}"'
 
     def query(sql: str) -> List[Tuple[Any, ...]]:
+        """在獨立 transaction 內執行唯讀查詢並取回所有列"""
+
         with dao.conn.transaction():
             return dao.conn.execute(sql).fetchall()
 

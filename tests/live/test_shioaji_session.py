@@ -33,6 +33,8 @@ TAIPEI: ZoneInfo = ZoneInfo("Asia/Taipei")
 
 
 class FakeContract:
+    """只帶合約更新日期的合約替身"""
+
     def __init__(self, update_date: Any = "2026-09-19") -> None:
         self.update_date: Any = update_date
 
@@ -48,6 +50,8 @@ class FakeStockCategory:
 
 
 class FakeContracts:
+    """對應 shioaji 的 `api.Contracts`，只提供股票類別"""
+
     def __init__(self, contract: Optional[FakeContract]) -> None:
         self.Stocks: FakeStockCategory = FakeStockCategory(contract)
 
@@ -685,6 +689,8 @@ def test_logout_failure_does_not_leak_the_session_token(
     )
 
     class LeakyLogout(FakeShioaji):
+        """登出逾時、錯誤訊息夾帶 session token 的 shioaji 替身"""
+
         def logout(self) -> None:
             raise TimeoutError(
                 "Topic: api/v1/auth/logout, Corr: c11, "

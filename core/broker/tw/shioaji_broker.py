@@ -166,6 +166,8 @@ class ShioajiBroker(BaseBroker):
         """
 
         def forward_quote(item: Any) -> None:
+            """只轉交逐筆成交；試撮與盤中零股轉換後為 None，一併略過"""
+
             kind, _exchange, message = item
             if kind != "tick_stk":
                 # 委買賣（bidask）目前沒有消費者；轉成報價會讓「收到一筆行情」

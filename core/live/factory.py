@@ -115,7 +115,7 @@ from core.utils import (
 
 
 class UnsupportedMarketError(ValueError):
-    """沒有對應實作的（市場, 商品）組合"""
+    """沒有對應實作的（市場，商品）組合"""
 
 
 def live_capital(strategy: BaseStrategy) -> float:
@@ -359,7 +359,7 @@ def build_live_trader(
             組裝好的引擎
     - Raise:
         - UnsupportedMarketError
-            某支策略的（市場, 商品）組合沒有對應實作
+            某支策略的（市場，商品）組合沒有對應實作
         - ValueError
             策略清單為空、策略名稱重複，或風控設定不合法（宣告的類別與市場不符、
             部署設定比策略宣告寬或寫了不存在的欄位）
@@ -633,6 +633,8 @@ def make_order_rebuilder(
     """
 
     def rebuild(row: Dict[str, Any]) -> Optional[BaseOrder]:
+        """依該列的策略取建構器還原訂單；標的或數量是空的列回 None"""
+
         if not row.get("symbol") or not int(row.get("volume") or 0):
             return None
 
@@ -835,6 +837,8 @@ def make_trade_cost_estimator(
         opening: List[Dict[str, Any]],
         run_date: datetime.date,
     ) -> Optional[float]:
+        """依市場重算一筆已平倉交易的手續費與稅；算不出來時回 None"""
+
         quantity: int = trade.quantity
         if trade.is_futures:
             product, _ = split_contract_id(trade.symbol)
@@ -937,6 +941,8 @@ def _make_opening_requirement(
     """
 
     def calculate(order: BaseOrder) -> float:
+        """開倉需要的原始保證金與開倉成本（保證金表以今天為準）"""
+
         return manager.calculate_opening_requirement(order, now_provider().date())
 
     return calculate
@@ -963,9 +969,7 @@ def make_daily_backtest_runner(
         的話，宣告了實盤額度的策略每天都會因為張數與檔數不同而報未解釋差異——
         `VolumeBreakoutMomentumStrategy` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
         2026-10-06 試跑的三筆未解釋差異全是這個原因。
-    - Parameters:
-        - strategies: Sequence[BaseStrategy]
-            本次實盤載入的策略實例；只用來取類別與 `init_capital`
+
         **起始部位＝實盤當天開盤前的持倉**（`held_lots`）：從零部位跑的話，回測帳上
         沒有前一天留下的部位，實盤當天的平倉單在回測一定沒有對應，平倉日必定報
         未解釋差異——開倉→次日平倉這組驗收永遠過不了。順帶的效果是：開倉沒成交
@@ -986,6 +990,8 @@ def make_daily_backtest_runner(
     }
 
     def run(strategy_name: str, run_date: datetime.date) -> List[BaseOrder]:
+        """以新建的策略實例跑一天回測，回傳它會送出的委託"""
+
         blueprint: Optional[BaseStrategy] = blueprints.get(strategy_name)
         if blueprint is None:
             raise UnsupportedMarketError(f"本次執行沒有載入策略 {strategy_name}")
@@ -1034,6 +1040,8 @@ def make_order_phase_lookup(
     }
 
     def lookup(strategy_name: str, order: BaseOrder) -> Set[str]:
+        """這張回測委託該送出的段落名；任一鉤子解析不出段落就回空集合"""
+
         strategy: Optional[BaseStrategy] = by_name.get(strategy_name)
         if strategy is None:
             return set()
@@ -1085,6 +1093,8 @@ def make_closing_limit_lookup(
     cache: Dict[datetime.date, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
 
     def load(run_date: datetime.date) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """取當日收盤價與漲跌停基準（前收，除權息日改用開盤競價基準）；同一天只查一次"""
+
         if run_date not in cache:
             with api_factory() as api:
                 # 往前 30 個曆日足以跨過任何連假
@@ -1107,6 +1117,8 @@ def make_closing_limit_lookup(
     def lookup(
         symbol: str, side: str, run_date: datetime.date
     ) -> Optional[Tuple[float, float]]:
+        """當日收盤價與該方向的漲跌停價；任一項取不到時回 None"""
+
         closes, references = load(run_date)
         close: Optional[float] = _positive_price(closes.get(symbol))
         reference: Optional[float] = _positive_price(references.get(symbol))
@@ -1215,6 +1227,8 @@ def _make_contract_value_calculator(
     """
 
     def calculate(order: BaseOrder) -> float:
+        """價格 × 數量 × 計價單位"""
+
         unit: int = spec.get_unit_size(spec.resolve_product(order), now_provider())
         return float(order.price) * float(order.volume) * float(unit)
 
@@ -1250,6 +1264,8 @@ def _make_futures_margin_calculator(
     """
 
     def calculate(order: BaseOrder) -> float:
+        """部位取記帳時繳的保證金；委託（或沒有紀錄的部位）以今天查保證金表"""
+
         recorded: float = float(getattr(order, "margin", 0.0) or 0.0)
         if isinstance(order, BasePosition) and recorded > 0:
             return recorded
