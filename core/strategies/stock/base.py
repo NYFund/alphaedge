@@ -94,7 +94,7 @@ class BaseStockStrategy(BaseStrategy):
             宣告本策略要用的資料源
 
             實例一律由 DataFeed 統一持有，策略只做取用，不自行建立。
-        - Parameter:
+        - Parameters:
             - feed: BaseDataFeed
                 引擎持有的資料源
         """

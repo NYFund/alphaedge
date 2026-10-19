@@ -295,7 +295,7 @@ class BaseStrategy(ABC):
             **策略不覆寫 `check_open_signal()`**：那是基底提供的引擎契約，
             現行三支正式策略全部只實作 `generate_*_signals()`。覆寫它會讓
             本方法整個不被走到，數量換算與風控前處理也一併被跳過。
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -316,7 +316,7 @@ class BaseStrategy(ABC):
             而「平掉第一筆部位」與「合併同標的所有部位」是策略決策
             （後者若逐筆送單，會被 `close_position()` 的 FIFO 吃掉）。
             故回傳的 `Signal` 必須填 `volume` 與 `order_price`。
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -332,7 +332,7 @@ class BaseStrategy(ABC):
         """
         - Description:
             停損訊號；語意與 `generate_close_signals()` 相同，只是觸發條件不同
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -351,7 +351,7 @@ class BaseStrategy(ABC):
 
             **只做欄位搬運**，不做任何數量或價格決策——兩者都已由策略在
             `Signal` 裡給定。由各市場基底實作（組出 `StockOrder`／`FuturesOrder`）。
-        - Parameter:
+        - Parameters:
             - signals: List[Signal]
                 已填好 `volume` 與 `order_price` 的平倉訊號
         - Return:
@@ -390,7 +390,7 @@ class BaseStrategy(ABC):
         """
         - Description:
             開倉：Alpha 選出候選後交由 portfolio 層換算部位
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -413,7 +413,7 @@ class BaseStrategy(ABC):
             平倉：數量與價格都由策略在訊號裡給定，基底只負責組單
 
             **不經過 portfolio 層**，理由見 `generate_close_signals()`。
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -430,7 +430,7 @@ class BaseStrategy(ABC):
         """
         - Description:
             停損：與平倉走同一條組裝路徑，只是訊號來源不同
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
