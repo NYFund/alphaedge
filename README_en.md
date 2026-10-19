@@ -228,7 +228,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Live Execution Layer](docs/live/execution-layer.md) | How a strategy's execution style (`MARKET`/`LIMIT`) becomes a broker order per session; decision price, parity categories, known limits |
 | [Production Launch Checklist (Stock)](docs/live/production-checklist-stock.md) | Tick-off list before the stock line first connects to production: credentials, risk and capital, alerts and monitoring, day-one dry run, stock-specific items (in Chinese) |
 | [Production Launch Checklist (Futures)](docs/live/production-checklist-futures.md) | Tick-off list before the futures line first connects to production: the shared items match the stock list, plus futures-specific items (margin account, margin table, notional leverage, contract roll, taken-over positions) |
-| [Data Coverage](docs/exchanges/data_coverage.md)        | Data sources, API mapping, start dates and price adjustment   |
+| [Data Coverage](docs/exchanges/data_coverage.md)        | Every database table with its crawler, API class and update target; data sources, start dates and price adjustment |
 | [Command Usage](docs/commands/command-usage.md)         | Flags, examples and exit codes for every `apps/` entrypoint (data update, backtest, live, log and data maintenance) |
 | [Strategy Development Guide](strategies/README.md) | How to implement strategies in this project                   |
 | [Multi-Market Engine](docs/backtest/multi-market-engine.md) | Backtest engine architecture: one engine, five pluggable models |

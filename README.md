@@ -229,7 +229,7 @@ graph TB
 | [實盤執行層](docs/live/execution-layer.md) | 策略的執行方式（`MARKET`／`LIMIT`）如何依時段換成券商委託、決策價、parity 歸類與已知限制 |
 | [正式環境上線檢查表（股票線）](docs/live/production-checklist-stock.md) | 股票線第一次連正式環境前逐項勾選：憑證、風控與資金、通知與監控、首日 dry-run、股票線專屬事項 |
 | [正式環境上線檢查表（期貨線）](docs/live/production-checklist-futures.md) | 期貨線第一次連正式環境前逐項勾選：共通項目同股票線，另加保證金帳戶、保證金表、名目槓桿、換月、接管部位等期貨專屬事項 |
-| [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
+| [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 每張資料表對應的 crawler、API 與更新 target；資料來源、起始日期與股價還原 |
 | [指令教學](docs/commands/command-usage.zh-TW.md)   | `apps/` 各入口（資料更新、回測、實盤、日誌與資料維護）的參數、範例與退出碼 |
 | [策略開發指南](strategies/README.md)          | 本專案策略實作方式                              |
 | [多市場回測引擎架構](docs/backtest/multi-market-engine.md) | 單一引擎 ＋ 五個可插拔 model 的設計與已知簡化 |

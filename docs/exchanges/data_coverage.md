@@ -3,6 +3,51 @@
 本文件描述 `AlphaEdge` 程式碼中**實際可用**的資料來源與對應模組。
 本地資料庫的實際內容可能與預設起日不同，一律以庫內最早一筆為準。
 
+## 資料表一覽
+
+每張表從哪裡抓、用哪個類別讀，一張表看完。**Crawler** 在 `core/pipeline/tw/crawlers/`、**API** 在 `core/api/tw/`；
+更新指令是 `python -m apps.update_db --target <target>`。
+
+**`data/db/tw_stock.db`（台股）**
+
+| 資料表 | 內容 | `--target` | Crawler | API |
+| --- | --- | --- | --- | --- |
+| `price` | 每日收盤行情（日 K） | `price` | `StockPriceCrawler` | `StockPriceAPI` |
+| `chip` | 三大法人買賣超 | `chip` | `StockChipCrawler` | `StockChipAPI` |
+| `margin` | 融資融券餘額 | `margin` | `StockMarginCrawler` | `StockMarginAPI` |
+| `short_sale_list` | 平盤下得融（借）券賣出名單 | `short_sale_list` | `StockTradingListCrawler` | `StockShortSaleListAPI` |
+| `day_trade_list` | 現股當沖標的名單 | `day_trade_list` | `StockTradingListCrawler` | `StockDayTradeListAPI` |
+| `dividend` | 除權除息（還原係數、現金股利） | `dividend` | `StockDividendCrawler` | `StockDividendAPI` |
+| `corporate_action` | 減資、分割、面額變更 | `corporate_action` | `CorporateActionCrawler` | `StockDividendAPI`（併入還原係數） |
+| `monthly_revenue` | 月營收 | `mrr` | `MonthlyRevenueReportCrawler` | `MonthlyRevenueReportAPI` |
+| `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | 財報四表 | `fs` | `FinancialStatementCrawler` | `FinancialStatementAPI` |
+| `market_holiday` | 開休市日曆 | `market_holiday` | `MarketHolidayCrawler` | `MarketHolidayAPI` |
+| `taiwan_stock_info`、`taiwan_stock_info_with_warrant` | 台股總覽（不含／含權證） | `stock_info`、`stock_info_with_warrant`* | `FinMindCrawler` | `FinMindAPI` |
+| `taiwan_securities_trader_info` | 證券商資訊 | `broker_info`* | `FinMindCrawler` | `FinMindAPI` |
+| `taiwan_stock_trading_daily_report_secid_agg` | 券商分點進出 | `broker_trading`* | `FinMindCrawler` | `FinMindAPI` |
+
+**`data/db/tw_futures.db`（台期貨）**
+
+| 資料表 | 內容 | `--target` | Crawler | API |
+| --- | --- | --- | --- | --- |
+| `futures_price_daily` | 各月份契約日 K（日盤、夜盤分列） | `futures_price`；股期另跑 `futures_stock_price`* | `FuturesPriceCrawler` | `FuturesPriceAPI` |
+| `futures_continuous` | 連續合約（換月接續） | `futures_continuous` | 無（由 `futures_price_daily` 建出） | `FuturesContinuousAPI` |
+| `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | 三大法人、大額交易人、選擇權 PCR | `futures_chip` | `FuturesChipCrawler` | `FuturesChipAPI` |
+| `futures_margin_history`、`stock_futures_margin_rate_history` | 保證金（指數類每口金額、股票類比例） | `futures_margin` | `FuturesMarginCrawler` | `FuturesMarginAPI` |
+| `futures_stock_universe` | 股票期貨標的池（快照） | `futures_stock_universe` | `FuturesStockUniverseCrawler` | `FuturesStockUniverseAPI` |
+
+**TimescaleDB（台股 tick，需 `docker compose up -d postgres`）**
+
+| 資料表 | 內容 | `--target` | Crawler | API |
+| --- | --- | --- | --- | --- |
+| `stock_tick`、`stock_tick_load_log` | 逐筆成交、各「股票 × 交易日」的入庫紀錄 | `tick` | `StockTickCrawler` | `StockTickAPI` |
+
+**`data/db/tw_trading.db`（實盤紀錄庫）**：不由 `update_db` 更新，由實盤引擎寫入、以 `LiveTradeDAO` 讀寫，
+共 11 張 `live_*` 表（啟動紀錄、委託、成交、部位歸屬、快照、風控事件、待辦、parity 等）。
+
+> \* 標 `*` 的 target 只在明確點名時才跑，`all`／`no_tick` 不含（FinMind 帳號權限不足、股期行情缺口，見下方〈更新入口〉）。
+> 每張表的起始日期與資料來源網址見〈總覽〉。
+
 ## 總覽
 
 | 類別 | 來源 | 主要模組 | 儲存位置 | 起始日期 | 備註 |
@@ -24,29 +69,6 @@
 | 股票期貨標的池 | TAIFEX 標的證券一覽表（GET） | `FuturesStockUniverseAPI` | SQLite `tw_futures.db` `futures_stock_universe` | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
 | 市場開休市日期 | TWSE `holidaySchedule`（JSON，一年一次請求） | `MarketHolidayAPI` | SQLite `market_holiday` | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
 | Tick 逐筆 | Shioaji（每日更新）＋歷史 CSV（一次匯入） | `StockTickAPI` | TimescaleDB `stock_tick`（hypertable） | 歷史存檔 2020-04-01～2024-05-10（`scripts/manual/manual_tick_history_import.py` 匯入後才有資料）；Shioaji 可查區間約自 **2020-03-02** | 需執行中的 TimescaleDB（開 Docker Desktop 後 `docker compose up -d postgres`）；興櫃時期不入庫 |
-
-## API 與資料表對照
-
-| API 類別 | 檔案 | 後端 | 關鍵資料表／資料庫 |
-| --- | --- | --- | --- |
-| `StockPriceAPI` | `core/api/tw/stock_price_api.py` | SQLite | `price` |
-| `StockChipAPI` | `core/api/tw/stock_chip_api.py` | SQLite | `chip` |
-| `StockDividendAPI` | `core/api/tw/stock_dividend_api.py` | SQLite | `dividend`、`corporate_action` |
-| `StockMarginAPI` | `core/api/tw/stock_margin_api.py` | SQLite | `margin` |
-| `StockShortSaleListAPI` | `core/api/tw/stock_short_sale_list_api.py` | SQLite | `short_sale_list` |
-| `StockDayTradeListAPI` | `core/api/tw/stock_day_trade_list_api.py` | SQLite | `day_trade_list` |
-| `MonthlyRevenueReportAPI` | `core/api/tw/monthly_revenue_report_api.py` | SQLite | `monthly_revenue` |
-| `FinancialStatementAPI` | `core/api/tw/financial_statement_api.py` | SQLite | `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` |
-| `FinMindAPI` | `core/api/tw/finmind_api.py` | SQLite | `taiwan_stock_info`、`taiwan_stock_info_with_warrant`、`taiwan_securities_trader_info`、`taiwan_stock_trading_daily_report_secid_agg` |
-| `StockTickAPI` | `core/api/tw/stock_tick_api.py` | TimescaleDB | `stock_tick`、`stock_tick_load_log` |
-| `FuturesPriceAPI` | `core/api/tw/futures_price_api.py` | SQLite | `futures_price_daily`（`tw_futures.db`） |
-| `FuturesContinuousAPI` | `core/api/tw/futures_continuous_api.py` | SQLite | `futures_continuous`（`tw_futures.db`） |
-| `FuturesMarginAPI` | `core/api/tw/futures_margin_api.py` | SQLite | `futures_margin_history`、`stock_futures_margin_rate_history` |
-| `FuturesChipAPI` | `core/api/tw/futures_chip_api.py` | SQLite | `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` |
-| `FuturesStockUniverseAPI` | `core/api/tw/futures_stock_universe_api.py` | SQLite | `futures_stock_universe` |
-| `MarketHolidayAPI` | `core/api/tw/market_holiday_api.py` | SQLite | `market_holiday` |
-
-起始日期常數除另行註明者外皆定義於 `core/config/settings.py`。
 
 ## 更新入口
 
