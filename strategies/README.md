@@ -586,7 +586,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 |------|------|------|--------|
 | `live_ready` | `bool` | 策略可上實盤；標 `True` 前要確認內部狀態能由「歷史資料 ＋ 當前部位」重建 | `False` |
 | `live_execution` | `Optional[ExecutionStyle]` | `MARKET`（要成交）或 `LIMIT`（照價掛單），開倉與平倉共用；**停損一律 `MARKET`**。沒宣告時啟動檢查拒絕。回測假設以收盤價成交的策略應宣告 `MARKET` | `None` |
-| `live_tag` | `str` | 策略代號，只寫進本地紀錄庫，不送券商 | `""` |
+| `live_tag` | `str` | 策略代號，只寫進本地紀錄庫（`live_run.strategy_params_json` 的 `live_tags`），不送券商 | `""` |
 | `live_capital` | `Optional[float]` | 實盤資金額度；`None` 沿用 `init_capital` | `None` |
 | `live_max_holdings` | `Optional[int]` | 實盤最大持倉檔數；`None` 沿用 `max_holdings`，與 `live_capital` 成對調整 | `None` |
 | `live_risk_config` | `Optional[BaseRiskConfig]` | 實盤風控門檻；股票宣告 `StockRiskConfig(...)`、期貨宣告 `FuturesRiskConfig(...)`，只填要改的欄位，不可超過全域上限；部署端可再以 `deploy/live_risk.toml` 收緊（見 `docs/live/live-engine.md`〈三、委託路徑〉的事前風控） | `None`（該市場預設值） |

@@ -139,7 +139,8 @@ class BaseStrategy(ABC):
         會產生錯訊號，而且不會報錯。標成 True 之前要逐項確認並寫進
         class docstring 的〈實盤執行〉區塊。
 
-        `live_tag` 是策略代號，**只寫本地紀錄與報表，不送券商**——券商的
+        `live_tag` 是策略代號，**只寫本地紀錄，不送券商**（啟動時記進
+        `live_run.strategy_params_json` 的 `live_tags`）——券商的
         `custom_field` 那 6 個字元讓給委託識別碼的壓縮碼（壓縮碼反查得到策略，
         策略代號卻反查不到是哪一張單），因此它不受 6 字元與英數字的限制。
 

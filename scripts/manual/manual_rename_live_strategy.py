@@ -23,7 +23,8 @@ parity 都以它分帳）。策略改名後不遷移紀錄庫的話，新名字�
 改兩種地方，**在同一個交易內完成**，前後各表筆數必須相同：
 - 每張表的 `strategy_name` 欄位（以 schema 動態找出，不寫死表名）。
 - `live_run.strategy_params_json` 的 `strategies` 清單：parity 以它判斷「這支策略當天的
-  交易段落有沒有正常跑完」，不改的話改名前的日子會被判成沒跑。
+  交易段落有沒有正常跑完」，不改的話改名前的日子會被判成沒跑。同一欄的 `live_tags`
+  以策略名為鍵，一併換鍵。
 `live_run.end_reason` 之類的自由文字是歷史紀錄，**不改**。
 
 另外把 `results/live/<舊名>/` 的 parity CSV 目錄改名（新名目錄已存在時不動，改為報告）。
@@ -118,11 +119,20 @@ def plan_strategy_columns(
 
 
 def rename_in_params(raw: str, old: str, new: str) -> str:
-    """把 `strategy_params_json` 的 `strategies` 清單中的舊名換成新名；其餘欄位原樣保留"""
+    """
+    把 `strategy_params_json` 的 `strategies` 清單與 `live_tags` 的鍵從舊名換成新名
+
+    其餘欄位原樣保留；`live_tags` 不存在（較早的紀錄）時不補上。
+    """
 
     params: Dict = json.loads(raw)
     strategies: List[str] = params.get("strategies", [])
     params["strategies"] = [new if name == old else name for name in strategies]
+    if isinstance(params.get("live_tags"), dict):
+        params["live_tags"] = {
+            new if name == old else name: tag
+            for name, tag in params["live_tags"].items()
+        }
     return json.dumps(params, ensure_ascii=False)
 
 
