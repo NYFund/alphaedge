@@ -8,6 +8,7 @@ from core.live.attribution.position_ledger import (
     PositionAttributionLedger,
 )
 from core.live.notify.base import NotifyLevel
+from core.live.risk.event_categories import RESYNC_FROM_BROKER
 from core.live.risk.event_log import RiskEventLogger
 from core.models import BrokerPositionSnapshot
 
@@ -32,9 +33,6 @@ from core.models import BrokerPositionSnapshot
 判定與寫入刻意分開：`plan_resync()` 只產出計畫，`apply_resync()` 才寫入。
 只列計畫不寫入的那條路徑因此不可能動到任何一筆。
 """
-
-# 風控事件類別：每一筆異動一筆事件
-RESYNC_EVENT_CATEGORY: str = "RESYNC_FROM_BROKER"
 
 # 異動種類
 RESYNC_ADOPT: str = "ADOPT"  # 券商多出來的量收進未歸屬
@@ -266,7 +264,7 @@ def _apply_action(
     detail: Dict[str, object] = dataclasses.asdict(action)
     detail["lot_id"] = lot_id
     RiskEventLogger(ledger.dao, run_id, now_provider=lambda: moment).write(
-        category=RESYNC_EVENT_CATEGORY,
+        category=RESYNC_FROM_BROKER,
         severity=severity,
         message=message,
         strategy_name=action.strategy_name,

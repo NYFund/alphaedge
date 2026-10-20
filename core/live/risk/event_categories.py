@@ -91,6 +91,8 @@ ORDER_STATE_INVALID: str = "ORDER_STATE_INVALID"
 RECOVER_AMBIGUOUS: str = "RECOVER_AMBIGUOUS"
 # 券商已受理、本地卻寫不進紀錄庫：單是活的，不可當成送單失敗去補平
 ORDER_PERSIST_FAILED: str = "ORDER_PERSIST_FAILED"
+# 以券商部位重建歸屬帳（`core/live/attribution/resync.py`）：每一筆 lot 異動一筆事件
+RESYNC_FROM_BROKER: str = "RESYNC_FROM_BROKER"
 
 OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
     {
@@ -118,6 +120,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         ORDER_STATE_INVALID,
         RECOVER_AMBIGUOUS,
         ORDER_PERSIST_FAILED,
+        RESYNC_FROM_BROKER,
     }
 )
 

@@ -12,7 +12,6 @@ from core.live.attribution.position_ledger import (
 from core.live.attribution.resync import (
     RESYNC_ADOPT,
     RESYNC_CLOSE,
-    RESYNC_EVENT_CATEGORY,
     RESYNC_REDUCE,
     ResyncPlan,
     ResyncRefusedError,
@@ -20,6 +19,7 @@ from core.live.attribution.resync import (
     plan_resync,
 )
 from core.live.factory import build_live_trader
+from core.live.risk.event_categories import RESYNC_FROM_BROKER
 from core.live.risk.trading_mode import TradingMode
 from core.live.trader import LiveTrader
 from core.models import BrokerPositionSnapshot
@@ -113,7 +113,7 @@ def resync_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
     return dao.conn.execute(
         "SELECT strategy_name, severity, symbol FROM live_risk_event "
         "WHERE category = ? ORDER BY event_id",
-        (RESYNC_EVENT_CATEGORY,),
+        (RESYNC_FROM_BROKER,),
     ).fetchall()
 
 

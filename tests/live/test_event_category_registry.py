@@ -1,6 +1,6 @@
 import ast
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from core.live.report.parity_checker import RISK_EVENT_TO_CATEGORY
 from core.live.risk import event_categories
@@ -26,9 +26,74 @@ POSITIONAL_CATEGORY_ARG: dict = {
 }
 
 
-def category_literals(path: Path) -> List[Tuple[int, str]]:
-    """找出檔案裡所有以字面值寫出的事件類別：`(行號, 類別名)`"""
+def module_constants(path: Path) -> Dict[str, str]:
+    """檔案最外層的字串常數：`NAME: str = "..."` → `{NAME: 值}`"""
 
+    tree: ast.Module = ast.parse(path.read_text(encoding="utf-8"))
+    constants: Dict[str, str] = {}
+    for node in tree.body:
+        target: Optional[ast.expr] = None
+        if isinstance(node, ast.AnnAssign):
+            target = node.target
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        value: Optional[ast.expr] = getattr(node, "value", None)
+        if (
+            isinstance(target, ast.Name)
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            constants[target.id] = value.value
+    return constants
+
+
+def all_live_constants() -> Dict[str, str]:
+    """`core/live/` 各檔最外層字串常數的聯集：解析跨檔 import 進來的常數名用"""
+
+    constants: Dict[str, str] = {}
+    for path in sorted(LIVE_ROOT.rglob("*.py")):
+        constants.update(module_constants(path))
+    return constants
+
+
+def resolve_category(
+    value: ast.expr, local: Dict[str, str], shared: Dict[str, str]
+) -> Optional[str]:
+    """
+    把類別參數解析成字串；解析不了（函式參數轉傳的變數）時回 None
+
+    **常數寫法也要解析**：只收字面值的話，以模組常數寫出的類別整條被略過——
+    重建歸屬帳的事件類別就曾因此沒登錄，而測試照樣綠。順序是本檔常數、登錄檔、
+    其他檔案的常數：登錄檔的名字最可能被 import 進來直接用。
+    轉傳變數（`category=category`）的實際值由呼叫端傳入，呼叫端那裡會被掃到。
+    """
+
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value
+    if isinstance(value, ast.Name):
+        registered: object = getattr(event_categories, value.id, None)
+        if value.id in local:
+            return local[value.id]
+        if isinstance(registered, str):
+            return registered
+        return shared.get(value.id)
+    if (
+        isinstance(value, ast.Attribute)
+        and isinstance(value.value, ast.Name)
+        and value.value.id == "event_categories"
+    ):
+        attribute: object = getattr(event_categories, value.attr, None)
+        return attribute if isinstance(attribute, str) else None
+    return None
+
+
+def category_literals(
+    path: Path, shared: Optional[Dict[str, str]] = None
+) -> List[Tuple[int, str]]:
+    """找出檔案裡所有寫出的事件類別（字面值或常數）：`(行號, 類別名)`"""
+
+    shared = all_live_constants() if shared is None else shared
+    local: Dict[str, str] = module_constants(path)
     tree: ast.AST = ast.parse(path.read_text(encoding="utf-8"))
     found: List[Tuple[int, str]] = []
     for node in ast.walk(tree):
@@ -51,8 +116,9 @@ def category_literals(path: Path) -> List[Tuple[int, str]]:
             values.append(node.args[index])
 
         for value in values:
-            if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                found.append((value.lineno, value.value))
+            category: Optional[str] = resolve_category(value, local, shared)
+            if category is not None:
+                found.append((value.lineno, category))
     return found
 
 
