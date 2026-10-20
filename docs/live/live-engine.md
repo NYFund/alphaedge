@@ -306,7 +306,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 函式 | 時機 | 以誰為準 |
 |------|------|----------|
 | `AccountSynchronizer.rebuild_from_broker()` | 段落啟動、盤後 | 以 lot 表重建，券商多出的收進 `__unattributed__` |
-| `AccountSynchronizer.apply_fill()` | 運行中 | 成交回報；歸屬鏈為 `broker_seqno` → `live_order` → `strategy_name`，查不到不猜 |
+| `AccountSynchronizer.apply_fill()` | 運行中 | 成交回報；歸屬鏈為「交易日＋`broker_seqno`」→ `live_order` → `strategy_name`（券商序號每天從頭配發，只在同一天內唯一），查不到不猜 |
 
 成交方向先看歸屬帳裡有沒有反向部位：回補空單與開多都是 BUY，只看買賣別會把回補記成新多單。
 

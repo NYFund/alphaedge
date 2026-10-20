@@ -270,7 +270,18 @@ class OrderManager:
             logger.opt(exception=True).error(f"送單失敗：{client_order_id}")
             raise
 
-        self._sync_after_broker(ticket)
+        try:
+            self._sync_after_broker(ticket)
+        except Exception as exc:
+            # **券商已經受理，這裡的失敗不可往上拋**：呼叫端把例外當成「沒送出」，
+            # 出場單會被排成次日補平、對已在場上的單再平一次。單留在記憶體照常收回報，
+            # 紀錄庫那列少了序號則由盤後回填與對帳補救
+            message: str = (
+                f"委託 {client_order_id} 券商已受理（seqno={ticket.broker_seqno}），"
+                f"但本地紀錄寫入失敗：{type(exc).__name__}: {exc}"
+            )
+            logger.opt(exception=True).critical(message)
+            self._write_risk_event("ORDER_PERSIST_FAILED", message, ticket)
         return ticket
 
     def _sync_after_broker(self, ticket: OrderTicket) -> None:
@@ -418,6 +429,12 @@ class OrderManager:
         self._book_fill(ticket, report)
         return True
 
+    def _trade_date(self, report: ExecutionReport) -> datetime.date:
+        """成交回報所屬的交易日：券商序號每天從頭配發，查紀錄庫一律帶上它"""
+
+        moment: Optional[datetime.datetime] = report.ts
+        return (moment if moment is not None else self._now()).date()
+
     def _store_foreign_fill(self, report: ExecutionReport) -> bool:
         """
         本行程找不到委託的成交：是另一個行程的，還是真的沒人認
@@ -428,7 +445,7 @@ class OrderManager:
         """
 
         owner: Optional[Dict[str, Any]] = self.dao.find_order_by_broker_seqno(
-            report.broker_seqno
+            report.broker_seqno, self._trade_date(report)
         )
         if owner is not None:
             self.dao.insert_fill(
@@ -461,7 +478,9 @@ class OrderManager:
         本張要補套。
         """
 
+        trade_date: datetime.date = self._trade_date(report)
         if not self.dao.attribute_fill(
+            trade_date,
             report.broker_seqno,
             report.broker_trade_id,
             ticket.client_order_id,
@@ -475,7 +494,7 @@ class OrderManager:
 
         attributed: int = sum(
             int(row.get("volume") or 0)
-            for row in self.dao.get_fills_by_seqno(report.broker_seqno)
+            for row in self.dao.get_fills_by_seqno(report.broker_seqno, trade_date)
             if row.get("client_order_id") == ticket.client_order_id
         )
         if ticket.filled_volume >= attributed:
@@ -512,8 +531,8 @@ class OrderManager:
             )
             self.transition(ticket, target, op_type="fill")
 
-    @staticmethod
     def _fill_row(
+        self,
         report: ExecutionReport,
         client_order_id: Optional[str],
         strategy_name: Optional[str],
@@ -521,6 +540,7 @@ class OrderManager:
         """成交回報 → `live_fill` 的一列"""
 
         return {
+            "trade_date": self._trade_date(report).isoformat(),
             "broker_seqno": report.broker_seqno,
             "broker_trade_id": report.broker_trade_id,
             "client_order_id": client_order_id,

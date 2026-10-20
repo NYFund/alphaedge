@@ -33,9 +33,13 @@ from core.dao.connection import connect_live_trading
 本 DAO 管 11 張表，全部是同一件事的不同切面（一次交易從委託到對帳），拆成 11 個 DAO
 只會讓每個呼叫端都要開 11 條連線。建表一律冪等（`IF NOT EXISTS`）。
 
-**寫入的冪等性靠主鍵**，不靠呼叫端記得檢查：成交以 `(broker_seqno, broker_trade_id)`
+**寫入的冪等性靠主鍵**，不靠呼叫端記得檢查：成交以 `(trade_date, broker_seqno, broker_trade_id)`
 為主鍵並走 `INSERT OR IGNORE`，同一筆重放幾次都只會有一列。實盤的回報會重複推送，
 而重複記一筆成交等於帳上多了一個不存在的部位。
+
+**券商序號只在同一交易日內唯一**：委託序號與成交序號每天從頭配發，紀錄庫以它們當鍵
+或反查時一律帶上交易日（`trade_date`，由本地寫入時戳推出）。當成跨日唯一鍵的話，
+隔幾天撞到同一個序號時送單後回填序號會拋錯、成交會歸到前幾天的另一張單。
 
 **時間欄位存完整時間（含時區），日期欄位存日期**：研究庫共用的 `to_sql_params()`
 會把 `datetime` 截成日期，那是日頻資料要的；但這裡同一天會有好幾段執行，
@@ -88,6 +92,49 @@ def _to_live_params(*values: Any) -> Tuple[Any, ...]:
         else to_sql_params(value)[0]
         for value in values
     )
+
+
+def _trade_date_of(moment: Any) -> Optional[str]:
+    """
+    時戳 → 交易日（`YYYY-MM-DD`）
+
+    券商的委託序號與成交序號**每個交易日從頭配發**（2026-10-13 的 `004440` 與
+    2026-10-16 的 `0022D2` 都在同一帳號出現過），兩者只在「同一天」內才是唯一的。
+    紀錄庫以它們當鍵時一律帶上交易日；日期取自本地寫入時戳（台北時間）。
+    """
+
+    if moment is None:
+        return None
+    if isinstance(moment, datetime.datetime):
+        return moment.date().isoformat()
+    if isinstance(moment, datetime.date):
+        return moment.isoformat()
+    return str(moment)[:10]
+
+
+def _fill_table_sql(table: str) -> str:
+    """成交明細的建表 SQL；遷移舊表時也用同一份，兩邊不會各長一套"""
+
+    return f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                trade_date        TEXT NOT NULL,
+                broker_seqno      TEXT NOT NULL,
+                broker_trade_id   TEXT NOT NULL,
+                client_order_id   TEXT,
+                strategy_name     TEXT,
+                symbol            TEXT NOT NULL,
+                action            TEXT NOT NULL,
+                price             REAL NOT NULL,
+                volume            INTEGER NOT NULL,
+                estimated_fee     REAL,
+                estimated_tax     REAL,
+                actual_fee        REAL,
+                actual_tax        REAL,
+                filled_at         TEXT,
+                raw_json          TEXT,
+                PRIMARY KEY (trade_date, broker_seqno, broker_trade_id)
+            )
+            """
 
 
 class LiveTradeDAO(BaseDAO):
@@ -161,6 +208,7 @@ class LiveTradeDAO(BaseDAO):
         for statement in self._schema_statements():
             self.conn.execute(statement)
         self._add_missing_columns()
+        self._ensure_daily_seqno_keys()
         self.conn.commit()
 
     # 後加的欄位：`CREATE TABLE IF NOT EXISTS` 對已存在的表什麼都不做，
@@ -175,20 +223,74 @@ class LiveTradeDAO(BaseDAO):
         # （集合競價買單是漲停價），事後比對執行品質要靠這兩欄
         (LIVE_ORDER_TABLE_NAME, "execution_style", "TEXT"),
         (LIVE_ORDER_TABLE_NAME, "decision_price", "REAL"),
+        # 券商序號只在同一交易日內唯一（見 `_trade_date_of()`），唯一索引要帶上它
+        (LIVE_ORDER_TABLE_NAME, "trade_date", "TEXT"),
     )
 
     def _add_missing_columns(self) -> None:
         """補上後加的欄位；已經有的就跳過"""
 
         for table, column, column_type in self.ADDED_COLUMNS:
-            existing: List[str] = [
-                info[1] for info in self.conn.execute(f"PRAGMA table_info('{table}')")
-            ]
-            if column in existing:
+            if column in self._columns_of(table):
                 continue
 
             self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
             logger.info(f"{table} 補上欄位 {column}")
+
+    def _columns_of(self, table: str) -> List[str]:
+        """資料表目前的欄位名"""
+
+        return [info[1] for info in self.conn.execute(f"PRAGMA table_info('{table}')")]
+
+    def _ensure_daily_seqno_keys(self) -> None:
+        """
+        把委託與成交的鍵改成「交易日＋券商序號」；可重複呼叫
+
+        舊版把 `broker_seqno` 當跨日唯一鍵：唯一索引只建在它上面、成交主鍵是
+        `(broker_seqno, broker_trade_id)`。券商序號每天從頭配發，隔幾天撞到同一個序號時，
+        送單後回填序號會拋 `IntegrityError`（單已經在券商端了，本地卻當成送單失敗），
+        另一條線的成交又會反查到舊委託、歸到舊策略。
+
+        - `live_order`：補 `trade_date`（舊列由 `created_at` 推回）、換唯一索引。
+        - `live_fill`：主鍵改不了，整張表重建後搬資料；舊列的交易日由 `filled_at` 推回。
+        """
+
+        # 委託：補值、換索引
+        self.conn.execute(
+            f"UPDATE {LIVE_ORDER_TABLE_NAME} SET trade_date = substr(created_at, 1, 10) "
+            "WHERE trade_date IS NULL"
+        )
+        self.conn.execute("DROP INDEX IF EXISTS idx_live_order_seqno")
+        # 唯一索引仍**允許 NULL**：在 `place_order()` 回傳前崩潰的委託沒有 seqno，
+        # SQLite 的 UNIQUE 不把多個 NULL 視為重複，正合需要
+        self.conn.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_live_order_date_seqno "
+            f"ON {LIVE_ORDER_TABLE_NAME}(trade_date, broker_seqno)"
+        )
+
+        # 成交：主鍵要帶交易日，只能重建
+        if "trade_date" in self._columns_of(LIVE_FILL_TABLE_NAME):
+            return
+
+        rebuilt: str = f"{LIVE_FILL_TABLE_NAME}__rebuild"
+        columns: List[str] = self._columns_of(LIVE_FILL_TABLE_NAME)
+        quoted: str = ",".join(f'"{column}"' for column in columns)
+        self.conn.execute(f"DROP TABLE IF EXISTS {rebuilt}")
+        self.conn.execute(_fill_table_sql(rebuilt))
+        self.conn.execute(
+            f"INSERT INTO {rebuilt} (trade_date, {quoted}) "
+            f"SELECT COALESCE(substr(filled_at, 1, 10), ''), {quoted} "
+            f"FROM {LIVE_FILL_TABLE_NAME}"
+        )
+        self.conn.execute(f"DROP TABLE {LIVE_FILL_TABLE_NAME}")
+        self.conn.execute(f"ALTER TABLE {rebuilt} RENAME TO {LIVE_FILL_TABLE_NAME}")
+        self.conn.execute(
+            f"CREATE INDEX IF NOT EXISTS idx_live_fill_order "
+            f"ON {LIVE_FILL_TABLE_NAME}(client_order_id)"
+        )
+        logger.warning(
+            f"{LIVE_FILL_TABLE_NAME} 已重建：主鍵改為（交易日, 券商序號, 成交序號）"
+        )
 
     @staticmethod
     def _schema_statements() -> Tuple[str, ...]:
@@ -236,6 +338,7 @@ class LiveTradeDAO(BaseDAO):
                 status            TEXT NOT NULL,
                 broker_order_id   TEXT,
                 broker_seqno      TEXT,
+                trade_date        TEXT,
                 custom_field      TEXT,
                 filled_volume     INTEGER NOT NULL DEFAULT 0,
                 avg_fill_price    REAL NOT NULL DEFAULT 0,
@@ -245,10 +348,8 @@ class LiveTradeDAO(BaseDAO):
                 updated_at        TEXT
             )
             """,
-            # `broker_seqno` 建唯一索引但**允許 NULL**：在 `place_order()` 回傳前
-            # 崩潰的委託沒有 seqno，SQLite 的 UNIQUE 不把多個 NULL 視為重複，正合需要
-            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_live_order_seqno "
-            f"ON {LIVE_ORDER_TABLE_NAME}(broker_seqno)",
+            # `(trade_date, broker_seqno)` 的唯一索引建在 `_ensure_daily_seqno_keys()`：
+            # 舊資料庫要先補上 `trade_date` 欄位才建得起來
             f"CREATE INDEX IF NOT EXISTS idx_live_order_strategy "
             f"ON {LIVE_ORDER_TABLE_NAME}(strategy_name, created_at)",
             f"CREATE INDEX IF NOT EXISTS idx_live_order_custom_field "
@@ -270,25 +371,7 @@ class LiveTradeDAO(BaseDAO):
             # 成交明細。手續費與稅**估算值與券商實際值分欄保存**：
             # 成交回報不帶費用，盤中只能用 cost model 估，盤後才回填得到實際值。
             # 併成一欄的話，回填之後就再也算不出「估得準不準」
-            f"""
-            CREATE TABLE IF NOT EXISTS {LIVE_FILL_TABLE_NAME} (
-                broker_seqno      TEXT NOT NULL,
-                broker_trade_id   TEXT NOT NULL,
-                client_order_id   TEXT,
-                strategy_name     TEXT,
-                symbol            TEXT NOT NULL,
-                action            TEXT NOT NULL,
-                price             REAL NOT NULL,
-                volume            INTEGER NOT NULL,
-                estimated_fee     REAL,
-                estimated_tax     REAL,
-                actual_fee        REAL,
-                actual_tax        REAL,
-                filled_at         TEXT,
-                raw_json          TEXT,
-                PRIMARY KEY (broker_seqno, broker_trade_id)
-            )
-            """,
+            _fill_table_sql(LIVE_FILL_TABLE_NAME),
             f"CREATE INDEX IF NOT EXISTS idx_live_fill_order "
             f"ON {LIVE_FILL_TABLE_NAME}(client_order_id)",
             # 策略層部位歸屬帳。券商合併部位拆不回策略，只能本地自己記
@@ -554,6 +637,7 @@ class LiveTradeDAO(BaseDAO):
         "run_id",
         "custom_field",
         "created_at",
+        "trade_date",
     )
 
     # 委託狀態類欄位：沒有原始訂單可寫時，只更新這些
@@ -568,8 +652,15 @@ class LiveTradeDAO(BaseDAO):
     )
 
     def upsert_order(self, row: Dict[str, Any]) -> None:
-        """寫入或更新一張委託；`client_order_id` 為主鍵，建立資訊只在第一次寫入"""
+        """
+        寫入或更新一張委託；`client_order_id` 為主鍵，建立資訊只在第一次寫入
 
+        `trade_date` 沒給時由 `created_at` 推出：券商序號只在同一交易日內唯一，
+        唯一索引是 `(trade_date, broker_seqno)`，少了交易日的列會與別天的序號互相擋。
+        """
+
+        if "trade_date" not in row and row.get("created_at") is not None:
+            row = {**row, "trade_date": _trade_date_of(row["created_at"])}
         self._upsert(
             LIVE_ORDER_TABLE_NAME,
             row,
@@ -618,6 +709,10 @@ class LiveTradeDAO(BaseDAO):
 
             走 `INSERT OR IGNORE` 而不是先查再寫：先查再寫在多執行緒下仍會重複，
             而重複記一筆成交等於帳上多了一個不存在的部位。
+
+            主鍵是 `(trade_date, broker_seqno, broker_trade_id)`：券商的兩個序號每天
+            從頭配發（模擬環境實測成交序號與委託序號還是同一個值），不帶交易日的話
+            隔幾天同序號的成交會被當成重放而靜默丟掉。`trade_date` 沒給時由 `filled_at` 推出。
         - Parameters:
             - row: Dict[str, Any]
                 成交欄位
@@ -626,12 +721,15 @@ class LiveTradeDAO(BaseDAO):
                 True 代表這是新的一筆
         """
 
+        if "trade_date" not in row:
+            row = {**row, "trade_date": _trade_date_of(row.get("filled_at")) or ""}
         cursor: sqlite3.Cursor = self._insert(LIVE_FILL_TABLE_NAME, row)
         self.conn.commit()
         return cursor.rowcount > 0
 
     def backfill_fill_costs(
         self,
+        trade_date: datetime.date,
         broker_seqno: str,
         broker_trade_id: str,
         actual_fee: float,
@@ -641,8 +739,10 @@ class LiveTradeDAO(BaseDAO):
 
         self.conn.execute(
             f"UPDATE {LIVE_FILL_TABLE_NAME} SET actual_fee = ?, actual_tax = ? "
-            "WHERE broker_seqno = ? AND broker_trade_id = ?",
-            _to_live_params(actual_fee, actual_tax, broker_seqno, broker_trade_id),
+            "WHERE trade_date = ? AND broker_seqno = ? AND broker_trade_id = ?",
+            _to_live_params(
+                actual_fee, actual_tax, trade_date, broker_seqno, broker_trade_id
+            ),
         )
         self.conn.commit()
 
@@ -839,15 +939,20 @@ class LiveTradeDAO(BaseDAO):
         result: List[Dict[str, Any]] = self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
         return result[0] if result else None
 
-    def find_strategy_by_broker_seqno(self, broker_seqno: str) -> Optional[str]:
+    def find_strategy_by_broker_seqno(
+        self, broker_seqno: str, trade_date: datetime.date
+    ) -> Optional[str]:
         """
         - Description:
             以券商委託序號反查送單的策略
 
             成交回報只帶券商序號；要記進哪一支策略的歸屬帳，得回頭查當初是誰送的。
+            **一定帶交易日**：序號每天從頭配發，不限日期會查到前幾天另一支策略的委託。
         - Parameters:
             - broker_seqno: str
                 券商委託序號
+            - trade_date: datetime.date
+                該序號所屬的交易日（成交回報的日期）
         - Return:
             - Optional[str]
                 策略名稱；查不到時為 None
@@ -855,22 +960,27 @@ class LiveTradeDAO(BaseDAO):
 
         rows: List[Tuple[Any, ...]] = self.conn.execute(
             f"SELECT strategy_name FROM {LIVE_ORDER_TABLE_NAME} "
-            "WHERE broker_seqno = ? LIMIT 1",
-            (broker_seqno,),
+            "WHERE trade_date = ? AND broker_seqno = ? LIMIT 1",
+            _to_live_params(trade_date, broker_seqno),
         ).fetchall()
         return str(rows[0][0]) if rows else None
 
-    def find_order_by_broker_seqno(self, broker_seqno: str) -> Optional[Dict[str, Any]]:
+    def find_order_by_broker_seqno(
+        self, broker_seqno: str, trade_date: datetime.date
+    ) -> Optional[Dict[str, Any]]:
         """
         - Description:
-            以券商委託序號找委託列，**不限策略、不限行程**
+            以券商委託序號找當日的委託列，**不限策略、不限行程**
 
             股票線與期貨線是兩個行程、共用同一個紀錄庫，券商的成交回報兩個行程都會收到。
             收到的行程若在自己的委託裡找不到序號，要先問紀錄庫「這是不是另一個行程的委託」，
             才能決定成交該歸給誰——直接判成未歸屬，會讓擁有者的那張單永遠停在送出狀態。
+            只看同一交易日：序號每天從頭配發，跨日查會配到別天的委託。
         - Parameters:
             - broker_seqno: str
                 券商委託序號
+            - trade_date: datetime.date
+                該序號所屬的交易日
         - Return:
             - Optional[Dict[str, Any]]
                 委託列；查不到時為 None
@@ -879,15 +989,16 @@ class LiveTradeDAO(BaseDAO):
         if not broker_seqno:
             return None
         rows: List[Tuple[Any, ...]] = self.conn.execute(
-            f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} WHERE broker_seqno = ? "
-            "ORDER BY created_at DESC LIMIT 1",
-            (broker_seqno,),
+            f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} "
+            "WHERE trade_date = ? AND broker_seqno = ? LIMIT 1",
+            _to_live_params(trade_date, broker_seqno),
         ).fetchall()
         dicts: List[Dict[str, Any]] = self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
         return dicts[0] if dicts else None
 
     def attribute_fill(
         self,
+        trade_date: datetime.date,
         broker_seqno: str,
         broker_trade_id: str,
         client_order_id: str,
@@ -902,6 +1013,8 @@ class LiveTradeDAO(BaseDAO):
             已歸屬到**別張**委託的列不動並回 False：兩張單搶同一筆成交是接管配錯，
             要讓它浮出來，不是誰後到誰贏。
         - Parameters:
+            - trade_date: datetime.date
+                成交所屬的交易日
             - broker_seqno: str
                 券商委託序號
             - broker_trade_id: str
@@ -917,11 +1030,12 @@ class LiveTradeDAO(BaseDAO):
 
         cursor: sqlite3.Cursor = self.conn.execute(
             f"UPDATE {LIVE_FILL_TABLE_NAME} SET client_order_id = ?, strategy_name = ? "
-            "WHERE broker_seqno = ? AND broker_trade_id = ? "
+            "WHERE trade_date = ? AND broker_seqno = ? AND broker_trade_id = ? "
             "AND (client_order_id IS NULL OR client_order_id = '' OR client_order_id = ?)",
-            (
+            _to_live_params(
                 client_order_id,
                 strategy_name,
+                trade_date,
                 broker_seqno,
                 broker_trade_id,
                 client_order_id,
@@ -1024,27 +1138,63 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return self._to_dicts(LIVE_RISK_EVENT_TABLE_NAME, rows)
 
-    def get_fills_by_seqno(self, broker_seqno: str) -> List[Dict[str, Any]]:
+    def get_fills_by_seqno(
+        self, broker_seqno: str, trade_date: datetime.date
+    ) -> List[Dict[str, Any]]:
         """
         - Description:
-            某張委託的全部成交，依成交時間排序（不限日期）
+            某張委託當日的全部成交，依成交時間排序
 
-            盤後校正成本時，股票的已實現交易只帶開倉那張委託的序號，
-            開倉價要由它回查；開倉可能在前幾天，故不限日期。
+            序號每天從頭配發，查的一定是「這一天的這個序號」。
         - Parameters:
             - broker_seqno: str
                 券商委託序號
+            - trade_date: datetime.date
+                該序號所屬的交易日
         - Return:
             - List[Dict[str, Any]]
                 成交清單；查無時為空
         """
 
         rows: List[Tuple[Any, ...]] = self.conn.execute(
-            f"SELECT * FROM {LIVE_FILL_TABLE_NAME} WHERE broker_seqno = ? "
+            f"SELECT * FROM {LIVE_FILL_TABLE_NAME} "
+            "WHERE trade_date = ? AND broker_seqno = ? "
             "ORDER BY filled_at, broker_trade_id",
-            (broker_seqno,),
+            _to_live_params(trade_date, broker_seqno),
         ).fetchall()
         return self._to_dicts(LIVE_FILL_TABLE_NAME, rows)
+
+    def get_latest_fills_by_seqno(
+        self, broker_seqno: str, on_or_before: datetime.date
+    ) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            某個序號**最近一次出現**那天的全部成交（只看指定日以前）
+
+            盤後校正成本時，券商的已實現交易只帶開倉委託的序號、不帶開倉日；
+            開倉可能在前幾天，又可能與更早的另一張單同序號。取最近的那一天：
+            離平倉日最近的開倉才是這筆交易的開倉。
+        - Parameters:
+            - broker_seqno: str
+                開倉委託序號
+            - on_or_before: datetime.date
+                只看這一天（含）以前
+        - Return:
+            - List[Dict[str, Any]]
+                成交清單；查無時為空
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT MAX(trade_date) FROM {LIVE_FILL_TABLE_NAME} "
+            "WHERE broker_seqno = ? AND trade_date <= ?",
+            _to_live_params(broker_seqno, on_or_before),
+        ).fetchall()
+        latest: Optional[str] = rows[0][0] if rows else None
+        if not latest:
+            return []
+        return self.get_fills_by_seqno(
+            broker_seqno, datetime.date.fromisoformat(latest)
+        )
 
     def get_fills_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
@@ -1088,11 +1238,24 @@ class LiveTradeDAO(BaseDAO):
         return self._to_dicts(LIVE_POSITION_SNAPSHOT_TABLE_NAME, rows)
 
     # === 跨日待辦 ===
-    def insert_pending_action(self, row: Dict[str, Any]) -> None:
-        """新增一筆跨日待辦（例如「次日開盤段補平」）"""
+    def insert_pending_action(self, row: Dict[str, Any]) -> bool:
+        """
+        - Description:
+            新增一筆跨日待辦（例如「次日開盤段補平」）；同一個 `action_id` 只會有一列
 
-        self._insert(LIVE_PENDING_ACTION_TABLE_NAME, row)
+            同一張出場單可能從兩條路排進來（段落內送單失敗、盤後掃到殘量），
+            呼叫端要靠回傳值知道「這筆早就排過了」，才不會再寫一次事件與推播。
+        - Parameters:
+            - row: Dict[str, Any]
+                待辦欄位
+        - Return:
+            - bool
+                True 代表這是新的一筆
+        """
+
+        cursor: sqlite3.Cursor = self._insert(LIVE_PENDING_ACTION_TABLE_NAME, row)
         self.conn.commit()
+        return cursor.rowcount > 0
 
     def get_pending_actions(self, due_date: datetime.date) -> List[Dict[str, Any]]:
         """

@@ -1054,6 +1054,105 @@ def test_pending_action_is_covered_next_morning(tmp_path: Path) -> None:
     assert harness.dao.get_pending_actions(TODAY) == []
 
 
+def test_two_pending_actions_for_one_position_send_one_cover() -> None:
+    """
+    同一個部位有兩筆到期待辦時只送一張補平單
+
+    出場單連兩天沒成交時，盤後會對「補平單殘量」與「策略出場單殘量」各寫一筆待辦。
+    開盤段 08:30 送單、09:00 才撮合，第二筆若只看歸屬帳就會再送一張——
+    持有 1 張卻賣出 2 張，第二張把部位做反。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、自己不產生訊號的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    seed_holding(harness, "Alpha", 1)
+    harness.broker.fill_ratio = 0.0  # 集合競價：送出後要等 09:00 才撮合
+    for action_id in ("D-1-close-exit", "D-1-cover-from-D-2"):
+        harness.dao.insert_pending_action(
+            {
+                "action_id": action_id,
+                "strategy_name": "Alpha",
+                "symbol": "2330",
+                "action": "Sell",
+                "position_type": "LONG",
+                "volume": 1,
+                "due_date": TODAY,
+                "status": harness.dao.ACTION_PENDING,
+                "created_at": NOW,
+            }
+        )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    assert harness.broker.placed_count == 1
+    assert harness.dao.get_pending_actions(TODAY) == []  # 兩筆都已處理
+    assert (
+        harness.dao.conn.execute(
+            "SELECT COUNT(*) FROM live_risk_event "
+            "WHERE category = 'PENDING_ACTION_TRUNCATED'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_exit_order_that_fails_to_send_gets_one_pending_action(tmp_path: Path) -> None:
+    """
+    送單途中拋例外的出場單只排一筆次日補平
+
+    OMS 先寫 `live_order` 再送單：段落內已替它排補平（`UNSENT_EXIT`），盤後掃殘量時
+    又會掃到同一張 FAILED 列。兩筆待辦在次日開盤段會各送一張補平單，把部位做反。
+    """
+
+    from core.live.report.live_reporter import LiveReporter
+
+    exit_order: StockOrder = make_order()
+    exit_order.action = Action.SELL
+
+    class Alpha(ScriptedStrategy):
+        """平倉鉤子送出出場單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", close_orders=[exit_order])
+
+    harness: Harness = Harness([Alpha()])
+    seed_holding(harness, "Alpha", 1)
+
+    def timing_out(ticket: Any) -> Any:
+        raise TimeoutError("送單逾時（腳本化）")
+
+    harness.broker.place_order = timing_out  # type: ignore[method-assign]
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+
+    summary: Dict[str, Any] = harness.trader.run_after_close()
+
+    pending: List[Dict[str, Any]] = harness.dao.get_pending_actions(
+        TODAY + datetime.timedelta(days=1)
+    )
+    assert [row["volume"] for row in pending] == [1]
+    assert (
+        pending[0]["action_id"] == f"{TODAY.isoformat()}-{exit_order.client_order_id}"
+    )
+    assert summary["pending_actions"] == 0  # 盤後沒有再排第二筆
+    categories: List[str] = [
+        row[0]
+        for row in harness.dao.conn.execute(
+            "SELECT category FROM live_risk_event "
+            "WHERE category IN ('UNSENT_EXIT', 'UNFILLED_EXIT')"
+        )
+    ]
+    assert categories == ["UNSENT_EXIT"]
+
+
 def test_pending_action_without_a_reference_price_is_left_for_humans(
     tmp_path: Path,
 ) -> None:

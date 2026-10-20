@@ -197,7 +197,7 @@ def test_order_upsert_keeps_one_row_per_client_order_id(dao: LiveTradeDAO) -> No
 
 def test_broker_seqno_is_unique_but_allows_many_nulls(dao: LiveTradeDAO) -> None:
     """
-    `broker_seqno` 唯一，但可以有多個 NULL
+    `broker_seqno` 在同一交易日內唯一，但可以有多個 NULL
 
     在 `place_order()` 回傳前崩潰的委託沒有 seqno。唯一索引若不允許多個 NULL，
     第二張還沒送出去的單就寫不進 DB——而「先寫 DB 再送單」正是恢復的前提。
@@ -215,6 +215,44 @@ def test_broker_seqno_is_unique_but_allows_many_nulls(dao: LiveTradeDAO) -> None
         dao.upsert_order(
             make_order("run1-0004", broker_seqno="000001", custom_field="1-0004")
         )
+
+
+def test_same_broker_seqno_on_another_day_is_a_different_order(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    券商序號每天從頭配發：隔天撞到同一個序號是另一張單，不是衝突
+
+    當成跨日唯一鍵的話，送單後回填序號會拋 `IntegrityError`——單已經在券商端了，
+    本地卻當成送單失敗去排補平；另一條線的成交又會反查到前幾天的委託與策略。
+    """
+
+    day1: Dict[str, Any] = make_order(
+        "run1-0001", strategy_name="StrategyA", broker_seqno="002862"
+    )
+    day2: Dict[str, Any] = make_order(
+        "run2-0001", strategy_name="StrategyB", custom_field="2-0001"
+    )
+    day2["created_at"] = NOW + datetime.timedelta(days=7)
+    dao.upsert_order(day1)
+    dao.upsert_order(day2)
+
+    # 第二天回填同一個序號：不拋、兩列各自保留
+    dao.upsert_order({**day2, "broker_seqno": "002862"})
+
+    assert dao.count_rows() == 2
+    assert dao.find_strategy_by_broker_seqno("002862", TODAY) == "StrategyA"
+    assert (
+        dao.find_strategy_by_broker_seqno("002862", TODAY + datetime.timedelta(days=7))
+        == "StrategyB"
+    )
+    assert (
+        dao.find_strategy_by_broker_seqno("002862", TODAY + datetime.timedelta(days=1))
+        is None
+    )
+    assert dao.find_order_by_broker_seqno("002862", TODAY)["client_order_id"] == (
+        "run1-0001"
+    )
 
 
 def test_unfinished_orders_exclude_terminal_states(dao: LiveTradeDAO) -> None:
@@ -273,10 +311,10 @@ def test_lookup_strategy_by_broker_seqno(dao: LiveTradeDAO) -> None:
     )
 
     assert (
-        dao.find_strategy_by_broker_seqno("000123")
+        dao.find_strategy_by_broker_seqno("000123", TODAY)
         == "ForeignSellingReversalShortStrategy"
     )
-    assert dao.find_strategy_by_broker_seqno("999999") is None
+    assert dao.find_strategy_by_broker_seqno("999999", TODAY) is None
 
 
 # === 成交 ===
@@ -313,6 +351,144 @@ def test_separate_fills_of_one_order_are_both_kept(dao: LiveTradeDAO) -> None:
     )
 
 
+def test_same_fill_ids_on_another_day_are_a_different_fill(dao: LiveTradeDAO) -> None:
+    """
+    券商的委託序號與成交序號每天從頭配發（模擬環境實測兩者還是同一個值）
+
+    主鍵不帶交易日的話，隔幾天同序號的成交會被 `INSERT OR IGNORE` 當成重放丟掉，
+    帳上就少一個真實存在的部位。
+    """
+
+    later: Dict[str, Any] = make_fill()
+    later["filled_at"] = NOW + datetime.timedelta(days=7)
+    later["client_order_id"] = "run2-0001"
+
+    assert dao.insert_fill(make_fill()) is True
+    assert dao.insert_fill(later) is True
+
+    assert len(dao.get_fills_by_seqno("000001", TODAY)) == 1
+    assert dao.get_fills_by_seqno("000001", TODAY)[0]["client_order_id"] == "run1-0001"
+    assert dao.get_fills_by_seqno("000001", TODAY + datetime.timedelta(days=1)) == []
+    assert (
+        dao.get_fills_by_seqno("000001", TODAY + datetime.timedelta(days=7))[0][
+            "client_order_id"
+        ]
+        == "run2-0001"
+    )
+
+
+def test_fill_attribution_is_scoped_to_the_day(dao: LiveTradeDAO) -> None:
+    """認領成交只動指定交易日的那一列，別天同序號的成交不受影響"""
+
+    later: Dict[str, Any] = make_fill()
+    later["filled_at"] = NOW + datetime.timedelta(days=7)
+    later["client_order_id"] = None
+    later["strategy_name"] = None
+    dao.insert_fill(make_fill())
+    dao.insert_fill(later)
+
+    assert (
+        dao.attribute_fill(
+            TODAY + datetime.timedelta(days=7), "000001", "T001", "run2-0001", "B"
+        )
+        is True
+    )
+    assert dao.get_fills_by_seqno("000001", TODAY)[0]["client_order_id"] == "run1-0001"
+    assert (
+        dao.get_fills_by_seqno("000001", TODAY + datetime.timedelta(days=7))[0][
+            "client_order_id"
+        ]
+        == "run2-0001"
+    )
+
+
+def test_latest_fills_by_seqno_picks_the_most_recent_day(dao: LiveTradeDAO) -> None:
+    """
+    盤後成本校正只拿得到開倉委託序號、拿不到開倉日
+
+    同序號可能在更早的某天也出現過；離平倉日最近的那一天才是這筆交易的開倉。
+    """
+
+    earlier: Dict[str, Any] = make_fill()
+    earlier["filled_at"] = NOW - datetime.timedelta(days=14)
+    earlier["price"] = 900.0
+    dao.insert_fill(earlier)
+    dao.insert_fill(make_fill())
+
+    found: List[Dict[str, Any]] = dao.get_latest_fills_by_seqno(
+        "000001", TODAY + datetime.timedelta(days=2)
+    )
+
+    assert [fill["price"] for fill in found] == [1000.0]
+    before: List[Dict[str, Any]] = dao.get_latest_fills_by_seqno(
+        "000001", TODAY - datetime.timedelta(days=1)
+    )
+    assert [fill["price"] for fill in before] == [900.0]
+    assert dao.get_latest_fills_by_seqno("999999", TODAY) == []
+
+
+def test_legacy_schema_is_migrated_to_daily_keys(tmp_path: Path) -> None:
+    """
+    舊資料庫（序號當跨日唯一鍵）開啟時要原地遷移，資料一列不少
+
+    `live_order` 補 `trade_date` 並換唯一索引；`live_fill` 主鍵改不了，整張重建。
+    """
+
+    db_path: Path = tmp_path / "legacy.db"
+    legacy: sqlite3.Connection = sqlite3.connect(db_path)
+    legacy.executescript(
+        f"""
+        CREATE TABLE {LIVE_ORDER_TABLE_NAME} (
+            client_order_id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
+            strategy_name TEXT NOT NULL, symbol TEXT NOT NULL, action TEXT NOT NULL,
+            position_type TEXT NOT NULL, price REAL NOT NULL DEFAULT 0,
+            volume INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL,
+            broker_seqno TEXT, custom_field TEXT,
+            filled_volume INTEGER NOT NULL DEFAULT 0,
+            avg_fill_price REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX idx_live_order_seqno ON {LIVE_ORDER_TABLE_NAME}(broker_seqno);
+        INSERT INTO {LIVE_ORDER_TABLE_NAME} VALUES
+            ('run1-0001', 'run1', 'A', '2330', 'Buy', 'LONG', 1000, 2, 'FILLED',
+             '000001', '1-0001', 2, 1000, '2026-09-19T13:25:00+08:00');
+        CREATE TABLE {LIVE_FILL_TABLE_NAME} (
+            broker_seqno TEXT NOT NULL, broker_trade_id TEXT NOT NULL,
+            client_order_id TEXT, strategy_name TEXT, symbol TEXT NOT NULL,
+            action TEXT NOT NULL, price REAL NOT NULL, volume INTEGER NOT NULL,
+            estimated_fee REAL, estimated_tax REAL, actual_fee REAL, actual_tax REAL,
+            filled_at TEXT, raw_json TEXT,
+            PRIMARY KEY (broker_seqno, broker_trade_id)
+        );
+        INSERT INTO {LIVE_FILL_TABLE_NAME} VALUES
+            ('000001', '000001', 'run1-0001', 'A', '2330', 'Buy', 1000, 2,
+             427, 0, 421, 0, '2026-09-19T13:30:02+08:00', '{{}}');
+        """
+    )
+    legacy.commit()
+    legacy.close()
+
+    dao: LiveTradeDAO = LiveTradeDAO(db_path=db_path)
+    dao.ensure_tables()
+    dao.ensure_tables()  # 可重複呼叫
+
+    assert dao.find_strategy_by_broker_seqno("000001", TODAY) == "A"
+    fills: List[Dict[str, Any]] = dao.get_fills_by_seqno("000001", TODAY)
+    assert [(fill["trade_date"], fill["actual_fee"]) for fill in fills] == [
+        ("2026-09-19", 421.0)
+    ]
+    indexes: List[str] = [
+        row[1]
+        for row in dao.conn.execute(f"PRAGMA index_list('{LIVE_ORDER_TABLE_NAME}')")
+    ]
+    assert "idx_live_order_date_seqno" in indexes
+    assert "idx_live_order_seqno" not in indexes
+    # 遷移後隔天同序號可以再寫
+    later: Dict[str, Any] = make_fill(broker_trade_id="000001")
+    later["filled_at"] = NOW + datetime.timedelta(days=7)
+    assert dao.insert_fill(later) is True
+    dao.close()
+
+
 def test_cost_backfill_keeps_the_estimate(dao: LiveTradeDAO) -> None:
     """
     回填實際費用時估算值要留著
@@ -322,7 +498,7 @@ def test_cost_backfill_keeps_the_estimate(dao: LiveTradeDAO) -> None:
     """
 
     dao.insert_fill(make_fill())
-    dao.backfill_fill_costs("000001", "T001", actual_fee=421.0, actual_tax=0.0)
+    dao.backfill_fill_costs(TODAY, "000001", "T001", actual_fee=421.0, actual_tax=0.0)
 
     row: Any = dao.conn.execute(
         f"SELECT estimated_fee, actual_fee FROM {LIVE_FILL_TABLE_NAME}"

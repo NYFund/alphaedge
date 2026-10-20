@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 from typing import Any, Callable, Dict, List, Optional
 
 import pytest
@@ -748,3 +749,33 @@ def test_ambiguous_fuzzy_match_degrades_instead_of_guessing(
     assert ambiguous is not None
     assert ambiguous.status is LiveOrderStatus.FAILED
     assert any("模糊比對" in reason for reason in degradations)
+
+
+def test_persist_failure_after_broker_accepts_is_not_a_send_failure(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    券商已受理、本地落地失敗：不往上拋，單留在記憶體照常收回報
+
+    `dispatch()` 把 `submit()` 的例外一律當成「沒送出」——出場單會被排成次日補平，
+    對已在場上的單再平一次。這種失敗要以 CRITICAL 事件浮出來，而不是變成第二張單。
+    """
+
+    original: Callable[[Dict[str, Any]], None] = dao.upsert_order
+
+    def failing_after_seqno(row: Dict[str, Any]) -> None:
+        if row.get("broker_seqno"):
+            raise sqlite3.OperationalError("database is locked")
+        original(row)
+
+    dao.upsert_order = failing_after_seqno  # type: ignore[method-assign]
+
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    assert fake_broker.placed_count == 1
+    assert ticket.broker_seqno is not None
+    assert oms.tickets[ticket.client_order_id] is ticket
+    categories: List[str] = [
+        row[0] for row in dao.conn.execute("SELECT category FROM live_risk_event")
+    ]
+    assert categories == ["ORDER_PERSIST_FAILED"]

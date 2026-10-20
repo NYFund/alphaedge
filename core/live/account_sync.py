@@ -161,9 +161,13 @@ class AccountSynchronizer:
         return name
 
     def _resolve_strategy(self, report: ExecutionReport) -> Optional[str]:
-        """由委託序號反查策略；查不到回 None"""
+        """由委託序號反查策略；查不到回 None。序號每天從頭配發，一律限定成交當日"""
 
-        return self.dao.find_strategy_by_broker_seqno(report.broker_seqno)
+        moment: Optional[datetime.datetime] = report.ts
+        trade_date: datetime.date = (
+            moment if moment is not None else self._now()
+        ).date()
+        return self.dao.find_strategy_by_broker_seqno(report.broker_seqno, trade_date)
 
     def _resolve_direction(
         self, strategy_name: str, report: ExecutionReport

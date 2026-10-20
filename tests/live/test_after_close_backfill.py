@@ -205,9 +205,9 @@ def test_backfill_books_an_exit_fill_stored_by_another_process(
     assert row["status"] == "FILLED"
     assert row["filled_volume"] == 2
     assert row["avg_fill_price"] == pytest.approx(46.45)
-    assert dao.get_fills_by_seqno(ticket.broker_seqno or "")[0]["client_order_id"] == (
-        ticket.client_order_id
-    )
+    assert dao.get_fills_by_seqno(ticket.broker_seqno or "", TODAY)[0][
+        "client_order_id"
+    ] == (ticket.client_order_id)
     assert open_lots(dao, "Alpha") == []
     assert "FILL_BACKFILLED" in categories(dao)
 

@@ -20,7 +20,11 @@ from core.broker.base import BROKER_SESSION_DOWN, BaseBroker
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
-from core.live.after_close import AfterCloseRunner, TradeCostEstimator
+from core.live.after_close import (
+    AfterCloseRunner,
+    TradeCostEstimator,
+    pending_cover_action_id,
+)
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import (
     ACCOUNT_STRATEGY,
@@ -1748,10 +1752,15 @@ class LiveTrader:
         - Description:
             出場單從未送出：寫次日補平待辦與 CRITICAL 事件，並推播
 
-            「出場必補」原本只由盤後掃 `live_order` 的未成交殘量承接；被風控、執行層
-            或送單失敗擋在送出**之前**的出場單沒有 `live_order` 列，掃不到，部位會無聲
-            留到隔夜。這裡補上同一條路：待辦交給次日開盤段的 `apply_pending_actions()`，
+            「出場必補」原本只由盤後掃 `live_order` 的未成交殘量承接；被風控或執行層
+            擋在送出**之前**的出場單沒有 `live_order` 列，掃不到，部位會無聲留到隔夜。
+            這裡補上同一條路：待辦交給次日開盤段的 `apply_pending_actions()`，
             數量到時再截到實際持有量。開倉單不補（開倉未送出一律放棄）。
+
+            **送單途中才失敗的出場單已經有 `live_order` 列**（OMS 先寫 DB 再送單），
+            盤後掃殘量會再替它排一次；兩筆待辦在次日開盤段會各送一張補平單，把部位做反。
+            所以有 `client_order_id` 的用與盤後相同的編號，讓紀錄庫擋下第二筆；
+            沒有列的才以時戳編號。
         - Parameters:
             - context: StrategyContext
                 策略脈絡
@@ -1770,12 +1779,16 @@ class LiveTrader:
             f"{order.symbol} 出場單未送出（{reason}），已成為預期外的隔夜部位；"
             "次日開盤段第一件事補平"
         )
-        logger.error(f"[Unsent Exit] {context.name}：{message}")
 
-        self.dao.insert_pending_action(
+        client_order_id: Optional[str] = getattr(order, "client_order_id", None)
+        action_id: str = (
+            pending_cover_action_id(today, client_order_id)
+            if client_order_id
+            else f"{today.isoformat()}-unsent-{order.symbol}-{now.strftime('%H%M%S%f')}"
+        )
+        is_new: bool = self.dao.insert_pending_action(
             {
-                "action_id": f"{today.isoformat()}-unsent-{order.symbol}-"
-                f"{now.strftime('%H%M%S%f')}",
+                "action_id": action_id,
                 "strategy_name": context.name,
                 "symbol": order.symbol,
                 "action": order.action.value,
@@ -1788,6 +1801,11 @@ class LiveTrader:
                 "created_at": now,
             }
         )
+        if not is_new:
+            logger.info(f"{order.symbol} 的補平待辦 {action_id} 已存在，不重複寫入")
+            return
+
+        logger.error(f"[Unsent Exit] {context.name}：{message}")
         self.events.write(
             category="UNSENT_EXIT",
             severity=NotifyLevel.CRITICAL,
@@ -2199,6 +2217,11 @@ class LiveTrader:
             多出來的部分不是「多平一點」，是直接把部位做反。持有量為 0 就標 `DONE`
             並記一筆事件，不送單。
 
+            **同一個部位的多筆待辦要扣掉前面已送出的量**：出場單連兩天沒成交時，
+            盤後會對「補平單殘量」與「策略出場單殘量」各寫一筆待辦。開盤段 08:30 送單、
+            09:00 才撮合，逐筆只看歸屬帳的話兩筆都會截到「持有 N」而送出 2N——
+            本段落已送出、尚未撮合的補平量也是在途的出場，第二筆要先扣掉它。
+
             **送單走 `dispatch()`**：與一般委託同一條管線（資金保留、事前風控、
             送出後消化回報），不另外直接呼叫 OMS。
 
@@ -2218,6 +2241,8 @@ class LiveTrader:
             context.name: context for context in self.contexts
         }
         submitted: int = 0
+        # 本段落已送出的補平量，以（策略, 標的, 方向）累計
+        in_flight: Dict[Tuple[str, str, str], int] = {}
 
         for action in pending:
             context: Optional[StrategyContext] = by_name.get(action.strategy_name)
@@ -2227,7 +2252,14 @@ class LiveTrader:
                 )
                 continue
 
-            volume: Optional[int] = self._pending_volume_to_cover(context, action)
+            key: Tuple[str, str, str] = (
+                context.name,
+                action.symbol,
+                action.position_type or "",
+            )
+            volume: Optional[int] = self._pending_volume_to_cover(
+                context, action, in_flight.get(key, 0)
+            )
             if volume is None:
                 continue
 
@@ -2254,6 +2286,7 @@ class LiveTrader:
             self.dao.resolve_pending_action(
                 action.action_id, self.dao.ACTION_DONE, self._now()
             )
+            in_flight[key] = in_flight.get(key, 0) + volume
             submitted += 1
 
         return submitted
@@ -2279,20 +2312,22 @@ class LiveTrader:
         return actions
 
     def _pending_volume_to_cover(
-        self, context: StrategyContext, action: PendingAction
+        self, context: StrategyContext, action: PendingAction, in_flight: int = 0
     ) -> Optional[int]:
         """
         - Description:
-            待辦實際要補平的數量：待辦數量與歸屬帳目前持有量取小
+            待辦實際要補平的數量：待辦數量與「歸屬帳持有量 − 本段落已送出的補平量」取小
 
             持有量為 0 時把待辦標成 `DONE` 並寫事件；數量被截短時也寫事件——
-            兩者都代表「寫待辦之後部位變了」，事後要查得到是怎麼變的。
-            待辦沒有部位方向時無從比對，留給人工。
+            兩者都代表「寫待辦之後部位變了」或「前一筆待辦已經在平它」，
+            事後要查得到是怎麼截的。待辦沒有部位方向時無從比對，留給人工。
         - Parameters:
             - context: StrategyContext
                 待辦所屬的策略
             - action: PendingAction
                 待辦內容
+            - in_flight: int
+                本段落已對同一個（標的, 方向）送出、尚未撮合的補平量
         - Return:
             - Optional[int]
                 要送出的數量；None 表示本筆不送
@@ -2309,14 +2344,17 @@ class LiveTrader:
         held: int = self.ledger.get_strategy_positions(context.name).get(
             (symbol, direction), 0
         )
-        volume: int = min(wanted, held)
+        available: int = max(held - in_flight, 0)
+        volume: int = min(wanted, available)
         if volume == wanted:
             return volume
 
         message: str = (
             f"待辦 {action_id} 要補平 {symbol} {direction} {wanted}，"
-            f"歸屬帳目前只持有 {held}，"
-            + ("已無部位，不送單" if volume <= 0 else f"改送 {volume}")
+            f"歸屬帳目前持有 {held}"
+            + (f"、本段落已送出補平 {in_flight}" if in_flight else "")
+            + "，"
+            + ("已無可平部位，不送單" if volume <= 0 else f"改送 {volume}")
         )
         logger.warning(message)
         self.events.write(
