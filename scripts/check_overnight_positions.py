@@ -2,6 +2,7 @@ import argparse
 import datetime
 import sys
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from core.config import TW_TRADING_DB_PATH
@@ -285,6 +286,11 @@ def main() -> int:
         help="紀錄庫路徑（預設為正式的 tw_trading.db）",
     )
     args: argparse.Namespace = parser.parse_args()
+
+    # 路徑打錯要明講，不能讓它像「還沒有快照」一樣看起來正常
+    if not Path(args.db).is_file():
+        print(f"紀錄庫不存在：{args.db}")
+        return 1
 
     # 唯讀開啟：這支工具在演練進行中會被執行，絕不能干擾正在寫入的行程
     conn: DBConnection = connect_live_trading(args.db, read_only=True)

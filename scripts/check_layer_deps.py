@@ -21,6 +21,8 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
     5. `sys.path` 注入：專案已以 editable 方式安裝，逐處列出以便複查
     6. 資料庫驅動外洩：`core/`、`apps/`、`strategies/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
     7. 純轉換層做 I/O：`core/adapters/` 不得 import `core.api`、`core.dao` 或資料庫驅動
+    8. 掃描範圍缺漏：`_SCAN_DIRS`／`_SCAN_FILES`／`_ENGINE_FILES` 宣告的目標不存在、
+       或一個檔案都沒掃到，一律算違規——結果為空的檢查不能算通過
 - 使用場景:
     python scripts/check_layer_deps.py            # 只印報告，違規時以非零狀態碼結束
     python scripts/check_layer_deps.py --edges     # 另外把所有跨套件的 import 邊倒出來
@@ -197,6 +199,42 @@ def collect_files() -> List[Path]:
         if p.exists():
             files.append(p)
     return sorted(files)
+
+
+def check_scan_targets(files: List[Path]) -> List[str]:
+    """
+    - Description:
+        宣告的掃描範圍必須真的存在，而且掃得到東西
+
+        `collect_files()` 與 `check_market_leakage()` 遇到不存在的目錄或檔案都直接略過，
+        那是為了讓單一缺漏不至於讓整支檢查崩潰；但略過的結果是**那一塊的檢查靜默消失**，
+        結束碼照樣是 0。最容易發生在拆檔與搬家：`core/live/trader.py` 拆開後，
+        引擎的市場語意洩漏檢查就不再掃任何東西。所以缺漏要算違規，
+        要嘛同步更新宣告，要嘛把檔案放回來。
+    - Parameters:
+        - files: List[Path]
+            `collect_files()` 收到的檔案
+    - Return:
+        - List[str]
+            缺漏的宣告與「什麼都沒掃到」的說明；範圍完整時為空
+    """
+
+    problems: List[str] = []
+    for name in _SCAN_DIRS:
+        if not (_PROJECT_ROOT / name).is_dir():
+            problems.append(f"_SCAN_DIRS 宣告的目錄不存在：{name}")
+    for name in _SCAN_FILES:
+        if not (_PROJECT_ROOT / name).is_file():
+            problems.append(f"_SCAN_FILES 宣告的檔案不存在：{name}")
+    for engine_rel in _ENGINE_FILES:
+        if not (_PROJECT_ROOT / engine_rel).is_file():
+            problems.append(
+                f"_ENGINE_FILES 宣告的引擎檔不存在：{engine_rel}"
+                "（拆檔或改名後要同步更新，否則市場語意洩漏檢查會靜默消失）"
+            )
+    if not files:
+        problems.append("掃描範圍內沒有任何 .py 檔：結果為空的檢查不能算通過")
+    return problems
 
 
 def resolve_import(module: str, node: ast.AST, known_modules: Set[str]) -> List[str]:
@@ -415,6 +453,7 @@ def check_market_leakage() -> List[str]:
     for engine_rel in _ENGINE_FILES:
         engine: Path = _PROJECT_ROOT / engine_rel
         if not engine.exists():
+            # 缺檔由 `check_scan_targets()` 計為違規；這裡只略過，免得同一件事報兩次
             continue
         for lineno, code in sorted(code_lines(engine).items()):
             if re.search(r"\b(Stock|Futures|Tw)[A-Za-z]*\b", code):
@@ -834,6 +873,7 @@ def main() -> int:
                     f"{paths[src].relative_to(_PROJECT_ROOT)}:{lineno}: {src} -> {dst}"
                 )
 
+    scan_targets: List[str] = check_scan_targets(files)
     # 循環只看執行期的 import：`TYPE_CHECKING` 區塊不會執行，循環不成立
     cycles: List[List[str]] = strongly_connected(runtime_graph)
     leakage: List[str] = check_market_leakage()
@@ -855,6 +895,7 @@ def main() -> int:
     print(
         f"掃描 {len(files)} 個檔案，{sum(len(v) for v in graph.values())} 條專案內 import 邊"
     )
+    section("0. 掃描範圍缺漏（宣告了卻不存在、或什麼都沒掃到）", scan_targets)
     section("A. core/ 反向 import 到非 core 套件", core_to_outside)
     section("B. 低層 import 高層（違反單向相依，新出現者）", reverse)
     section("B'. 已登錄的反向相依（附錄 A 追蹤中，不影響結束碼）", known_reverse)
@@ -880,7 +921,8 @@ def main() -> int:
         section("H. 全部跨套件 import 邊", edges_out)
 
     violations: int = (
-        len(core_to_outside)
+        len(scan_targets)
+        + len(core_to_outside)
         + len(reverse)
         + len(cycles)
         + len(leakage)

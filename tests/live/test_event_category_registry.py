@@ -1,6 +1,6 @@
 import ast
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 from core.live.report.parity_checker import RISK_EVENT_TO_CATEGORY
 from core.live.risk import event_categories
@@ -54,6 +54,26 @@ def category_literals(path: Path) -> List[Tuple[int, str]]:
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 found.append((value.lineno, value.value))
     return found
+
+
+def test_the_scan_actually_finds_the_writers() -> None:
+    """
+    掃描本身不得落空
+
+    下一條只斷言「沒有未登錄的類別」，掃到 0 筆時同樣成立：`LIVE_ROOT` 指錯、
+    寫入端改用別的方法名，或類別從字面值改成常數，都會讓它靜默變成恆真。
+    兩支寫最多事件的檔案必須在命中裡——拆檔或改名時這裡會紅，提醒同步更新。
+    """
+
+    hits: Dict[str, int] = {}
+    for path in sorted(LIVE_ROOT.rglob("*.py")):
+        count: int = len(category_literals(path))
+        if count:
+            hits[path.name] = hits.get(path.name, 0) + count
+
+    assert sum(hits.values()) >= 30, hits
+    assert "risk_manager.py" in hits, hits
+    assert "trader.py" in hits, hits
 
 
 def test_every_category_written_by_the_engine_is_registered() -> None:

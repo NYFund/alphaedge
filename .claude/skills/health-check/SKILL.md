@@ -45,7 +45,9 @@ uv run pytest -m "not slow" -rs
 `./scripts/run_regression.sh`（回歸雙線）。
 
 **已經由上面這些工具管住的東西，人工審查一律不報**：格式、import 排序、未使用 import、
-裸 `except`、`exc_info=`、註解引用 backlog 編號、文件路徑失效、分層違規。
+裸 `except`、`exc_info=`、註解引用 backlog 編號、文件路徑失效、分層違規、
+`scripts/check_*.py` 掃描範圍不存在或掃到 0 筆仍回 0（`tests/test_check_scripts_fail_on_empty_scan.py`
+以空專案逐支執行，新腳本自動納入）。**測試裡的掃描**不在此列，仍要人工確認有「結果不得為空」的斷言。
 
 ## 3. `diff` 模式
 

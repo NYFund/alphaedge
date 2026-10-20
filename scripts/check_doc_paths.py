@@ -459,6 +459,23 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 掃描範圍缺漏一律算失敗：`_iter_markdown_files()` 對不存在的目錄直接略過，
+    # 目錄改名後那一塊文件就再也沒人檢查，結束碼卻照樣是 0
+    missing: List[str] = [
+        name for name in _SCAN_DIRS if not (_PROJECT_ROOT / name).is_dir()
+    ]
+    missing.extend(name for name in _SCAN_FILES if not (_PROJECT_ROOT / name).is_file())
+    if missing:
+        print(
+            "宣告的掃描範圍不存在（搬家或改名後要同步更新 `_SCAN_DIRS`／`_SCAN_FILES`）："
+        )
+        for name in missing:
+            print(f"  {name}")
+        return 1
+    if not _iter_markdown_files():
+        print("掃描範圍內沒有任何 .md：結果為空的檢查不能算通過")
+        return 1
+
     real_paths: List[str] = _collect_real_paths()
     deleted: Set[str] = _deleted_paths()
 
