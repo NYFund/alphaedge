@@ -117,10 +117,19 @@ class OrderManager:
         LiveOrderStatus.FILLED: set(),
         LiveOrderStatus.CANCELLED: set(),
         LiveOrderStatus.REJECTED: set(),
-        LiveOrderStatus.FAILED: set(),
+        # FAILED 只代表「本地不知道送到了沒」（送單途中逾時或斷線），不是券商的回覆：
+        # 券商端查到這張單、或它的成交回報進來時，以券商的事實為準往前走。
+        # 2026-10-20 換月開倉腿逾時 5 秒被標 FAILED、券商其實成交，當天就卡在這裡
+        LiveOrderStatus.FAILED: {
+            LiveOrderStatus.SUBMITTED,
+            LiveOrderStatus.PARTIALLY_FILLED,
+            LiveOrderStatus.FILLED,
+            LiveOrderStatus.CANCELLED,
+            LiveOrderStatus.REJECTED,
+        },
     }
 
-    # 恢復時模糊比對的送單時間窗（秒）
+    # 恢復時模糊比對的送單時間窗（秒）：本地建立時刻與券商端送單時刻相差超過它的候選不算
     FUZZY_MATCH_WINDOW_SECONDS: int = 600
 
     def __init__(
@@ -521,7 +530,14 @@ class OrderManager:
         filled: int = ticket.filled_volume + report.volume
         self._update_average_price(ticket, report)
         ticket.filled_volume = filled
-        if ticket.is_terminal and ticket.status is not LiveOrderStatus.FILLED:
+        # 撤單與拒單後的成交是交易所競態，狀態不動；FAILED 不在此列——
+        # 它是本地的猜測，成交就是「其實送到了」的證據，照狀態機推進。
+        # 已是 FILLED 的只補量：接管先依券商狀態推進、成交才由回填補進來時就是這樣
+        if ticket.status in (
+            LiveOrderStatus.CANCELLED,
+            LiveOrderStatus.REJECTED,
+            LiveOrderStatus.FILLED,
+        ):
             self._record_fill_after_terminal(ticket)
         else:
             target: LiveOrderStatus = (
@@ -584,8 +600,8 @@ class OrderManager:
         已終結（撤單、拒單、失敗）的委託又收到成交：**成交照收**，狀態不動
 
         成交是事實，狀態只是本地的判斷。撤單與成交在交易所是競態——撤單生效前
-        已撮合的量照樣會回報，而且可能比撤單回報晚到；送單時逾時被標成 FAILED 的單
-        也可能其實送到了。**這裡不可走狀態機**：會被判成非法轉移而把成交丟掉，
+        已撮合的量照樣會回報，而且可能比撤單回報晚到。**這裡不可走狀態機**：
+        會被判成非法轉移而把成交丟掉，
         帳戶同步收不到，盤後卻以 `live_order` 的舊成交量算出殘量、寫下隔日補平——
         對已經平掉的部位再送一次平倉，就是把部位做反。
         """
@@ -634,10 +650,21 @@ class OrderManager:
             )
         elif op_type.startswith("cancel"):
             self.transition(ticket, LiveOrderStatus.CANCELLED, op_type=event.op_type)
-        elif op_type == "new" and ticket.status is LiveOrderStatus.PENDING_SUBMIT:
+        elif op_type == "new" and ticket.status in (
+            LiveOrderStatus.PENDING_SUBMIT,
+            LiveOrderStatus.FAILED,
+        ):
             # 新單確認：送單回應只帶 PendingSubmit 時，要靠這一筆才知道券商收下了。
-            # 只從 PENDING_SUBMIT 推進——確認晚於成交或撤單回報到達時不可倒退
-            self.transition(ticket, LiveOrderStatus.SUBMITTED, op_type=event.op_type)
+            # 只從 PENDING_SUBMIT 推進——確認晚於成交或撤單回報到達時不可倒退。
+            # 送單逾時被標 FAILED 之後才到的確認同樣算數：券商受理了，單是活的
+            self.transition(
+                ticket,
+                LiveOrderStatus.SUBMITTED,
+                reason="送單逾時但券商已受理"
+                if ticket.status is LiveOrderStatus.FAILED
+                else None,
+                op_type=event.op_type,
+            )
 
     # === 撤單 ===
     def cancel_open_orders(
@@ -776,6 +803,13 @@ class OrderManager:
             而帳上的總量還是對的，對帳看不出來。
 
             完整刷新一次後仍查不到的才標為 `FAILED`，**不自動重送**。
+            送單途中逾時、沒拿到序號就被標 `FAILED` 的單也在接管範圍：那只是本地的猜測，
+            券商端查到就以它的狀態為準往前走；查不到則維持 `FAILED`，不重複判定。
+
+            **成交量不從券商抄**：接管只補狀態與序號。券商的累計成交量代表「有成交」，
+            本地的 `filled_volume` 代表「已套進委託並入帳」，兩者直接畫等號會讓盤後與
+            啟動時的成交回填以為沒東西要補，那些成交就落進 `__unattributed__`。
+            接管之後由成交回填依 `live_fill` 把差額補進委託與歸屬帳。
         - Parameters:
             - run_date: datetime.date
                 交易日
@@ -785,7 +819,7 @@ class OrderManager:
         """
 
         stored: List[Dict[str, Any]] = self._own_rows(
-            self.dao.get_unfinished_orders(run_date)
+            self.dao.get_orders_to_recover(run_date)
         )
         if not stored:
             return []
@@ -806,6 +840,7 @@ class OrderManager:
         for row in stored:
             ticket: OrderTicket = self._rebuild_ticket(row)
             self.tickets[ticket.client_order_id] = ticket
+            was_failed: bool = ticket.status is LiveOrderStatus.FAILED
 
             matched: Optional[OrderTicket] = None
             if row.get("broker_seqno"):
@@ -820,18 +855,34 @@ class OrderManager:
             # 一筆舊委託的狀態問題會讓當天所有策略都送不出單
             try:
                 if matched is None:
-                    self.transition(
-                        ticket,
-                        LiveOrderStatus.FAILED,
-                        reason="重啟接管時在券商端查無此單",
-                        op_type="recover",
-                    )
+                    if was_failed:
+                        logger.info(
+                            f"委託 {ticket.client_order_id} 送單時已標 FAILED，"
+                            "券商端亦查無此單，維持 FAILED"
+                        )
+                    else:
+                        self.transition(
+                            ticket,
+                            LiveOrderStatus.FAILED,
+                            reason="重啟接管時在券商端查無此單",
+                            op_type="recover",
+                        )
                 else:
                     ticket.broker_seqno = matched.broker_seqno
                     ticket.broker_order_id = matched.broker_order_id
-                    ticket.filled_volume = matched.filled_volume
                     if matched.status is not ticket.status:
-                        self.transition(ticket, matched.status, op_type="recover")
+                        self.transition(
+                            ticket,
+                            matched.status,
+                            reason="送單逾時但券商已受理，重啟接管時對回"
+                            if was_failed
+                            else None,
+                            op_type="recover",
+                        )
+                    else:
+                        # 狀態沒變也要落地：以 `custom_field` 對回來的單原本沒有序號，
+                        # 不寫的話成交回填與下一次接管都還是對不到它
+                        self._persist(ticket)
             except OrderStateError as exc:
                 logger.warning(f"接管時與本地狀態矛盾，已跳過本筆：{exc}")
             recovered.append(ticket)
@@ -842,12 +893,19 @@ class OrderManager:
         self, row: Dict[str, Any], candidates: Sequence[OrderTicket]
     ) -> Optional[OrderTicket]:
         """
-        以「標的 ＋ 買賣別 ＋ 價格 ＋ 數量」模糊比對；**多筆時回 None 並要求人工確認**
+        以「標的 ＋ 買賣別 ＋ 價格 ＋ 數量 ＋ 送單時間窗」模糊比對；**多筆時回 None 並要求人工確認**
 
         兩支策略可能在同一秒對不同標的送出相似的單，而同一支策略也可能分批建倉——
         挑一個看起來最像的，會把兩張單的成交記到同一張上。
+
+        時間窗（`FUZZY_MATCH_WINDOW_SECONDS`）排除券商端送單時刻與本地建立時刻相差太久的候選：
+        同一支策略早上與尾盤各送一張同價同量的單，少了這道條件就是兩筆候選、永遠要人工。
+        券商端沒有時間的候選不排除——寧可多一筆候選要人確認，不可把真正的那張漏掉。
         """
 
+        created_at: Optional[datetime.datetime] = self._parse_time(
+            row.get("created_at")
+        )
         matches: List[OrderTicket] = [
             candidate
             for candidate in candidates
@@ -856,6 +914,7 @@ class OrderManager:
             and candidate.order.action.value == row.get("action")
             and abs(candidate.order.price - float(row.get("price") or 0)) < 1e-6
             and candidate.order.volume == int(row.get("volume") or 0)
+            and self._within_window(created_at, candidate.created_at)
         ]
 
         if len(matches) == 1:
@@ -869,6 +928,27 @@ class OrderManager:
             self._write_risk_event("RECOVER_AMBIGUOUS", message, None)
             self._degrade(message)
         return None
+
+    def _within_window(
+        self,
+        local_created_at: Optional[datetime.datetime],
+        broker_created_at: Optional[datetime.datetime],
+    ) -> bool:
+        """
+        兩個送單時刻是否落在 `FUZZY_MATCH_WINDOW_SECONDS` 內；任一邊沒有時間視為在窗內
+
+        本地時刻是台北 aware、券商回的可能是 naive：只有一邊帶時區時剝掉它再比，
+        不然相減直接拋 TypeError，整個接管在第一筆模糊比對就中止。
+        """
+
+        if local_created_at is None or broker_created_at is None:
+            return True
+        local: datetime.datetime = local_created_at
+        remote: datetime.datetime = broker_created_at
+        if (local.tzinfo is None) != (remote.tzinfo is None):
+            local = local.replace(tzinfo=None)
+            remote = remote.replace(tzinfo=None)
+        return abs((local - remote).total_seconds()) <= self.FUZZY_MATCH_WINDOW_SECONDS
 
     def _rebuild_ticket(self, row: Dict[str, Any]) -> OrderTicket:
         """

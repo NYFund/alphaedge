@@ -414,7 +414,7 @@ def build_live_trader(
         now_provider=now_provider,
     )
     ledger: PositionAttributionLedger = PositionAttributionLedger(
-        resolved_dao, now_provider
+        resolved_dao, now_provider, run_id=resolved_run_id
     )
     allocator: CapitalAllocator = CapitalAllocator(
         {name: live_capital(strategy) for name, strategy in zip(names, strategies)},

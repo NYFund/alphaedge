@@ -93,6 +93,10 @@ RECOVER_AMBIGUOUS: str = "RECOVER_AMBIGUOUS"
 ORDER_PERSIST_FAILED: str = "ORDER_PERSIST_FAILED"
 # 以券商部位重建歸屬帳（`core/live/attribution/resync.py`）：每一筆 lot 異動一筆事件
 RESYNC_FROM_BROKER: str = "RESYNC_FROM_BROKER"
+# 啟動重建時券商有、歸屬帳查無來源的部位被收進 `__unattributed__`
+# （`core/live/attribution/position_ledger.py`）：每一筆收進一筆事件。這是對帳「一致」
+# 的盲點——收進去之後對帳就對得上，沒有事件的話沒人知道有部位脫離了策略
+POSITION_UNATTRIBUTED: str = "POSITION_UNATTRIBUTED"
 
 OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
     {
@@ -121,6 +125,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         RECOVER_AMBIGUOUS,
         ORDER_PERSIST_FAILED,
         RESYNC_FROM_BROKER,
+        POSITION_UNATTRIBUTED,
     }
 )
 

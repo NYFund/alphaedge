@@ -822,3 +822,32 @@ def test_dao_factory_builds_the_live_tables(
     built: Any = dao_factory(LiveTradeDAO)
 
     assert built.table_exists()
+
+
+def test_orders_to_recover_include_failed_sends_without_a_seqno(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    接管清單除了未終結的，還要有「送單失敗卻沒有券商序號」的
+
+    送單途中逾時被標 FAILED 只代表本地不知道送到了沒；2026-10-20 的換月開倉腿正是
+    這樣被標失敗、券商其實已成交。有序號的 FAILED 是券商明確回覆過的，不必再查。
+    日終標記維持排除 FAILED：它們不在場上，標成已撤會把「券商可能有單」蓋掉。
+    """
+
+    dao.upsert_order(make_order("run1-0001", status="SUBMITTED"))
+    dao.upsert_order(make_order("run1-0002", status="FAILED", custom_field="1-0002"))
+    dao.upsert_order(
+        make_order(
+            "run1-0003", status="FAILED", broker_seqno="000003", custom_field="1-0003"
+        )
+    )
+    dao.upsert_order(make_order("run1-0004", status="FILLED", custom_field="1-0004"))
+
+    assert {row["client_order_id"] for row in dao.get_orders_to_recover(TODAY)} == {
+        "run1-0001",
+        "run1-0002",
+    }
+    assert {row["client_order_id"] for row in dao.get_unfinished_orders(TODAY)} == {
+        "run1-0001"
+    }

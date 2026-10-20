@@ -6,6 +6,9 @@ from loguru import logger
 
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_categories import POSITION_UNATTRIBUTED
+from core.live.risk.event_log import RiskEventLogger
 from core.models import BrokerPositionSnapshot, ExecutionReport
 from core.utils import PositionType
 
@@ -50,6 +53,7 @@ class PositionAttributionLedger:
         self,
         dao: LiveTradeDAO,
         now_provider: Callable[[], datetime.datetime] = now_live,
+        run_id: Optional[str] = None,
     ) -> None:
         """
         - Description:
@@ -59,11 +63,19 @@ class PositionAttributionLedger:
                 實盤紀錄庫
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間（台北時區 aware）
+            - run_id: Optional[str]
+                本次啟動的識別碼；給了才寫風控事件（收進未歸屬部位時），
+                沒給只留 log——只做純帳務運算的呼叫端不必帶
         """
 
         self.dao: LiveTradeDAO = dao
         self._now: Callable[[], datetime.datetime] = now_provider
         self._lot_sequence: itertools.count = itertools.count(1)
+        self.events: Optional[RiskEventLogger] = (
+            RiskEventLogger(dao, run_id, now_provider=now_provider)
+            if run_id is not None
+            else None
+        )
 
     # === 開倉 ===
     def open_lot(
@@ -137,11 +149,31 @@ class PositionAttributionLedger:
             if gap <= 0:
                 continue
 
-            created.append(
-                self.add_unattributed_lot(
-                    position.symbol, position.direction.value, gap, position.avg_price
-                )
+            lot_id: str = self.add_unattributed_lot(
+                position.symbol, position.direction.value, gap, position.avg_price
             )
+            created.append(lot_id)
+            # **收進去之後對帳就會「一致」**：這是唯一會留下痕跡的地方。
+            # 沒有事件的話，一口策略的部位脫離歸屬（送單後崩潰、成交沒套回）
+            # 看起來和「對帳通過」一模一樣，而它只允許平倉、不再被策略管理
+            if self.events is not None:
+                self.events.write(
+                    category=POSITION_UNATTRIBUTED,
+                    severity=NotifyLevel.CRITICAL,
+                    message=(
+                        f"券商部位 {position.symbol} {position.direction.value} {gap} "
+                        f"在歸屬帳中查無來源，已收進 {UNATTRIBUTED_STRATEGY}（只允許平倉，"
+                        f"lot {lot_id}）；若是某支策略的委託成交後沒有套回，"
+                        "請以成交明細核對並歸回"
+                    ),
+                    strategy_name=UNATTRIBUTED_STRATEGY,
+                    symbol=position.symbol,
+                    detail={
+                        "lot_id": lot_id,
+                        "volume": gap,
+                        "avg_price": position.avg_price,
+                    },
+                )
 
         self.dao.commit()
         return created

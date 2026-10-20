@@ -238,7 +238,7 @@ class Harness:
             self.dao, "run1", lambda: NOW
         )
         self.ledger: PositionAttributionLedger = PositionAttributionLedger(
-            self.dao, now_provider=lambda: NOW
+            self.dao, now_provider=lambda: NOW, run_id="run1"
         )
         self.risk: PreTradeRiskManager = PreTradeRiskManager(
             self.mode_state,

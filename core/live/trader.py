@@ -40,6 +40,7 @@ from core.live.attribution.resync import (
 from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError, RollPlan
 from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
+from core.live.fill_backfill import FillBackfiller
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
 from core.live.intraday.session_guard import SessionGuard, stops_after_cover
 from core.live.notify.base import NotifyLevel, notify_safely
@@ -366,6 +367,9 @@ class LiveTrader:
         self.events: RiskEventLogger = RiskEventLogger(
             self.dao, self.run_id, now_provider=self._now
         )
+        self.backfiller: FillBackfiller = FillBackfiller(
+            order_manager, account_sync, dao, run_id, now_provider, notifier
+        )
         self._sleep: Callable[[float], None] = sleep
 
         # 本段落已送出的委託金額，逐策略累計；段落結束時用來釋放未成交的保留
@@ -494,6 +498,10 @@ class LiveTrader:
             context.data_feed.verify_data_freshness(today)
 
         self.order_manager.recover(today)
+        # 接管回來的委託可能已有成交寫在 `live_fill`（另一個行程先收到回報、或本行程
+        # 送單後死掉沒套進）。**先依成交事實補進委託與歸屬帳，再以歸屬帳重建部位**：
+        # 順序反了，這些成交會被重建收進 `__unattributed__`——對帳一致，策略卻失去那口部位
+        self.backfiller.backfill(today)
 
         positions: List[Any] = self.broker.get_positions()
         self.account_sync.rebuild_from_broker(positions)

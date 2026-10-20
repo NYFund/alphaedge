@@ -92,8 +92,8 @@ flowchart TD
 3. 讀回交易模式；帶 `--resume-trading` 時在讀回之後恢復（見第四節）。
 4. `verify_strategies()`（`core/live/strategy_guard.py`）：啟動守門，一次列出所有不合格的策略。擋的是「不報錯、只讓結果安靜地不同」的設定：沒宣告 `live_ready`／`execution_schedule`／`live_execution`，或段落安排與 `allow_day_trade` 推出的開平倉順序矛盾。
 5. 判定交易日（各資料源各判一次，任一休市就整段不送單；判不出來直接拋出）與歷史資料新鮮度。
-6. `OrderManager.recover()` 接管當日未終結的委託（第五節）。
-7. 以 `live_position_lot` 重建各策略帳戶，券商多出來的量收進 `__unattributed__`（第六節）；重設各策略本地餘額為「額度 − 持倉金額」。
+6. `OrderManager.recover()` 接管當日未終結的委託（第五節），接著 `FillBackfiller` 依 `live_fill` 回填接管回來的委託已有的成交（第九節的同一支）。**回填一定在重建之前**：順序反了，送單後崩潰才成交的那口會被下一步收進 `__unattributed__`。
+7. 以 `live_position_lot` 重建各策略帳戶，券商多出來的量收進 `__unattributed__` 並寫 `POSITION_UNATTRIBUTED`（CRITICAL；第六節）；重設各策略本地餘額為「額度 − 持倉金額」。
 8. 刷新帳務快照與資金分配；正式環境檢查額度總量（Σ 額度 ≤ 總權益 × 0.95，不滿足拒絕啟動），模擬環境略過。
 9. 當日虧損檢查（第四節）。
 10. 對帳（第七節）。
@@ -255,11 +255,12 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | `PENDING_SUBMIT` | `SUBMITTED`、`PARTIALLY_FILLED`、`FILLED`、`CANCELLED`、`REJECTED`、`FAILED` |
 | `SUBMITTED` | `PARTIALLY_FILLED`、`FILLED`、`CANCELLED`、`REJECTED`、`FAILED` |
 | `PARTIALLY_FILLED` | `PARTIALLY_FILLED`、`FILLED`、`CANCELLED` |
-| `FILLED`／`CANCELLED`／`REJECTED`／`FAILED` | 終態 |
+| `FAILED` | `SUBMITTED`、`PARTIALLY_FILLED`、`FILLED`、`CANCELLED`、`REJECTED`——只代表「本地不知道送到了沒」（送單途中逾時或斷線），券商端查到這張單或成交回報進來時以券商的事實往前走 |
+| `FILLED`／`CANCELLED`／`REJECTED` | 終態 |
 
 - 回報**不保證順序**：成交或撤單回報可能比委託確認先到，所以 `PENDING_SUBMIT` 可以直接跳到成交或撤單。
 - 佇列消化時單筆矛盾只跳過該筆，不中斷整批（後面正常的成交不能跟著丟）。
-- **已終結的委託又收到成交：成交照收、狀態不動**。撤單與成交在交易所是競態；若走狀態機會被判非法而丟掉成交，盤後再以舊成交量算殘量、對已平掉的部位排補平，就是把部位做反。
+- **已撤、已拒的委託又收到成交：成交照收、狀態不動**。撤單與成交在交易所是競態；若走狀態機會被判非法而丟掉成交，盤後再以舊成交量算殘量、對已平掉的部位排補平，就是把部位做反。`FAILED` 的單收到成交則照狀態機推進（它其實送到了）；已是 `FILLED` 的只補成交量。
 - 撤單只送請求、本地狀態不動，等撤單回報或盤後刷新才轉 `CANCELLED`。
 
 ### 去重
@@ -269,9 +270,10 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 ### 重啟接管
 
-`recover()` 只處理**本行程載入的策略**的當日未終結委託（股票線與期貨線共用紀錄庫，不限定的話會去接管對方的委託）。
-向券商刷新一次當日委託後依序比對：券商委託序號 → `custom_field` 壓縮碼 → 「標的＋買賣別＋價格＋數量」模糊比對。
-模糊比對到多筆**不挑一個**，寫 `RECOVER_AMBIGUOUS` 並降級；完全查不到的標 `FAILED`，不自動重送。
+`recover()` 只處理**本行程載入的策略**的當日未終結委託，加上**送單途中逾時、沒拿到序號就被標 `FAILED`** 的（股票線與期貨線共用紀錄庫，不限定的話會去接管對方的委託）。
+向券商刷新一次當日委託後依序比對：券商委託序號 → `custom_field` 壓縮碼 → 「標的＋買賣別＋價格＋數量」模糊比對（只收送單時刻與本地建立時刻相差 `FUZZY_MATCH_WINDOW_SECONDS` 內的候選；券商端沒有時間的不排除）。
+模糊比對到多筆**不挑一個**，寫 `RECOVER_AMBIGUOUS` 並降級；完全查不到的標 `FAILED`，不自動重送；原本就是 `FAILED` 的維持原狀。
+**接管只補狀態與序號，不抄券商的累計成交量**：本地的 `filled_volume` 代表「已套進委託並入帳」，抄過來會讓成交回填以為沒東西要補，那些成交就落進 `__unattributed__`。接管之後由 `FillBackfiller` 依 `live_fill` 補差額。
 重建的委託連同原始訂單、段落、執行方式與決策價一起還原，否則全額成交也只會被判成部分成交、也不佔持倉檔數名額。
 
 斷線重連後（`recover_after_reconnect()`）同樣依序：重新訂閱行情 → 接管委託 → 對帳；**只對帳、不以券商部位重建本地帳**
@@ -288,7 +290,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 不是本行程的委託 | 以紀錄庫查到的委託歸屬寫入成交，不動對方的狀態機，由擁有者認領或盤後回填 |
 | 全庫查無委託 | 寫 `FILL_UNMATCHED`，成交照樣保留（無歸屬），由對帳抓出差異 |
 
-收線後才到、或兩邊都沒套進的成交，由盤後的 `AfterCloseRunner.backfill_fills()` 回填（第九節）。
+收線後才到、或兩邊都沒套進的成交，由 `FillBackfiller`（`core/live/fill_backfill.py`）回填：盤後（`AfterCloseRunner.backfill_fills()`，第九節）與段落啟動時（接管之後、重建之前）各跑一次。
 
 ---
 
@@ -393,7 +395,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 `AfterCloseRunner`（`core/live/after_close.py`）與送單段落沒有共用狀態，自己連線、自己關閉，不送任何新倉單。順序固定：
 
-1. **依成交明細回填**（`backfill_fills()`）：把 `live_fill` 裡尚未歸屬的同序號成交歸給本行程的委託；合計多於委託已記的量就補套進委託與歸屬帳，寫 `FILL_BACKFILLED`（CRITICAL）並推播。**一定排第一**：順序反了，已成交的單會在下一步被標成日終未成交、再對已平掉的部位排補平。
+1. **依成交明細回填**（`backfill_fills()`，即 `FillBackfiller`）：把 `live_fill` 裡尚未歸屬的同序號成交歸給本行程的委託；合計多於委託已記的量就補套進委託與歸屬帳，寫 `FILL_BACKFILLED`（CRITICAL）並推播。**一定排第一**：順序反了，已成交的單會在下一步被標成日終未成交、再對已平掉的部位排補平。
 2. 向券商刷新委託狀態（券商累計成交多於本地時寫 `FILL_REPORT_MISSING`，**只套狀態、不覆寫成交量**），再把仍未終結的委託標成已撤（ROD 單在券商端日終失效，不標的話次日接管會去撤一張不存在的單）。
 3. 重建帳戶並對帳。
 4. 成本校正：以券商的已實現損益逐筆比對實際費用與成本模型估算，寫 `account/` 底下的 `*_cost_calibration.csv`；差距超過 20% 寫 `COST_MODEL_DRIFT`。期貨用券商的 `fee + tax`，股票以本地開倉成交價算毛損益再扣券商淨損益。任一邊算不出來時該列照寫並註明原因，不略過。
@@ -441,7 +443,7 @@ parity 回答「同一支策略在回測與實盤有沒有送出同一批委託�
 
 | 等級 | 事件 |
 |------|------|
-| CRITICAL | 偵測到上次崩潰、標的池為空、行情中斷、重連失敗、出場單未送出、補平單送出失敗或無法組出、當沖回補失敗、平倉單未成交、成交回報盤後回填、parity 有未解釋差異或比對失敗 |
+| CRITICAL | 偵測到上次崩潰、標的池為空、行情中斷、重連失敗、出場單未送出、補平單送出失敗或無法組出、當沖回補失敗、平倉單未成交、成交回報回填（盤後或啟動時）、parity 有未解釋差異或比對失敗 |
 | WARN | 保證金不足、當沖回補政策被改寫；換月與執行層換不出委託依嚴重度為 WARN 或 CRITICAL |
 
 風控拒單、對帳不一致、交易模式降級、kill switch 只寫 `live_risk_event`，**引擎不直接推播**；

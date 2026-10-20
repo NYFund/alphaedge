@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -358,3 +358,43 @@ def test_lots_held_at_the_start_of_a_day(dao: LiveTradeDAO) -> None:
     ]
 
     assert held == ["closed-today", "held"]
+
+
+def test_adopting_a_broker_position_leaves_a_critical_event(dao: LiveTradeDAO) -> None:
+    """
+    收進 `__unattributed__` 要寫 CRITICAL 事件
+
+    收進去之後對帳就「一致」：沒有事件的話，一口策略的部位脫離歸屬看起來和
+    對帳通過一模一樣，而它只允許平倉、不再被策略管理。沒帶 `run_id` 的歸屬帳只留 log。
+    """
+
+    with_events: PositionAttributionLedger = PositionAttributionLedger(
+        dao, now_provider=lambda: NOW, run_id="run1"
+    )
+    with_events.adopt_broker_positions(
+        [
+            BrokerPositionSnapshot(
+                symbol="2330", direction=PositionType.LONG, volume=1, avg_price=1000.0
+            )
+        ]
+    )
+
+    rows: List[Any] = dao.conn.execute(
+        "SELECT severity, strategy_name, symbol FROM live_risk_event "
+        "WHERE category = 'POSITION_UNATTRIBUTED'"
+    ).fetchall()
+    assert rows == [("CRITICAL", UNATTRIBUTED_STRATEGY, "2330")]
+
+    silent: PositionAttributionLedger = PositionAttributionLedger(
+        dao, now_provider=lambda: NOW
+    )
+    silent.adopt_broker_positions(
+        [
+            BrokerPositionSnapshot(
+                symbol="2317", direction=PositionType.LONG, volume=1, avg_price=100.0
+            )
+        ]
+    )
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'POSITION_UNATTRIBUTED'"
+    ).fetchone() == (1,)

@@ -917,6 +917,34 @@ class LiveTradeDAO(BaseDAO):
         ).fetchall()
         return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
 
+    def get_orders_to_recover(self, run_date: datetime.date) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            重啟接管要核對的當日委託：未終結的，加上**送單失敗卻沒有券商序號**的
+
+            送單途中逾時或斷線時本地標 `FAILED`，但那只代表「不知道送到了沒」：
+            2026-10-20 的換月開倉腿就是逾時 5 秒被標失敗、券商其實已成交。有序號的
+            `FAILED` 是券商明確回覆過的，不必再查；沒有序號的要帶著 `custom_field`
+            回券商對一次。日終標記（`get_unfinished_orders()`）刻意不收這些列：
+            它們不在場上，標成已撤會把「券商可能有單」這件事蓋掉。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Dict[str, Any]]
+                委託清單
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_ORDER_TABLE_NAME} "
+            "WHERE substr(created_at, 1, 10) = ? "
+            "AND (status NOT IN ('FILLED', 'CANCELLED', 'REJECTED', 'FAILED') "
+            "OR (status = 'FAILED' AND (broker_seqno IS NULL OR broker_seqno = ''))) "
+            "ORDER BY created_at",
+            _to_live_params(run_date),
+        ).fetchall()
+        return self._to_dicts(LIVE_ORDER_TABLE_NAME, rows)
+
     def find_order_by_custom_field(self, custom_field: str) -> Optional[Dict[str, Any]]:
         """
         - Description:
