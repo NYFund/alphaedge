@@ -464,6 +464,7 @@ def build_live_trader(
         resolved_dao,
         now_provider,
         order_builders=order_builders,
+        run_id=resolved_run_id,
     )
     # OMS 比逐策略元件先建（它是單例），建構器要等策略都組好才齊
     order_manager.order_rebuilder = make_order_rebuilder(order_builders, now_provider)
