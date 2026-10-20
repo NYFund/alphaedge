@@ -68,6 +68,14 @@ except ModuleNotFoundError:
         to_numeric,
     )
 
+"""
+回測報表檢視器的 Streamlit 入口：側欄選策略，分頁顯示總覽、交易明細、互動圖表、圖檔與下載
+
+**import 有兩條路徑**：`streamlit run frontend/app.py` 只把 `frontend/` 放進 `sys.path`，
+所以先以 `config`／`services` 直接 import；以套件方式載入（測試、映像內的冒煙檢查）時
+退回 `frontend.config`／`frontend.services`。映像因此要設 `PYTHONPATH=/app`（見 `frontend/Dockerfile`）。
+"""
+
 
 st.set_page_config(page_title="AlphaEdge Backtest Viewer", layout="wide")
 _THEME_CSS_PATH = Path(__file__).resolve().parent / "static" / "theme.css"
