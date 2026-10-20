@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 """
 文件路徑漂移檢查：找出 `.md` 裡指不到檔案、但同名檔存在於別處的路徑引用
@@ -117,18 +117,35 @@ _DELETION_NARRATIVE: Set[Tuple[str, str]] = {
 }
 
 
-def _deleted_paths() -> Set[str]:
+def _deleted_paths() -> Optional[Set[str]]:
     """
     - Description:
         git 歷史中曾存在、現在已不存在的檔案路徑
 
         判斷「刪除」只能問版本歷史：工作目錄裡沒有任何痕跡可比對。
-        **拿不到歷史時回空集合而不是拋出**——這是一道輔助檢查，
+        **沒有 git 時回空集合而不是拋出**——這是一道輔助檢查，
         不該讓整支腳本在沒有 git 的環境（例如只解壓原始碼的映像）當掉。
+
+        **shallow clone 回 None**：那裡 git 照樣回得出結果，只是只看得到最後幾個 commit，
+        `--diff-filter=D` 幾乎查不到東西——檢查看起來跑過、其實沒跑。CI 的
+        `actions/checkout` 預設就是 depth 1，這種情況要讓呼叫端明講，不可當成「沒有刪除」。
     - Return:
-        - Set[str]
-            曾被刪除且目前仍不存在的相對路徑
+        - Optional[Set[str]]
+            曾被刪除且目前仍不存在的相對路徑；歷史不完整（shallow clone）時為 None
     """
+
+    try:
+        shallow: subprocess.CompletedProcess = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            cwd=_PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return set()
+    if shallow.stdout.strip() == "true":
+        return None
 
     try:
         result: subprocess.CompletedProcess = subprocess.run(
@@ -477,7 +494,14 @@ def main() -> int:
         return 1
 
     real_paths: List[str] = _collect_real_paths()
-    deleted: Set[str] = _deleted_paths()
+    history: Optional[Set[str]] = _deleted_paths()
+    if history is None:
+        print(
+            "刪除檢查未執行：shallow clone 拿不到完整 git 歷史"
+            "（CI 的 actions/checkout 要設 fetch-depth: 0）"
+        )
+        return 1
+    deleted: Set[str] = history
 
     drifted: List[Tuple[str, str, List[str]]] = []
     unknown: List[Tuple[str, str]] = []

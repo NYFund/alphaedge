@@ -39,7 +39,11 @@ jobs:
       TICK_DATABASE_URL: postgresql://alphaedge:alphaedge@localhost:5432/alphaedge
 
     steps:
+      # `fetch-depth: 0`：文件路徑檢查要問 git 歷史「哪些檔案被刪過」，預設 depth 1 時
+      # 只看得到最後一個 commit，刪除檢查等於沒跑（`check_doc_paths.py` 在 shallow clone 會直接判紅）
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # uv 版本釘死：lock 檔格式與解析行為跟著 uv 版本走，與本機不同版時
       # 可能出現「本機 lock 有效、CI 判定過期」這類與程式碼無關的紅燈。
