@@ -675,7 +675,7 @@ class MyDayTradeLongStrategy(BaseStockStrategy):
 >
 > 回傳 `DataFrame` 的方法（`get()`／`get_range()`／`get_stock_price()`）保留給
 > `strategy_lab/` 的研究用途。在 `strategies/` 底下寫策略時，**禁止**出現
-> `df["收盤價"]`、`df["成交股數"]`、`df["投信買賣超"]` 這類資料庫欄位字面值。
+> `df["收盤價"]`、`df["成交股數"]`、`df["投信買賣超股數"]` 這類資料庫欄位字面值。
 >
 > 原因是失效模式**靜默**：欄位一旦更名，策略會走進既有的 `continue` 分支而安靜地不開倉，
 > 回測報表上只表現為「訊號變少」，極難察覺。`tests/test_strategy_data_access.py`
@@ -721,7 +721,8 @@ price_chg = quote.signal_close / close_map[quote.stock_id] - 1
 ```python
 # 取得 2024/1/1 的所有股票價格
 prices = self.price.get(date=datetime.date(2024, 1, 1))
-# 回傳 DataFrame，包含欄位：stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交量等
+# 回傳 DataFrame，包含欄位：stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交股數等
+# 量的單位是股，不是張
 ```
 
 **取得日期範圍的所有股票價格**:
@@ -778,7 +779,7 @@ trust_map: Dict[str, Any] = self.chip.get_trust_net_shares_map(date)
 ```python
 # 取得 2024/1/1 的三大法人籌碼資料
 chips = self.chip.get(date=datetime.date(2024, 1, 1))
-# 回傳 DataFrame，包含欄位：stock_id, 外資買賣超, 投信買賣超, 自營商買賣超等
+# 回傳 DataFrame，包含欄位：stock_id, 外資買賣超股數, 投信買賣超股數, 自營商買賣超股數等
 ```
 
 ### MonthlyRevenueReportAPI - 月營收資料
@@ -788,7 +789,7 @@ chips = self.chip.get(date=datetime.date(2024, 1, 1))
 ```python
 # 取得 2024 年 1 月的月營收資料
 mrr = self.mrr.get(year=2024, month=1)
-# 回傳 DataFrame，包含欄位：stock_id, 月營收, 月增率, 年增率等
+# 回傳 DataFrame，包含欄位：stock_id, 當月營收, 上月比較增減(%), 去年同月增減(%)等
 ```
 
 ### FinancialStatementAPI - 財報資料
