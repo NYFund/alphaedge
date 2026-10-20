@@ -1,12 +1,15 @@
 import datetime
+import re
+import shlex
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import Any, Dict, List
 
 from scripts.launchd.rehearsal_schedule import (
     _CHAINED_JOBS,
     _DAILY_JOBS,
     _ONE_OFF_JOBS,
+    all_plists,
     build_chain_command,
 )
 
@@ -113,3 +116,49 @@ def test_one_off_jobs_are_not_left_in_the_past() -> None:
     ]
 
     assert expired == []
+
+
+def _uv_invocations(arguments: List[str], uv_bin: str) -> List[List[str]]:
+    """
+    一條 `ProgramArguments` 裡每一次呼叫 uv 的參數（含 uv 本身）
+
+    排程有三種形狀：直接 `[uv, run, ...]`；`/bin/sh -c` 串多步，每行一個 uv；
+    `/bin/sh <腳本>`，uv 寫在腳本裡（以 `$UV_BIN` 取用）。
+    """
+
+    if arguments[0] == uv_bin:
+        return [arguments]
+    if arguments[:2] == ["/bin/sh", "-c"]:
+        return [
+            shlex.split(line.split(";", 1)[0])
+            for line in arguments[2].splitlines()
+            if line.startswith(shlex.quote(uv_bin)) or line.startswith(uv_bin)
+        ]
+    script: str = Path(arguments[1]).read_text(encoding="utf-8")
+    return [
+        ["$UV_BIN", *match.split()]
+        for match in re.findall(r'"\$UV_BIN"\s+([^\\\n]*)', script)
+    ]
+
+
+def test_every_scheduled_uv_run_passes_no_sync() -> None:
+    """
+    排程裡每一次 `uv run` 都帶 `--no-sync`
+
+    `tests/test_subprocess_uv_no_sync.py` 只認 `["uv", "run", ...]` 字面值，排程是
+    `[uv_bin, *_UV_RUN_ARGS, ...]` 組出來的，拿掉 `--no-sync` 那邊照樣綠。不帶的話每次排程
+    觸發都會把主目錄的 venv 同步回預設相依、移除 extras——主目錄正是排程執行的環境。
+    **每個 plist 至少要找到一次 uv 呼叫**：形狀判讀落空時不可以靜默通過。
+    """
+
+    uv_bin: str = "/opt/homebrew/bin/uv"
+    plists: Dict[str, Dict[str, Any]] = all_plists(uv_bin)
+    missing: List[str] = []
+    for suffix, plist in plists.items():
+        calls: List[List[str]] = _uv_invocations(plist["ProgramArguments"], uv_bin)
+        assert calls, f"{suffix} 找不到任何 uv 呼叫"
+        for call in calls:
+            if call[1:3] != ["run", "--no-sync"]:
+                missing.append(f"{suffix}: {shlex.join(call)}")
+
+    assert missing == [], "排程的 uv run 沒帶 --no-sync：\n" + "\n".join(missing)
