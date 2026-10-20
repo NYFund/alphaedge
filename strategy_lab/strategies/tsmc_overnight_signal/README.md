@@ -127,18 +127,19 @@
 
 ## 6. 圖表清單（輸出於 `strategy_lab/strategies/tsmc_overnight_signal/output/`）
 
-與 AlphaEdge 回測報告常見圖表對應如下：
+與 AlphaEdge 回測報告常見圖表對應如下。檔名後綴 `_realistic` 是逐張可執行的結果（研究結論以它為準），
+`_vectorized` 是全額名目的診斷用路徑：
 
 | 檔案 | 說明 |
 |------|------|
-| `equity_curve.png` / `.html` | **資產（淨值）曲線**：策略 vs. Buy & Hold。 |
-| `mdd_underwater.png` / `.html` | **最大回撤（水下曲線）**：策略與基準之回撤百分比。 |
-| `rolling_sharpe.png` / `.html` | **滾動夏普比率**（約 63 交易日窗口，年化）。 |
-| `monthly_returns_heatmap.png` / `.html` | **月報酬率熱力圖**：檢視策略報酬之時間叢聚。 |
+| `equity_curve_realistic.png` / `.html`（另有 `_vectorized`） | **資產（淨值）曲線**：策略 vs. Buy & Hold。 |
+| `mdd_underwater_realistic.png` / `.html`（另有 `_vectorized`） | **最大回撤（水下曲線）**：策略與基準之回撤百分比。 |
+| `rolling_sharpe_realistic.png` / `.html` | **滾動夏普比率**（約 63 交易日窗口，年化，不扣無風險利率）。 |
+| `monthly_returns_heatmap_realistic.png` / `.html`（另有 `_vectorized`） | **月報酬率熱力圖**：檢視策略報酬之時間叢聚。 |
 | `ic_by_year.png` / `.html` | **年度 IC**：預測值與實現報酬之相關係數（報告建議之 Alpha 衰減分析起點）。 |
 | `rolling_ic.png` / `.html` | **滾動 IC**：觀察預測力是否隨時間漂移。 |
-| `backtest_daily.csv` | 每日部位、報酬、淨值、回撤。 |
-| `metrics_summary.csv` / `run_meta.csv` | 聚合指標與本次 lambda、手續費設定。 |
+| `backtest_daily.csv`（另有 `backtest_vectorized_daily.csv`） | 每日部位、報酬、淨值、回撤。 |
+| `metrics_summary.csv`（另有 `metrics_vectorized_summary.csv`）/ `run_meta.csv` | 聚合指標與本次 lambda、手續費設定。 |
 
 ---
 
@@ -176,7 +177,7 @@
 ## 9. 參考
 
 - 課程期末報告原始稿：`tsmc_arbitrage_report.docx`（樣本切分與成本假設）。  
-- AlphaEdge 回測架構說明：`../core/backtest/README.md`。  
+- AlphaEdge 回測架構說明：`../../../core/backtest/README.md`（自本目錄起算）。  
 - 股價與指數資料：**yfinance**（[https://github.com/ranaroussi/yfinance](https://github.com/ranaroussi/yfinance)）。
 
 ---

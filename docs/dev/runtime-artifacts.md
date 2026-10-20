@@ -24,7 +24,7 @@ AlphaEdge/
 │       └── tw_futures/    # price, chip, continuous, universe, margin, meta
 │
 ├── results/               # 回測產出：只放要給人看的東西（CSV ＋ PNG）
-│   ├── <StrategyName>/
+│   ├── <strategy_name>/  # 策略的 self.strategy_name，不是類別名
 │   └── live/              # 實盤日報與每日 parity 比對（與回測輸出分層，避免蓋掉回歸比對基準）
 │
 └── logs/

@@ -200,7 +200,7 @@ sequenceDiagram
 
 ## 四、輸出檔案
 
-全部落在 `results/<策略名稱>/`：
+全部落在 `results/<strategy_name>/`（策略的 `self.strategy_name`，不是 `--strategy` 的類別名）：
 
 | 檔案 | 內容 | 產生者 |
 |------|------|--------|
