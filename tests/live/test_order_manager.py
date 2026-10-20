@@ -1011,3 +1011,78 @@ def test_a_fill_moves_a_failed_send_forward_instead_of_being_parked(
 
     assert ticket.status is LiveOrderStatus.FILLED
     assert ticket.filled_volume == 2
+
+
+# === 事件序號與撤單失敗 ===
+def test_event_seq_continues_across_processes(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    另一個行程對同一張單寫轉移時，序號接著紀錄庫既有的最大值
+
+    每個行程都從 1 起算會撞 `(client_order_id, seq)` 主鍵、被靜默吞掉，
+    事件表少掉的正是盤後寫的 FILLED／CANCELLED。
+    """
+
+    fake_broker.fill_ratio = 0.0
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    after_close: OrderManager = OrderManager(
+        fake_broker, dao, "after", run_index=9, now_provider=lambda: NOW
+    )
+    recovered: OrderTicket = after_close.recover(TODAY)[0]
+    after_close.transition(recovered, LiveOrderStatus.CANCELLED, op_type="expire")
+
+    rows: List[Any] = dao.conn.execute(
+        "SELECT seq, to_status FROM live_order_event WHERE client_order_id = ? "
+        "ORDER BY seq",
+        (ticket.client_order_id,),
+    ).fetchall()
+    assert rows == [(1, "PENDING_SUBMIT"), (2, "SUBMITTED"), (3, "CANCELLED")]
+
+
+def test_cancel_failure_does_not_reject_a_live_order(
+    oms: OrderManager, fake_broker: FakeBroker, dao: LiveTradeDAO
+) -> None:
+    """
+    撤單失敗（多半是已經成交了才撤不掉）：單仍在場上，不可標成 REJECTED
+
+    標成終態會釋放保留、不再核對，盤後也不替它排補平。
+    """
+
+    fake_broker.fill_ratio = 0.0
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "",
+            op_type="Cancel",
+            op_code="88",
+            op_msg="委託已成交，無法刪單",
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.SUBMITTED
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'ORDER_OP_FAILED'"
+    ).fetchone() == (1,)
+
+
+def test_new_order_failure_is_still_a_rejection(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    fake_broker.ack_on_submit = False
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "",
+            op_type="New",
+            op_code="88",
+            op_msg="餘額不足",
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.REJECTED

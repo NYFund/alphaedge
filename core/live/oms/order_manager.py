@@ -641,12 +641,21 @@ class OrderManager:
             ticket.broker_order_id = event.broker_order_id
 
         op_type: str = event.op_type.lower()
-        if event.is_failure:
+        if event.is_failure and op_type == "new":
             self.transition(
                 ticket,
                 LiveOrderStatus.REJECTED,
                 reason=event.op_msg,
                 op_type=event.op_type,
+            )
+        elif event.is_failure:
+            # 撤單或改價失敗：單**仍在場上**（可能已經成交了才撤不掉）。轉成 REJECTED
+            # 會把一張活的單標成終態——釋放保留、不再核對、盤後也不會替它排補平
+            self._write_risk_event(
+                "ORDER_OP_FAILED",
+                f"委託 {ticket.client_order_id} 的 {event.op_type} 失敗：{event.op_msg}；"
+                "單仍在場上，狀態不變，以後續回報或盤後刷新為準",
+                ticket,
             )
         elif op_type.startswith("cancel"):
             self.transition(ticket, LiveOrderStatus.CANCELLED, op_type=event.op_type)
@@ -979,6 +988,11 @@ class OrderManager:
             created_at=self._parse_time(row.get("created_at")),
         )
 
+    def rebuild_order(self, row: Dict[str, Any]) -> Optional[BaseOrder]:
+        """由紀錄庫的委託列還原訂單（沒有注入建構器時回 None）；給引擎算歷史委託的金額用"""
+
+        return self._rebuild_order(row)
+
     def _rebuild_order(self, row: Dict[str, Any]) -> Optional[BaseOrder]:
         """以注入的建構器還原訂單，並補回執行段落（撤單依段落篩選）與執行方式"""
 
@@ -1113,11 +1127,22 @@ class OrderManager:
         to_status: LiveOrderStatus,
         op_type: str,
     ) -> None:
-        """追加一筆狀態轉移歷史（append-only）"""
+        """
+        追加一筆狀態轉移歷史（append-only）
 
-        counter: itertools.count = self._event_sequence.setdefault(
-            ticket.client_order_id, itertools.count(1)
+        **序號從紀錄庫既有的最大值接著數**：每個行程都從 1 起算的話，盤後或重啟
+        行程對同一張單寫的 FILLED／CANCELLED 轉移會撞 `(client_order_id, seq)` 主鍵，
+        被 `INSERT OR IGNORE` 吞掉，事件表少掉的正是最關鍵的那幾筆。
+        """
+
+        counter: Optional[itertools.count] = self._event_sequence.get(
+            ticket.client_order_id
         )
+        if counter is None:
+            counter = itertools.count(
+                self.dao.get_max_order_event_seq(ticket.client_order_id) + 1
+            )
+            self._event_sequence[ticket.client_order_id] = counter
         self.dao.append_order_event(
             {
                 "client_order_id": ticket.client_order_id,

@@ -488,7 +488,9 @@ class AfterCloseRunner:
         """
 
         created: int = 0
-        for order_row in self.dao.get_orders_by_date(run_date):
+        # 只掃本行程策略的委託：股票線與期貨線共用紀錄庫，掃全部會拿另一條線的委託
+        # 替它排待辦、重複推播，而那條線自己的盤後也會再排一次
+        for order_row in self.order_manager.orders_of_day(run_date):
             client_order_id: str = str(order_row["client_order_id"])
             # **已是 FILLED 的沒有殘量**：FILLED 只會由券商的事實推到（成交回報、接管、刷新），
             # 本地成交量仍不足代表回報漏接（刷新已寫 `FILL_REPORT_MISSING`），

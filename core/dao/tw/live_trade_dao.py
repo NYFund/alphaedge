@@ -702,6 +702,21 @@ class LiveTradeDAO(BaseDAO):
 
         self._insert(LIVE_ORDER_EVENT_TABLE_NAME, row)
 
+    def get_max_order_event_seq(self, client_order_id: str) -> int:
+        """
+        某張委託已有的轉移序號最大值；沒有任何轉移時為 0
+
+        序號是 `(client_order_id, seq)` 主鍵的一部分：每個行程都從 1 起算的話，
+        盤後或重啟行程對同一張單寫的轉移會撞號而被靜默吞掉。
+        """
+
+        row: Tuple[Any, ...] = self.conn.execute(
+            f"SELECT COALESCE(MAX(seq), 0) FROM {LIVE_ORDER_EVENT_TABLE_NAME} "
+            "WHERE client_order_id = ?",
+            (client_order_id,),
+        ).fetchone()
+        return int(row[0] or 0)
+
     def insert_fill(self, row: Dict[str, Any]) -> bool:
         """
         - Description:

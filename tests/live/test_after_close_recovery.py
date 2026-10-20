@@ -378,3 +378,34 @@ def test_run_recovers_before_backfilling_and_expiring(
 
     assert calls[:3] == ["recover_orders", "backfill_fills", "expire"]
     assert calls[-1] == "handle_unfilled_remainders"
+
+
+def test_remainders_ignore_the_other_lines_orders(
+    broker: FakeBroker, dao: LiveTradeDAO, sync: AccountSynchronizer
+) -> None:
+    """
+    盤後殘量只處理本行程策略的委託
+
+    股票線與期貨線共用紀錄庫；股票盤後 14:30 若掃到期貨線還沒結束的出場單，
+    會以它過期的成交量替它排待辦並重複推播，期貨盤後 14:35 再排一次。
+    """
+
+    dao.upsert_order(
+        {
+            "client_order_id": "fut-0001",
+            "run_id": "futures",
+            "strategy_name": "MomentumFuturesStrategy",
+            "symbol": "TX202611",
+            "action": "Sell",
+            "position_type": "LONG",
+            "price": 46000.0,
+            "volume": 1,
+            "status": "SUBMITTED",
+            "custom_field": "f10001",
+            "created_at": FILLED_AT,
+        }
+    )
+    dao.conn.commit()
+
+    assert make_runner(broker, dao, sync).handle_unfilled_remainders(TODAY) == 0
+    assert pending_volumes(dao) == []
