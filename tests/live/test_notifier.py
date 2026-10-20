@@ -1,4 +1,5 @@
 import datetime
+import json
 import sqlite3
 import sys
 import threading
@@ -389,10 +390,70 @@ def make_row(
     ended_at: Optional[str] = "2026-09-21 09:05:00",
     end_reason: Optional[str] = "正常結束",
     instrument_type: Optional[str] = None,
+    strategies: Optional[List[str]] = None,
 ) -> Tuple[Any, ...]:
-    """組一筆段落執行紀錄，預設為正常結束"""
+    """組一筆段落執行紀錄，預設為正常結束；`strategies` 寫成 `strategy_params_json`"""
 
-    return (phase, started_at, ended_at, end_reason, instrument_type)
+    params: Optional[str] = (
+        None if strategies is None else json.dumps({"strategies": strategies})
+    )
+    return (phase, started_at, ended_at, end_reason, instrument_type, params)
+
+
+def test_one_dead_process_is_not_hidden_by_another_in_the_same_phase() -> None:
+    """
+    同市場同段落的兩個行程：先跑的死掉、後跑的正常 → 要報死掉的那一個
+
+    parity 補比股票線分成兩個行程跑；只取最後一筆的話，2026-10-20 06:29 那次
+    `DataFreshnessError` 中止就被下一個行程的正常結束蓋掉了。
+    """
+
+    statuses: List[PhaseStatus] = check_phases(
+        [
+            make_row(
+                "parity",
+                end_reason="例外中止：DataFreshnessError",
+                instrument_type="Stock",
+                strategies=["VolumeBreakoutMomentumStrategy"],
+            ),
+            make_row(
+                "parity",
+                instrument_type="Stock",
+                strategies=["IntradayMomentumStrategy"],
+            ),
+        ],
+        {"parity:stock": datetime.time(6, 0)},
+        NOW,
+        grace_minutes=15,
+    )
+
+    assert statuses[0].problem is not None
+    assert "VolumeBreakoutMomentumStrategy" in statuses[0].problem
+    assert "IntradayMomentumStrategy" not in statuses[0].problem
+
+
+def test_a_rerun_of_the_same_strategies_supersedes_the_failed_run() -> None:
+    """同一組策略重跑成功：以最後一次為準，不再告警"""
+
+    statuses: List[PhaseStatus] = check_phases(
+        [
+            make_row("parity", end_reason="例外中止", strategies=["Alpha"]),
+            make_row("parity", strategies=["Alpha"]),
+        ],
+        {"parity": datetime.time(6, 0)},
+        NOW,
+        grace_minutes=15,
+    )
+
+    assert statuses[0].is_healthy is True
+
+
+def test_default_table_includes_the_parity_phase() -> None:
+    """06:00 的 parity 補比也要被監控：它失敗時訊號一致性就整天沒比"""
+
+    from scripts.live_watchdog import DEFAULT_EXPECTED_PHASES
+
+    assert DEFAULT_EXPECTED_PHASES["parity"] == datetime.time(6, 0)
 
 
 def test_missing_phase_is_detected() -> None:
@@ -666,8 +727,9 @@ def test_fetch_runs_reads_a_database_without_the_instrument_column(
         grace_minutes=15,
     )
 
+    # 商品類別與策略集合兩欄都補不了，一律讀成 None
     assert rows == [
-        ("close", "2026-09-21 13:28:00", "2026-09-21 13:40:00", "正常結束", None)
+        ("close", "2026-09-21 13:28:00", "2026-09-21 13:40:00", "正常結束", None, None)
     ]
     assert statuses[0].is_healthy is True
 

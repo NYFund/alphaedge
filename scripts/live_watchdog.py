@@ -1,8 +1,9 @@
 import argparse
 import datetime
+import json
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
@@ -74,6 +75,8 @@ MARKET_TOKENS: Dict[str, str] = {
 # 預設不帶市場：只跑一條線的部署不該因為另一條線沒排而每天告警；
 # 兩條線都跑時由排程以 `--expect` 逐市場指定（見 scripts/launchd/watchdog_in_window.sh）
 DEFAULT_EXPECTED_PHASES: Dict[str, datetime.time] = {
+    # 次日資料更新後的訊號 parity 補比，排在 06:00 的資料更新之後
+    "parity": datetime.time(6, 0),
     "open": datetime.time(8, 30),
     "intraday": datetime.time(9, 6),
     "close": datetime.time(13, 20),
@@ -225,6 +228,45 @@ def _row_matches(row: Tuple[Any, ...], phase: str, market: Optional[str]) -> boo
     return recorded is None or str(recorded) == market
 
 
+def _row_strategies(row: Tuple[Any, ...]) -> FrozenSet[str]:
+    """
+    這筆紀錄載入的策略集合；欄位缺漏或格式不對時為空集合
+
+    第六欄是 `strategy_params_json`（`{"strategies": [...]}`）；較早的紀錄沒有這欄或為 NULL，
+    一律歸成同一組，維持「同段落取最後一筆」的舊語意。
+    """
+
+    raw: Any = row[5] if len(row) > 5 else None
+    if not raw:
+        return frozenset()
+    try:
+        return frozenset(
+            str(name) for name in json.loads(str(raw)).get("strategies", [])
+        )
+    except (ValueError, AttributeError):
+        return frozenset()
+
+
+def _row_problem(
+    label: str, row: Tuple[Any, ...], phase: str, now: datetime.datetime
+) -> Optional[str]:
+    """一筆紀錄的問題：停在未結束太久，或以非正常原因結束；健康時為 None"""
+
+    started_at: Optional[str] = row[1]
+    ended_at: Optional[str] = row[2]
+    if not ended_at:
+        elapsed: float = _minutes_since(started_at, now)
+        if elapsed > PHASE_STALE_MINUTES.get(phase, STALE_RUN_MINUTES):
+            return (
+                f"{label} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
+                "（跑到一半死掉，或卡在等待回報）"
+            )
+        return None
+    if row[3] and str(row[3]) != LiveTradeDAO.END_REASON_NORMAL:
+        return f"{label} 以非正常原因結束：{row[3]}"
+    return None
+
+
 def check_phases(
     rows: Sequence[Tuple[Any, ...]],
     expected: Dict[str, datetime.time],
@@ -240,10 +282,15 @@ def check_phases(
 
         **段落鍵帶市場時只認該市場的紀錄**：股票與期貨是兩個行程、段落名相同，
         只看段落名會讓股票尾盤的紀錄遮住「期貨尾盤沒跑」。
+
+        **同一段落鍵有多筆紀錄時依策略集合分組、每組取最後一筆，任一組不健康就告警**：
+        同市場同段落也可能是不同行程（parity 補比股票線就分兩個行程跑），只取最後一筆的話，
+        先跑的那個死掉、後跑的正常結束，就回報通過。同一組策略重跑過時以最後一次為準。
     - Parameters:
         - rows: Sequence[Tuple[Any, ...]]
-            `live_run` 的當日紀錄 `(phase, started_at, ended_at, end_reason, instrument_type)`；
-            第五欄可省略（舊形狀），視為不分市場
+            `live_run` 的當日紀錄
+            `(phase, started_at, ended_at, end_reason, instrument_type, strategy_params_json)`；
+            後兩欄可省略（舊形狀），視為不分市場、不分策略
         - expected: Dict[str, datetime.time]
             應執行的段落表，鍵為 `段落` 或 `段落:市場`
         - now: datetime.datetime
@@ -266,13 +313,11 @@ def check_phases(
         if now < deadline:
             continue
 
-        # 同一段落若有多筆，取最後一筆——重跑過的那次才是最終狀態
-        row: Optional[Tuple[Any, ...]] = None
-        for candidate in rows:
-            if _row_matches(candidate, phase, market):
-                row = candidate
+        matched: List[Tuple[Any, ...]] = [
+            candidate for candidate in rows if _row_matches(candidate, phase, market)
+        ]
 
-        if row is None:
+        if not matched:
             results.append(
                 PhaseStatus(
                     phase,
@@ -285,22 +330,30 @@ def check_phases(
             )
             continue
 
-        started_at: Optional[str] = row[1]
-        ended_at: Optional[str] = row[2]
-        problem: Optional[str] = None
+        # 每組策略只留最後一筆（dict 覆寫保留先出現的位置，輸出順序穩定）
+        latest: Dict[FrozenSet[str], Tuple[Any, ...]] = {}
+        for candidate in matched:
+            latest[_row_strategies(candidate)] = candidate
 
-        if not ended_at:
-            elapsed: float = _minutes_since(started_at, now)
-            if elapsed > PHASE_STALE_MINUTES.get(phase, STALE_RUN_MINUTES):
-                problem = (
-                    f"{key} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
-                    "（跑到一半死掉，或卡在等待回報）"
-                )
-        elif row[3] and str(row[3]) != LiveTradeDAO.END_REASON_NORMAL:
-            problem = f"{key} 以非正常原因結束：{row[3]}"
+        problems: List[str] = []
+        for strategies, row in latest.items():
+            label: str = (
+                f"{key}（{'、'.join(sorted(strategies))}）" if strategies else key
+            )
+            row_problem: Optional[str] = _row_problem(label, row, phase, now)
+            if row_problem is not None:
+                problems.append(row_problem)
 
+        last: Tuple[Any, ...] = matched[-1]
         results.append(
-            PhaseStatus(phase, expected_at, started_at, ended_at, problem, market)
+            PhaseStatus(
+                phase,
+                expected_at,
+                last[1],
+                last[2],
+                "；".join(problems) if problems else None,
+                market,
+            )
         )
 
     return results
@@ -392,7 +445,7 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
             交易日
     - Return:
         - List[Tuple[Any, ...]]
-            `(phase, started_at, ended_at, end_reason, instrument_type)`
+            `(phase, started_at, ended_at, end_reason, instrument_type, strategy_params_json)`
     - Raise:
         - DBError
             開不了紀錄庫（由呼叫端轉成 CRITICAL 推播）
@@ -406,9 +459,14 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
         instrument_column: str = (
             "instrument_type" if "instrument_type" in columns else "NULL"
         )
+        # 同理：策略集合欄缺的話讀成 NULL，同段落的紀錄退回不分策略
+        strategies_column: str = (
+            "strategy_params_json" if "strategy_params_json" in columns else "NULL"
+        )
         return connection.execute(
             "SELECT phase, started_at, ended_at, end_reason, "
-            f"{instrument_column} AS instrument_type "
+            f"{instrument_column} AS instrument_type, "
+            f"{strategies_column} AS strategy_params_json "
             "FROM live_run "
             "WHERE substr(started_at, 1, 10) = ? ORDER BY started_at, rowid",
             (today.isoformat(),),
