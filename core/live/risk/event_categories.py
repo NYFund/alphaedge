@@ -65,6 +65,9 @@ DEGRADE: str = "DEGRADE"
 # 盤中與送單流程（`core/live/trader.py`）
 DAY_TRADE_COVER_FAILED: str = "DAY_TRADE_COVER_FAILED"
 PENDING_ACTION_TRUNCATED: str = "PENDING_ACTION_TRUNCATED"
+# 出場單送出前被同標的「在途出場量」截短或截到 0：開盤段先送的補平單 09:00 才撮合，
+# 策略接著對同一個部位再送一張平倉，兩張同時撮合就是超賣、把部位做反
+EXIT_TRUNCATED: str = "EXIT_TRUNCATED"
 UNSENT_EXIT: str = "UNSENT_EXIT"
 REFERENCE_PRICE_MISSING: str = "REFERENCE_PRICE_MISSING"
 ROLL_SKIPPED: str = "ROLL_SKIPPED"
@@ -108,6 +111,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         DEGRADE,
         DAY_TRADE_COVER_FAILED,
         PENDING_ACTION_TRUNCATED,
+        EXIT_TRUNCATED,
         UNSENT_EXIT,
         REFERENCE_PRICE_MISSING,
         ROLL_SKIPPED,

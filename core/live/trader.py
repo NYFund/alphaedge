@@ -80,6 +80,7 @@ from core.utils import (
     ExecutionTiming,
     LiveHook,
     LiveOrderStatus,
+    PositionType,
 )
 
 """
@@ -1665,11 +1666,17 @@ class LiveTrader:
                 unsent.append((context, order))
                 continue
 
+            closing: bool = order_rules.is_closing(order)
+            # 出場單先扣掉同一個部位已在場上、尚未撮合的出場量：開盤段先送的補平單
+            # 09:00 才撮合，策略接著讀仍持有的帳戶再送一張平倉，兩張同時撮合就是超賣
+            if closing and not self._truncate_exit_to_available(context, order):
+                unsent.append((context, order))
+                continue
+
             # **平倉與停損不保留資金**：出場是釋放資金，不是占用。可用額度是
             # 「額度 − 持倉占用」，滿倉的策略趨近 0，若出場也要先保留，之後每一張
             # 平倉／停損都會在這裡被擋下、永遠出不了場。開倉才保留；
             # 與 `_check_margin()` 對平倉單免檢查是同一條原則。金額仍算出來給風控
-            closing: bool = order_rules.is_closing(order)
             amount: float = self._order_amount(context, order, closing)
             reserved: float = 0.0 if closing else amount
             if not closing and not self.allocator.reserve(
@@ -1762,6 +1769,77 @@ class LiveTrader:
     # 刻意連出場都不送的風控類別：kill switch 與 HALTED 是人為或系統決定「現在什麼都不動」，
     # 替這兩種排次日補平等於繞過那個決定
     DELIBERATE_EXIT_BLOCKS: Set[str] = {"KILL_SWITCH", "MODE_HALTED"}
+
+    def _in_flight_exit_volume(
+        self, strategy_name: str, symbol: str, position_type: PositionType
+    ) -> int:
+        """
+        本行程已送出、尚未終結的同部位出場單的殘量合計
+
+        以委託管理器手上的 ticket 算，不另外記帳：補平、策略平倉、停損、當沖回補
+        走的都是同一條 `dispatch()`，任一條路徑送出的出場單都算在途。
+        """
+
+        total: int = 0
+        for ticket in self.order_manager.tickets.values():
+            order: Optional[BaseOrder] = ticket.order
+            if (
+                ticket.is_terminal
+                or order is None
+                or ticket.strategy_name != strategy_name
+                or order.symbol != symbol
+                or order.position_type is not position_type
+                or not order_rules.is_closing(order)
+            ):
+                continue
+            total += ticket.remaining_volume
+        return total
+
+    def _truncate_exit_to_available(
+        self, context: StrategyContext, order: BaseOrder
+    ) -> bool:
+        """
+        - Description:
+            把出場單扣掉同一個部位的在途出場量；扣到 0 就不送並寫事件
+
+            **只扣在途量，不拿歸屬帳的持有量當上限**：策略的出場單本來就是照它帳上的部位
+            開的，持有量由帳戶重建保證；而在途的那張（多半是本段落稍早的補平單）撮合後
+            會平掉同一口部位，兩張都送就是超賣。截短與截到 0 都寫 `EXIT_TRUNCATED`，
+            事後要查得到這張單為什麼變小或沒送。截到 0 **不排次日補平**：
+            在途那張沒成交的話，盤後殘量處理會替它排。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - order: BaseOrder
+                待送出的出場單；數量會被就地改小
+        - Return:
+            - bool
+                是否仍有量可送
+        """
+
+        in_flight: int = self._in_flight_exit_volume(
+            context.name, order.symbol, order.position_type
+        )
+        if in_flight <= 0:
+            return True
+        available: int = max(order.volume - in_flight, 0)
+
+        message: str = (
+            f"出場單 {order.symbol} {order.position_type.value} 要平 {order.volume}，"
+            f"同部位已有在途出場 {in_flight}，"
+            + ("已無可平部位，不送" if available <= 0 else f"改送 {available}")
+        )
+        logger.warning(f"[Exit] {context.name}：{message}")
+        self.events.write(
+            category=event_categories.EXIT_TRUNCATED,
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
+        order.volume = available
+        return available > 0
 
     def _record_unsent_exit(
         self, context: StrategyContext, order: BaseOrder, reason: str

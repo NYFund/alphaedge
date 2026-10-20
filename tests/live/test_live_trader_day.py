@@ -1850,3 +1850,92 @@ def test_dispatch_refuses_orders_before_the_window_opens() -> None:
 
     assert len(unsent) == 1
     assert harness.broker.placed_count == 0
+
+
+def test_strategy_exit_is_truncated_by_the_cover_already_in_flight() -> None:
+    """
+    持有 1 張、待辦 1 筆、策略 close 排在開盤段、不成交 → 只送 1 張
+
+    開盤段先送補平單，策略接著讀仍持有的帳戶再送一張平倉，兩張都在 09:00 撮合
+    就是超賣。盤中動能策略的「隔天開盤出場」部署後每天都會走到這裡。
+    """
+
+    exit_order: StockOrder = make_order()
+    exit_order.action = Action.SELL
+
+    class Alpha(ScriptedStrategy):
+        """平倉鉤子排在開盤段、每天都要平掉 2330 的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [], close_orders=[exit_order])
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fill_ratio = 0.0
+    seed_holding(harness, "Alpha", 1)
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    assert harness.broker.placed_count == 1
+    assert harness.dao.conn.execute(
+        "SELECT severity FROM live_risk_event WHERE category = 'EXIT_TRUNCATED'"
+    ).fetchall() == [("WARN",)]
+    # 截到 0 的那張不排次日補平：在途那張沒成交時由盤後殘量處理替它排
+    assert harness.dao.get_pending_actions(TODAY + datetime.timedelta(days=1)) == []
+
+
+def test_exit_larger_than_the_remaining_holding_is_cut_down_not_dropped() -> None:
+    """持有 2 張、在途出場 1 張、策略再平 2 張 → 改送 1 張"""
+
+    exit_order: StockOrder = make_order(volume=2)
+    exit_order.action = Action.SELL
+
+    class Alpha(ScriptedStrategy):
+        """平倉鉤子排在開盤段的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [], close_orders=[exit_order])
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fill_ratio = 0.0
+    seed_holding(harness, "Alpha", 2)
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    volumes: List[int] = [
+        ticket.order.volume for ticket in harness.broker.tickets.values()
+    ]
+    assert volumes == [1, 1]
