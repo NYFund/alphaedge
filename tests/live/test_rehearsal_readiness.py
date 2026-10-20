@@ -102,6 +102,28 @@ def test_stock_feed_fills_the_previous_day_universe() -> None:
     assert strategy.symbols == ["2317", "2330"]
 
 
+def test_stock_feed_default_universe_keeps_only_common_stocks() -> None:
+    """
+    預設標的池與回測共用同一個普通股過濾：ETF、槓桿 ETF、權證不進池
+
+    2026-10-16 回測池 1,972 檔、實盤 2,391 檔；回放 2026-07～10 的日 K，
+    00715L、00631L 這類非普通股過了漲幅門檻 44 次——實盤會買回測從不會買的東西。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    feed.get_latest_data_date = lambda: datetime.date(2026, 10, 16)  # type: ignore
+    feed.price = SimpleNamespace(
+        get=lambda date: pd.DataFrame(
+            {"stock_id": ["0050", "00631L", "00715L", "2330", "031234", "9962"]}
+        )
+    )
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=lambda latest: None)
+
+    feed.fill_default_universe(strategy)
+
+    assert strategy.symbols == ["2330", "9962"]
+
+
 def test_stock_feed_uses_the_strategy_screen_with_the_latest_data_date() -> None:
     """
     策略有盤前篩選時用它的結果，並把資料最新日傳進去

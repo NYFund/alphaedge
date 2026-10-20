@@ -445,7 +445,9 @@ class ShioajiBroker(BaseBroker):
         if trade is None:
             raise LookupError(f"找不到 {ticket.client_order_id} 對應的 Trade，無法改價")
 
-        aligned: float = self.mapper.align_price(price, ticket.order.action)
+        aligned: float = self.mapper.align_price(
+            price, ticket.order.action, ticket.order.symbol
+        )
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
         self._apply_trade(
             ticket,
