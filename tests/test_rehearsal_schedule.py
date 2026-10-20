@@ -1,10 +1,14 @@
 import datetime
+import plistlib
 import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+import pytest
+
+from scripts.launchd import rehearsal_schedule
 from scripts.launchd.rehearsal_schedule import (
     _CHAINED_JOBS,
     _DAILY_JOBS,
@@ -177,3 +181,105 @@ def test_every_scheduled_process_runs_in_taipei_time() -> None:
     assert plists
     for suffix, plist in plists.items():
         assert plist["EnvironmentVariables"].get("TZ") == "Asia/Taipei", suffix
+
+
+# === 時差守衛（夏令時間切換、launchd 沿用開機時區） ===
+def _utc(hour: int, minute: int) -> datetime.datetime:
+    return datetime.datetime(2026, 11, 1, hour, minute, tzinfo=datetime.UTC)
+
+
+def test_guard_measures_the_offset_launchd_actually_uses() -> None:
+    """
+    守衛排在 launchd 本機 03:07：被觸發時的 UTC 時刻就決定時差
+
+    美東夏令（UTC−4）時 03:07 是 07:07Z，台北快 12 小時；11/01 結束夏令（UTC−5）後
+    是 08:07Z，台北快 13 小時。量的是 launchd 的解讀，不是 shell 的 `date +%z`。
+    """
+
+    assert rehearsal_schedule.measure_launchd_offset(_utc(7, 7)) == 12
+    assert rehearsal_schedule.measure_launchd_offset(_utc(8, 7)) == 13
+    assert rehearsal_schedule.measure_launchd_offset(_utc(9, 9)) == 14
+    # 台北本身（UTC+8）：03:07 是前一天 19:07Z
+    assert rehearsal_schedule.measure_launchd_offset(_utc(19, 7)) == 0
+
+
+def test_a_late_trigger_is_not_trusted() -> None:
+    """延遲太久時小時可能算錯：不量測，也就不重裝"""
+
+    assert rehearsal_schedule.measure_launchd_offset(_utc(8, 30)) is None
+    assert rehearsal_schedule.measure_launchd_offset(_utc(8, 5)) is None
+
+
+def _install_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: Optional[int]
+) -> List[Dict[str, Any]]:
+    """把 LaunchAgents 指到暫存目錄、放一份記著 `recorded` 時差的 plist，攔下 install()"""
+
+    monkeypatch.setattr(rehearsal_schedule, "_LAUNCH_AGENTS", tmp_path)
+    environment: Dict[str, str] = {"TZ": "Asia/Taipei"}
+    if recorded is not None:
+        environment[rehearsal_schedule._OFFSET_ENV] = str(recorded)
+    with (tmp_path / "com.alphaedge.live.futures-close.plist").open("wb") as handle:
+        plistlib.dump({"EnvironmentVariables": environment}, handle)
+
+    calls: List[Dict[str, Any]] = []
+    monkeypatch.setattr(
+        rehearsal_schedule,
+        "install",
+        lambda offset=None, skip=None: calls.append({"offset": offset, "skip": skip}),
+    )
+    return calls
+
+
+def test_guard_reinstalls_when_the_offset_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """夏令時間結束後第一次觸發：以量到的時差重裝，並跳過守衛自己（卸載自己會殺掉本行程）"""
+
+    calls: List[Dict[str, Any]] = _install_recorded(tmp_path, monkeypatch, 12)
+
+    assert rehearsal_schedule.ensure_offset(_utc(8, 7)) == 13
+    assert calls == [{"offset": 13, "skip": {"tz-guard"}}]
+
+
+def test_guard_leaves_the_schedule_alone_when_nothing_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: List[Dict[str, Any]] = _install_recorded(tmp_path, monkeypatch, 12)
+
+    assert rehearsal_schedule.ensure_offset(_utc(7, 7)) is None
+    assert calls == []
+
+
+def test_guard_reinstalls_a_schedule_installed_before_offsets_were_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """舊版安裝沒記時差：無從比對，就以量到的為準重裝一次"""
+
+    calls: List[Dict[str, Any]] = _install_recorded(tmp_path, monkeypatch, None)
+
+    assert rehearsal_schedule.ensure_offset(_utc(7, 7)) == 12
+    assert calls == [{"offset": 12, "skip": {"tz-guard"}}]
+
+
+def test_the_guard_is_not_converted_and_the_segments_are() -> None:
+    """
+    守衛固定在 launchd 本機 03:07、不記時差；段落依時差換算並記下時差
+
+    守衛跟著換算的話，它的觸發時刻就不再是已知的本機時刻，量不出時差。
+    """
+
+    summer: Dict[str, Dict[str, Any]] = all_plists("/opt/homebrew/bin/uv", offset=12)
+    winter: Dict[str, Dict[str, Any]] = all_plists("/opt/homebrew/bin/uv", offset=13)
+
+    for plists in (summer, winter):
+        guard: Dict[str, Any] = plists["tz-guard"]
+        assert guard["StartCalendarInterval"] == {"Hour": 3, "Minute": 7}
+        assert rehearsal_schedule._OFFSET_ENV not in guard["EnvironmentVariables"]
+    # 期貨尾盤段台北 13:28：夏令換成本機 01:28、冬令 00:28
+    assert summer["futures-close"]["StartCalendarInterval"][0]["Hour"] == 1
+    assert winter["futures-close"]["StartCalendarInterval"][0]["Hour"] == 0
+    assert (
+        summer["futures-close"]["EnvironmentVariables"][rehearsal_schedule._OFFSET_ENV]
+        == "12"
+    )

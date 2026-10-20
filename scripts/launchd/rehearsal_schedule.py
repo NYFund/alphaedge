@@ -1,11 +1,12 @@
 import argparse
+import datetime
 import os
 import plistlib
 import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 """
 模擬環境演練的 launchd 排程：產生、載入、移除
@@ -15,8 +16,11 @@ from typing import Any, Dict, List, Optional, Tuple
 正式環境的旗標不會出現在任何一個排程裡。
 
 **時間以本機時區寫**：launchd 依系統時區觸發，無法逐排程指定時區。
-本檔的時刻表以台北時間撰寫，安裝時換算成本機時間——換算依「安裝當下」的時差，
-**夏令時間切換（美東 11/1）後要重新安裝**，否則全部偏一小時。
+本檔的時刻表以台北時間撰寫，安裝時換算成本機時間，換算用的時差記在每個 plist 的
+`ALPHAEDGE_TAIPEI_OFFSET_HOURS`。**時差會變**：夏令時間切換、主機改時區，而且 launchd
+可能沿用開機當時的時區、與 shell 的 `date +%z` 不同（2026-10 演練就因此裝錯過一次）。
+所以另有一個 `tz-guard` 排程每天在 launchd 本機時間 03:07 觸發，以「被觸發的這一刻」
+反推 launchd 實際用的時差，與安裝時記下的不同就自動以量到的時差重裝（見 `ensure_offset()`）。
 
 台北早上的段落落在美東前一天晚上，星期要跟著錯開一天；換算由
 `to_local_slots()` 統一處理，不在時刻表裡手寫本機時間。
@@ -25,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
     uv run python -m scripts.launchd.rehearsal_schedule --install
     uv run python -m scripts.launchd.rehearsal_schedule --uninstall
     uv run python -m scripts.launchd.rehearsal_schedule --status
+    uv run python -m scripts.launchd.rehearsal_schedule --ensure-offset   # tz-guard 排程呼叫
 """
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
@@ -198,6 +203,16 @@ _UV_RUN_ARGS: Tuple[str, ...] = ("run", "--no-sync", "python")
 # 存活監控的觸發間隔（秒）；時段判斷在 watchdog_in_window.sh 裡
 _WATCHDOG_INTERVAL_SECONDS: int = 300
 
+# 時差守衛：固定在 launchd 本機時間觸發、**不換算**，被觸發的時刻本身就是量測。
+# 03:07 換成台北是 15:07～17:07（本機 UTC−4～−6），所有段落都已結束，重裝不會撞上段落
+_TZ_GUARD_SUFFIX: str = "tz-guard"
+_TZ_GUARD_LOCAL_HOUR: int = 3
+_TZ_GUARD_LOCAL_MINUTE: int = 7
+# 實際觸發晚於排定時刻這麼多分鐘以上時不採信量測（主機睡眠或負載造成的延遲會讓小時算錯）
+_TZ_GUARD_MAX_DELAY_MINUTES: int = 8
+# 記在每個 plist 的安裝時差（台北比 launchd 本機快幾小時）
+_OFFSET_ENV: str = "ALPHAEDGE_TAIPEI_OFFSET_HOURS"
+
 
 def taipei_offset_hours() -> int:
     """台北比本機快幾小時（依安裝當下的時差）"""
@@ -211,11 +226,15 @@ def taipei_offset_hours() -> int:
 
 
 def to_local_slots(
-    hour: int, minute: int, weekdays: Tuple[int, ...]
+    hour: int, minute: int, weekdays: Tuple[int, ...], offset: Optional[int] = None
 ) -> List[Dict[str, int]]:
-    """台北的 (時, 分, 星期) → 本機的 `StartCalendarInterval` 項目；跨日時星期一起平移"""
+    """
+    台北的 (時, 分, 星期) → 本機的 `StartCalendarInterval` 項目；跨日時星期一起平移
 
-    offset: int = taipei_offset_hours()
+    `offset` 是台北比本機快幾小時；未給時取 `taipei_offset_hours()`
+    """
+
+    offset = taipei_offset_hours() if offset is None else offset
     local_hour: int = hour - offset
     day_shift: int = 0
     while local_hour < 0:
@@ -232,15 +251,16 @@ def to_local_slots(
     ]
 
 
-def to_local_once(month: int, day: int, hour: int, minute: int) -> Dict[str, int]:
-    """台北的某一刻 → 本機的月、日、時、分（只跑一次的排程用）"""
+def to_local_once(
+    month: int, day: int, hour: int, minute: int, offset: Optional[int] = None
+) -> Dict[str, int]:
+    """台北的某一刻 → 本機的月、日、時、分（只跑一次的排程用）；`offset` 同 `to_local_slots()`"""
 
-    import datetime
-
+    offset = taipei_offset_hours() if offset is None else offset
     taipei: datetime.datetime = datetime.datetime(
         datetime.date.today().year, month, day, hour, minute
     )
-    local: datetime.datetime = taipei - datetime.timedelta(hours=taipei_offset_hours())
+    local: datetime.datetime = taipei - datetime.timedelta(hours=offset)
     return {
         "Month": local.month,
         "Day": local.day,
@@ -255,8 +275,9 @@ def build_plist(
     calendar: Optional[Any] = None,
     interval: Optional[int] = None,
     uv_bin: str = "",
+    offset: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """組一個 plist 的內容"""
+    """組一個 plist 的內容；`offset` 是換算用的時差，記進環境變數供 `ensure_offset()` 比對"""
 
     plist: Dict[str, Any] = {
         "Label": f"{_LABEL_PREFIX}{suffix}",
@@ -274,6 +295,8 @@ def build_plist(
         "StandardOutPath": str(_LOG_DIR / f"{suffix}.log"),
         "StandardErrorPath": str(_LOG_DIR / f"{suffix}.err.log"),
     }
+    if offset is not None:
+        plist["EnvironmentVariables"][_OFFSET_ENV] = str(offset)
     if calendar is not None:
         plist["StartCalendarInterval"] = calendar
     if interval is not None:
@@ -281,38 +304,125 @@ def build_plist(
     return plist
 
 
-def all_plists(uv_bin: str) -> Dict[str, Dict[str, Any]]:
-    """全部排程：標籤後綴 → plist 內容"""
+def all_plists(uv_bin: str, offset: Optional[int] = None) -> Dict[str, Dict[str, Any]]:
+    """全部排程：標籤後綴 → plist 內容；`offset` 未給時取 `taipei_offset_hours()`"""
 
+    offset = taipei_offset_hours() if offset is None else offset
     plists: Dict[str, Dict[str, Any]] = {}
     for suffix, (hour, minute, args) in _DAILY_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
             [uv_bin, *_UV_RUN_ARGS, *args],
-            calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS),
+            calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS, offset),
             uv_bin=uv_bin,
+            offset=offset,
         )
     for suffix, (hour, minute, steps) in _CHAINED_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
             build_chain_command(uv_bin, steps),
-            calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS),
+            calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS, offset),
             uv_bin=uv_bin,
+            offset=offset,
         )
     for suffix, (month, day, hour, minute, args) in _ONE_OFF_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
             [uv_bin, *_UV_RUN_ARGS, *args],
-            calendar=to_local_once(month, day, hour, minute),
+            calendar=to_local_once(month, day, hour, minute, offset),
             uv_bin=uv_bin,
+            offset=offset,
         )
     plists["watchdog"] = build_plist(
         "watchdog",
         ["/bin/sh", str(Path(__file__).with_name("watchdog_in_window.sh"))],
         interval=_WATCHDOG_INTERVAL_SECONDS,
         uv_bin=uv_bin,
+        offset=offset,
+    )
+    # 守衛自己不換算、也不記時差：它的觸發時刻要固定在 launchd 本機時間，才量得出時差
+    plists[_TZ_GUARD_SUFFIX] = build_plist(
+        _TZ_GUARD_SUFFIX,
+        [
+            uv_bin,
+            *_UV_RUN_ARGS,
+            "-m",
+            "scripts.launchd.rehearsal_schedule",
+            "--ensure-offset",
+        ],
+        calendar={"Hour": _TZ_GUARD_LOCAL_HOUR, "Minute": _TZ_GUARD_LOCAL_MINUTE},
+        uv_bin=uv_bin,
     )
     return plists
+
+
+def measure_launchd_offset(now_utc: datetime.datetime) -> Optional[int]:
+    """
+    - Description:
+        由守衛被觸發的時刻反推 launchd 實際使用的時差（台北比 launchd 本機快幾小時）
+
+        守衛排在 launchd 本機 03:07；被觸發時的 UTC 時刻減掉 03:07 就是 launchd 的 UTC 時差。
+        **量的是 launchd 怎麼解讀排程，不是 shell 的 `date +%z`**：兩者可能不同
+        （launchd 沿用開機當時的時區）。觸發延遲太久時小時可能算錯，那時回 None、不採信。
+    - Parameters:
+        - now_utc: datetime.datetime
+            被觸發當下的 UTC 時刻（aware）
+    - Return:
+        - Optional[int]
+            台北比 launchd 本機快幾小時；觸發延遲超過 `_TZ_GUARD_MAX_DELAY_MINUTES` 時為 None
+    """
+
+    delay: int = now_utc.minute - _TZ_GUARD_LOCAL_MINUTE
+    if not 0 <= delay < _TZ_GUARD_MAX_DELAY_MINUTES:
+        return None
+    launchd_utc_offset: int = (_TZ_GUARD_LOCAL_HOUR - now_utc.hour) % 24
+    # 正規化到 −12～+14（世界時區的範圍）
+    if launchd_utc_offset > 14:
+        launchd_utc_offset -= 24
+    return 8 - launchd_utc_offset
+
+
+def installed_offset() -> Optional[int]:
+    """已安裝排程記下的時差；沒有安裝、或是加這個欄位之前裝的，回 None"""
+
+    for path in sorted(_LAUNCH_AGENTS.glob(f"{_LABEL_PREFIX}*.plist")):
+        with path.open("rb") as handle:
+            content: Dict[str, Any] = plistlib.load(handle)
+        raw: Optional[str] = content.get("EnvironmentVariables", {}).get(_OFFSET_ENV)
+        if raw is not None:
+            return int(raw)
+    return None
+
+
+def ensure_offset(now_utc: Optional[datetime.datetime] = None) -> Optional[int]:
+    """
+    - Description:
+        守衛排程的本體：launchd 實際時差與安裝時記下的不同，就以量到的時差重裝
+
+        **重裝時跳過守衛自己**：卸載自己的標籤會在重裝到一半時把這個行程殺掉；
+        守衛的 plist 不隨時差變動，本來就不必重裝。
+    - Parameters:
+        - now_utc: Optional[datetime.datetime]
+            被觸發的 UTC 時刻；None 時取現在
+    - Return:
+        - Optional[int]
+            重裝時採用的時差；不需重裝或量測不可信時為 None
+    """
+
+    now_utc = datetime.datetime.now(datetime.UTC) if now_utc is None else now_utc
+    measured: Optional[int] = measure_launchd_offset(now_utc)
+    if measured is None:
+        print(f"守衛於 {now_utc.isoformat()} 觸發，延遲過久，本次不量測時差")
+        return None
+
+    recorded: Optional[int] = installed_offset()
+    if recorded == measured:
+        print(f"launchd 時差仍為台北快 {measured} 小時，排程不變")
+        return None
+
+    print(f"launchd 時差由 {recorded} 變為 {measured} 小時，以新時差重裝排程")
+    install(offset=measured, skip={_TZ_GUARD_SUFFIX})
+    return measured
 
 
 def build_chain_command(uv_bin: str, steps: List[List[str]]) -> List[str]:
@@ -346,8 +456,13 @@ def domain() -> str:
     return f"gui/{os.getuid()}"
 
 
-def install() -> None:
-    """產生 plist、寫入 LaunchAgents 並逐一載入（已載入的先卸載再載）"""
+def install(offset: Optional[int] = None, skip: Optional[Set[str]] = None) -> None:
+    """
+    產生 plist、寫入 LaunchAgents 並逐一載入（已載入的先卸載再載）
+
+    `offset` 未給時以 `date +%z` 換算；與 launchd 實際時差不同時，`tz-guard`
+    下一次觸發會以量到的時差改正。`skip` 是不重裝的標籤後綴。
+    """
 
     uv_bin: Optional[str] = shutil.which("uv")
     if uv_bin is None:
@@ -355,9 +470,12 @@ def install() -> None:
 
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
     _LAUNCH_AGENTS.mkdir(parents=True, exist_ok=True)
-    print(f"台北比本機快 {taipei_offset_hours()} 小時；排程以此換算")
+    offset = taipei_offset_hours() if offset is None else offset
+    print(f"台北比本機快 {offset} 小時；排程以此換算")
 
-    for suffix, content in all_plists(uv_bin).items():
+    for suffix, content in all_plists(uv_bin, offset).items():
+        if skip and suffix in skip:
+            continue
         path: Path = _LAUNCH_AGENTS / f"{_LABEL_PREFIX}{suffix}.plist"
         subprocess.run(
             ["launchctl", "bootout", domain(), str(path)], capture_output=True
@@ -411,12 +529,19 @@ def main() -> None:
     group.add_argument("--install", action="store_true")
     group.add_argument("--uninstall", action="store_true")
     group.add_argument("--status", action="store_true")
+    group.add_argument(
+        "--ensure-offset",
+        action="store_true",
+        help="tz-guard 排程呼叫：launchd 實際時差與安裝時不同就自動重裝",
+    )
     args: argparse.Namespace = parser.parse_args()
 
     if args.install:
         install()
     elif args.uninstall:
         uninstall()
+    elif args.ensure_offset:
+        ensure_offset()
     else:
         status()
 
