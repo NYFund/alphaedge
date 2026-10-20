@@ -73,6 +73,9 @@ ROLL_ABANDONED: str = "ROLL_ABANDONED"
 ROLL_OPEN_FAILED: str = "ROLL_OPEN_FAILED"
 # 券商登入後仍組不出標的池：策略拿到 0 筆報價、永遠不會出訊號，而鉤子照常被呼叫、不會報錯
 UNIVERSE_EMPTY: str = "UNIVERSE_EMPTY"
+# 等不到送單時窗（行程提早太久啟動、或時鐘卡住）：本段落放棄送單。提早送出的尾盤單會在
+# 逐筆交易時段以掛漲停的限價成交，與回測的收盤價假設分岔，而且看起來完全正常
+SUBMIT_WINDOW_MISSED: str = "SUBMIT_WINDOW_MISSED"
 # 券商連線中斷與重連成功：**不降級**，是否有漏接由重連後的對帳判定（不一致時由對帳器降級）
 BROKER_SESSION_DOWN: str = "BROKER_SESSION_DOWN"
 BROKER_RECONNECTED: str = "BROKER_RECONNECTED"
@@ -112,6 +115,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         ROLL_ABANDONED,
         ROLL_OPEN_FAILED,
         UNIVERSE_EMPTY,
+        SUBMIT_WINDOW_MISSED,
         BROKER_SESSION_DOWN,
         BROKER_RECONNECTED,
         UNFILLED_EXIT,

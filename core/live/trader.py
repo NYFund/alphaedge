@@ -1130,7 +1130,9 @@ class LiveTrader:
                 段落時窗；None 時不做時限控制
         """
 
-        self._wait_until_submit_window(window)
+        # 等不到時窗就整段不送：補平、換月與策略訊號都在時窗之外送出會與回測分岔
+        if not self._wait_until_submit_window(window):
+            return
 
         # **開盤段的第一件事是補平昨天沒成交的平倉單**，排在任何新訊號之前：
         # 那是預期外的隔夜部位，多留一分鐘就多一分鐘的曝險
@@ -1639,14 +1641,15 @@ class LiveTrader:
         # 每批一份保證金預算：同一批的開倉單逐張累計，不各自拿同一份可用保證金比
         margin_gate: MarginGate = MarginGate(self.margin_query, self.simulation)
         for index, (context, order) in enumerate(candidates):
-            if self._past(window, "submit_end"):
-                logger.warning("已過送單時限，其餘委託不再送出")
+            # 時窗之外一律不送：過了時限不送，**還沒到也不送**——等待迴圈逾時後
+            # 呼叫端若仍走到這裡（時鐘卡在時窗之前），這道檢查是最後一道
+            outside: Optional[str] = self._outside_window(window)
+            if outside is not None:
+                logger.warning(f"{outside}，其餘委託不再送出")
                 unsent.extend(candidates[index:])
                 if cover_unsent_exits:
                     for late_context, late_order in candidates[index:]:
-                        self._record_unsent_exit(
-                            late_context, late_order, "已過送單時限"
-                        )
+                        self._record_unsent_exit(late_context, late_order, outside)
                 break
 
             blocked: Optional[str] = self._check_margin(margin_gate, context, order)
@@ -2760,29 +2763,45 @@ class LiveTrader:
             if name == context.name:
                 self._reserved_by_order.pop(client_order_id, None)
 
-    def _wait_until_submit_window(self, window: Optional[SegmentWindow]) -> None:
+    def _wait_until_submit_window(self, window: Optional[SegmentWindow]) -> bool:
         """
-        等到可以送單的時刻
+        - Description:
+            等到可以送單的時刻；等不到就寫事件、推播，並回 False
 
-        **提早送出的代價很具體**：尾盤段若在時窗之前送出限價單，它會在逐筆交易
-        時段就成交，成交價不是收盤價——與回測的假設對不上，而且看起來完全正常。
+            **提早送出的代價很具體**：尾盤段若在時窗之前送出限價單，它會在逐筆交易
+            時段就成交，成交價不是收盤價——與回測的假設對不上，而且看起來完全正常。
+            所以逾時不是「記一行就繼續」：呼叫端要照回傳值整段放棄送單。
+        - Parameters:
+            - window: Optional[SegmentWindow]
+                段落時窗；None 時不做時限控制、視為已到
+        - Return:
+            - bool
+                是否到達送單時窗
         """
 
         if window is None:
-            return
+            return True
 
         cap: float = self._wait_cap_seconds(window.submit_start)
         waited: float = 0.0
         while self._now().time() < window.submit_start:
             if waited >= cap:
-                logger.error(
-                    f"等待送單時窗已達安全上限 {cap:.0f} 秒，"
-                    "本段落放棄送單；請確認系統時鐘是否正常"
+                message: str = (
+                    f"等待送單時窗（{window.submit_start}）已達安全上限 {cap:.0f} 秒，"
+                    f"時鐘仍停在 {self._now().time()}；本段落放棄送單，請確認系統時鐘是否正常"
                 )
-                return
+                logger.error(message)
+                self.events.write(
+                    category=event_categories.SUBMIT_WINDOW_MISSED,
+                    severity=NotifyLevel.CRITICAL,
+                    message=message,
+                )
+                self._notify(NotifyLevel.CRITICAL, "等不到送單時窗", message)
+                return False
 
             self._sleep(self.POLL_INTERVAL_SECONDS)
             waited += self.POLL_INTERVAL_SECONDS
+        return True
 
     def _wait_cap_seconds(self, target: datetime.time) -> float:
         """
@@ -2812,6 +2831,18 @@ class LiveTrader:
         if window is None:
             return False
         return self._now().time() >= getattr(window, attribute)
+
+    def _outside_window(self, window: Optional[SegmentWindow]) -> Optional[str]:
+        """目前時刻不在送單時窗內時回原因（還沒到／已過），在時窗內回 None"""
+
+        if window is None:
+            return None
+        now: datetime.time = self._now().time()
+        if now < window.submit_start:
+            return f"尚未到送單時窗（{window.submit_start}）"
+        if now >= window.submit_end:
+            return "已過送單時限"
+        return None
 
 
 def quote_prices_of(quotes: Sequence[BaseQuote]) -> Dict[str, float]:

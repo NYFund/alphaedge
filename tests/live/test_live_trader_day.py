@@ -1791,3 +1791,62 @@ def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
     )
 
     assert received == ["2317"]
+
+
+def test_segment_that_never_reaches_the_window_sends_nothing() -> None:
+    """
+    等不到送單時窗（時鐘卡在時窗之前）：逾時後零送單、寫事件
+
+    以前逾時只記一行就 `return`，`submit_segment()` 不看結果照樣收訊號送單：
+    行程提早 30 分鐘以上啟動或時鐘卡住時，尾盤單會在逐筆交易時段以掛漲停的限價
+    成交，與回測的收盤價假設分岔。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 40),  # 還沒到（now 是 13:26）
+        submit_end=datetime.time(13, 44),
+        drain_end=datetime.time(13, 50),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+    harness.trader._now = lambda: NOW  # 時鐘卡死在時窗之前
+    harness.trader._sleep = lambda seconds: None
+    harness.trader.WAIT_GRACE_SECONDS = 5.0
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert harness.dao.conn.execute(
+        "SELECT severity FROM live_risk_event WHERE category = 'SUBMIT_WINDOW_MISSED'"
+    ).fetchall() == [("CRITICAL",)]
+
+
+def test_dispatch_refuses_orders_before_the_window_opens() -> None:
+    """`dispatch()` 自己也看 `submit_start`：等待迴圈之外的呼叫端在時窗前送單一樣要擋"""
+
+    class Alpha(ScriptedStrategy):
+        """不自己出訊號的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 40),
+        submit_end=datetime.time(13, 44),
+        drain_end=datetime.time(13, 50),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+    start_run(harness)
+    harness.broker.connect()
+
+    unsent = harness.trader.dispatch(
+        [(harness.contexts[0], make_order())], window, cover_unsent_exits=True
+    )
+
+    assert len(unsent) == 1
+    assert harness.broker.placed_count == 0
