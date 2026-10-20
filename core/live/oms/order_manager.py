@@ -722,6 +722,8 @@ class OrderManager:
             `live_fill` 並交給帳戶同步）。以券商的累計量覆寫之後，同一筆成交的回報
             再進來就會重複累加；券商量比本地多時代表有成交回報沒收到，
             那要寫事件讓人處理，而不是靜靜改掉數字——帳戶同步並沒有收到那些成交。
+            **狀態相同也要比成交量**：接管已把狀態推到券商的狀態，兩邊同為
+            PARTIALLY_FILLED 或 FILLED 而本地量較少，正是回報漏接的樣子。
         - Return:
             - List[OrderTicket]
                 券商端當日的委託
@@ -736,7 +738,7 @@ class OrderManager:
 
         for ticket in self.tickets.values():
             latest: Optional[OrderTicket] = by_seqno.get(ticket.broker_seqno or "")
-            if latest is None or latest.status is ticket.status:
+            if latest is None:
                 continue
             if latest.filled_volume > ticket.filled_volume:
                 self._write_risk_event(
@@ -746,6 +748,8 @@ class OrderManager:
                     "帳戶與歸屬帳都少記了這些成交，請以券商成交明細核對",
                     ticket,
                 )
+            if latest.status is ticket.status:
+                continue
             try:
                 self.transition(ticket, latest.status, op_type="refresh")
             except OrderStateError as exc:
