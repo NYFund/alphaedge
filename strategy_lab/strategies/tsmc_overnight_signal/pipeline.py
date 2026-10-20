@@ -9,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 
+from core.analysis.performance_metrics import compute_annualized_sharpe
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.utils import Commission, Units
 from core.utils.instrument import StockUtils
@@ -402,14 +403,26 @@ def information_coefficient(y: np.ndarray, y_hat: np.ndarray) -> float:
     return float(np.corrcoef(y, y_hat)[0, 1])
 
 
-def annualized_sharpe(daily_r: np.ndarray, rf_daily: float = 0.02 / 252) -> float:
-    """年化 Sharpe（以 252 個交易日年化，預設無風險利率年 2%）；報酬近乎不變時回傳 NaN"""
+# 年化無風險利率：研究報告的 Sharpe 刻意扣 2%（約為台灣短天期利率的上緣），讓「策略比放著
+# 不動好多少」的比較偏保守；回測報表的 `core` 預設不扣（0），兩者的數字不可直接互比。
+# 滾動 Sharpe（`plot_rolling_sharpe()`）只看走勢、不扣無風險利率
+RISK_FREE_RATE: float = 0.02
 
-    x = daily_r - rf_daily
-    s = float(np.std(x, ddof=1))
-    if s < 1e-12:
-        return float("nan")
-    return float(np.sqrt(252) * np.mean(x) / s)
+
+def annualized_sharpe(
+    daily_r: np.ndarray, risk_free_rate: float = RISK_FREE_RATE
+) -> float:
+    """
+    年化 Sharpe：公式共用 `compute_annualized_sharpe()`，只把研究採用的無風險利率明確傳進去
+
+    不另寫一份公式：同一個指標算在兩處，口徑遲早分岔。無法計算（樣本不足、報酬完全不變）時
+    core 回 None，這裡轉成 NaN，與報表其他欄位的缺值寫法一致。
+    """
+
+    value: Optional[float] = compute_annualized_sharpe(
+        [float(r) for r in daily_r], risk_free_rate=risk_free_rate
+    )
+    return float("nan") if value is None else value
 
 
 def max_drawdown_pct(dd: np.ndarray) -> float:
