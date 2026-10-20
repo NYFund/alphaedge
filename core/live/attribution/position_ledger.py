@@ -1,5 +1,6 @@
 import datetime
 import itertools
+import os
 from typing import Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -71,6 +72,9 @@ class PositionAttributionLedger:
         self.dao: LiveTradeDAO = dao
         self._now: Callable[[], datetime.datetime] = now_provider
         self._lot_sequence: itertools.count = itertools.count(1)
+        # lot_id 的行程識別：股票線與期貨線是兩個行程、收盤成交都在同一秒附近，
+        # 兩邊各自從 1 起算的序號會撞主鍵。有 run_id 用 run_id（同秒內舊行程排前），沒有用 pid
+        self._process_tag: str = run_id if run_id is not None else f"p{os.getpid()}"
         self.events: Optional[RiskEventLogger] = (
             RiskEventLogger(dao, run_id, now_provider=now_provider)
             if run_id is not None
@@ -413,11 +417,16 @@ class PositionAttributionLedger:
 
     def _next_lot_id(self, moment: datetime.datetime) -> str:
         """
-        產生 lot id
+        產生 lot id：`時戳-行程識別-序號`
 
         **前綴是時戳、後綴是遞增序號**：`get_open_lots()` 以 `(開倉日, lot_id)` 排序，
         而 FIFO 的正確性建立在「同一天內 lot_id 遞增 ＝ 開倉先後」上。
         純隨機碼會讓同一天的沖銷順序變成不可預期，兩次重跑得到不同的已實現損益。
+        **中段是行程識別**：兩個行程在同一秒各開第一筆 lot 時，只有時戳＋序號會撞主鍵，
+        `INSERT OR IGNORE` 把後寫者靜靜吞掉，下一段落那口部位就被收進 `__unattributed__`。
         """
 
-        return f"{moment.strftime('%Y%m%d%H%M%S')}-{next(self._lot_sequence):06d}"
+        return (
+            f"{moment.strftime('%Y%m%d%H%M%S')}-{self._process_tag}-"
+            f"{next(self._lot_sequence):06d}"
+        )

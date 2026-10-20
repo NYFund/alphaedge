@@ -428,3 +428,26 @@ def test_close_segment_rolls_before_collecting_signals(
     assert placed_symbols(broker)[: len(expected)] == expected
     if not expected:
         assert "TX202611" not in placed_symbols(broker)
+
+
+def test_roll_legs_are_checked_against_the_snapshot_not_yesterdays_settlement(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    偏離檢查以換月計畫的快照價為基準：參考價 45,700、快照 48,000（+5%）→ 兩腿都送出
+
+    換月先於收訊號，此時本段落還沒有報價，基準退回合約檔的前一日結算價；
+    當日漲跌超過 3% 時平倉腿會被 `PRICE_DEVIATION` 擋下、整筆 `ROLL_ABANDONED`，
+    而隔天已經換不了（最後交易日）。既有換月測試都走「取不到參考價放行」，測不到這條。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=1.0)
+    context: StrategyContext = trader.contexts[0]
+    context.data_feed.get_reference_price = lambda symbol: 45700.0  # type: ignore
+
+    assert trader.execute_rolls(None) == 1
+    assert placed_symbols(broker) == ["TX202610", "TX202611"]
+    assert roll_events(dao) == []
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'PRICE_DEVIATION'"
+    ).fetchone() == (0,)

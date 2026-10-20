@@ -785,9 +785,27 @@ class LiveTradeDAO(BaseDAO):
 
     # === 部位歸屬帳 ===
     def open_lot(self, row: Dict[str, Any]) -> None:
-        """開倉成交時新增一筆 lot"""
+        """
+        - Description:
+            開倉成交時新增一筆 lot；**寫不進去要拋出**
 
-        self._insert(LIVE_POSITION_LOT_TABLE_NAME, row)
+            `lot_id` 是呼叫端產生的，重複只會是識別碼產生規則出了問題（例如兩個行程
+            撞號），不是重放。被 `INSERT OR IGNORE` 靜靜吞掉的話，這口部位在歸屬帳
+            就不存在，下一段落重建時會被收進 `__unattributed__`，而且沒有任何錯誤。
+        - Parameters:
+            - row: Dict[str, Any]
+                lot 列
+        - Raise:
+            - RuntimeError
+                `lot_id` 已存在、寫入被忽略
+        """
+
+        cursor: sqlite3.Cursor = self._insert(LIVE_POSITION_LOT_TABLE_NAME, row)
+        if cursor.rowcount == 0:
+            raise RuntimeError(
+                f"lot {row.get('lot_id')} 寫入被忽略（lot_id 已存在）：{row.get('strategy_name')} "
+                f"{row.get('symbol')} {row.get('direction')} {row.get('volume')} 沒有進歸屬帳"
+            )
 
     def close_lot(self, lot_id: str, closed_at: datetime.datetime) -> None:
         """標記某筆 lot 已平倉"""

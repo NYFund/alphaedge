@@ -1226,6 +1226,13 @@ class LiveTrader:
             ExecutionTiming.AT_CLOSE,
             ExecutionStyle.MARKET,
         )
+        # 偏離檢查的市場基準用計畫當下的快照價：換月先於收訊號，此時本段落還沒有
+        # 餵給策略的報價，`_reference_price()` 會退回合約檔的參考價（前一日結算）。
+        # 當日漲跌超過偏離上限時平倉腿就被擋、整筆放棄——而換月固定在最後交易日
+        # 前一天，隔天已無法再換，舊月只能被交易所結算
+        for leg in (plan.close_order, plan.open_order):
+            if leg.price and leg.price > 0:
+                context.quote_prices[leg.symbol] = float(leg.price)
 
         if self.dispatch([(context, plan.close_order)], window):
             self._write_roll_event(
