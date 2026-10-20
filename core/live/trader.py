@@ -499,6 +499,7 @@ class LiveTrader:
             context.data_feed.verify_data_freshness(today)
 
         self.order_manager.recover(today)
+        self._preload_daily_amounts(today)
         # 接管回來的委託可能已有成交寫在 `live_fill`（另一個行程先收到回報、或本行程
         # 送單後死掉沒套進）。**先依成交事實補進委託與歸屬帳，再以歸屬帳重建部位**：
         # 順序反了，這些成交會被重建收進 `__unattributed__`——對帳一致，策略卻失去那口部位
@@ -1249,14 +1250,28 @@ class LiveTrader:
             plan.close_order.client_order_id or ""
         )
         if ticket is None or not self._wait_for_fill(ticket, window):
+            filled: int = ticket.filled_volume if ticket is not None else 0
+            if filled <= 0:
+                self._write_roll_event(
+                    context,
+                    plan,
+                    NotifyLevel.WARN,
+                    "ROLL_ABANDONED",
+                    "平倉腿未成交，開倉腿放棄，次日再換",
+                )
+                return False
+            # 部分成交（IOC 成交幾口後被取消）：已平的口數曝險已經消失，開倉腿改送
+            # 已平量補回；剩下沒平的次日再換。只記 WARN 放棄的話，曝險少了幾口沒人知道
+            remaining: int = int(plan.close_order.volume) - filled
+            plan.open_order.volume = filled
             self._write_roll_event(
                 context,
                 plan,
-                NotifyLevel.WARN,
-                "ROLL_ABANDONED",
-                "平倉腿未成交，開倉腿放棄，次日再換",
+                NotifyLevel.CRITICAL,
+                "ROLL_PARTIAL",
+                f"平倉腿只成交 {filled}/{plan.close_order.volume}，"
+                f"開倉腿改送 {filled} 口補回已平部分的曝險，剩 {remaining} 口次日再換",
             )
-            return False
 
         if self.dispatch([(context, plan.open_order)], window):
             self._write_roll_event(
@@ -1655,9 +1670,12 @@ class LiveTrader:
             if outside is not None:
                 logger.warning(f"{outside}，其餘委託不再送出")
                 unsent.extend(candidates[index:])
-                if cover_unsent_exits:
-                    for late_context, late_order in candidates[index:]:
-                        self._record_unsent_exit(late_context, late_order, outside)
+                for late_context, late_order in candidates[index:]:
+                    if order_rules.is_closing(late_order):
+                        if cover_unsent_exits:
+                            self._record_unsent_exit(late_context, late_order, outside)
+                    else:
+                        self._write_deadline_event(late_context, late_order, outside)
                 break
 
             blocked: Optional[str] = self._check_margin(margin_gate, context, order)
@@ -1769,6 +1787,22 @@ class LiveTrader:
     # 刻意連出場都不送的風控類別：kill switch 與 HALTED 是人為或系統決定「現在什麼都不動」，
     # 替這兩種排次日補平等於繞過那個決定
     DELIBERATE_EXIT_BLOCKS: Set[str] = {"KILL_SWITCH", "MODE_HALTED"}
+
+    def _write_deadline_event(
+        self, context: StrategyContext, order: BaseOrder, reason: str
+    ) -> None:
+        """時窗之外被丟掉的開倉單：寫事件，讓 parity 歸到執行面而不是快照口徑"""
+
+        message: str = f"{order.symbol} 開倉單未送出：{reason}"
+        logger.warning(f"[Window] {context.name}：{message}")
+        self.events.write(
+            category=event_categories.SUBMIT_DEADLINE_PASSED,
+            severity=NotifyLevel.WARN,
+            message=message,
+            strategy_name=context.name,
+            symbol=order.symbol,
+            client_order_id=order.client_order_id,
+        )
 
     def _in_flight_exit_volume(
         self, strategy_name: str, symbol: str, position_type: PositionType
@@ -2085,6 +2119,15 @@ class LiveTrader:
             ticket = self.order_manager.tickets.get(client_order_id)
             if ticket is not None and ticket.is_terminal:
                 self.allocator.release(name, amount)
+                # 成交的部分轉入占用：只釋放不占用的話，同一批內即時成交的單
+                # 既不在保留也不在占用，後面的單會以整個額度通過
+                if ticket.order is not None and ticket.order.volume > 0:
+                    self.allocator.consume(
+                        name,
+                        amount
+                        * min(ticket.filled_volume, ticket.order.volume)
+                        / ticket.order.volume,
+                    )
                 self._reserved_by_order.pop(client_order_id, None)
 
     # === 收尾 ===
@@ -2624,6 +2667,45 @@ class LiveTrader:
         """
 
         return self.simulation
+
+    def _preload_daily_amounts(self, today: datetime.date) -> None:
+        """
+        以紀錄庫裡當日已送出的開倉單金額起算風控的單日累計
+
+        三個段落是三個行程、重啟也歸零，單日累計上限要防的正是「重啟反覆送單」。
+        被拒與送單失敗的不算（沒有送出去）；出場單不算（上限只管開倉）。
+        還原不出訂單的列算不出金額，記 warning 略過——寧可少算也不猜。
+        """
+
+        by_name: Dict[str, StrategyContext] = {
+            context.name: context for context in self.contexts
+        }
+        totals: Dict[str, float] = {name: 0.0 for name in by_name}
+        for row in self.order_manager.orders_of_day(today):
+            context: Optional[StrategyContext] = by_name.get(
+                str(row.get("strategy_name"))
+            )
+            if context is None or str(row.get("status")) in (
+                LiveOrderStatus.REJECTED.value,
+                LiveOrderStatus.FAILED.value,
+            ):
+                continue
+            order: Optional[BaseOrder] = self.order_manager.rebuild_order(row)
+            if order is None:
+                logger.warning(
+                    f"委託 {row.get('client_order_id')} 還原不出訂單，當日累計金額少算這一筆"
+                )
+                continue
+            if order_rules.is_closing(order):
+                continue
+            totals[context.name] += context.notional(order)
+
+        for name, amount in totals.items():
+            self.risk_manager.preload_daily_amount(name, amount)
+            if amount > 0:
+                logger.info(
+                    f"{name} 本日啟動前已送出開倉金額 {amount:,.0f}，累計上限由此起算"
+                )
 
     def _reset_local_balances(self) -> None:
         """

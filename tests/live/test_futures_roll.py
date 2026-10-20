@@ -451,3 +451,57 @@ def test_roll_legs_are_checked_against_the_snapshot_not_yesterdays_settlement(
     assert dao.conn.execute(
         "SELECT COUNT(*) FROM live_risk_event WHERE category = 'PRICE_DEVIATION'"
     ).fetchone() == (0,)
+
+
+def test_partially_filled_close_leg_is_critical_and_rolls_the_filled_part(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    平倉腿只成交一部分：記 CRITICAL，開倉腿改送已平的口數補回曝險
+
+    以前只判 FILLED，IOC 成交 3／5 口後被取消也只記 WARN「放棄」，
+    已平的口數曝險消失卻沒有人會知道。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=0.5)
+    context: StrategyContext = trader.contexts[0]
+    # 再補一口，讓部位有 2 口可換；兩腿各 2 口、券商只成交一半
+    trader.account_sync.apply_fill(
+        ExecutionReport(
+            broker_seqno="seed2",
+            broker_trade_id="seed2",
+            symbol="TX202610",
+            action=Action.BUY,
+            price=48000.0,
+            volume=1,
+            ts=datetime.datetime(2026, 10, 19, 13, 30),
+        ),
+        strategy_name=context.name,
+    )
+
+    def leg(expiry: str, action: Action) -> FuturesOrder:
+        return FuturesOrder(
+            product="TX",
+            expiry=expiry,
+            action=action,
+            position_type=PositionType.LONG,
+            volume=2,
+            price=48000.0,
+        )
+
+    context.data_feed.plan_rolls = lambda positions, today: [  # type: ignore
+        RollPlan(
+            close_order=leg("202610", Action.SELL),
+            open_order=leg("202611", Action.BUY),
+            reason="TX202610 → TX202611（2 口）",
+        )
+    ]
+
+    trader.execute_rolls(None)
+
+    legs: List[Any] = [ticket.order for ticket in broker.tickets.values()]
+    assert [(order.symbol, order.volume) for order in legs] == [
+        ("TX202610", 2),
+        ("TX202611", 1),
+    ]
+    assert ("ROLL_PARTIAL", "CRITICAL") in roll_events(dao)

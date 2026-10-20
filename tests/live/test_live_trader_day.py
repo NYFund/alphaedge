@@ -1939,3 +1939,90 @@ def test_exit_larger_than_the_remaining_holding_is_cut_down_not_dropped() -> Non
         ticket.order.volume for ticket in harness.broker.tickets.values()
     ]
     assert volumes == [1, 1]
+
+
+def test_open_order_dropped_outside_the_window_leaves_an_event() -> None:
+    """時窗之外被丟掉的開倉單要寫事件：只有 log 的話，parity 會把它歸成快照口徑、不推播"""
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 25),
+        submit_end=datetime.time(13, 25, 30),  # 已過（now 是 13:26）
+        drain_end=datetime.time(13, 35),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert harness.dao.conn.execute(
+        "SELECT symbol FROM live_risk_event WHERE category = 'SUBMIT_DEADLINE_PASSED'"
+    ).fetchall() == [("2330",)]
+
+
+def test_daily_amount_starts_from_orders_already_sent_today() -> None:
+    """
+    單日累計委託金額從紀錄庫裡當日已送出的開倉單起算
+
+    三個段落是三個行程、重啟也歸零，單日累計上限要防的正是「重啟反覆送單」。
+    被拒的不算，出場單不算。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """不送新單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+
+    harness: Harness = Harness([Alpha()])
+    for index, (action, status) in enumerate(
+        [("Buy", "FILLED"), ("Buy", "REJECTED"), ("Sell", "FILLED")], start=1
+    ):
+        harness.dao.upsert_order(
+            {
+                "client_order_id": f"run0-000{index}",
+                "run_id": "run0",
+                "strategy_name": "Alpha",
+                "symbol": "2330",
+                "action": action,
+                "position_type": "LONG",
+                "price": 100.0,
+                "volume": 1,
+                "status": status,
+                "custom_field": f"00000{index}",
+                "created_at": NOW - datetime.timedelta(hours=4),
+            }
+        )
+    harness.dao.conn.commit()
+    harness.oms.order_rebuilder = lambda row: make_order(
+        volume=int(row["volume"]),
+        price=float(row["price"]),
+        action=Action(str(row["action"])),
+    )
+    start_run(harness)
+
+    harness.trader.prepare()
+
+    # 只有那張成交的買單：100 × 1 張 × 1,000 股
+    assert harness.risk.daily_amount["Alpha"] == 100_000.0
+
+
+def test_filled_amount_moves_from_reserved_to_used() -> None:
+    """成交後釋放保留的同時轉入占用：同一批內即時成交的錢不可憑空消失"""
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.allocator.reserved["Alpha"] == 0.0
+    assert harness.allocator.used["Alpha"] == 100_000.0

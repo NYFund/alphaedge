@@ -196,6 +196,25 @@ class CapitalAllocator:
 
         self.reserved[strategy_name] = max(self.reserved[strategy_name] - amount, 0.0)
 
+    def consume(self, strategy_name: str, amount: float) -> None:
+        """
+        - Description:
+            成交的金額轉入持倉占用
+
+            占用（`used`）平常只在段落開始時由持倉刷新一次；同一批內即時成交的單
+            （期貨範圍市價＋IOC、盤中段落）釋放保留之後，那筆錢既不在保留也不在占用，
+            後面的單會以整個額度通過。
+        - Parameters:
+            - strategy_name: str
+                策略名
+            - amount: float
+                已成交部分的金額
+        """
+
+        if strategy_name not in self.used:
+            return
+        self.used[strategy_name] += max(amount, 0.0)
+
     def release_all(self, strategy_name: str) -> float:
         """
         - Description:
