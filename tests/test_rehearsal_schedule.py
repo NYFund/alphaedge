@@ -162,3 +162,18 @@ def test_every_scheduled_uv_run_passes_no_sync() -> None:
                 missing.append(f"{suffix}: {shlex.join(call)}")
 
     assert missing == [], "排程的 uv run 沒帶 --no-sync：\n" + "\n".join(missing)
+
+
+def test_every_scheduled_process_runs_in_taipei_time() -> None:
+    """
+    排程啟動的行程都帶 `TZ=Asia/Taipei`
+
+    ETL 以主機時區的 `date.today()` 取「今天」，實盤以台北時間；主機在別的時區時，
+    兩邊在台北 00:00 到時差之間對「今天」的認定差一天，資料更新會抓錯日期。
+    """
+
+    plists: Dict[str, Dict[str, Any]] = all_plists("/opt/homebrew/bin/uv")
+
+    assert plists
+    for suffix, plist in plists.items():
+        assert plist["EnvironmentVariables"].get("TZ") == "Asia/Taipei", suffix

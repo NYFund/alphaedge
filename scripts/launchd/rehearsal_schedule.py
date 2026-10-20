@@ -265,6 +265,11 @@ def build_plist(
         "EnvironmentVariables": {
             "PATH": f"{Path(uv_bin).parent}:/usr/bin:/bin:/usr/sbin:/sbin",
             "UV_BIN": uv_bin,
+            # 被排程的行程一律以台北時間取「今天」：ETL 用 `datetime.date.today()`（主機時區），
+            # 實盤用 `now_live()`（台北）。主機不在台北時區時，兩者在台北 00:00～時差之間
+            # 會差一天。**不影響觸發時刻**：`StartCalendarInterval` 由 launchd 以主機時區解讀，
+            # 已在安裝時以 `to_local_slots()` 換算
+            "TZ": "Asia/Taipei",
         },
         "StandardOutPath": str(_LOG_DIR / f"{suffix}.log"),
         "StandardErrorPath": str(_LOG_DIR / f"{suffix}.err.log"),
