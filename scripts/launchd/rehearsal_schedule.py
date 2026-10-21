@@ -41,6 +41,13 @@ _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 # 盤後 parity 補比只比示範策略（演練策略沒有回測意義）
 _FUTURES_STRATEGIES: str = "MomentumFuturesStrategy,FuturesRolloverRehearsalStrategy"
 
+# 股票三個段落載入的策略（同一個行程、共用帳戶）。
+# `StockRoundTripRehearsalStrategy` 只為驗「開倉成交 → 次日平倉成交」而設：示範策略
+# 買強勢股掛漲停價，收盤鎖漲停就排不到，被動等成交不知要等多久。開盤段也要載入——
+# 收盤沒賣掉的部位由次日開盤段補平，那筆補平單歸屬演練策略。
+# 演練結束移除排程時一併拿掉；盤後 parity 補比只比示範策略
+_STOCK_STRATEGIES: str = "MomentumStrategy1,StockRoundTripRehearsalStrategy"
+
 # 標籤後綴 → (台北時, 台北分, `python` 之後的參數)
 _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
     "stock-open": (
@@ -50,7 +57,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "open",
         ],
@@ -74,7 +81,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "close",
         ],
@@ -98,7 +105,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "after_close",
         ],

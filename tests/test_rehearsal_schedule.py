@@ -57,6 +57,23 @@ def test_futures_segments_load_the_rollover_rehearsal_strategy() -> None:
         ], suffix
 
 
+def test_stock_segments_load_the_round_trip_rehearsal_strategy() -> None:
+    """
+    股票三個段落都載入下單路徑演練策略，且與示範策略在同一個行程
+
+    開盤段也要有：收盤沒賣掉的部位由次日開盤段補平，那筆補平單歸屬演練策略。
+    parity 補比不含演練策略（見第一條）。
+    """
+
+    for suffix in ("stock-open", "stock-close", "stock-after-close"):
+        args: List[str] = _DAILY_JOBS[suffix][2]
+        strategies: List[str] = args[args.index("--strategy") + 1].split(",")
+        assert strategies == [
+            "MomentumStrategy1",
+            "StockRoundTripRehearsalStrategy",
+        ], suffix
+
+
 def test_chain_runs_every_step_and_reports_the_first_failure(tmp_path: Path) -> None:
     """
     前一步失敗不中斷後面，結束碼取第一個失敗的
