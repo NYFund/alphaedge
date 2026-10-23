@@ -160,7 +160,6 @@ graph TB
 | `InvestmentTrustMomentumSwingStrategy` | 台股 | LONG | `DAY` | — |
 | `ForeignSellingReversalShortStrategy` | 台股 | SHORT（現股當沖） | `DAY` | — |
 | `MomentumFuturesStrategy` | 台指數期貨 | LONG | `DAY` | ✅ 模擬環境演練中（示範用） |
-| `FuturesRolloverRehearsalStrategy` | 台指數期貨 | LONG | `DAY` | 只供模擬環境驗證換月，不是交易策略 |
 
 「實盤」欄指策略宣告了 `live_ready`；沒宣告的策略會被實盤入口拒絕。
 

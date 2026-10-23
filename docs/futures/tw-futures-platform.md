@@ -13,7 +13,7 @@
 | 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price` |
 | 回測 | 與台股**共用同一支引擎**：`(TW, FUTURE)` 的 model 組（規格／成交／成本／結算／資料源）由 `core/backtest/factory.py` 注入；Tick 級別未實作（§七） |
 | 期貨語意 | 逐日盯市、保證金查表與追繳、換月轉倉、日夜盤整併、期交稅與跳動點滑價 |
-| 策略 | `MomentumFuturesStrategy`（介面示範）、`FuturesRolloverRehearsalStrategy`（實盤換月演練，無回測意義） |
+| 策略 | `MomentumFuturesStrategy`（介面示範） |
 | 實盤 | `python -m apps.live --strategy <期貨策略> --phase ...`；成本、保證金與部位管理與回測同一組組裝（§五） |
 
 ---
@@ -302,7 +302,6 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 
 - `MomentumFuturesStrategy` 的用途是**驗證介面能跑通**，不是可用的交易邏輯——門檻是隨手取的。
   `python -m apps.backtest --strategy MomentumFuturesStrategy`
-- `FuturesRolloverRehearsalStrategy` 以固定日期建倉並撐過換月日，專供模擬環境演練實盤換月兩腿；回測區間內沒有交易。
 
 ---
 

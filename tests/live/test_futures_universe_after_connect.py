@@ -8,9 +8,6 @@ import pytest
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.factory import build_live_trader
 from core.live.trader import LiveTrader, StrategyContext
-from strategies.futures.futures_rollover_rehearsal_strategy import (
-    FuturesRolloverRehearsalStrategy,
-)
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 
 from .conftest import FakeBroker
@@ -21,8 +18,8 @@ from .conftest import FakeBroker
 沒宣告 `symbols` 的期貨策略，標的池由資料源以券商 `resolver` 查掛牌月份補上；
 `resolver` 在登入時才建立，而資料源的 `setup()` 在組裝時就跑了。只在組裝時補的話，
 標的池永遠是空的、每個段落都拿到 0 筆報價，鉤子照常被呼叫卻永遠沒有訊號，
-而且不會有任何錯誤——2026-09-22 演練起期貨線就是這樣，直到 10/15 換月演練策略
-該建倉卻沒有委託才被發現。
+而且不會有任何錯誤——2026-09-22 演練起期貨線就是這樣，直到 10/15 一支該建倉的期貨策略
+沒有委託才被發現。
 
 這裡的假券商**刻意不在組裝前登入**，與 `ShioajiBroker` 一樣登入後才有 `resolver`。
 """
@@ -62,10 +59,10 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def build_trader(dao: LiveTradeDAO, broker: LateResolverBroker) -> LiveTrader:
-    """與演練排程相同的期貨行程組合；**組裝時券商尚未登入**"""
+    """與排程相同的期貨行程；**組裝時券商尚未登入**"""
 
     return build_live_trader(
-        [MomentumFuturesStrategy(), FuturesRolloverRehearsalStrategy()],
+        [MomentumFuturesStrategy()],
         broker=broker,
         dao=dao,
         run_id="20261016132800",
@@ -78,11 +75,11 @@ def test_assembly_before_login_leaves_the_universe_empty(dao: LiveTradeDAO) -> N
 
     trader: LiveTrader = build_trader(dao, LateResolverBroker())
 
-    assert [context.symbols for context in trader.contexts] == [[], []]
+    assert [context.symbols for context in trader.contexts] == [[]]
 
 
 def test_universe_is_filled_after_login(dao: LiveTradeDAO) -> None:
-    """登入後補填：兩支期貨策略的 `context.symbols` 都是全部掛牌月份"""
+    """登入後補填：期貨策略的 `context.symbols` 是全部掛牌月份"""
 
     broker: LateResolverBroker = LateResolverBroker()
     trader: LiveTrader = build_trader(dao, broker)
@@ -138,17 +135,14 @@ def test_universe_still_empty_after_login_writes_a_critical_event(
         "SELECT strategy_name, severity, category FROM live_risk_event "
         "WHERE category = 'UNIVERSE_EMPTY' ORDER BY rowid"
     ).fetchall()
-    assert [row[0] for row in rows] == [
-        "MomentumFuturesStrategy",
-        "FuturesRolloverRehearsalStrategy",
-    ]
+    assert [row[0] for row in rows] == ["MomentumFuturesStrategy"]
     assert {row[1] for row in rows} == {"CRITICAL"}
 
 
 def test_declared_symbols_are_left_alone(dao: LiveTradeDAO) -> None:
     """策略自己宣告的標的池不被登入後的補填覆寫"""
 
-    strategy: FuturesRolloverRehearsalStrategy = FuturesRolloverRehearsalStrategy()
+    strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
     strategy.symbols = ["TX202611"]
     broker: LateResolverBroker = LateResolverBroker()
     trader: LiveTrader = build_live_trader(

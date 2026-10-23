@@ -160,7 +160,6 @@ Strategies live in `strategies/`; the class name is the `--strategy` value. To w
 | `InvestmentTrustMomentumSwingStrategy` | TW stocks | LONG | `DAY` | — |
 | `ForeignSellingReversalShortStrategy` | TW stocks | SHORT (cash day trade) | `DAY` | — |
 | `MomentumFuturesStrategy` | TW index futures | LONG | `DAY` | ✅ in simulation rehearsal (demo) |
-| `FuturesRolloverRehearsalStrategy` | TW index futures | LONG | `DAY` | Only for verifying contract roll in simulation; not a trading strategy |
 
 "Live" means the strategy declares `live_ready`; the live entrypoint rejects strategies that don't.
 
