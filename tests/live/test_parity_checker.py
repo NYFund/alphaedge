@@ -1121,7 +1121,7 @@ def test_order_phase_lookup_follows_the_strategy_schedule() -> None:
     """段落沿用實盤引擎的解析：開倉看 `open` 鉤子，平倉看 `close` 與 `stop_loss`"""
 
     strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
-    strategy.live_schedule = {
+    strategy.execution_schedule = {
         LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
         LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
     }

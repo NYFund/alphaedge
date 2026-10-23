@@ -7,7 +7,6 @@ import pandas as pd
 
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
-from core.utils import TimeUtils
 from strategies.stock.volume_breakout_momentum_strategy import (
     VolumeBreakoutMomentumStrategy,
 )
@@ -30,21 +29,15 @@ BASELINE_END_DATE: datetime.date = datetime.date(2024, 12, 31)
 
 
 def run_backtest_without_report(strategy: VolumeBreakoutMomentumStrategy) -> Backtester:
-    """跑完回測主迴圈但不產生圖表報告（繪圖與回歸比對無關且耗時）"""
+    """
+    跑完回測主迴圈但不產生圖表報告（繪圖與回歸比對無關且耗時）
 
-    backtester: Backtester = build_backtester(strategy)
+    直接走 `Backtester.run()`，回歸線守的就是正式回測的同一條逐日迴圈，
+    不另外複製一份迴圈（複製的那份會和正式迴圈分岔而不自知）。
+    """
 
-    dates: List[datetime.date] = TimeUtils.generate_date_range(
-        start_date=backtester.start_date, end_date=backtester.end_date
-    )
-
-    for date in dates:
-        if not backtester.data_feed.is_market_open(date):
-            continue
-
-        backtester.run_day_backtest(date)
-
-    backtester.account.update_account_status()
+    backtester: Backtester = build_backtester(strategy, write_artifacts=False)
+    backtester.run()
     return backtester
 
 

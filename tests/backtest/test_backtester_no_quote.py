@@ -1,5 +1,5 @@
 import datetime
-from typing import Callable
+from typing import Callable, List
 
 import pytest
 
@@ -7,6 +7,7 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.models import StockOrder
 from core.utils import Action, PositionType, StockPriceType
+from tests.backtest.conftest import run_bar
 
 """
 查不到報價的開倉單一律拒單
@@ -54,7 +55,49 @@ def test_open_order_without_a_quote_is_rejected(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(DAY_1, [make_quote(stock_id="2330", date=DAY_1)])
+    run_bar(backtester, DAY_1, [make_quote(stock_id="2330", date=DAY_1)])
 
     assert [position.symbol for position in backtester.account.positions] == ["2330"]
     assert backtester.event_counts["rejected_no_quote"] == 1
+
+
+def test_run_skips_market_day_without_any_quote(
+    make_strategy, make_backtester, make_quote, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    開盤日但全市場都查不到報價（資料缺日）：整天跳過，連每日準備與收盤結算都不做
+
+    每日準備會覆寫漲跌停參考價（除權息日的公告基準），收盤結算會記權益與次日參考價；
+    沒有報價的日子照跑的話，前者會留下沒被收盤價蓋掉的基準，後者會多出一筆沒有盯市依據的權益。
+    引擎靠 simulator 的 `load_day()` 在準備之前就知道當天沒有報價。
+    """
+
+    day_2: datetime.date = DAY_1 + datetime.timedelta(days=1)
+    strategy = make_strategy()
+    strategy.start_date = DAY_1
+    strategy.end_date = day_2
+    backtester: Backtester = make_backtester(strategy)
+    backtester.write_artifacts = False
+
+    quotes_by_date = {day_2: [make_quote(stock_id="2330", date=day_2)]}
+    monkeypatch.setattr(backtester.data_feed, "is_market_open", lambda date: True)
+    monkeypatch.setattr(
+        backtester.data_feed,
+        "get_quotes",
+        lambda date, scale, adjusted=False: quotes_by_date.get(date, []),
+    )
+    monkeypatch.setattr(backtester.data_feed, "close", lambda: None)
+
+    prepared: List[datetime.date] = []
+    original_prepare_day = backtester.prepare_day
+
+    def _record_prepare_day(date: datetime.date) -> None:
+        prepared.append(date)
+        original_prepare_day(date)
+
+    monkeypatch.setattr(backtester, "prepare_day", _record_prepare_day)
+
+    backtester.run()
+
+    assert prepared == [day_2]
+    assert [row["Date"] for row in backtester.daily_equity] == [day_2]

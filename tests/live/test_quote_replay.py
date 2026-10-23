@@ -134,7 +134,7 @@ def test_same_recording_yields_identical_signals_twice() -> None:
                 self.is_tick_triggered = True
                 # **鉤子要排在 IMMEDIATE**，否則逐筆段落一個鉤子都不會觸發，
                 # 這條測試就變成 `[] == []`——正是它要防的那種假綠燈
-                self.live_schedule = {
+                self.execution_schedule = {
                     LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
                     LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
                 }

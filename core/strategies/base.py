@@ -1,6 +1,8 @@
 import datetime
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
+
+from loguru import logger
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio.construction import BasePortfolioConstructor
@@ -9,6 +11,7 @@ from core.utils import (
     ExecutionStyle,
     ExecutionTiming,
     InstrumentType,
+    LiveHook,
     Market,
     Scale,
     TradeDirection,
@@ -25,11 +28,16 @@ _REMOVED_SETTINGS: Dict[str, str] = {
     "enable_intraday": "改用 `allow_day_trade`（預設 False）",
     "bar_execution_order": "已移除：執行順序一律由 `allow_day_trade` 推導",
     "is_intraday": "改用 `is_tick_triggered`",
+    "live_schedule": "改名為 `execution_schedule`（實盤與 TICK 回測共用）",
 }
 
 
 class RemovedStrategySettingError(ValueError):
     """策略設定了已移除的欄位：引擎不會讀它，照跑只會靜默套用預設值"""
+
+
+class UnsupportedScaleError(ValueError):
+    """回測級別不在策略宣告的支援範圍內：只寫了日 K 邏輯的策略吃到 tick 會默默算錯"""
 
 
 class BaseStrategy(ABC):
@@ -54,10 +62,8 @@ class BaseStrategy(ABC):
         # （挑最強的前 N 檔）的邏輯必須自己在策略內保存其他標的的最新報價——
         # 逐筆之下沒有人會把全市場一次交給你。
         #
-        # **它同時會擋掉 `Scale.TICK` 的整天回測**（見 `Backtester.__init__`）：
-        # 同一個 `check_open_signal(stock_quotes)`，實盤拿到長度 1 的 list、
-        # TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。
-        # 兩邊都跑得完、都不報錯，而訊號完全不一樣——那是最難查的一種錯。
+        # `Scale.TICK` 回測由 `TickSimulator` 逐筆重放，每次同樣只給一筆，與實盤是同一個契約，
+        # 所以同一支策略不改程式就能回測與實盤。
         #
         # 與當沖無關：能不能當沖看下方的 `allow_day_trade`。
         self.is_tick_triggered: bool = False  # 盤中逐筆觸發（實盤）
@@ -93,8 +99,32 @@ class BaseStrategy(ABC):
 
         """ === Backtest Setting === """
         self.scale: str = Scale.DAY  # Backtest scale: DAY / TICK
+        # 回測可用 `--scale` 切換的級別；**None ＝ 只支援 `self.scale`**。
+        # 例如同時寫了日 K 與逐筆邏輯的策略設 `{Scale.DAY, Scale.TICK}`。
+        #
+        # 基底不寫死成 `{self.scale}`：子類在 `super().__init__()` 之後才改 `scale`，
+        # 這裡先記下的話會留著基底的 DAY，宣告 TICK 的策略反而不支援 TICK
+        self.supported_scales: Optional[Set[Scale]] = None
         self.start_date: datetime.date = None  # Optional: 回測起始日
         self.end_date: datetime.date = None  # Optional: 回測結束日
+
+        # === Execution Schedule：實盤與 TICK 回測共用，DAY 回測不讀 ===
+        #
+        # 宣告各鉤子在哪一個段落被呼叫，例如
+        # `{"open": AT_OPEN, "close": AT_CLOSE, "stop_loss": AT_CLOSE}`。
+        # 日 K 在實盤不存在——日 K 回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道
+        # close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點。
+        # TICK 回測照同一份設定決定鉤子排在開盤集合競價、盤中逐筆還是收盤集合競價，
+        # 回測與實盤才是同一套時點；DAY 回測沒有段落（一次拿到整天），所以不讀它。
+        # 停損沒宣告時退回平倉的段落，見 `resolve_hook_timing()`。
+        #
+        # ⚠️ **它與 `allow_day_trade` 可能互相矛盾。**
+        # 日 K 回測依 `allow_day_trade` 決定同一根 bar 內先開後平還是先平後開；拆成段落之後，
+        # **兩個鉤子分屬不同段落時，實際順序由段落決定**：`open` 排在 `close` 之前，
+        # 當天開的部位當天就會被拿去檢查要不要平，等同當沖。兩者不一致時會**靜默**
+        # 改掉交易順序，回測與實盤的部位軌跡從當天起就不同。
+        # 故實盤啟動時一律檢查（見 `core/live/strategy_guard.py`）。
+        self.execution_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
 
         """
         === Live Setting ===
@@ -107,18 +137,6 @@ class BaseStrategy(ABC):
         算一次而盤中會過期的清單）。實盤會在任意時點重啟，重建不出來的狀態
         會產生錯訊號，而且不會報錯。標成 True 之前要逐項確認並寫進
         class docstring 的〈實盤執行〉區塊。
-
-        `live_schedule` 宣告各鉤子在哪一個段落被呼叫，例如
-        `{"open": AT_OPEN, "close": AT_CLOSE, "stop_loss": AT_CLOSE}`。
-        日 K 在實盤不存在——回測一次呼叫就同時拿到當日 OHLC，實盤在開盤前不知道
-        close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點。
-
-        ⚠️ **`live_schedule` 與 `allow_day_trade` 可能互相矛盾。**
-        回測依 `allow_day_trade` 決定同一根 bar 內先開後平還是先平後開；實盤拆成兩段之後，
-        **兩個鉤子分屬不同段落時，實際順序由段落決定**：`open` 排在 `close` 之前，
-        當天開的部位當天就會被拿去檢查要不要平，等同當沖。兩者不一致時會**靜默**
-        改掉交易順序，回測與實盤的部位軌跡從當天起就不同。
-        故啟動時一律檢查（見 `core/live/strategy_guard.py`）。
 
         `live_tag` 是策略代號，**只寫本地紀錄與報表，不送券商**——券商的
         `custom_field` 那 6 個字元讓給委託識別碼的壓縮碼（壓縮碼反查得到策略，
@@ -133,7 +151,6 @@ class BaseStrategy(ABC):
         給預設值等於替策略作者決定它要不要成交。
         """
         self.live_ready: bool = False  # 預設不可上實盤
-        self.live_schedule: Dict[str, ExecutionTiming] = {}  # 各鉤子的執行段落
         self.live_tag: str = ""  # 策略代號（只寫本地）
         self.live_execution: Optional[ExecutionStyle] = None  # 實盤執行方式
 
@@ -173,6 +190,42 @@ class BaseStrategy(ABC):
             if name in vars(self)
         ]
 
+    def get_supported_scales(self) -> Set[Scale]:
+        """策略支援的回測級別：有宣告 `supported_scales` 就用它，否則只有 `self.scale`"""
+
+        if self.supported_scales is None:
+            return {Scale(self.scale)}
+        return {Scale(scale) for scale in self.supported_scales}
+
+    def validate_scale(self, scale: Optional[Scale] = None) -> None:
+        """
+        - Description:
+            檢查回測級別的宣告：`self.scale` 必須在支援範圍內；指定 `scale` 時它也必須在範圍內
+
+            兩個欄位寫得互相矛盾（宣告 TICK 卻只支援 DAY）時當場報錯，不默默挑一個來跑。
+        - Parameters:
+            - scale: Optional[Scale]
+                要改用的級別（回測 `--scale`）；None 時只檢查宣告本身
+        - Raise:
+            - UnsupportedScaleError
+                宣告矛盾，或指定的級別不在支援範圍內
+        """
+
+        supported: Set[Scale] = self.get_supported_scales()
+        supported_text: str = "、".join(sorted(s.value for s in supported))
+        name: str = type(self).__name__
+
+        if Scale(self.scale) not in supported:
+            raise UnsupportedScaleError(
+                f"{name} 的 scale={Scale(self.scale).value} 不在它宣告的 "
+                f"supported_scales（{supported_text}）內，請修正策略設定"
+            )
+        if scale is not None and Scale(scale) not in supported:
+            raise UnsupportedScaleError(
+                f"{name} 不支援 {Scale(scale).value} 級別回測（支援：{supported_text}）；"
+                "要支援請在策略宣告 supported_scales 並實作該級別的邏輯"
+            )
+
     @abstractmethod
     def setup_account(self, account: BaseAccount) -> None:
         """
@@ -206,7 +259,9 @@ class BaseStrategy(ABC):
             實盤資料源在 `setup_apis()` 之後呼叫，策略此時已拿得到歷史資料。
             需要覆寫的是盤中逐筆策略：券商單一連線的逐筆訂閱有上限（Shioaji 為 200 檔），
             沿用「前一交易日有行情的全部股票」會在訂閱時被拒，必須自己先篩到上限以內。
-            **回測不呼叫**——回測每天餵的是全市場，篩選只影響實盤要看哪些報價。
+            **TICK 回測的策略清單模式（`--tick-universe strategy`，TICK 的預設）也呼叫它**：
+            每個交易日盤前以前一交易日呼叫一次，再加上當時的持倉，決定當天讀哪些標的的逐筆資料，
+            與實盤看得到的報價一致。沒覆寫的策略選這個模式會當場報錯。DAY 回測不呼叫。
 
             日期由資料源傳入而不讓策略自己取今天：實盤主機的時區不一定是台北，
             `datetime.date.today()` 在美東主機的台北早上會是前一天。
@@ -379,3 +434,43 @@ class BaseStrategy(ABC):
             return []
 
         return self.build_close_orders(self.generate_stop_loss_signals(quotes))
+
+
+def resolve_hook_timing(
+    strategy: BaseStrategy, hook: LiveHook
+) -> Optional[ExecutionTiming]:
+    """
+    - Description:
+        取得某個鉤子的執行段落（實盤與 TICK 回測共用）
+
+        放在策略契約而不是實盤模組：TICK 回測也要依它把鉤子排進段落，
+        回測不可 import 實盤模組。
+
+        **停損沒宣告時退回平倉的段落**：兩者都是出場，把停損排在與平倉不同的
+        段落是刻意的決定，不該由「忘了寫」造成。
+    - Parameters:
+        - strategy: BaseStrategy
+            策略
+        - hook: LiveHook
+            鉤子
+    - Return:
+        - Optional[ExecutionTiming]
+            執行段落；未宣告且無從退回時為 None
+    """
+
+    timing: Optional[ExecutionTiming] = strategy.execution_schedule.get(hook.value)
+    if timing is not None:
+        return timing
+
+    if hook is LiveHook.STOP_LOSS:
+        fallback: Optional[ExecutionTiming] = strategy.execution_schedule.get(
+            LiveHook.CLOSE.value
+        )
+        if fallback is not None:
+            logger.debug(
+                f"{type(strategy).__name__} 未宣告 stop_loss 的段落，退回 close 的 "
+                f"{fallback.value}"
+            )
+        return fallback
+
+    return None

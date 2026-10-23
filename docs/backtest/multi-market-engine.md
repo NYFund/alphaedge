@@ -36,7 +36,7 @@ import `core.backtest.models`／`datafeed`／`report`，搬出去的東西不會
 
 | 性質 | 內容 |
 |------|------|
-| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`execute_bar()` 執行順序、委託前處理（`validate_orders()` 方向白名單、`check_max_holdings()`、`sort_orders()`，皆薄包裝 `core/portfolio/order_rules.py`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
+| **市場無關**（複製會浪費、且會漂移） | `run()` 日期迴圈、`prepare_day()`／`finish_day()`、simulator 的執行順序（`BarSimulator.process_bar()`）、委託前處理（`validate_orders()` 方向白名單、`resolve_open/close_action()`、`check_max_holdings()`、`sort_orders()`，皆薄包裝 `core/portfolio/order_rules.py`）、`execute_open/close_signal()`、`snapshot_daily_equity()` 骨架、`event_counts`、`generate_backtest_report()` |
 | **市場規則**（介面共用、實作不同） | 成交價驗證、價格區間、開盤判定 |
 | **台股信用交易專屬** | 成本設定推導、隨單欄位補值、當沖強制回補、轉融券留倉、持有成本計提、維持率追繳 |
 
@@ -85,26 +85,39 @@ class Backtester:
 
 ### 2.2 單根 bar 的流程
 
+`Backtester` 只負責逐日迴圈與每日前後的共用處理，「一天怎麼跑」交給注入的 simulator（日 K 是 `BarSimulator`）：
+
 ```python
-def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
-    # 下單前先由 DataFeed 推入當日的市場事件：
-    # 漲跌停基準、券源餘額、停券期間、交易所名單（開啟檢核時）→ FillModel；
+# Backtester.run() 的每一個開盤日
+if not self.simulator.load_day(date):  # 當天沒有報價就整天跳過
+    continue
+self.prepare_day(date)
+close_quotes = self.simulator.run_day(date)
+self.finish_day(date, close_quotes)
+
+def prepare_day(self, date):
+    # 下單前各 model 自己向 DataFeed 取當日的市場狀態（model 的 prepare_day）：
+    # 漲跌停參考價、券源餘額、停券期間、交易所名單（開啟檢核時）→ FillModel；
     # 停券回補日、現金股利、配股 → SettlementModel
-    ...
+    allow_short = PositionType.SHORT in self.get_allowed_directions()
+    self.fill_model.prepare_day(self.data_feed, date, allow_short)
+    self.settlement.prepare_day(self.data_feed, date, allow_short)
 
-    if self.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
-        self.execute_open_signal(quotes)
-        self.execute_close_signal(quotes)
-    else:
-        self.execute_close_signal(quotes)
-        self.execute_open_signal(quotes)
+# BarSimulator.process_bar(quotes)
+if self.engine.get_execution_sequence() == BarExecutionSequence.OPEN_THEN_CLOSE:
+    self.execute_open_signal(quotes)
+    self.execute_close_signal(quotes)
+else:
+    self.execute_close_signal(quotes)
+    self.execute_open_signal(quotes)
 
+def finish_day(self, date, close_quotes):
     # 台股：當沖強制回補 ＋ 借券費計提 ＋ 維持率追繳
     # 期貨：每日結算 ＋ 保證金追繳 ＋ 到期換月
-    self.settlement.on_bar_close(date, quotes, self.account, self.event_counts)
+    self.settlement.settle_day(date, close_quotes, self.account, self.event_counts)
 
-    self.snapshot_daily_equity(date, quotes)
-    self.update_prev_close(quotes)
+    self.snapshot_daily_equity(date, close_quotes)
+    self.update_reference_prices(close_quotes)
 ```
 
 ### 2.2.1 單根 bar 的委託順序
@@ -155,7 +168,7 @@ def execute_bar(self, date: datetime.date, quotes: List[BaseQuote]) -> None:
 
 | 路徑 | 位置 | 輸入 | 命名 |
 |---|---|---|---|
-| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_rows()`／`combine_sessions()`（期貨的 `generate_futures_quotes()` 是 `from_day_rows()` 的內部工廠，外部一律走 `from_*`） |
+| 回測 | `core/adapters/tw/` | `price`／`futures_price` 表的 DataFrame（中文欄位） | `from_day_rows()`／`from_tick_row()`／`combine_sessions()`（期貨的 `generate_futures_quotes()` 是 `from_day_rows()` 的內部工廠，外部一律走 `from_*`） |
 | 實盤 | `core/broker/tw/shioaji_quote_stream.py` | 券商的 `Snapshot`／逐筆推播 | `from_stock_snapshot()`／`from_futures_snapshot()`／`from_tick_message()` |
 
 ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心。
@@ -204,7 +217,7 @@ ports & adapters 的分工是 normalization 屬於來源、contract 屬於核心
 model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳遞：
 
 - **`event_counts`**：由 factory 以 `new_event_counts()`（`core/backtest/models/event_counts.py`）建立，同時交給引擎、`FillModel`、`SettlementModel` 與台股 `PositionManager`。既有 key 與報表相容，不可更名（新增可以）。
-- **`prev_close`**：由 `FillModel` 持有（記錄前收是成交價模型的職責），`SettlementModel` 建構時取得同一個 dict 的參照，用於停牌盯市與漲停判定。
+- **`reference_prices`**（漲跌停參考價：前收，除權息日為公告基準）：由 `FillModel` 持有（記錄參考價是成交價模型的職責），`SettlementModel` 建構時取得同一個 dict 的參照，用於停牌盯市與漲停判定。
 
 `get_mark_price()` 屬 `BaseSettlementModel` 的介面方法而非 `FillModel`——**期貨的盯市價就是每日結算價**，本來就是結算模型的職責；引擎的 `snapshot_daily_equity()` 也用它算未實現損益。
 
@@ -296,7 +309,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 
 SHORT 的 14 組情境刻意各只動一個變因，任一情境快照有變即可直接指向出問題的掛點：當沖同日回補（稅率減半）、融券留倉 10 天、FIFO 部分回補的等比例攤提、維持率斷頭、當沖鎖漲停轉留倉、當沖遇停券回補日（釘住結算順序）、SBL 與 MARGIN 借券費對照、除權息停券日的 MARGIN／SBL 對照、跨除息日的股利補償（含部分回補攤提）、平盤下名單擋單、現股當沖名單暫停先賣後買。
 
-停券日、除息股利與交易所名單由 `DataFeed` 每根 bar 推給 model，故相關情境的腳本掛在
+停券日、除息股利與交易所名單由 model 的 `prepare_day()` 每天向 `DataFeed` 取，故相關情境的腳本掛在
 `tests/backtest/conftest.py` 的 `ScriptedDataFeed` 上——直接設 `SettlementModel` 的欄位
 會在下一根 bar 被引擎覆寫。
 

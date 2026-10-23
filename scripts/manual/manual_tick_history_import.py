@@ -492,7 +492,10 @@ def verify_sample_rows(
             set(price_dao.get_trading_days(day, day)),
         )
         expected = expected.sort_values(["time", "seq"]).loc[:, list(TICK_COLUMNS)]
-        actual: pd.DataFrame = api.get_stock_ticks(stock_id, day, day)
+        # 只比原始欄位：`cum_volume` 是讀取時算出來的，CSV 裡沒有
+        actual: pd.DataFrame = api.get_stock_ticks(stock_id, day, day).loc[
+            :, list(TICK_COLUMNS)
+        ]
         try:
             pd.testing.assert_frame_equal(
                 expected.reset_index(drop=True),

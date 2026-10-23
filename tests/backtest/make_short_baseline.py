@@ -15,7 +15,7 @@ from core.models import (
 )
 from core.models.cost_config import ShortConstraint
 from core.utils import Action, PositionType, ShortMethod, TradeDirection
-from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy
+from tests.backtest.conftest import ScriptedDataFeed, ScriptedStrategy, run_bar
 from tests.conftest import build_stock_quote
 
 """
@@ -268,7 +268,7 @@ def build_scenarios() -> List[ShortScenario]:
     # === 6. 當沖 ＋ 停券強制回補日：釘住兩個收盤後動作的先後順序 ===
     #
     # enforce_day_trade_cover() 與 execute_daily_position_check() 已被
-    # 合併進 SettlementModel.on_bar_close()，兩者對調不會讓任何單元測試失敗，
+    # 合併進 SettlementModel.settle_day()，兩者對調不會讓任何單元測試失敗，
     # 但會讓同一次強制回補記到不同的事件桶。此情境是唯一能抓到該漂移的護欄：
     # - 現行順序：當沖回補先執行 → forced_cover_day_trade
     # - 順序對調：停券檢查先執行 → forced_cover_max_holding
@@ -451,7 +451,7 @@ def run_scenario(scenario: ShortScenario) -> Backtester:
     )
 
     for date, stock_quotes in scenario.bars:
-        backtester.execute_bar(date, stock_quotes)
+        run_bar(backtester, date, stock_quotes)
 
     backtester.account.update_account_status()
     return backtester

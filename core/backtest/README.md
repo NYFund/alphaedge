@@ -29,19 +29,31 @@ AlphaEdge 的回測系統提供策略回測與績效分析。支援哪些市場�
 self.scale: str = Scale.DAY  # 或 Scale.TICK
 ```
 
-### 逐筆觸發的策略跑不了 `Scale.TICK`
+### `Scale.TICK`：逐筆重放
 
-宣告 `is_tick_triggered = True`（實盤逐筆觸發）的策略，建立 `Backtester` 時會直接拋
-`IntradayScaleMismatchError`。**這不是限制，是擋住一種查不出來的錯**：
+TICK 回測由 `TickSimulator` 照時間順序一筆一筆重放，與實盤逐筆觸發是同一個契約
+（每次鉤子拿到**一檔的一筆**報價），盤中策略不改程式就能回測。一天分三段，
+各鉤子排在哪一段由策略的 `execution_schedule` 決定，時點與實盤的台股段落表相同
+（`core/market/tw/segment_schedule.py`）：
 
-| | 每次鉤子拿到的報價 |
-|---|---|
-| 實盤逐筆 | 一檔的**一筆** tick（list 長度 1） |
-| `Scale.TICK` 回測 | 該日**整天**的 tick（list 長度上萬） |
+| 段落 | 鉤子拿到的報價 | 委託怎麼成交 |
+|------|----------------|--------------|
+| 開盤集合競價（`AT_OPEN`） | 盤前報價（只有參考價與漲跌停，讀 OHLC 會拋出） | 該檔當天第一筆的成交價；限價要開盤價不劣於限價，否則留到盤中 |
+| 盤中逐筆（`IMMEDIATE`） | 09:05–13:18 的每一筆（長度 1） | **同一檔的下一筆**才撮合：市價買吃委賣價、賣吃委買價（IOC，沒成交就作廢）；限價要成交價穿越限價才以限價成交（ROD，收盤作廢） |
+| 收盤集合競價（`AT_CLOSE`） | 13:25 之前每檔最後一筆 | 之後的收盤集合競價成交價 |
 
-同一個 `generate_open_signals(stock_quotes)`，兩邊的 list 語意根本不同。需要橫斷面的
-邏輯（挑當下最強的前 N 檔）在回測裡看起來完全正常，上了實盤每次只看得到一檔，
-訊號完全不同——**而且兩邊都跑得完、都不報錯**。
+- **沒有前視**：每一筆先撮合在途委託、再交給策略；收盤段的鉤子在 13:25 被呼叫，看不到 13:30 的成交。
+- **對手方掛單為 0 不成交**（鎖漲停買不到、鎖跌停賣不掉）。
+- **報價的 `volume` 是當日累計量**（與實盤同語意），這一筆的量在 `tick_quote.volume`。
+- **成交量上限**（`max_volume_share`）的分母是這一筆的對手方委託量（集合競價用成交量）。
+- 停損一律市價；開倉與一般平倉照策略的 `live_execution`（沒宣告就拒絕跑 TICK）。
+- 已有在途出場委託的標的不再拿去問停損與平倉；同一檔已有在途開倉委託時，新的開倉單略過並計入 `rejected_duplicate_pending`。
+- 只保留一般股（與日 K 的標的池一致）；每天讀哪些標的見下方 `--tick-universe`。
+
+效能（2023-05～2024-05 一年、`IntradayMomentumStrategy`）：標的範圍 `strategy` 每交易日約 7 秒、峰值約 1 GB；`all` 約 12 秒、峰值約 1.4 GB。日 K 回測同一段只要 18 秒。
+
+已知與實盤的差異：跨股票同一時間戳記的到達順序以代號固定（實盤取決於券商推送）；
+回測沒有網路延遲，委託在下一筆就可能成交；限價單不模擬排隊位置（只有成交價穿越才算成交）。
 
 要用回測估量級，把 `scale` 設成 `Scale.DAY`，或明確關掉 `is_tick_triggered`。
 
@@ -58,7 +70,7 @@ self.scale: str = Scale.DAY  # 或 Scale.TICK
 1. **載入策略**: `apps/backtest.py` 解析參數，`StrategyLoader.load()` 只 import `--strategy` 指定的策略模組
 2. **組裝引擎**: `build_backtester()` 先套用 `BacktestOverrides`（`--start`／`--end`／`--capital`），再依策略宣告的 `(market, instrument_type)` 組出帳戶、`PositionManager`、`InstrumentSpec`、`FillModel`、`CostModel`、`SettlementModel` 與 `DataFeed`
 3. **啟動**: `Backtester.setup()` → `DataFeed.setup()` 開連線並建資料 API、檢查交易所名單涵蓋、呼叫 `strategy.setup_apis(feed)`
-4. **逐日執行**: 每個交易日 `is_market_open()` → `get_quotes()`（`core/adapters/tw/` 把表資料轉成 `StockQuote`／`FuturesQuote`）→ `execute_bar()`：推入當日市場事件 → 依 `BarExecutionSequence` 執行開倉與平倉（預設先平後開；`allow_day_trade=True` 時先開後平；平倉階段固定先停損再一般平倉）→ `on_bar_close()` 結算 → 權益快照
+4. **逐日執行**: 每個交易日 `is_market_open()` → `simulator.load_day()`（`core/adapters/tw/` 把表資料轉成 `StockQuote`／`FuturesQuote`；當天沒有報價就整天跳過）→ `prepare_day()`：各 model 向資料源取當天的市場狀態 → `simulator.run_day()`：`BarSimulator` 依 `BarExecutionSequence` 執行開倉與平倉（預設先平後開；`allow_day_trade=True` 時先開後平；平倉階段固定先停損再一般平倉），`TickSimulator` 則逐筆重放 → `finish_day()`：`settle_day()` 結算 → 權益快照
 5. **生成報告**: 五份 CSV 與五張圖，績效指標由 `core/analysis/performance_metrics.py` 計算
 
 ## 價格口徑：訊號用還原價、成交用原始價
@@ -272,7 +284,7 @@ TF／ZFF 為 0.2 點，同一個 `slippage_ticks=1` 在不同商品是不同的�
 | 策略（Alpha） | `generate_open_signals()` | 選標的、決定 `sizing_price`（算量價）與 `order_price`（委託價） |
 | 部位建構 | `StockPortfolioConstructor`（`core/portfolio/construction.py`） | 把訊號交給 sizer，再組成訂單 |
 | 部位大小模型 | `EqualWeightSizer`（`core/portfolio/sizing.py`） | 依剩餘名額均分餘額、換算張數 |
-| 引擎 | `order_rules.check_max_holdings()`（回測經 `Backtester.check_max_holdings()` 呼叫） | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
+| 引擎 | `order_rules.check_max_holdings()`（回測經 `BaseSimulator.check_max_holdings()` 呼叫） | **硬上限**：超過 `max_holdings` 的開倉單一律剔除並計數 |
 
 > **sizer 與引擎的 `max_holdings` 檢查刻意不合併。** 兩者回答不同問題：sizer 問
 > 「資金要切成幾份」（訊號階段，張數不足 1 張的候選不佔名額），引擎問「這張單送出去
@@ -326,7 +338,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 
 ### 引擎側硬上限
 
-`max_holdings` 是真正的風控，不是「策略願意遵守才生效」的建議值。策略即使不呼叫 sizer，超額的開倉單仍會在 `execute_open_signal()` 內被剔除，並以 `logger.warning` ＋ `event_counts["rejected_max_holdings"]` 留痕——**禁止靜默丟棄**。`max_holdings` 為 `None` 時不做任何截斷。
+`max_holdings` 是真正的風控，不是「策略願意遵守才生效」的建議值。策略即使不呼叫 sizer，超額的開倉單仍會在 `BaseSimulator.execute_open_signal()` 內被剔除，並以 `logger.warning` ＋ `event_counts["rejected_max_holdings"]` 留痕——**禁止靜默丟棄**。`max_holdings` 為 `None` 時不做任何截斷。
 
 ## 回測結果
 
@@ -423,6 +435,8 @@ python -m apps.backtest --strategy <StrategyName>
 - 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（必須帶 `--phase`）
 - `--strategy`: 指定要使用的策略類別名稱（必填）
 - `--start` / `--end`（`YYYY-MM-DD`）、`--capital`: 覆寫策略宣告的回測區間與初始資金，三者皆選填。
+- `--scale DAY|TICK`: 改用另一個回測級別，只能選策略 `supported_scales` 宣告支援的（未宣告時只支援策略的 `scale`），否則以用法錯誤拒絕。
+- `--tick-universe strategy|all`: TICK 回測每天讀哪些標的的逐筆資料。`strategy`（TICK 的預設）＝策略 `get_live_symbols()` 以前一交易日給的清單加上當時的持倉，與實盤盤前訂閱同規則；`all`＝當天有成交的全市場。策略沒覆寫 `get_live_symbols()` 卻選 `strategy` 會當場拒絕並提示改用 `all`（不自動退回全市場）；DAY 回測帶了也會拒絕。
   覆寫在組裝任何元件之前寫回策略實例（`core/backtest/overrides.py` 的 `BacktestOverrides`），
   不合法時（起日晚於迄日、早於歷史資料起點、資金不為正）以結束碼 2 結束
 - `--show` / `--no-show`: 回測結束後要不要在瀏覽器開圖。**預設不開**——圖本來就會

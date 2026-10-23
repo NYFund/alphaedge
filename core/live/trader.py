@@ -56,8 +56,8 @@ from core.live.risk.risk_manager import (
     is_closing_order,
 )
 from core.live.risk.trading_mode import TradingMode, TradingModeState
-from core.live.segment import SegmentSchedule, SegmentWindow, resolve_window
-from core.live.strategy_guard import resolve_hook_timing, verify_strategies
+from core.live.strategy_guard import verify_strategies
+from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.models import (
     BaseAccount,
     BaseOrder,
@@ -69,7 +69,7 @@ from core.models import (
 )
 from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
-from core.strategies.base import BaseStrategy
+from core.strategies.base import BaseStrategy, resolve_hook_timing
 from core.utils import (
     BarExecutionSequence,
     DayTradeUncoveredPolicy,

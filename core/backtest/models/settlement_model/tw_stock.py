@@ -6,6 +6,7 @@ from loguru import logger
 
 from core.backtest.models.fill_model import BaseFillModel
 from core.backtest.models.settlement_model.base import BaseSettlementModel
+from core.datafeed.base import BaseDataFeed
 from core.market.instrument_spec import InstrumentSpec
 from core.market.tw.cost_model import StockCostModel
 from core.market.tw.instrument_spec import TwStockSpec
@@ -41,7 +42,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         self,
         position_manager: StockPositionManager,
         cost_model: StockCostModel,
-        prev_close: Dict[str, float],
+        reference_prices: Dict[str, float],
         instrument: Optional[InstrumentSpec] = None,
         day_trade_uncovered_policy: DayTradeUncoveredPolicy = (
             DayTradeUncoveredPolicy.FORCE_COVER_AT_CLOSE
@@ -57,9 +58,10 @@ class TwStockSettlementModel(BaseSettlementModel):
         self.cost_model: StockCostModel = cost_model
         self.instrument: InstrumentSpec = instrument or TwStockSpec()
 
-        # 與 FillModel 共用同一個 dict：停牌盯市與漲停判定都要用前收，
-        # 但「記錄前收」屬成交價模型的職責，故此處只持有參照，不自行維護
-        self.prev_close: Dict[str, float] = prev_close
+        # 與 FillModel 共用同一個 dict（漲跌停參考價：前一交易日收盤，除權息日為公告的
+        # 開盤競價基準）：停牌盯市與漲停判定都要用它，但「記錄參考價」屬成交價模型的職責，
+        # 故此處只持有參照，不自行維護
+        self.reference_prices: Dict[str, float] = reference_prices
 
         # 策略宣告的處理政策，由 factory 從策略帶入
         self.day_trade_uncovered_policy: DayTradeUncoveredPolicy = (
@@ -69,10 +71,25 @@ class TwStockSettlementModel(BaseSettlementModel):
         self.max_holding_days: Optional[int] = max_holding_days
         self.max_no_quote_days: Optional[int] = max_no_quote_days
 
-        # 當日市場狀態，由引擎每根 bar 從 DataFeed 推入（本 model 不自行查資料源）
+        # 當日市場狀態，`prepare_day()` 每天開盤前從 DataFeed 取（單元測試直接呼叫 `apply_*`）
         self.force_cover_symbols: Set[str] = set()  # 今日觸及融券最後回補日的標的
         self.cash_dividends: Dict[str, float] = {}  # 今日除息的每股現金股利
         self.share_ratios: Dict[str, float] = {}  # 今日的股數倍率（配股、分割、減資）
+
+    def prepare_day(
+        self, feed: BaseDataFeed, date: datetime.date, allow_short: bool
+    ) -> None:
+        """
+        每日開盤前取當天的停券回補標的（只在可能放空時）與除權息資料
+
+        **除權息兩個方向都要**：做多跨除息要收現金股利、跨配股要調整股數，
+        不取的話做多績效會系統性偏低（除權息日的跳空變成憑空虧損）
+        """
+
+        if allow_short:
+            self.apply_force_cover_symbols(feed.get_force_cover_symbols(date))
+        self.apply_cash_dividends(feed.get_cash_dividend_map(date))
+        self.apply_share_ratios(feed.get_share_ratio_map(date))
 
     def apply_force_cover_symbols(self, symbols: Set[str]) -> None:
         """更新今日觸及融券最後回補日的標的"""
@@ -89,7 +106,7 @@ class TwStockSettlementModel(BaseSettlementModel):
 
         self.share_ratios = ratios
 
-    def on_bar_close(
+    def settle_day(
         self,
         date: datetime.date,
         quotes: List[StockQuote],
@@ -179,7 +196,7 @@ class TwStockSettlementModel(BaseSettlementModel):
         """
 
         return self.instrument.is_locked_at_limit(
-            prev_close=self.prev_close.get(quote.symbol),
+            prev_close=self.reference_prices.get(quote.symbol),
             open_price=quote.open,
             high=quote.high,
             low=quote.low,
@@ -620,7 +637,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             做多部位連續無報價達上限時強制出場
 
             下市或長期停牌的股票不會再出現在 `price` 表，引擎也不會把無報價的
-            標的交給策略（`Backtester.execute_close_signal()` 只走有報價的部位），
+            標的交給策略（`BaseSimulator.execute_close_signal()` 只走有報價的部位），
             於是它永遠留在帳上、以最後一個收盤價計入權益（下市損失完全不反映，
             屬存活者偏差），還一直佔著 `max_holdings` 的名額。
 
@@ -695,7 +712,7 @@ class TwStockSettlementModel(BaseSettlementModel):
 
             1. `ShortConstraint.force_cover_dates`：使用者明示指定的日期，
                **不分放空管道一律適用**——引擎不替使用者的政策再加條件。
-            2. 除權息行事曆推導的融券最後回補日（由 DataFeed 每根 bar 推入）：
+            2. 除權息行事曆推導的融券最後回補日（`prepare_day()` 每天從 DataFeed 取）：
                這是**融券制度**的規則，故只對 `MARGIN` 生效。SBL 借券不受強制回補
                約束，其跨除息日的成本改由 `settle_cash_dividend()` 反映；
                `DAY_TRADE` 當日已由 `enforce_day_trade_cover()` 處理完畢。
@@ -844,4 +861,4 @@ class TwStockSettlementModel(BaseSettlementModel):
         logger.warning(
             f"[Mark Price] {position.symbol} 當日無報價，沿用前一交易日收盤價盯市"
         )
-        return self.prev_close.get(position.symbol, position.price)
+        return self.reference_prices.get(position.symbol, position.price)

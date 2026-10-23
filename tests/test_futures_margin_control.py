@@ -283,7 +283,7 @@ def test_margin_call_force_covers_until_equity_is_enough() -> None:
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
     # 跌 5,000 點：權益 3,000,000 − 2,000,000 ＝ 1,000,000 < 維持 1,200,000
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=13000.0, date=DAY_2)], account, event_counts
     )
 
@@ -315,7 +315,7 @@ def test_margin_call_warn_only_keeps_the_position() -> None:
     manager.open_position(make_order(volume=2))
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=13000.0, date=DAY_2)], account, event_counts
     )
 
@@ -339,7 +339,7 @@ def test_no_margin_call_when_equity_is_sufficient() -> None:
     manager.open_position(make_order(volume=1))
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=18100.0, date=DAY_2)], account, event_counts
     )
 
@@ -362,7 +362,7 @@ def test_margin_call_ratio_triggers_earlier() -> None:
     manager.open_position(make_order(volume=1))
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=18000.0, date=DAY_2)], account, event_counts
     )
 

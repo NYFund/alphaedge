@@ -19,8 +19,8 @@ from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO, RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
-from core.live.segment import SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
+from core.market.segment import SegmentWindow
 from core.models import (
     BaseOrder,
     BaseQuote,
@@ -126,7 +126,7 @@ class ScriptedStrategy(BaseStrategy):
         self._raises: bool = raises
         self.init_capital = CAPITAL
         self.live_ready = True
-        self.live_schedule = {
+        self.execution_schedule = {
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
@@ -967,7 +967,7 @@ def test_pending_action_is_covered_next_morning(tmp_path: Path) -> None:
     class Alpha(ScriptedStrategy):
         def __init__(self) -> None:
             super().__init__("Alpha", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -1007,7 +1007,7 @@ def test_pending_action_without_a_reference_price_is_left_for_humans(
     class NoBuilder(ScriptedStrategy):
         def __init__(self) -> None:
             super().__init__("NoBuilder", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -1041,7 +1041,7 @@ def make_opening_strategy() -> ScriptedStrategy:
     class Alpha(ScriptedStrategy):
         def __init__(self) -> None:
             super().__init__("Alpha", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -1555,7 +1555,7 @@ def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
         def __init__(self) -> None:
             super().__init__("Alpha")
             self.is_tick_triggered = True
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
                 LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
             }

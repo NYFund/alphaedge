@@ -3,8 +3,10 @@ from typing import Callable, Dict, List, Optional, Set
 
 import pytest
 
+from core.backtest.backtester import Backtester
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.models import (
+    BaseQuote,
     DayTradeListSnapshot,
     ShortSaleListSnapshot,
     StockAccount,
@@ -15,6 +17,30 @@ from core.strategies.stock import BaseStockStrategy
 from core.utils import Action, PositionType, Scale, ShortMethod
 
 """放空回測框架的測試 fixture：全部為純記憶體物件，不連資料庫"""
+
+
+def run_bar(
+    backtester: Backtester, date: datetime.date, quotes: List[BaseQuote]
+) -> None:
+    """
+    - Description:
+        以指定的報價跑完一根日 K bar 的完整每日流程：每日準備 → 開平倉 → 收盤結算
+
+        與 `Backtester.run()` 的一天相同，差別在報價由測試直接給、不經 DataFeed；
+        也因此**空的 `quotes` 照樣會跑結算**，用來模擬持倉標的整天沒有報價的情境
+        （正式迴圈在全市場都沒有報價時會整天跳過）。
+    - Parameters:
+        - backtester: Backtester
+            注入 `BarSimulator` 的引擎
+        - date: datetime.date
+            交易日
+        - quotes: List[BaseQuote]
+            當根 bar 的報價
+    """
+
+    backtester.prepare_day(date)
+    backtester.simulator.process_bar(quotes)
+    backtester.finish_day(date, quotes)
 
 
 @pytest.fixture
@@ -121,8 +147,8 @@ class ScriptedDataFeed(TwStockDataFeed):
     """
     測試用資料源：停券日與除息股利改由腳本給定，完全不連資料庫
 
-    引擎每根 bar 都會從 DataFeed 把這兩份資料推給 `SettlementModel`
-    （`Backtester.execute_bar()`），因此腳本情境要驗停券強制回補與股利補償，
+    `SettlementModel.prepare_day()` 每天都會從 DataFeed 取這兩份資料
+    （`Backtester.prepare_day()`），因此腳本情境要驗停券強制回補與股利補償，
     只能從這一層注入——直接設 `SettlementModel` 的欄位會在下一根 bar 被覆寫。
     """
 
@@ -139,7 +165,7 @@ class ScriptedDataFeed(TwStockDataFeed):
     ) -> None:
         super().__init__()
 
-        # 交易所名單同樣由引擎每根 bar 推給 `FillModel`，只能從資料源這一層注入
+        # 交易所名單同樣由 `FillModel.prepare_day()` 每天從資料源取，只能從這一層注入
         self.short_sale_list_script: Dict[datetime.date, ShortSaleListSnapshot] = (
             short_sale_list_script or {}
         )

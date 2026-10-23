@@ -254,21 +254,22 @@ validate_orders(orders, stage)       # 白名單 + action 與方向是否相符�
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
 ```
 
-另外兩個是 `Backtester` 上的方法：
+另外兩個方法：
 
 ```python
-validate_fill_price(order, quote)    # 轉呼叫 FillModel.validate()，§5.6 的檢查
-snapshot_daily_equity(...)           # 含未實現損益的逐日權益
+BaseSimulator.validate_fill_price(order, quote)  # 轉呼叫 FillModel.validate()，§5.6 的檢查
+Backtester.snapshot_daily_equity(...)            # 含未實現損益的逐日權益
 ```
 
-單根 K 棒的流程固定為（`execute_bar()`，日 K 與 Tick 共用）：
+單根 K 棒的流程固定為（`Backtester.prepare_day()` → `BarSimulator.process_bar()` → `Backtester.finish_day()`）：
 
 ```python
+prepare_day(date)                    # 漲跌停參考價、券源、停券、名單、除權息
 if order == BarExecutionSequence.OPEN_THEN_CLOSE:
     execute_open_signal(quotes); execute_close_signal(quotes)
 else:
     execute_close_signal(quotes); execute_open_signal(quotes)
-settlement.on_bar_close(date, quotes, account, event_counts)
+settlement.settle_day(date, quotes, account, event_counts)
     # 當沖日終強制回補 → 無報價天數更新 → 借券費計提 → 現金股利（補償／收取）
     # → 配股等股數調整 → 最長持有天數／停券回補／維持率追繳 → 做多連續無報價出場
 snapshot_daily_equity(date, quotes)
@@ -394,7 +395,7 @@ snapshot_daily_equity(date, quotes)
 
 ### 5.3 強制回補日與股利補償
 
-`TwStockDataFeed` 由 `dividend` 表推導融券最後回補日，每根 bar 把當日觸及回補日的標的推給 `SettlementModel`：
+`TwStockDataFeed` 由 `dividend` 表推導融券最後回補日，`SettlementModel.prepare_day()` 每天向它取當日觸及回補日的標的：
 
 ```
 融券最後回補日 = 除權息交易日往前推 4 個營業日
@@ -456,9 +457,9 @@ snapshot_daily_equity(date, quotes)
 | Scale | 高低點來源 | 說明 |
 |-------|-----------|------|
 | `DAY` | `StockQuote.high` / `.low` | 已有 OHLC 欄位，直接用 |
-| `TICK` | `FillModel` 維護的**當日累計高低點** | `intraday_range` 記錄各檔當日累計 low/high。**目前有前視**：引擎把整天的 tick 一次交給 `on_bar_open()`，區間是全日高低點而非「該 tick 之前」，盤中較早的委託會通過稍後才出現的價位；TICK 回測只能當量級參考 |
+| `TICK` | 不用區間 | 逐筆回測由 `TickSimulator` 重放，委託在同一檔的下一筆才撮合，成交價取自那一筆的委賣／委買價（或限價、集合競價價），不經 `validate()` 的區間檢查；`intraday_range` 只累計「到目前這一筆為止」的高低點，供結算層的強制出場夾價 |
 
-漲跌停基準取前一交易日收盤（`prev_close`）；除權息日改用 `DataFeed.get_price_limit_basis()` 推入的開盤競價基準。首個交易日無前收時跳過該項檢查。
+漲跌停基準取前一交易日收盤（`reference_prices`）；除權息日改用 `FillModel.prepare_day()` 由 `DataFeed.get_price_limit_basis()` 取得的開盤競價基準。首個交易日無前收時跳過該項檢查。
 
 特別針對 `OPEN_THEN_CLOSE`：策略在日 K 級別拿得到當日 `close`，卻可以宣稱「以 `open` 放空」。引擎無法從價格本身分辨這是合理假設還是前視偏誤，因此**當沖放空策略的文件中必須明確宣告成交價假設**（建議：開倉用 `open`，回補用 `close`），並在 `generate_open_signals` 的實作中只使用該時點之前可得的資訊。這條屬於策略紀律，引擎只能擋掉「不可能的價格」，擋不掉「可能但不誠實的價格」。
 
@@ -502,7 +503,7 @@ snapshot_daily_equity(date, quotes)
 | `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
 | `core/market/tw/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
 | `core/backtest/models/fill_model.py` | 成交價驗證、交易所名單檢核、券源檢核、停券期間拒單、當日累計高低點 |
-| `core/backtest/datafeed/tw/stock_datafeed.py` | 推導停券與回補日、每根 bar 推入券源／名單／除權息、開跑前檢查名單涵蓋 |
+| `core/backtest/datafeed/tw/stock_datafeed.py` | 推導停券與回補日、提供券源／名單／除權息給 model 的 `prepare_day()`、開跑前檢查名單涵蓋 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/position/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
 | `core/backtest/report/reporter.py` | 時間軸用 `exit_date`、放空欄位、多空統計、事件報表 |

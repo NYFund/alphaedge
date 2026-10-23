@@ -3,6 +3,7 @@ from typing import List, Optional
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
+from core.backtest.datafeed.tw.stock_tick_datafeed import StockTickDataFeed
 from core.backtest.models.fill_model import TwFuturesFillModel, TwStockFillModel
 from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
@@ -11,10 +12,13 @@ from core.backtest.models.settlement_model import (
 from core.backtest.overrides import BacktestOverrides
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
+from core.backtest.simulator.bar_simulator import BarSimulator
+from core.backtest.simulator.tick_simulator import TickSimulator
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
+from core.market.tw.segment_schedule import TW_STOCK_SEGMENTS
 from core.models import FuturesAccount, StockAccount
 from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.models.fill_config import FillConfig, FuturesFillConfig
@@ -23,7 +27,7 @@ from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy, RemovedStrategySettingError
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
-from core.utils import InstrumentType, Market, ShortMethod
+from core.utils import InstrumentType, Market, Scale, ShortMethod, TickUniverse
 
 """Backtester factory: **回測路徑**唯一一處依（市場, 商品）組合分派的地方"""
 
@@ -79,12 +83,17 @@ def build_backtester(
     # 晚一步覆寫就會有元件拿到舊值
     if overrides is not None:
         overrides.apply_to(strategy)
+    tick_universe: Optional[TickUniverse] = (
+        overrides.tick_universe if overrides is not None else None
+    )
 
     if (strategy.market, strategy.instrument_type) == (
         Market.TW,
         InstrumentType.STOCK,
     ):
-        return build_tw_stock_backtester(strategy, adjusted_price, write_artifacts)
+        return build_tw_stock_backtester(
+            strategy, adjusted_price, write_artifacts, tick_universe
+        )
 
     if (strategy.market, strategy.instrument_type) == (
         Market.TW,
@@ -92,7 +101,7 @@ def build_backtester(
     ):
         # `adjusted_price` 不往下傳：期貨沒有除權息還原的概念，見
         # `build_tw_futures_backtester()`
-        return build_tw_futures_backtester(strategy, write_artifacts)
+        return build_tw_futures_backtester(strategy, write_artifacts, tick_universe)
 
     raise ValueError(
         f"尚未支援的（市場, 商品）組合：{strategy.market}, {strategy.instrument_type}"
@@ -103,8 +112,9 @@ def build_tw_stock_backtester(
     strategy: BaseStockStrategy,
     adjusted_price: bool = True,
     write_artifacts: bool = True,
+    tick_universe: Optional[TickUniverse] = None,
 ) -> Backtester:
-    """組裝台股的 model 組合"""
+    """組裝台股的 model 組合；`tick_universe` 是 TICK 回測的標的範圍（None 時由引擎決定預設）"""
 
     account: StockAccount = StockAccount(strategy.init_capital)
     strategy.setup_account(account)
@@ -127,10 +137,13 @@ def build_tw_stock_backtester(
         check_day_trade_list=cost_model.config.short_constraint.check_day_trade_list,
     )
 
+    # 級別在組裝前已依 `--scale` 寫回策略
+    is_tick: bool = strategy.scale == Scale.TICK
+
     settlement: TwStockSettlementModel = TwStockSettlementModel(
         position_manager=position_manager,
         cost_model=cost_model,
-        prev_close=fill_model.prev_close,
+        reference_prices=fill_model.reference_prices,
         instrument=instrument,
         day_trade_uncovered_policy=strategy.day_trade_uncovered_policy,
         margin_call_policy=strategy.margin_call_policy,
@@ -147,16 +160,25 @@ def build_tw_stock_backtester(
         fill_model=fill_model,
         cost_model=cost_model,
         settlement=settlement,
-        data_feed=TwStockDataFeed(),
+        data_feed=StockTickDataFeed() if is_tick else TwStockDataFeed(),
         reporter_cls=StockBacktestReporter,
+        # 逐筆依台股的段落時窗重放；日 K 一天一根 bar
+        build_simulator=(
+            (lambda engine: TickSimulator(engine, TW_STOCK_SEGMENTS))
+            if is_tick
+            else BarSimulator
+        ),
         event_counts=event_counts,
         adjusted_price=adjusted_price,
         write_artifacts=write_artifacts,
+        tick_universe=tick_universe,
     )
 
 
 def build_tw_futures_backtester(
-    strategy: BaseFuturesStrategy, write_artifacts: bool = True
+    strategy: BaseFuturesStrategy,
+    write_artifacts: bool = True,
+    tick_universe: Optional[TickUniverse] = None,
 ) -> Backtester:
     """
     - Description:
@@ -183,6 +205,8 @@ def build_tw_futures_backtester(
             要回測的台期貨策略
         - write_artifacts: bool
             是否寫出回測報表與 backtest log
+        - tick_universe: Optional[TickUniverse]
+            TICK 回測的標的範圍；期貨沒有逐筆資料，帶了會被引擎以級別不符拒絕
     - Return:
         - Backtester
             已注入台期貨 model 組的引擎
@@ -270,9 +294,11 @@ def build_tw_futures_backtester(
         settlement=settlement,
         data_feed=data_feed,
         reporter_cls=FuturesBacktestReporter,
+        build_simulator=BarSimulator,
         event_counts=event_counts,
         adjusted_price=False,
         write_artifacts=write_artifacts,
+        tick_universe=tick_universe,
     )
 
 

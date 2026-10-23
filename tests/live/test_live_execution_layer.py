@@ -440,7 +440,7 @@ def test_pending_cover_is_sent_as_must_fill_in_the_opening_auction() -> None:
     class Alpha(ScriptedStrategy):
         def __init__(self) -> None:
             super().__init__("Alpha", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -485,7 +485,7 @@ def test_engine_builds_the_pending_cover_when_the_strategy_does_not() -> None:
     class Plain(ScriptedStrategy):
         def __init__(self) -> None:
             super().__init__("Plain", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }

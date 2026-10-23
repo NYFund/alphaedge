@@ -285,7 +285,7 @@ python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 - `--strategy` 填策略類別名稱，現有策略在 `strategies/stock/` 與 `strategies/futures/`。
-- 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--show`／`--no-show` 決定是否在瀏覽器開圖（都不帶時看 `ALPHAEDGE_SHOW_FIGURES`，預設不開）。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
+- 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--scale` 改用策略支援的另一個回測級別、`--tick-universe` 選 TICK 回測的標的範圍，`--show`／`--no-show` 決定是否在瀏覽器開圖（都不帶時看 `ALPHAEDGE_SHOW_FIGURES`，預設不開）。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
 **步驟 3：開啟前端檢視結果**
@@ -464,7 +464,8 @@ AlphaEdge/
 │   │   └── utils/            # 跨市場通用：常數、DataFrame 與 SQLite 工具、例外類別
 │   ├── backtest/              # 回測引擎
 │   │   ├── README.md          # 回測級別、價格口徑、成交假設、績效指標
-│   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類
+│   │   ├── backtester.py      # 唯一引擎：市場與商品皆無關、無子類；逐日迴圈與每日前後處理
+│   │   ├── simulator/         # 一天怎麼跑：BarSimulator（日 K，開平倉執行在基底 BaseSimulator）
 │   │   ├── factory.py         # 依（market, instrument_type）組合組裝 model 組合
 │   │   ├── overrides.py       # --start／--end／--capital 的命令列覆寫，組裝前寫回策略
 │   │   ├── models/            # FillModel／SettlementModel／事件計數（回測模擬；商品規格與成本模型在 core/market/）

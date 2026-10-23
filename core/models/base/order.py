@@ -57,7 +57,7 @@ class BaseOrder:
 
         # 這張單要在哪一個段落送出。
         #
-        # `None` 表示「由引擎依策略的 `live_schedule` 決定」，策略不必逐單填。
+        # `None` 表示「由引擎依策略的 `execution_schedule` 決定」，策略不必逐單填。
         # 日 K 在實盤不存在——回測一次呼叫就拿到當日 OHLC，實盤在開盤前不知道
         # close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點送單
         self.timing: Optional[ExecutionTiming] = timing

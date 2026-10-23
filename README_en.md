@@ -284,7 +284,7 @@ python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
 - `--strategy` takes a strategy class name; existing strategies live in `strategies/stock/` and `strategies/futures/`.
-- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--show` / `--no-show` decide whether charts open in a browser (with neither flag, `ALPHAEDGE_SHOW_FIGURES` decides; default off). Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
+- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--scale` switches to another bar scale the strategy declares as supported; `--tick-universe` picks the symbols a TICK backtest reads; `--show` / `--no-show` decide whether charts open in a browser (with neither flag, `ALPHAEDGE_SHOW_FIGURES` decides; default off). Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
 **Step 3: Open the frontend to view results**
@@ -467,7 +467,8 @@ AlphaEdge/
 │   │   └── utils/            # cross-market: constants, DataFrame and SQLite helpers, exceptions
 │   ├── backtest/              # backtest engine
 │   │   ├── README.md          # bar scales, price basis, fill assumptions, performance metrics
-│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses
+│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses; daily loop and pre/post-day steps
+│   │   ├── simulator/         # how one day runs: BarSimulator (daily bars; order execution lives in BaseSimulator)
 │   │   ├── factory.py         # assembles the model set from (market, instrument_type)
 │   │   ├── overrides.py       # --start / --end / --capital command-line overrides, written back to the strategy before assembly
 │   │   ├── models/            # FillModel / SettlementModel / event counts (backtest simulation; instrument spec and cost model live in core/market/)

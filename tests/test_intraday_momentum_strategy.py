@@ -408,16 +408,6 @@ def test_engine_derives_open_then_close() -> None:
     )
 
 
-def test_tick_scale_is_rejected() -> None:
-    """TICK 級別回測當場擋下（逐筆只在實盤，一次一筆報價）"""
-
-    strategy: IntradayMomentumStrategy = IntradayMomentumStrategy()
-    strategy.scale = Scale.TICK
-
-    with pytest.raises(NotImplementedError):
-        strategy.setup_apis(FakeFeed([]))
-
-
 # === 實盤逐筆 ===
 def at(
     hour: int, minute: int, second: int = 0, day: datetime.date = DAY_T

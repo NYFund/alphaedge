@@ -571,12 +571,17 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `init_capital` | `float` | 初始資金（元） | `0` |
 | `max_holdings` | `Optional[int]` | 最大持倉檔數，`None` 表示**無限制**（＝基底預設；每支策略都該自己設一個值） | `None` |
 
+### 執行段落（實盤與 TICK 回測共用，DAY 回測不讀）
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `execution_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫；`stop_loss` 沒宣告時同 `close`。舊名 `live_schedule` 已移除，設定舊名時啟動即報錯 | `{}` |
+
 ### 實盤設定（回測不讀）
 
 | 參數 | 類型 | 說明 | 預設值 |
 |------|------|------|--------|
 | `live_ready` | `bool` | 策略可上實盤；標 `True` 前要確認內部狀態能由「歷史資料 ＋ 當前部位」重建 | `False` |
-| `live_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫 | `{}` |
 | `live_execution` | `Optional[ExecutionStyle]` | `MARKET`（要成交）或 `LIMIT`（照價掛單），開倉與平倉共用；**停損一律 `MARKET`**。沒宣告時啟動檢查拒絕。回測假設以收盤價成交的策略應宣告 `MARKET` | `None` |
 | `live_tag` | `str` | 策略代號，只寫進本地紀錄庫，不送券商 | `""` |
 | `live_capital` | `Optional[float]` | 實盤資金額度；`None` 沿用 `init_capital` | `None` |
@@ -592,6 +597,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | 參數 | 類型 | 說明 | 預設值 |
 |------|------|------|--------|
 | `scale` | `str` | 回測級別：`Scale.DAY`、`Scale.TICK` | `Scale.DAY` |
+| `supported_scales` | `Optional[Set[Scale]]` | 回測可用 `--scale` 切換的級別；`None` 表示只支援 `scale`。同時寫了日 K 與逐筆邏輯的策略才設成 `{Scale.DAY, Scale.TICK}`；`scale` 不在集合內時建立回測當場報錯 | `None` |
 | `start_date` | `datetime.date` | 回測起始日期 | `None` |
 | `end_date` | `datetime.date` | 回測結束日期 | `None` |
 
@@ -599,6 +605,8 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 
 - **`Scale.DAY`**: 日線回測，使用每日收盤價
 - **`Scale.TICK`**: 逐筆回測，使用每筆成交資料（僅台股；期貨 Tick 回測未實作）
+- 回測時可用 `--scale DAY`／`--scale TICK`（大小寫皆可）改用另一個級別，**只能選策略 `supported_scales` 宣告支援的**，否則以用法錯誤（退出碼 2）拒絕並列出支援的級別。只寫了日 K 邏輯的策略吃到 tick 不會報錯、只會默默算錯，所以預設只支援自己宣告的 `scale`。目前宣告支援 TICK 的只有 `IntradayMomentumStrategy`（`self.supported_scales = {Scale.DAY, Scale.TICK}`）；新增一支時要同時寫好逐筆分支，並更新 `tests/backtest/test_backtest_scale.py` 的 `TICK_CAPABLE_STRATEGIES`。
+- TICK 回測每天讀哪些標的由 `--tick-universe` 決定：預設 `strategy` 會以前一交易日呼叫策略的 `get_live_symbols()`、再加上當時的持倉（與實盤盤前訂閱一致），**沒有覆寫 `get_live_symbols()` 的策略要明確改用 `--tick-universe all`**（全市場，一天上百萬筆，較慢）。
 
 ### 盤中逐筆策略：`is_tick_triggered`
 
@@ -615,10 +623,9 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 2. **橫斷面邏輯要自己維護狀態**。日頻策略的 `generate_open_signals(stock_quotes)`
    一次拿到一批，可以「挑最強的前 N 檔」；逐筆之下每次只有一檔，
    需要跨標的比較的策略**必須自己在策略內保存其他標的的最新報價**。
-3. **不能跑 `Scale.TICK` 回測**。引擎會在建立時就拒絕（`IntradayScaleMismatchError`）——
-   同一個 `generate_open_signals(stock_quotes)`，實盤拿到長度 1 的 list、
-   TICK 回測卻一次拿到整天的 tick，兩邊的 list 語意根本不同。要用回測估量級，
-   把 `scale` 設成 `Scale.DAY` 或把 `is_tick_triggered` 關掉。
+3. **可以跑 `Scale.TICK` 回測**：逐筆重放每次同樣只給一筆，與實盤同一個契約
+   （成交規則與段落見 `core/backtest/README.md` 的〈`Scale.TICK`：逐筆重放〉）。
+   要同時保留日 K 近似，`supported_scales` 宣告 `{Scale.DAY, Scale.TICK}`，回測時用 `--scale` 切換。
 
 ### 當沖與單根 bar 的執行順序
 

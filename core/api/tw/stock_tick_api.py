@@ -1,5 +1,5 @@
 import datetime
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -21,7 +21,9 @@ class StockTickAPI(BaseDataAPI):
         台股逐筆成交查詢
 
         回傳欄位固定為 `stock_id, time, close, volume, bid_price, bid_volume,
-        ask_price, ask_volume, tick_type`；`time` 是不帶時區的台北當地時間。
+        ask_price, ask_volume, tick_type, cum_volume`；`time` 是不帶時區的台北當地時間。
+        `volume` 是這一筆的成交量、`cum_volume` 是該檔當日到這一筆為止的累計量（含這一筆），
+        單位都是張；實盤 TICK 報價的 `volume` 對應的是後者。
         日期區間兩端都包含（以「迄日隔天 00:00 之前」的半開區間查詢）。
     """
 
@@ -84,16 +86,30 @@ class StockTickAPI(BaseDataAPI):
         self,
         start_date: datetime.date,
         end_date: datetime.date,
+        stock_ids: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
-        取得區間內全市場的 tick，所有股票混在一起依時間排序（模擬盤中的成交順序）
+        - Description:
+            取得區間內的 tick，所有股票混在一起依時間排序（模擬盤中的成交順序）
 
-        同一時間戳記跨股票的順序以代號固定下來，回測才可重現。
+            同一時間戳記跨股票的順序以代號固定下來，回測才可重現。
+        - Parameters:
+            - start_date: datetime.date
+                起日（含）
+            - end_date: datetime.date
+                迄日（含）
+            - stock_ids: Optional[List[str]]
+                只取這些股票（回測的策略清單模式）；None 取全市場，空清單回空表
+        - Return:
+            - pd.DataFrame
+                依 `(time, stock_id, seq)` 排序的 tick，欄位見類別說明
         """
 
         if start_date > end_date:
             return pd.DataFrame()
-        return self.dao.query_ticks(start_date, end_date, ("time", "stock_id", "seq"))
+        return self.dao.query_ticks(
+            start_date, end_date, ("time", "stock_id", "seq"), stock_ids=stock_ids
+        )
 
     def get_stock_ticks(
         self,
@@ -106,7 +122,7 @@ class StockTickAPI(BaseDataAPI):
         if start_date > end_date:
             return pd.DataFrame()
         return self.dao.query_ticks(
-            start_date, end_date, ("time", "seq"), stock_id=stock_id
+            start_date, end_date, ("time", "seq"), stock_ids=[stock_id]
         )
 
     def get_last_tick(
