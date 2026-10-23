@@ -38,7 +38,7 @@
 
 | # | 動作 | 驗證 |
 |:-:|------|------|
-| 1 | **`live_schedule` → `execution_schedule` 改名要涵蓋合併當下 main 上的所有策略**（Phase1-3 動到實盤：設定舊名的策略在回測與實盤啟動時都會報錯）。2026-10-18 實查：`feature/stock-rehearsal`（`實盤下單架構規劃.md` Phase7-27，預計 2026-10-21 盤後部署進 main）新增的 `core/strategies/stock/stock_round_trip_rehearsal_strategy.py` 仍寫 `self.live_schedule`、也還在舊目錄。合併 `feature/post-rehearsal` 時要把它搬到 `strategies/stock/`（那一步的事），合併本分支時要改成 `execution_schedule`，它的測試（`tests/test_stock_round_trip_rehearsal_strategy.py`、`tests/live/test_stock_round_trip_rehearsal_live.py`）一併同步 | `grep -rn "live_schedule" strategies core apps tests` 只剩 `_REMOVED_SETTINGS` 對照表與移除欄位測試；`pytest tests/live` 全綠 |
+| 1 | **`live_schedule` → `execution_schedule` 改名要涵蓋合併當下 main 上的所有策略**（Phase1-3 動到實盤：設定舊名的策略在回測與實盤啟動時都會報錯）。2026-10-18 實查：`feature/stock-rehearsal`（`實盤下單架構規劃.md` Phase7-27，預計 2026-10-21 盤後部署進 main）新增的 `core/strategies/stock/stock_round_trip_rehearsal_strategy.py` 仍寫 `self.live_schedule`、也還在舊目錄。合併 `feature/post-rehearsal` 時要把它搬到 `strategies/stock/`（那一步的事），合併本分支時要改成 `execution_schedule`，它的測試（`tests/test_stock_round_trip_rehearsal_strategy.py`、`tests/live/test_stock_round_trip_rehearsal_live.py`）一併同步。**2026-10-24：不必做了**——`2026-10里程碑收尾排程.md` S19 採先 revert `6cf78811` 再合併，演練策略在合併前就已移除，`deploy/s19` 上 `grep live_schedule` 只剩對照表與測試 | `grep -rn "live_schedule" strategies core apps tests` 只剩 `_REMOVED_SETTINGS` 對照表與移除欄位測試；`pytest tests/live` 全綠 |
 | 2 | 完整檢查：`pytest`、`scripts/run_regression.sh`（回歸雙線零變動，結束碼 3 不算通過）、`python scripts/check_layer_deps.py` | 全綠 |
 | 3 | 主目錄冒煙：`python -m apps.backtest --strategy IntradayMomentumStrategy --scale TICK --tick-universe strategy --start 2024-05-06 --end 2024-05-10` | 0 錯誤跑完，每交易日約 7～10 秒 |
 
