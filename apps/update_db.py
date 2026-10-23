@@ -6,6 +6,7 @@ from typing import Dict, Iterator, List, Optional, Set, Union
 
 from loguru import logger
 
+from apps.clean_logs import clean_logs
 from core.config import (
     DAY_TRADE_LIST_START_DATE,
     DEFAULT_CHIP_START_DATE,
@@ -54,7 +55,6 @@ from core.pipeline.tw.updaters.stock_short_sale_list_updater import (
 )
 from core.pipeline.tw.updaters.stock_tick_updater import StockTickUpdater
 from core.pipeline.utils import DataLoadError, DataType, FinMindDataType
-from tasks.clean_logs import clean_logs
 
 # api 桶日誌的保留天數（`update_db` 收尾會自動清理）
 API_LOG_RETENTION_DAYS: int = 7
@@ -117,11 +117,11 @@ Target 對照表
 使用範例
 ================================================================================
 
-  python -m tasks.update_db                                  # 等同 --target no_tick
-  python -m tasks.update_db --target price
-  python -m tasks.update_db --target chip price tick         # 多個 target
-  python -m tasks.update_db --target futures_stock_price     # 只能這樣點名才會跑
-  python -m tasks.update_db --target all --from 2024-01-01   # 覆寫起日
+  python -m apps.update_db                                  # 等同 --target no_tick
+  python -m apps.update_db --target price
+  python -m apps.update_db --target chip price tick         # 多個 target
+  python -m apps.update_db --target futures_stock_price     # 只能這樣點名才會跑
+  python -m apps.update_db --target all --from 2024-01-01   # 覆寫起日
 """
 
 
@@ -133,7 +133,7 @@ TICK_DATA_TYPES: Set[DataType] = {DataType.TICK, DataType.FUTURES_TICK}
 # 股期的商品清單有 320 檔，而 `FuturesPriceUpdater.resolve_stock_futures_products()`
 # 在表內還沒有股期行情時排不出流動性，會**無聲退回整份標的池**——實測約每小時
 # 330 個交易日，單一商品 11 年就要 8.6 小時，320 檔是 100 天以上。
-# 這種量級的回補必須是人明確要求的動作，不能被 `python -m tasks.update_db`
+# 這種量級的回補必須是人明確要求的動作，不能被 `python -m apps.update_db`
 # 的預設值一腳踩進去，更不能卡住排在它後面的 futures_chip、fs、mrr 等 target
 #
 # 期貨 tick 同樣只能點名：它沒有續跑依據（逐日逐契約爬、沒有已爬紀錄），
@@ -178,7 +178,7 @@ def expand_targets(targets: Set[str]) -> Set[str]:
     # no_tick = 所有資料類型 − **所有** tick（包含 finmind）
     #
     # **`futures_tick` 也要排除**：只排除 `DataType.TICK` 的話，預設的
-    # `python -m tasks.update_db` 會去跑期貨 tick——那需要 Shioaji 金鑰與
+    # `python -m apps.update_db` 會去跑期貨 tick——那需要 Shioaji 金鑰與
     # `[tick]` 選用相依，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了。
     if "no_tick" in expanded:
         expanded.update(

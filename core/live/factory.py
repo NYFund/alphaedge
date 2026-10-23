@@ -45,11 +45,12 @@ from core.live.notify.base import BaseNotifier, NullNotifier
 from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
-from core.live.report.parity_checker import ParityChecker
+from core.live.report.parity_checker import TIMING_TO_PHASE, ParityChecker
 from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.segment import SegmentSchedule, SegmentWindow
+from core.live.strategy_guard import resolve_hook_timing
 from core.live.trader import LiveTrader, StrategyContext
 from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
@@ -76,6 +77,7 @@ from core.utils import (
     ExecutionTiming,
     FuturesRollRule,
     InstrumentType,
+    LiveHook,
     Market,
     PositionType,
     Units,
@@ -100,6 +102,10 @@ from core.utils import (
 # 成交價不是收盤價，與回測「以收盤價成交」的假設對不上，而且看起來完全正常。
 # 13:29 停止送單讓委託進得了收盤集合競價；**13:35 才收線**，因為收盤集合競價的
 # 成交回報要 13:30 之後才會進來——送完單就收線會讓當日成交明細出現一段空窗。
+#
+# 盤中逐筆段落**夾在開盤段收線（09:05）與尾盤段啟動（13:20）之間**：同一個帳號的
+# 委託回報會推給每一條連線，兩個行程同時在場上時，各自都會收到對方的回報。
+# 代價是 09:00～09:05 與 13:19 之後的盤中觸發看不到。
 TW_STOCK_SEGMENTS: SegmentSchedule = {
     ExecutionTiming.AT_OPEN: SegmentWindow(
         submit_start=datetime.time(8, 30),
@@ -110,6 +116,11 @@ TW_STOCK_SEGMENTS: SegmentSchedule = {
         submit_start=datetime.time(13, 25),
         submit_end=datetime.time(13, 29),
         drain_end=datetime.time(13, 35),
+    ),
+    ExecutionTiming.IMMEDIATE: SegmentWindow(
+        submit_start=datetime.time(9, 5),
+        submit_end=datetime.time(13, 18),
+        drain_end=datetime.time(13, 19),
     ),
 }
 
@@ -331,6 +342,7 @@ def build_live_trader(
     simulation: bool = True,
     dry_run: bool = False,
     resume_trading: bool = False,
+    resume_strategies: Optional[Sequence[str]] = None,
     run_id: Optional[str] = None,
     dao: Optional[LiveTradeDAO] = None,
     risk_config: Optional[RiskConfig] = None,
@@ -356,6 +368,8 @@ def build_live_trader(
             走完整流程但不真的送出
         - resume_trading: bool
             人工恢復交易模式
+        - resume_strategies: Optional[Sequence[str]]
+            只恢復這幾支策略、帳戶層不動；None 時恢復帳戶層與所有已記錄的策略
         - run_id: Optional[str]
             本次啟動的識別碼；None 時以時戳產生
         - dao: Optional[LiveTradeDAO]
@@ -400,7 +414,11 @@ def build_live_trader(
     )
 
     mode_state: TradingModeState = TradingModeState(
-        resolved_dao, resolved_run_id, now_provider, resume_trading=resume_trading
+        resolved_dao,
+        resolved_run_id,
+        now_provider,
+        resume_trading=resume_trading,
+        resume_strategies=resume_strategies,
     )
     risk_manager: PreTradeRiskManager = PreTradeRiskManager(
         mode_state,
@@ -483,19 +501,12 @@ def build_live_trader(
         make_daily_backtest_runner(strategies, resolved_dao.get_lots_held_at_start),
         strategy_names=[type(strategy).__name__ for strategy in strategies],
         closing_limit=make_closing_limit_lookup(),
+        order_phases=make_order_phase_lookup(strategies),
     )
-    _record_run(
-        resolved_dao,
-        resolved_run_id,
-        simulation,
-        dry_run,
-        not isinstance(notifier, NullNotifier),
-        now_provider,
-        phase,
-        [type(strategy).__name__ for strategy in strategies],
-    )
-
-    return LiveTrader(
+    # 先組好引擎、再寫 `live_run`：組裝過程中任何一步拋錯（例如兩個市場的時窗
+    # 沒有交集）都是設定錯誤，那時不該留下一筆沒有結束時間的執行紀錄——
+    # 下一次啟動會把它當成崩潰，發 CRITICAL 並觸發「以券商為準重建部位」
+    trader: LiveTrader = LiveTrader(
         contexts=contexts,
         broker=resolved_broker,
         order_manager=order_manager,
@@ -523,11 +534,43 @@ def build_live_trader(
             )
             else None
         ),
-        resume_trading=resume_trading,
+        # 引擎用它放行「帳戶層非 NORMAL」的送單路徑：只有帳戶層真的被恢復時才成立，
+        # 指名恢復策略時帳戶層不動，不可讓它放行
+        resume_trading=resume_trading and resume_strategies is None,
         notifier=notifier,
         now_provider=now_provider,
         parity_checker=parity_checker,
     )
+    _record_run(
+        resolved_dao,
+        resolved_run_id,
+        simulation,
+        dry_run,
+        not isinstance(notifier, NullNotifier),
+        now_provider,
+        phase,
+        [type(strategy).__name__ for strategy in strategies],
+        _run_instrument_type(strategies),
+    )
+
+    return trader
+
+
+def _run_instrument_type(strategies: Sequence[BaseStrategy]) -> Optional[str]:
+    """
+    本次行程載入的商品類別；只有一種才寫，混合或沒宣告時為 None
+
+    股票與期貨各是一個行程、段落名相同，存活監控靠這一欄分辨是哪一條線沒跑。
+    混合市場的行程組裝時就會被拒絕，這裡回 None 只是不替未定義的情況編一個值。
+    """
+
+    instruments: Set[Optional[InstrumentType]] = {
+        strategy.instrument_type for strategy in strategies
+    }
+    if len(instruments) != 1:
+        return None
+    (instrument,) = instruments
+    return instrument.value if instrument is not None else None
 
 
 def make_order_rebuilder(
@@ -835,7 +878,7 @@ def make_daily_backtest_runner(
         **資金與檔數照實盤的口徑**（`live_capital`、`live_max_holdings`）：parity 量的是
         訊號有沒有漂移，不是兩邊設定不同。用研究回測的 `init_capital`／`max_holdings`
         的話，宣告了實盤額度的策略每天都會因為張數與檔數不同而報未解釋差異——
-        `MomentumStrategy1` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
+        `VolumeBreakoutMomentumStrategy` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
         2026-10-06 試跑的三筆未解釋差異全是這個原因。
     - Parameters:
         - strategies: Sequence[BaseStrategy]
@@ -882,6 +925,48 @@ def make_daily_backtest_runner(
         return [order for _, _, order in backtester.submitted_orders]
 
     return run
+
+
+def make_order_phase_lookup(
+    strategies: Sequence[BaseStrategy],
+) -> Callable[[str, BaseOrder], Set[str]]:
+    """
+    - Description:
+        產生 parity 用的「回測這張單該在哪些段落送出」查詢
+
+        開倉單看 `open` 鉤子的段落；平倉單同時看 `close` 與 `stop_loss`——回測的委託分不出
+        是一般平倉還是停損，兩個段落都要中止，parity 才能把它歸給段落中止。
+        段落沿用實盤引擎同一套解析（`resolve_hook_timing()`，沒宣告的鉤子會退回 `close`），
+        兩邊各算一份的話，宣告改了只有一邊跟上。
+    - Parameters:
+        - strategies: Sequence[BaseStrategy]
+            本次行程載入的策略
+    - Return:
+        - Callable[[str, BaseOrder], Set[str]]
+            `(策略名, 回測委託) → 段落名集合`；認不得的策略或沒有段落時為空集合
+    """
+
+    by_name: Dict[str, BaseStrategy] = {
+        type(strategy).__name__: strategy for strategy in strategies
+    }
+
+    def lookup(strategy_name: str, order: BaseOrder) -> Set[str]:
+        strategy: Optional[BaseStrategy] = by_name.get(strategy_name)
+        if strategy is None:
+            return set()
+        opening: bool = order.action is resolve_open_action(order.position_type)
+        hooks: List[LiveHook] = (
+            [LiveHook.OPEN] if opening else [LiveHook.CLOSE, LiveHook.STOP_LOSS]
+        )
+        phases: Set[str] = set()
+        for hook in hooks:
+            timing: Optional[ExecutionTiming] = resolve_hook_timing(strategy, hook)
+            if timing is None or timing not in TIMING_TO_PHASE:
+                return set()
+            phases.add(TIMING_TO_PHASE[timing])
+        return phases
+
+    return lookup
 
 
 def make_closing_limit_lookup(
@@ -1098,6 +1183,7 @@ def _record_run(
     now_provider: Callable[[], datetime.datetime],
     phase: str,
     strategy_names: Sequence[str] = (),
+    instrument_type: Optional[str] = None,
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -1113,6 +1199,9 @@ def _record_run(
     **本次載入的策略寫進 `strategy_params_json`**（`{"strategies": [...]}`）：盤後 parity
     要知道某支策略當天的段落有沒有正常跑完，才分得出「回測多出的開倉單」是快照口徑
     還是實盤根本沒跑到。這一欄先前從未寫入，2026-10-08 以前的紀錄為 NULL。
+
+    **商品類別寫進 `instrument_type`**：股票與期貨是兩個行程、段落名相同，存活監控
+    要靠它分辨「期貨尾盤沒跑」而不是被股票尾盤的紀錄遮住。更早的紀錄為 NULL。
     """
 
     if not notify_enabled:
@@ -1137,6 +1226,7 @@ def _record_run(
             "strategy_params_json": json.dumps(
                 {"strategies": list(strategy_names)}, ensure_ascii=False
             ),
+            "instrument_type": instrument_type,
         }
     )
     dao.commit()

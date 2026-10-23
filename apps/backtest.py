@@ -16,7 +16,7 @@ from ._common import EXIT_USAGE, _resolve_strategy_or_exit
 回測入口：python -m apps.backtest --strategy <策略類別名稱>
 
 - `--strategy` 收的是**策略的類別名稱**，只接一支；可用的策略以
-  `core/strategies/{stock,futures}/` 底下的非抽象子類為準
+  `strategies/{stock,futures}/` 底下的非抽象子類為準
 - `--start`／`--end`／`--capital` 覆寫策略宣告的回測區間與初始資金，不帶時沿用策略預設
 - 本 parser 只認得回測的旗標：帶了實盤旗標（例如 `--production`）時，
   argparse 會直接以用法錯誤拒絕，不可能「以為在下單、其實跑了回測」

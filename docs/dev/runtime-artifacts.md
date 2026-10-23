@@ -11,7 +11,7 @@
 ```
 AlphaEdge/
 ├── core/                  # 函式庫：可被 import，不寫任何東西到自己目錄下
-├── apps/  strategies/  tasks/  frontend/  strategy_lab/  tests/  docs/  backlog/  scripts/
+├── apps/  strategies/  frontend/  strategy_lab/  tests/  docs/  backlog/  scripts/
 │
 ├── data/                  # 資料
 │   ├── db/                # tw_stock.db、tw_futures.db、tw_trading.db（實盤紀錄；市場軸由檔名承載）
@@ -36,7 +36,7 @@ AlphaEdge/
 三個根皆可由環境變數覆寫（容器掛載 volume 用）：
 `ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`；kill switch 另可由
 `ALPHAEDGE_LIVE_KILL_SWITCH_PATH` 單獨指定。`logs/launchd/` 例外：它由 launchd plist 產生器以
-專案根目錄寫死，不跟 `ALPHAEDGE_LOGS_DIR` 走，也不在 `tasks.clean_logs` 的清理範圍內。
+專案根目錄寫死，不跟 `ALPHAEDGE_LOGS_DIR` 走，也不在 `apps.clean_logs` 的清理範圍內。
 
 護欄在 [`tests/test_config_paths.py`](../../tests/test_config_paths.py)。
 
@@ -141,9 +141,9 @@ ImportError 收場。
 無關的獨立進入點：
 
 ```bash
-python -m tasks.clean_logs                     # 預覽（不刪）
-python -m tasks.clean_logs --apply             # 實際刪除，預設保留 30 天
-python -m tasks.clean_logs --apply --bucket api --days 7
+python -m apps.clean_logs                     # 預覽（不刪）
+python -m apps.clean_logs --apply             # 實際刪除，預設保留 30 天
+python -m apps.clean_logs --apply --bucket api --days 7
 ```
 
 它**只刪已輪替的檔**（檔名帶時間戳）；當前使用中的 `xxx.log` 一律保留——刪掉正在被 loguru

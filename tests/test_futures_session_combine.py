@@ -427,7 +427,7 @@ def test_combined_session_is_not_used_for_price_queries() -> None:
     2026-09-02 實測踩到過，故固化為測試。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -443,7 +443,7 @@ def test_combined_session_is_not_used_for_price_queries() -> None:
 def test_strategy_filters_combined_quotes() -> None:
     """整併模式下 `filter_session()` 要留下 `COMBINED` 報價，不可整批濾掉"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 

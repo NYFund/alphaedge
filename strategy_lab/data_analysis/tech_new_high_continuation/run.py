@@ -6,7 +6,7 @@
     .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.run
 
 **必須用 `-m`**：`strategy_lab` 不在 `pyproject` 的 `packages.find` 裡（只裝
-`core*`／`tasks*`／`tests*`），直接跑檔案路徑時 `sys.path[0]` 是腳本自己的目錄，
+`core*`／`apps*`／`strategies*`／`tests*`），直接跑檔案路徑時 `sys.path[0]` 是腳本自己的目錄，
 `import strategy_lab.…` 會失敗。`-m` 會把工作目錄放進 `sys.path`，
 專案根目錄底下就找得到（原本靠 `sys.path.insert` 硬塞）。
 

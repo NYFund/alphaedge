@@ -35,6 +35,10 @@ _LABEL_PREFIX: str = "com.alphaedge.live."
 # 台北時間的交易日（週一～五）
 _TAIPEI_WEEKDAYS: Tuple[int, ...] = (1, 2, 3, 4, 5)
 
+# 股票開盤段與盤後段的策略：`IntradayMomentumStrategy` 隔天開盤出場在開盤段，
+# 盤後對帳與快照也要涵蓋它；盤中進場與停損由 `stock-intraday` 另一個行程負責
+_STOCK_STRATEGIES: str = "VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy"
+
 # 期貨三個段落載入的策略（同一個行程、共用帳戶）。
 # `FuturesRolloverRehearsalStrategy` 只為 2026-10-20 的換月演練而設：示範策略很少出訊號，
 # 換月日沒有部位就驗不到換月兩腿。演練結束移除排程時一併拿掉；
@@ -50,9 +54,23 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "open",
+        ],
+    ),
+    # 盤中逐筆：開盤段 09:05 收線後才啟動，13:19 收線、早於 13:20 的尾盤段——
+    # 同一個帳號的委託回報會推給每一條連線，不讓兩個行程同時在場上
+    "stock-intraday": (
+        9,
+        6,
+        [
+            "-m",
+            "apps.live",
+            "--strategy",
+            "IntradayMomentumStrategy",
+            "--phase",
+            "intraday",
         ],
     ),
     "futures-open": (
@@ -74,7 +92,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            "VolumeBreakoutMomentumStrategy",
             "--phase",
             "close",
         ],
@@ -98,7 +116,7 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
             "-m",
             "apps.live",
             "--strategy",
-            "MomentumStrategy1",
+            _STOCK_STRATEGIES,
             "--phase",
             "after_close",
         ],
@@ -124,14 +142,31 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
 # - 接在後面而不排固定時刻：資料更新實測 8 分鐘到近 3 小時不等，固定時刻可能比到還沒入庫的資料。
 #   資料更新失敗時補比照樣執行，由它自己的新鮮度檢查拒絕（退出碼 3），失敗原因才看得到。
 # - 06:00 而不是 08:00：留兩個多小時給 08:30 的開盤段，資料更新拖長時也不會撞上。
-# 股票與期貨各跑一次補比：兩條線的策略不可混在同一個行程（段落時窗不同）
+# 股票與期貨各跑一次補比：兩條線的策略不可混在同一個行程（段落時窗不同）。
+# 盤中動能策略另跑一次：它的段落（逐筆＋開盤段）與尾盤策略不同，混在同一行程會因時窗無交集而拒絕。
+# 它的當日回測是日 K 近似、實盤是逐筆，**差異是預期中的**（使用者裁示先直接比，有不一樣再檢討原因）
 _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
     "update-db": (
         6,
         0,
         [
-            ["-m", "tasks.update_db"],
-            ["-m", "apps.live", "--strategy", "MomentumStrategy1", "--phase", "parity"],
+            ["-m", "apps.update_db"],
+            [
+                "-m",
+                "apps.live",
+                "--strategy",
+                "VolumeBreakoutMomentumStrategy",
+                "--phase",
+                "parity",
+            ],
+            [
+                "-m",
+                "apps.live",
+                "--strategy",
+                "IntradayMomentumStrategy",
+                "--phase",
+                "parity",
+            ],
             [
                 "-m",
                 "apps.live",

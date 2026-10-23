@@ -14,9 +14,9 @@ source .venv/bin/activate
 ## 2) 更新資料庫
 
 ```bash
-python -m tasks.update_db                          # 全部資料（不含兩種 tick 與只能點名的 target），等同 --target no_tick
-python -m tasks.update_db --target chip price      # 只更新指定資料
-python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
+python -m apps.update_db                          # 全部資料（不含兩種 tick 與只能點名的 target），等同 --target no_tick
+python -m apps.update_db --target chip price      # 只更新指定資料
+python -m apps.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
 ```
 
 - 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日。
@@ -29,18 +29,18 @@ python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB
 策略名稱使用「類別名稱」：
 
 ```bash
-python -m apps.backtest --strategy MomentumStrategy1                  # 台股做多動能
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy                  # 台股做多動能
 python -m apps.backtest --strategy InvestmentTrustMomentumSwingStrategy        # 台股投信認同強勢股短波段
 python -m apps.backtest --strategy ForeignSellingReversalShortStrategy   # 台股外資大賣強勢股當沖放空
 python -m apps.backtest --strategy IntradayMomentumStrategy           # 台股盤中動能（目前只有日 K 近似版本）
 python -m apps.backtest --strategy MomentumFuturesStrategy            # 台指期動能（示範用，非交易邏輯）
 
 # 覆寫回測區間與初始資金（皆選填，不帶時沿用策略預設）
-python -m apps.backtest --strategy MomentumStrategy1 --start 2024-01-01 --end 2024-12-31 --capital 500000
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy --start 2024-01-01 --end 2024-12-31 --capital 500000
 ```
 
-策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 收錄（頂層 `strategies/` 目前只是空門面，載入器不掃它）；
-怎麼寫策略見 [策略開發指南](../../core/strategies/README.md)。
+策略放在 `strategies/stock/` 與 `strategies/futures/`，由 `StrategyLoader` 自動收錄；
+怎麼寫策略見 [策略開發指南](../../strategies/README.md)。
 
 動到 `core/backtest/`、`core/position/`、`core/models/` 之後，先跑回歸雙線：
 
@@ -87,8 +87,8 @@ docker compose up -d frontend # 常駐 Web，只讀 volume 裡已落地的 CSV
 
 ```bash
 # 刪除指定日期的 price 資料（預設只預覽，加 --apply 才刪）
-python -m tasks.delete_price_data --date 2025-07-13
+python -m apps.delete_price_data --date 2025-07-13
 
 # 清理已輪替的日誌（預設只預覽）
-python -m tasks.clean_logs
+python -m apps.clean_logs
 ```

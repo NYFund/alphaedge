@@ -1,6 +1,6 @@
 # 開發環境設定（Dev Setup）
 
-本文件針對目前 `AlphaEdge` 專案實際結構整理（以 `apps/`（回測與實盤入口）、`tasks/update_db.py`、`core/` 為主）。
+本文件針對目前 `AlphaEdge` 專案實際結構整理（以 `apps/`（回測與實盤入口）、`apps/update_db.py`、`core/` 為主）。
 
 ## 前置需求
 
@@ -18,7 +18,7 @@ source .venv/bin/activate    # 或不啟用，改在指令前加 `uv run`
 ```
 
 `uv sync` 依 `uv.lock` 安裝每個套件的精確版本，並把專案本身裝成 editable，
-因此**一行指令就完成環境建置**。安裝後 `core` / `apps` / `strategies` / `tasks` / `tests` 於**任意工作目錄**皆可 import，
+因此**一行指令就完成環境建置**。安裝後 `core` / `apps` / `strategies` / `tests` 於**任意工作目錄**皆可 import，
 不需再設 `PYTHONPATH`。`.venv` 是可以隨時重建的產物：壞了就 `rm -rf .venv && uv sync`。
 
 開發工具（pytest、pytest-timeout、pytest-cov、ruff）是 `pyproject.toml` 的 `[dependency-groups].dev`，
@@ -92,14 +92,14 @@ mkdir -p data/db data/downloads logs results
 # 注意：取具體實作一律用完整模組路徑。core/backtest/__init__.py 與 core/strategies/__init__.py
 # 刻意不做套件層 eager import（會造成循環 import），故 `from core.backtest import
 # Backtester` 會失敗
-python -c "from core.backtest.backtester import Backtester; from core.strategies.strategy_loader import StrategyLoader; print('OK')"
+python -c "from core.backtest.backtester import Backtester; from strategies.loader import StrategyLoader; print('OK')"
 
 # 顯示回測／實盤入口參數
 python -m apps.backtest --help
 python -m apps.live --help
 
 # 顯示資料更新參數
-python -m tasks.update_db --help
+python -m apps.update_db --help
 ```
 
 ## 6) 程式碼品質檢查（選用但建議）

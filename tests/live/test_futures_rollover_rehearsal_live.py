@@ -10,11 +10,11 @@ from core.live.factory import build_live_trader
 from core.live.risk.risk_manager import RiskDecision
 from core.live.trader import LiveTrader, StrategyContext
 from core.models import FuturesOrder
-from core.strategies.futures.futures_rollover_rehearsal_strategy import (
+from core.utils import Action, PositionType
+from strategies.futures.futures_rollover_rehearsal_strategy import (
     FuturesRolloverRehearsalStrategy,
 )
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.utils import Action, PositionType
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 
 from .conftest import FakeBroker
 

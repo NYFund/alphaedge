@@ -24,10 +24,10 @@ crawler（例如 `crawl_finmind`），它的舊檔會永遠留著——`logs/` �
 不是「保留太久」，所以解法是一個與 logger 生命週期無關的獨立進入端。
 
 使用方式：
-    python -m tasks.clean_logs                    # 預覽（不刪）
-    python -m tasks.clean_logs --apply            # 實際刪除，預設保留 30 天
-    python -m tasks.clean_logs --apply --days 7   # 只保留 7 天
-    python -m tasks.clean_logs --apply --bucket api   # 只清 api 桶
+    python -m apps.clean_logs                    # 預覽（不刪）
+    python -m apps.clean_logs --apply            # 實際刪除，預設保留 30 天
+    python -m apps.clean_logs --apply --days 7   # 只保留 7 天
+    python -m apps.clean_logs --apply --bucket api   # 只清 api 桶
 """
 
 DEFAULT_RETENTION_DAYS: int = 30

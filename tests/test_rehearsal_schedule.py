@@ -20,22 +20,26 @@ from scripts.launchd.rehearsal_schedule import (
 
 def test_update_db_runs_at_taipei_six_and_is_followed_by_parity() -> None:
     """
-    資料更新在台北 06:00，跑完接著補比股票與期貨兩條線
+    資料更新在台北 06:00，跑完接著補比股票、盤中與期貨
 
     補比要用前一交易日的日 K，它在資料更新之後才入庫；
-    兩條線的策略不可混在同一個行程，所以各跑一次。
+    段落時窗不同的策略不可混在同一個行程，所以各跑一次。
     """
 
     hour, minute, steps = _CHAINED_JOBS["update-db"]
 
     assert (hour, minute) == (6, 0)
-    assert steps[0] == ["-m", "tasks.update_db"]
+    assert steps[0] == ["-m", "apps.update_db"]
     parity_strategies: List[str] = [
         step[step.index("--strategy") + 1]
         for step in steps[1:]
         if step[step.index("--phase") + 1] == "parity"
     ]
-    assert parity_strategies == ["MomentumStrategy1", "MomentumFuturesStrategy"]
+    assert parity_strategies == [
+        "VolumeBreakoutMomentumStrategy",
+        "IntradayMomentumStrategy",
+        "MomentumFuturesStrategy",
+    ]
     # 不可同時留著舊的單步資料更新：兩個排程會在不同時刻各跑一次
     assert "update-db" not in _DAILY_JOBS
 

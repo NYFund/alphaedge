@@ -67,20 +67,16 @@ def build_stock_db(path: Path) -> Path:
 
 
 def all_phases_done(day: datetime.date) -> List[Tuple[Any, ...]]:
-    """三個段落都正常結束的當日紀錄"""
+    """預設段落表裡每個段落都正常結束的當日紀錄（段落表依分支而異，故從程式讀）"""
 
     return [
         (
             phase,
-            f"{day.isoformat()}T{hour}:00+08:00",
-            f"{day.isoformat()}T{hour}:30+08:00",
+            f"{day.isoformat()}T{at.strftime('%H:%M')}:00+08:00",
+            f"{day.isoformat()}T{at.strftime('%H:%M')}:30+08:00",
             LiveTradeDAO.END_REASON_NORMAL,
         )
-        for phase, hour in (
-            ("open", "08:30"),
-            ("close", "13:20"),
-            ("after_close", "14:30"),
-        )
+        for phase, at in watchdog.DEFAULT_EXPECTED_PHASES.items()
     ]
 
 

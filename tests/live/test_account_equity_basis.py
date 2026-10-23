@@ -6,7 +6,9 @@ import pytest
 from core.live.factory import live_capital
 from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 
 """
 策略可用的資金基準
@@ -367,10 +369,10 @@ def test_changing_live_capital_leaves_backtest_capital_alone() -> None:
     **這是 `live_capital` 存在的唯一理由**
 
     `init_capital` 同時是回測帳戶的初始資金，而 LONG 回歸基準就是拿
-    `MomentumStrategy1` 跑出來的。改它等於改掉每一筆回測結果、破壞回歸雙線。
+    `VolumeBreakoutMomentumStrategy` 跑出來的。改它等於改掉每一筆回測結果、破壞回歸雙線。
     """
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
 
     assert strategy.init_capital == 1_000_000.0, "回測本金不可被實盤需求改動"
     assert strategy.live_capital == 400_000.0
@@ -380,7 +382,7 @@ def test_changing_live_capital_leaves_backtest_capital_alone() -> None:
 def test_base_strategies_default_to_no_override() -> None:
     """預設 `None`：沒有人宣告時，實盤與回測用同一個數字"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -411,7 +413,7 @@ def test_live_max_holdings_is_written_to_the_live_instance() -> None:
 
     from core.live.factory import apply_live_max_holdings
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
 
     apply_live_max_holdings(strategy)
 
@@ -427,16 +429,19 @@ def test_live_max_holdings_leaves_backtest_defaults_alone() -> None:
 
     from core.live.factory import apply_live_max_holdings
 
-    apply_live_max_holdings(MomentumStrategy1())
+    apply_live_max_holdings(VolumeBreakoutMomentumStrategy())
 
-    assert MomentumStrategy1().max_holdings == MomentumStrategy1.DEFAULT_MAX_HOLDINGS
+    assert (
+        VolumeBreakoutMomentumStrategy().max_holdings
+        == VolumeBreakoutMomentumStrategy.DEFAULT_MAX_HOLDINGS
+    )
 
 
 def test_undeclared_live_max_holdings_keeps_max_holdings() -> None:
     """沒宣告時不動，既有策略行為不變"""
 
     from core.live.factory import apply_live_max_holdings
-    from core.strategies.stock.investment_trust_momentum_swing_strategy import (
+    from strategies.stock.investment_trust_momentum_swing_strategy import (
         InvestmentTrustMomentumSwingStrategy,
     )
 

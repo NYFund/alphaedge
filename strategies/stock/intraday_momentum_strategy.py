@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Union
 
 import pandas as pd
 from loguru import logger
@@ -7,17 +7,27 @@ from loguru import logger
 from core.datafeed.base import BaseDataFeed
 from core.market.tw.instrument_spec import TwStockSpec
 from core.market.tw.market_calendar import MarketCalendar
-from core.models import StockAccount, StockPosition, StockQuote
+from core.models import PreOpenStockQuote, StockAccount, StockPosition, StockQuote
 from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.models.stock.trading_list import DayTradeListSnapshot
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
-from core.utils import Action, PositionType, Scale, TradeDirection
+from core.utils import (
+    Action,
+    ExecutionStyle,
+    ExecutionTiming,
+    LiveHook,
+    PositionType,
+    Scale,
+    TradeDirection,
+)
+from core.utils.instrument import StockUtils
+from core.utils.time import TimeUtils
 
 
 class IntradayMomentumStrategy(BaseStockStrategy):
     """
-    盤中動能策略（**目前只有日 K 近似版本**）
+    盤中動能策略（回測為日 K 近似；實盤逐筆觸發）
 
     買進條件（全部滿足）：
     - 盤中相對平盤價（前一交易日收盤；除權息日為開盤競價基準）漲幅 ≥ 門檻（預設 9%）
@@ -50,7 +60,24 @@ class IntradayMomentumStrategy(BaseStockStrategy):
       開倉時這些部位仍佔持倉名額、賣出款也還沒回到可用餘額——**偏保守**（實盤是開盤先賣、盤中才買）。
     - 同一檔隔天又觸發時，回測因為部位還在帳上而不進場；實盤在開盤賣出後盤中可以再進。
 
-    **TICK 級別不支援**：逐筆分支尚未實作，`setup_apis()` 會直接 `NotImplementedError`。
+    〈實盤執行〉
+    - 開倉與停損在盤中逐筆段落（`IMMEDIATE`）呼叫，每次只拿到一檔的一筆報價（`Scale.TICK`）：
+      - 進場：**現價**相對平盤價漲幅 ≥ 門檻、當日累計量 ≥ 門檻、在當沖名單內，以現價為決策價買進；
+        同一檔一天只進場一次（送出就算，沒成交也不再追）。
+      - 停損：當天進場的部位，現價跌到停損價以下即賣出，**同一檔一天只送一次**。
+        策略看不到在途的委託：成交回報晚到時部位還在帳上，重送會在原單成交後再賣一次、
+        變成意外的當日空單；IOC 沒成交時部位留到隔天開盤出場，不追價。
+      - 逐筆不需要 K 棒路徑假設：盤中的先後順序就是報價到達的順序。
+    - 隔天開盤出場在開盤段（`AT_OPEN`）呼叫：盤前沒有開盤價，以參考價為決策價，
+      執行層換成開盤集合競價掛跌停＋ROD，成交價即開盤價。
+    - 執行方式 `MARKET`（要成交）：盤中由執行層換成決策價加保護價的限價＋IOC，沒成交即作廢。
+    - 標的池：券商單一連線的逐筆訂閱上限 200 檔，盤前由 `get_live_symbols()` 篩選
+      「最近一個交易日在當沖名單內的一般股票（排除 ETF 與權證）中，成交量最大的前 `LIVE_UNIVERSE_SIZE` 檔」。
+      **前一天冷門、當天才爆量的股票會漏掉**，這是與日 K 回測（全市場）最大的差異。
+    - 當沖名單：當天那一份收盤後才入庫，盤中沿用最近一份（見實盤資料源的 `get_day_trade_list()`）。
+    - 時區：逐筆報價與盤中成交的日期都帶時刻（`datetime`），比較開倉日前一律轉成日期。
+
+    **TICK 級別回測不支援**：`setup_apis()` 會直接 `NotImplementedError`。
     """
 
     DEFAULT_MAX_HOLDINGS: int = 10
@@ -62,6 +89,11 @@ class IntradayMomentumStrategy(BaseStockStrategy):
     STOP_LOSS_PRICE_CHANGE_PCT: float = 8.0  # 跌破此漲幅即停損（%）
     MIN_VOLUME_LOTS: int = 5000  # 當日累計成交量門檻（張）
     MAX_VOLUME_SHARE: float = 0.1  # 單筆訂單不超過當日成交量的比例
+
+    # 實盤參數
+    # 盤前篩選的標的數上限（檔）。券商單一連線的逐筆訂閱上限是 200，留 10 檔給前一天
+    # 買進、今天掉出池外的持有標的（引擎一律替持有標的訂閱，見 `LiveTrader.quote_symbols()`）
+    LIVE_UNIVERSE_SIZE: int = 190
 
     # 交易日清單往回多抓的曆日數；與日曆的最大回看天數對齊，
     # 否則第一根 bar 在清單裡查不到前一交易日、退回逐日查資料庫
@@ -103,6 +135,25 @@ class IntradayMomentumStrategy(BaseStockStrategy):
         # 平盤價快取：同一根 bar 內開倉與停損都要用，只留最近一天
         self.reference_price_date: Optional[datetime.date] = None
         self.reference_price_map: Dict[str, Any] = {}
+
+        # 實盤（見 class docstring〈實盤執行〉）
+        self.is_tick_triggered = True
+        self.live_ready = True
+        self.live_schedule = {
+            LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
+            LiveHook.STOP_LOSS.value: ExecutionTiming.IMMEDIATE,
+            LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+        }
+        self.live_execution = ExecutionStyle.MARKET
+        # 模擬環境的額度與檔數比照 `VolumeBreakoutMomentumStrategy`；正式環境要在上線前重新決定
+        self.live_capital = 400000.0
+        self.live_max_holdings = 3
+
+        # 逐筆狀態：只對當天有效，換日時清掉。行程重啟會遺失——重啟後同一檔可能再進場一次，
+        # 由「帳上已有部位就不進場」擋住已成交的那些
+        self.live_trading_date: Optional[datetime.date] = None
+        self.live_entered: Set[str] = set()
+        self.stop_loss_sent: Set[str] = set()
 
     def setup_account(self, account: StockAccount) -> None:
         """設置虛擬帳戶資訊"""
@@ -228,6 +279,62 @@ class IntradayMomentumStrategy(BaseStockStrategy):
             return None
         return self.feed.get_day_trade_list(date)
 
+    @staticmethod
+    def to_date(value: Union[datetime.date, datetime.datetime]) -> datetime.date:
+        """逐筆報價與盤中成交的日期帶時刻，日 K 與重建的部位只有日期；比較前一律轉成日期"""
+
+        return TimeUtils.to_date(value)
+
+    def get_live_symbols(self, latest_date: datetime.date) -> Optional[List[str]]:
+        """
+        - Description:
+            盤前篩選逐筆訂閱的標的：最近一個交易日在當沖名單內的一般股票中，
+            成交量最大的前 `LIVE_UNIVERSE_SIZE` 檔
+
+            不在當沖名單的標的本來就不進場，先排除才不會浪費訂閱名額；
+            以前一天的成交量排序是「當天會不會爆量」最便宜的代理指標。
+            **只留一般股票**（`StockUtils.filter_common_stocks()`，排除 ETF 與權證）：
+            與回測的報價轉換同一份過濾，回測本來就看不到 ETF；成交量大的 ETF 幾乎不會漲 9%，
+            留著只會佔掉訂閱名額。
+        - Parameters:
+            - latest_date: datetime.date
+                歷史資料最新的交易日
+        - Return:
+            - Optional[List[str]]
+                要訂閱的標的；沒有當沖名單時為空 list（不進場的日子不必訂閱）
+        """
+
+        day_trade_list: Optional[DayTradeListSnapshot] = self.get_day_trade_list(
+            latest_date
+        )
+        if day_trade_list is None:
+            logger.warning(f"{latest_date} 沒有現股當沖名單，盤中不訂閱任何標的")
+            return []
+
+        volumes: Dict[str, int] = self.price.get_volume_lots_map(latest_date)
+        candidates: List[str] = [
+            stock_id
+            for stock_id in StockUtils.filter_common_stocks(list(volumes))
+            if stock_id in day_trade_list.day_tradable
+        ]
+        candidates.sort(key=lambda stock_id: volumes[stock_id], reverse=True)
+        return sorted(candidates[: self.LIVE_UNIVERSE_SIZE])
+
+    def count_held_symbols(self) -> int:
+        """帳上有部位的標的數（同一檔多筆部位算一檔，與持倉檔數上限的口徑相同）"""
+
+        return len({position.symbol for position in self.account.get_positions()})
+
+    def reset_live_state(self, date: datetime.date) -> None:
+        """逐筆狀態換日：前一天的進場與停損紀錄不得延續到今天"""
+
+        if self.live_trading_date == date:
+            return
+
+        self.live_trading_date = date
+        self.live_entered = set()
+        self.stop_loss_sent = set()
+
     def is_stop_loss_hit(
         self, stock_quote: StockQuote, stop_price: float, trigger_price: float
     ) -> bool:
@@ -262,6 +369,9 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
         if self.max_holdings == 0 or not stock_quotes:
             return []
+
+        if stock_quotes[0].scale == Scale.TICK:
+            return self.generate_tick_open_signals(stock_quotes)
 
         date: datetime.date = stock_quotes[0].date
         reference_price_map: Dict[str, Any] = self.get_reference_price_map(date)
@@ -317,17 +427,85 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
         return signals
 
-    def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
-        """平倉訊號：進場日之前開的部位，一律以當日開盤價出場"""
+    def generate_tick_open_signals(
+        self, stock_quotes: List[StockQuote]
+    ) -> List[Signal]:
+        """逐筆開倉：現價漲幅達門檻、累計量達門檻且可當沖，以現價為決策價做多"""
 
         signals: List[Signal] = []
         for stock_quote in stock_quotes:
+            date: datetime.date = self.to_date(stock_quote.date)
+            self.reset_live_state(date)
+
+            stock_id: str = stock_quote.stock_id
+            if stock_id in self.live_entered:
+                continue
+            if self.account.check_has_position(stock_id):
+                continue
+            # 實盤的成交量是券商的當日累計量（張）
+            if stock_quote.volume < self.MIN_VOLUME_LOTS:
+                continue
+
+            reference_price: Optional[float] = self.get_valid_reference_price(
+                stock_quote, self.get_reference_price_map(date)
+            )
+            if reference_price is None:
+                continue
+
+            trigger_price: float = self.get_entry_trigger_price(
+                reference_price, stock_id
+            )
+            if stock_quote.close < trigger_price:
+                continue
+
+            day_trade_list: Optional[DayTradeListSnapshot] = self.get_day_trade_list(
+                date
+            )
+            if day_trade_list is None or stock_id not in day_trade_list.day_tradable:
+                continue
+
+            # 名額已滿時不送、也不記成進場過：之後有部位停損出場騰出名額，
+            # 這一檔若仍在門檻之上還能進場（與回測「有名額才開倉」一致）
+            if self.count_held_symbols() >= self.max_holdings:
+                continue
+
+            # 送出就算進場過：之後每一筆報價都還在門檻之上，不擋的話會逐筆重送
+            self.live_entered.add(stock_id)
+            logger.info(
+                f"股票 {stock_id} 盤中現價 {stock_quote.close} 觸及 {trigger_price}"
+                f"（平盤價 {reference_price}、累計量 {stock_quote.volume} 張），進場"
+            )
+            signals.append(
+                Signal(
+                    quote=stock_quote,
+                    action=Action.BUY,
+                    position_type=PositionType.LONG,
+                    order_price=stock_quote.close,
+                    sizing_price=stock_quote.close,
+                )
+            )
+
+        return signals
+
+    def get_exit_price(self, stock_quote: StockQuote) -> float:
+        """隔天出場的決策價：回測是開盤價；實盤開盤段在盤前，只有參考價"""
+
+        if isinstance(stock_quote, PreOpenStockQuote):
+            return stock_quote.reference_price
+        return stock_quote.open
+
+    def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        """平倉訊號：進場日之前開的部位，一律在當日開盤出場"""
+
+        signals: List[Signal] = []
+        for stock_quote in stock_quotes:
+            date: datetime.date = self.to_date(stock_quote.date)
             positions: List[StockPosition] = [
                 position
                 for position in self.account.get_positions(
                     stock_id=stock_quote.stock_id, position_type=PositionType.LONG
                 )
-                if position.date < stock_quote.date
+                if self.to_date(position.date) < date
             ]
             # 同一檔多筆部位合併成一張單：逐筆送會被 FIFO 吃掉後面那筆的張數
             volume: int = sum(position.volume for position in positions)
@@ -339,7 +517,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
                     quote=stock_quote,
                     action=Action.SELL,
                     position_type=PositionType.LONG,
-                    order_price=stock_quote.open,
+                    order_price=self.get_exit_price(stock_quote),
                     volume=volume,
                 )
             )
@@ -353,6 +531,9 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
         if not stock_quotes:
             return []
+
+        if stock_quotes[0].scale == Scale.TICK:
+            return self.generate_tick_stop_loss_signals(stock_quotes)
 
         reference_price_map: Dict[str, Any] = self.get_reference_price_map(
             stock_quotes[0].date
@@ -395,6 +576,60 @@ class IntradayMomentumStrategy(BaseStockStrategy):
                     action=Action.SELL,
                     position_type=PositionType.LONG,
                     order_price=stop_price,
+                    volume=volume,
+                )
+            )
+
+        return signals
+
+    def generate_tick_stop_loss_signals(
+        self, stock_quotes: List[StockQuote]
+    ) -> List[Signal]:
+        """逐筆停損：當天進場的部位，現價跌到停損價以下即以現價為決策價賣出"""
+
+        signals: List[Signal] = []
+        for stock_quote in stock_quotes:
+            now: datetime.datetime = stock_quote.date
+            date: datetime.date = self.to_date(now)
+            self.reset_live_state(date)
+
+            stock_id: str = stock_quote.stock_id
+            positions: List[StockPosition] = [
+                position
+                for position in self.account.get_positions(
+                    stock_id=stock_id, position_type=PositionType.LONG
+                )
+                if self.to_date(position.date) == date
+            ]
+            volume: int = sum(position.volume for position in positions)
+            if volume <= 0:
+                continue
+
+            reference_price: Optional[float] = self.get_valid_reference_price(
+                stock_quote, self.get_reference_price_map(date)
+            )
+            if reference_price is None:
+                continue
+
+            stop_price: float = self.get_stop_loss_price(reference_price, stock_id)
+            if stock_quote.close > stop_price:
+                continue
+
+            # 部位要等成交回報才會消失，而策略看不到在途的委託：回報晚到時重送，
+            # 兩張都成交就賣超、變成當日空單。故一天只送一次，沒成交留到隔天開盤出場
+            if stock_id in self.stop_loss_sent:
+                continue
+
+            self.stop_loss_sent.add(stock_id)
+            logger.warning(
+                f"股票 {stock_id} 進場當天現價 {stock_quote.close} 跌到 {stop_price}，停損"
+            )
+            signals.append(
+                Signal(
+                    quote=stock_quote,
+                    action=Action.SELL,
+                    position_type=PositionType.LONG,
+                    order_price=stock_quote.close,
                     volume=volume,
                 )
             )

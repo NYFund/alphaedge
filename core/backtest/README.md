@@ -20,7 +20,7 @@ AlphaEdge 的回測系統提供策略回測與績效分析。支援哪些市場�
 
 | 級別 | 資料來源 | 適用商品 | 說明 |
 | ---- | -------- | -------- | ---- |
-| `Scale.DAY` | 台股：`StockPriceAPI` 日線；台期貨：`tw_futures.db` 日行情 | 台股、台期貨 | 預設值；範例見 `core/strategies/stock/momentum_strategy_1.py` |
+| `Scale.DAY` | 台股：`StockPriceAPI` 日線；台期貨：`tw_futures.db` 日行情 | 台股、台期貨 | 預設值；範例見 `strategies/stock/volume_breakout_momentum_strategy.py` |
 | `Scale.TICK` | `StockTickAPI` 逐筆成交（DolphinDB） | 僅台股 | 需 `[tick]` 相依與 DolphinDB；期貨 Tick 回測未實作，`TwFuturesDataFeed` 會回空報價 |
 
 在策略中設定回測級別：
@@ -313,7 +313,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 下單條件 = 張數 >= 1；sizing_price <= 0 者跳過
 ```
 
-**`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定 LONG 回歸 baseline（`MomentumStrategy1` 2024 全年，1,861 筆）的逐筆結果。
+**`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定 LONG 回歸 baseline（`VolumeBreakoutMomentumStrategy` 2024 全年，1,861 筆）的逐筆結果。
 
 這段公式原本在五支策略內各寫一遍，收斂時發現兩處已經漂移，一併定案（2026-08-09）：
 
@@ -362,12 +362,12 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
 ### 儲存位置
 
 回測結果儲存路徑：`results/<策略>/`，其中 `<策略>` 取的是
-**`strategy.strategy_name`**（例如 `Momentum-1`、`Momentum-Futures`、
+**`strategy.strategy_name`**（例如 `Volume-Breakout-Momentum`、`Momentum-Futures`、
 `Foreign-Selling-Reversal-Short`）。
 
-⚠️ **那不是類別名**。`--strategy` 吃的是類別名（`MomentumStrategy1`），
+⚠️ **那不是類別名**。`--strategy` 吃的是類別名（`VolumeBreakoutMomentumStrategy`），
 輸出目錄吃的是 `strategy_name`，**兩者可以不同**——跑
-`--strategy MomentumStrategy1` 會產出 `results/Momentum-1/`。
+`--strategy VolumeBreakoutMomentumStrategy` 會產出 `results/Volume-Breakout-Momentum/`。
 
 ## 績效指標
 
@@ -432,22 +432,22 @@ python -m apps.backtest --strategy <StrategyName>
 ### 使用範例
 
 ```bash
-# 執行回測，使用名為 "MomentumStrategy1" 的策略
-python -m apps.backtest --strategy MomentumStrategy1
+# 執行回測，使用名為 "VolumeBreakoutMomentumStrategy" 的策略
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 
 # 執行實盤（必須指定段落；目前只在模擬環境演練過）
-python -m apps.live --strategy MomentumStrategy1 --phase open
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
 ```
 
 ### 注意事項
 
-- `--strategy` 吃的是**類別名稱**（例如 `MomentumStrategy1`）
+- `--strategy` 吃的是**類別名稱**（例如 `VolumeBreakoutMomentumStrategy`）
 - `StrategyLoader.load()` 以 AST 索引只載入 `--strategy` 指定的類別；找不到時才全掃描
-  `core/strategies/{stock,futures}/` 列出可用策略並以結束碼 2 退出。新增商品類別子套件不需要改程式
-- 回測前請確認資料庫中有所需的資料（使用 `python -m tasks.update_db` 更新資料）
-- 回測結果會儲存在 `results/<策略>/` 目錄，其中 `<策略>` 是 **`strategy.strategy_name`**（例如 `Momentum-1`），**與 `--strategy` 吃的類別名不同**
+  `strategies/{stock,futures}/` 列出可用策略並以結束碼 2 退出。新增商品類別子套件不需要改程式
+- 回測前請確認資料庫中有所需的資料（使用 `python -m apps.update_db` 更新資料）
+- 回測結果會儲存在 `results/<策略>/` 目錄，其中 `<策略>` 是 **`strategy.strategy_name`**（例如 `Volume-Breakout-Momentum`），**與 `--strategy` 吃的類別名不同**
 
 ## 相關文檔
 
-- [策略開發指南](../strategies/README.md)
+- [策略開發指南](../../strategies/README.md)
 - [專案 README](../../README.md)

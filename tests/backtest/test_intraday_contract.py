@@ -5,8 +5,8 @@ import pytest
 from core.backtest.backtester import Backtester, IntradayScaleMismatchError
 from core.backtest.factory import build_backtester
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
 from core.utils import Scale
+from strategies.loader import StrategyLoader
 
 """
 盤中逐筆策略的契約守門
@@ -36,7 +36,9 @@ def skip_dataset_loading(monkeypatch: pytest.MonkeyPatch) -> None:
 def make_strategy(is_tick_triggered: bool, scale: str) -> BaseStrategy:
     """取一支真實策略再改旗標；不自造假策略，避免與真實基底漂移"""
 
-    strategy: BaseStrategy = StrategyLoader.load_strategies()["MomentumStrategy1"]()
+    strategy: BaseStrategy = StrategyLoader.load_strategies()[
+        "VolumeBreakoutMomentumStrategy"
+    ]()
     strategy.is_tick_triggered = is_tick_triggered
     strategy.scale = scale
     strategy.start_date = datetime.date(2024, 1, 2)
@@ -45,10 +47,17 @@ def make_strategy(is_tick_triggered: bool, scale: str) -> BaseStrategy:
 
 
 def test_default_strategy_is_not_intraday() -> None:
-    """**預設關閉**：既有策略一支都不該因為新增這個旗標而改變行為"""
+    """
+    **預設關閉**：只有明確宣告為盤中逐筆的策略才開
+
+    新增策略時忘了關、或既有策略被誤改成逐筆，這裡會多出一支而轉紅。
+    """
 
     registry = StrategyLoader.load_strategies()
-    assert all(cls().is_tick_triggered is False for cls in registry.values())
+    tick_triggered = {
+        name for name, cls in registry.items() if cls().is_tick_triggered is True
+    }
+    assert tick_triggered == {"IntradayMomentumStrategy"}
 
 
 def test_intraday_strategy_refuses_tick_backtest() -> None:

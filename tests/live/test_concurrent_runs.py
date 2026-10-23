@@ -205,7 +205,7 @@ def test_resume_also_clears_strategy_level_degradation(dao: LiveTradeDAO) -> Non
     """
     策略層的降級同樣要解除
 
-    2026-09-24 演練實測：`MomentumStrategy1` 因鉤子拋例外被降為 HALTED，
+    2026-09-24 演練實測：`VolumeBreakoutMomentumStrategy` 因鉤子拋例外被降為 HALTED，
     只解除帳戶層的話，那支策略下次啟動照樣不交易。
     """
 

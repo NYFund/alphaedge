@@ -198,6 +198,28 @@ class BaseStrategy(ABC):
                 引擎持有的資料源
         """
 
+    def get_live_symbols(self, latest_date: datetime.date) -> Optional[List[str]]:
+        """
+        - Description:
+            實盤啟動時決定要訂閱哪些標的；**預設 None，由實盤資料源補上預設標的池**
+
+            實盤資料源在 `setup_apis()` 之後呼叫，策略此時已拿得到歷史資料。
+            需要覆寫的是盤中逐筆策略：券商單一連線的逐筆訂閱有上限（Shioaji 為 200 檔），
+            沿用「前一交易日有行情的全部股票」會在訂閱時被拒，必須自己先篩到上限以內。
+            **回測不呼叫**——回測每天餵的是全市場，篩選只影響實盤要看哪些報價。
+
+            日期由資料源傳入而不讓策略自己取今天：實盤主機的時區不一定是台北，
+            `datetime.date.today()` 在美東主機的台北早上會是前一天。
+        - Parameters:
+            - latest_date: datetime.date
+                歷史資料最新的交易日（盤前即前一交易日）
+        - Return:
+            - Optional[List[str]]
+                要訂閱的標的；None 表示不篩選、沿用預設標的池
+        """
+
+        return None
+
     # === Alpha 層：策略只需要實作這些 ===
     def generate_open_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
         """

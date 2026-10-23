@@ -27,7 +27,7 @@
 ```
 
 **必須用 `-m`**：`scripts` 不在 `pyproject` 的 `packages.find` 裡
-（只裝 `core*`／`tasks*`／`tests*`），直接跑檔案路徑時 `sys.path[0]` 是腳本
+（只裝 `core*`／`apps*`／`strategies*`／`tests*`），直接跑檔案路徑時 `sys.path[0]` 是腳本
 自己的目錄，`import core.…` 會失敗。`-m` 會把工作目錄放進 `sys.path`。
 
 > 舊版靠每支腳本開頭的 `sys.path.insert` 硬塞，那會遮蔽「沒安裝就跑」的

@@ -436,7 +436,7 @@ class TwStockFillModel(BaseFillModel):
 
             **這條擋的是開倉**：`validate()` 只跑在開倉路徑上（拒掉平倉單會讓部位
             被迫留倉，那是更嚴重的失真）。開高低收都等於漲停價，代表整天沒有人
-            願意在漲停以下賣出，實務上排隊也買不到——而 `MomentumStrategy1` 的
+            願意在漲停以下賣出，實務上排隊也買不到——而 `VolumeBreakoutMomentumStrategy` 的
             訊號正是「當日漲幅 ≥ 9%、以收盤價買進」，這類標的大量是鎖漲停，
             照常成交會讓做多績效系統性偏樂觀，且沒有任何徵兆。
         - Parameters:

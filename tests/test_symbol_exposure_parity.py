@@ -104,7 +104,7 @@ def test_live_truncation_agrees_with_the_shared_formula() -> None:
             [ExposureItem(make_order(), amount)],
             existing_exposure=0.0,
             existing_symbol_exposure={},
-            init_capital=INIT_CAPITAL,
+            capital_limit=INIT_CAPITAL,
             config=config,
         )
         was_truncated: bool = bool(truncated)
@@ -130,7 +130,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
         existing_exposure=0.0,
         # 這一檔已經佔掉六成的額度，只剩四成，放不下這張半額度的單
         existing_symbol_exposure={"2330": cap * 0.6},
-        init_capital=INIT_CAPITAL,
+        capital_limit=INIT_CAPITAL,
         config=config,
     )
 
@@ -270,20 +270,12 @@ def _operand_name(node: ast.expr) -> str:
 
 
 # 允許出現「資金 × 單一標的比例」的位置。**每一處都要有理由**。
-# 2026-09-25 現查只有這兩處：
 # **權威實作不會被命中，那是刻意的**：`exceeds_symbol_exposure()` 是純函式，
 # 參數名就叫 `ratio`——它不知道自己在算哪一種比例，所以沒有 `symbol` 字樣。
 # 反過來說，任何把比例**具名成單一標的**再自己乘一次的地方，就是在重算這條公式。
-_ALLOWED_SYMBOL_EXPOSURE_SITES: Dict[str, int] = {
-    # **批次截斷這條路徑其實沒有呼叫權威實作，而是把同一條公式再算一次**
-    # （`symbol_cap = init_capital * symbol_ratio`）。它上方的註解宣稱
-    # 「公式與回測共用」，但程式是內嵌重算的——兩者之間沒有任何東西保證一致。
-    # 之所以還沒收掉：`exceeds_symbol_exposure()` 回的是 bool（單筆判定），
-    # 批次截斷要的是 cap（跟累計值比），改法要先決定介面。
-    # 收掉的做法是讓權威實作多一個「回 cap」的入口，兩邊都呼叫它；
-    # 那會動到實盤風控，故尚未施作。**這一筆例外不可再增加**
-    "core/live/risk/risk_manager.py": 1,
-}
+# 例外清單刻意留空：批次截斷曾經內嵌重算同一條公式，已改為呼叫
+# `order_rules.symbol_exposure_cap()`。**新增任何一筆之前，先改成呼叫權威實作**
+_ALLOWED_SYMBOL_EXPOSURE_SITES: Dict[str, int] = {}
 
 
 def test_the_detector_actually_matches_the_formula() -> None:

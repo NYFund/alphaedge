@@ -2,7 +2,7 @@ import argparse
 import datetime
 import sys
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
@@ -30,6 +30,7 @@ from core.live.datafeed.calendar import (
 )
 from core.live.notify.base import BaseNotifier, NotifyLevel
 from core.live.notify.factory import build_notifier
+from core.utils.constant.market import InstrumentType
 
 """
 存活監控：實盤最常見的失效是**該跑的沒跑、沒人發現**
@@ -53,14 +54,28 @@ from core.live.notify.factory import build_notifier
 
     .venv/bin/python -m scripts.live_watchdog
     .venv/bin/python -m scripts.live_watchdog --expect open=08:30 close=13:20
+    .venv/bin/python -m scripts.live_watchdog --expect close:stock=13:20 close:futures=13:28
+
+段落鍵可以帶市場（`段落:市場`）：股票與期貨是兩個行程、段落名相同，只看段落名的話
+股票尾盤的紀錄會把「期貨尾盤沒跑」遮住。不帶市場的鍵維持舊語意——該段落任一市場有跑就算。
 """
 
-# 預設的段落表：段落名 → 應該開始執行的時刻。
+# 段落鍵裡的市場字樣 → `live_run.instrument_type` 的值
+MARKET_TOKENS: Dict[str, str] = {
+    "stock": InstrumentType.STOCK.value,
+    "futures": InstrumentType.FUTURE.value,
+    "future": InstrumentType.FUTURE.value,
+}
+
+# 預設的段落表：段落鍵 → 應該開始執行的時刻。
 #
 # 與部署文件的排程對齊；**容忍延遲**是因為排程器本身就有秒級誤差，
-# 而且段落要先做完對帳才會寫紀錄
+# 而且段落要先做完對帳才會寫紀錄。
+# 預設不帶市場：只跑一條線的部署不該因為另一條線沒排而每天告警；
+# 兩條線都跑時由排程以 `--expect` 逐市場指定（見 scripts/launchd/watchdog_in_window.sh）
 DEFAULT_EXPECTED_PHASES: Dict[str, datetime.time] = {
     "open": datetime.time(8, 30),
+    "intraday": datetime.time(9, 6),
     "close": datetime.time(13, 20),
     "after_close": datetime.time(14, 30),
 }
@@ -70,6 +85,11 @@ GRACE_MINUTES: int = 15
 
 # 有開始紀錄但超過這麼久還沒有結束時間，就判定「跑到一半死掉」
 STALE_RUN_MINUTES: int = 90
+
+# 本來就要跑很久的段落另訂上限。盤中段落 09:06 開始、13:19 收線（約 253 分鐘）：
+# 沿用 90 分鐘的話，它每天 10:36 起都會被誤報成「跑到一半死掉」，
+# 然後這個監控就會被靜音
+PHASE_STALE_MINUTES: Dict[str, int] = {"intraday": 270}
 
 # 退出碼：0 正常、1 有異常（已推播）、2 連紀錄庫都開不了
 EXIT_OK: int = 0
@@ -86,6 +106,7 @@ class PhaseStatus:
     started_at: Optional[str]
     ended_at: Optional[str]
     problem: Optional[str]
+    market: Optional[str] = None  # `live_run.instrument_type` 的值；不分市場時為 None
 
     @property
     def is_healthy(self) -> bool:
@@ -103,8 +124,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--expect",
         nargs="*",
-        metavar="段落=HH:MM",
-        help="應執行的段落與時刻；未指定時用預設表",
+        metavar="段落[:市場]=HH:MM",
+        help=(
+            "應執行的段落與時刻；未指定時用預設表。"
+            "市場為 stock／futures，不帶市場時該段落任一市場有跑就算"
+        ),
     )
     parser.add_argument(
         "--db-path", default=str(TW_TRADING_DB_PATH), help="實盤紀錄庫路徑"
@@ -123,19 +147,48 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def split_phase_key(key: str) -> Tuple[str, Optional[str]]:
+    """
+    - Description:
+        把段落鍵拆成（段落名, 市場）
+
+        市場字樣只認 `MARKET_TOKENS` 裡的幾個：打錯字（`future s`、`stocks`）要當場拋出，
+        否則那個鍵永遠比不到任何紀錄、每天都告警，然後被靜音。
+    - Parameters:
+        - key: str
+            `段落` 或 `段落:市場`
+    - Return:
+        - Tuple[str, Optional[str]]
+            段落名與 `live_run.instrument_type` 的值；不帶市場時為 None
+    - Raise:
+        - ValueError
+            市場字樣不認得
+    """
+
+    phase, _, raw_market = key.partition(":")
+    market: str = raw_market.strip().lower()
+    if not market:
+        return phase.strip(), None
+    if market not in MARKET_TOKENS:
+        raise ValueError(
+            f"段落鍵的市場只能是 {sorted(MARKET_TOKENS)}，收到 {raw_market!r}"
+        )
+    return phase.strip(), MARKET_TOKENS[market]
+
+
 def parse_expected(values: Optional[Sequence[str]]) -> Dict[str, datetime.time]:
     """
     - Description:
-        解析 `段落=HH:MM` 格式的段落表
+        解析 `段落[:市場]=HH:MM` 格式的段落表
     - Parameters:
         - values: Optional[Sequence[str]]
             命令列傳入的段落表；None 或空時回預設表
     - Return:
         - Dict[str, datetime.time]
-            段落 → 應執行時刻
+            段落鍵（`段落` 或 `段落:市場`，市場字樣轉小寫）→ 應執行時刻
     - Raise:
         - ValueError
-            格式錯誤
+            格式錯誤或市場字樣不認得
     """
 
     if not values:
@@ -144,11 +197,32 @@ def parse_expected(values: Optional[Sequence[str]]) -> Dict[str, datetime.time]:
     expected: Dict[str, datetime.time] = {}
     for value in values:
         if "=" not in value:
-            raise ValueError(f"段落表格式應為 `段落=HH:MM`，收到 {value!r}")
-        phase, raw_time = value.split("=", 1)
+            raise ValueError(f"段落表格式應為 `段落[:市場]=HH:MM`，收到 {value!r}")
+        raw_key, raw_time = value.split("=", 1)
+        phase, _, raw_market = raw_key.partition(":")
+        split_phase_key(raw_key)  # 只為了驗證市場字樣
+        key: str = phase.strip()
+        if raw_market.strip():
+            key = f"{key}:{raw_market.strip().lower()}"
         hour, minute = raw_time.split(":")
-        expected[phase.strip()] = datetime.time(int(hour), int(minute))
+        expected[key] = datetime.time(int(hour), int(minute))
     return expected
+
+
+def _row_matches(row: Tuple[Any, ...], phase: str, market: Optional[str]) -> bool:
+    """
+    這筆 `live_run` 紀錄是不是指定段落（與市場）的
+
+    紀錄沒有市場（欄位後加之前的舊紀錄，或 4 欄的舊形狀）時視為任一市場都算：
+    舊紀錄補不出內容，拿它們告警只會製造假警報。
+    """
+
+    if str(row[0] or "") != phase:
+        return False
+    if market is None:
+        return True
+    recorded: Optional[str] = row[4] if len(row) > 4 else None
+    return recorded is None or str(recorded) == market
 
 
 def check_phases(
@@ -163,11 +237,15 @@ def check_phases(
 
         **只檢查「應該已經開始」的段落**：還沒到時間的段落沒有紀錄是正常的，
         對它告警會讓人在每天早上收到三則假警報，然後學會忽略這個監控。
+
+        **段落鍵帶市場時只認該市場的紀錄**：股票與期貨是兩個行程、段落名相同，
+        只看段落名會讓股票尾盤的紀錄遮住「期貨尾盤沒跑」。
     - Parameters:
         - rows: Sequence[Tuple[Any, ...]]
-            `live_run` 的當日紀錄 `(phase, started_at, ended_at, end_reason)`
+            `live_run` 的當日紀錄 `(phase, started_at, ended_at, end_reason, instrument_type)`；
+            第五欄可省略（舊形狀），視為不分市場
         - expected: Dict[str, datetime.time]
-            應執行的段落表
+            應執行的段落表，鍵為 `段落` 或 `段落:市場`
         - now: datetime.datetime
             目前時刻
         - grace_minutes: int
@@ -177,14 +255,9 @@ def check_phases(
             逐段落的檢查結果
     """
 
-    by_phase: Dict[str, Tuple[Any, ...]] = {}
-    for row in rows:
-        phase: str = str(row[0] or "")
-        # 同一段落若有多筆，取最後一筆——重跑過的那次才是最終狀態
-        by_phase[phase] = row
-
     results: List[PhaseStatus] = []
-    for phase, expected_at in sorted(expected.items(), key=lambda item: item[1]):
+    for key, expected_at in sorted(expected.items(), key=lambda item: item[1]):
+        phase, market = split_phase_key(key)
         # 截止時刻沿用 `now` 的時區：`now_live()` 是 aware，不帶時區地組出來的
         # naive 時刻一比就拋 TypeError，watchdog 會在第一個段落到期時自己崩潰
         deadline: datetime.datetime = datetime.datetime.combine(
@@ -193,7 +266,12 @@ def check_phases(
         if now < deadline:
             continue
 
-        row = by_phase.get(phase)
+        # 同一段落若有多筆，取最後一筆——重跑過的那次才是最終狀態
+        row: Optional[Tuple[Any, ...]] = None
+        for candidate in rows:
+            if _row_matches(candidate, phase, market):
+                row = candidate
+
         if row is None:
             results.append(
                 PhaseStatus(
@@ -201,7 +279,8 @@ def check_phases(
                     expected_at,
                     None,
                     None,
-                    f"{phase} 應於 {expected_at} 執行，但 live_run 沒有任何紀錄",
+                    f"{key} 應於 {expected_at} 執行，但 live_run 沒有任何紀錄",
+                    market,
                 )
             )
             continue
@@ -212,15 +291,17 @@ def check_phases(
 
         if not ended_at:
             elapsed: float = _minutes_since(started_at, now)
-            if elapsed > STALE_RUN_MINUTES:
+            if elapsed > PHASE_STALE_MINUTES.get(phase, STALE_RUN_MINUTES):
                 problem = (
-                    f"{phase} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
+                    f"{key} 於 {started_at} 開始，已經 {elapsed:.0f} 分鐘沒有結束紀錄"
                     "（跑到一半死掉，或卡在等待回報）"
                 )
         elif row[3] and str(row[3]) != LiveTradeDAO.END_REASON_NORMAL:
-            problem = f"{phase} 以非正常原因結束：{row[3]}"
+            problem = f"{key} 以非正常原因結束：{row[3]}"
 
-        results.append(PhaseStatus(phase, expected_at, started_at, ended_at, problem))
+        results.append(
+            PhaseStatus(phase, expected_at, started_at, ended_at, problem, market)
+        )
 
     return results
 
@@ -300,6 +381,10 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
 
         以 `substr(started_at, 1, 10)` 取日期而不是 SQLite 的 `date()`：
         後者會把帶時區的時間換算成 UTC，台北早上 08:00 以前開始的段落會被算到前一天。
+
+        **`instrument_type` 欄不存在時讀成 NULL**：這欄由實盤行程啟動時補上，唯讀的
+        watchdog 補不了。新版部署後到下一個段落啟動前，直接選這欄會讓每一輪都報
+        「讀不到紀錄庫」——假警報之外，那段時間也完全沒在檢查段落。
     - Parameters:
         - db_path: str
             紀錄庫路徑
@@ -307,7 +392,7 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
             交易日
     - Return:
         - List[Tuple[Any, ...]]
-            `(phase, started_at, ended_at, end_reason)`
+            `(phase, started_at, ended_at, end_reason, instrument_type)`
     - Raise:
         - DBError
             開不了紀錄庫（由呼叫端轉成 CRITICAL 推播）
@@ -315,8 +400,16 @@ def fetch_runs(db_path: str, today: datetime.date) -> List[Tuple[Any, ...]]:
 
     connection = connect_live_trading(db_path, read_only=True)
     try:
+        columns: Set[str] = {
+            row[1] for row in connection.execute("PRAGMA table_info(live_run)")
+        }
+        instrument_column: str = (
+            "instrument_type" if "instrument_type" in columns else "NULL"
+        )
         return connection.execute(
-            "SELECT phase, started_at, ended_at, end_reason FROM live_run "
+            "SELECT phase, started_at, ended_at, end_reason, "
+            f"{instrument_column} AS instrument_type "
+            "FROM live_run "
             "WHERE substr(started_at, 1, 10) = ? ORDER BY started_at, rowid",
             (today.isoformat(),),
         ).fetchall()

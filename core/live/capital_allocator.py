@@ -47,13 +47,14 @@ class CapitalAllocator:
             建立分配器
         - Parameters:
             - quotas: Dict[str, float]
-                各策略的額度上限（`init_capital`）
+                各策略的額度上限（`live_capital`；未宣告時為 `init_capital`）
             - dao: Optional[LiveTradeDAO]
                 紀錄庫；額度不足的拒單寫進 `live_risk_event`
             - run_id: str
                 本次啟動的識別碼
             - safety_ratio: float
-                安全係數
+                安全係數：Σ 各策略額度不得超過帳戶總權益 × 它。帳戶總曝險上限
+                也是由它間接保證，空隙見 `CAPITAL_SAFETY_RATIO` 的註解
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
         """

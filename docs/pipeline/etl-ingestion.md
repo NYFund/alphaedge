@@ -3,7 +3,7 @@
 > 本文件描述 `core/pipeline/` **入庫階段**的現行約定：分批時機、冪等性、失敗語意與結束碼。
 >
 > **各項設計的理由寫在程式碼的 docstring**（`core.dao.base.insert_or_ignore()` / `BaseDAO.savepoint()`、
-> `BaseDataLoader.finish_load()` / `select_csv_files()` / `check_symbol_name_uniqueness()`、`DataLoadError`、`tasks.update_db.target_guard()`、
+> `BaseDataLoader.finish_load()` / `select_csv_files()` / `check_symbol_name_uniqueness()`、`DataLoadError`、`apps.update_db.target_guard()`、
 > `core/pipeline/shared/date_planner.py`）。本文件只放**跨檔案的全貌**與新增 updater 時的檢查表。
 >
 > 連線、交易與 SQL 一律在 `core/dao/`，loader／updater 不寫 SQL；連線所有權與 commit 時點的全貌見
@@ -177,7 +177,7 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 ### 3.2 失敗必須浮出來
 
 單檔失敗**不中止整批**（其餘檔案仍該入庫），但整批跑完後若有任何失敗，
-`finish_load()` 會拋出 `DataLoadError`，最終讓 `tasks/update_db.py` 以**結束碼 1** 結束
+`finish_load()` 會拋出 `DataLoadError`，最終讓 `apps/update_db.py` 以**結束碼 1** 結束
 且不印 `✅`。`except` 之後只留 warning、行程照樣回報成功，比不 catch 更危險——
 缺的列只能靠事後逐日比對列數才發現。
 
@@ -332,7 +332,7 @@ crawler 回 `CrawlResult` 三態（`FuturesPriceCrawler.crawl_futures_price()`�
 6. **跨期間的來源要逐期間實查，測試 fixture 要涵蓋每一種期間。** MOPS 權益變動表的本期標籤 Q1 是「第N季」、Q2／Q3／Q4 分別是「上半年度／前3季／年度」；只用 Q1 驗證時，測試與實跑會同時漏掉另外三季。
 7. **把暫時性失敗記成 `FAILED`，不要記成「沒有資料」。** 連線失敗、被擋、版面解析不出來都要讓那一天或那一年下次重試；記成 `NO_DATA` 會讓它永遠不再被補。
 8. **多個來源拼成一份的資料，任一來源沒有完整取得就整份不入庫**（§3.5）。只入庫問到的那一邊不會有任何錯誤；同理，resume 不可用 `MAX + 1`，否則失敗的那一期被後面成功的期間越過之後永遠不會再被請求。
-9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 提供 `close()` 並在 `tasks/update_db.py` 以 `try/finally` 呼叫**（§3.1.1）。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
+9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 提供 `close()` 並在 `apps/update_db.py` 以 `try/finally` 呼叫**（§3.1.1）。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
 
 ## 相關文件
 

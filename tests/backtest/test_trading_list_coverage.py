@@ -178,7 +178,7 @@ def test_backtest_entry_reports_coverage_errors(
 
     monkeypatch.setattr(backtest_entry, "build_backtester", refuse)
 
-    code: int = backtest_entry.main(["--strategy", "MomentumStrategy1"])
+    code: int = backtest_entry.main(["--strategy", "VolumeBreakoutMomentumStrategy"])
 
     assert code == 1
     assert "名單缺 3 個交易日" in capsys.readouterr().err

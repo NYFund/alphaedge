@@ -16,9 +16,9 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 **刪除不可逆**：打錯一個日期就少掉一整天、上千檔的收盤行情，要重跑 ETL 才補得回來。
 故預設**只預覽不刪除**，`--apply` 才會寫入，且互動環境下還要再輸入一次日期確認。
 
-    python -m tasks.delete_price_data --date 2025-07-13                # 只報告
-    python -m tasks.delete_price_data --date 2025-07-13 --apply        # 互動確認後刪除
-    python -m tasks.delete_price_data --date 2025-07-13 --apply --yes  # 不確認（排程用）
+    python -m apps.delete_price_data --date 2025-07-13                # 只報告
+    python -m apps.delete_price_data --date 2025-07-13 --apply        # 互動確認後刪除
+    python -m apps.delete_price_data --date 2025-07-13 --apply --yes  # 不確認（排程用）
 """
 
 

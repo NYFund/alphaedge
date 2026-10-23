@@ -28,6 +28,7 @@ from core.models import (
     PendingAction,
     StockAccount,
     StockOrder,
+    StockPosition,
     StockQuote,
 )
 from core.position.stock.position_manager import StockPositionManager
@@ -200,7 +201,12 @@ class Harness:
         latest_data_date: Optional[datetime.date] = None,
         quota: Optional[float] = None,
         price_limits: Tuple[Optional[float], Optional[float]] = (110.0, 90.0),
+        live_capital: Optional[float] = None,
+        risk_config: Optional[RiskConfig] = None,
     ) -> None:
+        # 實盤額度：與組裝層一致，帳戶與額度分配用同一個值（未指定時等於研究本金）
+        capital: float = live_capital if live_capital is not None else CAPITAL
+
         self.dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
         self.dao.ensure_tables()
 
@@ -220,7 +226,7 @@ class Harness:
         )
         self.risk: PreTradeRiskManager = PreTradeRiskManager(
             self.mode_state,
-            RiskConfig(),
+            risk_config or RiskConfig(),
             self.dao,
             "run1",
             kill_switch_path=_MissingPath(),
@@ -228,7 +234,7 @@ class Harness:
         )
         self.allocator: CapitalAllocator = CapitalAllocator(
             {
-                type(s).__name__: quota if quota is not None else CAPITAL
+                type(s).__name__: quota if quota is not None else capital
                 for s in strategies
             },
             self.dao,
@@ -242,7 +248,7 @@ class Harness:
         managers: Dict[str, StockPositionManager] = {}
         self.contexts: List[StrategyContext] = []
         for strategy in strategies:
-            account: StockAccount = StockAccount(init_capital=CAPITAL)
+            account: StockAccount = StockAccount(init_capital=capital)
             manager: StockPositionManager = StockPositionManager(account)
             managers[type(strategy).__name__] = manager
             self.contexts.append(
@@ -550,6 +556,48 @@ def test_risk_rejection_releases_the_reservation() -> None:
     assert harness.allocator.reserved["Alpha"] == 0.0
 
 
+@pytest.mark.parametrize(
+    "risk_config",
+    [
+        # 只有批次曝險（單一標的 25%）擋得住，逐筆單筆上限 40% 放行
+        RiskConfig(single_order_amount_ratio=0.40, single_symbol_exposure_ratio=0.25),
+        # 只有逐筆單筆上限（25%）擋得住，批次的單一標的上限 40% 放行
+        RiskConfig(single_order_amount_ratio=0.25, single_symbol_exposure_ratio=0.40),
+    ],
+    ids=["batch_exposure", "single_order"],
+)
+@pytest.mark.parametrize(
+    ("live_capital", "placed"),
+    [
+        # 30 萬的單：以實盤額度 100 萬計是 30%，兩組設定都恰好只有一道擋得住
+        (1_000_000.0, 0),
+        # 對照組：實盤額度等於研究本金 1,000 萬時只佔 3%，照常送出
+        (None, 1),
+    ],
+)
+def test_risk_limits_use_live_capital(
+    risk_config: RiskConfig, live_capital: Optional[float], placed: int
+) -> None:
+    """
+    批次曝險與逐筆檢查都以實盤額度為基準，不是研究回測的 `init_capital`
+
+    策略宣告較小的 `live_capital` 時，若仍拿 `init_capital` 當基準，
+    每道上限都會照較大的本金放寬（曾經寬了 2.5 倍）。兩組設定各讓一道上限
+    單獨負責擋單，任一處退回舊基準都會讓那一組的單送出去。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order(volume=3)])
+
+    harness: Harness = Harness(
+        [Alpha()], live_capital=live_capital, risk_config=risk_config
+    )
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == placed
+
+
 def test_kill_switch_blocks_the_whole_segment() -> None:
     """kill switch 生效時一張單都不送，並把帳戶層降到 HALTED"""
 
@@ -618,18 +666,47 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     slept: List[float] = []
     harness.trader._now = lambda: NOW  # 時鐘卡死
     harness.trader._sleep = slept.append
-    harness.trader.MAX_WAIT_SECONDS = 5.0
+    harness.trader.WAIT_GRACE_SECONDS = 5.0
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
-    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：
-    # 收線前的等待 ＋ 收線後收撤單回報的固定秒數，兩段都不看時鐘
+    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：上限是開始等待時
+    # 離收線還有多久（13:26 → 13:35）加寬限；收線後收撤單回報的固定秒數另計，
+    # 兩段都不看時鐘
+    remaining: float = (
+        datetime.datetime.combine(TODAY, window.drain_end) - NOW
+    ).total_seconds()
     assert slept
     assert sum(slept) <= (
-        harness.trader.MAX_WAIT_SECONDS
+        remaining
+        + harness.trader.WAIT_GRACE_SECONDS
         + LiveTrader.CANCEL_REPORT_SECONDS
         + 2 * LiveTrader.POLL_INTERVAL_SECONDS
     )
+
+
+def test_long_window_does_not_hit_the_wait_cap() -> None:
+    """
+    時鐘正常前進時，比固定秒數長的時窗也要等到收線
+
+    股票開盤段 08:30～09:05 共 35 分鐘；保險絲曾寫死 1800 秒，
+    每天在 09:03 左右撞到上限、提早收線並記「請確認系統時鐘」的假警報。
+    """
+
+    class Alpha(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 26),
+        submit_end=datetime.time(13, 27),
+        drain_end=datetime.time(14, 1),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.clock[0].time() >= window.drain_end
 
 
 def test_auction_orders_stay_open_until_the_drain_end() -> None:
@@ -1429,3 +1506,89 @@ def test_failed_finish_record_does_not_mask_the_real_error() -> None:
 
     with pytest.raises(ConnectionError):
         harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+
+def test_held_symbols_outside_the_universe_still_get_quotes() -> None:
+    """
+    帳上持有、卻不在標的池的標的照樣拿報價
+
+    盤中策略每天重新篩選標的池（受逐筆訂閱上限），昨天買的那一檔今天掉出池外的話，
+    平倉鉤子永遠看不到它，部位就一直留在帳上而沒有任何錯誤。
+    """
+
+    harness: Harness = Harness([ScriptedStrategy("Alpha")])
+    context: StrategyContext = harness.contexts[0]
+    context.account.positions.append(
+        StockPosition(
+            id=1,
+            stock_id="2317",
+            position_type=PositionType.LONG,
+            date=NOW.date(),
+            price=100.0,
+            volume=1,
+        )
+    )
+    requested: List[List[str]] = []
+
+    def recording(timing: ExecutionTiming, symbols: Sequence[str]) -> List[BaseQuote]:
+        requested.append(list(symbols))
+        return []
+
+    context.data_feed.get_live_quotes = recording  # type: ignore
+
+    harness.trader.collect_orders(context, ExecutionTiming.AT_CLOSE)
+
+    assert requested == [["2330", "2317"]]
+
+
+def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
+    """
+    盤中逐筆：池外持有標的的報價也要餵給策略
+
+    只訂閱、不派送的話，報價到了卻在派送那一層被「不在標的池」擋掉，
+    停損鉤子一樣看不到它。
+    """
+
+    received: List[str] = []
+
+    class Watcher(ScriptedStrategy):
+        def __init__(self) -> None:
+            super().__init__("Alpha")
+            self.is_tick_triggered = True
+            self.live_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
+                LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
+            }
+
+        def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+            received.extend(quote.symbol for quote in quotes)
+            return []
+
+    harness: Harness = Harness([Watcher()])
+    harness.trader.prepare()
+    harness.contexts[0].account.positions.append(
+        StockPosition(
+            id=1,
+            stock_id="2317",
+            position_type=PositionType.LONG,
+            date=NOW.date(),
+            price=100.0,
+            volume=1,
+        )
+    )
+
+    harness.trader._on_intraday_quote(
+        StockQuote(
+            stock_id="2317",
+            scale=Scale.TICK,
+            date=NOW,
+            cur_price=100.0,
+            volume=1,
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+        )
+    )
+
+    assert received == ["2317"]

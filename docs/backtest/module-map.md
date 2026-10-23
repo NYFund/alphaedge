@@ -11,7 +11,7 @@
 相依**單向由上往下**，同層之間不互相 import。違反時 `scripts/check_layer_deps.py` 會以非零狀態碼結束（CI 有跑）。
 
 ```
-入口層      apps/backtest.py ── apps/live.py ── tasks/update_db.py
+入口層      apps/backtest.py ── apps/live.py ── apps/update_db.py
               │
 策略層      core/strategies/、strategies/  ← 宣告 market，是 factory 的分派鍵
             （Alpha：generate_*_signals() → List[Signal]）
@@ -37,9 +37,8 @@
 共用層      core/utils/（enum、路徑、時間、日誌、StockUtils）
 ```
 
-**頂層 `strategies/` 套件**是具體策略日後的落點（相依只能 `strategies` → `core`，`core/` 反向 import 會被
-`check_layer_deps.py` 擋下）；目前只有空的 `stock/`、`futures/` 門面，`StrategyLoader` 也還只掃描
-`core/strategies/`，具體策略仍放在 `core/strategies/{stock,futures}/`。
+**頂層 `strategies/` 套件**放具體策略與策略載入器（相依只能 `strategies` → `core`，`core/` 反向 import 會被
+`check_layer_deps.py` 擋下）；`core/strategies/` 只留契約（抽象基底與門面），具體策略放回去也會被同一支檢查擋下。
 
 **引擎不認識任何市場**：`grep "Stock" core/backtest/backtester.py` 為 0。市場語意全部在 `factory.py` 組裝時注入。
 
@@ -47,7 +46,7 @@
 
 | 層 | 檔案 | 回答什麼 | 不回答什麼 |
 |----|------|----------|-----------|
-| Alpha | `core/strategies/` | 買哪些、什麼方向、什麼價 | 各買幾張 |
+| Alpha | `strategies/`（契約在 `core/strategies/`） | 買哪些、什麼方向、什麼價 | 各買幾張 |
 | Portfolio | `core/portfolio/construction.py` | 開倉各買幾張／幾口 | 選哪些標的 |
 | Portfolio | `core/portfolio/sizing.py` | 資金怎麼切（可替換） | 用哪個參考價 |
 
@@ -129,7 +128,7 @@ sequenceDiagram
 |------|------|----------|
 | `apps/backtest.py` | CLI 解析（`--strategy`、`--start`／`--end`／`--capital`、`--show/--no-show`）、載入策略、建引擎、`run()`；實盤是另一個入口 `apps/live.py` | 使用者 |
 | `apps/_common.py` | 兩個入口共用的策略名解析：只載入指定策略，找不到時才全掃描列出可用策略並以退出碼 2 結束 | `apps/backtest.py`、`apps/live.py` |
-| `core/strategies/strategy_loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描 `core/strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
+| `strategies/loader.py` | `load(names)` 以 AST 找出類別所在模組、**只 import 指定策略**；`load_strategies()` 掃描頂層 `strategies/` 下**所有商品類別子套件**。類別名即策略識別名 | `apps/_common.py` |
 | `core/backtest/overrides.py` | `BacktestOverrides`：命令列的回測區間與初始資金覆寫，在組裝任何元件之前套用到策略 | `apps/backtest.py`、實盤 parity |
 | `core/backtest/factory.py` | 依 `(strategy.market, strategy.instrument_type)` 組裝 model 組合；`build_cost_config()` 依策略宣告推導成本設定 | `apps/backtest.py`、`core/live/factory.py`、測試 |
 
@@ -258,8 +257,8 @@ sequenceDiagram
    `tests/test_strategy_data_access.py` 會在策略層出現欄位字面值時失敗——這類錯誤是**靜默**的（換資料源後策略會安靜地不開倉，報表上只表現為訊號變少）。
 4. **`core/utils/instrument.py` 只 import `core/utils/constant/`。** `StockUtils` 已不再相依 `MarketCalendar`，因此任何層都能引用它；不要再讓它 import `core/market/` 或 `core/api/`——`MarketCalendar` 相依 `StockPriceAPI`，`core/api/` 一旦反過來用 `StockUtils` 就會循環。
 5. **回歸雙線不經過 reporter。** `tests/backtest/make_baseline.py` 直接從 `account.trade_records` 組 `DataFrame`，改壞報表欄位兩條線都一樣綠——動 `reporter.py` 時要靠 `test_reporting.py` 與 `test_reporter_timeline.py`。
-6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`tasks/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
-7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`tasks/`、`scripts/`、`tests/` 不受限。
+6. **只有 `core/dao/` 可以 `import sqlite3`。** `core/`、`apps/`、`strategies/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
+7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`apps/`、`scripts/`、`tests/` 不受限。
 8. **回測以外不可 import 回測內部零件**（`core/backtest/models`／`datafeed`／`report`）。實盤與策略要用的市場規則已在 `core/market/`、設定類別在 `core/models/`；由 `check_layer_deps.py` 的 E''''' 項強制，`tests/` 不受限。
 9. **reporter 共用 `DataFeed` 的連線。** `Backtester` 把 `StockPriceAPI` 傳給 reporter 取 benchmark，reporter 的 `close()` 只關自己開的連線（`owns_conn` 語意）。
 10. **任何動到 `core/backtest/`、`core/position/`、`core/models/` 的改動，先跑 `./scripts/run_regression.sh`。**
@@ -302,5 +301,5 @@ sequenceDiagram
 
 - [多市場回測引擎架構](multi-market-engine.md)——設計決策與已知簡化
 - [放空回測框架規格](short-selling-framework.md)——方向驅動的記帳原則
-- [策略開發指南](../../core/strategies/README.md)——策略怎麼寫
+- [策略開發指南](../../strategies/README.md)——策略怎麼寫
 - [資料存取層（DAO）](../dev/data-access-layer.md)——連線所有權、交易與錯誤語意

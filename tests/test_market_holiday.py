@@ -309,7 +309,7 @@ def test_updater_keeps_going_after_a_failed_year_then_reports_it(
 def test_update_db_target_is_in_the_default_set() -> None:
     """`market_holiday` 一年三次請求，放進預設的 `no_tick`：實盤每天盤前都要用"""
 
-    from tasks.update_db import expand_targets
+    from apps.update_db import expand_targets
 
     assert "market_holiday" in expand_targets({"no_tick"})
     assert "market_holiday" in expand_targets({"all"})

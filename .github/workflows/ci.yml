@@ -100,7 +100,7 @@ jobs:
       # 覆蓋率只建立基線、不設門檻（覆蓋率偏低時設門檻只會鼓勵寫無效測試），
       # 而 `--cov` 本身不會讓指令失敗，故不需要 `continue-on-error`——
       # 分成兩步時那個旗標反而讓「測試紅了」與「覆蓋率收集失敗」看起來一樣
-      # `--cov=core --cov=strategies` 刻意不含入口層（`apps/`、`tasks/`），理由同
+      # `--cov=core --cov=strategies` 刻意不含入口層（`apps/`），理由同
       # `pyproject.toml` 的 `[tool.coverage.run]`
       - name: 測試與覆蓋率（略過需要資料庫與外部 API 的項目）
         run: >-

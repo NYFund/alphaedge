@@ -16,7 +16,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 """
 
 
-# 策略原始碼所在：`core/strategies/`（契約與尚未搬出的具體策略）與頂層 `strategies/`（具體策略）
+# 策略原始碼所在：`core/strategies/`（只剩契約基底；仍掃描是為了擋下具體策略被放回框架層）與頂層 `strategies/`（具體策略）
 STRATEGY_DIRS: Tuple[Path, ...] = (
     _PROJECT_ROOT / "core" / "strategies",
     _PROJECT_ROOT / "strategies",
@@ -56,7 +56,7 @@ def test_every_loaded_strategy_is_scanned() -> None:
 
     import inspect
 
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     scanned: Set[Path] = set(strategy_source_files())
     loaded: List[Path] = [
@@ -124,7 +124,7 @@ def test_no_self_built_data_access_in_strategies(
     - Description:
         策略層不得自建資料連線或 API 物件
 
-        「策略不得自行建立 API／連線」原本**只寫在 `core/strategies/README.md`**，
+        「策略不得自行建立 API／連線」原本**只寫在 `strategies/README.md`**，
         沒有任何測試釘住它。目前 grep 無違規，所以這條是**預防性**護欄——
         下一支策略寫 `StockPriceAPI()` 時不會有任何東西變紅，而症狀是
         一次回測多開好幾條互不相干的連線，不會報錯、只會慢慢累積。
@@ -192,10 +192,12 @@ def test_momentum_strategy_rejects_tick_scale() -> None:
 
     import pytest
 
-    from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
     from core.utils import Scale
+    from strategies.stock.volume_breakout_momentum_strategy import (
+        VolumeBreakoutMomentumStrategy,
+    )
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.scale = Scale.TICK
 
     class _Feed:
@@ -242,12 +244,12 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
 
     import importlib
 
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     original = importlib.import_module
 
     def explode_on_one(name: str, *args, **kwargs):
-        if name.endswith("momentum_strategy_1"):
+        if name.endswith("volume_breakout_momentum_strategy"):
             raise ImportError("boom")
         return original(name, *args, **kwargs)
 
@@ -255,7 +257,7 @@ def test_strategy_loader_isolates_a_broken_module(monkeypatch) -> None:
 
     strategies = StrategyLoader.load_strategies()
 
-    assert "MomentumStrategy1" not in strategies
+    assert "VolumeBreakoutMomentumStrategy" not in strategies
     assert "ForeignSellingReversalShortStrategy" in strategies, "其餘策略仍要載得到"
 
 
@@ -271,7 +273,7 @@ def test_strategy_loader_rejects_duplicate_class_names() -> None:
     import pytest
 
     from core.strategies.base import BaseStrategy
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
     def make_module(module_name: str):
         module = types.ModuleType(module_name)
@@ -317,11 +319,13 @@ def test_momentum_skips_stocks_without_a_valid_previous_close() -> None:
     import pandas as pd
 
     from core.models import StockQuote
-    from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
     from core.utils import Scale
+    from strategies.stock.volume_breakout_momentum_strategy import (
+        VolumeBreakoutMomentumStrategy,
+    )
 
     date: datetime.date = datetime.date(2024, 6, 6)
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.max_holdings = 10
     strategy.trading_days = [datetime.date(2024, 6, 5), date]
 

@@ -33,7 +33,7 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 def make_order(
     client_order_id: str = "run1-0001",
-    strategy_name: str = "MomentumStrategy1",
+    strategy_name: str = "VolumeBreakoutMomentumStrategy",
     status: str = "PENDING_SUBMIT",
     broker_seqno: Optional[str] = None,
     custom_field: str = "1-0001",
@@ -61,7 +61,7 @@ def make_fill(
         "broker_seqno": broker_seqno,
         "broker_trade_id": broker_trade_id,
         "client_order_id": "run1-0001",
-        "strategy_name": "MomentumStrategy1",
+        "strategy_name": "VolumeBreakoutMomentumStrategy",
         "symbol": "2330",
         "action": "Buy",
         "price": 1000.0,
@@ -75,7 +75,7 @@ def make_fill(
 
 def make_lot(
     lot_id: str = "L1",
-    strategy_name: str = "MomentumStrategy1",
+    strategy_name: str = "VolumeBreakoutMomentumStrategy",
     symbol: str = "2330",
     volume: int = 2,
     open_date: datetime.date = TODAY,
@@ -249,7 +249,7 @@ def test_lookup_by_custom_field(dao: LiveTradeDAO) -> None:
     found: Optional[Dict[str, Any]] = dao.find_order_by_custom_field("1-0001")
 
     assert found is not None
-    assert found["strategy_name"] == "MomentumStrategy1"
+    assert found["strategy_name"] == "VolumeBreakoutMomentumStrategy"
     assert dao.find_order_by_custom_field("9-9999") is None
 
 
@@ -473,7 +473,7 @@ def test_strategy_mode_is_persisted_per_strategy(dao: LiveTradeDAO) -> None:
 
     dao.upsert_strategy_mode(
         {
-            "strategy_name": "MomentumStrategy1",
+            "strategy_name": "VolumeBreakoutMomentumStrategy",
             "mode": "REDUCE_ONLY",
             "reason": "當日虧損上限",
             "run_id": "run1",
@@ -491,7 +491,7 @@ def test_strategy_mode_is_persisted_per_strategy(dao: LiveTradeDAO) -> None:
 
     modes: Dict[str, str] = dao.get_strategy_modes()
 
-    assert modes["MomentumStrategy1"] == "REDUCE_ONLY"
+    assert modes["VolumeBreakoutMomentumStrategy"] == "REDUCE_ONLY"
     assert modes["MomentumFuturesStrategy"] == "NORMAL"
 
 
@@ -551,7 +551,7 @@ def make_action(
 ) -> Dict[str, Any]:
     return {
         "action_id": action_id,
-        "strategy_name": "MomentumStrategy1",
+        "strategy_name": "VolumeBreakoutMomentumStrategy",
         "symbol": "2330",
         "action": "Sell",
         "position_type": "LONG",
@@ -615,7 +615,7 @@ def test_risk_event_carries_severity(dao: LiveTradeDAO) -> None:
     dao.insert_risk_event(
         {
             "run_id": "run1",
-            "strategy_name": "MomentumStrategy1",
+            "strategy_name": "VolumeBreakoutMomentumStrategy",
             "severity": "CRITICAL",
             "category": "RECONCILE_MISMATCH",
             "message": "本地與券商部位不一致",

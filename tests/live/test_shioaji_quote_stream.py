@@ -227,7 +227,7 @@ def test_futures_quote_keeps_settlement_fields_none(limiter: RateLimiter) -> Non
     """
 
     quote: FuturesQuote = make_stream(FakeApi(), limiter).from_futures_snapshot(
-        FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TXF202601")
+        FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TX202601")
     )
 
     assert quote.settlement_price is None
@@ -242,10 +242,10 @@ def test_futures_expiry_comes_from_symbol_not_code(limiter: RateLimiter) -> None
     """
 
     quote: FuturesQuote = make_stream(FakeApi(), limiter).from_futures_snapshot(
-        FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TXF202601")
+        FakeSnapshot(code="TXFA6"), FakeContract(code="TXFA6", symbol="TX202601")
     )
 
-    assert (quote.product, quote.expiry) == ("TXF", "202601")
+    assert (quote.product, quote.expiry) == ("TX", "202601")
 
 
 @pytest.mark.parametrize(
@@ -293,18 +293,16 @@ def test_stock_futures_multiplier_comes_from_the_contract() -> None:
     assert ShioajiQuoteStream.resolve_multiplier("CDF", FakeContract(unit=100)) == 100
 
 
-def test_unknown_multiplier_is_zero_not_a_guess() -> None:
+def test_unknown_multiplier_raises_instead_of_zero() -> None:
     """
-    取不到乘數時回 0 並 warning，不猜
+    取不到乘數時拋 `KeyError`，不回 0、不猜
 
-    **這條只是釘住現行行為，不是主張它是對的**：回測那一側同名的
-    `FuturesQuoteAdapter.resolve_multiplier()` 直接 `KeyError`，而
-    `FuturesPositionManager.get_multiplier()` 也明訂「查不到一律中斷、
-    不退回近似值」。乘數 0 會讓 PnL 全部算成 0，那沒有任何徵兆——
-    改成中斷會動到實盤主流程，故目前先保留並釘住。
+    乘數 0 會讓可開口數與 PnL 全部算成 0，而那沒有任何徵兆；
+    回測那一側的 `FuturesQuoteAdapter.resolve_multiplier()` 同樣直接 `KeyError`。
     """
 
-    assert ShioajiQuoteStream.resolve_multiplier("UNKNOWN") == 0
+    with pytest.raises(KeyError, match="UNKNOWN"):
+        ShioajiQuoteStream.resolve_multiplier("UNKNOWN")
 
 
 # === 快照批次與限流 ===
@@ -346,13 +344,35 @@ def test_futures_snapshots_pair_by_code(limiter: RateLimiter) -> None:
     quotes: List[FuturesQuote] = make_stream(api, limiter).get_futures_snapshots(
         [
             FakeContract(code="CDFA6", symbol="CDF202601", multiplier=2000),
-            FakeContract(code="TXFA6", symbol="TXF202601"),
+            FakeContract(code="TXFA6", symbol="TX202601"),
         ]
     )
     by_product: Dict[str, FuturesQuote] = {q.product: q for q in quotes}
 
-    assert by_product["TXF"].multiplier == 0  # TXF 不在登錄表裡（表裡是 TAIFEX 的 TX）
+    assert by_product["TX"].multiplier == 200
     assert by_product["CDF"].multiplier == 2000
+
+
+def test_contract_without_multiplier_is_skipped_alone(limiter: RateLimiter) -> None:
+    """
+    取不到乘數的契約只略過它自己，其他契約照常
+
+    舊格式代號 `TXF202601` 拆出的商品是 Shioaji 分類 `TXF`，不在登錄表（表裡是
+    TAIFEX 的 `TX`），合約上也沒有乘數欄位。帶著乘數 0 進到部位建構，
+    可開口數會靜默歸零；整批中斷又會連帶擋掉其他契約。
+    """
+
+    api: FakeApi = FakeApi(
+        snapshots=[FakeSnapshot(code="TXFA6"), FakeSnapshot(code="CDFA6")]
+    )
+    quotes: List[FuturesQuote] = make_stream(api, limiter).get_futures_snapshots(
+        [
+            FakeContract(code="CDFA6", symbol="CDF202601", multiplier=2000),
+            FakeContract(code="TXFA6", symbol="TXF202601"),
+        ]
+    )
+
+    assert [quote.product for quote in quotes] == ["CDF"]
 
 
 # === 訂閱 ===

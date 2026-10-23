@@ -12,14 +12,14 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 - Features:
     1. 反向相依：低層 import 高層（例如 core/api → core/backtest）、`core/` import 到
-       `tasks/`／`frontend/`／`strategy_lab/`／`tests/`／`scripts/`
+       `apps/`／`frontend/`／`strategy_lab/`／`tests/`／`scripts/`
     2. 循環 import：檔案層級的強連通分量（含套件 `__init__.py` 的 re-export 邊）
     3. 市場語意洩漏：`_ENGINE_FILES` 列出的引擎本體（回測與實盤）不得出現
        Stock／Futures／Tw 字樣，
        `if market ==` 只允許出現在 `factory.py`
     4. 跨軸目錄污染：每層目錄只承載一條軸（市場 `tw/`／`us/` 或商品類別 `stock/`／`futures/`）
     5. `sys.path` 注入：專案已以 editable 方式安裝，逐處列出以便複查
-    6. 資料庫驅動外洩：`core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
+    6. 資料庫驅動外洩：`core/`、`apps/`、`strategies/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
     7. 純轉換層做 I/O：`core/adapters/` 不得 import `core.api`、`core.dao` 或資料庫驅動
 - 使用場景:
     python scripts/check_layer_deps.py            # 只印報告，違規時以非零狀態碼結束
@@ -33,7 +33,6 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "core",
     "apps",
     "strategies",
-    "tasks",
     "frontend",
     "strategy_lab",
     "scripts",
@@ -107,18 +106,18 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.after_close", 5, "實盤／盤後作業", False),
     ("core.live.factory", 6, "組裝層", False),
     # 策略「契約」（抽象基底與其套件門面）是引擎、factory、報表都要認得的介面，
-    # 與可插拔 model 同層；具體策略（momentum_strategy_1 等）才是策略層。
-    # 引擎若 import 到任何具體策略，仍會被列為反向相依
+    # 與可插拔 model 同層。`core/strategies/` 只放契約，具體策略一律在頂層
+    # `strategies/`（策略層）；有人把具體策略放回 `core/strategies/` 時，分層等級擋不住
+    # （它 import 的都是同層或更低層），由 `check_strategy_contract_only()` 擋下
     ("core.strategies.base", 4, "策略契約", False),
     ("core.strategies.stock.base", 4, "策略契約", False),
     ("core.strategies.futures.base", 4, "策略契約", False),
     ("core.strategies.stock", 4, "策略契約（套件門面）", True),
     ("core.strategies.futures", 4, "策略契約（套件門面）", True),
-    ("core.strategies", 7, "策略層", False),
-    # 頂層的具體策略套件：與 `core.strategies` 的具體策略同層，只能往下 import 框架
+    ("core.strategies", 4, "策略契約（套件門面）", True),
+    # 頂層的具體策略套件：只能往下 import 框架
     ("strategies", 7, "策略層", False),
     ("apps", 8, "入口層", False),
-    ("tasks", 8, "入口層", False),
     ("frontend", 8, "應用層", False),
     ("strategy_lab", 8, "研究層", False),
     ("scripts", 8, "工具", False),
@@ -137,7 +136,6 @@ _KNOWN_REVERSE: Dict[Tuple[str, str], str] = {}
 _NON_CORE_TOPS: Set[str] = {
     "apps",
     "strategies",
-    "tasks",
     "frontend",
     "strategy_lab",
     "scripts",
@@ -489,6 +487,49 @@ def check_strategy_facades(graph: Dict[str, Set[str]]) -> List[str]:
     return problems
 
 
+# `core/strategies/` 只准有的檔案：契約（抽象基底）與套件門面
+_STRATEGY_CONTRACT_FILES: Set[str] = {
+    "core/strategies/__init__.py",
+    "core/strategies/base.py",
+    "core/strategies/stock/__init__.py",
+    "core/strategies/stock/base.py",
+    "core/strategies/futures/__init__.py",
+    "core/strategies/futures/base.py",
+}
+
+
+def check_strategy_contract_only(root: Path = _PROJECT_ROOT) -> List[str]:
+    """
+    - Description:
+        `core/strategies/` 只准放契約；具體策略要放頂層 `strategies/`
+
+        分層檢查擋不住這一條：具體策略 import 的都是契約、部位建構、資料源契約，
+        與 `core.strategies` 同層或更低，放回 `core/` 照樣零違規。放回去的代價是
+        框架又開始承載具體策略，而且策略載入器不掃 `core/strategies/`——那支策略
+        在 `--strategy` 清單裡會憑空消失。新增商品類別的契約時把檔案登記進
+        `_STRATEGY_CONTRACT_FILES`。
+    - Parameters:
+        - root: Path
+            專案根目錄（測試以暫存目錄替代）
+    - Return:
+        - List[str]
+            不在白名單內的 `.py` 檔（相對路徑）
+    """
+
+    strategy_dir: Path = root / "core" / "strategies"
+    if not strategy_dir.exists():
+        return []
+    return [
+        f"{relative}：core/strategies/ 只放契約，具體策略請放頂層 strategies/"
+        for relative in sorted(
+            path.relative_to(root).as_posix()
+            for path in strategy_dir.rglob("*.py")
+            if "__pycache__" not in path.parts
+        )
+        if relative not in _STRATEGY_CONTRACT_FILES
+    ]
+
+
 # 只有 DAO 層可以直接碰資料庫驅動；其餘一律經由 `core.dao`
 # 純轉換層：不得自己查資料。`core/adapters/` 只把來源資料轉成報價模型，
 # 查詢由資料源（feed）負責——adapter 自己查會讓轉換規則綁死在一個 API 上，
@@ -506,14 +547,14 @@ _BACKTEST_INTERNAL_PACKAGES: Tuple[str, ...] = (
     "core.backtest.report",
 )
 _BACKTEST_DIR: str = "core/backtest"
-_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "strategies", "tasks")
+_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "strategies")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
 
 
 def check_db_driver_imports(files: List[Path]) -> List[str]:
     """
     - Description:
-        `core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 import 資料庫驅動
+        `core/`、`apps/`、`strategies/` 內 `core/dao/` 以外的檔案不得 import 資料庫驅動
 
         「SQL、連線與交易只寫在 DAO」不能只是慣例：慣例擋不住下一個人順手
         `import sqlite3`，而散在各層的連線會出現沒人關閉、彼此搶鎖的情況。
@@ -597,7 +638,7 @@ def check_framework_pipeline_imports(files: List[Path]) -> List[str]:
         框架（回測、實盤、API、市場結構）只讀資料庫，不碰 ETL 的中間狀態；
         一旦依賴長回來，資料管線就搬不出 `core/`，搬家時才會發現整串 import 斷掉。
         分層等級擋不住這條：`core.pipeline` 與 `core.api` 同級，引擎層往下 import
-        它屬於「合法的向下相依」。`tasks/`、`scripts/`、`tests/` 不受限。
+        它屬於「合法的向下相依」。`apps/`、`scripts/`、`tests/` 不受限。
         以 AST 判定，說明文字裡的字樣不算。
     - Parameters:
         - files: List[Path]
@@ -789,7 +830,7 @@ def main() -> int:
     cycles: List[List[str]] = strongly_connected(runtime_graph)
     leakage: List[str] = check_market_leakage()
     axis: List[str] = check_axis_dirs()
-    facades: List[str] = check_strategy_facades(graph)
+    facades: List[str] = check_strategy_facades(graph) + check_strategy_contract_only()
     sys_path_hits: List[str] = check_sys_path(files)
     db_driver_hits: List[str] = check_db_driver_imports(files)
     pure_transform_hits: List[str] = check_pure_transform_layers(files)
@@ -810,9 +851,11 @@ def main() -> int:
     section("C. 循環 import（強連通分量）", [" <-> ".join(c) for c in cycles])
     section("D. 市場語意洩漏", leakage)
     section("E. 跨軸目錄污染", axis)
-    section("E'. 策略套件門面 eager import 具體策略", facades)
     section(
-        "E''. DAO 以外 import 資料庫驅動（core／apps／strategies／tasks）",
+        "E'. 策略套件門面 eager import 具體策略／core/strategies 放了具體策略", facades
+    )
+    section(
+        "E''. DAO 以外 import 資料庫驅動（core／apps／strategies）",
         db_driver_hits,
     )
     section("E'''. 純轉換層 import 資料層（core/adapters）", pure_transform_hits)

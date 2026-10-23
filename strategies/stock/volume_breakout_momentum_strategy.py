@@ -19,9 +19,9 @@ from core.utils import (
 )
 
 
-class MomentumStrategy1(BaseStockStrategy):
+class VolumeBreakoutMomentumStrategy(BaseStockStrategy):
     """
-    動能策略 1（**只支援日線**）
+    量能突破動能策略（**只支援日線**）
 
     買進條件（全部滿足）：
     - 當日收盤相對「前一交易日」收盤漲幅 ≥ 門檻（預設 9%）
@@ -72,7 +72,7 @@ class MomentumStrategy1(BaseStockStrategy):
 
     def __init__(self) -> None:
         super().__init__()
-        self.strategy_name: str = "Momentum-1"
+        self.strategy_name: str = "Volume-Breakout-Momentum"
         self.init_capital: float = 1000000.0
         # 實盤額度與研究時的本金分開：模擬環境的帳務是假的，額度就是演練用的虛擬資金；
         # 正式環境要用多少，與 `live_max_holdings` 成對在上線前決定（額度不得超過帳戶可用資金）。

@@ -70,7 +70,7 @@ class InvestmentTrustMomentumSwingStrategy(BaseStockStrategy):
     MARKET_LOOKBACK_CALENDAR_DAYS: int = 45
     # 出場參數
     HOLDING_DAYS: int = 10  # 持有交易日數
-    # 交易日清單往回多抓幾個曆日，理由同 `MomentumStrategy1.CALENDAR_LOOKBACK_DAYS`：
+    # 交易日清單往回多抓幾個曆日，理由同 `VolumeBreakoutMomentumStrategy.CALENDAR_LOOKBACK_DAYS`：
     # 窗比日曆的回推上界小，清單查不到就會退回逐日查資料庫
     CALENDAR_LOOKBACK_DAYS: int = MarketCalendar.MAX_LOOKBACK_DAYS
 

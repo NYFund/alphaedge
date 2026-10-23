@@ -505,7 +505,7 @@ def test_buy_open_is_rejected_when_locked_at_limit_up() -> None:
     """
     前收 100、開高低收皆 110（全日鎖漲停）時，買進開倉被拒
 
-    整天沒有人願意在漲停以下賣出，實務上排隊也買不到。`MomentumStrategy1`
+    整天沒有人願意在漲停以下賣出，實務上排隊也買不到。`VolumeBreakoutMomentumStrategy`
     的訊號正是「當日漲幅 ≥ 9%、以收盤價買進」，這類標的大量是鎖漲停，
     照常成交會讓做多績效系統性偏樂觀且沒有任何徵兆。
     """

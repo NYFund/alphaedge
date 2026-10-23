@@ -15,7 +15,7 @@
 | Skill | 觸發時機 | 對應 Cursor Rule |
 |-------|----------|------------------|
 | [`manage-backlog`](.claude/skills/manage-backlog/SKILL.md) | 新增／更新 `backlog/**` 文件與 `index.md` | `.cursor/skills/manage-backlog/SKILL.md` |
-| [`develop-strategy`](.claude/skills/develop-strategy/SKILL.md) | 新增／修改 `core/strategies/{stock,futures}/` 策略 | `.cursor/rules/strategy-development-sdd.mdc` |
+| [`develop-strategy`](.claude/skills/develop-strategy/SKILL.md) | 新增／修改 `strategies/{stock,futures}/` 策略 | `.cursor/rules/strategy-development-sdd.mdc` |
 | [`commit-push-merge`](.claude/skills/commit-push-merge/SKILL.md) | 使用者要求「commit + push + merge」 | `.cursor/skills/commit-push-merge/SKILL.md`、`.cursor/rules/commit-message-zh.mdc` |
 | [`health-check`](.claude/skills/health-check/SKILL.md) | 使用者要求健檢（`diff`：每段工作後；`milestone`：里程碑才做全專案） | `.cursor/skills/health-check/SKILL.md` |
 
@@ -74,7 +74,7 @@
    ```
 
    欄位名固定為 `- Description:`、`- Parameters:`（複數）、`- Return:`、`- Raise:`（後兩者單數），用不到的欄位省略；不要改用 Google style 的 `Args:` / `Returns:` / `Raises:`。
-4. 策略類別的 class docstring 格式見 [`core/strategies/CLAUDE.md`](core/strategies/CLAUDE.md)（在該目錄下工作時自動載入）。
+4. 策略類別的 class docstring 格式見 [`strategies/CLAUDE.md`](strategies/CLAUDE.md)（在該目錄下工作時自動載入）。
 
 ### 2.3 模組層級說明字串
 
@@ -118,7 +118,7 @@
 | 函式 / 變數 | `snake_case`；查詢類前綴 `get_`、設定類 `setup_`、**Alpha 層產生訊號 `generate_*_signals`**、引擎契約 `check_*_signal`（由基底提供，策略不實作）、計算 `calculate_` | `get_stock_price()`、`generate_open_signals()` |
 | 模組私有 | 前綴底線 | `_drop_explained()`、`_PROJECT_ROOT` |
 | 常數 | `UPPER_SNAKE_CASE`，策略參數放 class 層級常數並附中文單位註解 | `MIN_VOLUME_LOTS: int = 5000  # 最小成交量（張）` |
-| 策略類別 | 類別名即策略識別名稱，需與入口 `--strategy` 的值對應 | `MomentumStrategy1` |
+| 策略類別 | 類別名即策略識別名稱，需與入口 `--strategy` 的值對應 | `VolumeBreakoutMomentumStrategy` |
 
 ### 2.7 常數與 Enum
 
@@ -208,4 +208,4 @@
 | 目錄 | 規則檔 | 說明 |
 |------|--------|------|
 | `strategy_lab/` | [`strategy_lab/CLAUDE.md`](strategy_lab/CLAUDE.md) | 對應 `.cursor/rules/strategy-lab-layout.mdc`，只在該目錄下工作時套用 |
-| `core/strategies/` | [`core/strategies/CLAUDE.md`](core/strategies/CLAUDE.md) | 策略類別 docstring 格式，只在該目錄下工作時套用 |
+| `strategies/` | [`strategies/CLAUDE.md`](strategies/CLAUDE.md) | 策略類別 docstring 格式，只在該目錄下工作時套用 |

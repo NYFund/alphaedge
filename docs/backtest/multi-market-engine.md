@@ -237,7 +237,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 9. `core/market/<market>/`：實作該組合的 `InstrumentSpec`／`CostModel`（命名帶市場前綴，如 `TwStockSpec`，繼承 `core/market/` 根目錄的抽象基底）；`core/backtest/models/fill_model.py`：實作 `FillModel`；`SettlementModel` 在 `settlement_model/` 套件內新增 `<market>_<instrument>.py`（如 `us_stock.py`），並在其 `__init__.py` 登記 re-export。
 10. `core/backtest/factory.py`：`build_backtester()` 加一個 `if (strategy.market, strategy.instrument_type) == (...)` 分支，並新增對應的 `build_<market>_<instrument>_backtester()`。要上實盤時，`core/live/factory.py` 以同一組分派鍵另有一份，也要加分支。
 
-**既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`apps/backtest.py` 皆為 0 行——`StrategyLoader` 會自動掃描 `core/strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
+**既有檔案的改動量：`factory.py` 一個分支 ＋ `settlement_model/__init__.py` 一行登記。** `backtester.py`、`StrategyLoader`、`apps/backtest.py` 皆為 0 行——`StrategyLoader` 會自動掃描頂層 `strategies/` 下的所有子套件，CLI 也不需要 `--market`（市場與商品皆由策略類別自己宣告）。
 
 新增市場時還要注意兩處**會跑得動但數字錯**的地方：
 
@@ -292,7 +292,7 @@ model 之間刻意**不互相依賴**，需要共享的狀態以 dict 參照傳�
 | 回歸線 | 內容 | 需求 |
 |---|---|---|
 | SHORT | 14 組腳本情境、3 份快照（交易紀錄／期末未平倉部位／帳戶與事件計數） | 純記憶體，不連 DB（CI 有跑） |
-| LONG | `MomentumStrategy1` 2024 全年的交易紀錄逐筆比對 | 需 `data/db/tw_stock.db`（僅本機） |
+| LONG | `VolumeBreakoutMomentumStrategy` 2024 全年的交易紀錄逐筆比對 | 需 `data/db/tw_stock.db`（僅本機） |
 
 SHORT 的 14 組情境刻意各只動一個變因，任一情境快照有變即可直接指向出問題的掛點：當沖同日回補（稅率減半）、融券留倉 10 天、FIFO 部分回補的等比例攤提、維持率斷頭、當沖鎖漲停轉留倉、當沖遇停券回補日（釘住結算順序）、SBL 與 MARGIN 借券費對照、除權息停券日的 MARGIN／SBL 對照、跨除息日的股利補償（含部分回補攤提）、平盤下名單擋單、現股當沖名單暫停先賣後買。
 

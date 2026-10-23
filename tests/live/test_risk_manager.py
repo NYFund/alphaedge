@@ -68,6 +68,26 @@ def test_config_caps_cover_every_field() -> None:
     assert {field.name for field in fields(RiskConfig)} == set(RISK_LIMIT_CAPS)
 
 
+def test_every_threshold_is_enforced_somewhere() -> None:
+    """
+    每個門檻都要有執行端：`RiskManager` 真的拿它去比
+
+    曾經有一個 `account_exposure_ratio` 寫著「帳戶總曝險上限」，全庫卻沒有任何地方讀它，
+    唯一被讀到的地方是上限驗證——設多少都不擋單，也沒有任何警告。
+    """
+
+    source: str = (
+        Path(__file__).resolve().parents[2] / "core/live/risk/risk_manager.py"
+    ).read_text(encoding="utf-8")
+    unenforced: List[str] = [
+        field.name
+        for field in dataclasses.fields(RiskConfig)
+        if f"config.{field.name}" not in source
+    ]
+
+    assert not unenforced, f"RiskConfig 有欄位沒有執行端：{unenforced}"
+
+
 def test_config_rejects_values_above_the_cap() -> None:
     """超過上限的設定在建立時就拋出，不等到盤中第一次拒單才發現"""
 
@@ -263,7 +283,7 @@ def test_single_symbol_exposure_is_a_separate_dimension() -> None:
 
 def test_live_holdings_fit_within_single_symbol_cap() -> None:
     """
-    每支股票策略實盤每檔分到的比例（1 ÷ 持倉檔數）不得超過單一標的上限
+    每支股票策略實盤每檔分到的比例（1 ÷ 持倉檔數）不得超過單一標的與單筆上限
 
     部位建構器把資金均分給各檔；比例一超過上限，帳戶層會把每張買單都截斷，
     下單路徑整個不通卻只留下 WARN。曾經把 `live_max_holdings` 改成 3 檔
@@ -271,9 +291,13 @@ def test_live_holdings_fit_within_single_symbol_cap() -> None:
     """
 
     from core.strategies.stock.base import BaseStockStrategy
-    from core.strategies.strategy_loader import StrategyLoader
+    from strategies.loader import StrategyLoader
 
-    cap: float = RiskConfig().single_symbol_exposure_ratio
+    config: RiskConfig = RiskConfig()
+    # 兩條上限都要容得下一檔的完整份額：單一標的管存量、單筆管一張單
+    cap: float = min(
+        config.single_symbol_exposure_ratio, config.single_order_amount_ratio
+    )
     checked: List[str] = []
     for name, strategy_class in StrategyLoader.load_strategies().items():
         if not issubclass(strategy_class, BaseStockStrategy):
@@ -289,10 +313,10 @@ def test_live_holdings_fit_within_single_symbol_cap() -> None:
         checked.append(name)
         assert 1 / holdings <= cap, (
             f"{name} 實盤 {holdings} 檔、每檔 {1 / holdings:.1%}，"
-            f"超過單一標的上限 {cap:.0%}，每張買單都會被截斷"
+            f"超過單一標的或單筆上限 {cap:.0%}，每張買單都會被擋下"
         )
 
-    assert "MomentumStrategy1" in checked
+    assert "VolumeBreakoutMomentumStrategy" in checked
 
 
 def test_existing_exposure_is_counted(dao_factory: object = None) -> None:

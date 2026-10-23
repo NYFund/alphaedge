@@ -8,9 +8,9 @@ from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesQuote
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.strategy_loader import StrategyLoader
 from core.utils import Action, FuturesSession, InstrumentType, Market, PositionType
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.loader import StrategyLoader
 from tests.conftest import build_futures_quote
 
 """
@@ -96,7 +96,7 @@ def strategy() -> MomentumFuturesStrategy:
 # === 載入 ===
 def test_futures_strategy_is_auto_loaded() -> None:
     """
-    新增 `core/strategies/futures/` 就會被自動收錄
+    新增 `strategies/futures/` 就會被自動收錄
 
     `StrategyLoader` 逐一掃描所有商品類別子套件，**期貨與股票走同一條載入路徑**
     ——不需要另外為期貨寫一支 `load_futures_strategies()`。

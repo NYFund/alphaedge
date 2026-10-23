@@ -42,10 +42,8 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 # Build this Dockerfile with project root as context:
 # docker build -t alphaedge-core .
 COPY core /app/core
-# `tasks/` 是 ETL 的入口（`python -m tasks.update_db`）。少了它，映像只跑得了
-# 回測，compose 描述的資料更新流程在容器裡完全不存在
-COPY tasks /app/tasks
-# `apps/` 是回測與實盤的入口套件（`python -m apps.<name>`）
+# `apps/` 是全部入口的套件：回測、實盤與資料更新（`python -m apps.<name>`）。
+# 少了它，compose 描述的回測、實盤與資料更新流程在容器裡完全不存在
 COPY apps /app/apps
 # `strategies/` 是具體策略（框架只留契約），回測與實盤都要載入
 COPY strategies /app/strategies

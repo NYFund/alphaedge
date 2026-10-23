@@ -211,7 +211,7 @@ def test_update_db_lists_the_target_as_failed_and_exits_non_zero(
 ) -> None:
     """端到端：整批 403 的 target 進失敗清單，`update_db` 非零結束"""
 
-    import tasks.update_db as update_db
+    import apps.update_db as update_db
 
     updater, loaded, _ = make_daily_updater(
         StockPriceUpdater, "price", tmp_path, monkeypatch, {}, dao_factory

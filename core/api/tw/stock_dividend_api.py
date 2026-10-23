@@ -295,7 +295,7 @@ class StockDividendAPI(BaseDataAPI):
             logger.warning(
                 f"[dividend] 找不到 {CORPORATE_ACTION_TABLE_NAME}，還原價僅涵蓋除權息；"
                 "減資與分割的假跳空不會被消除。"
-                "請跑 `python -m tasks.update_db --target corporate_action`"
+                "請跑 `python -m apps.update_db --target corporate_action`"
             )
             return dividend_df.sort_values(["stock_id", "date"], kind="stable")
 

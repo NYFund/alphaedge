@@ -39,7 +39,7 @@
 - **每次都掃整個區間**，不從 `MAX(date)+1` 續跑：這類事件是事後公告。
 
 ```bash
-python -m tasks.update_db --target corporate_action
+python -m apps.update_db --target corporate_action
 ```
 
 ---

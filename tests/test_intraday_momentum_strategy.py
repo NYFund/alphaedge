@@ -3,12 +3,19 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
-from core.models import StockAccount, StockOrder, StockPosition, StockQuote
+from core.live.strategy_guard import inspect_strategy
+from core.models import (
+    PreOpenStockQuote,
+    StockAccount,
+    StockOrder,
+    StockPosition,
+    StockQuote,
+)
 from core.models.fill_config import VolumeCapPolicy
 from core.models.stock.trading_list import DayTradeListSnapshot
 from core.portfolio.order_rules import get_execution_sequence
-from core.strategies.stock.intraday_momentum_strategy import IntradayMomentumStrategy
 from core.utils import Action, BarExecutionSequence, PositionType, Scale
+from strategies.stock.intraday_momentum_strategy import IntradayMomentumStrategy
 from tests.conftest import build_stock_quote
 
 """盤中動能策略（日 K 近似）的訊號測試：全部為純記憶體物件，不連資料庫"""
@@ -402,10 +409,209 @@ def test_engine_derives_open_then_close() -> None:
 
 
 def test_tick_scale_is_rejected() -> None:
-    """逐筆分支尚未實作，TICK 級別當場擋下"""
+    """TICK 級別回測當場擋下（逐筆只在實盤，一次一筆報價）"""
 
     strategy: IntradayMomentumStrategy = IntradayMomentumStrategy()
     strategy.scale = Scale.TICK
 
     with pytest.raises(NotImplementedError):
         strategy.setup_apis(FakeFeed([]))
+
+
+# === 實盤逐筆 ===
+def at(
+    hour: int, minute: int, second: int = 0, day: datetime.date = DAY_T
+) -> datetime.datetime:
+    """盤中某一刻；逐筆報價與盤中成交的日期都帶時刻"""
+
+    return datetime.datetime.combine(day, datetime.time(hour, minute, second))
+
+
+def make_tick(
+    close: float,
+    when: datetime.datetime,
+    volume: int = BASE_VOLUME_LOTS,
+    high: float = 110.0,
+) -> StockQuote:
+    """逐筆報價：`close` 是現價，`volume` 是當日累計量，`high` 是當日到目前的最高價"""
+
+    return StockQuote(
+        stock_id="2330",
+        scale=Scale.TICK,
+        date=when,
+        cur_price=close,
+        volume=volume,
+        open=105.0,
+        high=high,
+        low=104.0,
+        close=close,
+    )
+
+
+def test_live_settings_pass_the_readiness_check() -> None:
+    """實盤宣告（逐筆、段落、執行方式）通過上線前檢查"""
+
+    assert inspect_strategy(IntradayMomentumStrategy()) == []
+
+
+def test_tick_entry_uses_the_current_price_not_the_day_high() -> None:
+    """
+    逐筆以現價判斷：盤中最高價曾到 110、現價已跌回 108.5 時不進場
+
+    用最高價會在拉高又跌回之後才進場，買在已經跌回門檻之下的價位。
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+
+    assert strategy.generate_open_signals([make_tick(108.5, at(10, 0))]) == []
+
+    signals = strategy.generate_open_signals([make_tick(109.0, at(10, 1))])
+
+    assert len(signals) == 1
+    assert signals[0].order_price == 109.0
+    assert signals[0].sizing_price == 109.0
+
+
+def test_tick_entry_happens_once_per_symbol_per_day() -> None:
+    """送出就算進場過：之後每一筆都還在門檻之上，不擋就會逐筆重送；隔天重新計算"""
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+
+    first = strategy.generate_open_signals([make_tick(109.5, at(10, 0))])
+    second = strategy.generate_open_signals([make_tick(110.0, at(10, 0, 5))])
+    # 隔天的平盤價是當天收盤 110，觸發價 120
+    next_day = strategy.generate_open_signals(
+        [make_tick(120.5, at(10, 0, day=DAY_NEXT), high=121.0)]
+    )
+
+    assert len(first) == 1
+    assert second == []
+    assert len(next_day) == 1
+
+
+def test_tick_entry_needs_the_cumulative_volume() -> None:
+    """當日累計量未達門檻時不進場"""
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+
+    assert (
+        strategy.generate_open_signals(
+            [make_tick(109.5, at(10, 0), volume=BASE_VOLUME_LOTS - 1)]
+        )
+        == []
+    )
+
+
+def test_tick_entry_needs_the_day_trade_list() -> None:
+    """不在當沖名單（或沒有名單）時不進場；也不記成進場過，名單補上後還能進"""
+
+    strategy: IntradayMomentumStrategy = make_strategy(day_tradable=["2317"])
+
+    assert strategy.generate_open_signals([make_tick(109.5, at(10, 0))]) == []
+    assert "2330" not in strategy.live_entered
+
+
+def test_tick_stop_loss_uses_the_current_price_and_is_sent_once_a_day() -> None:
+    """
+    當天進場的部位現價跌到停損價即賣出；同一檔一天只送一次
+
+    策略看不到在途的委託：成交回報晚到時部位還在帳上，重送會在原單成交後再賣一次、
+    變成當日空單。盤中成交的部位日期帶時刻，要轉成日期才比得出是不是當天進場。
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.account.positions.append(make_position(date=at(9, 30), volume=2))
+
+    above = strategy.generate_stop_loss_signals([make_tick(108.0, at(10, 0))])
+    hit = strategy.generate_stop_loss_signals([make_tick(STOP_PRICE, at(10, 1))])
+    later = strategy.generate_stop_loss_signals([make_tick(106.0, at(11, 30))])
+
+    assert above == []
+    assert len(hit) == 1
+    assert hit[0].order_price == STOP_PRICE
+    assert hit[0].volume == 2
+    assert later == []
+
+
+def test_tick_entry_waits_for_a_free_slot_without_burning_the_day() -> None:
+    """
+    持倉檔數已滿時不進場，也不記成進場過：之後騰出名額、仍在門檻之上就能進
+
+    記成進場過的話，這一檔當天就再也進不去，回測卻會買——parity 漂移而 log 看不出原因。
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.max_holdings = 1
+    other: StockPosition = make_position(date=at(9, 30))
+    other.symbol = "2317"
+    strategy.account.positions.append(other)
+
+    full = strategy.generate_open_signals([make_tick(109.5, at(10, 0))])
+    strategy.account.positions.clear()
+    freed = strategy.generate_open_signals([make_tick(109.5, at(10, 30))])
+
+    assert full == []
+    assert len(freed) == 1
+
+
+def test_tick_stop_loss_ignores_positions_from_earlier_days() -> None:
+    """停損只看當天進場的部位；前一天的部位由隔天開盤出場處理"""
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.account.positions.append(make_position(date=DAY_T1))
+
+    assert strategy.generate_stop_loss_signals([make_tick(100.0, at(10, 0))]) == []
+
+
+def test_close_signal_uses_the_reference_price_before_the_open() -> None:
+    """
+    實盤開盤段在盤前，沒有開盤價：以參考價為決策價出場
+
+    盤前報價讀開盤價會直接拋例外（避免拿參考價冒充開盤價）；
+    前一天盤中成交的部位日期帶時刻，也要轉成日期再比。
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.account.positions.append(make_position(date=at(10, 1), volume=2))
+    quote: PreOpenStockQuote = PreOpenStockQuote(
+        stock_id="2330", date=DAY_NEXT, reference_price=111.0
+    )
+
+    signals = strategy.generate_close_signals([quote])
+
+    assert len(signals) == 1
+    assert signals[0].order_price == 111.0
+    assert signals[0].volume == 2
+
+
+def test_live_symbols_are_the_most_traded_day_tradable_stocks() -> None:
+    """
+    盤前篩選：只留當沖名單內的一般股票，依前一交易日成交量取前 N 檔
+
+    ETF（`0050`）與權證（6 碼）就算量最大、也在當沖名單內，仍要排除——
+    回測的報價轉換本來就濾掉它們，而且幾乎不會漲 9%，只會佔掉訂閱名額。
+    """
+
+    strategy: IntradayMomentumStrategy = make_strategy(
+        day_tradable=["2330", "2317", "2454", "0050", "030001"]
+    )
+    strategy.LIVE_UNIVERSE_SIZE = 2
+    strategy.price.get_volume_lots_map = lambda date: {  # type: ignore
+        "2330": 30000,
+        "2317": 5000,
+        "2454": 20000,
+        "9999": 90000,
+        "0050": 99000,
+        "030001": 95000,
+    }
+
+    assert strategy.get_live_symbols(DAY_T) == ["2330", "2454"]
+
+
+def test_live_symbols_are_empty_without_a_day_trade_list() -> None:
+    """沒有當沖名單的日子本來就不進場，不必訂閱任何標的"""
+
+    strategy: IntradayMomentumStrategy = make_strategy()
+    strategy.feed = FakeFeed(None)
+
+    assert strategy.get_live_symbols(DAY_T) == []

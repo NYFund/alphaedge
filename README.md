@@ -13,12 +13,12 @@ graph TB
     subgraph entry ["入口層"]
         BacktestApp["apps/backtest.py<br/>python -m apps.backtest"]
         LiveApp["apps/live.py<br/>python -m apps.live"]
-        Tasks["tasks/update_db.py"]
+        Tasks["apps/update_db.py"]
     end
 
     subgraph strategy_layer ["策略層（Alpha）"]
-        Strategies["core/strategies<br/>（宣告 market ＋ instrument_type<br/>generate_*_signals → Signal）"]
-        Loader["strategy_loader.py"]
+        Strategies["strategies（契約在 core/strategies）<br/>（宣告 market ＋ instrument_type<br/>generate_*_signals → Signal）"]
+        Loader["strategies/loader.py"]
     end
 
     subgraph shared_layer ["共用契約層（回測與實盤吃同一份）"]
@@ -184,11 +184,10 @@ graph TB
 | `core/datafeed/`  | 中立的 `BaseDataFeed` 契約：回測與實盤各自實作，策略的 `setup_apis(feed)` 型別就是它 |
 | `core/market/`    | 市場結構與市場規則（交易日曆、期貨換月、保證金設定、商品規格 `InstrumentSpec`、成本模型 `CostModel`），不屬於任一引擎 |
 | `frontend/`     | 用於檢視回測結果的 Streamlit Docker 映像                              |
-| `tasks/`        | 資料維護與資料庫更新腳本                                              |
 | `tests/`        | 單元／整合測試、回測回歸線（`tests/backtest/`）與實盤測試（`tests/live/`，以 fake 券商閘道跑） |
 | `scripts/`      | 護欄檢查（分層相依、文件路徑、API 孤兒方法）、回歸腳本與人工執行腳本   |
 | `docs/`         | 使用與架構說明文件（安裝、指令、部署、資料、回測與 ETL 設計）          |
-| `strategies/`   | 具體策略的頂層套件（目前為空白門面，策略仍在 `core/strategies/{stock,futures}/`，之後逐步搬入）；相依只能 `strategies` → `core` |
+| `strategies/`   | 具體策略（`stock/`、`futures/`）與策略載入器；策略契約（抽象基底）留在 `core/strategies/`；相依只能 `strategies` → `core` |
 | `strategy_lab/` | 策略研究工作區，依概念分為 `strategies/`、`data_analysis/`、`notebooks/`、`ideas/`；見 `strategy_lab/README.md` |
 | `backlog/`      | 內部規劃與待辦筆記                                                    |
 
@@ -203,9 +202,10 @@ graph TB
 | [正式環境部署](docs/deployment/prod-deployment.md) | Docker 映像建置、容器執行與角色切分             |
 | [實盤部署與排程](docs/deployment/live-deployment.md) | 實盤逐段落啟動、容器與 cron 排程、停止與退出碼 |
 | [實盤執行層](docs/live/execution-layer.md) | 策略的執行方式（`MARKET`／`LIMIT`）如何依時段換成券商委託、決策價、parity 歸類與已知限制 |
+| [正式環境上線檢查表（股票線）](docs/live/production-checklist-stock.md) | 股票線第一次連正式環境前逐項勾選：憑證、風控與資金、通知與監控、首日 dry-run、股票線專屬事項 |
 | [資料覆蓋範圍](docs/exchanges/data_coverage.md)    | 資料來源、API 對照、起始日期與股價還原          |
 | [指令教學](docs/commands/command-usage.zh-TW.md)   | `update_db` target 對照與完整執行範例           |
-| [策略開發指南](core/strategies/README.md)          | 本專案策略實作方式                              |
+| [策略開發指南](strategies/README.md)          | 本專案策略實作方式                              |
 | [多市場回測引擎架構](docs/backtest/multi-market-engine.md) | 單一引擎 ＋ 五個可插拔 model 的設計與已知簡化 |
 | [模組使用關係](docs/backtest/module-map.md)        | 回測路徑上誰呼叫誰、逐檔案職責與輸出檔案        |
 | [放空回測框架規格](docs/backtest/short-selling-framework.md) | 方向驅動的記帳、成本、維持率追繳與強制回補 |
@@ -273,7 +273,7 @@ uv sync
 .venv\Scripts\activate
 ```
 
-專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`tasks`／`tests`。
+專案以 editable 方式裝進 `.venv`，之後在任何目錄都能 import `core`／`apps`／`strategies`／`tests`。
 之後每開一個新的終端機都要先啟用虛擬環境（要離開時執行 `deactivate`）；
 不想啟用時，也可以在指令前加 `uv run --no-sync`，例如 `uv run --no-sync python -m apps.backtest ...`
 （不帶 `--no-sync` 的 `uv run` 會先把環境同步成預設相依，順手移除另外裝的 `frontend`／`lab` extra）。
@@ -281,10 +281,10 @@ uv sync
 **步驟 2：執行回測**
 
 ```bash
-python -m apps.backtest --strategy MomentumStrategy1
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
-- `--strategy` 填策略類別名稱，現有策略在 `core/strategies/stock/` 與 `core/strategies/futures/`。
+- `--strategy` 填策略類別名稱，現有策略在 `strategies/stock/` 與 `strategies/futures/`。
 - 選用參數：`--start`／`--end`（`YYYY-MM-DD`）與 `--capital` 覆寫策略預設的回測區間與初始資金，`--show`／`--no-show` 決定是否在瀏覽器開圖（都不帶時看 `ALPHAEDGE_SHOW_FIGURES`，預設不開）。實盤是另一個入口（`python -m apps.live`），用法與退出碼見[實盤部署與排程](docs/deployment/live-deployment.md)。
 - 結果會寫到專案根目錄的 `results/`。
 
@@ -304,7 +304,7 @@ streamlit run frontend/app.py
 一個指令建好並啟動兩個容器：`core` 跑完一次回測就結束，`frontend` 會持續提供網頁。
 
 ```bash
-# 建立映像並啟動（預設策略為 MomentumStrategy1）
+# 建立映像並啟動（預設策略為 VolumeBreakoutMomentumStrategy）
 docker compose up --build
 
 # 換成其他策略
@@ -336,7 +336,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 docker run --rm \
   -v "$(pwd)/data:/app/data:ro" \
   -v "$(pwd)/results:/app/results" \
-  alphaedge-core --strategy MomentumStrategy1
+  alphaedge-core --strategy VolumeBreakoutMomentumStrategy
 ```
 
 映像不含資料庫，所以要唯讀掛入本機 `data/`；結果寫回本機 `results/`，否則容器結束時會跟著消失。
@@ -420,7 +420,7 @@ CI 沒有該檔，只能在本機跑。**
 完整 target 對照表與單一/組合範例請見：[指令教學](docs/commands/command-usage.zh-TW.md)。
 
 ```bash
-python -m tasks.update_db --target no_tick
+python -m apps.update_db --target no_tick
 ```
 
 ### 執行回測
@@ -437,11 +437,10 @@ python -m apps.backtest --strategy <StrategyClassName>
 ```text
 AlphaEdge/
 ├── core/                    # 交易領域模組
-│   ├── strategies/            # 策略實作
+│   ├── strategies/            # 策略契約（只放抽象基底；具體策略在頂層 strategies/）
 │   │   ├── base.py            # BaseStrategy（市場無關）
-│   │   ├── strategy_loader.py # 自動掃描所有商品類別子套件（stock／futures）
-│   │   ├── stock/             # BaseStockStrategy ＋ 各支台股策略
-│   │   └── futures/           # BaseFuturesStrategy 與台期貨策略
+│   │   ├── stock/             # BaseStockStrategy
+│   │   └── futures/           # BaseFuturesStrategy
 │   ├── api/                   # 資料查詢介面與業務規則（不寫 SQL，以 conn= 建 DAO）
 │   ├── dao/                   # 資料存取層：SQL、連線與交易只寫在這裡
 │   │   ├── base.py            # BaseDAO：owns_conn、table_exists、savepoint、寫入方法
@@ -506,9 +505,8 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend 容器映像
 │   ├── README.md              # frontend 使用說明
 │   └── __init__.py
-├── strategies/                # 具體策略的頂層套件（stock／futures，目前為空白門面；策略契約留在 core/strategies/，相依只能 strategies → core）
+├── strategies/                # 具體策略與策略載入器（stock／futures；策略契約留在 core/strategies/，相依只能 strategies → core）
 ├── strategy_lab/              # 策略研究工作區（strategies/ / data_analysis/ / notebooks/ / ideas/）
-├── tasks/                     # 資料更新與維運入口（update_db、delete_price_data、clean_logs）
 ├── tests/                     # 測試套件（`backtest/` 引擎與回歸線、`live/` 實盤、`portfolio/` 共用契約層、`analysis/` 績效指標、`fixtures/` 測試資料；`downloads/` 為執行期產物）
 ├── backlog/                   # 內部規劃筆記
 ├── docs/                      # 專案文件
@@ -531,7 +529,7 @@ AlphaEdge/
 │   ├── check_overnight_positions.py  # 模擬環境是否保留隔夜部位（唯讀分析）
 │   ├── launchd/               # macOS launchd 排程產生器與存活監控包裝腳本（逐段落啟動模擬環境演練）
 │   └── manual/                # 需要金鑰或資料庫的人工執行腳本（見該目錄 README）
-├── Dockerfile                 # 後端映像（core、apps、tasks、strategies；回測、資料更新與實盤共用）
+├── Dockerfile                 # 後端映像（core、apps、strategies；回測、資料更新與實盤共用）
 ├── docker-compose.yml         # compose：core ＋ live（掛 profile，不會被 up 帶起來）＋ frontend ＋ 共用 results volume
 ├── pyproject.toml             # 相依宣告（唯一來源）與 ruff／pytest 設定
 ├── uv.lock                    # uv 解析出的鎖定版本（勿手改，改 pyproject 後 `uv lock`）

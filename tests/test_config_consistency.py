@@ -32,7 +32,6 @@ ENV_SCAN_PATHS: List[str] = [
     "core",
     "apps",
     "strategies",
-    "tasks",
     "frontend",
     "scripts",
 ]

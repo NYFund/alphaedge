@@ -128,7 +128,7 @@ def test_unexplained_count_does_not_grow(unexplained: pd.DataFrame) -> None:
 
     assert len(unexplained) <= BASELINE_UNEXPLAINED_TOTAL + TOLERANCE, (
         f"解釋不掉的跳空由 {BASELINE_UNEXPLAINED_TOTAL} 增為 {len(unexplained)} 筆"
-        f"（{summary}）。請跑 `python -m tasks.update_db --target corporate_action`；"
+        f"（{summary}）。請跑 `python -m apps.update_db --target corporate_action`；"
         "若補完仍在，代表是不在減資端點裡的公司行動（合併換股、私募等），"
         "確認後調高基準數並註明原因。"
     )

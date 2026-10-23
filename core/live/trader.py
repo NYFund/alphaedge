@@ -2,11 +2,21 @@ import datetime
 import time
 from dataclasses import dataclass, field, replace
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from loguru import logger
 
-from core.broker.base import BaseBroker
+from core.broker.base import BROKER_SESSION_DOWN, BaseBroker
 from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_sync import AccountSynchronizer, FilledOrderBuilder
@@ -36,6 +46,7 @@ from core.live.notify.base import NotifyLevel, notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker
+from core.live.risk import event_categories
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.margin_gate import MarginAccountQuery, MarginGate
 from core.live.risk.risk_manager import (
@@ -129,6 +140,20 @@ class StrategyContext:
 
         return type(self.strategy).__name__
 
+    @property
+    def capital_limit(self) -> float:
+        """
+        - Description:
+            本策略的實盤資金額度，風控各道上限的基準
+
+            取帳戶的初始資金：實盤帳戶由組裝層以 `live_capital` 建立，
+            與資金額度分配同一個值。**不可用 `strategy.init_capital`**——
+            那是研究回測的本金，宣告了較小 `live_capital` 的策略會讓每道上限
+            照較大的本金放寬。
+        """
+
+        return float(self.account.init_capital)
+
     def notional(self, order: BaseOrder) -> float:
         """本張委託的金額；未注入換算器時退回「價 × 量」"""
 
@@ -168,12 +193,14 @@ class LiveTrader:
     # 沒有回報時的輪詢間隔（秒）。太短會空轉吃 CPU，太長會讓撤單與時限判斷變遲鈍
     POLL_INTERVAL_SECONDS: float = 0.5
 
-    # 等待回報的安全上限（秒）。**這條是獨立於時鐘的保險絲**：
-    # 時窗判斷靠 `now_provider()`，而它若因為時鐘卡住、倒退或注入錯誤而不再前進，
-    # 迴圈會永遠轉下去——段落不結束，下一個段落的行程拿不到連線與寫入鎖，
-    # 而存活監控只會看到「開始了但沒有正常結束」。故另外累計實際等過的秒數，
-    # 超過就強制跳出並記 error
-    MAX_WAIT_SECONDS: float = 1800.0
+    # 等待的安全上限＝開始等待時離目標時點還有多久 ＋ 這段寬限（秒）。
+    # **這條是獨立於時鐘的保險絲**：時窗判斷靠 `now_provider()`，而它若因為時鐘卡住、
+    # 倒退或注入錯誤而不再前進，迴圈會永遠轉下去——段落不結束，下一個段落的行程
+    # 拿不到連線與寫入鎖，而存活監控只會看到「開始了但沒有正常結束」。故另外累計
+    # 實際睡過的秒數，超過就強制跳出並記 error。
+    # **上限跟著時窗長度走**：寫死一個秒數的話，比它長的時窗（股票開盤段 35 分鐘）
+    # 會在時鐘完全正常時撞到上限，天天記一條「請確認系統時鐘」的假警報
+    WAIT_GRACE_SECONDS: float = 300.0
 
     # 收線後撤單，再收撤單回報的時間（秒）。撤單回報通常一秒內就到；
     # 收不到也不影響正確性——日終由盤後刷新與 `expire_unfinished()` 補標
@@ -257,7 +284,8 @@ class LiveTrader:
             - cost_estimator: Optional[TradeCostEstimator]
                 盤後校正成本用的估算器（依市場重算一筆已平倉交易的費用與稅）
             - resume_trading: bool
-                人工恢復交易模式（**只能由命令列旗標傳入**）
+                帳戶層已人工恢復（**只能由命令列旗標傳入**）；指名只恢復部分策略時為 False，
+                帳戶層的降級仍然有效
             - notifier: Optional[Any]
                 事件推播；None 時不推播
             - now_provider: Callable[[], datetime.datetime]
@@ -350,6 +378,8 @@ class LiveTrader:
         self._cover_attempts: Dict[datetime.date, int] = {}
         # 每檔最後一筆報價；回補單取價用
         self._last_quotes: Dict[str, BaseQuote] = {}
+        # 盤中段落各策略的標的池集合（`run_intraday()` 開始時建立）
+        self._declared_symbols: Dict[str, FrozenSet[str]] = {}
 
     # === 主流程 ===
     def run(self, timing: ExecutionTiming) -> None:
@@ -613,9 +643,21 @@ class LiveTrader:
             on_heartbeat=self._on_heartbeat,
         )
 
+        # 開盤段與尾盤段是另外的行程、共用同一個帳號：時窗開始前不連上場，
+        # 否則兩個行程同時在場上，各自都會收到對方的委託回報
+        self._wait_until_submit_window(window)
+
         symbols: List[str] = sorted(
-            {symbol for context in self.contexts for symbol in context.symbols}
+            {
+                symbol
+                for context in self.contexts
+                for symbol in self.quote_symbols(context)
+            }
         )
+        # 逐筆派送每一筆都要判斷「這檔是不是這支策略的」；標的池在段落內不變，先建成集合
+        self._declared_symbols = {
+            context.name: frozenset(context.symbols) for context in self.contexts
+        }
         self.broker.route_events(loop.submit_quote, loop.submit_execution)
         if symbols:
             self.broker.subscribe_quotes(symbols)
@@ -624,11 +666,43 @@ class LiveTrader:
         logger.info(f"盤中逐筆開始，訂閱 {len(symbols)} 檔，收線 {deadline}")
 
         stats: LoopStats = loop.run_until(deadline)
+        self._close_intraday_loop(loop, stats)
         logger.info(
             f"盤中逐筆結束：行情 {stats.quotes} 筆、回報 {stats.executions} 筆、"
             f"心跳 {stats.heartbeats} 次、處理失敗 {stats.handler_errors} 筆"
         )
         return stats
+
+    def _close_intraday_loop(self, loop: IntradayEventLoop, stats: LoopStats) -> None:
+        """
+        - Description:
+            盤中收線：回報改回直接的 queue → 清掉迴圈裡剩下的回報
+
+            **收線前一刻送出的單可能在收線後才成交**（台股盤中段落送單迄 13:18、收回報到 13:19）。
+            迴圈導向期間 `drain_execution_queue()` 恆為空，不改回的話，這段時間的成交與撤單回報
+            會留在迴圈那個已經沒人讀的 queue 裡，本行程的委託與歸屬帳都看不到。改回之後，
+            `finish()` 照日頻段落的同一套流程在直接的 queue 上收回報到 `drain_end`、撤單、收撤單回報。
+
+            **先改回 queue、再清迴圈裡的回報**：改道前進來的回報比之後進來的早，先處理完，順序才不會亂。
+
+            **不退訂行情**：改回之後行情進到一個沒人讀的 queue，只到段落收尾登出為止；
+            為這一兩分鐘另外退訂，失敗時還得決定要不要中止段落，不值得。
+        - Parameters:
+            - loop: IntradayEventLoop
+                本段的事件迴圈
+            - stats: LoopStats
+                本段統計；收線後清出的回報與失敗一併累計進去
+        """
+
+        self.broker.restore_event_routing()
+        flushed: LoopStats = loop.flush_executions()
+
+        stats.executions += flushed.executions
+        stats.handler_errors += flushed.handler_errors
+        if flushed.executions:
+            logger.info(
+                f"盤中收線時 queue 裡還有 {flushed.executions} 筆回報，已套進委託與歸屬帳"
+            )
 
     def _resolve_intraday_deadline(
         self, window: Optional[SegmentWindow]
@@ -664,6 +738,7 @@ class LiveTrader:
             連不回來時不跑日終動作，留給下一次心跳再試。
         """
 
+        self._apply_broker_degrades()
         if not self.ensure_connected():
             return
         self._run_session_guard()
@@ -842,7 +917,13 @@ class LiveTrader:
         for context in self.contexts:
             if not getattr(context.strategy, "is_tick_triggered", False):
                 continue
-            if quote.symbol not in context.symbols:
+            # 標的池查集合；池外的只認帳上持有的（與訂閱範圍 `quote_symbols()` 相同）
+            declared: FrozenSet[str] = self._declared_symbols.get(
+                context.name, frozenset(context.symbols)
+            )
+            if quote.symbol not in declared and not context.account.check_has_position(
+                quote.symbol
+            ):
                 continue
             self._submit_one_quote(context, quote)
 
@@ -893,6 +974,40 @@ class LiveTrader:
         self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
         self._notify(NotifyLevel.CRITICAL, "行情中斷", reason)
 
+    def _apply_broker_degrades(self) -> None:
+        """
+        - Description:
+            取出券商閘道回報的降級事件，依類別決定要不要降級
+
+            偵測跑在券商的執行緒上，只入列；這裡在主執行緒處理，因為降級要寫紀錄庫。
+
+            - **連線中斷**：不降級，只寫 WARN 事件並推播。短暫斷線不該停掉之後的開倉——
+              降級會落地並延續到之後的段落，要人工解除。盤中由心跳重連並走完恢復流程，
+              斷線期間若有漏接，重連後的對帳會抓到並由對帳器降級。
+            - **重連次數用完、時鐘偏差過大**：帳戶層降為 `REDUCE_ONLY` 並推 CRITICAL。
+              前者是今天不會自己恢復的故障；後者讓段落時窗與報價過期判斷都失準。
+              **不降 `HALTED`**（同 `_on_market_data_lost()`）：部位還在場上，停損要送得出去。
+        """
+
+        drain: Optional[Callable[[], List[Tuple[str, str]]]] = getattr(
+            self.broker, "drain_degrade_events", None
+        )
+        if drain is None:
+            return
+
+        for kind, reason in drain():
+            if kind == BROKER_SESSION_DOWN:
+                self.events.write(
+                    category=event_categories.BROKER_SESSION_DOWN,
+                    severity=NotifyLevel.WARN,
+                    message=reason,
+                )
+                self._notify(NotifyLevel.WARN, "券商連線中斷", reason)
+                continue
+
+            self.risk_manager.on_degrade_event(reason, TradingMode.REDUCE_ONLY)
+            self._notify(NotifyLevel.CRITICAL, "券商連線降級", reason)
+
     def ensure_connected(self) -> bool:
         """
         - Description:
@@ -911,10 +1026,21 @@ class LiveTrader:
 
         logger.error("偵測到連線中斷，嘗試重連")
         if not self.broker.reconnect():
+            # 次數用完時閘道會回報降級事件，當場套用，不等下一次心跳
+            self._apply_broker_degrades()
             self._notify(NotifyLevel.CRITICAL, "重連失敗", "已停止送單，請人工確認")
             return False
 
         self.recover_after_reconnect()
+        # 恢復流程含對帳：不一致時對帳器已經降級，走到這裡代表狀態確認過，不降級只留紀錄
+        message: str = "券商重連成功，已重新訂閱、接管委託並對帳"
+        logger.warning(message)
+        self.events.write(
+            category=event_categories.BROKER_RECONNECTED,
+            severity=NotifyLevel.WARN,
+            message=message,
+        )
+        self._notify(NotifyLevel.WARN, "券商重連成功", message)
         return True
 
     def recover_after_reconnect(self) -> None:
@@ -1132,6 +1258,29 @@ class LiveTrader:
         self._notify(severity, "換月", text)
 
     # === 訊號 ===
+    @staticmethod
+    def quote_symbols(context: StrategyContext) -> List[str]:
+        """
+        - Description:
+            這支策略要拿報價的標的：宣告的標的池，加上帳上持有、卻不在池裡的標的
+
+            **持有的標的一定要拿得到報價**：標的池可能每天重新篩選（盤中策略受訂閱上限
+            所限，只看前 N 檔），昨天買的那一檔今天掉出池外的話，平倉與停損鉤子
+            永遠看不到它，部位就一直留在帳上，而且不會有任何錯誤。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+        - Return:
+            - List[str]
+                標的池在前、池外的持有標的依代號排序附在後面
+        """
+
+        declared: List[str] = list(context.symbols)
+        held: Set[str] = {
+            position.symbol for position in context.account.get_positions()
+        } - set(declared)
+        return declared + sorted(held)
+
     def collect_orders(
         self, context: StrategyContext, timing: ExecutionTiming
     ) -> List[Tuple[StrategyContext, BaseOrder]]:
@@ -1158,7 +1307,7 @@ class LiveTrader:
 
         try:
             quotes: List[BaseQuote] = context.data_feed.get_live_quotes(
-                timing, context.symbols
+                timing, self.quote_symbols(context)
             )
             # 先記下市場價再呼叫鉤子：鉤子產生的每一張委託都要拿同一份報價當偏離基準
             context.quote_prices = quote_prices_of(quotes)
@@ -1375,7 +1524,7 @@ class LiveTrader:
                 continue
 
             allowed: List[ExposureItem] = self.risk_manager.check_batch(
-                items, context.name, context.strategy.init_capital
+                items, context.name, context.capital_limit
             )
             kept.extend((context, item.order) for item in allowed)
         return kept
@@ -1432,6 +1581,9 @@ class LiveTrader:
                 一般段落不需要它；日終回補靠它判斷要不要重試
         """
 
+        # 券商執行緒回報的降級要在送單前套用，否則時鐘已不可信的這一批照樣送出
+        self._apply_broker_degrades()
+
         unsent: List[Tuple[StrategyContext, BaseOrder]] = []
         # 每批一份保證金預算：同一批的開倉單逐張累計，不各自拿同一份可用保證金比
         margin_gate: MarginGate = MarginGate(self.margin_query, self.simulation)
@@ -1478,7 +1630,7 @@ class LiveTrader:
             decision: RiskDecision = self.risk_manager.check(
                 order,
                 context.name,
-                context.strategy.init_capital,
+                context.capital_limit,
                 amount,
                 reference_price=self._reference_price(context, order),
                 limit_up=limits[0],
@@ -1712,14 +1864,15 @@ class LiveTrader:
             self.drain_once()
             return
 
+        cap: float = self._wait_cap_seconds(getattr(window, attribute))
         waited: float = 0.0
         while not self._past(window, attribute):
             if self.drain_once():
                 continue
 
-            if waited >= self.MAX_WAIT_SECONDS:
+            if waited >= cap:
                 logger.error(
-                    f"等待回報已達安全上限 {self.MAX_WAIT_SECONDS:.0f} 秒仍未到 "
+                    f"等待回報已達安全上限 {cap:.0f} 秒仍未到 "
                     f"{attribute}，強制結束等待；請確認系統時鐘是否正常"
                 )
                 return
@@ -1772,6 +1925,9 @@ class LiveTrader:
             - aborted: bool
                 段落是否因例外或終止訊號結束
         """
+
+        # 段落中途發生、還沒被送單或心跳取走的降級事件，在寫結束紀錄之前落地
+        self._apply_broker_degrades()
 
         try:
             if aborted:
@@ -2306,7 +2462,7 @@ class LiveTrader:
 
         for context in self.contexts:
             self.risk_manager.check_daily_loss(
-                context.name, self._strategy_loss(context), context.account.init_capital
+                context.name, self._strategy_loss(context), context.capital_limit
             )
 
         account_loss: Optional[float] = self._account_loss()
@@ -2497,17 +2653,40 @@ class LiveTrader:
         if window is None:
             return
 
+        cap: float = self._wait_cap_seconds(window.submit_start)
         waited: float = 0.0
         while self._now().time() < window.submit_start:
-            if waited >= self.MAX_WAIT_SECONDS:
+            if waited >= cap:
                 logger.error(
-                    f"等待送單時窗已達安全上限 {self.MAX_WAIT_SECONDS:.0f} 秒，"
+                    f"等待送單時窗已達安全上限 {cap:.0f} 秒，"
                     "本段落放棄送單；請確認系統時鐘是否正常"
                 )
                 return
 
             self._sleep(self.POLL_INTERVAL_SECONDS)
             waited += self.POLL_INTERVAL_SECONDS
+
+    def _wait_cap_seconds(self, target: datetime.time) -> float:
+        """
+        - Description:
+            這次等待的安全上限：開始等待時離目標時點的秒數 ＋ 寬限
+
+            只在開始等待時讀一次時鐘。之後時鐘卡住也不影響上限，
+            迴圈仍會在累計睡滿上限後跳出。
+        - Parameters:
+            - target: datetime.time
+                要等到的時點（同一個交易日）
+        - Return:
+            - float
+                上限秒數；目標已過時只剩寬限
+        """
+
+        now: datetime.datetime = self._now()
+        target_at: datetime.datetime = datetime.datetime.combine(
+            now.date(), target, tzinfo=now.tzinfo
+        )
+        remaining: float = (target_at - now).total_seconds()
+        return max(remaining, 0.0) + self.WAIT_GRACE_SECONDS
 
     def _past(self, window: Optional[SegmentWindow], attribute: str) -> bool:
         """目前時刻是否已過時窗上的某個時點"""

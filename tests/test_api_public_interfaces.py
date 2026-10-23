@@ -32,7 +32,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 （逐一實測過都正常回傳），問題是沒有任何東西盯著它們：下一次資料表欄位一改，
 它們會安靜地跟著壞而沒有東西會紅。
 
-`core/api/` 是策略作者的公開介面（見 `core/strategies/README.md`），
+`core/api/` 是策略作者的公開介面（見 `strategies/README.md`），
 「`core/` 內部沒有呼叫端」對它們是正常狀態，**有測試才是維護的證據**。
 
 一律以 in-memory SQLite 灌樣本，不連 `data/db/tw_stock.db`。

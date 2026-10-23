@@ -81,6 +81,9 @@ class ShioajiBroker(BaseBroker):
         super().__init__()
 
         self.session: ShioajiSession = session
+        # session 偵測到的連線中斷、重連用完與時鐘偏差一律進本閘道的降級佇列，
+        # 由引擎主執行緒決定要不要降級（那些偵測跑在券商的執行緒上，不可直接寫紀錄庫）
+        session.set_degrade_handler(self.report_degrade)
         self.rate_limiter: RateLimiter = (
             rate_limiter if rate_limiter is not None else session.rate_limiter
         )
@@ -176,6 +179,19 @@ class ShioajiBroker(BaseBroker):
         super().route_events(on_quote, on_execution)
         self.quote_queue = CallbackQueue(forward_quote)
         self._bind_session()
+
+    def restore_event_routing(self) -> None:
+        """
+        撤銷導向：行情與回報都改回各自的 queue，並把回呼重新掛到新的 queue 上
+
+        元件在 `_bind_session()` 時拿走的是當下的 queue 物件，只換屬性不重綁的話，
+        回呼仍會往迴圈那個已經沒人讀的 queue 塞。連線已斷時不重綁（重連時會綁）。
+        """
+
+        super().restore_event_routing()
+        self.quote_queue = queue.Queue()
+        if self.session.is_connected():
+            self._bind_session()
 
     def reconnect(self) -> bool:
         """
@@ -524,19 +540,24 @@ class ShioajiBroker(BaseBroker):
         return list(self.quote_stream.get_stock_snapshots(contracts))
 
     def subscribe_quotes(self, symbols: List[str]) -> None:
-        """訂閱股票逐筆行情"""
+        """
+        訂閱股票逐筆行情（只訂成交，不訂委買賣）
+
+        委買賣目前沒有消費者，一併訂閱只會讓每一檔佔兩個訂閱名額——券商若把兩種行情
+        分開計數，200 檔的標的池就會變成 400 個訂閱而在盤中段落啟動時被拒。
+        """
 
         self._require_ready()
         self.quote_stream.subscribe(
-            list(self.resolver.resolve_stocks(symbols).values())
+            list(self.resolver.resolve_stocks(symbols).values()), with_bidask=False
         )
 
     def unsubscribe_quotes(self, symbols: List[str]) -> None:
-        """取消訂閱"""
+        """取消訂閱（與訂閱對稱，只有成交）"""
 
         self._require_ready()
         self.quote_stream.unsubscribe(
-            list(self.resolver.resolve_stocks(symbols).values())
+            list(self.resolver.resolve_stocks(symbols).values()), with_bidask=False
         )
 
     # === 委託狀態轉換 ===

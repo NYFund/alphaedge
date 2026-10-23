@@ -6,7 +6,13 @@ from typing import Iterable, List, Optional, Set, Tuple
 from loguru import logger
 
 from core.api.tw.futures_price_api import FuturesPriceAPI
-from core.utils import FuturesSession
+from core.utils import (
+    FUTURES_DAY_SESSION_CLOSE,
+    FUTURES_DAY_SESSION_OPEN,
+    FUTURES_NIGHT_SESSION_CLOSE,
+    FUTURES_NIGHT_SESSION_OPEN,
+    FuturesSession,
+)
 
 """
 FuturesCalendar: 台期貨交易日曆（交易日、時段、結算日與最後交易日）
@@ -36,10 +42,11 @@ class FuturesCalendar:
     """台期貨交易日曆"""
 
     # === 交易時段（TAIFEX 現行制度）===
-    DAY_SESSION_OPEN: datetime.time = datetime.time(8, 45)
-    DAY_SESSION_CLOSE: datetime.time = datetime.time(13, 45)
-    NIGHT_SESSION_OPEN: datetime.time = datetime.time(15, 0)
-    NIGHT_SESSION_CLOSE: datetime.time = datetime.time(5, 0)  # 次一曆日
+    # 起訖只定義在 `core/utils/constant/futures.py` 一處，這裡是別名
+    DAY_SESSION_OPEN: datetime.time = FUTURES_DAY_SESSION_OPEN
+    DAY_SESSION_CLOSE: datetime.time = FUTURES_DAY_SESSION_CLOSE
+    NIGHT_SESSION_OPEN: datetime.time = FUTURES_NIGHT_SESSION_OPEN
+    NIGHT_SESSION_CLOSE: datetime.time = FUTURES_NIGHT_SESSION_CLOSE  # 次一曆日
 
     # 夜盤上線日：**2017-05-15 之前沒有夜盤**，該日之前的夜盤查詢一律無資料
     NIGHT_SESSION_LAUNCH_DATE: datetime.date = datetime.date(2017, 5, 15)
@@ -329,15 +336,7 @@ class FuturesCalendar:
                 所屬時段；非交易時間（13:45~15:00、05:00~08:45）為 None
         """
 
-        clock: datetime.time = moment.time()
-
-        if cls.DAY_SESSION_OPEN <= clock <= cls.DAY_SESSION_CLOSE:
-            return FuturesSession.DAY
-
-        if clock >= cls.NIGHT_SESSION_OPEN or clock <= cls.NIGHT_SESSION_CLOSE:
-            return FuturesSession.NIGHT
-
-        return None
+        return FuturesSession.resolve(moment)
 
     def has_night_session(self, date: datetime.date) -> bool:
         """

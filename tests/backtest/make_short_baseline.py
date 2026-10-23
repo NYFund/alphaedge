@@ -21,7 +21,7 @@ from tests.conftest import build_stock_quote
 """
 產生 SHORT 路徑的回歸 baseline：多市場抽象重構動程式碼前的第一步
 
-LONG 已有逐筆 baseline（`momentum_strategy_1_baseline.csv`），SHORT 卻只有
+LONG 已有逐筆 baseline（`volume_breakout_momentum_strategy_baseline.csv`），SHORT 卻只有
 單元／整合測試，缺少「整條路徑的完整帳」。放空記帳要從 `Backtester` 搬進
 `SettlementModel`，若某個攤提比例走鐘，現有測試不保證抓得到，
 因此在此建立第二條回歸線。

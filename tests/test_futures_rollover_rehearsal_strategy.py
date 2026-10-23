@@ -7,11 +7,11 @@ from core.live.strategy_guard import inspect_strategy
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
 from core.position.futures.position_manager import FuturesPositionManager
-from core.strategies.futures.futures_rollover_rehearsal_strategy import (
+from core.utils import Action, ExecutionStyle, PositionType
+from strategies.futures.futures_rollover_rehearsal_strategy import (
     FuturesRolloverRehearsalStrategy,
 )
-from core.strategies.strategy_loader import StrategyLoader
-from core.utils import Action, ExecutionStyle, PositionType
+from strategies.loader import StrategyLoader
 from tests.conftest import build_futures_quote
 
 """

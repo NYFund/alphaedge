@@ -41,7 +41,9 @@ def test_ticket_keeps_order_and_status_separate() -> None:
 
     order: StockOrder = StockOrder(stock_id="2330", volume=5, price=1000.0)
     ticket: OrderTicket = OrderTicket(
-        client_order_id="r1-0001", strategy_name="MomentumStrategy1", order=order
+        client_order_id="r1-0001",
+        strategy_name="VolumeBreakoutMomentumStrategy",
+        order=order,
     )
 
     ticket.status = LiveOrderStatus.PARTIALLY_FILLED

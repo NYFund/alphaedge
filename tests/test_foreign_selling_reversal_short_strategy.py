@@ -9,9 +9,6 @@ from core.backtest.backtester import Backtester
 from core.backtest.factory import build_cost_config
 from core.models import StockAccount, StockOrder, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
-from core.strategies.stock.foreign_selling_reversal_short_strategy import (
-    ForeignSellingReversalShortStrategy,
-)
 from core.utils import (
     Action,
     BarExecutionSequence,
@@ -19,6 +16,9 @@ from core.utils import (
     PositionType,
     ShortMethod,
     Units,
+)
+from strategies.stock.foreign_selling_reversal_short_strategy import (
+    ForeignSellingReversalShortStrategy,
 )
 from tests.conftest import build_stock_quote
 
@@ -524,8 +524,26 @@ def test_borrow_check_stays_disabled() -> None:
     )
     config: CostConfig = build_cost_config(strategy)
 
-    assert strategy.short_constraint is None
     assert config.short_constraint.check_borrowable is False
+
+
+def test_exchange_trading_lists_are_checked() -> None:
+    """
+    交易所名單檢核預設開啟
+
+    現股當沖名單外、或暫停先賣後買的標的現實中沖賣不了；不檢核的話回測會算進做不到的獲利。
+    平盤下名單對現股沖賣沒有作用，一併開啟只為與其他放空策略一致。
+    """
+
+    strategy: ForeignSellingReversalShortStrategy = (
+        ForeignSellingReversalShortStrategy()
+    )
+    config: CostConfig = build_cost_config(strategy)
+
+    assert config.short_constraint.check_day_trade_list is True
+    assert config.short_constraint.check_short_sale_list is True
+    # 名單涵蓋檢查要求起日不早於先賣後買開放日
+    assert strategy.start_date >= datetime.date(2014, 6, 30)
 
 
 # === 回補價：當日 vs 被迫留倉 ===
