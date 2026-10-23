@@ -1,6 +1,6 @@
 import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 import shioaji as sj
@@ -63,17 +63,29 @@ class StockTickCrawler(BaseDataCrawler):
                 證券代號
         - Return:
             - Optional[pd.DataFrame]
-                逐筆成交；查無資料或取得失敗時為 None
+                逐筆成交；查無資料（非交易日、停牌、代號已不在合約表）時為 None
+        - Raise:
+            - ConnectionError
+                Shioaji 取資料失敗
+
+            **失敗不可回 None**：呼叫端會把 None 當成「這天沒有成交」，
+            那一天就被當成已處理，之後再也不會重爬。
         """
 
-        try:
-            ticks: Ticks = api.ticks(
-                contract=api.Contracts.Stocks.get(code), date=date.isoformat()
-            )
-            tick_df: pd.DataFrame = pd.DataFrame({**ticks})
-
-            return tick_df if not tick_df.empty else None
-
-        except Exception as e:
-            logger.error(f"Error Crawling Tick Data: {code} {date} | {e}")
+        contract: Optional[Any] = api.Contracts.Stocks.get(code)
+        if contract is None:
+            logger.warning(f"{code} 不在 Shioaji 合約表（可能已下市），略過 {date}")
             return None
+
+        try:
+            ticks: Ticks = api.ticks(contract=contract, date=date.isoformat())
+        except Exception as e:
+            # **刻意的盲捕**：Shioaji 1.7 沒有公開的例外型別（`shioaji.error` 裡沒有任何
+            # 例外類別），連線、逾時與伺服器端錯誤各自拋什麼無從列舉。
+            # 一律轉成 `ConnectionError` 交給 updater 計為失敗，型別名留在訊息裡
+            raise ConnectionError(
+                f"Shioaji 取 tick 失敗：{code} {date}（{type(e).__name__}: {e}）"
+            ) from e
+
+        tick_df: pd.DataFrame = pd.DataFrame({**ticks})
+        return tick_df if not tick_df.empty else None

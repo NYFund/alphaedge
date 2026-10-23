@@ -89,7 +89,9 @@ class StockTickCleaner(BaseDataCleaner):
                             f"Stock {stock_id}: All rows have invalid timestamp"
                         )
                         return None
-            except Exception as e:
+            # 缺 `ts` 欄（KeyError）或整欄型別不對（TypeError）都是來源資料的問題；
+            # `errors="coerce"` 已把個別壞值轉成 NaT，不會走到這裡
+            except (KeyError, TypeError, ValueError) as e:
                 logger.error(f"Stock {stock_id}: Error converting timestamp: {e}")
                 return None
 
@@ -176,7 +178,10 @@ class StockTickCleaner(BaseDataCleaner):
 
             return new_df
 
-        except Exception as e:
+        # 只收來源資料與落地的錯：欄位缺漏（KeyError）、格式轉換（ValueError）、
+        # 寫檔與替換（OSError）。程式自己寫錯（AttributeError、TypeError）要現形，
+        # 由 updater 的 thread 邊界計為整批失敗，而不是悄悄變成「這檔沒資料」
+        except (KeyError, ValueError, OSError) as e:
             logger.opt(exception=True).error(
                 f"Error processing or saving tick data for stock {stock_id} | {e}",
             )
@@ -219,7 +224,7 @@ class StockTickCleaner(BaseDataCleaner):
 
     def format_time_to_microsec(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        把 `time` 欄補足到微秒精度（DolphinDB 的 tick 表要求固定精度）
+        把 `time` 欄補足到微秒精度（CSV 的欄位契約是固定 26 字元，也是 PostgreSQL `TIMESTAMP` 的精度上限）
 
         補不出來的列一律丟掉：時間是 tick 唯一的排序依據，猜一個值會讓成交順序錯亂。
         """
@@ -241,7 +246,7 @@ class StockTickCleaner(BaseDataCleaner):
                         logger.error("All rows have invalid time format")
                         return df
 
-            # 微秒必須是完整 6 位小數，少一位在 DolphinDB 端就會對不上精度
+            # 微秒必須是完整 6 位小數：同一份 CSV 混著不同精度的話，逐列對照資料庫時對不上
             time_str: pd.Series = df["time"].astype(str)
             has_microsec: pd.Series = time_str.str.contains(
                 r"\.\d{6}", regex=True, na=False
@@ -259,7 +264,8 @@ class StockTickCleaner(BaseDataCleaner):
 
             return df
 
-        except Exception as e:
+        # 時間字串轉換失敗（ValueError／TypeError）時保留原值，交給入庫端的正規化再檢查一次
+        except (ValueError, TypeError) as e:
             logger.opt(exception=True).error(
                 f"Error formatting time to microsecond: {e}"
             )

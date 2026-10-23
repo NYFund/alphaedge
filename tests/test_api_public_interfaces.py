@@ -482,7 +482,7 @@ def test_get_last_tick_takes_the_last_row() -> None:
     當日最後一筆 tick ＝ `get_stock_ticks()` 結果的最後一列
 
     以替身取代 `get_stock_ticks()`，本測試驗的是**取尾與空表處理**這段邏輯，
-    不需要 DolphinDB 連線（`StockTickAPI` 的 `__init__` 會連 tick 庫，
+    不需要 TimescaleDB 連線（`StockTickAPI` 的 `__init__` 會連 tick 庫，
     故以 `__new__` 建立空殼）。
     """
 

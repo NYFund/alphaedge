@@ -84,6 +84,37 @@ class StockPriceDAO(BaseDAO):
 
         return self.get_distinct_dates(start_date, end_date)
 
+    def get_stock_trading_days(
+        self,
+        stock_id: str,
+        start_date: datetime.date,
+        end_date: datetime.date,
+    ) -> Set[datetime.date]:
+        """
+        - Description:
+            某檔股票在區間內有日 K 的交易日
+
+            台股 tick 入庫用它判斷「這一天這檔是不是上市櫃」：興櫃時期的 tick 以「股」為單位、
+            交易到 15:00 之後，`price` 表只收上市櫃，當天沒有這檔就代表還在興櫃。
+        - Parameters:
+            - stock_id: str
+                股票代號
+            - start_date: datetime.date
+                起始日（含）
+            - end_date: datetime.date
+                結束日（含）
+        - Return:
+            - Set[datetime.date]
+                有日 K 的日期；無資料時為空集合
+        """
+
+        rows: sqlite3.Cursor = self.conn.execute(
+            f"SELECT DISTINCT {self.DATE_COLUMN} FROM {self.TABLE_NAME} "
+            f"WHERE stock_id = ? AND {self.DATE_COLUMN} BETWEEN ? AND ?",
+            to_sql_params(stock_id, start_date, end_date),
+        )
+        return {datetime.date.fromisoformat(row[0][:10]) for row in rows}
+
     def get_close_prices(
         self, start_date: Optional[datetime.date] = None
     ) -> pd.DataFrame:

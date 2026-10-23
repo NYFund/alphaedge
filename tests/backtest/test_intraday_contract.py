@@ -82,8 +82,8 @@ def test_non_intraday_tick_backtest_is_untouched() -> None:
     """
     既有的 TICK 回測語意不動：沒宣告逐筆的策略不受這道守門影響
 
-    **直接驗守門本身而不是建一個 TICK 引擎**：TICK 回測要 DolphinDB，
-    沒裝的環境會在載入資料時就先炸掉，那樣這條測試驗到的是相依有沒有裝，
+    **直接驗守門本身而不是建一個 TICK 引擎**：TICK 回測要 TimescaleDB，
+    沒啟動資料庫的環境會在載入資料時就先炸掉，那樣這條測試驗到的是相依有沒有裝，
     不是守門有沒有放行。
     """
 

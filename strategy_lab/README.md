@@ -24,7 +24,7 @@
   - [研究工作流（從想法到上線）](#研究工作流從想法到上線)
   - [可直接複用的資料 API](#可直接複用的資料-api)
     - [StockPriceAPI — 日線價格資料 (SQLite)](#stockpriceapi--日線價格資料-sqlite)
-    - [StockTickAPI — 逐筆成交資料 (DolphinDB)](#stocktickapi--逐筆成交資料-dolphindb)
+    - [StockTickAPI — 逐筆成交資料 (TimescaleDB)](#stocktickapi--逐筆成交資料-timescaledb)
     - [StockChipAPI — 三大法人籌碼 (SQLite)](#stockchipapi--三大法人籌碼-sqlite)
     - [MonthlyRevenueReportAPI — 月營收 (SQLite)](#monthlyrevenuereportapi--月營收-sqlite)
     - [FinancialStatementAPI — 季報財報 (SQLite)](#financialstatementapi--季報財報-sqlite)
@@ -151,10 +151,11 @@ df_2330 = price.get_stock_price(
 
 回傳欄位（典型）：`date, stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交股數, ...`（**是 `成交股數` 不是 `成交量`**——後者只存在於期貨表，單位是口。要張數請用 `StockPriceAPI.get_volume_lots_map()`）
 
-### StockTickAPI — 逐筆成交資料 (DolphinDB)
+### StockTickAPI — 逐筆成交資料 (TimescaleDB)
 
-來源：DolphinDB tick 表（需先連線；連線資訊由 `core/config` 帶入）。
-**注意：需安裝 `dolphindb` 套件且有可用的 DDB 伺服器。**
+來源：TimescaleDB 的 `stock_tick`（連線字串為 `.env` 的 `TICK_DATABASE_URL`）。
+**注意：需 `uv sync --extra tick`，並先開 Docker Desktop、`docker compose up -d postgres`；歷史資料要先以 `scripts/manual/manual_tick_history_import.py` 匯入。**
+回傳欄位固定為 `stock_id, time, close, volume, bid_price, bid_volume, ask_price, ask_volume, tick_type`；興櫃時期不入庫。
 
 ```python
 import datetime
@@ -343,7 +344,7 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 | 資料種類       | 後端           | 提供 API                      | 來源 / 更新                                |
 | -------------- | -------------- | ----------------------------- | ------------------------------------------ |
 | 日線價量       | SQLite         | `StockPriceAPI`               | `core/pipeline/` 內的爬蟲；表名見 `core/config/schema.py` |
-| 逐筆 Tick      | DolphinDB      | `StockTickAPI`                | Shioaji / 第三方；需另起 DDB 服務          |
+| 逐筆 Tick      | TimescaleDB    | `StockTickAPI`                | Shioaji 每日更新＋歷史 CSV 匯入；需執行中的 TimescaleDB |
 | 三大法人籌碼   | SQLite         | `StockChipAPI`                | `core/pipeline/` 內的爬蟲                  |
 | 月營收         | SQLite         | `MonthlyRevenueReportAPI`     | `core/pipeline/` 內的爬蟲                  |
 | 財報           | SQLite         | `FinancialStatementAPI`       | `core/pipeline/` 內的爬蟲                  |

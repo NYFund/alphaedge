@@ -105,8 +105,8 @@ FORBIDDEN_DATA_ACCESS: List[Tuple[str, str, str]] = [
         "需要額外資料請在 DataFeed 取好後放進 quotes",
     ),
     (
-        "dolphindb",
-        r"\b(?:dolphindb|ddb)\b",
+        "tick-db-driver",
+        r"\b(?:dolphindb|ddb|psycopg|connectorx)\b",
         "策略不得直接連 tick 資料庫；tick 由 DataFeed 以 Scale.TICK 供應",
     ),
 ]
@@ -168,11 +168,15 @@ def test_forbidden_pattern_actually_matches() -> None:
     samples: Dict[str, str] = {
         "sqlite3-connect": "conn = sqlite3.connect(TW_STOCK_DB_PATH)",
         "api-instantiation": "self.price = StockPriceAPI()",
-        "dolphindb": "import dolphindb as ddb",
+        "tick-db-driver": "import dolphindb as ddb",
     }
 
     for pattern_id, pattern, _ in FORBIDDEN_DATA_ACCESS:
         assert re.search(pattern, samples[pattern_id]), pattern_id
+
+    # tick 改存 TimescaleDB 之後的兩個驅動也要擋
+    for driver_import in ("import psycopg", "import connectorx as cx"):
+        assert re.search(FORBIDDEN_DATA_ACCESS[2][1], driver_import), driver_import
 
     # 型別標註不得被誤判為自建
     assert not re.search(FORBIDDEN_DATA_ACCESS[1][1], "price: StockPriceAPI")

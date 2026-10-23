@@ -43,9 +43,8 @@ A failing target does not stop the others, but the run exits with code 1 at the 
 | `futures_margin` | Futures margin (change series, written to `tw_futures.db`) |
 | `futures_chip` | Futures chips (institutional investors, large traders, option PCR) |
 | `market_holiday` | Market holiday schedule (TWSE announcement; re-fetches last / this / next year every run, written to `tw_stock.db`). Primary source for the live pre-open trading-day check |
-| `futures_tick` | Futures tick trades (Shioaji → DolphinDB; requires the `[tick]` extra and credentials). **Not included in `all` or `no_tick`**: it has no resume record and re-running writes duplicate rows, so it only runs when named explicitly |
-| `all` | All datasets (including tick; excludes `futures_tick`, `futures_stock_price` and `finmind`) |
-| `no_tick` | All datasets except `tick` and `futures_tick`, also excluding the explicit-only `futures_stock_price` / `finmind` (default). Both tick targets need Shioaji credentials and the `[tick]` extra; without the exclusion a machine lacking them would exit 1 every night |
+| `all` | All datasets (including tick; excludes `futures_stock_price` and `finmind`) |
+| `no_tick` | All datasets except `tick`, also excluding the explicit-only `futures_stock_price` / `finmind` (default). Tick needs Shioaji credentials, the `[tick]` extra and a running TimescaleDB; without the exclusion a machine lacking them would exit 1 every night |
 
 ### Single Target Examples
 

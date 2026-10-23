@@ -103,7 +103,7 @@ class BaseDataAPI(ABC):  # noqa: B024
             關閉資料連線
 
             不關閉的話，單次回測會累積 8~10 條互不相干且不再釋放的 SQLite 連線。
-            預設實作關掉 `self.conn`；非 SQLite 的資料源（如 DolphinDB）自行覆寫。
+            預設實作關掉 `self.conn`；非 SQLite 的資料源（如台股 tick 的 TimescaleDB）自行覆寫。
         """
 
         if not getattr(self, "owns_conn", True):

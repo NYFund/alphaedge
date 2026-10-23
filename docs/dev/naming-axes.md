@@ -105,7 +105,7 @@
 
 `core/pipeline/utils/` 與 `shared/` 同屬跨市場共用層，但當時裡面混了兩支**只有台股
 用得到**的檔案：`url_manager.py`（整張表都是 TWSE／TPEX／MOPS／TAIFEX 端點）與
-`stock_tick_utils.py`（Shioaji 金鑰、metadata 的鍵是台股代號）。兩支已搬到
+`stock_tick_utils.py`（Shioaji 金鑰、續跑判斷的鍵是台股代號）。兩支已搬到
 `core/pipeline/tw/utils/`。
 
 **為什麼不在 `utils/` 底下再開 `tw/`／`us/`**：那會讓同一層同時承載「層」與「軸」，
