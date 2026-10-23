@@ -1,3 +1,3 @@
 # core/__init__.py
 
-"""Core package: data access, backtesting, strategy management, utilities"""
+"""core 套件：資料存取、回測、實盤、策略與共用工具"""

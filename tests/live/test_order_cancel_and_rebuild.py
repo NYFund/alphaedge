@@ -37,6 +37,8 @@ TODAY: datetime.date = NOW.date()
 def make_oms(
     broker: FakeBroker, dao: LiveTradeDAO, run_id: str, run_index: int
 ) -> OrderManager:
+    """以指定券商與執行代號建立委託管理器"""
+
     return OrderManager(
         broker=broker,
         dao=dao,
@@ -63,6 +65,8 @@ def exit_order(volume: int = 2) -> StockOrder:
 
 
 def fill_for(ticket: OrderTicket, volume: int, trade_id: str) -> ExecutionReport:
+    """依委託單組出 2330 的成交回報"""
+
     return ExecutionReport(
         broker_seqno=ticket.broker_seqno or "",
         broker_trade_id=trade_id,
@@ -75,6 +79,8 @@ def fill_for(ticket: OrderTicket, volume: int, trade_id: str) -> ExecutionReport
 
 
 def cancel_report_for(ticket: OrderTicket) -> OrderStatusEvent:
+    """依委託單組出刪單成功的委託回報"""
+
     return OrderStatusEvent(
         broker_seqno=ticket.broker_seqno or "",
         op_type="Cancel",
@@ -85,6 +91,8 @@ def cancel_report_for(ticket: OrderTicket) -> OrderStatusEvent:
 
 
 def order_row(dao: LiveTradeDAO, client_order_id: str) -> Dict[str, Any]:
+    """依自訂委託編號取當日委託紀錄"""
+
     return next(
         row
         for row in dao.get_orders_by_date(TODAY)

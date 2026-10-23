@@ -9,7 +9,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 
 
 class StockChipLoader(BaseDataLoader):
-    """Stock Chip Loader"""
+    """台股三大法人籌碼 loader"""
 
     DAO_CLASS: Type[Any] = StockChipDAO
     SOURCE: str = "chip"

@@ -1,10 +1,11 @@
 import datetime
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 from loguru import logger
 
 from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.models import (
     FuturesAccount,
     FuturesOrder,
@@ -13,7 +14,7 @@ from core.models import (
 )
 from core.models.cost_config import FuturesCostConfig
 from core.position.base.position_manager import BasePositionManager
-from core.utils import Action, PositionType
+from core.utils import PositionType, TimeUtils
 from core.utils.constant import FUTURES_MULTIPLIER
 
 """
@@ -36,7 +37,7 @@ __all__ = ["FuturesMarginConfig", "FuturesPositionManager"]
 
 
 class FuturesPositionManager(BasePositionManager):
-    """Futures Position Manager"""
+    """期貨部位管理"""
 
     def __init__(
         self,
@@ -47,14 +48,18 @@ class FuturesPositionManager(BasePositionManager):
         underlying_price_resolver: Optional[
             Callable[[str, datetime.date], Optional[float]]
         ] = None,
+        event_counts: Optional[Dict[str, int]] = None,
+        margin_model: Optional[FuturesMarginModel] = None,
     ) -> None:
-        super().__init__(account)
+        super().__init__(account, event_counts)
         self.account: FuturesAccount = account
         # 成本一律走 CostModel（與 `StockPositionManager` 同一種接法）：
         # 本層只決定「什麼時候收」，費率與公式全在 model，兩處各算一份必然漂移
         self.cost_model: TwFuturesCostModel = cost_model or TwFuturesCostModel()
-        self.margin_config: FuturesMarginConfig = (
-            margin_config or FuturesMarginConfig.default()
+        # 保證金查表同理只有一份：factory 把同一個 `FuturesMarginModel` 交給本層與
+        # 部位建構層，可開口數與應繳保證金才會是同一個數字；未注入時自己建一個
+        self.margin_model: FuturesMarginModel = margin_model or FuturesMarginModel(
+            margin_config or FuturesMarginConfig.default(), underlying_price_resolver
         )
 
         # 乘數解析器，由 DataFeed 注入（見 `get_multiplier()`）。
@@ -64,20 +69,26 @@ class FuturesPositionManager(BasePositionManager):
             multiplier_resolver
         )
 
-        # 股期保證金要用**標的證券**的價格，而它在 `tw_stock.db`（另一個 DB 檔）。
-        # 同樣由 DataFeed 注入：連線一律由 DataFeed 持有，本層不自行開連線
-        self.underlying_price_resolver: Optional[
-            Callable[[str, datetime.date], Optional[float]]
-        ] = underlying_price_resolver
-
     @property
     def cost_config(self) -> FuturesCostConfig:
         """費率設定；唯一來源是 `cost_model.config`"""
 
         return self.cost_model.config
 
+    @property
+    def margin_config(self) -> FuturesMarginConfig:
+        """保證金設定；唯一來源是 `margin_model.config`"""
+
+        return self.margin_model.config
+
+    @margin_config.setter
+    def margin_config(self, config: FuturesMarginConfig) -> None:
+        """換設定就是換模型的設定：建構後改成比率模式時模型要跟著變，否則兩邊各一份"""
+
+        self.margin_model.config = config
+
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Futures Position Manager"""
+        """設定掛點；期貨部位管理目前沒有額外設定"""
 
         pass
 
@@ -108,13 +119,13 @@ class FuturesPositionManager(BasePositionManager):
         - Return:
             - int
                 乘數（股期為契約單位股數）
-        - Raises:
+        - Raise:
             - KeyError
                 未注入 resolver 且商品不在 `FUTURES_MULTIPLIER` 內
         """
 
         if self.multiplier_resolver is not None:
-            return self.multiplier_resolver(product, self.normalize_date(date))
+            return self.multiplier_resolver(product, TimeUtils.to_date(date))
 
         return FUTURES_MULTIPLIER[product]
 
@@ -154,42 +165,15 @@ class FuturesPositionManager(BasePositionManager):
         - Return:
             - float
                 應繳的原始保證金
-        - Raises:
+        - Raise:
             - ValueError
                 查表模式下查不到該商品在該日期的保證金
         """
 
-        if self.margin_config.api is None:
-            contract_value: float = self.calculate_contract_value(
-                price, volume, multiplier
-            )
-            return contract_value * self.margin_config.initial_margin_ratio
-
-        if product is None or date is None:
-            raise ValueError("查表模式必須提供 product 與 date——保證金隨商品與日期變動")
-
-        query_date: datetime.date = self.normalize_date(date)
-
-        per_lot: Optional[float] = self.margin_config.api.get_initial_margin(
-            product,
-            query_date,
-            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        per_lot: float = self.margin_model.initial_margin_per_lot(
+            product, date, price, multiplier
         )
-
-        if per_lot is None:
-            per_lot = self.calculate_stock_futures_margin(product, query_date)
-
-        if per_lot is None:
-            covered = self.margin_config.api.get_covered_date_range(product)
-            raise ValueError(
-                f"查無 {product} 在 {date} 生效的保證金"
-                f"（金額表涵蓋 {covered}，比例表也查不到）。"
-                f"**刻意不退回近似值**：靜默套一個比率會讓資金效率與可開口數"
-                f"整段偏掉卻毫無徵兆。保證金資料只回溯到 2020-03，"
-                f"要回測更早的期間請明確改用 `FuturesMarginConfig.ratio()`"
-            )
-
-        return float(per_lot * volume)
+        return per_lot * volume
 
     def calculate_opening_requirement(
         self,
@@ -252,23 +236,8 @@ class FuturesPositionManager(BasePositionManager):
                 每口保證金；比例、契約單位或標的股價任一查不到時為 None
         """
 
-        if self.underlying_price_resolver is None:
-            return None
-
-        price: Optional[float] = self.underlying_price_resolver(product, date)
-        if not price:
-            return None
-
-        calculate = (
-            self.margin_config.api.calculate_stock_futures_maintenance_margin
-            if maintenance
-            else self.margin_config.api.calculate_stock_futures_margin
-        )
-        return calculate(
-            product,
-            date,
-            price,
-            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        return self.margin_model.stock_futures_margin_per_lot(
+            product, date, maintenance=maintenance
         )
 
     def calculate_maintenance_margin(
@@ -300,18 +269,9 @@ class FuturesPositionManager(BasePositionManager):
         if self.margin_config.api is None or date is None:
             return position.margin
 
-        query_date: datetime.date = self.normalize_date(date)
-
-        per_lot: Optional[float] = self.margin_config.api.get_maintenance_margin(
-            position.product,
-            query_date,
-            fallback_to_earliest=self.margin_config.fallback_to_earliest,
+        per_lot: Optional[float] = self.margin_model.maintenance_margin_per_lot(
+            position.product, date
         )
-
-        if per_lot is None:
-            per_lot = self.calculate_stock_futures_margin(
-                position.product, query_date, maintenance=True
-            )
 
         if per_lot is None:
             logger.warning(
@@ -359,101 +319,57 @@ class FuturesPositionManager(BasePositionManager):
                 損益（未扣交易成本）
         """
 
-        # **一律走成本模型**：損益公式只留 `TwFuturesCostModel.realized_pnl()` 一份。
-        # 本層若自己再算一次，改動乘數或多空方向的處理時另一邊不會跟著改，
-        # 也不會有測試失敗，兩份必然漂移
+        # **一律走成本模型**：損益公式只留 `BaseCostModel.realized_pnl()` 一份，
+        # 期貨的計價單位就是契約乘數。本層若自己再算一次，改動乘數或多空方向的
+        # 處理時另一邊不會跟著改，也不會有測試失敗，兩份必然漂移
         return self.cost_model.realized_pnl(
+            position_type=position_type,
             entry_price=entry_price,
             exit_price=exit_price,
             volume=volume,
-            multiplier=multiplier,
-            position_type=position_type,
-            transaction_cost=0.0,
+            unit_size=multiplier,
+            cost=0.0,
         )
 
-    @staticmethod
-    def normalize_date(
-        date: Union[datetime.date, datetime.datetime],
-    ) -> Optional[datetime.date]:
-        """Tick 級別的 date 會是 datetime，統一取其日期部分以計算持有曆日數"""
+    def get_position_unit_size(self, position: FuturesPosition) -> int:
+        """期貨的計價單位是契約乘數，逐契約不同"""
 
-        if date is None:
-            return None
-        return date.date() if isinstance(date, datetime.datetime) else date
-
-    def calculate_holding_days(
-        self,
-        entry_date: Union[datetime.date, datetime.datetime],
-        exit_date: Union[datetime.date, datetime.datetime],
-    ) -> int:
-        """計算持有曆日數（非交易日），同日開平倉為 0 天"""
-
-        entry: Optional[datetime.date] = self.normalize_date(entry_date)
-        exit_: Optional[datetime.date] = self.normalize_date(exit_date)
-        if entry is None or exit_ is None:
-            return 0
-        return (exit_ - entry).days
+        return position.multiplier
 
     # === 開倉 ===
-    def open_position(self, order: FuturesOrder) -> Optional[FuturesPosition]:
+    def _book_open(self, order: FuturesOrder) -> Optional[FuturesPosition]:
         """
         - Description:
-            開倉（多空皆走同一條路徑）
+            開倉入帳（多空皆走同一條路徑）
 
             **與股票不同，不檢查「餘額是否足以買下契約價值」**，而是檢查
             「可動用餘額是否足以繳出保證金與交易成本」。
 
-            **同一契約不允許雙向持倉**：已有反向未平倉部位即拒單，與股票端
-            同一判準。跨月份的價差部位不受此限。
+            同一契約不得雙向持倉已由基底擋過：多空並存時 `get_open_lots()` 會把兩邊
+            相抵成淨口數（＝曝險為 0），但 `margin_used` 仍各佔一份原始保證金——
+            帳上「沒有曝險卻押著兩份保證金」，而交易所對沖部位只收單邊，可開口數
+            因此被系統性低估。**擋在開倉端而不去模擬保證金減收**：TAIFEX 的價差部位
+            保證金是另一套費率表，本專案沒有該資料源，硬寫一個比率只是用一個猜測
+            換掉另一個猜測。跨月份的價差部位不受此限。
         - Parameters:
             - order: FuturesOrder
                 目標契約的訂單資訊
         - Return:
             - Optional[FuturesPosition]
-                開倉成功的部位；保證金不足時為 None
+                入帳的部位；保證金不足時為 None
         """
-
-        # 開倉動作與方向必須一致：多單買進開倉、空單賣出開倉
-        is_long_open: bool = (
-            order.position_type == PositionType.LONG and order.action == Action.BUY
-        )
-        is_short_open: bool = (
-            order.position_type == PositionType.SHORT and order.action == Action.SELL
-        )
-        if not (is_long_open or is_short_open):
-            logger.warning(
-                f"[Open Position] 方向與動作不一致：{order.contract_id} "
-                f"{order.position_type} / {order.action}"
-            )
-            return None
-
-        # 同一契約不允許同時持有反向部位（與股票端「同標的不得雙向持倉」同一判準）。
-        # 多空並存時 `get_open_lots()` 會把兩邊相抵成淨口數（＝曝險為 0），
-        # 但 `margin_used` 仍各佔一份原始保證金——帳上「沒有曝險卻押著兩份保證金」，
-        # 而交易所對沖部位只收單邊，可開口數因此被系統性低估。
-        # **擋在開倉端而不去模擬保證金減收**：TAIFEX 的價差部位保證金是另一套費率表，
-        # 本專案沒有該資料源，硬寫一個比率只是用一個猜測換掉另一個猜測
-        opposite_type: PositionType = (
-            PositionType.SHORT
-            if order.position_type == PositionType.LONG
-            else PositionType.LONG
-        )
-        if self.account.check_has_position(order.symbol, opposite_type):
-            logger.warning(
-                f"[Open Position] {order.contract_id} 已有 {opposite_type.value} 部位，"
-                f"不允許同契約雙向持倉，拒絕開倉"
-            )
-            return None
 
         multiplier, margin, commission, tax = self._opening_costs(order, order.date)
         open_cost: float = commission + tax
         required: float = margin + open_cost
 
         if self.account.balance < required:
+            # 與台股做多餘額不足同一個 key：都是「可動用餘額付不出開倉要的錢」
             logger.warning(
                 f"[Open Position] 可動用餘額不足：{order.contract_id} "
-                f"需要 {required:.0f}，實際 {self.account.balance:.0f}"
+                f"需要 {required:.0f}，實際 {self.account.balance:.0f}，拒絕開倉"
             )
+            self.count_event("rejected_insufficient_balance")
             return None
 
         logger.info(
@@ -483,10 +399,6 @@ class FuturesPositionManager(BasePositionManager):
         self.account.balance -= margin + open_cost
         self.account.margin_used += margin
         self.account.positions.append(position)
-
-        # **開成了才算滑價**：被拒的單沒有成交，價差也就不存在。
-        # 期貨的計價單位是契約乘數，逐契約不同
-        self.accrue_slippage_cost(order, order.volume, multiplier)
 
         return position
 
@@ -611,14 +523,15 @@ class FuturesPositionManager(BasePositionManager):
             tax=proportional_open_tax + close_tax,
             transaction_cost=total_transaction_cost,
             realized_pnl=realized_pnl,
-            roi=self.calculate_roi(realized_pnl, released_margin),
+            # 報酬率以**釋回的保證金**為分母，不是契約價值；公式在成本模型基底
+            roi=self.cost_model.roi(realized_pnl, released_margin),
             multiplier=position.multiplier,
             margin=released_margin,
             settled_pnl=settled_pnl,
             holding_days=self.calculate_holding_days(position.date, order.date),
         )
 
-        # Update position（等比例攤提後扣減）
+        # 更新部位（等比例攤提後扣減）
         position.volume -= close_volume
         position.commission -= proportional_open_commission
         position.tax -= proportional_open_tax
@@ -630,7 +543,7 @@ class FuturesPositionManager(BasePositionManager):
         if position.volume == 0:
             position.is_closed = True
 
-        # Update account：釋回保證金、最後一段損益進帳、扣平倉成本
+        # 更新帳戶：釋回保證金、最後一段損益進帳、扣平倉成本
         self.account.margin_used -= released_margin
         self.account.balance += (
             released_margin + final_leg_pnl - (close_commission + close_tax)
@@ -639,16 +552,3 @@ class FuturesPositionManager(BasePositionManager):
         self.account.trade_records.append(record)
 
         return record
-
-    @staticmethod
-    def calculate_roi(realized_pnl: float, margin: float) -> float:
-        """
-        報酬率以**保證金**為分母，不是契約價值
-
-        期貨是保證金交易，投入的資金就是保證金；用契約價值當分母會把槓桿效果抹掉。
-        保證金為 0（例如比率設成 0）時回傳 0，不拋除零錯誤。
-        """
-
-        if margin == 0:
-            return 0.0
-        return round(realized_pnl / margin * 100, 2)

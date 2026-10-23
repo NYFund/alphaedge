@@ -1,4 +1,3 @@
-import datetime
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -38,6 +37,11 @@ class FuturesChipDAO(BaseDAO):
     """
 
     DEFAULT_DB_PATH: Optional[Path] = TW_FUTURES_DB_PATH
+    # 可缺：籌碼是選用資料集，尚未回補時策略拿到的是「查無資料」
+    OPTIONAL_TABLE: bool = True
+
+    # 三張表的鍵不同，由建構子依表設定（見 `__init__`）
+    KEY_COLUMNS: Tuple[str, ...] = ()
 
     # {表名: 主鍵欄位}；同時是表名白名單
     PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
@@ -68,6 +72,12 @@ class FuturesChipDAO(BaseDAO):
         """
 
         self.TABLE_NAME: str = self.check_table_name(table_name)
+        # 鍵欄隨表而定：主鍵扣掉日期欄
+        self.KEY_COLUMNS: Tuple[str, ...] = tuple(
+            column
+            for column in self.PRIMARY_KEYS[self.TABLE_NAME]
+            if column != self.DATE_COLUMN
+        )
         super().__init__(conn=conn, db_path=db_path)
 
     @classmethod
@@ -81,29 +91,39 @@ class FuturesChipDAO(BaseDAO):
         return table_name
 
     # === 建表與寫入 ===
-    def ensure_table(self, df: pd.DataFrame) -> None:
+    def ensure_table(self) -> None:
+        """欄位由第一批資料推導，無參數的建表無從下手：請改呼叫 `ensure_table_from_columns()`"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 的欄位由資料推導，請用 ensure_table_from_columns(columns)"
+        )
+
+    def ensure_table_from_columns(self, columns: List[str]) -> None:
         """
         - Description:
-            依 DataFrame 的欄位建表（若不存在）並 commit；主鍵與名稱類欄位存文字，其餘存數值
+            依欄位清單建表（若不存在）並 commit；主鍵與名稱類欄位存文字，其餘存數值
+
+            **與基底無參數的 `ensure_table()` 分開命名**：簽名不同的同名方法會讓
+            以基底型別持有 DAO 的呼叫端（測試的 DAO 工廠、通用的建表迴圈）無從分辨。
         - Parameters:
-            - df: pd.DataFrame
-                本次要寫入的資料（用來推導欄位）
+            - columns: List[str]
+                本次要寫入的資料欄位（第一批資料的欄位）
         """
 
         keys: Tuple[str, ...] = self.PRIMARY_KEYS[self.TABLE_NAME]
-        columns: List[str] = []
-        for column in df.columns:
+        column_defs: List[str] = []
+        for column in columns:
             if column in keys:
                 sql_type: str = "TEXT NOT NULL"
             elif column.endswith("_name"):
                 sql_type = "TEXT"
             else:
                 sql_type = "REAL"
-            columns.append(f'"{column}" {sql_type}')
+            column_defs.append(f'"{column}" {sql_type}')
 
         primary_key: str = ", ".join(f'"{key}"' for key in keys)
         self.conn.execute(
-            f"CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} ({', '.join(columns)}, "
+            f"CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} ({', '.join(column_defs)}, "
             f"PRIMARY KEY ({primary_key}));"
         )
         self.conn.commit()
@@ -181,39 +201,6 @@ class FuturesChipDAO(BaseDAO):
             f"SELECT MIN(date) FROM {self.TABLE_NAME}"
         )
         return row[0] if row else None
-
-    def get_latest_date_before(self, date: datetime.date) -> Optional[str]:
-        """
-        - Description:
-            **嚴格早於** `date` 的最近一個有籌碼的日期；表不存在或沒有時為 None
-
-            籌碼盤後才公布，當天的資料當天不可能知道——`<=` 那一個等號就是前視偏差。
-        - Parameters:
-            - date: datetime.date
-                回測當前日
-        - Return:
-            - Optional[str]
-                日期字串
-        """
-
-        if not self.table_exists():
-            return None
-
-        row: Optional[Tuple[Any, ...]] = self.fetch_one(
-            f"SELECT MAX(date) FROM {self.TABLE_NAME} WHERE date < ?", (date,)
-        )
-        return row[0] if row and row[0] else None
-
-    def get_by_date(self, date: Union[datetime.date, str]) -> pd.DataFrame:
-        """取得某一天公布的籌碼；表不存在時為空表"""
-
-        if not self.table_exists():
-            return pd.DataFrame()
-
-        return self.query_df(
-            f"SELECT * FROM {self.TABLE_NAME} WHERE date = ?",
-            (date,),
-        )
 
     def get_covered_date_range(self) -> Optional[Tuple[str, str]]:
         """表的（最早, 最晚）資料日期；表不存在或為空時為 None"""

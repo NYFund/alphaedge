@@ -11,7 +11,7 @@ class Payload:
     firstin: Optional[str] = "1"  # 表單首次送出旗標（站方預設 1）
     step: Optional[str] = "1"  # 查詢步驟（站方預設 1）
     TYPEK: Optional[str] = (
-        None  # {sii: 上市, otc: 上櫃, all: 全部, sii0: 國內上市, sii1: 國外上市, otc0: 國內上櫃, otc1: 國外上貴}
+        None  # {sii: 上市, otc: 上櫃, all: 全部, sii0: 國內上市, sii1: 國外上市, otc0: 國內上櫃, otc1: 國外上櫃}
     )
 
     co_id: Optional[str] = None  # 證券代號

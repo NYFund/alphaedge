@@ -7,7 +7,7 @@ from core.backtest.backtester import new_event_counts
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.backtest.models.fill_model import TwStockFillModel
 from core.backtest.models.settlement_model import TwStockSettlementModel
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.market.tw.market_calendar import MarketCalendar
 from core.models import (
     StockAccount,
@@ -193,7 +193,7 @@ def make_settlement(
     if short_constraint is not None:
         config.short_constraint = short_constraint
 
-    cost_model: StockCostModel = StockCostModel(config)
+    cost_model: TwStockCostModel = TwStockCostModel(config)
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,
@@ -580,7 +580,9 @@ def test_accrued_borrow_fee_is_deducted_from_daily_equity() -> None:
     account.positions.append(position)
     settlement: TwStockSettlementModel = make_settlement(account)
 
-    units: int = settlement.instrument.to_units(position.volume)
+    units: int = position.volume * settlement.instrument.get_unit_size(
+        position.symbol, position.date
+    )
     before: float = settlement.mark_position(position, 100.0, units)
 
     position.accrued_borrow_fee = 500.0
@@ -608,7 +610,7 @@ def test_forced_cover_applies_slippage() -> None:
     settlement: TwStockSettlementModel = make_settlement(account)
     settlement.fill_model = fill_model
 
-    settlement.force_cover_position(
+    settlement.force_close_position(
         position, datetime.date(2024, 1, 4), 100.0, make_stock_quote()
     )
 

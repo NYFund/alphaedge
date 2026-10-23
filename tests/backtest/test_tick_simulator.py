@@ -137,7 +137,7 @@ class _TickStrategy(BaseStockStrategy):
         self.open_rule: Optional[Rule] = open_rule
         self.close_rule: Optional[Rule] = close_rule
         self.stop_rule: Optional[Rule] = stop_rule
-        # (鉤子, 收到的報價)
+        # 每次呼叫記成（鉤子名稱，收到的報價）
         self.calls: List[Tuple[str, List[StockQuote]]] = []
 
     def setup_account(self, account: StockAccount) -> None:
@@ -627,9 +627,7 @@ def test_same_data_twice_gives_identical_trades(
 def test_same_day_round_trip_costs_match_day_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    同一天先買後賣：逐筆與日 K 走同一套帳務，同價同量時手續費、證交稅（當沖減半）、損益完全相同
-    """
+    """同一天先買後賣：逐筆與日 K 走同一套帳務，同價同量時手續費、證交稅（當沖減半）、損益完全相同"""
 
     def close_rule(quote: StockQuote, strategy: _TickStrategy) -> List[StockOrder]:
         if quote.tick_quote.time.strftime("%H:%M:%S") == "11:00:00":

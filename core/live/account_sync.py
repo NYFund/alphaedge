@@ -15,7 +15,7 @@ from core.models import (
     ExecutionReport,
     StockOrder,
 )
-from core.portfolio.order_rules import resolve_close_action
+from core.portfolio.order_rules import is_closing, resolve_open_action
 from core.position.base.position_manager import BasePositionManager
 from core.utils import Action, PositionType
 
@@ -151,7 +151,7 @@ class AccountSynchronizer:
         direction: PositionType = self._resolve_direction(name, report)
         order: BaseOrder = self._to_order(name, report, direction)
 
-        if self._is_closing(order):
+        if is_closing(order):
             manager.close_position(order)
             self.ledger.close_lots(name, report.symbol, report.volume, direction)
         else:
@@ -212,12 +212,6 @@ class AccountSynchronizer:
             report.price,
             report.volume,
         )
-
-    @staticmethod
-    def _is_closing(order: BaseOrder) -> bool:
-        """是否為平倉單；判定委派給共用的動作推導"""
-
-        return order.action is resolve_close_action(order.position_type)
 
     def book_backfilled_fill(
         self,
@@ -368,7 +362,7 @@ class AccountSynchronizer:
         return builder(
             str(lot["symbol"]),
             parsed,
-            Action.BUY if direction is PositionType.LONG else Action.SELL,
+            resolve_open_action(direction),
             direction,
             float(lot["open_price"]),
             int(lot["volume"]),

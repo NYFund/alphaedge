@@ -1,3 +1,11 @@
+import datetime
+import sys
+
+import pandas as pd
+import pytest
+
+from core.api.tw.finmind_api import FinMindAPI
+
 """
 測試 FinMindAPI 的每一個 function 是否正常運作
 
@@ -13,14 +21,6 @@
 未標記會在 `pytest -m "not slow"` 直接以 sqlite3.OperationalError 失敗。
 """
 
-import datetime
-import sys
-
-import pandas as pd
-import pytest
-
-from core.api.tw.finmind_api import FinMindAPI
-
 pytestmark = pytest.mark.slow
 
 
@@ -35,6 +35,8 @@ def test_finmind_api() -> bool:
     all_ok = True
 
     def check(name: str, df: pd.DataFrame) -> None:
+        """確認回傳型別並印出前幾筆；失敗只記錄、不中斷，讓其餘方法照樣測完"""
+
         nonlocal all_ok
         try:
             assert isinstance(df, pd.DataFrame), f"{name} 應回傳 DataFrame"

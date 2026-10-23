@@ -29,7 +29,7 @@ from core.pipeline.tw.loaders.stock_short_sale_list_loader import (
 
 
 class StockShortSaleListUpdater(DailyTwoMarketUpdater):
-    """Stock ShortSale List Updater"""
+    """台股平盤下賣出名單 updater"""
 
     SOURCE: str = "short_sale_list"
     SOURCE_LABEL: str = "Short Sale List"

@@ -37,11 +37,7 @@ from core.live.capital_allocator import CapitalAllocator
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError, RollPlan
 from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
-from core.live.intraday.session_guard import (
-    SessionGuard,
-    cover_action,
-    stops_after_cover,
-)
+from core.live.intraday.session_guard import SessionGuard, stops_after_cover
 from core.live.notify.base import NotifyLevel, notify_safely
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
@@ -53,10 +49,10 @@ from core.live.risk.risk_manager import (
     ExposureItem,
     PreTradeRiskManager,
     RiskDecision,
-    is_closing_order,
 )
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.live.strategy_guard import verify_strategies
+from core.market.cost_model import BaseCostModel
 from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.models import (
     BaseAccount,
@@ -66,7 +62,9 @@ from core.models import (
     ExecutionReport,
     OrderTicket,
     PendingAction,
+    PriceLimits,
 )
+from core.models.risk_config import BaseRiskConfig, default_risk_config
 from core.portfolio import order_rules
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy, resolve_hook_timing
@@ -115,6 +113,9 @@ class StrategyContext:
     account: BaseAccount
     position_manager: BasePositionManager
     data_feed: BaseLiveDataFeed
+    # 成本模型：委託前處理用它補市場專屬欄位（台股空單的放空管道與當沖旗標），
+    # 與本地帳記帳用的是同一個；None 時不補值（純記憶體測試）
+    cost_model: Optional[BaseCostModel] = None
     # 本策略要處理的標的；實盤不掃全市場，標的池由策略決定
     symbols: List[str] = field(default_factory=list)
     # 把一張委託換算成金額（風控與資金保留都要用）。
@@ -129,6 +130,12 @@ class StrategyContext:
     # 執行層：把執行方式換成券商委託。換算規則是市場特性（集合競價的時段、
     # 連續交易時段的保護方式），故由外部注入；未注入時本策略的委託一律不送
     execution_model: Optional[BaseExecutionModel] = None
+    # 把一張委託換算成曝險（批次曝險上限要用）。股票與 `calculate_notional` 相同；
+    # 期貨是契約價值（點數 × 乘數 × 口數），與資金占用的保證金不同——
+    # 曝險要反映「承擔多少風險」，保證金只反映「押了多少錢」。未注入時退回 `notional()`
+    calculate_exposure: Optional[Callable[[BaseOrder], float]] = None
+    # 本策略的風控門檻（策略宣告、部署設定收緊後的結果）；None 時用該市場的預設值
+    risk_config: Optional[BaseRiskConfig] = None
     # 本段落餵給策略的報價：symbol → 最新成交價（盤前段為參考價）。
     # 風控的決策價偏離檢查拿它當市場基準；策略決定要買 108 時，市場在 100 還是 107
     # 只有這份報價知道。每個段落重取，不跨段落沿用
@@ -154,17 +161,35 @@ class StrategyContext:
 
         return float(self.account.init_capital)
 
+    @property
+    def risk_limits(self) -> BaseRiskConfig:
+        """本策略實際套用的風控門檻；沒有指定時取該市場的預設值"""
+
+        if self.risk_config is not None:
+            return self.risk_config
+        return default_risk_config(getattr(self.strategy, "instrument_type", None))
+
     def notional(self, order: BaseOrder) -> float:
-        """本張委託的金額；未注入換算器時退回「價 × 量」"""
+        """
+        本張委託的資金占用（股票：價 × 股數；期貨：原始保證金）；
+        未注入換算器時退回「價 × 量」
+        """
 
         if self.calculate_notional is not None:
             return self.calculate_notional(order)
         return float(order.price) * float(order.volume)
 
+    def exposure(self, order: BaseOrder) -> float:
+        """本張委託的曝險（股票：價 × 股數；期貨：契約價值）；未注入時同 `notional()`"""
+
+        if self.calculate_exposure is not None:
+            return self.calculate_exposure(order)
+        return self.notional(order)
+
     def position_value(self) -> float:
         """
         - Description:
-            本策略未平倉部位的帳面金額（開倉價 × 計價單位）
+            本策略未平倉部位的資金占用（股票：開倉價 × 股數；期貨：原始保證金）
 
             **要經過與委託相同的換算器**：部位的數量台股是張、期貨是口，只做「價 × 量」
             的話台股少乘 1000 股——已用額度因此小了一千倍，持倉幾乎不佔額度，
@@ -894,7 +919,7 @@ class LiveTrader:
         return context.build_filled_order(
             position.symbol,
             self._now(),
-            cover_action(position),
+            order_rules.resolve_close_action(position.position_type),
             position.position_type,
             float(quote.cur_price),
             int(position.volume),
@@ -1395,10 +1420,15 @@ class LiveTrader:
     def _preprocess(
         self, context: StrategyContext, orders: List[BaseOrder], stage: str
     ) -> List[BaseOrder]:
-        """方向白名單 ＋ 持倉檔數上限 ＋ 決定性排序；與回測共用同一份實作"""
+        """方向白名單 → 市場欄位補值 → 決定性排序 → 持倉檔數上限；與回測同一個順序、同一份實作"""
 
         allowed = order_rules.get_allowed_directions(context.strategy.direction)
         valid: List[BaseOrder] = order_rules.validate_orders(orders, stage, allowed)
+        # 台股空單的放空管道與當沖旗標由成本模型依策略設定補上，與回測同一步。
+        # 少了這一步，SHORT 委託到券商轉換層才因 `short_method` 為 None 被拒，
+        # 當沖空單的部位也不會被日終回補認出來
+        if context.cost_model is not None:
+            valid = context.cost_model.enrich_orders(valid)
         sorted_orders: List[BaseOrder] = order_rules.sort_orders(valid)
 
         # 只擋開倉，與回測一致（`Backtester` 也只在開倉分支呼叫）。
@@ -1516,7 +1546,7 @@ class LiveTrader:
         kept: List[Tuple[StrategyContext, BaseOrder]] = []
         for context in self.contexts:
             items: List[ExposureItem] = [
-                ExposureItem(order, context.notional(order))
+                ExposureItem(order, context.exposure(order))
                 for owner, order in candidates
                 if owner is context
             ]
@@ -1524,7 +1554,7 @@ class LiveTrader:
                 continue
 
             allowed: List[ExposureItem] = self.risk_manager.check_batch(
-                items, context.name, context.capital_limit
+                items, context.name, context.capital_limit, context.risk_limits
             )
             kept.extend((context, item.order) for item in allowed)
         return kept
@@ -1536,20 +1566,29 @@ class LiveTrader:
         帳戶層合計試算
 
         策略層各自都過、加總仍可能超過帳戶能承受的量——那正是多策略的典型破口。
+
+        **依市場分組、各用該市場的預設上限**：股票與期貨的曝險計量不同（持倉金額 vs
+        契約價值），合在一起比會讓期貨的契約價值吃掉股票的額度。帳戶層不讀策略宣告：
+        各策略的宣告只管自己，帳戶合計用哪一支的值都說不通。
         """
 
-        items: List[ExposureItem] = [
-            ExposureItem(order, context.notional(order))
-            for context, order in candidates
-        ]
+        groups: Dict[type, List[Tuple[StrategyContext, BaseOrder]]] = {}
+        for context, order in candidates:
+            groups.setdefault(type(context.risk_limits), []).append((context, order))
+
         # **與額度檢查、單日虧損共用同一個口徑**：這裡自己內嵌一份
         # 「可用餘額 ＋ 持倉占用」的公式的話，改了一邊另一邊不會跟著改
-        allowed: List[ExposureItem] = self.risk_manager.check_batch(
-            items,
-            ACCOUNT_STRATEGY,
-            self._account_equity(),
-        )
-        approved: List[BaseOrder] = [item.order for item in allowed]
+        equity: float = self._account_equity() if groups else 0.0
+        approved: List[BaseOrder] = []
+        for config_cls, members in groups.items():
+            items: List[ExposureItem] = [
+                ExposureItem(order, context.exposure(order))
+                for context, order in members
+            ]
+            allowed: List[ExposureItem] = self.risk_manager.check_batch(
+                items, ACCOUNT_STRATEGY, equity, config_cls()
+            )
+            approved.extend(item.order for item in allowed)
         return [(context, order) for context, order in candidates if order in approved]
 
     # === 送單 ===
@@ -1565,7 +1604,7 @@ class LiveTrader:
 
             **資金保留以決策價計算，在執行層改寫委託價之前**：集合競價的 `MARKET`
             買單掛漲停，以掛單價保留的話，額度切滿的策略最後一檔一定保留不到。
-            風控收到同一份漲跌停，並以決策價做偏離與漲跌停檢查（見 `RiskManager`）。
+            風控收到同一份漲跌停，並以決策價做偏離與漲跌停檢查（見 `PreTradeRiskManager.check()`）。
         - Parameters:
             - candidates: List[Tuple[StrategyContext, BaseOrder]]
                 通過跨策略檢查的委託
@@ -1608,8 +1647,8 @@ class LiveTrader:
             # 「額度 − 持倉占用」，滿倉的策略趨近 0，若出場也要先保留，之後每一張
             # 平倉／停損都會在這裡被擋下、永遠出不了場。開倉才保留；
             # 與 `_check_margin()` 對平倉單免檢查是同一條原則。金額仍算出來給風控
-            closing: bool = is_closing_order(order)
-            amount: float = context.notional(order)
+            closing: bool = order_rules.is_closing(order)
+            amount: float = self._order_amount(context, order, closing)
             reserved: float = 0.0 if closing else amount
             if not closing and not self.allocator.reserve(
                 context.name, amount, symbol=order.symbol
@@ -1617,9 +1656,7 @@ class LiveTrader:
                 unsent.append((context, order))
                 continue
 
-            limits: Optional[Tuple[Optional[float], Optional[float]]] = (
-                self._apply_execution(context, order)
-            )
+            limits: Optional[PriceLimits] = self._apply_execution(context, order)
             if limits is None:
                 self.allocator.release(context.name, reserved)
                 if cover_unsent_exits:
@@ -1632,9 +1669,10 @@ class LiveTrader:
                 context.name,
                 context.capital_limit,
                 amount,
+                context.risk_limits,
                 reference_price=self._reference_price(context, order),
-                limit_up=limits[0],
-                limit_down=limits[1],
+                limit_up=limits.limit_up,
+                limit_down=limits.limit_down,
             )
             if not decision.passed:
                 self.allocator.release(context.name, reserved)
@@ -1666,6 +1704,39 @@ class LiveTrader:
 
         return unsent
 
+    def _order_amount(
+        self, context: StrategyContext, order: BaseOrder, closing: bool
+    ) -> float:
+        """
+        - Description:
+            本張委託的資金占用；**出場單算不出來時記 0，不中斷送單**
+
+            期貨的資金占用要查當天的保證金表。開倉單在這之前已經過保證金檢查
+            （同一張表，查不到就擋），走不到這裡；出場單不做保證金檢查，表若缺當天的資料，
+            讓例外往上拋會中斷整批送單，部位反而出不了場。出場單的金額只用在當日流量統計
+            （金額類上限對出場本來就不檢查），記 0 的代價是流量少算這一筆。
+        - Parameters:
+            - context: StrategyContext
+                歸屬策略
+            - order: BaseOrder
+                委託
+            - closing: bool
+                是否為出場單
+        - Return:
+            - float
+                資金占用
+        """
+
+        if not closing:
+            return context.notional(order)
+        try:
+            return context.notional(order)
+        except ValueError as exc:
+            logger.warning(
+                f"{context.name} 出場單 {order.symbol} 算不出資金占用，以 0 計：{exc}"
+            )
+            return 0.0
+
     # 刻意連出場都不送的風控類別：kill switch 與 HALTED 是人為或系統決定「現在什麼都不動」，
     # 替這兩種排次日補平等於繞過那個決定
     DELIBERATE_EXIT_BLOCKS: Set[str] = {"KILL_SWITCH", "MODE_HALTED"}
@@ -1690,7 +1761,7 @@ class LiveTrader:
                 沒送出的原因
         """
 
-        if not is_closing_order(order):
+        if not order_rules.is_closing(order):
             return
 
         now: datetime.datetime = self._now()
@@ -1729,7 +1800,7 @@ class LiveTrader:
 
     def _apply_execution(
         self, context: StrategyContext, order: BaseOrder
-    ) -> Optional[Tuple[Optional[float], Optional[float]]]:
+    ) -> Optional[PriceLimits]:
         """
         - Description:
             交給執行層換成券商委託；換不出來時寫事件並回 None（本張不送）
@@ -1743,8 +1814,8 @@ class LiveTrader:
             - order: BaseOrder
                 待送出的委託（就地改寫價格類型、委託價與委託效期）
         - Return:
-            - Optional[Tuple[Optional[float], Optional[float]]]
-                換算時用的（漲停, 跌停），要一併交給風控；None 表示本張不送
+            - Optional[PriceLimits]
+                換算時用的漲跌停，要一併交給風控；None 表示本張不送
         """
 
         model: Optional[BaseExecutionModel] = context.execution_model
@@ -1754,9 +1825,7 @@ class LiveTrader:
             )
             return None
 
-        limits: Tuple[Optional[float], Optional[float]] = model.get_price_limits(
-            order.symbol
-        )
+        limits: PriceLimits = model.get_price_limits(order.symbol)
         try:
             model.apply(order, limits)
         except ExecutionUnavailableError as exc:
@@ -1801,7 +1870,7 @@ class LiveTrader:
 
         if context.calculate_opening_requirement is None:
             return None
-        if order.action is order_rules.resolve_close_action(order.position_type):
+        if order_rules.is_closing(order):
             return None
 
         try:
@@ -2462,7 +2531,10 @@ class LiveTrader:
 
         for context in self.contexts:
             self.risk_manager.check_daily_loss(
-                context.name, self._strategy_loss(context), context.capital_limit
+                context.name,
+                self._strategy_loss(context),
+                context.capital_limit,
+                context.risk_limits,
             )
 
         account_loss: Optional[float] = self._account_loss()

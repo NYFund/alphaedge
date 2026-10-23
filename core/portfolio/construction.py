@@ -4,7 +4,8 @@ from typing import Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.cost_model import TwFuturesCostModel
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.models import (
     BaseAccount,
     BaseOrder,
@@ -108,16 +109,7 @@ class StockPortfolioConstructor(BasePortfolioConstructor):
         orders: List[StockOrder] = []
         for quote, _, volume in self.sizer.size(account, candidates, self.max_holdings):
             signal: Signal = signal_by_quote[id(quote)]
-            orders.append(
-                StockOrder(
-                    stock_id=signal.symbol,
-                    date=quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=volume,
-                )
-            )
+            orders.append(StockOrder.from_signal(signal, volume))
         return orders
 
 
@@ -126,118 +118,84 @@ class FuturesPortfolioConstructor(BasePortfolioConstructor):
     台期貨開倉：保證金約束
 
     **不是資金切分**：拿契約價值去除可動用餘額會嚴重低估可開口數
-    （TX 一口契約價值 900 萬、保證金只有 70 萬）。
+    （TX 一口契約價值 900 萬、保證金只有 70 萬）。口數由 `sizer` 決定（預設
+    `MarginSizer`，`max_lots`／`max_capital_usage` 是它的參數），本層只負責把每個訊號
+    攤成「報價 ＋ 每口需要的資金」。
 
-    另有一層總口數上限：`max_lots` 扣掉帳上已開口數就是本次的可用額度，
-    逐筆遞減、歸零即停。
+    **每口需要的資金 ＝ 原始保證金 ＋ 開倉手續費與稅**，與
+    `FuturesPositionManager.calculate_opening_requirement()` 同口徑：只算保證金的話，
+    資金剛好卡邊界時會多算 1 口、再被部位管理層以餘額不足拒絕。保證金走注入的
+    `FuturesMarginModel`——與部位管理層**同一個實例**，個股期貨的比例表才查得到。
     """
 
     def __init__(
         self,
-        max_lots: int = 0,
-        max_capital_usage: float = 0.5,
-        margin_config: Optional[FuturesMarginConfig] = None,
+        sizer: BasePositionSizer,
+        margin_model: Optional[FuturesMarginModel] = None,
+        cost_model: Optional[TwFuturesCostModel] = None,
         log_context: str = "",
     ) -> None:
-        self.max_lots: int = max_lots  # 總口數上限（0 表示不開倉）
-        self.max_capital_usage: float = max_capital_usage  # 可動用餘額的使用上限
-        self.margin_config: Optional[FuturesMarginConfig] = margin_config
+        self.sizer: BasePositionSizer = sizer
+        # 未注入時自己建：沒有 API 就是比率近似，與部位管理層未注入時相同
+        self.margin_model: FuturesMarginModel = margin_model or FuturesMarginModel()
+        self.cost_model: TwFuturesCostModel = cost_model or TwFuturesCostModel()
         self.log_context: str = log_context  # 記在 log 前綴的策略名稱
 
     def build(self, signals: List[Signal], account: BaseAccount) -> List[FuturesOrder]:
-        """依保證金與剩餘口數上限計算下單口數"""
+        """每個訊號算出每口需要的資金，交給 sizer 決定口數"""
 
         if not signals:
             return []
 
-        remaining_lots: int = self.max_lots - sum(
-            abs(lots) for lots in account.get_open_lots().values()
-        )
-
-        orders: List[FuturesOrder] = []
+        candidates: List[Tuple[BaseQuote, float]] = []
+        # 以 `id()` 為鍵反查訊號，理由同 `StockPortfolioConstructor`
+        signal_by_quote: Dict[int, Signal] = {}
         for signal in signals:
-            if remaining_lots <= 0:
-                break
-
             quote: FuturesQuote = signal.quote
-            affordable: int = self.calculate_max_lots(quote, account)
-            volume: int = min(affordable, remaining_lots)
-            if volume <= 0:
+            requirement: float = self.opening_requirement_per_lot(quote)
+            if requirement <= 0:
                 logger.info(
-                    f"[{self.log_context}] {quote.contract_id} "
-                    f"保證金不足或已達口數上限，跳過"
+                    f"[{self.log_context}] {quote.contract_id} 算不出每口需要的資金"
+                    f"（乘數 {quote.multiplier}），跳過"
                 )
                 continue
+            candidates.append((quote, requirement))
+            signal_by_quote[id(quote)] = signal
 
-            orders.append(
-                FuturesOrder(
-                    product=quote.product,
-                    expiry=quote.expiry,
-                    date=quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=volume,
-                )
-            )
-            remaining_lots -= volume
-
+        orders: List[FuturesOrder] = []
+        for quote, _, volume in self.sizer.size(account, candidates, None):
+            orders.append(FuturesOrder.from_signal(signal_by_quote[id(quote)], volume))
         return orders
 
-    def calculate_max_lots(self, quote: FuturesQuote, account: BaseAccount) -> int:
+    def opening_requirement_per_lot(self, quote: FuturesQuote) -> float:
         """
         - Description:
-            以**保證金**算出這筆訂單最多能開幾口
+            開一口需要的資金：原始保證金 ＋ 手續費 ＋ 期交稅
 
-            股票是「用多少錢買多少股」，期貨是「繳多少保證金開幾口」。
-            保證金取得方式與 `FuturesPositionManager` 一致：帶了 API 就查表，
-            否則用比率近似。**查表查不到會往外拋**，那是刻意的，見
-            `FuturesMarginConfig` 的說明。
+            保證金取自 `FuturesMarginModel`（查表查不到會往外拋，那是刻意的，見
+            `FuturesMarginConfig` 的說明）；手續費與稅取自成本模型，與部位管理層的開倉
+            資金檢查同一組費率。
         - Parameters:
             - quote: FuturesQuote
                 目標契約的報價
-            - account: BaseAccount
-                虛擬帳戶，提供可動用餘額
         - Return:
-            - int
-                可開口數；帳戶或報價不足以計算時為 0
+            - float
+                每口需要的資金；報價沒有乘數時為 0
         """
 
-        if account is None or quote.multiplier <= 0:
-            return 0
+        if quote.multiplier <= 0:
+            return 0.0
 
-        margin_per_lot: float = self.get_margin_per_lot(quote)
-        if margin_per_lot <= 0:
-            return 0
-
-        budget: float = account.balance * self.max_capital_usage
-        return max(0, int(budget // margin_per_lot))
-
-    def get_margin_per_lot(self, quote: FuturesQuote) -> float:
-        """
-        取得每口原始保證金
-
-        沒有 `margin_config` 或沒有 API 時退回「契約價值 × 比率」，
-        與 `FuturesPositionManager` 的比率模式一致——兩處若不一致，
-        算出來的口數會開不進去（或開得太少）。
-        """
-
-        config: FuturesMarginConfig = (
-            self.margin_config or FuturesMarginConfig.default()
+        margin: float = self.margin_model.initial_margin_per_lot(
+            quote.product,
+            normalize_quote_date(quote.date),
+            quote.close,
+            quote.multiplier,
         )
-
-        if config.api is not None:
-            per_lot: Optional[int] = config.api.get_initial_margin(
-                quote.product,
-                normalize_quote_date(quote.date),
-                fallback_to_earliest=config.fallback_to_earliest,
-            )
-            if per_lot is None:
-                logger.warning(
-                    f"[{self.log_context}] 查無 {quote.product} 在 {quote.date} "
-                    f"的保證金，本次不開倉"
-                )
-                return 0.0
-            return float(per_lot)
-
-        return quote.close * quote.multiplier * config.initial_margin_ratio
+        commission: float = self.cost_model.commission(
+            price=quote.close, volume=1, product=quote.product
+        )
+        tax: float = self.cost_model.tax(
+            price=quote.close, volume=1, multiplier=quote.multiplier
+        )
+        return margin + commission + tax

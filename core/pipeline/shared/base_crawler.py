@@ -62,6 +62,9 @@ class CrawlResult:
     # 少數來源（月營收）一次「爬取」其實是好幾個請求、回好幾張表，
     # 且各表欄位不同無法先合併，故另留一個欄位；單表來源不會用到它。
     tables: List[pd.DataFrame] = field(default_factory=list)
+    # 期交所的籌碼與保證金一覽表回的是 CSV 原文而不是表格，由清洗器自己解析；
+    # 單表來源不會用到它
+    text: Optional[str] = None
 
     @property
     def is_ok(self) -> bool:
@@ -94,6 +97,12 @@ class CrawlResult:
         return cls(status=CrawlStatus.OK, tables=tables)
 
     @classmethod
+    def ok_text(cls, text: str) -> "CrawlResult":
+        """建立成功結果（CSV 原文，見 `text` 欄位說明）"""
+
+        return cls(status=CrawlStatus.OK, text=text)
+
+    @classmethod
     def no_data(cls, reason: str) -> "CrawlResult":
         """建立「站方明確沒有資料」的結果"""
 
@@ -107,7 +116,7 @@ class CrawlResult:
 
 
 class BaseDataCrawler(ABC):
-    """Base Class of Data Crawler"""
+    """資料 crawler 的抽象基底"""
 
     # 站方「查無資料」的明確訊息。**只有這些字串出現才算休市**——
     # TWSE 與 TPEX 兩邊的措辭都收在這裡，五支 crawler 共用同一份判準。
@@ -137,18 +146,21 @@ class BaseDataCrawler(ABC):
 
     def __init__(self) -> None:
         """建立 crawler；連線與參數一律由子類的 `setup()` 負責"""
+
         pass
 
     @abstractmethod
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     @abstractmethod
     # 回傳型別由各 crawler 自行決定（`CrawlResult`、`DataFrame`、`None`……），
     # 故此處標 `Any`：來源的形狀差異太大，硬統一只會讓每個子類都得回傳包裝物件
     def crawl(self, *args, **kwargs) -> Any:
-        """Crawl Data"""
+        """爬取資料"""
+
         pass
 
     @classmethod

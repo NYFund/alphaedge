@@ -21,6 +21,8 @@ class Resolver:
 
 
 class Broker:
+    """只帶合約轉換器的券商替身"""
+
     resolver: Resolver = Resolver()
 
 
@@ -37,6 +39,8 @@ class Contract:
 
 
 def make_feed() -> TwFuturesLiveDataFeed:
+    """建立盤前時點的期貨實盤資料源"""
+
     return TwFuturesLiveDataFeed(
         broker=Broker(),
         calendar_sources=[],

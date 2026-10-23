@@ -58,7 +58,7 @@ def dao() -> FinancialStatementDAO:
     fs_dao: FinancialStatementDAO = FinancialStatementDAO(
         "balance_sheet", conn=sqlite3.connect(":memory:")
     )
-    fs_dao.ensure_table(BALANCE_SHEET_COLUMNS)
+    fs_dao.ensure_table_from_columns(BALANCE_SHEET_COLUMNS)
     fs_dao.insert_or_ignore(
         make_balance_rows([(2023, 3), (2023, 4), (2024, 1), (2024, 2)])
     )
@@ -84,8 +84,8 @@ def test_equity_change_primary_key_includes_flattened_dimensions() -> None:
     fs_dao: FinancialStatementDAO = FinancialStatementDAO(
         "equity_change", conn=sqlite3.connect(":memory:")
     )
-    fs_dao.ensure_table(EQUITY_CHANGE_COLUMNS)
-    fs_dao.ensure_table(EQUITY_CHANGE_COLUMNS)
+    fs_dao.ensure_table_from_columns(EQUITY_CHANGE_COLUMNS)
+    fs_dao.ensure_table_from_columns(EQUITY_CHANGE_COLUMNS)
 
     info: List[Tuple[Any, ...]] = fs_dao.conn.execute(
         "PRAGMA table_info('equity_change')"

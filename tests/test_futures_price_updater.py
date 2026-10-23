@@ -13,7 +13,9 @@ from core.config import (
 )
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.pipeline.shared import date_planner as date_planner_module
 from core.pipeline.shared.base_crawler import CrawlResult
+from core.pipeline.shared.date_planner import DateProgressStore
 from core.pipeline.tw.updaters.futures_price_updater import FuturesPriceUpdater
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession
@@ -38,6 +40,8 @@ def updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FuturesPriceUpda
     monkeypatch.setattr(
         "core.pipeline.tw.updaters.futures_price_updater.TW_FUTURES_DB_PATH", db_path
     )
+    # 日期進度檔也寫到暫存目錄，不碰正式的 downloads
+    monkeypatch.setattr(date_planner_module, "DOWNLOADS_METADATA_DIR_PATH", tmp_path)
     monkeypatch.setattr(
         "core.pipeline.tw.loaders.futures_price_loader.TW_FUTURES_DB_PATH", db_path
     )
@@ -144,42 +148,156 @@ def insert_row(conn: sqlite3.Connection, date: str, product: str) -> None:
     conn.commit()
 
 
-# === 逐商品續跑 ===
-def test_start_date_falls_back_to_default_when_no_data(
-    updater: FuturesPriceUpdater,
+# === 逐商品續跑（差集） ===
+MONDAY: datetime.date = datetime.date(2026, 8, 24)
+FRIDAY: datetime.date = datetime.date(2026, 8, 28)
+
+
+def progress_for(tmp_path: Path, product: str) -> DateProgressStore:
+    """測試用的進度檔，寫在暫存目錄"""
+
+    return DateProgressStore(
+        f"futures_price_{product}", path=tmp_path / f"{product}.json"
+    )
+
+
+def test_plan_starts_from_the_given_date_when_product_has_no_rows(
+    updater: FuturesPriceUpdater, tmp_path: Path
 ) -> None:
-    """表內沒有該商品時，起點為傳入的預設日"""
+    """表內沒有該商品時，從傳入的起日開始：那一週的五個平日都要問"""
 
-    default: datetime.date = datetime.date(1998, 7, 21)
+    dates: List[datetime.date] = updater.plan_dates(
+        "TX", MONDAY, FRIDAY, progress_for(tmp_path, "TX")
+    )
 
-    assert updater.get_actual_update_start_date("TX", default) == default
+    assert (dates[0], dates[-1], len(dates)) == (MONDAY, FRIDAY, 5)
 
 
-def test_start_date_resumes_from_latest(updater: FuturesPriceUpdater) -> None:
-    """表內已有資料時，起點為最新日 +1"""
+def test_plan_resumes_from_the_table(
+    updater: FuturesPriceUpdater, tmp_path: Path
+) -> None:
+    """表內已到 08-27：只剩 08-28 要補；該商品第一筆之前的日子不回頭看"""
 
     insert_row(updater.conn, "2026-08-27", "TX")
 
-    assert updater.get_actual_update_start_date(
-        "TX", datetime.date(1998, 7, 21)
-    ) == datetime.date(2026, 8, 28)
+    dates: List[datetime.date] = updater.plan_dates(
+        "TX", MONDAY, FRIDAY, progress_for(tmp_path, "TX")
+    )
+
+    assert dates == [FRIDAY]
 
 
-def test_resume_is_per_product(updater: FuturesPriceUpdater) -> None:
+def test_resume_is_per_product(updater: FuturesPriceUpdater, tmp_path: Path) -> None:
     """
     新加入的商品不可被既有商品的進度擋住
 
-    TX 已補到 2026，此時把 MTX 加進設定檔，MTX 的起點仍須是預設日；
-    若以全表最新日為準，MTX 的歷史會整段補不到且不會有任何錯誤訊息。
+    TX 已補到 08-27，此時把 MTX 加進設定檔，MTX 仍要從起日開始；
+    若以全表的日期算差集，MTX 的歷史會整段補不到且不會有任何錯誤訊息。
     """
 
     insert_row(updater.conn, "2026-08-27", "TX")
-    default: datetime.date = datetime.date(1998, 7, 21)
 
-    assert updater.get_actual_update_start_date("TX", default) == datetime.date(
-        2026, 8, 28
+    assert updater.plan_dates("TX", MONDAY, FRIDAY, progress_for(tmp_path, "TX")) == [
+        FRIDAY
+    ]
+    assert (
+        len(updater.plan_dates("MTX", MONDAY, FRIDAY, progress_for(tmp_path, "MTX")))
+        == 5
     )
-    assert updater.get_actual_update_start_date("MTX", default) == default
+
+
+def test_plan_honours_the_progress_file(
+    updater: FuturesPriceUpdater, tmp_path: Path
+) -> None:
+    """已確認無資料的日子不再問；上次沒跑完的即使表內已有也重來"""
+
+    for day in ("2026-08-24", "2026-08-26", "2026-08-27"):
+        insert_row(updater.conn, day, "TX")
+    progress: DateProgressStore = progress_for(tmp_path, "TX")
+    progress.no_data.add(datetime.date(2026, 8, 25))
+    progress.incomplete.add(datetime.date(2026, 8, 27))
+
+    dates: List[datetime.date] = updater.plan_dates("TX", MONDAY, FRIDAY, progress)
+
+    assert dates == [datetime.date(2026, 8, 27), FRIDAY]
+
+
+def test_spot_holidays_inside_the_calendar_are_not_requested(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    現貨沒開市的平日就是期貨的休市日，直接當成已確認無資料；日曆尾端之後的日子仍要問
+
+    週三是國定假日、現貨日曆只到週四：週三不請求，週五（現貨還沒更新到）照常請求。
+    """
+
+    wednesday: datetime.date = datetime.date(2026, 8, 26)
+    calendar: List[datetime.date] = [
+        day for day in (MONDAY, datetime.date(2026, 8, 25), datetime.date(2026, 8, 27))
+    ]
+    monkeypatch.setattr(updater, "get_stock_trading_days", lambda *_: calendar)
+
+    dates: List[datetime.date] = updater.plan_dates(
+        "TX", MONDAY, FRIDAY, progress_for(tmp_path, "TX")
+    )
+
+    assert wednesday not in dates
+    assert dates == [
+        MONDAY,
+        datetime.date(2026, 8, 25),
+        datetime.date(2026, 8, 27),
+        FRIDAY,
+    ]
+
+
+def test_holiday_is_recorded_and_not_requested_again(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """站方明確查無資料的平日記成休市：下一次執行不再請求（舊做法每次都重問）"""
+
+    requested: List[datetime.date] = []
+    monkeypatch.setattr(
+        updater.crawler,
+        "crawl_futures_price",
+        as_crawl_result(lambda date, product, session: requested.append(date) or None),
+    )
+    monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
+    updater.BATCH_RANDOM_DELAY_MIN = 0
+    updater.BATCH_RANDOM_DELAY_MAX = 0
+
+    updater.update(start_date=DATE, end_date=DATE, products=["TX"])
+    first_round: int = len(requested)
+    updater.update(start_date=DATE, end_date=DATE, products=["TX"])
+
+    assert first_round > 0
+    assert len(requested) == first_round
+    assert DATE in updater.progress_store("TX").no_data
+
+
+def test_blocked_day_is_requested_again_next_run(
+    updater: FuturesPriceUpdater, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """現貨有開市卻沒拿到：記成待重試，下一次執行一定再請求"""
+
+    requested: List[datetime.date] = []
+    monkeypatch.setattr(
+        updater.crawler,
+        "crawl_futures_price",
+        as_crawl_result(lambda date, product, session: requested.append(date) or None),
+    )
+    monkeypatch.setattr(updater, "get_stock_trading_days", lambda *_: [DATE])
+    monkeypatch.setattr(updater, "get_traded_weekend_dates", lambda *_: set())
+    updater.BATCH_RANDOM_DELAY_MIN = 0
+    updater.BATCH_RANDOM_DELAY_MAX = 0
+
+    with pytest.raises(ProductUpdateError):
+        updater.update(start_date=DATE, end_date=DATE, products=["TX"])
+    first_round: int = len(requested)
+    with pytest.raises(ProductUpdateError):
+        updater.update(start_date=DATE, end_date=DATE, products=["TX"])
+
+    assert len(requested) == first_round * 2
+    assert DATE in updater.progress_store("TX").incomplete
 
 
 def test_backfill_ignores_table_progress(

@@ -118,6 +118,8 @@ class ShioajiQuoteStream:
         """
 
         def callback(message: Any) -> None:
+            """券商執行緒上的行情回呼：只入列，例外一律吞掉並記 log"""
+
             try:
                 exchange: Any = getattr(message, "exchange", None)
                 self.quote_queue.put((kind, exchange, message))

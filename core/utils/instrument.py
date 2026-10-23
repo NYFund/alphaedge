@@ -25,14 +25,14 @@ from .constant import (
     5. 期貨契約代號拆成商品與到期月份（`FuturesUtils`）
 - 使用場景:
     **生產路徑不呼叫本檔的成本函式**。回測與實盤的記帳一律走
-    `StockCostModel`，它自己從 `CostConfig` 推算；本檔的成本函式現行只有
+    `TwStockCostModel`，它自己從 `CostConfig` 推算；本檔的成本函式現行只有
     同檔的 `calculate_transaction_cost()`、`strategy_lab/` 的研究腳本與測試在用。
     `round_to_tick()`、`convert_*` 與 `filter_common_stocks()` 則是全庫共用的純換算。
 """
 
 
 class StockUtils:
-    """Stock Related Tools"""
+    """台股的張股換算、成本、損益與檔位工具"""
 
     @staticmethod
     def convert_share_to_lot(shares: int) -> int:
@@ -40,10 +40,10 @@ class StockUtils:
         - Description: 將股數轉換為張數
         - Parameters:
             - shares: int
-                股數 (Unit: Shares)
+                股數（Unit: Shares）
         - Return:
             - lots: int
-                張數 (Unit: Lots)
+                張數（Unit: Lots）
         """
 
         return int(shares / Units.LOT)
@@ -54,10 +54,10 @@ class StockUtils:
         - Description: 將張數轉換為股數
         - Parameters:
             - lots: int
-                張數 (Unit: Lots)
+                張數（Unit: Lots）
         - Return:
             - shares: int
-                股數 (Unit: Shares)
+                股數（Unit: Shares）
         """
 
         return int(lots * Units.LOT)
@@ -68,10 +68,10 @@ class StockUtils:
         - Description:
             計算股票買賣時的手續費
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel.commission()`**，不要從
+            ⚠️ **記帳的唯一入口是 `TwStockCostModel.commission()`**，不要從
             `core/position/`、`core/backtest/` 或策略層直接呼叫本函式。
 
-            **兩者尚未收斂**：`StockCostModel.commission()` 自己從 `self.config`
+            **兩者尚未收斂**：`TwStockCostModel.commission()` 自己從 `self.config`
             推算，一次都沒有呼叫過本函式。現行呼叫端只有同檔的
             `calculate_transaction_cost()`、`strategy_lab/` 的研究腳本與測試，
             所以口徑差異目前不影響任何回測數字；但同一條規則存在兩份，
@@ -110,7 +110,7 @@ class StockUtils:
             一律減半的話，2013-01 ~ 2017-04 的每一筆當沖賣出都少算一半的稅
             ——約 4 年 4 個月，而且結果只會偏樂觀。
 
-            **這個判定只有一份**，`StockCostModel.is_day_trade_tax_effective()`
+            **這個判定只有一份**，`TwStockCostModel.is_day_trade_tax_effective()`
             轉呼叫本方法：兩處各寫一份的話，只要有一邊忘了看日期就會少算一半，
             而少算的稅不會讓任何測試變紅。
         - Parameters:
@@ -139,10 +139,10 @@ class StockUtils:
         - Description:
             計算股票賣出時的交易稅
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel.tax()`**，不要從 `core/position/`、
+            ⚠️ **記帳的唯一入口是 `TwStockCostModel.tax()`**，不要從 `core/position/`、
             `core/backtest/` 或策略層直接呼叫本函式。
 
-            **公式只有這一份**：`StockCostModel.tax()` 轉呼叫本函式，只是由它
+            **公式只有這一份**：`TwStockCostModel.tax()` 轉呼叫本函式，只是由它
             決定「買進不課稅」與稅率來源（`CostConfig` 可被使用者覆寫）。
             本函式不傳稅率時取模組層級常數，供研究腳本直接用。
         - Parameters:
@@ -186,7 +186,7 @@ class StockUtils:
                 證券代號
         - Return:
             - List[Tuple[float, float]]
-                (價格上限, 檔位) 的清單
+                `(價格上限, 檔位)` 的清單
         """
 
         if symbol and symbol.startswith("00"):
@@ -285,7 +285,7 @@ class StockUtils:
         """
         - Description: 計算股票交易的淨收益（扣除手續費和交易稅）（目前只有做多）
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel.realized_pnl()`**：本函式以「傳入張數」
+            ⚠️ **記帳的唯一入口是 `BaseCostModel.realized_pnl()`**：本函式以「傳入張數」
             重算開倉手續費，部分平倉時最低手續費會被重複套用，與 `record.commission`
             的等比例攤提不一致（差異量化見 `tests/backtest/compare_cost_formula.py`）。
             生產路徑不呼叫本函式，保留僅供研究腳本比對用。
@@ -322,7 +322,7 @@ class StockUtils:
         """
         - Description: 計算股票投資報酬率（ROI）（目前只有做多）
 
-            ⚠️ **記帳的唯一入口是 `StockCostModel.roi()`**，理由同 `calculate_net_profit`。
+            ⚠️ **記帳的唯一入口是 `BaseCostModel.roi()`**，理由同 `calculate_net_profit`。
         - Parameters:
             - buy_price: float
                 股票買入價格

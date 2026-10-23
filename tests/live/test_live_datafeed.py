@@ -16,7 +16,12 @@ from core.live.datafeed.calendar import (
 )
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
-from core.models import BaseQuote, LiveDataUnavailableError, PreOpenStockQuote
+from core.models import (
+    BaseQuote,
+    LiveDataUnavailableError,
+    PreOpenStockQuote,
+    PriceLimits,
+)
 from core.utils import ExecutionTiming
 
 """
@@ -160,6 +165,9 @@ class FakeLiveFeed(BaseLiveDataFeed):
     def setup(self, strategy: Any) -> None:
         """本檔只驗新鮮度，不需要真的建 API"""
 
+    def open_data_sources(self, strategy: Any) -> None:
+        """同上"""
+
     def get_quotes(
         self, date: datetime.date, scale: Any, adjusted: bool = False
     ) -> List[BaseQuote]:
@@ -228,6 +236,8 @@ def test_definite_missing_trading_day_is_rejected() -> None:
 
 # === 盤前報價 ===
 class FakeContract:
+    """帶參考價與漲跌停價的合約替身"""
+
     def __init__(self, reference: float = 1000.0, limit_up: float = 1100.0) -> None:
         self.reference: float = reference
         self.limit_up: float = limit_up
@@ -236,6 +246,8 @@ class FakeContract:
 
 
 class FakeResolver:
+    """依代號回合約替身的合約轉換器"""
+
     def __init__(self, contracts: Optional[dict] = None) -> None:
         self._contracts: dict = (
             contracts if contracts is not None else {"2330": FakeContract()}
@@ -248,6 +260,8 @@ class FakeResolver:
 
 
 class FakeBrokerForFeed:
+    """記下快照查詢的券商替身，快照一律回空"""
+
     def __init__(self, resolver: FakeResolver) -> None:
         self.resolver: FakeResolver = resolver
         self.snapshot_calls: List[List[str]] = []
@@ -259,6 +273,8 @@ class FakeBrokerForFeed:
 
 @pytest.fixture
 def feed() -> TwStockLiveDataFeed:
+    """開盤日、合約齊全的台股實盤資料源"""
+
     broker: FakeBrokerForFeed = FakeBrokerForFeed(FakeResolver())
     return TwStockLiveDataFeed(
         broker,
@@ -365,7 +381,7 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 
     def assigned_api_names(cls: Any) -> set:
-        source: str = inspect.getsource(cls.setup)
+        source: str = inspect.getsource(cls.open_data_sources)
         return {
             line.split("=")[0].strip().removeprefix("self.")
             for line in source.splitlines()
@@ -380,7 +396,7 @@ def test_live_feed_exposes_the_same_apis_as_the_backtest_feed() -> None:
     live_apis: set = assigned_api_names(TwStockLiveDataFeed)
 
     # **先確認掃描結果非空**：`assigned_api_names()` 是從原始碼刮出
-    # `self.x = XxxAPI(` 這種行，哪天 `setup()` 改用迴圈、dict 或 factory 建 API，
+    # `self.x = XxxAPI(` 這種行，哪天 `open_data_sources()` 改用迴圈、dict 或 factory 建 API，
     # 它就會回空集合——而 `set() <= 任何集合` 恆為真，下面那條斷言會無條件通過，
     # 這道護欄就在沒人察覺的情況下死掉
     assert len(backtest_apis) >= 5, (
@@ -493,6 +509,8 @@ def test_probe_failure_is_visible_not_swallowed() -> None:
     """
 
     class BrokenResolver:
+        """查掛牌月份就拋錯的合約轉換器"""
+
         def list_index_futures_expiries(self, product: str) -> List[str]:
             raise RuntimeError("連線斷了")
 
@@ -592,7 +610,9 @@ def test_futures_pre_open_quote_carries_the_contract_id() -> None:
     (quote,) = feed.get_live_quotes(ExecutionTiming.AT_OPEN, ["TX202610"])
 
     assert (quote.product, quote.expiry) == ("TX", "202610")
-    assert feed.get_price_limits("TX202610") == (55090.0, 45074.0)
+    assert feed.get_price_limits("TX202610") == PriceLimits(
+        limit_up=55090.0, limit_down=45074.0
+    )
     assert feed.get_reference_price("TX202610") == 50082.0
 
 
@@ -600,6 +620,8 @@ def test_futures_pre_open_quote_without_a_contract_id_is_skipped() -> None:
     """換算不出代號就略過該契約，不送出一筆沒有代號的報價"""
 
     class Unmapped(LetterCodeResolver):
+        """把契約代號原樣傳回、對不到專案契約代號的轉換器"""
+
         def to_futures_symbol(self, code: str) -> str:
             return code
 

@@ -31,7 +31,7 @@ from core.utils import FileEncoding, TimeUtils
 
 
 class FinancialStatementCleaner(BaseDataCleaner):
-    """Cleaner for quarterly financial Statement"""
+    """季度財報 cleaner（Transform）"""
 
     # 權益變動表是攤平後的長表，欄位固定六個，不像其他三張報表要靠 column map 推導
     EQUITY_CHANGE_COLS: List[str] = [
@@ -69,7 +69,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Raw and cleaned column names for each report type (Load from .json)
+        # 各報表的原始欄名與清洗後欄名（由 `setup()` 從 JSON 載入）
         self.balance_sheet_cols: List[str] = []
         self.balance_sheet_cleaned_cols: List[str] = []
         self.comprehensive_income_cols: List[str] = []
@@ -79,12 +79,12 @@ class FinancialStatementCleaner(BaseDataCleaner):
         # 權益變動表沒有 raw cols 與 col map：欄位由攤平規則固定（見 EQUITY_CHANGE_COLS）
         self.equity_change_cleaned_cols: List[str] = []
 
-        # Column mapping for each report type (Load from .json)
+        # 各報表的欄名對照表（由 `setup()` 從 JSON 載入）
         self.balance_sheet_col_map: Dict[str, List[str]] = {}
         self.comprehensive_income_col_map: Dict[str, List[str]] = {}
         self.cash_flow_col_map: Dict[str, List[str]] = {}
 
-        # Reports Cleaned Columns Path
+        # 各報表清洗後欄名的 JSON 路徑
         self.balance_sheet_cleaned_cols_path: Path = (
             FINANCIAL_STATEMENT_META_DIR_PATH
             / FinancialStatementType.BALANCE_SHEET.lower()
@@ -106,7 +106,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
             / f"{FinancialStatementType.EQUITY_CHANGE.lower()}_cleaned_columns.json"
         )
 
-        # Output directories for each report
+        # 各報表清洗後 CSV 的輸出目錄
         self.fs_dir: Path = FINANCIAL_STATEMENT_DOWNLOADS_PATH
         self.balance_sheet_dir: Path = (
             self.fs_dir / FinancialStatementType.BALANCE_SHEET.lower()
@@ -121,22 +121,20 @@ class FinancialStatementCleaner(BaseDataCleaner):
             self.fs_dir / FinancialStatementType.EQUITY_CHANGE.lower()
         )
 
-        # Clean Set Up
+        # 清洗時要丟掉的欄位（名稱前綴）
         self.removed_cols: List[str] = ["Unnamed", "0"]
 
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Create Downloads Directory For Financial Reports
         self.fs_dir.mkdir(parents=True, exist_ok=True)
         self.balance_sheet_dir.mkdir(parents=True, exist_ok=True)
         self.comprehensive_income_dir.mkdir(parents=True, exist_ok=True)
         self.cash_flow_dir.mkdir(parents=True, exist_ok=True)
         self.equity_change_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load Report Column Names & Map
         self.load_all_column_names()
         self.load_column_maps()
 
@@ -153,14 +151,14 @@ class FinancialStatementCleaner(BaseDataCleaner):
         self, df_list: List[pd.DataFrame], year: int, season: int
     ) -> pd.DataFrame:
         """
-        Clean Balance Sheet (資產負債表)
+        清洗資產負債表（Balance Sheet）
 
-        資料區間（但是只有 102 年以後才可以爬）
-        上市: 民國 78 (1989) 年 ~ present
-        上櫃: 民國 82 (1993) 年 ~ present
+        資料區間（但只有 102 年以後才爬得到）
+        上市：民國 78（1989）年至今
+        上櫃：民國 82（1993）年至今
         """
 
-        # Step 1: 載入已清洗欄位，若未成功則執行清洗流程
+        # Step 1：載入已清洗欄位，若未成功則執行清洗流程
         if not self.balance_sheet_cleaned_cols:
             self.load_cleaned_column_names(
                 report_type=FinancialStatementType.BALANCE_SHEET
@@ -173,7 +171,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
                     save_path=self.balance_sheet_cleaned_cols_path,
                 )
 
-        # Step 2: 清理 df_list 欄位名稱
+        # Step 2：清理 df_list 欄位名稱
         # 建立涵蓋所有 columns 的 df
         new_df: pd.DataFrame = pd.DataFrame(columns=self.balance_sheet_cleaned_cols)
         # 篩掉沒有 "公司名稱" 的 df
@@ -184,7 +182,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
             if DataUtils.check_required_columns(df=df, required_cols=required_cols)
         ]
 
-        # 清洗 df Column Names
+        # 清洗欄名
         appended_df_list: List[pd.DataFrame] = []
         for df in df_list:
             cleaned_cols: List[str] = [
@@ -229,14 +227,14 @@ class FinancialStatementCleaner(BaseDataCleaner):
         self, df_list: List[pd.DataFrame], year: int, season: int
     ) -> pd.DataFrame:
         """
-        Clean Statement of Comprehensive Income (綜合損益表)
+        清洗綜合損益表（Statement of Comprehensive Income）
 
-        資料區間（但是只有 102 年以後才可以爬）
-        上市: 民國 77 (1988) 年 ~ present
-        上櫃: 民國 82 (1993) 年 ~ present
+        資料區間（但只有 102 年以後才爬得到）
+        上市：民國 77（1988）年至今
+        上櫃：民國 82（1993）年至今
         """
 
-        # Step 1: 載入已清洗欄位，若未成功則執行清洗流程
+        # Step 1：載入已清洗欄位，若未成功則執行清洗流程
         if not self.comprehensive_income_cleaned_cols:
             self.load_cleaned_column_names(
                 report_type=FinancialStatementType.COMPREHENSIVE_INCOME
@@ -249,7 +247,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
                     save_path=self.comprehensive_income_cleaned_cols_path,
                 )
 
-        # Step 2: 清理 df_list 欄位名稱
+        # Step 2：清理 df_list 欄位名稱
         # 建立涵蓋所有 columns 的 df
         new_df: pd.DataFrame = pd.DataFrame(
             columns=self.comprehensive_income_cleaned_cols
@@ -262,7 +260,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
             if DataUtils.check_required_columns(df=df, required_cols=required_cols)
         ]
 
-        # 清洗 df Column Names
+        # 清洗欄名
         appended_df_list: List[pd.DataFrame] = []
         for df in df_list:
             cleaned_cols: List[str] = [
@@ -307,14 +305,14 @@ class FinancialStatementCleaner(BaseDataCleaner):
         self, df_list: List[pd.DataFrame], year: int, season: int
     ) -> pd.DataFrame:
         """
-        Clean Cash flow Statement (現金流量表)
+        清洗現金流量表（Cash Flow Statement）
 
         資料區間
-        上市: 民國 102 (2013) 年 ~ present
-        上櫃: 民國 102 (2013) 年 ~ present
+        上市：民國 102（2013）年至今
+        上櫃：民國 102（2013）年至今
         """
 
-        # Step 1: 載入已清洗欄位，若未成功則執行清洗流程
+        # Step 1：載入已清洗欄位，若未成功則執行清洗流程
         if not self.cash_flow_cleaned_cols:
             self.load_cleaned_column_names(report_type=FinancialStatementType.CASH_FLOW)
             if not self.cash_flow_cleaned_cols:
@@ -325,7 +323,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
                     save_path=self.cash_flow_cleaned_cols_path,
                 )
 
-        # Step 2: 清理 df_list 欄位名稱
+        # Step 2：清理 df_list 欄位名稱
         # 建立涵蓋所有 columns 的 df
         new_df: pd.DataFrame = pd.DataFrame(columns=self.cash_flow_cleaned_cols)
         # 篩掉沒有 "公司名稱" 的 df
@@ -336,7 +334,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
             if DataUtils.check_required_columns(df=df, required_cols=required_cols)
         ]
 
-        # 清洗 df Column Names
+        # 清洗欄名
         appended_df_list: List[pd.DataFrame] = []
         for df in df_list:
             cleaned_cols: List[str] = [
@@ -380,11 +378,11 @@ class FinancialStatementCleaner(BaseDataCleaner):
         self, df_list: List[pd.DataFrame], year: int, season: int, stock_id: str
     ) -> pd.DataFrame:
         """
-        Clean Statement of Changes in Equity (權益變動表)
+        清洗權益變動表（Statement of Changes in Equity）
 
         資料區間
-        上市: 民國 102 (2013) 年 ~ present
-        上櫃: 民國 102 (2013) 年 ~ present
+        上市：民國 102（2013）年至今
+        上櫃：民國 102（2013）年至今
 
         與其他三張報表不同，本表在來源網站是二維表（欄＝權益項目、列＝變動原因），
         且各公司的權益項目集合差異極大（金控多出特別股股本、採用覆蓋法重分類…），
@@ -392,7 +390,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
         故一律攤平成長表：一列 = 一個（權益項目 × 變動原因）的金額。
         """
 
-        # Step 1: 取出「本期」那張表
+        # Step 1：取出「本期」那張表
         # 同一頁還附了去年同季的比較表，兩張的表頭一模一樣，
         # 只有 column 第一層的「民國 X 年第 N 季」能區分；抓錯會把去年的數字記成今年的
         target_df: Optional[pd.DataFrame] = self.select_equity_changes_period_table(
@@ -405,7 +403,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
             )
             return pd.DataFrame(columns=self.EQUITY_CHANGE_COLS)
 
-        # Step 2: 首列才是真表頭（read_html 讀到的 column 名稱是「單位：新台幣仟元」）
+        # Step 2：首列才是真表頭（read_html 讀到的 column 名稱是「單位：新台幣仟元」）
         header: List[str] = [str(value).strip() for value in target_df.iloc[0].tolist()]
         body: pd.DataFrame = target_df.iloc[1:].reset_index(drop=True)
 
@@ -418,7 +416,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
             DataUtils.standardize_column_name(header[index]) for index in kept_indexes
         ]
 
-        # Step 3: 攤平成長表（第一欄是變動原因，其餘每欄是一個權益項目）
+        # Step 3：攤平成長表（第一欄是變動原因，其餘每欄是一個權益項目）
         reason_col: str = body.columns[0]
         new_df: pd.DataFrame = body.melt(
             id_vars=[reason_col],
@@ -558,7 +556,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
     ) -> List[str]:
         """
         - Description:
-            清洗指定的 Report Column Names
+            清洗指定報表的欄名
         - Parameters:
             - raw_cols: List[str]
                 原始欄位名稱清單
@@ -573,16 +571,16 @@ class FinancialStatementCleaner(BaseDataCleaner):
                 已清洗、排序、去重後的欄位名稱清單
         """
 
-        # Step 1: 欄位排序
+        # Step 1：欄位排序
         tail_columns: List[str] = [col for col in raw_cols if col not in front_cols]
         cleaned_cols: List[str] = front_cols + tail_columns
 
-        # Step 2: 移除不必要欄位
+        # Step 2：移除不必要欄位
         cleaned_cols = DataUtils.remove_items_by_keywords(
             cleaned_cols, startswith=self.removed_cols
         )
 
-        # Step 3: 清洗欄位並做名稱對應
+        # Step 3：清洗欄位並做名稱對應
         cleaned_cols = [
             DataUtils.map_column_name(
                 DataUtils.standardize_column_name(word=col), col_map
@@ -590,17 +588,17 @@ class FinancialStatementCleaner(BaseDataCleaner):
             for col in cleaned_cols
         ]
 
-        # Step 4: 去除重複欄位（保留順序）
+        # Step 4：去除重複欄位（保留順序）
         cleaned_cols = list(dict.fromkeys(cleaned_cols))
 
-        # Step 5: 儲存清洗結果
+        # Step 5：儲存清洗結果
         DataUtils.save_json(data=cleaned_cols, file_path=save_path)
         logger.info(f"已儲存清洗後欄位名稱: {save_path.name}")
 
         return cleaned_cols
 
     def load_all_column_names(self) -> None:
-        """載入 Report Column Names"""
+        """載入各報表的欄名"""
 
         attr_map: Dict[FinancialStatementType, str] = {
             FinancialStatementType.BALANCE_SHEET: f"{FinancialStatementType.BALANCE_SHEET.lower()}_cols",
@@ -647,7 +645,7 @@ class FinancialStatementCleaner(BaseDataCleaner):
         return cleaned_cols
 
     def load_column_maps(self) -> None:
-        """載入 Report Column Maps"""
+        """載入各報表的欄名對照表"""
 
         attr_map: Dict[FinancialStatementType, str] = {
             FinancialStatementType.BALANCE_SHEET: f"{FinancialStatementType.BALANCE_SHEET.lower()}_col_map",

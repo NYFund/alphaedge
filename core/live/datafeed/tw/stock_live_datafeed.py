@@ -14,7 +14,6 @@ from core.api.tw.stock_margin_api import StockMarginAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import TW_STOCK_DB_PATH
 from core.config.settings import now_live
-from core.dao.connection import connect_sqlite
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
@@ -86,10 +85,10 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             datetime.date, Optional[DayTradeListSnapshot]
         ] = {}
 
-    def setup(self, strategy: BaseStrategy) -> None:
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
         """
         - Description:
-            建立歷史資料 API（**唯讀**）與交易日來源
+            建立歷史資料 API（**唯讀**）
 
             唯讀的兩個理由：實盤行程不該寫研究庫；以及唯讀連線不會與背景 ETL
             搶寫入鎖——尾盤那 4 分鐘被一個 ETL 擋住是很難查的那種事故。
@@ -103,7 +102,7 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
                 本次要跑的策略
         """
 
-        self.conn = connect_sqlite(self.db_path, read_only=True)
+        self.conn = self.connect_db(self.db_path, read_only=True)
         self.dividend = StockDividendAPI(conn=self.conn)
         self.price = StockPriceAPI(conn=self.conn, dividend_api=self.dividend)
         self.chip = StockChipAPI(conn=self.conn)
@@ -112,6 +111,11 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.fs = FinancialStatementAPI(conn=self.conn)
         self.market_holiday = MarketHolidayAPI(conn=self.conn)
         self.day_trade_list = StockDayTradeListAPI(conn=self.conn)
+
+    def setup(self, strategy: BaseStrategy) -> None:
+        """基底的外框之後：補預設的交易日來源、把資料源交給策略、補標的池"""
+
+        super().setup(strategy)
 
         if not self.calendar_sources:
             self.calendar_sources = self.build_default_calendar_sources()

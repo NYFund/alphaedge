@@ -14,15 +14,15 @@ from core.pipeline.tw.loaders.stock_chip_loader import StockChipLoader
 三大法人爬蟲資料時間表：
 1. TWSE
     - TWSE: 2012/5/2 開始提供
-    - TWSE 改制時間: 2014/12/1, 2017/12/18
+    - TWSE 改制時間：2014/12/1、2017/12/18
 2. TPEX
     - TPEX: 2007/4/20 開始提供
-    - TPEX 改制時間: 2018/1/15
+    - TPEX 改制時間：2018/1/15
 """
 
 
 class StockChipUpdater(DailyTwoMarketUpdater):
-    """Stock Chip Updater"""
+    """台股三大法人籌碼 updater"""
 
     SOURCE: str = "chip"
     SOURCE_LABEL: str = "Chip"

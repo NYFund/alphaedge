@@ -8,7 +8,7 @@ from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.market.tw.instrument_spec import TwStockSpec
 from core.market.tw.market_calendar import MarketCalendar
-from core.models import PreOpenStockQuote, StockQuote
+from core.models import PreOpenStockQuote, PriceLimits, StockQuote
 from core.utils.instrument import StockUtils
 
 """
@@ -141,7 +141,7 @@ class StockTickDataFeed(TwStockDataFeed):
                 missing += 1
                 continue
 
-            limit_down, limit_up = self.instrument.get_price_limits(
+            limits: PriceLimits = self.instrument.get_price_limits(
                 reference, self.day, symbol
             )
             quotes.append(
@@ -149,8 +149,8 @@ class StockTickDataFeed(TwStockDataFeed):
                     stock_id=symbol,
                     date=self.day,
                     reference_price=reference,
-                    limit_up=limit_up,
-                    limit_down=limit_down,
+                    limit_up=limits.limit_up,
+                    limit_down=limits.limit_down,
                 )
             )
 

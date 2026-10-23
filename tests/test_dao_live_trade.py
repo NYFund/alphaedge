@@ -38,6 +38,8 @@ def make_order(
     broker_seqno: Optional[str] = None,
     custom_field: str = "1-0001",
 ) -> Dict[str, Any]:
+    """建一列委託紀錄，預設為尚未送出的 2330 買單"""
+
     return {
         "client_order_id": client_order_id,
         "run_id": "run1",
@@ -57,6 +59,8 @@ def make_order(
 def make_fill(
     broker_seqno: str = "000001", broker_trade_id: str = "T001", volume: int = 2
 ) -> Dict[str, Any]:
+    """建一列成交回報，預設對應 `make_order()` 的委託"""
+
     return {
         "broker_seqno": broker_seqno,
         "broker_trade_id": broker_trade_id,
@@ -80,6 +84,8 @@ def make_lot(
     volume: int = 2,
     open_date: datetime.date = TODAY,
 ) -> Dict[str, Any]:
+    """建一列持倉批次（lot），預設為當日開倉的多單"""
+
     return {
         "lot_id": lot_id,
         "strategy_name": strategy_name,
@@ -549,6 +555,8 @@ def test_symbol_holder_for_cross_strategy_guard(dao: LiveTradeDAO) -> None:
 def make_action(
     action_id: str = "P1", due_date: datetime.date = TODAY
 ) -> Dict[str, Any]:
+    """建一列待執行的跨日動作，預設為到期日當天的賣出"""
+
     return {
         "action_id": action_id,
         "strategy_name": "VolumeBreakoutMomentumStrategy",

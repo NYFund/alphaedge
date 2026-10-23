@@ -22,7 +22,7 @@ from core.pipeline.tw.loaders.stock_margin_loader import StockMarginLoader
 
 
 class StockMarginUpdater(DailyTwoMarketUpdater):
-    """Stock Margin Updater"""
+    """台股融資融券 updater"""
 
     SOURCE: str = "margin"
     SOURCE_LABEL: str = "Margin"

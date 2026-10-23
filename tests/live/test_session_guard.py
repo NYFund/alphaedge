@@ -7,7 +7,6 @@ from core.live.factory import TW_STOCK_SEGMENTS
 from core.live.intraday.session_guard import (
     DAY_TRADE_COVER_TIME,
     SessionGuard,
-    cover_action,
     is_night_session,
     resolve_accounting_date,
     resolve_live_policy,
@@ -16,6 +15,7 @@ from core.live.intraday.session_guard import (
     uncovered_day_trade_positions,
 )
 from core.models import StockAccount, StockOrder, StockPosition
+from core.portfolio.order_rules import resolve_close_action
 from core.utils import Action, DayTradeUncoveredPolicy, ExecutionTiming, PositionType
 
 """
@@ -32,6 +32,8 @@ from core.utils import Action, DayTradeUncoveredPolicy, ExecutionTiming, Positio
 def at(
     year: int, month: int, day: int, hour: int, minute: int = 0
 ) -> datetime.datetime:
+    """組一個本地時間點"""
+
     return datetime.datetime(year, month, day, hour, minute)
 
 
@@ -207,6 +209,8 @@ def test_quote_date_and_accounting_date_agree() -> None:
 def make_position(
     symbol: str = "2330", is_day_trade: bool = True, closed: bool = False
 ) -> StockPosition:
+    """組一筆 2330 部位，預設為未平倉的當沖部位"""
+
     position: StockPosition = StockPosition(
         id=1,
         stock_id=symbol,
@@ -221,6 +225,8 @@ def make_position(
 
 
 def make_account(*positions: StockPosition) -> StockAccount:
+    """建立持有指定部位的台股帳戶"""
+
     account: StockAccount = StockAccount(init_capital=10_000_000.0)
     account.positions = list(positions)
     return account
@@ -238,12 +244,6 @@ def test_only_open_day_trade_shorts_are_collected() -> None:
     found: List[Any] = uncovered_day_trade_positions(account)
 
     assert [p.symbol for p in found] == ["2330"]
-
-
-def test_cover_action_is_buy_for_a_short() -> None:
-    """回補空單就是買進"""
-
-    assert cover_action(make_position()) is Action.BUY
 
 
 def test_guard_waits_until_the_cover_time() -> None:
@@ -305,7 +305,7 @@ def test_build_cover_orders_reports_the_rewritten_policy() -> None:
         return StockOrder(
             stock_id=position.symbol,
             date=at(2026, 9, 21, 13, 20),
-            action=cover_action(position),
+            action=resolve_close_action(position.position_type),
             position_type=PositionType.SHORT,
             price=1000.0,
             volume=position.volume,
@@ -349,6 +349,8 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -365,6 +367,10 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
     harness.trader._run_session_guard()
 
     assert harness.broker.placed_count == before + 1
+    # 回補空單就是買進；送成賣出會再開一口空單而不是平掉它
+    sent: Any = list(harness.broker.tickets.values())[-1].order
+    assert (sent.action, sent.position_type) == (Action.BUY, PositionType.SHORT)
+    assert resolve_close_action(sent.position_type) is sent.action
 
 
 def test_heartbeat_does_nothing_before_the_cover_time() -> None:
@@ -373,6 +379,8 @@ def test_heartbeat_does_nothing_before_the_cover_time() -> None:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -395,6 +403,8 @@ def make_cover_harness(*symbols: str) -> Any:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 

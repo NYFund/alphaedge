@@ -44,6 +44,15 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
     - 執行方式 `MARKET`（要成交）：尾盤段仍在連續交易時段，執行層送範圍市價＋IOC。
     - 已知差異：換月比回測早一天；價格是快照價而非收盤價；
       成交價是 13:30 後的市價，不是收盤價。
+
+    〈資金額度〉
+    - 實盤額度 `live_capital` 600 萬，與研究回測的 `init_capital`（300 萬）分開：
+      實盤風控對期貨以保證金計單筆上限、以契約價值計名目槓桿。300 萬開 2 口台指期
+      （保證金約 140 萬、契約價值約 1,900 萬）會同時超過單筆保證金 35% 與槓桿 4 倍兩條預設上限；
+      600 萬時約 23% 與 3.2 倍，預設全過、不必放寬風控。
+    - 口數仍由 `max_lots`（2 口）壓住：部位建構器以 600 萬 × `max_capital_usage` 算得出更多口，
+      實際送出的與研究回測同為 2 口，parity 一致。指數漲到約 6 萬點以上時 2 口會超過槓桿上限，
+      屆時要一起重訂額度或口數。
     """
 
     DEFAULT_PRODUCTS: List[str] = ["TX"]
@@ -61,6 +70,8 @@ class MomentumFuturesStrategy(BaseFuturesStrategy):
         super().__init__()
         self.strategy_name: str = "Momentum-Futures"
         self.init_capital: float = 3000000.0
+        # 實盤額度（元）；為何與研究本金不同見 class docstring〈資金額度〉
+        self.live_capital: float = 6000000.0
         self.products: List[str] = self.DEFAULT_PRODUCTS
         self.max_lots: int = self.DEFAULT_MAX_LOTS
         self.direction: TradeDirection = TradeDirection.LONG

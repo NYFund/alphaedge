@@ -1,6 +1,7 @@
 # 執行期產物與原始碼的分界
 
 > 本文件定義「程式寫出來的東西該放哪」，以及判斷一個檔案屬於**設定**還是**產物**的準則。
+> 所有路徑常數集中在 `core/config/paths.py`（資料庫檔路徑在 `core/config/schema.py`）。
 
 ---
 
@@ -19,8 +20,8 @@ AlphaEdge/
 │   └── downloads/         # ETL 中繼檔（市場軸由目錄承載）
 │       ├── tw_stock/      # price, chip, margin, short_sale_list, day_trade_list, dividend,
 │       │                  # corporate_action, financial_statement, monthly_revenue_report,
-│       │                  # tick, finmind, meta
-│       └── tw_futures/    # price, chip, continuous, universe, margin, tick, meta
+│       │                  # tick, finmind, meta（爬蟲 resume 狀態）
+│       └── tw_futures/    # price, chip, continuous, universe, margin, meta
 │
 ├── results/               # 回測產出：只放要給人看的東西（CSV ＋ PNG）
 │   ├── <StrategyName>/
@@ -29,14 +30,19 @@ AlphaEdge/
 └── logs/
     ├── api/               # core/api/ 的查詢日誌
     ├── pipeline/          # 爬取／清洗／入庫，以及其餘未被認領的記錄
-    ├── backtest/          # 回測
+    ├── backtest/          # 回測（檔名＝策略名）
     └── launchd/           # 演練排程的 stdout／stderr（scripts/launchd/rehearsal_schedule.py）
 ```
 
 三個根皆可由環境變數覆寫（容器掛載 volume 用）：
 `ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`；kill switch 另可由
-`ALPHAEDGE_LIVE_KILL_SWITCH_PATH` 單獨指定。`logs/launchd/` 例外：它由 launchd plist 產生器以
-專案根目錄寫死，不跟 `ALPHAEDGE_LOGS_DIR` 走，也不在 `apps.clean_logs` 的清理範圍內。
+`ALPHAEDGE_LIVE_KILL_SWITCH_PATH` 單獨指定。路徑在 import `core/config/paths.py` 時就算定，之後再改環境變數不會生效。
+
+兩個例外不在這三根底下：
+
+- `logs/launchd/` 由 launchd plist 產生器以專案根目錄寫死，不跟 `ALPHAEDGE_LOGS_DIR` 走，也不在 `apps.clean_logs` 的清理範圍內。
+- **台股 tick 存在 TimescaleDB**，資料在 `docker-compose.yml` 的 named volume `alphaedge_pgdata`，不在 `data/` 底下；
+  備份 `data/` 不會帶到它。用 named volume 而不是 bind mount，是因為 Docker Desktop on Mac 的 bind mount 大量寫入非常慢。
 
 護欄在 [`tests/test_config_paths.py`](../../tests/test_config_paths.py)。
 
@@ -46,10 +52,13 @@ AlphaEdge/
 `pyproject.toml` 的 `packages.find`、ruff 的 `extend-exclude`、coverage 的 `omit`
 都得各維護一份排除清單。
 
-**最能說明問題的是 `.gitignore`**：產物散在原始碼裡時，它沒辦法寫「忽略產物目錄」，
-只能全 repo 封鎖 `*.csv`／`*.png`／`*.log`／`*.db`，於是正當的 CSV（回歸 baseline）
-得靠負向例外撈回來。分界成立之後，`.gitignore` 的產物段落只剩三行目錄，
-工具的排除清單也不再需要。
+`.gitignore` 也是：產物散在原始碼裡時，它沒辦法寫「忽略產物目錄」，只能全 repo 封鎖
+`*.csv`／`*.png`／`*.log`／`*.db`，正當的 CSV（回歸 baseline）就得靠負向例外撈回來。
+分界成立之後，`.gitignore` 的產物段落只需 `data/`、`results/`、`logs/` 三行。
+
+**`core/` 不寫檔也包括「import 不建目錄」**：`core/config/paths.py` 只算路徑，不 `mkdir`；
+目錄由實際寫檔的呼叫端惰性建立（例如 `LogManager.setup_logger()`、`BaseDataFeed.connect_db()`）。
+否則任何只是要讀常數的測試都會被動生出這些目錄。
 
 ### 為什麼是三個根而不是一個
 
@@ -59,22 +68,24 @@ AlphaEdge/
 
 ### 為什麼日誌分三桶
 
-依**產生者**分（`LogManager.BUCKET_PREFIXES` 依記錄的模組名前綴認領）：
+依**產生者**分（`core/utils/log_manager.py` 的 `LogManager.BUCKET_PREFIXES` 依記錄的模組名前綴認領）：
 
 | 桶 | 收哪些記錄 | 誰開 sink | 性質 |
 |----|------------|-----------|------|
-| `api/` | `core.api.*` | `core/api/base.py`、`core/api/tw/stock_tick_api.py` | 每次查詢都寫，量最大、純雜訊，可整桶刪（檔案 sink 只留 WARNING 以上，`API_LOG_FILE_LEVEL`） |
-| `backtest/` | `core.backtest`、`core.strategies`、`core.position`、`core.models`、`core.adapters`、`strategy_lab` | 回測引擎（`LogManager.setup_backtest_logger()`，檔名＝策略名） | 單次回測的執行紀錄 |
-| `pipeline/` | **其餘全收**（未被前兩桶認領的記錄） | `core/pipeline/` 的 updater／crawler（`setup_logger()` 未指定目錄時的預設） | **會回頭讀**（回補的 `N requested / N no data / N unreachable` 統計行） |
+| `api/` | `core.api.*` | `core/api/base.py`（`BaseDataAPI`，所有資料 API 共用；檔案 sink 只留 `API_LOG_FILE_LEVEL` 以上，目前為 WARNING） | 每次查詢都寫，量最大、純雜訊，可整桶刪 |
+| `backtest/` | `core.backtest`、`core.strategies`、`strategies`（頂層具體策略）、`core.position`、`core.models`、`core.adapters`、`strategy_lab` | 回測引擎（`LogManager.setup_backtest_logger()`，檔名＝策略名） | 單次回測的執行紀錄 |
+| `pipeline/` | **其餘全收**（未被前兩桶認領的記錄） | updater（`BaseDataUpdater` 依 `LOG_FILE_NAME`）與部分 crawler；`setup_logger()` 未指定目錄時的預設 | **會回頭讀**（回補的 `N requested / N no data / N unreachable` 統計行） |
 
-只分兩桶不成立：`pipeline` 蓋不住 `stock_price_api.log` 這些來自 `core/api/` 的日誌，
-而它們恰好是檔案數最多的一群。分開之後，「可以整桶刪掉的那一批」才被隔離出來。
+只分兩桶不成立：`pipeline` 蓋不住來自 `core/api/` 的查詢日誌，而它們恰好是檔案數最多的一群。
+分開之後，「可以整桶刪掉的那一批」才被隔離出來。
 
-每個 sink 都帶 `filter`，只收自己那一桶的套件發出的記錄——少了它，一次查詢會同時寫進三個桶的每一個檔案。
-`pipeline` 用排除法而不是白名單：新增的套件會自動落進這一桶，而不是整批消失。
-`core.market` 刻意不列進任何桶：交易日曆由 ETL、回測、實盤共用，列進 `backtest` 桶的話
-ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 sink 收」而消失。
-同一桶內的檔案仍會互收（例如 `update_price.log` 也收得到 `update_chip.log` 的內容）。
+- 每個 sink 都帶 `filter`，只收自己那一桶的記錄——少了它，一次查詢會同時寫進每一個檔案。
+- `pipeline` 用排除法而不是白名單：新增的套件會自動落進這一桶，而不是整批消失。
+- `core.market` 刻意不列進任何桶：交易日曆由 ETL、回測、實盤共用，列進 `backtest` 桶的話
+  ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 sink 收」而消失。
+- 同一桶內的檔案仍會互收（例如 `update_price.log` 也收得到 `update_chip.log` 那一趟的內容）。
+- **實盤入口（`apps.live`）不開檔案 sink**：輸出走 stdout／stderr，由排程（launchd 寫進 `logs/launchd/`）或容器收集；
+  委託、成交與每次執行的權威紀錄在 `tw_trading.db`。
 
 ---
 
@@ -92,13 +103,13 @@ ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 s
 
 實例：
 
-- **設定** — `core/pipeline/tw/cleaners/schema/**/*.json`（欄位對照表）。
-  被 cleaner 讀取，**缺檔只會 warning 後靜默降級清洗**，所以一定要進版控。
-- **產物** — `broker_trading_metadata.json`、`futures_margin_announcements.json`（爬蟲 resume 狀態）。台股 tick 的續跑紀錄在 TimescaleDB 的 `stock_tick_load_log`，不落檔。
+- **設定** — `core/pipeline/tw/cleaners/schema/**/*.json`（欄位對照表，常數 `CLEANER_SCHEMA_DIR_PATH`）。
+  被 cleaner 讀取，**缺檔只會 warning 後靜默降級清洗**，所以一定要進版控；也因此不可放進 `downloads/`（整個產物目錄都不進版控）。
+- **產物** — `broker_trading_metadata.json`、`futures_margin_announcements.json`（爬蟲 resume 狀態，在各自的 `meta/`）。
+  台股 tick 的續跑紀錄在 TimescaleDB 的 `stock_tick_load_log`，不落檔。
 
 > **package data 是 `core/` 內唯一正當的非程式碼檔案**：小、唯讀、隨套件發佈、
-> 以 `importlib.resources` 或路徑常數讀取。判準是「唯讀 ＋ 隨套件發佈 ＋ 小」，
-> 三條都要成立。
+> 以 `importlib.resources` 或路徑常數讀取。三條都要成立。
 
 ---
 
@@ -109,7 +120,7 @@ ETL 那一趟只開 pipeline sink，日曆的 warning 會「被認領卻沒有 s
 | 模組 | 內容 | 什麼時候會改 |
 |------|------|--------------|
 | `paths.py` | 原始碼路徑、產物三根與其下所有目錄 | 目錄搬遷時 |
-| `schema.py` | 分庫檔名、完整路徑、資料表名稱、資料表欄位名與 Column Enum | 新增資料表或欄位時 |
+| `schema.py` | 分庫檔名、完整路徑（`TW_STOCK_DB_PATH` 等）、資料表名稱、資料表欄位名與 Column Enum | 新增資料表或欄位時 |
 | `settings.py` | 爬取範圍、預設區間、TimescaleDB 連線、Shioaji 憑證、實盤參數（時區、通知管道）、日誌層級、回測報表開圖開關 | 調整營運參數時 |
 
 新程式碼建議直接 import 子模組（`from core.config.paths import DATA_DIR_PATH`），語意較明確。
@@ -125,16 +136,16 @@ ImportError 收場。
 1. **搬移路徑常數時不要改常數名。** 改 `base_dir`、不改名稱，改動就收斂在 `core/config/` 一處；
    改名會擴散到所有取用端。**任何地方都不要自行以字串拼 `downloads/` 路徑**，一律走常數。
 
-2. **`Path(__file__).parent` 的層數跟著檔案位置走。**
-   路徑錨點所在的檔案一旦多一層目錄，同一行 `.parent` 就會指到錯的地方，
-   **所有產物路徑會安靜地退回錯誤位置、不會有任何錯誤**。
+2. **`Path(__file__).parents[...]` 的層數跟著檔案位置走。**
+   `core/config/paths.py` 以 `parents[1]` 取得 `core/`、再往上一層取得專案根。這個檔案一旦多一層目錄，
+   **所有產物路徑會安靜地退回錯誤位置（例如 `core/data/`）、不會有任何錯誤**。
    `tests/test_config_paths.py` 釘住錨點的絕對位置。
 
 ---
 
 ## 日誌保留
 
-`LogManager.setup_logger()` 的 `retention` 預設 30 天，但 **loguru 的清理只在該 logger
+`LogManager.setup_logger()` 預設 `rotation="10 MB"`、`retention="30 days"`，但 **loguru 的清理只在該 sink
 再次被建立時才觸發**。一支跑完就不再執行的 crawler，它的舊檔會永遠留著。
 
 問題出在「不會被觸發」而不是「保留太久」，故**不要調 retention**，改用與 logger 生命週期
@@ -146,13 +157,13 @@ python -m apps.clean_logs --apply             # 實際刪除，預設保留 30 �
 python -m apps.clean_logs --apply --bucket api --days 7
 ```
 
-它**只刪已輪替的檔**（檔名帶時間戳）；當前使用中的 `xxx.log` 一律保留——刪掉正在被 loguru
-寫入的檔案，該 handler 會繼續寫進一個已不存在的 inode，日誌就此靜默消失。
+它**只刪已輪替的檔**（檔名帶時間戳，例如 `crawl_finmind.<時間戳>.log`）；當前使用中的 `xxx.log` 一律保留——
+刪掉正在被 loguru 寫入的檔案，該 handler 會繼續寫進一個已不存在的 inode，日誌就此靜默消失。
 
 ### 日誌檔被外部刪掉之後
 
 `clean_logs` 的自我約束保護不了手動的 `rm -rf logs`。為此 `setup_logger()` 的
-`logger.add()` 帶 `watch=True`（loguru ≥ 0.7.0）：檔案被刪除或被外部程式取代時，
+`logger.add()` 帶 `watch=True`：檔案被刪除或被外部程式取代時，
 **下一筆記錄會重新建立它**（含缺少的父目錄）。
 
 ⚠️ **已經寫進舊 inode 的內容救不回來**，這個參數保證的是「之後不再繼續消失」。
@@ -164,5 +175,5 @@ python -m apps.clean_logs --apply --bucket api --days 7
 ## 相關文件
 
 - [命名軸線](naming-axes.md)：`core/` 內部的市場軸與商品軸分層
-- [PostgreSQL 遷移計畫](../../backlog/PostgreSQL遷移計畫.md)：若日後遷移完成，
-  `data/db/` 會整個消失，`data/` 只剩 `downloads/`；本結構承受得住，不需為此預留
+- [資料存取層](data-access-layer.md)：`data/db/` 與 TimescaleDB 的連線入口
+- [開發環境設定](../setup/dev-setup.md)：環境變數一覽

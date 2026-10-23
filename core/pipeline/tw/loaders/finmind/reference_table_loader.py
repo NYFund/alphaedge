@@ -37,7 +37,7 @@ class ReferenceTableSpec:
     csv_name: str  # CSV 檔名
     dao_class: Type[Union[StockInfoDAO, SecuritiesTraderInfoDAO]]  # 目標資料表的 DAO
     column_order: List[str]  # 寫入前的欄位順序，須與 crawler schema 註解一致
-    label: str  # log 用的人話名稱（Ex: "stock info"）
+    label: str  # log 用的人話名稱（例如 `"stock info"`）
 
 
 def load_reference_table(

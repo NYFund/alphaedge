@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import (
     UnsupportedMarketError,
     _merge_schedules,
@@ -19,6 +18,7 @@ from core.live.factory import (
 from core.live.trader import LiveTrader, StrategyContext
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
+from core.models import PriceLimits
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
@@ -95,13 +95,16 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 def build(
     strategies: List[BaseStrategy], dao: LiveTradeDAO, **kwargs: Any
 ) -> LiveTrader:
+    """以替身券商組出實盤交易器"""
+
     return build_live_trader(
         strategies,
         broker=FakeBroker(),
@@ -291,7 +294,7 @@ def test_each_market_gets_its_own_execution_model(dao: LiveTradeDAO) -> None:
 
     assert isinstance(stock.execution_model, StockExecutionModel)
     assert isinstance(futures.execution_model, FuturesExecutionModel)
-    assert stock.execution_model.get_price_limits("2330") == (None, None)
+    assert stock.execution_model.get_price_limits("2330") == PriceLimits.none()
 
 
 def test_parity_backtest_uses_the_live_capital_and_holdings(
@@ -310,6 +313,8 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     captured: Dict[str, Any] = {}
 
     class StubBacktester:
+        """不跑真的回測、沒有委託的回測替身"""
+
         submitted_orders: List[Any] = []
 
         def run(self) -> None:
@@ -323,6 +328,8 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     monkeypatch.setattr(live_factory, "build_backtester", fake_build)
 
     class Sized(LiveStockStrategy):
+        """實盤與回測資金、檔數設定不同的策略"""
+
         def __init__(self) -> None:
             super().__init__()
             self.init_capital = 1_000_000.0
@@ -351,10 +358,14 @@ def test_parity_backtest_starts_from_the_live_holdings(
     seeded: List[Any] = []
 
     class StubPositionManager:
+        """記下開倉種子部位的部位管理器替身"""
+
         def open_position(self, order: Any) -> None:
             seeded.append(order)
 
     class StubBacktester:
+        """開跑時檢查持倉已先種好的回測替身"""
+
         submitted_orders: List[Any] = []
         position_manager: StubPositionManager = StubPositionManager()
 
@@ -557,8 +568,26 @@ class FakePriceAPI:
 
     def get_close_map(self, date: datetime.date) -> Dict[str, Any]:
         if date == datetime.date(2026, 10, 7):
-            return {"2305": 58.9, "4157": 8.55, "9999": 10.0}
-        return {"2305": 64.7, "4157": 9.33, "9999": float("nan")}
+            return {"2305": 58.9, "4157": 8.55, "9999": 10.0, "2454": 953.0}
+        return {"2305": 64.7, "4157": 9.33, "9999": float("nan"), "2454": 1020.0}
+
+
+class FakeDividendAPI:
+    """假的除權息 API：10/8 只有 2454 除權息，開盤競價基準 928；記錄被開啟幾次"""
+
+    opened: int = 0
+
+    def __enter__(self) -> "FakeDividendAPI":
+        FakeDividendAPI.opened += 1
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def get_opening_reference_price_map(self, date: datetime.date) -> Dict[str, float]:
+        if date == datetime.date(2026, 10, 8):
+            return {"2454": 928.0}
+        return {}
 
 
 def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
@@ -570,7 +599,10 @@ def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
     """
 
     FakePriceAPI.opened = 0
-    lookup = make_closing_limit_lookup(api_factory=FakePriceAPI)
+    FakeDividendAPI.opened = 0
+    lookup = make_closing_limit_lookup(
+        api_factory=FakePriceAPI, dividend_api_factory=FakeDividendAPI
+    )
     day: datetime.date = datetime.date(2026, 10, 8)
 
     locked: Optional[Tuple[float, float]] = lookup("2305", "Buy", day)
@@ -581,4 +613,23 @@ def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
     assert lookup("4157", "Sell", day) == (9.33, 7.7)
     assert lookup("9999", "Buy", day) is None
     assert lookup("0000", "Buy", day) is None
-    assert FakePriceAPI.opened == 1
+    assert (FakePriceAPI.opened, FakeDividendAPI.opened) == (1, 1)
+
+
+def test_closing_limit_lookup_uses_the_ex_dividend_basis() -> None:
+    """
+    除權息日的漲跌停以公告的開盤競價基準算，與回測同一口徑
+
+    聯發科 2024-01-04 的公告值：開盤競價基準 928，漲停 1020、跌停 836；
+    前收 953 算出來的漲停是 1048——收在 1020 的鎖漲停單會被當成「沒鎖住」。
+    """
+
+    lookup = make_closing_limit_lookup(
+        api_factory=FakePriceAPI, dividend_api_factory=FakeDividendAPI
+    )
+    day: datetime.date = datetime.date(2026, 10, 8)
+
+    assert lookup("2454", "Buy", day) == (1020.0, 1020.0)
+    assert lookup("2454", "Sell", day) == (1020.0, 836.0)
+    # 非除權息日沒有基準可覆寫，照舊用前一交易日收盤
+    assert lookup("2305", "Buy", day) == (64.7, 64.7)

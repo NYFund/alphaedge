@@ -19,10 +19,9 @@ from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.loaders.futures_continuous_loader import FuturesContinuousLoader
 from core.pipeline.utils.exceptions import DataLoadError, UnbuildableSeriesError
 from core.utils import FuturesAdjustMethod, FuturesRollRule, FuturesSession
-from core.utils.log_manager import LogManager
 
 """
-Futures Continuous Updater: 由各月份契約建出可跨月的連續序列
+期貨連續月 updater：由各月份契約建出可跨月的連續序列
 
 **這一組沒有 crawler 也沒有 cleaner**：來源是同一個 DB 裡的
 `futures_price_daily`，不是網路。四層架構在此退化為「建表 ＋ 入庫」兩層，
@@ -50,6 +49,8 @@ Futures Continuous Updater: 由各月份契約建出可跨月的連續序列
 class FuturesContinuousUpdater(BaseDataUpdater):
     """建立並更新 `futures_continuous`"""
 
+    LOG_FILE_NAME: str = "futures_continuous_updater.log"
+
     # 建表時一併產生的組合：三種調整方式 × 指定的換月規則
     DEFAULT_METHODS: List[FuturesAdjustMethod] = [
         FuturesAdjustMethod.NONE,
@@ -72,9 +73,9 @@ class FuturesContinuousUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        LogManager.setup_logger("futures_continuous_updater.log")
+        super().setup()
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.dao = FuturesContinuousDAO(db_path=TW_FUTURES_DB_PATH)
         self.price_api = FuturesPriceAPI(conn=self.dao.conn)

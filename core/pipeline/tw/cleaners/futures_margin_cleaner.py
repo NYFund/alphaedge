@@ -202,13 +202,13 @@ class FuturesMarginCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.margin_dir: Path = FUTURES_MARGIN_DOWNLOADS_PATH
 
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         # 金額型的欄位（指數期貨與 ETF 股期共用）；
         # 主鍵為 (effective_date, product)，本表是變動序列不是每日快照

@@ -138,6 +138,8 @@ def test_execution_style_has_no_default() -> None:
     """不給預設值：要不要成交是策略的決定"""
 
     class Bare(BaseStrategy):
+        """沒設定下單方式的最小策略"""
+
         def setup_account(self, account: object) -> None:
             """測試不需要帳戶"""
 

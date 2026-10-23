@@ -1,6 +1,6 @@
-from typing import FrozenSet, Optional, Tuple
+from typing import FrozenSet
 
-from core.models import BaseOrder
+from core.models import BaseOrder, PriceLimits
 from core.utils import Action, ExecutionTiming, OrderType, StockPriceType
 from core.utils.instrument import StockUtils
 
@@ -31,9 +31,7 @@ class StockExecutionModel(BaseExecutionModel):
 
         return StockPriceType.LMT
 
-    def _apply_continuous_market(
-        self, order: BaseOrder, limits: Tuple[Optional[float], Optional[float]]
-    ) -> None:
+    def _apply_continuous_market(self, order: BaseOrder, limits: PriceLimits) -> None:
         """
         保護價限價＋IOC
 
@@ -44,8 +42,7 @@ class StockExecutionModel(BaseExecutionModel):
         與其送一張注定被退的單，不如在本地就記下原因。
         """
 
-        limit_up, limit_down = limits
-        if not limit_up or not limit_down:
+        if not limits.limit_up or not limits.limit_down:
             raise ExecutionUnavailableError(
                 f"{order.symbol} 取不到漲跌停價，保護價無從夾限，本檔略過"
             )
@@ -54,11 +51,13 @@ class StockExecutionModel(BaseExecutionModel):
         if order.action is Action.BUY:
             raw: float = decision * (1 + self.PROTECTION_RATIO)
             price: float = min(
-                StockUtils.round_to_tick(raw, "down", order.symbol), limit_up
+                StockUtils.round_to_tick(raw, "down", order.symbol), limits.limit_up
             )
         else:
             raw = decision * (1 - self.PROTECTION_RATIO)
-            price = max(StockUtils.round_to_tick(raw, "up", order.symbol), limit_down)
+            price = max(
+                StockUtils.round_to_tick(raw, "up", order.symbol), limits.limit_down
+            )
 
         order.price = float(price)
         order.price_type = StockPriceType.LMT

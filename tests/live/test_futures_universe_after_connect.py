@@ -6,7 +6,6 @@ from typing import Any, List, Optional
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import build_live_trader
 from core.live.trader import LiveTrader, StrategyContext
 from strategies.futures.futures_rollover_rehearsal_strategy import (
@@ -58,8 +57,8 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 def build_trader(dao: LiveTradeDAO, broker: LateResolverBroker) -> LiveTrader:

@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-將 tech_new_high_continuation 分析 output/ CSV 彙整為精簡 Word 報告（.docx）。
-
-使用方式（專案根目錄，**必須用 `-m`**，理由見同主題的 `run.py` 模組說明）：
-    .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.reports.generate_docx
-
-若尚未有 CSV，請先執行：
-    .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.run
-
-產出的 `Tech_NewHigh_Continuation_Report.docx` 是**產出物、不進版控**
-（`.gitignore` 的 `strategy_lab/**/reports/*.docx`）：本檔預設就寫進自己那個
-`reports/` 目錄，跑一次即產生整份二進位 diff。需要成品請自行執行本檔。
-"""
 
 from __future__ import annotations
 
@@ -36,6 +23,20 @@ from strategy_lab.data_analysis.tech_new_high_continuation.analysis import (
     MIN_EVENT_COUNT,
     START_DATE,
 )
+
+"""
+將 tech_new_high_continuation 分析 output/ CSV 彙整為精簡 Word 報告（.docx）。
+
+使用方式（專案根目錄，**必須用 `-m`**，理由見同主題的 `run.py` 模組說明）：
+    .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.reports.generate_docx
+
+若尚未有 CSV，請先執行：
+    .venv/bin/python -m strategy_lab.data_analysis.tech_new_high_continuation.run
+
+產出的 `Tech_NewHigh_Continuation_Report.docx` 是**產出物、不進版控**
+（`.gitignore` 的 `strategy_lab/**/reports/*.docx`）：本檔預設就寫進自己那個
+`reports/` 目錄，跑一次即產生整份二進位 diff。需要成品請自行執行本檔。
+"""
 
 _ANALYSIS_DIR = Path(__file__).resolve().parent.parent
 _OUTPUT_DIR = _ANALYSIS_DIR / "output"
@@ -171,6 +172,8 @@ def _stock_table_rows(df: pd.DataFrame) -> List[List[str]]:
 
 
 def build_report() -> Path:
+    """讀取分析輸出的 CSV，組出 Word 報告並寫到本目錄，回傳 `.docx` 路徑"""
+
     summary, by_stock = _load_data()
 
     non = summary[summary["event_mode"] == "non_overlap"].copy()
@@ -370,6 +373,8 @@ def build_report() -> Path:
 
 
 def main() -> Path:
+    """CLI 入口：產出報告並印出路徑"""
+
     path = build_report()
     print(f"報告已寫入：{path}")
     return path

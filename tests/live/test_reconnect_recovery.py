@@ -20,6 +20,8 @@ LATER: datetime.datetime = datetime.datetime(2026, 9, 21, 13, 40)
 
 
 def add_run(dao: LiveTradeDAO, run_id: str, started_at: datetime.datetime) -> None:
+    """寫入一筆模擬環境的開盤段執行紀錄"""
+
     dao.insert_run(
         {
             "run_id": run_id,
@@ -33,6 +35,8 @@ def add_run(dao: LiveTradeDAO, run_id: str, started_at: datetime.datetime) -> No
 
 
 def run_row(dao: LiveTradeDAO, run_id: str) -> Dict[str, Any]:
+    """以欄位名稱取出一筆執行紀錄"""
+
     columns: List[str] = [
         str(row[1]) for row in dao.conn.execute("PRAGMA table_info(live_run)")
     ]
@@ -147,6 +151,8 @@ def make_harness(**kwargs: Any) -> Any:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 

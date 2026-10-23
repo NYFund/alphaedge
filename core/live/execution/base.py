@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, FrozenSet, Optional, Tuple
+from typing import Any, Callable, FrozenSet, Optional
 
-from core.models import BaseOrder
+from core.models import BaseOrder, PriceLimits
 from core.utils import Action, ExecutionStyle, ExecutionTiming, OrderType
 
 """
@@ -28,7 +28,7 @@ from core.utils import Action, ExecutionStyle, ExecutionTiming, OrderType
 """
 
 # 取得某商品當日漲跌停的函式：`symbol → (漲停, 跌停)`，取不到的一側為 None
-PriceLimitLookup = Callable[[str], Tuple[Optional[float], Optional[float]]]
+PriceLimitLookup = Callable[[str], PriceLimits]
 
 
 class ExecutionUnavailableError(ValueError):
@@ -64,7 +64,7 @@ class BaseExecutionModel(ABC):
     def limit_price_type(self) -> Any:
         """本市場的限價列舉值（`StockPriceType.LMT`／`FuturesPriceType.LMT`）"""
 
-    def get_price_limits(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
+    def get_price_limits(self, symbol: str) -> PriceLimits:
         """
         - Description:
             取得當日漲跌停；取不到的一側為 None
@@ -76,18 +76,18 @@ class BaseExecutionModel(ABC):
             - symbol: str
                 商品代號
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                （漲停, 跌停）
+            - PriceLimits
+                漲停與跌停（以欄位名存取）
         """
 
         if self._price_limits is None:
-            return (None, None)
+            return PriceLimits.none()
         return self._price_limits(symbol)
 
     def apply(
         self,
         order: BaseOrder,
-        limits: Tuple[Optional[float], Optional[float]] = (None, None),
+        limits: Optional[PriceLimits] = None,
     ) -> None:
         """
         - Description:
@@ -98,8 +98,8 @@ class BaseExecutionModel(ABC):
         - Parameters:
             - order: BaseOrder
                 待送出的委託；`execution_style` 與 `timing` 須已由引擎填入
-            - limits: Tuple[Optional[float], Optional[float]]
-                （漲停, 跌停），通常來自 `get_price_limits()`
+            - limits: Optional[PriceLimits]
+                當日漲跌停，通常來自 `get_price_limits()`；None 視為兩側都取不到
         - Raise:
             - ValueError
                 執行方式或段落未決定
@@ -120,12 +120,13 @@ class BaseExecutionModel(ABC):
         if order.decision_price is None:
             order.decision_price = float(order.price)
 
+        bounds: PriceLimits = limits or PriceLimits.none()
         if style is ExecutionStyle.LIMIT:
             self._apply_resting_limit(order)
         elif timing in self.AUCTION_TIMINGS:
-            self._apply_auction_market(order, limits)
+            self._apply_auction_market(order, bounds)
         else:
-            self._apply_continuous_market(order, limits)
+            self._apply_continuous_market(order, bounds)
 
     def _apply_resting_limit(self, order: BaseOrder) -> None:
         """照價掛單：策略給的價，限價＋ROD"""
@@ -133,9 +134,7 @@ class BaseExecutionModel(ABC):
         order.price_type = self.limit_price_type
         order.order_type = OrderType.ROD
 
-    def _apply_auction_market(
-        self, order: BaseOrder, limits: Tuple[Optional[float], Optional[float]]
-    ) -> None:
+    def _apply_auction_market(self, order: BaseOrder, limits: PriceLimits) -> None:
         """
         集合競價的 `MARKET`：買掛漲停、賣掛跌停，限價＋ROD
 
@@ -143,8 +142,9 @@ class BaseExecutionModel(ABC):
         回測卻會成交；動能股多半離漲停不遠，兩者的差別也不大。
         """
 
-        limit_up, limit_down = limits
-        price: Optional[float] = limit_up if order.action is Action.BUY else limit_down
+        price: Optional[float] = (
+            limits.limit_up if order.action is Action.BUY else limits.limit_down
+        )
         if not price:
             raise ExecutionUnavailableError(
                 f"{order.symbol} 取不到{'漲停' if order.action is Action.BUY else '跌停'}"
@@ -156,7 +156,5 @@ class BaseExecutionModel(ABC):
         order.order_type = OrderType.ROD
 
     @abstractmethod
-    def _apply_continuous_market(
-        self, order: BaseOrder, limits: Tuple[Optional[float], Optional[float]]
-    ) -> None:
+    def _apply_continuous_market(self, order: BaseOrder, limits: PriceLimits) -> None:
         """連續交易時段的 `MARKET`；各市場的保護方式不同"""

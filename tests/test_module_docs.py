@@ -17,7 +17,7 @@ _STRATEGY_DIRS: Tuple[pathlib.Path, ...] = (
 補完是一次性的，**維持才是問題**：新增模組時沒有任何東西會提醒，於是覆蓋率
 只會往下掉，而「哪幾檔沒有」每次都要重新掃一遍才知道。
 
-本專案的模組說明有兩種合法位置（CLAUDE.md §2.3）：檔首 docstring，或
+本專案的模組說明有兩種合法位置：檔首 docstring，或
 **import 區塊之後的裸字串**（`core/api/`、`core/models/`、`core/pipeline/` 一律用後者）。
 兩種都算，故判準是「模組層級有沒有任何獨立的字串運算式」而不是 `ast.get_docstring()`。
 

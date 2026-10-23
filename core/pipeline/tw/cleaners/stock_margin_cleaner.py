@@ -19,7 +19,7 @@ Stock Margin Cleaner：將 TWSE／TPEX 兩種版面的信用交易表格收斂�
 
 
 class StockMarginCleaner(BaseDataCleaner):
-    """Stock Margin Cleaner (Transform)"""
+    """台股融資融券 cleaner（Transform）"""
 
     # TWSE 原始表格欄位（依位置，共 16 欄）
     TWSE_RAW_COLS: List[str] = [
@@ -88,19 +88,17 @@ class StockMarginCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Margin DataFrame Cleaned Columns
+        # 清洗後輸出的欄位順序（由 `setup()` 設定）
         self.margin_cleaned_cols: Optional[List[str]] = None
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.margin_dir: Path = MARGIN_DOWNLOADS_PATH
 
-        # Set Up
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Set Up Margin DataFrame Cleaned Columns
         self.margin_cleaned_cols = [
             "date",
             "stock_id",
@@ -122,7 +120,6 @@ class StockMarginCleaner(BaseDataCleaner):
             "註記",
         ]
 
-        # Generate downloads directory
         self.margin_dir.mkdir(parents=True, exist_ok=True)
 
     def clean_twse_margin(
@@ -130,7 +127,7 @@ class StockMarginCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         date: datetime.date,
     ) -> Optional[pd.DataFrame]:
-        """Clean TWSE Stock Margin Data"""
+        """清洗上市融資融券資料"""
 
         return self.clean_margin(
             df=df,
@@ -144,7 +141,7 @@ class StockMarginCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         date: datetime.date,
     ) -> Optional[pd.DataFrame]:
-        """Clean TPEX Stock Margin Data"""
+        """清洗上櫃融資融券資料"""
 
         return self.clean_margin(
             df=df,
@@ -236,7 +233,6 @@ class StockMarginCleaner(BaseDataCleaner):
             keep="first",
         )
 
-        # Save df to csv file
         aligned_df.to_csv(
             self.margin_dir / f"{file_prefix}_{TimeUtils.format_date(date)}.csv",
             index=False,

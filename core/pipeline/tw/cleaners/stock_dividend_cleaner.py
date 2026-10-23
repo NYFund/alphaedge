@@ -25,7 +25,7 @@ Stock Dividend Cleaner：將 TWSE（證交所）與 TPEX（櫃買中心）兩種
 
 
 class StockDividendCleaner(BaseDataCleaner):
-    """Stock Dividend Cleaner (Transform)"""
+    """台股除權息 cleaner（Transform）"""
 
     # TWSE 原始表格欄位（依位置，共 15 欄）
     TWSE_RAW_COLS: List[str] = [
@@ -94,19 +94,17 @@ class StockDividendCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Dividend DataFrame Cleaned Columns
+        # 清洗後輸出的欄位順序（由 `setup()` 設定）
         self.dividend_cleaned_cols: Optional[List[str]] = None
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.dividend_dir: Path = DIVIDEND_DOWNLOADS_PATH
 
-        # Set Up
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Set Up Dividend DataFrame Cleaned Columns
         self.dividend_cleaned_cols = [
             "date",
             "stock_id",
@@ -125,7 +123,6 @@ class StockDividendCleaner(BaseDataCleaner):
             "資料來源",
         ]
 
-        # Generate downloads directory
         self.dividend_dir.mkdir(parents=True, exist_ok=True)
 
     def clean_twse_dividend(
@@ -133,7 +130,7 @@ class StockDividendCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         file_name: str,
     ) -> Optional[pd.DataFrame]:
-        """Clean TWSE Stock Dividend Data；版面改制時拋 `ColumnLayoutError`"""
+        """清洗上市除權息資料；版面改制時拋 `ColumnLayoutError`"""
 
         if df is None or df.empty:
             return None
@@ -155,7 +152,7 @@ class StockDividendCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         file_name: str,
     ) -> Optional[pd.DataFrame]:
-        """Clean TPEX Stock Dividend Data（櫃買中心）；缺欄位時拋 `ColumnLayoutError`"""
+        """清洗上櫃（櫃買中心）除權息資料；缺欄位時拋 `ColumnLayoutError`"""
 
         if df is None or df.empty:
             return None
@@ -245,7 +242,6 @@ class StockDividendCleaner(BaseDataCleaner):
             keep="first",
         )
 
-        # Save df to csv file
         aligned_df.to_csv(self.dividend_dir / f"{file_name}.csv", index=False)
 
         return aligned_df

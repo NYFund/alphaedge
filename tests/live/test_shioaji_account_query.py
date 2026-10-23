@@ -50,6 +50,8 @@ class FakeEnum:
 
 
 class FakeStockPosition:
+    """shioaji 股票持倉物件替身"""
+
     def __init__(
         self,
         code: str = "2330",
@@ -71,6 +73,8 @@ class FakeStockPosition:
 
 
 class FakeFuturesPosition:
+    """shioaji 期貨持倉物件替身"""
+
     def __init__(
         self, code: str = "TXF202601", direction: str = "Sell", quantity: int = 1
     ) -> None:
@@ -85,6 +89,8 @@ class FakeFuturesPosition:
 
 
 class FakeMargin:
+    """shioaji 期貨保證金物件替身"""
+
     def __init__(self) -> None:
         self.equity_amount: float = 500_000.0
         self.available_margin: float = 316_000.0
@@ -96,11 +102,15 @@ class FakeMargin:
 
 
 class FakeBalance:
+    """shioaji 帳戶餘額物件替身"""
+
     def __init__(self, acc_balance: float = 200_000.0) -> None:
         self.acc_balance: float = acc_balance
 
 
 class FakeApi:
+    """提供餘額、交割款、持倉與保證金查詢的 shioaji API 替身"""
+
     def __init__(
         self,
         balance: float = 200_000.0,
@@ -140,6 +150,8 @@ def limiter() -> RateLimiter:
 
 
 def make_query(api: FakeApi, limiter: RateLimiter) -> ShioajiAccountQuery:
+    """建立時間固定在收盤後的帳戶查詢器"""
+
     return ShioajiAccountQuery(
         api,
         limiter,

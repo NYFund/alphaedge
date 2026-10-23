@@ -27,7 +27,7 @@ from core.utils import (
 
 
 class BaseStockStrategy(BaseStrategy):
-    """Stock Strategy Framework (Base Template)"""
+    """股票策略骨架：補上信用交易設定、部位大小模型與五個資料集"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -44,7 +44,8 @@ class BaseStockStrategy(BaseStrategy):
 
         `allow_day_trade=True` 在台股另有一項市場專屬效果：空單一律走現股當沖沖賣
         （`ShortMethod.DAY_TRADE`，證交稅減半、收盤前必須回補），`short_method`
-        不再參與判斷，由 `factory.build_cost_config()` 強制。要留倉放空（融券或借券）
+        不再參與判斷，由 `core/position/assembly.py` 的 `build_cost_config()` 強制
+        （回測與實盤同一份）。要留倉放空（融券或借券）
         就把 `allow_day_trade` 設為 False。
         """
         self.short_method: ShortMethod = ShortMethod.MARGIN  # 放空管道
@@ -71,15 +72,11 @@ class BaseStockStrategy(BaseStrategy):
         self.sizer: BasePositionSizer = EqualWeightSizer()  # 部位大小模型
 
         """ === Datasets Setting=== """
-        self.tick: Optional[StockTickAPI] = None  # Ticks data (Optional)
-        self.price: Optional[StockPriceAPI] = None  # Day price data (Optional)
-        self.chip: Optional[StockChipAPI] = None  # Chips data (Optional)
-        self.mrr: Optional[MonthlyRevenueReportAPI] = (
-            None  # Monthly Revenue Report data (Optional)
-        )
-        self.fs: Optional[FinancialStatementAPI] = (
-            None  # Financial Statement data (Optional)
-        )
+        self.tick: Optional[StockTickAPI] = None  # 逐筆資料（可選）
+        self.price: Optional[StockPriceAPI] = None  # 日 K 價格（可選）
+        self.chip: Optional[StockChipAPI] = None  # 三大法人籌碼（可選）
+        self.mrr: Optional[MonthlyRevenueReportAPI] = None  # 月營收（可選）
+        self.fs: Optional[FinancialStatementAPI] = None  # 財報（可選）
 
     @abstractmethod
     def setup_account(self, account: StockAccount) -> None:
@@ -97,7 +94,7 @@ class BaseStockStrategy(BaseStrategy):
             宣告本策略要用的資料源
 
             實例一律由 DataFeed 統一持有，策略只做取用，不自行建立。
-        - Parameter:
+        - Parameters:
             - feed: BaseDataFeed
                 引擎持有的資料源
         """
@@ -164,7 +161,7 @@ class BaseStockStrategy(BaseStrategy):
         決定（`VolumeBreakoutMomentumStrategy` 平第一筆部位、`ForeignSellingReversalShortStrategy`
         合併同標的所有空單，後者逐筆送單會被 `close_position()` 的 FIFO 吃掉）。
 
-        `short_method` 與 `is_day_trade` 不在此填，由 `StockCostModel.enrich_orders()`
+        `short_method` 與 `is_day_trade` 不在此填，由 `TwStockCostModel.enrich_orders()`
         依成本設定補值。
         """
 
@@ -174,14 +171,5 @@ class BaseStockStrategy(BaseStrategy):
             if not signal.volume or signal.volume <= 0:
                 continue
 
-            orders.append(
-                StockOrder(
-                    stock_id=signal.symbol,
-                    date=signal.quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=signal.volume,
-                )
-            )
+            orders.append(StockOrder.from_signal(signal, signal.volume))
         return orders

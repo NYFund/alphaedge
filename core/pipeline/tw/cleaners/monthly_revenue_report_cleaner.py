@@ -27,17 +27,17 @@ from core.utils import FileEncoding
 
 
 class MonthlyRevenueReportCleaner(BaseDataCleaner):
-    """TWSE & TPEX Monthly Revenue Report Cleaner (Transform)"""
+    """上市＋上櫃月營收 cleaner（Transform）"""
 
     def __init__(self) -> None:
         super().__init__()
 
-        # Raw and cleaned column names for monthly revenue report
+        # 月營收的原始欄名、清洗後欄名與欄名對照表（由 `setup()` 從 JSON 載入）
         self.monthly_revenue_report_cols: List[str] = []
         self.monthly_revenue_report_cleaned_cols: List[str] = []
         self.monthly_revenue_report_col_map: Dict[str, List[str]] = {}
 
-        # MRR Cleaned Columns Path
+        # 月營收清洗後欄名與對照表的 JSON 路徑
         self.monthly_revenue_report_cleaned_cols_path: Path = (
             MONTHLY_REVENUE_REPORT_META_DIR_PATH
             / f"{DataType.MRR.lower()}_cleaned_columns.json"
@@ -47,10 +47,10 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
             / f"{DataType.MRR.lower()}_column_map.json"
         )
 
-        # Output Directory
+        # 清洗後 CSV 的輸出目錄
         self.mrr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH
 
-        # Clean Set Up
+        # 清洗時要丟掉的欄位（含來源夾帶成欄名的說明文字）
         self.removed_cols: List[str] = [
             "因自102年1月起適用IFRSs申報月合併營收，故無101年12月合併營收之申報資料。",
             "備註",
@@ -59,12 +59,10 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Create the downloads directory
         self.mrr_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load MRR Column Names
         self.load_all_column_names()
         self.load_column_maps()
 
@@ -91,7 +89,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
                 清洗後的月營收資料
         """
 
-        # Step 1: 載入已清洗欄位，若未成功則執行清洗流程
+        # Step 1：載入已清洗欄位，若未成功則執行清洗流程
         if not self.monthly_revenue_report_cleaned_cols:
             self.load_cleaned_column_names()
             if not self.monthly_revenue_report_cleaned_cols:
@@ -100,7 +98,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
                     front_cols=["year", "month"],
                 )
 
-        # Step 2: 清理 df_list 欄位名稱
+        # Step 2：清理 df_list 欄位名稱
         # 建立涵蓋所有 columns 的 df
         new_df: pd.DataFrame = pd.DataFrame(
             columns=self.monthly_revenue_report_cleaned_cols
@@ -119,7 +117,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
             if DataUtils.check_required_columns(df=df, required_cols=required_cols)
         ]
 
-        # 清洗 df Column Names
+        # 清洗欄名
         appended_df_list: List[pd.DataFrame] = []
         for df in new_df_list:
             cleaned_cols: List[str] = [
@@ -185,16 +183,16 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
                 已清洗、排序、去重後的欄位名稱清單
         """
 
-        # Step 1: 欄位排序
+        # Step 1：欄位排序
         tail_columns: List[str] = [col for col in raw_cols if col not in front_cols]
         cleaned_cols: List[str] = front_cols + tail_columns
 
-        # Step 2: 移除不必要欄位
+        # Step 2：移除不必要欄位
         cleaned_cols = DataUtils.remove_items_by_keywords(
             cleaned_cols, startswith=self.removed_cols
         )
 
-        # Step 3: 清洗欄位
+        # Step 3：清洗欄位
         cleaned_cols: List[str] = [
             DataUtils.map_column_name(
                 DataUtils.standardize_column_name(word=col),
@@ -203,10 +201,10 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
             for col in cleaned_cols
         ]
 
-        # Step 4: 去除重複欄位（保留順序）
+        # Step 4：去除重複欄位（保留順序）
         cleaned_cols: List[str] = list(dict.fromkeys(cleaned_cols))
 
-        # Step 5: 儲存清洗結果
+        # Step 5：儲存清洗結果
         DataUtils.save_json(
             data=cleaned_cols, file_path=self.monthly_revenue_report_cleaned_cols_path
         )
@@ -244,7 +242,7 @@ class MonthlyRevenueReportCleaner(BaseDataCleaner):
         )
 
     def load_column_maps(self) -> None:
-        """載入 MRR Column Maps"""
+        """載入月營收的欄名對照表"""
 
         if not self.monthly_revenue_report_col_map_path.exists():
             logger.warning(

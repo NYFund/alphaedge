@@ -10,7 +10,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 from core.utils.constant import FileEncoding
 
 """
-Futures Continuous Loader
+期貨連續月 loader
 
 **本表是衍生表，不是爬回來的**：來源是同一個 DB 裡的 `futures_price_daily`，
 故整組 ETL 沒有 crawler 與 cleaner，只有「建表的 updater」與本 loader。
@@ -47,7 +47,7 @@ class FuturesContinuousLoader(BaseDataLoader):
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
         self.create_missing_tables()
@@ -61,12 +61,12 @@ class FuturesContinuousLoader(BaseDataLoader):
         return Path(TW_FUTURES_DB_PATH)
 
     def create_db(self) -> None:
-        """Create New Database Table"""
+        """建立資料表"""
 
         self.dao.ensure_table()
 
     def create_missing_tables(self) -> None:
-        """Ensure Database Tables Exist"""
+        """確保資料表存在"""
 
         self.dao.ensure_table()
 

@@ -12,12 +12,12 @@ from core.utils import TimeUtils
 三大法人爬蟲資料時間表：
 1. TWSE
     - TWSE: 2012 (ROC: 101)/5/2 開始提供
-    - TWSE 改制時間: 2014/12/1, 2017/12/18
+    - TWSE 改制時間：2014/12/1、2017/12/18
 2. TPEX
     - TPEX: 2007 (ROC: 96)/4/20 開始提供
         - URL1: 2007/4/21 ~ 2014 (ROC: 103)/11/30
         - URL2: 2014/12/1 ~ present
-    - TPEX 改制時間: 2018/1/15
+    - TPEX 改制時間：2018/1/15
 """
 
 
@@ -33,11 +33,12 @@ class StockChipCrawler(BaseDataCrawler):
         self.tpex_url_change_date: datetime.date = self.TPEX_URL_CHANGE_DATE
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     def crawl(self, date: datetime.date) -> None:
-        """Crawl TWSE & TPEX Chip Data"""
+        """爬取上市與上櫃的三大法人資料"""
 
         self.crawl_twse_chip(date)
         self.crawl_tpex_chip(date)

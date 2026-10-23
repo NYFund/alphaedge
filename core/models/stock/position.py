@@ -57,12 +57,13 @@ class StockPosition(BasePosition):
             transaction_cost=transaction_cost,
             unrealized_pnl=unrealized_pnl,
             unrealized_roi=unrealized_roi,
+            margin=margin,
+            holding_days=holding_days,
         )
 
         # Short Info（LONG 部位一律維持預設值，不受影響）
         self.short_method: Optional[ShortMethod] = short_method  # 放空管道
         self.is_day_trade: bool = is_day_trade  # 是否為現股當沖
-        self.margin: float = margin  # 已繳保證金
         self.short_proceeds: float = (
             short_proceeds  # 融券賣出擔保價款（不計入可用餘額）
         )
@@ -73,13 +74,10 @@ class StockPosition(BasePosition):
         # 除息日收到的現金股利（做多專屬收入）。**除息當日即入帳**：
         # 盯市用的是未還原價，跳空已經反映在未實現損益裡，這筆現金正好補回那一段
         self.dividend_received: float = dividend_received
-        self.holding_days: int = holding_days  # 已持有曆日數（＝當前日期 − 開倉日）
         # SBL 借券費上次計提到哪一天。**逐日計提必須看曆日而不是 bar**：
         # 週五開的空單到週一只過了 1 根 bar，卻是 3 個曆日的借券費。
         # 每根 bar 計 1/365 的話，一年只計到 252 天、年費低估約 31%
         self.last_accrual_date: Optional[datetime.date] = last_accrual_date
-        # 連續無報價天數；停牌／下市的部位靠它才有出場依據
-        self.no_quote_days: int = 0
 
     @property
     def stock_id(self) -> str:

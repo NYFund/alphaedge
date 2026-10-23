@@ -35,7 +35,7 @@ BROKER_SOURCE: str = "broker"
 ACCOUNT_SOURCE: str = "account"
 LOCAL_SOURCE: str = "local"
 
-# (symbol, direction) → volume
+# 部位對照：(symbol, direction) → 持有數量
 PositionMap = Dict[Tuple[str, str], int]
 
 

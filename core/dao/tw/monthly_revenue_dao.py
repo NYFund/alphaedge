@@ -22,16 +22,28 @@ class MonthlyRevenueDAO(BaseDAO):
 
     TABLE_NAME: str = MONTHLY_REVENUE_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：尚未回補時查詢回空表、規劃端視為全部待抓
+    OPTIONAL_TABLE: bool = True
 
     PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("year", "month", "stock_id", "公司名稱")
     TEXT_NOT_NULL_COLUMNS: Tuple[str, ...] = ("stock_id", "公司名稱")
     INT_NOT_NULL_COLUMNS: Tuple[str, ...] = ("year", "month")
 
     # === 建表 ===
-    def ensure_table(self, columns: List[str]) -> None:
+    def ensure_table(self) -> None:
+        """欄位由清洗器的欄位清單決定，無參數的建表無從下手：請改呼叫 `ensure_table_from_columns()`"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 的欄位由清單決定，請用 ensure_table_from_columns(columns)"
+        )
+
+    def ensure_table_from_columns(self, columns: List[str]) -> None:
         """
         - Description:
             確保資料表存在；可重複呼叫
+
+            **與基底無參數的 `ensure_table()` 分開命名**：簽名不同的同名方法會讓
+            以基底型別持有 DAO 的呼叫端無從分辨。
         - Parameters:
             - columns: List[str]
                 建表時的欄位清單（表已存在時不使用）
@@ -114,6 +126,9 @@ class MonthlyRevenueDAO(BaseDAO):
             - pd.DataFrame
                 區間內的月營收；起點晚於終點時為空表
         """
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""

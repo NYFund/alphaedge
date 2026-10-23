@@ -171,7 +171,7 @@ def _gap_feed(
     feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
     feed.start_date = start_date
     feed.end_date = end_date
-    feed.trading_days = trading_days
+    feed.calendar = MarketCalendar(trading_days)
     feed.market_holiday = holiday
     return feed
 
@@ -231,7 +231,7 @@ def test_is_market_open_uses_the_prebuilt_set() -> None:
     from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 
     feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
-    feed.trading_days = {datetime.date(2024, 1, 2)}
+    feed.calendar = MarketCalendar({datetime.date(2024, 1, 2)})
     feed.price = None  # 一旦回頭查資料庫就會 AttributeError
 
     assert feed.is_market_open(datetime.date(2024, 1, 2))
@@ -297,6 +297,8 @@ def test_datafeed_setup_survives_a_strategy_without_dates() -> None:
     feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
     feed.start_date = None
     feed.end_date = None
-    feed.trading_days = None
+    feed.price = None
 
+    assert feed.build_calendar() is None
+    feed.calendar = None
     assert feed.report_calendar_gaps() == 0

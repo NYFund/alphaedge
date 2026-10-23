@@ -350,6 +350,8 @@ def make_updater(
     calls: List[Tuple[str, datetime.date]] = []
 
     class FakeCrawler:
+        """照表回傳爬取結果並記錄呼叫順序的爬蟲替身"""
+
         def crawl_twse_short_sale_list(self, date: datetime.date) -> CrawlResult:
             calls.append(("TWSE", date))
             return results[("TWSE", date)]
@@ -359,6 +361,8 @@ def make_updater(
             return results[("TPEX", date)]
 
     class FakeDAO:
+        """不連資料庫的 DAO 替身"""
+
         conn: Any = None
 
     monkeypatch.setattr(

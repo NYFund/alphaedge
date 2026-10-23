@@ -514,7 +514,7 @@ def test_near_month_series_excludes_weekly_contracts() -> None:
 # === 期貨損益只有一條公式===
 def test_manager_pnl_delegates_to_the_cost_model() -> None:
     """
-    `calculate_pnl()` 與 `FuturesCostModel.realized_pnl()` 必須是同一條公式
+    `calculate_pnl()` 與 `BaseCostModel.realized_pnl()` 必須是同一條公式
 
     兩邊各寫一份時，哪天有人改了乘數或方向的處理，另一邊不會跟著改，
     也不會有測試失敗。
@@ -544,4 +544,11 @@ def test_manager_pnl_delegates_to_the_cost_model() -> None:
         exit_price=kwargs["exit_price"],
         volume=kwargs["volume"],
         multiplier=kwargs["multiplier"],
-    ) == cost_model.realized_pnl(**kwargs, transaction_cost=0.0)
+    ) == cost_model.realized_pnl(
+        position_type=kwargs["position_type"],
+        entry_price=kwargs["entry_price"],
+        exit_price=kwargs["exit_price"],
+        volume=kwargs["volume"],
+        unit_size=kwargs["multiplier"],
+        cost=0.0,
+    )

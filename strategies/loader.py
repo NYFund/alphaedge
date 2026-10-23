@@ -12,7 +12,7 @@ import strategies as strategies_pkg
 from core.strategies.base import BaseStrategy
 
 """
-StrategyLoader: 自動載入頂層 `strategies/` 下所有商品類別的具體策略
+StrategyLoader：自動載入頂層 `strategies/` 下所有商品類別的具體策略
 
 **單一模組壞掉不該讓所有策略都跑不了**：`import_module()` 一路往外拋的話，
 任何一支策略有 import 錯誤、或在 module level 做了會炸的事，入口的 `--strategy`

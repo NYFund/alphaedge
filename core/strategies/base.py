@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional, Set
 from loguru import logger
 
 from core.models import BaseAccount, BaseOrder, BaseQuote
+from core.models.risk_config import BaseRiskConfig
 from core.portfolio.construction import BasePortfolioConstructor
 from core.portfolio.signal import Signal
 from core.utils import (
@@ -41,7 +42,7 @@ class UnsupportedScaleError(ValueError):
 
 
 class BaseStrategy(ABC):
-    """Strategy Framework (Market/Instrument-agnostic Base Template)"""
+    """策略骨架：市場與商品皆無關的基底範本"""
 
     def __init__(self) -> None:
         """=== Account Setting ==="""
@@ -49,7 +50,7 @@ class BaseStrategy(ABC):
         self.account: Optional[BaseAccount] = None  # 虛擬帳戶資訊
 
         """ === Strategy Setting === """
-        self.strategy_name: str = ""  # Strategy name
+        self.strategy_name: str = ""  # 策略名稱
         # 市場（地區）與商品類別是兩條正交的軸，兩者的**組合**才是 factory 的分派鍵：
         # model 組合本來就是按組合實作的（`TwStockSpec` ＝ TW ＋ STOCK）。
         # 兩者皆由各市場的策略基底填入，策略本身不需設定。
@@ -67,7 +68,7 @@ class BaseStrategy(ABC):
         #
         # 與當沖無關：能不能當沖看下方的 `allow_day_trade`。
         self.is_tick_triggered: bool = False  # 盤中逐筆觸發（實盤）
-        self.init_capital: float = 0  # Initial capital
+        self.init_capital: float = 0  # 初始資金（回測帳戶的本金）
         # 同時可持有的最大檔數；**預設 None ＝ 不限制**。
         #
         # **不可改成預設 0**：`order_rules.check_max_holdings()` 只把 None
@@ -98,15 +99,15 @@ class BaseStrategy(ABC):
         self.allow_day_trade: bool = False  # 能否當沖
 
         """ === Backtest Setting === """
-        self.scale: str = Scale.DAY  # Backtest scale: DAY / TICK
+        self.scale: str = Scale.DAY  # 回測級別（DAY／TICK）
         # 回測可用 `--scale` 切換的級別；**None ＝ 只支援 `self.scale`**。
         # 例如同時寫了日 K 與逐筆邏輯的策略設 `{Scale.DAY, Scale.TICK}`。
         #
         # 基底不寫死成 `{self.scale}`：子類在 `super().__init__()` 之後才改 `scale`，
         # 這裡先記下的話會留著基底的 DAY，宣告 TICK 的策略反而不支援 TICK
         self.supported_scales: Optional[Set[Scale]] = None
-        self.start_date: datetime.date = None  # Optional: 回測起始日
-        self.end_date: datetime.date = None  # Optional: 回測結束日
+        self.start_date: datetime.date = None  # 回測起始日（可選）
+        self.end_date: datetime.date = None  # 回測結束日（可選）
 
         # === Execution Schedule：實盤與 TICK 回測共用，DAY 回測不讀 ===
         #
@@ -171,6 +172,13 @@ class BaseStrategy(ABC):
         # sizer 無條件捨去成 0 張，訊號整批被丟掉而不報錯。
         # 同樣不能直接改 `max_holdings`：它也是回歸基準的一部分。
         self.live_max_holdings: Optional[int] = None
+
+        # 實盤風控門檻；`None` 表示用該市場的預設值（`StockRiskConfig()`／`FuturesRiskConfig()`）。
+        #
+        # 宣告整份物件、只填要改的欄位，例如 `FuturesRiskConfig(max_leverage=3.0)`；
+        # 類別要與策略的市場相符，打錯欄位名建構時就報錯。不能超過全域上限，
+        # 部署端可再以 `deploy/live_risk.toml` 收緊（不能放寬）。**回測不讀這個屬性。**
+        self.live_risk_config: Optional[BaseRiskConfig] = None
 
     def check_removed_settings(self) -> List[str]:
         """
@@ -287,7 +295,7 @@ class BaseStrategy(ABC):
             **策略不覆寫 `check_open_signal()`**：那是基底提供的引擎契約，
             現行三支正式策略全部只實作 `generate_*_signals()`。覆寫它會讓
             本方法整個不被走到，數量換算與風控前處理也一併被跳過。
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -308,7 +316,7 @@ class BaseStrategy(ABC):
             而「平掉第一筆部位」與「合併同標的所有部位」是策略決策
             （後者若逐筆送單，會被 `close_position()` 的 FIFO 吃掉）。
             故回傳的 `Signal` 必須填 `volume` 與 `order_price`。
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -324,7 +332,7 @@ class BaseStrategy(ABC):
         """
         - Description:
             停損訊號；語意與 `generate_close_signals()` 相同，只是觸發條件不同
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -343,7 +351,7 @@ class BaseStrategy(ABC):
 
             **只做欄位搬運**，不做任何數量或價格決策——兩者都已由策略在
             `Signal` 裡給定。由各市場基底實作（組出 `StockOrder`／`FuturesOrder`）。
-        - Parameter:
+        - Parameters:
             - signals: List[Signal]
                 已填好 `volume` 與 `order_price` 的平倉訊號
         - Return:
@@ -382,7 +390,7 @@ class BaseStrategy(ABC):
         """
         - Description:
             開倉：Alpha 選出候選後交由 portfolio 層換算部位
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -405,7 +413,7 @@ class BaseStrategy(ABC):
             平倉：數量與價格都由策略在訊號裡給定，基底只負責組單
 
             **不經過 portfolio 層**，理由見 `generate_close_signals()`。
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:
@@ -422,7 +430,7 @@ class BaseStrategy(ABC):
         """
         - Description:
             停損：與平倉走同一條組裝路徑，只是訊號來源不同
-        - Parameter:
+        - Parameters:
             - quotes: List[BaseQuote]
                 目標商品的報價資訊
         - Return:

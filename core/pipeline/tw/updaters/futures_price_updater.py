@@ -1,4 +1,5 @@
 import datetime
+import functools
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -18,21 +19,25 @@ from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
+from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.step_runner import retry_if_blocked, run_isolated
 from core.pipeline.tw.cleaners.futures_price_cleaner import FuturesPriceCleaner
 from core.pipeline.tw.crawlers.futures_price_crawler import FuturesPriceCrawler
 from core.pipeline.tw.loaders.futures_price_loader import FuturesPriceLoader
 from core.pipeline.utils.exceptions import ProductUpdateError
 from core.utils import FuturesSession, TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 台期貨每日行情 Updater
 
-1. **逐商品迴圈，不是逐日期迴圈**
+1. **逐商品迴圈，不是逐日期迴圈；續跑是逐商品的差集**
    各商品的上市日不同（TX 1998-07、MTX 2001、TMF 2022 之後），且會陸續加入
    `FUTURES_TARGET_PRODUCTS`。若以「全表最新日」當續跑起點，新加的商品會被
-   既有商品的進度擋住而整段歷史都補不到，故 resume 一律以 (product) 為單位。
+   既有商品的進度擋住而整段歷史都補不到，故候選日期一律以商品（product）為單位算
+   「平日 ＋ 補行交易日 − 該商品已有 − 已確認無資料 ＋ 上次沒跑完」（`DatePlanner`），
+   中間被擋掉的日子下次仍會被請求；進度檔逐商品一份。
 
 2. 每個交易日要打兩次（日盤、夜盤）
    兩者是獨立行情，見 `futures_price_crawler` 的說明。
@@ -43,7 +48,7 @@ from core.utils.log_manager import LogManager
 """
 
 
-# 週六的 weekday() 值；用於判斷是否為週末
+# 週六的 `weekday()` 值；用於判斷是否為週末
 SATURDAY: int = 5
 
 # 一個「商品 × 日」固定送出日盤＋夜盤兩次請求（夜盤查無資料也照打），
@@ -51,8 +56,37 @@ SATURDAY: int = 5
 SESSIONS_PER_DAY: int = 2
 
 
+class ProductDateSource:
+    """
+    `DatePlanner` 用的逐商品視圖：`futures_price_daily` 一張表放所有商品，差集要以商品為單位算
+
+    用全表的日期算差集，新加入的商品會被既有商品的日期擋住、整段歷史補不到，
+    而且不會有任何錯誤訊息。
+    """
+
+    def __init__(self, dao: FuturesPriceDAO, product: str) -> None:
+        self.dao: FuturesPriceDAO = dao
+        self.product: str = product
+        # 進度訊息裡要看得出是哪個商品
+        self.TABLE_NAME: str = f"{dao.TABLE_NAME}:{product}"
+
+    def table_exists(self) -> bool:
+        """行情表在不在（表不存在是全新環境的正常狀態）"""
+
+        return self.dao.table_exists()
+
+    def get_distinct_dates(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> List[datetime.date]:
+        """該商品在區間內已有行情的日期"""
+
+        return self.dao.get_trading_days(start_date, end_date, product=self.product)
+
+
 class FuturesPriceUpdater(BaseDataUpdater):
-    """Futures Price Updater"""
+    """期貨行情 updater"""
+
+    LOG_FILE_NAME: str = "update_futures_price.log"
 
     # 每爬幾天就入庫一次；中斷最多只損失最後一批
     LOAD_BATCH_SIZE: int = 100
@@ -109,9 +143,9 @@ class FuturesPriceUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        LogManager.setup_logger("update_futures_price.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束；含唯讀的台股連線）"""
@@ -122,34 +156,6 @@ class FuturesPriceUpdater(BaseDataUpdater):
         if self.stock_price_dao is not None:
             self.stock_price_dao.close()
             self.stock_price_dao = None
-
-    def get_actual_update_start_date(
-        self,
-        product: str,
-        default_date: datetime.date,
-    ) -> datetime.date:
-        """
-        - Description:
-            取得該商品實際要開始更新的日期（表內該商品最新日 +1）
-
-            **以 product 為單位而非全表**：新加入的商品在表內沒有任何資料，
-            用全表最新日當起點會讓它的歷史整段補不到，且不會有任何錯誤訊息。
-        - Parameters:
-            - product: str
-                商品代碼
-            - default_date: datetime.date
-                表內無該商品資料時的起始日
-        - Return:
-            - datetime.date
-        """
-
-        # **查詢錯誤往外拋**：吞掉 `sqlite3.Error` 改用預設起日的話，「DB 被鎖住、
-        # 欄名打錯」會讓該商品從預設起日靜默重跑整段回補（數千次請求）
-        latest: Optional[str] = self.dao.get_latest_date_by_product(product)
-        if not latest:
-            return default_date
-
-        return TimeUtils.to_date(latest) + datetime.timedelta(days=1)
 
     def get_traded_weekend_dates(
         self, start_date: datetime.date, end_date: datetime.date
@@ -210,54 +216,12 @@ class FuturesPriceUpdater(BaseDataUpdater):
 
         return self.stock_price_dao.get_trading_days(start_date, end_date)
 
-    def find_gap_dates(self, product: str) -> List[datetime.date]:
-        """
-        - Description:
-            該商品在表內最早與最新日期之間、現貨有開市卻沒有期貨行情的日子
-
-            **續跑起點是「表內最新 +1」，中間的缺口它看不到**：被站方擋掉的日子
-            重試後仍拿不到時會被當成沒開盤，之後的日子照常入庫、`MAX(date)` 越過
-            它，這一天從此不會再被請求；`FuturesCalendar` 的交易日又取自行情表，
-            缺掉的日子在回測裡被當成休市。以現貨交易日曆比對才分得出「沒開盤」
-            與「沒拿到」。
-
-            **已知限制**：`price` 表自 2013 年起才有資料，更早的缺口偵測不到；
-            取不到現貨日曆時不偵測（回空清單並警告），不猜。
-        - Parameters:
-            - product: str
-                商品代碼
-        - Return:
-            - List[datetime.date]
-                缺口日期（已排序）
-        """
-
-        summary: Optional[Tuple[int, str, str]] = self.dao.get_product_summary(product)
-        if summary is None:
-            return []
-
-        first: datetime.date = TimeUtils.to_date(summary[1])
-        last: datetime.date = TimeUtils.to_date(summary[2])
-        if first >= last:
-            return []
-
-        calendar: Optional[List[datetime.date]] = self.get_stock_trading_days(
-            first, last
-        )
-        if calendar is None:
-            logger.warning(f"* {product} 取不到現貨交易日曆，本次不偵測中間缺口")
-            return []
-
-        existing: Set[datetime.date] = set(
-            self.dao.get_trading_days(first, last, product=product)
-        )
-        return [date for date in calendar if date not in existing]
-
     def get_candidate_dates(
         self, start_date: datetime.date, end_date: datetime.date
     ) -> List[datetime.date]:
         """
         - Description:
-            決定要送出請求的日期清單
+            區間內所有平日 ＋ 補行交易日：差集的母集合，也是 `resume=False` 整段重抓的候選
 
             平日一律照爬（國定假日無法純靠日曆判斷，交給回應判定）；
             週末原則上跳過，但補行交易日例外（見 `get_traded_weekend_dates`）。
@@ -306,15 +270,16 @@ class FuturesPriceUpdater(BaseDataUpdater):
             未指定 `products` 時取用 `FUTURES_TARGET_PRODUCTS`。
         - Parameters:
             - start_date: datetime.date
-                起日；`resume=True` 時會被該商品在表內的最新日覆蓋
+                起日（會先夾到該商品的上市日）；`resume=True` 時不會早於該商品在表內的第一筆
             - end_date: Optional[datetime.date]
                 迄日；None 取當日
             - products: Optional[List[str]]
                 要更新的商品；None 表示取設定檔
             - resume: bool
-                True（日常更新）：起點取「表內該商品最新日 +1」，只補新的。
-                False（歷史回補）：一律照 `start_date` 跑。**把起點往前拉時
-                必須用這個**——日常路徑會被表內既有資料擋住而整段補不到，
+                True（日常更新）：差集——從該商品在表內的第一筆起，補區間內缺的日子
+                （含中間被擋掉的），已確認無資料的不再問（見 `plan_dates()`）。
+                False（歷史回補）：一律照 `start_date` 整段重抓。**把起點往前拉到表內第一筆之前
+                必須用這個**——日常路徑不回頭看第一筆之前，整段補不到，
                 且不會有任何錯誤訊息，只會顯示「已是最新」。
                 重複的日期由 loader 的 `INSERT OR IGNORE` 吸收，不會產生重複列。
         - Raise:
@@ -338,18 +303,24 @@ class FuturesPriceUpdater(BaseDataUpdater):
         # 逐商品隔離：一個商品觸發保險絲（或任何例外）不擋排在後面的商品——
         # 股期一次更新前 N 檔，上市晚於起點的那檔就會觸發保險絲。
         # 但跑完之後統一拋出，讓 target 仍以失敗結束，不會安靜地少一檔
-        failures: Dict[str, str] = {}
-        for product in target_products:
-            try:
-                self.update_product(product, start_date, end_date, resume=resume)
-            except Exception as error:
-                # **這層盲捕不可收斂**：`update_product()` 是一整條子管線，
-                # 上面那行註解寫的「或任何例外」就是它的契約。收斂成列舉的話，
-                # 漏掉的那一種會讓後面的商品全部不跑，而 target 仍以成功結束
-                logger.opt(exception=True).error(
-                    f"* {product} 更新失敗，繼續下一個商品：{type(error).__name__}"
-                )
-                failures[product] = f"{type(error).__name__}: {error}"
+        failures: Dict[str, str] = dict(
+            run_isolated(
+                [
+                    (
+                        product,
+                        functools.partial(
+                            self.update_product,
+                            product,
+                            start_date,
+                            end_date,
+                            resume=resume,
+                        ),
+                    )
+                    for product in target_products
+                ],
+                "Futures Price",
+            )
+        )
 
         self.log_summary(target_products)
 
@@ -389,7 +360,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
             - products: Optional[List[str]]
                 直接指定商品，優先於 `top_n`
             - resume: bool
-                是否從各商品表內的最新日接續
+                True 各商品走差集續跑（不回頭看表內第一筆之前）；False 照 `start_date` 整段重抓
         """
 
         end_date: datetime.date = end_date or datetime.date.today()
@@ -609,6 +580,90 @@ class FuturesPriceUpdater(BaseDataUpdater):
         )
         return listing_date
 
+    def progress_store(self, product: str) -> DateProgressStore:
+        """該商品的日期進度檔（已確認無資料／上次沒跑完）；逐商品一份，休市日每個商品都要各自問過一次"""
+
+        return DateProgressStore(f"futures_price_{product}")
+
+    def plan_dates(
+        self,
+        product: str,
+        start_date: datetime.date,
+        end_date: datetime.date,
+        progress: DateProgressStore,
+        resume: bool = True,
+    ) -> List[datetime.date]:
+        """
+        - Description:
+            決定該商品這次要請求的日期
+
+            **續跑是差集，不是 `MAX(date)+1`**：候選 ＝ 平日 ＋ 補行交易日 − 該商品表內已有
+            − 已確認無資料 ＋ 上次沒跑完。中間被擋掉的日子因此下次仍會被請求；`MAX(date)+1`
+            會越過它，而 `FuturesCalendar` 的交易日取自行情表，那一天在回測裡就成了休市。
+
+            母集合用平日而不是現貨日曆：`price` 表自 2013 年起才有資料，拿它當日曆會讓
+            更早的區間一天都不請求。但**現貨日曆涵蓋的區間內、現貨沒開市的平日就是期貨的
+            休市日**（兩個市場共用同一份行事曆），直接當成已確認無資料，不浪費請求去問站方；
+            日曆尾端現貨還沒更新到的日子不算——那是「還不知道」，不是「沒開市」。
+            日曆之外的休市日由站方的回應判定後記進進度檔，之後不再問。
+
+            **續跑不回頭看該商品第一筆之前**：那段對沒登錄上市日的商品（股期）就是上市前的
+            空白日，每次都重問會一直撞保險絲。往前擴張區間要用 `resume=False`。
+        - Parameters:
+            - product: str
+                商品代碼
+            - start_date / end_date: datetime.date
+                更新區間；起點會先夾到該商品的上市日
+            - progress: DateProgressStore
+                該商品的進度檔
+            - resume: bool
+                True 走差集；False 不看表內與進度，整段重抓（重複列由 `INSERT OR IGNORE` 吸收）
+        - Return:
+            - List[datetime.date]
+                由早到晚的候選日期；已是最新時為空
+        """
+
+        start: datetime.date = self.clamp_to_listing_date(product, start_date)
+        if resume:
+            # **查詢錯誤往外拋**：吞掉改用預設起點的話，「DB 被鎖住、欄名打錯」
+            # 會讓該商品從預設起日靜默重跑整段回補（數千次請求）
+            summary: Optional[Tuple[int, str, str]] = self.dao.get_product_summary(
+                product
+            )
+            if summary is not None:
+                start = max(start, TimeUtils.to_date(summary[1]))
+        if start > end_date:
+            return []
+
+        if not resume:
+            return self.get_candidate_dates(start, end_date)
+
+        calendar: Optional[List[datetime.date]] = self.get_stock_trading_days(
+            start, end_date
+        )
+        if calendar is None:
+            logger.warning(
+                "無法取得現貨交易日曆，無法判斷補行交易日與休市日，本次一律跳過週末"
+            )
+        calendar_days: Set[datetime.date] = set(calendar or [])
+        calendar_tail: Optional[datetime.date] = max(calendar_days, default=None)
+        known_closed: Set[datetime.date] = {
+            date
+            for date in DatePlanner.generate_weekdays(start, end_date)
+            if calendar_tail is not None
+            and date <= calendar_tail
+            and date not in calendar_days
+        }
+
+        return DatePlanner.plan(
+            dao=ProductDateSource(self.dao, product),
+            start_date=start,
+            end_date=end_date,
+            no_data_dates=progress.no_data | known_closed,
+            incomplete_dates=progress.incomplete,
+            extra_dates={date for date in calendar_days if date.weekday() >= SATURDAY},
+        )
+
     def update_product(
         self,
         product: str,
@@ -616,89 +671,81 @@ class FuturesPriceUpdater(BaseDataUpdater):
         end_date: datetime.date,
         resume: bool = True,
     ) -> None:
-        """單一商品的爬取 → 清洗 → 分批入庫；`resume=False` 時不查表內進度"""
+        """單一商品的爬取 → 清洗 → 分批入庫；候選日期由 `plan_dates()` 決定"""
 
-        actual_start: datetime.date = (
-            self.get_actual_update_start_date(product, default_date=start_date)
-            if resume
-            else start_date
+        progress: DateProgressStore = self.progress_store(product)
+        dates: List[datetime.date] = self.plan_dates(
+            product, start_date, end_date, progress, resume=resume
         )
-        actual_start = self.clamp_to_listing_date(product, actual_start)
-
-        # 續跑時先補表內中間的缺口：起點是「最新 +1」，看不到被擋掉的那幾天
-        gaps: List[datetime.date] = self.find_gap_dates(product) if resume else []
-        if gaps:
-            logger.warning(
-                f"* {product} 表內有 {len(gaps)} 個現貨有開市卻沒有行情的日子，"
-                f"本次一併回補：{[str(date) for date in gaps[:10]]}"
+        if not dates:
+            logger.info(
+                f"* {product} 已是最新（{start_date} ~ {end_date} 沒有待請求的日期）"
             )
-
-        if actual_start > end_date and not gaps:
-            logger.info(f"* {product} 已是最新（起點 {actual_start} 晚於 {end_date}）")
             return
 
-        candidates: List[datetime.date] = self.get_candidate_dates(
-            actual_start, end_date
+        # 表內最新日之後的才是「新日期」，沒拿到時商品要記為失敗；更早的是中間缺口，
+        # 只是順便回補——沒有新日期可抓時（週末），補不到的舊缺口會讓 target 天天失敗
+        latest: Optional[str] = self.dao.get_latest_date_by_product(product)
+        latest_date: Optional[datetime.date] = (
+            TimeUtils.to_date(latest) if latest else None
         )
-        dates: List[datetime.date] = sorted(set(gaps) | set(candidates))
-        logger.info(f"* {product}: {actual_start} ~ {end_date}，共 {len(dates)} 天")
+        new_dates: Set[datetime.date] = {
+            date for date in dates if latest_date is None or date > latest_date
+        }
+        logger.info(
+            f"* {product}: {dates[0]} ~ {dates[-1]}，共 {len(dates)} 天"
+            f"（新日期 {len(new_dates)} 天、缺口 {len(dates) - len(new_dates)} 天）"
+        )
 
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
         batch_dates: List[str] = []
         consecutive_empty: int = 0
         stats: UpdateStats = UpdateStats()
         # 擋流量時站方回 HTTP 200 ＋ 沒有行情表的頁面，與非交易日長得一樣；
         # 現貨有開市的日子期貨也有行情，以此分辨「沒開盤」與「沒拿到」。
         # 取不到現貨日曆時（只跑期貨的環境）退回只認明確的請求失敗
-        stock_trading_days: Set[datetime.date] = (
-            set(self.get_stock_trading_days(dates[0], dates[-1]) or [])
-            if dates
-            else set()
+        stock_trading_days: Set[datetime.date] = set(
+            self.get_stock_trading_days(dates[0], dates[-1]) or []
         )
-        # 表內中間的缺口只是順便回補，不拿來當「最近一個應有資料的日子」：
-        # 沒有新日期可抓時（週末），補不到的舊缺口會讓 target 天天失敗
-        new_dates: Set[datetime.date] = set(candidates)
 
         with GracefulStop(label=f"futures_price:{product}") as stop:
             for date in dates:
                 crawled: Set[FuturesSession]
                 unreachable: bool
-                crawled, unreachable = self.crawl_and_clean_date(product, date)
-
                 # 沒拿到日盤時一律等待後再試一次：站方擋流量多半是暫時的，
                 # 第二次仍取不到才記為失敗（或兩個時段都查無資料，才是非交易日）。
-                # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子
-                if not self.is_day_complete(crawled):
-                    backoff_seconds: int = self.EMPTY_RETRY_DELAY_SECONDS * min(
-                        consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR
+                # **只拿到夜盤同樣要重試**：日盤尚未收盤時來源就是這個樣子。
+                # 等待隨連續空產出遞增（base × 1、×2 … 至多 ×8）
+                (crawled, unreachable), retries = retry_if_blocked(
+                    fetch=functools.partial(self.crawl_and_clean_date, product, date),
+                    is_blocked=lambda outcome: not self.is_day_complete(outcome[0]),
+                    attempts=2,
+                    delay_seconds=self.EMPTY_RETRY_DELAY_SECONDS
+                    * min(consecutive_empty + 1, self.EMPTY_RETRY_MAX_BACKOFF_FACTOR),
+                    label=f"Futures Price {product} {date}",
+                    stop=stop,
+                    sleep=lambda seconds: self.sleep(seconds, stop),
+                )
+                if retries and self.is_day_complete(crawled):
+                    logger.warning(
+                        f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
+                        f"不是非交易日"
                     )
-                    logger.info(
-                        f"{date} {product} 未取得日盤（本次時段："
-                        f"{sorted(session.value for session in crawled) or '無'}），"
-                        f"{backoff_seconds} 秒後重試一次"
-                    )
-                    self.sleep(backoff_seconds, stop)
-                    crawled, unreachable = self.crawl_and_clean_date(product, date)
-                    if self.is_day_complete(crawled):
-                        logger.warning(
-                            f"{date} {product} 重試後取得資料——前一次為暫時性失敗（站方擋流量），"
-                            f"不是非交易日"
-                        )
 
+                status: CrawlStatus = self.classify_day(
+                    crawled, unreachable, date in stock_trading_days
+                )
+                # 休市日記下來之後不再問；沒拿到的記成待重試，下次一定再來
+                progress.record(date, status)
                 if date in new_dates:
-                    stats.mark_day(
-                        date,
-                        self.classify_day(
-                            crawled, unreachable, date in stock_trading_days
-                        ),
-                    )
+                    stats.mark_day(date, status)
 
                 if self.is_day_complete(crawled):
                     batch_dates.append(TimeUtils.format_date(date))
                     consecutive_empty = 0
                 else:
-                    # **只有夜盤時整天不入庫**：入庫會讓 `MAX(date)` 推進過這一天，
-                    # 缺的日盤永遠不會再被請求（續跑起點是 `MAX(date)+1`）
+                    # **只有夜盤時整天不入庫**：缺的日盤要再被請求——表內沒有這一天、
+                    # 進度檔又記成待重試，下次執行一定會再來
                     if crawled:
                         logger.warning(
                             f"{date} {product} 只取得 "
@@ -707,21 +754,22 @@ class FuturesPriceUpdater(BaseDataUpdater):
                         )
                     consecutive_empty += 1
                     if consecutive_empty >= self.EMPTY_PRODUCT_ABORT_THRESHOLD:
-                        # 先把已爬到的入庫再中止，不浪費前面的成果
+                        # 先把已爬到的入庫、進度存檔再中止，不浪費前面的成果
                         if batch_dates:
                             self.load_batch(batch_dates)
+                        progress.save()
                         raise ValueError(
-                            f"{product} 自 {actual_start} 起連續 "
+                            f"{product} 自 {dates[0]} 起連續 "
                             f"{consecutive_empty} 個候選日皆無資料，已中止。"
                             f"可能原因：① 代碼拼錯；② 該商品在此期間尚未上市"
                             f"（請調整 start_date）；③ 來源異常。"
                         )
 
-                file_cnt += 1
-
                 if len(batch_dates) >= self.LOAD_BATCH_SIZE:
                     self.load_batch(batch_dates)
                     batch_dates = []
+                    # 與入庫同步落盤：中斷時已確認過的休市日不必再問一次
+                    progress.save()
 
                 if stop.requested:
                     logger.warning(
@@ -730,11 +778,12 @@ class FuturesPriceUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle_per_file(file_cnt, stop)
+                throttle.tick(stop)
 
-        # 收尾：載入最後一批未達批量的日期
+        # 收尾：載入最後一批未達批量的日期，進度一併落盤
         if batch_dates:
             self.load_batch(batch_dates)
+        progress.save()
 
         # 重試後仍為空就當成非交易日、不入庫也不報錯——站方整批回 HTTP 403 時
         # 每一天都會這樣，表停在舊資料卻列為成功。故最近一個應有資料的日子取不到時，

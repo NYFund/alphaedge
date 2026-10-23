@@ -6,7 +6,9 @@ import pytest
 
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesQuote
+from core.models.cost_config import FuturesCostConfig
 from core.portfolio.signal import Signal
+from core.portfolio.sizing import BasePositionSizer, MarginSizer
 from core.strategies.futures import BaseFuturesStrategy
 from core.utils import Action, FuturesSession, InstrumentType, Market, PositionType
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
@@ -183,6 +185,15 @@ def test_night_session_quotes_are_filtered_out(
 
 
 # === 口數由保證金決定 ===
+def lots_for(strategy: MomentumFuturesStrategy, quote: FuturesQuote) -> int:
+    """策略目前的部位建構器會替這筆報價開幾口（沒有訂單就是 0）"""
+
+    orders = strategy.make_portfolio_constructor().build(
+        open_signals(strategy, [quote]), strategy.account
+    )
+    return orders[0].volume if orders else 0
+
+
 def test_max_lots_is_driven_by_margin_not_contract_value(
     strategy: MomentumFuturesStrategy,
 ) -> None:
@@ -194,41 +205,49 @@ def test_max_lots_is_driven_by_margin_not_contract_value(
     """
 
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=700000))
-    quote: FuturesQuote = make_quote("202609")
+    strategy.cost_config = FuturesCostConfig.free()
+    strategy.max_lots = 10
 
-    # 3,000,000 × 0.5 = 1,500,000 ÷ 700,000 = 2 口
-    assert strategy.calculate_max_lots(quote) == 2
-    # 若誤用契約價值（360 萬）只會算出 0 口
-    assert strategy.calculate_max_lots(quote) != 0
+    # 3,000,000 × 0.5 = 1,500,000 ÷ 700,000 = 2 口；若誤用契約價值（360 萬）只會算出 0 口
+    assert lots_for(strategy, make_quote("202609")) == 2
 
 
 def test_ratio_mode_matches_the_position_manager(
     strategy: MomentumFuturesStrategy,
 ) -> None:
     """
-    沒有 API 時退回「契約價值 × 比率」，與 `FuturesPositionManager` 一致
+    沒有 API 時退回「契約價值 × 比率」——與 `FuturesPositionManager` 是同一個保證金模型
 
     兩處若不一致，策略算出的口數會開不進去（或開得太少）。
     """
 
-    quote: FuturesQuote = make_quote("202609", close=18000)
+    strategy.cost_config = FuturesCostConfig.free()
 
-    assert strategy.get_margin_per_lot(quote) == 18000 * MULTIPLIER * 0.1
+    requirement: float = (
+        strategy.make_portfolio_constructor().opening_requirement_per_lot(
+            make_quote("202609", close=18000)
+        )
+    )
+
+    assert requirement == 18000 * MULTIPLIER * 0.1
 
 
-def test_unavailable_margin_yields_zero_lots(
+def test_unavailable_margin_raises_like_the_position_manager(
     strategy: MomentumFuturesStrategy,
 ) -> None:
     """
-    查表模式下查不到保證金時開 0 口
+    查表模式下查不到保證金就拋錯，與部位管理層同一個判準
 
-    策略層選擇不開倉而非拋錯——真正會 raise 的是部位管理層，
-    那才是「已經決定要開倉卻算不出保證金」的地方。
+    舊版策略層回 0 口、部位管理層卻會拋：同一個商品兩邊的答案不同，
+    靜默套近似值也會讓可開口數整段偏掉卻毫無徵兆。
     """
 
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=None))
 
-    assert strategy.calculate_max_lots(make_quote("202609")) == 0
+    with pytest.raises(ValueError):
+        strategy.make_portfolio_constructor().build(
+            open_signals(strategy, [make_quote("202609")]), strategy.account
+        )
 
 
 def test_capital_usage_caps_the_budget(strategy: MomentumFuturesStrategy) -> None:
@@ -239,12 +258,55 @@ def test_capital_usage_caps_the_budget(strategy: MomentumFuturesStrategy) -> Non
     """
 
     strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
+    strategy.cost_config = FuturesCostConfig.free()
+    strategy.max_lots = 100
     strategy.max_capital_usage = 1.0
 
-    assert strategy.calculate_max_lots(make_quote("202609")) == 30
+    assert lots_for(strategy, make_quote("202609")) == 30
 
     strategy.max_capital_usage = 0.5
-    assert strategy.calculate_max_lots(make_quote("202609")) == 15
+    assert lots_for(strategy, make_quote("202609")) == 15
+
+
+def test_opening_fees_count_against_the_budget(
+    strategy: MomentumFuturesStrategy,
+) -> None:
+    """
+    每口需要的資金含開倉手續費與稅，與部位管理層的開倉資金檢查同口徑
+
+    只算保證金的話，資金剛好卡邊界時會多算 1 口、再被部位管理層以餘額不足拒絕。
+    """
+
+    strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
+    strategy.max_lots = 100
+    strategy.max_capital_usage = 1.0
+    quote: FuturesQuote = make_quote("202609")
+
+    requirement: float = (
+        strategy.make_portfolio_constructor().opening_requirement_per_lot(quote)
+    )
+
+    assert requirement > 100000
+    assert lots_for(strategy, quote) == int(3_000_000 // requirement) < 30
+
+
+def test_custom_sizer_overrides_the_default(strategy: MomentumFuturesStrategy) -> None:
+    """預設依 `max_lots`／`max_capital_usage` 建 `MarginSizer`；要自訂演算法就覆寫 `self.sizer`"""
+
+    class OneLot(BasePositionSizer):
+        """每個候選一律只給一口的自訂 sizer"""
+
+        def size(self, account, candidates, max_holdings):
+            return [(quote, requirement, 1) for quote, requirement in candidates]
+
+    strategy.margin_config = FuturesMarginConfig(api=StubMarginAPI(per_lot=100000))
+    strategy.max_lots = 100
+    assert isinstance(strategy.make_portfolio_constructor().sizer, MarginSizer)
+    assert lots_for(strategy, make_quote("202609")) > 1
+
+    strategy.sizer = OneLot()
+
+    assert lots_for(strategy, make_quote("202609")) == 1
 
 
 # === 下單口數 ===

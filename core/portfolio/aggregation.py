@@ -127,7 +127,7 @@ def resolve_symbol_conflicts(
             `{orders 的索引: 是否為平倉單}`
     - Return:
         - Tuple[List[Tuple[str, BaseOrder]], List[Tuple[str, BaseOrder, str]]]
-            （放行清單, [(策略名, 被擋的單, 原因)]）
+            `(放行清單, [(策略名, 被擋的單, 原因)])`
     """
 
     claimed: Dict[str, str] = dict(holders)

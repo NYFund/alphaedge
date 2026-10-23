@@ -18,7 +18,7 @@ from core.pipeline.tw.loaders.finmind import (
 )
 
 """
-FinMind Loader
+FinMind loader
 
 本檔是**門面（facade）**：對外介面與呼叫方式維持不變，四張表的 schema 與各自的
 入庫流程拆在 `core/pipeline/tw/loaders/finmind/` 底下（見該套件的說明）。
@@ -44,23 +44,23 @@ class FinMindLoader(BaseDataLoader):
         self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.finmind_dir: Path = FINMIND_DOWNLOADS_PATH
 
         self.setup()
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
 
-        # Ensure Database Tables Exist
+        # 確保資料表存在
         self.create_missing_tables()
 
         self.finmind_dir.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> None:
-        """Connect to the Database"""
+        """連線到資料庫"""
 
         if self.conn is None:
             # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
@@ -84,7 +84,7 @@ class FinMindLoader(BaseDataLoader):
             self.conn.commit()
 
     def create_db(self, *args, **kwargs) -> None:
-        """Create New Database Tables"""
+        """建立資料表"""
 
         self.create_missing_tables()
 
@@ -97,12 +97,12 @@ class FinMindLoader(BaseDataLoader):
         BrokerTradingDAO(conn=self.conn).ensure_table()
 
     def add_to_db(self, remove_files: bool = False) -> None:
-        """Add Data into Database from CSV files"""
+        """把 downloads 目錄裡的 CSV 寫入資料庫"""
 
         if self.conn is None:
             self.connect()
 
-        # Ensure Database Tables Exist
+        # 確保資料表存在
         self.create_missing_tables()
 
         # 處理四個 CSV 檔案
@@ -124,7 +124,7 @@ class FinMindLoader(BaseDataLoader):
         stock_info_loader.load_stock_info(self.conn, self.finmind_dir)
 
     def load_stock_info_with_warrant(self) -> None:
-        """載入台股總覽(含權證)資料到資料庫"""
+        """載入台股總覽（含權證）資料到資料庫"""
 
         stock_info_loader.load_stock_info_with_warrant(self.conn, self.finmind_dir)
 

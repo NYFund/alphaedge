@@ -4,9 +4,9 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
-from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, truncate_batch_by_exposure
 from core.models import StockOrder
+from core.models.risk_config import StockRiskConfig
 from core.portfolio.order_rules import exceeds_symbol_exposure
 from core.utils import Action, PositionType
 
@@ -18,7 +18,7 @@ from core.utils import Action, PositionType
 
 | | 回測 | 實盤 |
 |---|---|---|
-| 設定 | `ShortConstraint.max_short_exposure_ratio` | `RiskConfig.single_symbol_exposure_ratio` |
+| 設定 | `ShortConstraint.max_short_exposure_ratio` | `StockRiskConfig.single_symbol_exposure_ratio` |
 | 預設 | `None`（關閉） | `0.35` |
 | 適用 | **只有空單** | 多空皆適用 |
 | 超限行為 | 整筆拒絕開倉 | 批次截斷 |
@@ -87,7 +87,7 @@ def test_live_truncation_agrees_with_the_shared_formula() -> None:
     批次截斷就要把它截掉；說沒超過的就要放行。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     ratio: float = config.single_symbol_exposure_ratio
     cap: float = INIT_CAPITAL * ratio
 
@@ -122,7 +122,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
     只看單張的話，同一檔拆成多張、每張都低於上限，就能繞過單一標的上限。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     cap: float = INIT_CAPITAL * config.single_symbol_exposure_ratio
 
     allowed, truncated = truncate_batch_by_exposure(
@@ -150,7 +150,7 @@ def test_backtest_default_is_off_and_live_default_is_on() -> None:
     from core.models.cost_config import ShortConstraint
 
     assert ShortConstraint().max_short_exposure_ratio is None, "回測預設不限制"
-    assert RiskConfig().single_symbol_exposure_ratio == 0.35, "實盤預設 35%"
+    assert StockRiskConfig().single_symbol_exposure_ratio == 0.35, "實盤預設 35%"
 
 
 def test_backtest_only_applies_it_to_shorts() -> None:

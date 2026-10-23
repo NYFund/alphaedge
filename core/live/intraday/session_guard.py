@@ -6,7 +6,6 @@ from loguru import logger
 from core.models import BaseAccount, BaseOrder, BasePosition
 from core.utils import (
     FUTURES_NIGHT_SESSION_CLOSE,
-    Action,
     DayTradeUncoveredPolicy,
     FuturesSession,
     PositionType,
@@ -260,9 +259,3 @@ class SessionGuard:
             orders.append(order)
 
         return (orders, warning)
-
-
-def cover_action(position: BasePosition) -> Action:
-    """回補空單就是買進；與 `resolve_close_action()` 的推導一致"""
-
-    return Action.BUY if position.position_type is PositionType.SHORT else Action.SELL

@@ -129,6 +129,8 @@ def test_same_recording_yields_identical_signals_twice() -> None:
 
     def collect() -> List[Any]:
         class Alpha(ScriptedStrategy):
+            """逐筆觸發、兩個鉤子都排在 IMMEDIATE 的腳本策略"""
+
             def __init__(self) -> None:
                 super().__init__("Alpha", [make_order("2330")])
                 self.is_tick_triggered = True

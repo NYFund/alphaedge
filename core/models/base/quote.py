@@ -40,18 +40,20 @@ class BaseQuote:
     ) -> None:
         # Basic Info
         self.symbol: str = symbol  # 商品代號（台股為股票代號、期貨為契約代號）
-        self.scale: Scale = scale  # Quote scale (DAY or TICK or ALL)
-        self.date: Union[datetime.date, datetime.datetime] = date  # Current date
+        self.scale: Scale = scale  # 報價級別（DAY／TICK／ALL）
+        self.date: Union[datetime.date, datetime.datetime] = (
+            date  # 報價日期（tick 為帶時間的 datetime）
+        )
 
         # Current Price & Volume
-        self.cur_price: float = cur_price  # Current price
-        self.volume: int = volume  # order's volume (Unit: Lot)
+        self.cur_price: float = cur_price  # 當前價格
+        self.volume: int = volume  # 成交量（Unit: Lot）
 
         # OHLC Info（一律為原始成交價：成交、成本、漲跌停與檔位判定都用這一組）
-        self.open: float = open  # Open price
-        self.high: float = high  # High price
-        self.low: float = low  # Low price
-        self.close: float = close  # Close price
+        self.open: float = open  # 開盤價
+        self.high: float = high  # 最高價
+        self.low: float = low  # 最低價
+        self.close: float = close  # 收盤價
 
         # 還原收盤價（後復權）；None 代表未啟用還原，取值時退回 close
         self.adj_close: Optional[float] = adj_close

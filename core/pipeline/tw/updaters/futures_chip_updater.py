@@ -1,5 +1,5 @@
 import datetime
-import random
+import functools
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -13,13 +13,17 @@ from core.config import (
     TW_FUTURES_DB_PATH,
 )
 from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.tw.futures_chip_dao import FuturesChipDAO
+from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.step_runner import retry_if_blocked, run_isolated
 from core.pipeline.tw.cleaners.futures_chip_cleaner import FuturesChipCleaner
 from core.pipeline.tw.crawlers.futures_chip_crawler import FuturesChipCrawler
 from core.pipeline.tw.loaders.futures_chip_loader import FuturesChipLoader
 from core.pipeline.utils.exceptions import DataLoadError
-from core.utils.log_manager import LogManager
 
 """
 台期貨籌碼 Updater：三大法人、大額交易人、選擇權 PCR
@@ -38,6 +42,9 @@ from core.utils.log_manager import LogManager
 2. **交易日對照**：某批次沒拿到 CSV 時，用 `futures_price_daily` 的交易日確認
    那段期間是不是真的沒有交易日；**若有交易日就是被擋**，等待後重試，
    重試仍失敗才記 warning（不是安靜的 info）。
+3. **續跑是逐表的差集**（`DatePlanner`）：候選日期 ＝ 交易日曆（`futures_price_daily`）
+   − 該表已有 − 已確認無資料 ＋ 上次沒跑完，落在哪些月份就請求那些月份。被擋的月份
+   記成待重試，下次一定再來；`MAX(date)+1` 會越過它、以結束碼 0 收工而缺口仍在。
 
 ---
 
@@ -59,6 +66,8 @@ from core.utils.log_manager import LogManager
 class FuturesChipUpdater(BaseDataUpdater):
     """更新 tw_futures.db 的三張籌碼表"""
 
+    LOG_FILE_NAME: str = "futures_chip_updater.log"
+
     # 節流：月批次之後請求數只剩三十分之一，但仍要留間隔——
     # TAIFEX 擋流量時回的是 HTTP 200 ＋ 一頁 HTML，被擋了不會有任何錯誤
     MIN_DELAY_SECONDS: float = 2.0
@@ -78,7 +87,7 @@ class FuturesChipUpdater(BaseDataUpdater):
     # 「固定起點」還是「滾動視窗」**。兩種寫法猜錯的代價不對稱——
     # 猜成滾動而實際是固定，夾擠點會逐年往後跑、把真的拿得到的資料擋在外面且無聲；
     # 猜成固定而實際是滾動，最多只是每次回補多問幾個已經滑出視窗的月份，
-    # 而月批次一個月只有一次請求，且日常續跑本來就從表內最新日接續、根本走不到這裡。
+    # 而月批次一個月只有一次請求，且日常續跑本來就不回頭看表內第一筆之前、根本走不到這裡。
     INSTITUTIONAL_EARLIEST_DATE: datetime.date = datetime.date(2023, 9, 4)
 
     def __init__(self) -> None:
@@ -95,9 +104,9 @@ class FuturesChipUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        LogManager.setup_logger("futures_chip_updater.log")
+        super().setup()
         self.crawler = FuturesChipCrawler()
         self.cleaner = FuturesChipCleaner()
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -147,13 +156,13 @@ class FuturesChipUpdater(BaseDataUpdater):
         - Description:
             以**月批次**更新三個籌碼資料集
 
-            **每個資料集各自續跑**：以自己表內的最新日為起點，避免已補到的那一張
-            重爬一整段。`resume=False` 則一律使用傳入的 `start_date`（歷史回補用）。
+            **每個資料集各自續跑**：各自從表內第一筆起取差集、只補缺的日子，避免已補到的那一張
+            重爬一整段（見 `plan_dates()`）。`resume=False` 則一律使用傳入的 `start_date`（歷史回補用）。
         - Parameters:
             - start_date / end_date: Optional[datetime.date]
                 回補區間；None 分別取 `DEFAULT_START_DATE` 與今天
             - resume: bool
-                是否從各表的最新日接續
+                True 各表走差集續跑（不回頭看表內第一筆之前）；False 照 `start_date` 整段重抓
             - tables: Optional[List[str]]
                 只更新這幾張表；None 表示三張全做。
 
@@ -169,7 +178,6 @@ class FuturesChipUpdater(BaseDataUpdater):
         """
 
         end: datetime.date = end_date or datetime.date.today()
-        blocked: List[str] = []
 
         datasets: List[Tuple[str, str, Callable, Callable]] = [
             dataset
@@ -180,101 +188,160 @@ class FuturesChipUpdater(BaseDataUpdater):
             logger.warning(f"[Futures Chip] `tables` 沒有對應到任何資料集：{tables}")
             return
 
-        for table, label, crawl, clean in datasets:
-            # 續跑時先補表內中間缺的月份：起點是「最新 +1」，被擋掉、之後又有
-            # 月份成功入庫的那幾個月它看不到
-            if resume:
-                for gap_start, gap_end in self.find_gap_windows(table):
-                    _, gap_blocked = self.update_dataset(
-                        table, label, crawl, clean, gap_start, gap_end
-                    )
-                    blocked.extend(
-                        f"{table} {window_start}~{window_end}"
-                        for window_start, window_end in gap_blocked
-                    )
-
-            start: datetime.date = self.resolve_start_date(
-                table, start_date, resume=resume
-            )
-            start = self.clamp_start_date(table, label, start)
-            _, blocked_windows = self.update_dataset(
-                table, label, crawl, clean, start, end
-            )
-            blocked.extend(
-                f"{table} {window_start}~{window_end}"
-                for window_start, window_end in blocked_windows
-            )
+        # 逐資料集隔離：一張表失敗（例外或被擋的月份）不擋後面的表，跑完再彙總
+        failures: List[Tuple[str, str]] = run_isolated(
+            [
+                (
+                    table,
+                    functools.partial(
+                        self.update_table,
+                        table,
+                        label,
+                        crawl,
+                        clean,
+                        start_date,
+                        end,
+                        resume,
+                    ),
+                )
+                for table, label, crawl, clean in datasets
+            ],
+            "Futures Chip",
+        )
 
         # **「該有資料卻沒拿到」必須讓行程非零結束**：TAIFEX 擋流量時回的是
         # HTTP 200 ＋ 一整頁 HTML，與非交易日的回應一模一樣。只記 warning 的話，
         # 被擋的月份會被當成「那幾個月沒有籌碼」而永遠不再補。
-        if blocked:
-            raise DataLoadError("futures_chip", blocked)
+        if failures:
+            raise DataLoadError(
+                "futures_chip", [f"{table} {item}" for table, item in failures]
+            )
 
-    def find_gap_windows(self, table: str) -> List[Tuple[datetime.date, datetime.date]]:
-        """
-        - Description:
-            表內最早與最新日期之間，期貨有交易卻沒有籌碼的月份
+    def progress_store(self, table: str) -> DateProgressStore:
+        """該表的日期進度檔（已確認無資料／上次沒跑完）；三張表各自續跑，進度也各自一份"""
 
-            **被擋的月份只記 error、叫人「稍後重跑」是不夠的**：預設 `resume=True`
-            的起點是表內最新 +1，那個月已被後面入庫的月份蓋過去，重跑以結束碼 0
-            收工而缺口仍在。交易日以 `futures_price_daily` 為準
-            （與 `has_trading_days()` 同一個判準）。
-        - Parameters:
-            - table: str
-                籌碼資料表
-        - Return:
-            - List[Tuple[datetime.date, datetime.date]]
-                缺口所在月份的 `(起, 迄)`，頭尾夾在表內的日期範圍內
-        """
+        return DateProgressStore(f"futures_chip_{table}")
 
-        earliest: Optional[str] = self.loader.get_earliest_date(table)
-        latest: Optional[str] = self.loader.get_latest_date(table)
-        if earliest is None or latest is None:
-            return []
-
-        first: datetime.date = datetime.date.fromisoformat(earliest)
-        last: datetime.date = datetime.date.fromisoformat(latest)
-        if first >= last or not self.price_api.dao.table_exists():
-            return []
-
-        existing: Set[datetime.date] = set(self.loader.get_dates(table, first, last))
-        missing: List[datetime.date] = [
-            date
-            for date in self.price_api.get_trading_days(first, last)
-            if date not in existing
-        ]
-        if not missing:
-            return []
-
-        months: Set[Tuple[int, int]] = {(date.year, date.month) for date in missing}
-        windows: List[Tuple[datetime.date, datetime.date]] = [
-            window
-            for window in self.split_months(first, last)
-            if (window[0].year, window[0].month) in months
-        ]
-        logger.warning(
-            f"[Futures Chip] {table} 表內有 {len(missing)} 個交易日沒有籌碼"
-            f"（{len(windows)} 個月），本次一併回補：{[str(d) for d in missing[:10]]}"
-        )
-        return windows
-
-    def resolve_start_date(
+    def plan_dates(
         self,
         table: str,
+        label: str,
         start_date: Optional[datetime.date],
-        resume: bool,
-    ) -> datetime.date:
-        """決定該資料集的起點：續跑時取表內最新日的次日"""
+        end_date: datetime.date,
+        progress: DateProgressStore,
+        resume: bool = True,
+    ) -> List[datetime.date]:
+        """
+        - Description:
+            決定該表這次要補的日期（之後以月為單位請求）
 
+            **續跑是差集，不是 `MAX(date)+1`**：候選 ＝ 交易日曆 − 該表已有 − 已確認無資料
+            ＋ 上次沒跑完。日曆取自同庫的 `futures_price_daily`（籌碼只在期貨有交易的日子
+            才有），行情表還沒建時退回平日；日曆尾端補到迄日，行情比籌碼早一步更新時
+            今天才不會等到明天。被擋的月份記成待重試，下次一定再來。
+
+            **續跑不回頭看該表第一筆之前**：三大法人的來源只回溯到 2023-09，
+            更早的日子每次都問只會白打；往前擴張區間要用 `resume=False`。
+        - Parameters:
+            - table / label: str
+                目標資料表與 log 用名稱
+            - start_date: Optional[datetime.date]
+                起日；None 取 `DEFAULT_START_DATE`。三大法人會再夾到來源下限
+            - end_date: datetime.date
+                迄日
+            - progress: DateProgressStore
+                該表的進度檔
+            - resume: bool
+                True 走差集；False 不看表內與進度，整段重抓
+        - Return:
+            - List[datetime.date]
+                由早到晚的候選日期；已是最新時為空
+        """
+
+        start: datetime.date = self.clamp_start_date(
+            table, label, start_date or self.DEFAULT_START_DATE
+        )
+        dao: FuturesChipDAO = self.loader.get_dao(table)
+        if resume and dao.table_exists():
+            # 查詢錯誤往外拋：吞掉改用預設起點會整段歷史重爬好幾個小時
+            earliest: Optional[str] = dao.get_earliest_date()
+            if earliest:
+                start = max(start, datetime.date.fromisoformat(earliest))
+        if start > end_date:
+            return []
+
+        calendar: Set[datetime.date] = (
+            set(self.price_api.get_trading_days(start, end_date))
+            if self.price_api.dao.table_exists()
+            else set()
+        )
         if not resume:
-            return start_date or self.DEFAULT_START_DATE
+            universe: Set[datetime.date] = (
+                DatePlanner.extend_calendar_tail(calendar, end_date)
+                if calendar
+                else DatePlanner.generate_weekdays(start, end_date)
+            )
+            return sorted(date for date in universe if start <= date <= end_date)
 
-        latest: Optional[str] = self.loader.get_latest_date(table)
-        if latest is None:
-            return start_date or self.DEFAULT_START_DATE
+        return DatePlanner.plan(
+            dao=dao,
+            start_date=start,
+            end_date=end_date,
+            no_data_dates=progress.no_data,
+            incomplete_dates=progress.incomplete,
+            calendar_dates=calendar or None,
+        )
 
-        return datetime.date.fromisoformat(latest) + datetime.timedelta(days=1)
+    @classmethod
+    def month_windows(
+        cls, dates: List[datetime.date], end_date: datetime.date
+    ) -> List[Tuple[datetime.date, datetime.date]]:
+        """候選日期落在哪些月份就請求那些月份（來源以區間查詢、一次給一個月）；頭尾夾在候選範圍內"""
+
+        if not dates:
+            return []
+
+        months: Set[Tuple[int, int]] = {(date.year, date.month) for date in dates}
+        return [
+            window
+            for window in cls.split_months(dates[0], end_date)
+            if (window[0].year, window[0].month) in months
+        ]
+
+    def update_table(
+        self,
+        table: str,
+        label: str,
+        crawl: Callable,
+        clean: Callable,
+        start_date: Optional[datetime.date],
+        end: datetime.date,
+        resume: bool,
+    ) -> List[str]:
+        """單一籌碼表的更新：差集算出要補的日期、逐月請求；回傳被擋的月份"""
+
+        progress: DateProgressStore = self.progress_store(table)
+        dates: List[datetime.date] = self.plan_dates(
+            table, label, start_date, end, progress, resume=resume
+        )
+        if not dates:
+            logger.info(f"[Futures Chip] {table} 已是最新（沒有待請求的日期）")
+            return []
+
+        _, blocked_windows = self.update_dataset(
+            table,
+            label,
+            crawl,
+            clean,
+            self.month_windows(dates, end),
+            set(dates),
+            progress,
+        )
+        progress.save()
+        return [
+            f"{window_start}~{window_end}"
+            for window_start, window_end in blocked_windows
+        ]
 
     def clamp_start_date(
         self, table: str, label: str, start_date: datetime.date
@@ -305,57 +372,82 @@ class FuturesChipUpdater(BaseDataUpdater):
         label: str,
         crawl: Callable,
         clean: Callable,
-        start_date: datetime.date,
-        end_date: datetime.date,
+        windows: List[Tuple[datetime.date, datetime.date]],
+        candidates: Set[datetime.date],
+        progress: Optional[DateProgressStore] = None,
     ) -> Tuple[int, List[Tuple[datetime.date, datetime.date]]]:
         """
         - Description:
-            逐月爬取、清洗並入庫單一資料集
+            逐月爬取、清洗並入庫單一資料集，並把每個候選日的結果記進進度檔
         - Parameters:
             - table / label: str
                 目標資料表與 log 用名稱
             - crawl / clean: Callable
                 該資料集的爬取與清洗函式
-            - start_date / end_date: datetime.date
-                回補區間
+            - windows: List[Tuple[datetime.date, datetime.date]]
+                要請求的月份區間（`month_windows()`）
+            - candidates: Set[datetime.date]
+                這次要補的日期；只有它們會被記進進度檔
+            - progress: Optional[DateProgressStore]
+                進度檔；None 時不記錄（只跑一段的呼叫端）
         - Return:
             - Tuple[int, List[Tuple[datetime.date, datetime.date]]]
                 （新增列數, 該有資料卻沒拿到的月份區間）
         """
 
-        if start_date > end_date:
-            logger.info(f"[Futures Chip] {table} 已是最新（{start_date} > {end_date}）")
+        if not windows:
+            logger.info(f"[Futures Chip] {table} 沒有待請求的月份")
             return 0, []
 
-        logger.info(f"* Updating {table}: {start_date} ~ {end_date}（月批次）")
+        logger.info(
+            f"* Updating {table}: {windows[0][0]} ~ {windows[-1][1]}"
+            f"（{len(windows)} 個月批次）"
+        )
 
         inserted: int = 0
         blocked_windows: List[Tuple[datetime.date, datetime.date]] = []
+        # 月批次之間的間隔：請求數已經很少，但仍不要連續打
+        throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.MIN_DELAY_SECONDS, delay_max=self.MAX_DELAY_SECONDS
+        )
 
         with GracefulStop(label=f"futures_chip:{label}") as stop:
-            for window_start, window_end in self.split_months(start_date, end_date):
-                raw: Optional[str] = self.crawl_window(
+            for window_start, window_end in windows:
+                window_dates: Set[datetime.date] = {
+                    date for date in candidates if window_start <= date <= window_end
+                }
+                result: CrawlResult = self.crawl_window(
                     crawl, label, window_start, window_end, stop
                 )
-                if raw is None:
-                    if self.has_trading_days(window_start, window_end):
+                if not result.is_ok:
+                    # FAILED ＝ 該有交易日卻沒拿到（被擋或來源異常），記成待重試；
+                    # NO_DATA ＝ 整個月沒有交易日，真的沒資料，記下來之後不再問
+                    if result.is_failed:
                         blocked_windows.append((window_start, window_end))
-                    self.throttle_per_window(stop)
+                        self.record_window(progress, window_dates, CrawlStatus.FAILED)
+                    else:
+                        self.record_window(progress, window_dates, CrawlStatus.NO_DATA)
+                    throttle.tick(stop)
                     if stop.requested:
                         break
                     continue
 
-                df: Optional[pd.DataFrame] = clean(raw)
+                df: Optional[pd.DataFrame] = clean(result.text)
                 if df is None or df.empty:
-                    self.throttle_per_window(stop)
+                    throttle.tick(stop)
                     if stop.requested:
                         break
                     continue
 
                 self.loader.save_csv(df, f"{label}_{window_start.strftime('%Y%m')}.csv")
                 inserted += self.loader.add_to_db(table, df)
-                # 每個月批次寫完就落地：中斷時已入庫的月份不必重抓
+                # 每個月批次寫完就落地：中斷時已入庫的月份不必重抓；進度同步存檔
                 self.loader.commit()
+                self.record_loaded_window(
+                    progress, window_dates, df, window_start, window_end
+                )
+                if progress is not None:
+                    progress.save()
 
                 if stop.requested:
                     logger.warning(
@@ -365,17 +457,68 @@ class FuturesChipUpdater(BaseDataUpdater):
                     )
                     break
 
-                self.throttle_per_window(stop)
+                throttle.tick(stop)
 
         if blocked_windows:
             logger.error(
                 f"[Futures Chip] {table} 有 {len(blocked_windows)} 個月份「該有資料卻沒拿到」，"
-                f"多半是被擋流量，稍後照常重跑即可（續跑會先補表內中間的缺口；"
-                f"缺的是最新的月份時，同樣會從表內最新日往後接）：{blocked_windows[:5]}"
+                f"多半是被擋流量；已記成待重試，下次執行一定會再請求：{blocked_windows[:5]}"
             )
 
         logger.info(f"[Futures Chip] {table}：本次新增 {inserted} 列")
         return inserted, blocked_windows
+
+    @staticmethod
+    def record_window(
+        progress: Optional[DateProgressStore],
+        dates: Set[datetime.date],
+        status: CrawlStatus,
+    ) -> None:
+        """把一個月批次的結果記到該月的每個候選日"""
+
+        if progress is None:
+            return
+        for date in dates:
+            progress.record(date, status)
+
+    def record_loaded_window(
+        self,
+        progress: Optional[DateProgressStore],
+        dates: Set[datetime.date],
+        df: pd.DataFrame,
+        window_start: datetime.date,
+        window_end: datetime.date,
+    ) -> None:
+        """
+        入庫成功的月份：月檔裡有的日子記為完成；沒有的分兩種——不是期貨交易日就是真的沒資料
+        （記下來不再問），是交易日卻沒有籌碼則留著下次再問（來源偶發漏日的保險）
+        """
+
+        if progress is None or not dates:
+            return
+
+        loaded: Set[datetime.date] = (
+            set(pd.to_datetime(df["date"]).dt.date) if "date" in df.columns else set()
+        )
+        trading_days: Set[datetime.date] = (
+            set(self.price_api.get_trading_days(window_start, window_end))
+            if self.price_api.dao.table_exists()
+            else set()
+        )
+        pending: List[datetime.date] = []
+        for date in sorted(dates):
+            if date in loaded:
+                progress.record_complete(date)
+            elif date in trading_days:
+                pending.append(date)
+            else:
+                progress.record_no_data(date)
+
+        if pending:
+            logger.warning(
+                f"[Futures Chip] {len(pending)} 個期貨交易日在來源的月檔裡沒有籌碼，"
+                f"下次仍會再問：{[str(date) for date in pending[:10]]}"
+            )
 
     def crawl_window(
         self,
@@ -384,14 +527,14 @@ class FuturesChipUpdater(BaseDataUpdater):
         window_start: datetime.date,
         window_end: datetime.date,
         stop: Optional[GracefulStop] = None,
-    ) -> Optional[str]:
+    ) -> CrawlResult:
         """
         - Description:
             取得單一月份的資料；**疑似被擋就重試**
 
             判準是「這個月有沒有交易日」——有交易日卻拿不到 CSV，就不可能是
-            「非交易日」，只會是被擋或來源異常。等待時間隨次數遞增，
-            與 `futures_price_updater` 同一種作法。
+            「非交易日」，只會是被擋或來源異常；crawler 回的 `NO_DATA` 在這裡
+            升級成 `FAILED`。等待時間隨次數遞增，與 `futures_price_updater` 同一種作法。
         - Parameters:
             - crawl: Callable
                 該資料集的爬取方法
@@ -402,30 +545,44 @@ class FuturesChipUpdater(BaseDataUpdater):
             - stop: Optional[GracefulStop]
                 中止旗標；退避期間收到訊號就不再重試
         - Return:
-            - Optional[str]
-                CSV 原文；重試後仍拿不到時為 None
+            - CrawlResult
+                `OK` 時 `text` 為 CSV 原文；沒有交易日的月份為 `NO_DATA`；
+                有交易日卻重試後仍拿不到時為 `FAILED`
         """
 
-        raw: Optional[str] = crawl(window_start, window_end)
-        if raw is not None or not self.has_trading_days(window_start, window_end):
-            return raw
+        # 有交易日卻拿不到 CSV＝疑似被擋：等待隨次數遞增，退避可被中止。
+        # 交易日只查一次（第一次拿不到時才查），之後的重試沿用答案
+        has_trading_days: Optional[bool] = None
 
-        for attempt in range(1, self.BLOCKED_RETRY_ATTEMPTS):
-            wait: int = self.BLOCKED_RETRY_DELAY_SECONDS * attempt
-            logger.warning(
-                f"[Futures Chip] {label} {window_start}~{window_end} 該有交易日卻沒拿到 CSV，"
-                f"{wait} 秒後重試（第 {attempt} 次）"
-            )
-            # 退避也要可中斷：這裡一次可能睡數十秒，裸 sleep 會讓 Ctrl+C 沒反應
-            self.sleep(wait, stop)
-            if stop is not None and stop.requested:
-                return None
+        def is_blocked(crawled: CrawlResult) -> bool:
+            """沒拿到資料、但這段期間確實有交易日時才算被擋"""
 
-            raw = crawl(window_start, window_end)
-            if raw is not None:
-                return raw
+            nonlocal has_trading_days
+            if crawled.is_ok:
+                return False
+            if has_trading_days is None:
+                has_trading_days = self.has_trading_days(window_start, window_end)
+            return has_trading_days
 
-        return None
+        result, _ = retry_if_blocked(
+            fetch=lambda: crawl(window_start, window_end),
+            is_blocked=is_blocked,
+            attempts=self.BLOCKED_RETRY_ATTEMPTS,
+            delay_seconds=self.BLOCKED_RETRY_DELAY_SECONDS,
+            label=f"Futures Chip {label} {window_start}~{window_end}",
+            stop=stop,
+            sleep=lambda seconds: self.sleep(seconds, stop),
+        )
+        if result.is_ok:
+            return result
+        if not has_trading_days:
+            return CrawlResult.no_data(f"{window_start}~{window_end} 沒有交易日")
+        if stop is not None and stop.requested:
+            return CrawlResult.failed("收到中止要求，未重試完")
+
+        return CrawlResult.failed(
+            f"{label} {window_start}~{window_end} 該有交易日卻沒拿到 CSV（{result.reason}）"
+        )
 
     def has_trading_days(
         self, start_date: datetime.date, end_date: datetime.date
@@ -480,24 +637,6 @@ class FuturesChipUpdater(BaseDataUpdater):
             cursor = next_month
 
         return windows
-
-    def throttle_per_window(self, stop: Optional[GracefulStop] = None) -> None:
-        """
-        - Description:
-            月批次之間的間隔；請求數已經很少，但仍不要連續打
-
-            **名字帶單位、也不叫 `throttle`**：基底另有一份以「檔案／日期」為
-            單位的 `throttle_per_file(file_cnt, stop)`，簽名不同。同名會把基底
-            那份遮蔽掉，而遮蔽在這裡沒發作只是因為呼叫端剛好都不帶參數。
-
-            **睡眠必須可中斷**：裸 `time.sleep()` 被訊號打斷會自動續睡
-            （PEP 475），按下 Ctrl+C 要等滿 2~4 秒才有反應。
-        - Parameters:
-            - stop: Optional[GracefulStop]
-                中止旗標；None 時退化成不可打斷的 sleep
-        """
-
-        self.sleep(random.uniform(self.MIN_DELAY_SECONDS, self.MAX_DELAY_SECONDS), stop)
 
     def get_coverage(self) -> Dict[str, Optional[str]]:
         """三張表各自補到哪一天（供人工確認進度）"""

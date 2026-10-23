@@ -64,8 +64,8 @@ class IntradayEventLoop:
 
         三個來源（行情回呼、回報回呼、心跳）共用一個 queue，主迴圈只從這一個
         queue 取事件依序處理。**本層不認識策略也不認識引擎**：要做什麼由外部
-        注入的三個 callable 決定，否則這一層就得 import `core.live.trader`
-        （分層 5），而它在元件層。
+        注入的三個 callable 決定，否則這一層（元件層）就得往上 import 引擎層的
+        `core.live.trader`，分層相依檢查不允許。
     """
 
     def __init__(

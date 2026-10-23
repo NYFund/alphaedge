@@ -1,8 +1,10 @@
 import argparse
 import datetime
 import sys
+import time
 from contextlib import contextmanager
-from typing import Dict, Iterator, List, Optional, Set, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from loguru import logger
 
@@ -58,8 +60,12 @@ from core.pipeline.utils import DataLoadError, DataType, FinMindDataType
 # api 桶日誌的保留天數（`update_db` 收尾會自動清理）
 API_LOG_RETENTION_DAYS: int = 7
 
+# 失敗 target 重跑前的預設等待（分鐘）：交易所封鎖來源 IP 通常要數十分鐘以上才解除，
+# 等太短只會再被擋一次
+DEFAULT_RETRY_WAIT_MINUTES: int = 60
+
 """
-資料更新任務主程式 (update_db)
+資料更新任務主程式（update_db）
 
 本模組為資料更新系統的入口，依 --target 參數選擇要更新的資料類型，
 可單一更新或一次指定多個目標。預設為 no_tick（更新所有資料但不含 tick）。
@@ -83,7 +89,7 @@ Target 對照表
 
   選項                        說明
   -------------------------  -----------------------------------------------
-  tick                        逐筆成交 (Shioaji ticks)
+  tick                        逐筆成交（Shioaji ticks）
   chip                        三大法人籌碼
   margin                      信用交易（融資融券餘額）
   short_sale_list             平盤下得融（借）券賣出名單（2013-09-23 起；回測擋單用）
@@ -99,8 +105,8 @@ Target 對照表
   futures_chip                台期貨籌碼（三大法人、大額交易人、選擇權 PCR）
   futures_stock_price         股票期貨行情（商品清單取自標的池，預設只爬流動性前 N 檔；
                               **不含在 all／no_tick 內**，只在此處點名才會跑）
-  fs                          財報 (Financial Statement)
-  mrr                         月營收報表 (Monthly Revenue Report)
+  fs                          財報（Financial Statement）
+  mrr                         月營收報表（Monthly Revenue Report）
   finmind                     全部 FinMind（台股總覽 + 證券商 + 券商分點；
                               **不含在 all／no_tick 內**：帳號等級拿不到券商分點，只在點名時跑）
   stock_info                  FinMind 台股總覽（不含權證）
@@ -119,28 +125,215 @@ Target 對照表
   python -m apps.update_db --target chip price tick         # 多個 target
   python -m apps.update_db --target futures_stock_price     # 只能這樣點名才會跑
   python -m apps.update_db --target all --from 2024-01-01   # 覆寫起日
+  python -m apps.update_db --retry-failed 4 --retry-wait 60 # 失敗的 target 每小時重跑，最多 4 輪
 """
 
 
-# 需要 Shioaji 金鑰與 `[tick]` 選用相依（外加執行中的 TimescaleDB）的 target；`no_tick` 一律排除
-TICK_DATA_TYPES: Set[DataType] = {DataType.TICK}
+@dataclass(frozen=True)
+class TargetSpec:
+    """
+    `update_db` 的一個 target：怎麼建 updater、要不要取回補區間、怎麼跑、能不能被捷徑選到
 
-# 只在 `--target` 明確點名時才跑的 target；`all` 與 `no_tick` 兩個集合捷徑一律排除
+    **各 target 的 `update()` 簽名刻意不統一**（請求的單位本來就不同：日期、年季、年月、
+    或根本沒有區間），差異由 `run` 吸收；`main()` 只剩一個迴圈。
+    """
+
+    name: str
+    # 建 updater；**每次呼叫才建**，測試以 monkeypatch 換掉模組層的類別時才換得到
+    factory: Callable[[], Any]
+    # 跑這個 target：收 updater 與（有的話）回補區間設定
+    run: Callable[[Any, Optional[Dict[str, Any]]], None]
+    # 要不要取回補區間（`get_update_time_config()` 的 key）；None 表示這個 target 沒有區間
+    time_config: Optional[Union[DataType, str]] = None
+    # 只在 `--target` 明確點名時才跑；`all` 與 `no_tick` 兩個捷徑一律排除
+    explicit_only: bool = False
+    # 需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB；`no_tick` 排除
+    needs_tick: bool = False
+
+
+def run_date_range(method_name: str) -> Callable[[Any, Optional[Dict[str, Any]]], None]:
+    """以 `start_date`／`end_date` 呼叫 updater 的某個方法"""
+
+    def run(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+        """把 `time_config` 的日期區間轉給 updater 的指定方法"""
+
+        getattr(updater, method_name)(
+            start_date=time_config["start_date"], end_date=time_config["end_date"]
+        )
+
+    return run
+
+
+def run_without_range(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """沒有回補區間的 target：直接 `update()`"""
+
+    updater.update()
+
+
+def run_stock_futures(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """股期：商品清單取自標的池，預設只爬流動性前 N 檔"""
+
+    updater.update_stock_futures(
+        start_date=time_config["start_date"],
+        end_date=time_config["end_date"],
+        top_n=STOCK_FUTURES_TOP_N,
+    )
+
+
+def run_year_season(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """以年季為單位的 target（財報）"""
+
+    updater.update(
+        start_year=time_config["start_year"],
+        end_year=time_config["end_year"],
+        start_season=time_config["start_season"],
+        end_season=time_config["end_season"],
+    )
+
+
+def run_year_month(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+    """以年月為單位的 target（月營收）"""
+
+    updater.update(
+        start_year=time_config["start_year"],
+        end_year=time_config["end_year"],
+        start_month=time_config["start_month"],
+        end_month=time_config["end_month"],
+    )
+
+
+def run_finmind_subset(
+    data_type: FinMindDataType,
+) -> Callable[[Any, Optional[Dict[str, Any]]], None]:
+    """FinMind 的單一資料集"""
+
+    def run(updater: Any, time_config: Optional[Dict[str, Any]]) -> None:
+        """只更新綁定的資料集；日期區間沿用 updater 的預設值，不讀 `time_config`"""
+
+        updater.update(data_type=data_type)
+
+    return run
+
+
+# **順序就是執行順序**，與 `--target` 的點名順序無關：
 #
-# 股期的商品清單有 320 檔，而 `FuturesPriceUpdater.resolve_stock_futures_products()`
-# 在表內還沒有股期行情時排不出流動性，會**無聲退回整份標的池**——實測約每小時
-# 330 個交易日，單一商品 11 年就要 8.6 小時，320 檔是 100 天以上。
-# 這種量級的回補必須是人明確要求的動作，不能被 `python -m apps.update_db`
-# 的預設值一腳踩進去，更不能卡住排在它後面的 futures_chip、fs、mrr 等 target
-#
-# FinMind 暫停每日更新：現行帳號等級（register）沒有券商分點的資料集權限，
-# 每晚都在第一個組合就中止、以結束碼 1 收場。恆紅的 target 會讓真正的失敗混在裡面
-# 沒人看；其餘兩份（台股總覽、證券商資訊）幾乎不變，也沒有每日依賴它們的程式。
-# 帳號升級後從這裡移除即可恢復
-EXPLICIT_ONLY_DATA_TYPES: Set[DataType] = {
-    DataType.FUTURES_STOCK_PRICE,
-    DataType.FINMIND,
-}
+# - PRICE 必須排在 CHIP／MARGIN 之前：那兩個以 `price` 表的交易日為日曆，price 還沒更新到
+#   今天的話，它們今天就不會被請求——結果是永遠落後一天。`DatePlanner.extend_calendar_tail()`
+#   是第二層保險，但正確的執行順序仍應在這裡表達。
+# - TICK 必須排在 PRICE 之後：tick 入庫以 `price` 表判斷「這天這檔是不是上市櫃」，
+#   `price` 表整天沒資料的日子會被當成日 K 還沒更新而計為失敗。
+# - FUTURES_STOCK_PRICE 只在點名時跑：股期有 320 檔，表內還沒有股期行情時排不出流動性會
+#   無聲退回整份標的池，320 檔是 100 天以上的回補，不能被預設值一腳踩進去。
+# - FINMIND 與它的四個子集只在點名時跑：帳號等級拿不到券商分點。
+# - 籌碼、標的池、保證金、休市日沒有回補區間：籌碼各自從表內最新日續跑（盤後公布，盤中跑只會
+#   拿到無資料，那是正常狀態）；標的池是當下快照；保證金是現行一覽表（沒有調整時不會新增列）；
+#   休市日固定抓去年／今年／明年（明年的公告 12 月前多半還沒出來）。
+# - 連續合約是衍生表，來源是同一個 DB 的 futures_price_daily，不連網路，一律整段重建。
+TARGETS: Tuple[TargetSpec, ...] = (
+    TargetSpec(
+        "price", lambda: StockPriceUpdater(), run_date_range("update"), DataType.PRICE
+    ),
+    TargetSpec(
+        "tick",
+        lambda: StockTickUpdater(),
+        run_date_range("update"),
+        DataType.TICK,
+        needs_tick=True,
+    ),
+    TargetSpec(
+        "chip", lambda: StockChipUpdater(), run_date_range("update"), DataType.CHIP
+    ),
+    TargetSpec(
+        "margin",
+        lambda: StockMarginUpdater(),
+        run_date_range("update"),
+        DataType.MARGIN,
+    ),
+    TargetSpec(
+        "short_sale_list",
+        lambda: StockShortSaleListUpdater(),
+        run_date_range("update"),
+        DataType.SHORT_SALE_LIST,
+    ),
+    TargetSpec(
+        "day_trade_list",
+        lambda: StockDayTradeListUpdater(),
+        run_date_range("update"),
+        DataType.DAY_TRADE_LIST,
+    ),
+    TargetSpec(
+        "dividend",
+        lambda: StockDividendUpdater(),
+        run_date_range("update"),
+        DataType.DIVIDEND,
+    ),
+    TargetSpec(
+        "corporate_action",
+        lambda: CorporateActionUpdater(),
+        run_date_range("update"),
+        DataType.CORPORATE_ACTION,
+    ),
+    TargetSpec(
+        "futures_price",
+        lambda: FuturesPriceUpdater(),
+        run_date_range("update"),
+        DataType.FUTURES_PRICE,
+    ),
+    TargetSpec(
+        "futures_stock_price",
+        lambda: FuturesPriceUpdater(),
+        run_stock_futures,
+        DataType.FUTURES_PRICE,
+        explicit_only=True,
+    ),
+    TargetSpec("futures_chip", lambda: FuturesChipUpdater(), run_without_range),
+    TargetSpec(
+        "futures_continuous", lambda: FuturesContinuousUpdater(), run_without_range
+    ),
+    TargetSpec(
+        "futures_stock_universe",
+        lambda: FuturesStockUniverseUpdater(),
+        run_without_range,
+    ),
+    TargetSpec("futures_margin", lambda: FuturesMarginUpdater(), run_without_range),
+    TargetSpec("market_holiday", lambda: MarketHolidayUpdater(), run_without_range),
+    TargetSpec("fs", lambda: FinancialStatementUpdater(), run_year_season, DataType.FS),
+    TargetSpec(
+        "mrr", lambda: MonthlyRevenueReportUpdater(), run_year_month, DataType.MRR
+    ),
+    TargetSpec(
+        "finmind",
+        lambda: FinMindUpdater(),
+        run_date_range("update_all"),
+        DataType.FINMIND,
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "stock_info",
+        lambda: FinMindUpdater(),
+        run_finmind_subset(FinMindDataType.STOCK_INFO),
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "stock_info_with_warrant",
+        lambda: FinMindUpdater(),
+        run_finmind_subset(FinMindDataType.STOCK_INFO_WITH_WARRANT),
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "broker_info",
+        lambda: FinMindUpdater(),
+        run_finmind_subset(FinMindDataType.BROKER_INFO),
+        explicit_only=True,
+    ),
+    TargetSpec(
+        "broker_trading",
+        lambda: FinMindUpdater(),
+        run_date_range("update_broker_trading_daily_report"),
+        FinMindDataType.BROKER_TRADING.value.lower(),
+        explicit_only=True,
+    ),
+)
 
 
 def expand_targets(targets: Set[str]) -> Set[str]:
@@ -148,7 +341,7 @@ def expand_targets(targets: Set[str]) -> Set[str]:
     - Description:
         把 `all`／`no_tick` 兩個集合捷徑展開成實際的 target
 
-        `EXPLICIT_ONLY_DATA_TYPES` 兩個捷徑都不含，只有明確點名才會跑；
+        `explicit_only` 的 target 兩個捷徑都不含，只有明確點名才會跑；
         `no_tick` 另外排除所有需要 Shioaji 金鑰與 tick 選用相依的 target。
     - Parameters:
         - targets: Set[str]
@@ -160,19 +353,17 @@ def expand_targets(targets: Set[str]) -> Set[str]:
 
     expanded: Set[str] = set(targets)
 
-    # all = 所有資料類型（包含 tick 和 finmind），但不含 EXPLICIT_ONLY_DATA_TYPES
+    # all = 所有 target（包含 tick），但不含只能點名的那幾個
     if "all" in expanded:
-        expanded.update(
-            dt.name.lower() for dt in DataType if dt not in EXPLICIT_ONLY_DATA_TYPES
-        )
+        expanded.update(spec.name for spec in TARGETS if not spec.explicit_only)
 
-    # no_tick = 所有資料類型 − tick（預設值）：tick 需要 Shioaji 金鑰、`[tick]` 選用相依
+    # no_tick = all − tick（預設值）：tick 需要 Shioaji 金鑰、`[tick]` 選用相依
     # 與執行中的 TimescaleDB，沒有的機器每晚都以結束碼 1 收場，久了就沒人在看那個紅燈了
     if "no_tick" in expanded:
         expanded.update(
-            dt.name.lower()
-            for dt in DataType
-            if dt not in TICK_DATA_TYPES and dt not in EXPLICIT_ONLY_DATA_TYPES
+            spec.name
+            for spec in TARGETS
+            if not spec.explicit_only and not spec.needs_tick
         )
 
     return expanded
@@ -209,7 +400,26 @@ def parse_arguments() -> argparse.Namespace:
             "要把起點往前拉到比預設更早時才用得到"
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--retry-failed",
+        dest="retry_failed",
+        type=int,
+        default=0,
+        metavar="ROUNDS",
+        help="失敗的 target 最多再重跑幾輪（只重跑失敗的那幾個）；預設 0 不重試",
+    )
+    parser.add_argument(
+        "--retry-wait",
+        dest="retry_wait",
+        type=int,
+        default=DEFAULT_RETRY_WAIT_MINUTES,
+        metavar="MINUTES",
+        help=f"每輪重跑前等幾分鐘（預設 {DEFAULT_RETRY_WAIT_MINUTES}）",
+    )
+    args: argparse.Namespace = parser.parse_args()
+    if args.retry_failed < 0 or args.retry_wait < 0:
+        parser.error("--retry-failed 與 --retry-wait 不可為負數")
+    return args
 
 
 def get_update_time_config(
@@ -371,325 +581,109 @@ def cleanup_api_logs() -> None:
         logger.warning(f"清理 api 日誌失敗（不影響更新結果）：{error}")
 
 
+def run_targets(targets: Set[str], from_date: Optional[datetime.date]) -> List[str]:
+    """
+    - Description:
+        依註冊表順序更新 `targets` 裡的每個 target；任一失敗仍跑完其餘
+    - Parameters:
+        - targets: Set[str]
+            要更新的 target（已展開捷徑；捷徑名稱本身會被略過）
+        - from_date: Optional[datetime.date]
+            `--from` 的覆寫起日
+    - Return:
+        - List[str]
+            失敗的 target
+    """
+
+    failed_targets: List[str] = []
+
+    for spec in TARGETS:
+        if spec.name not in targets:
+            continue
+        with target_guard(spec.name, failed_targets):
+            time_config: Optional[Dict[str, Any]] = (
+                get_update_time_config(spec.time_config, from_date=from_date)
+                if spec.time_config is not None
+                else None
+            )
+            updater: Any = spec.factory()
+            try:
+                spec.run(updater, time_config)
+            finally:
+                # 每一支 updater 都以 `close()` 收尾（`BaseDataUpdater` 提供預設）；
+                # 測試可能以沒有 `close()` 的替身換掉類別，故容忍沒有
+                close: Optional[Callable[[], None]] = getattr(updater, "close", None)
+                if close is not None:
+                    close()
+
+    return failed_targets
+
+
+def retry_failed_targets(
+    failed_targets: List[str],
+    from_date: Optional[datetime.date],
+    rounds: int,
+    wait_minutes: int,
+) -> List[str]:
+    """
+    - Description:
+        只重跑失敗的 target，最多 `rounds` 輪，每輪之前先等 `wait_minutes` 分鐘
+
+        失敗多半是暫時的：交易所封鎖來源 IP、網路中斷，過一陣子就恢復。
+        整批重跑要數十分鐘到數小時，而成功的 target 已經入庫，只需要補失敗的那幾個；
+        全部補上就提前結束，不會白等剩下的輪數。
+    - Parameters:
+        - failed_targets: List[str]
+            第一次執行失敗的 target
+        - from_date: Optional[datetime.date]
+            `--from` 的覆寫起日
+        - rounds: int
+            最多重跑幾輪；0 表示不重試
+        - wait_minutes: int
+            每輪之前等幾分鐘
+    - Return:
+        - List[str]
+            最後仍失敗的 target
+    """
+
+    remaining: List[str] = list(failed_targets)
+
+    for round_no in range(1, rounds + 1):
+        if not remaining:
+            break
+        logger.warning(
+            f"{wait_minutes} 分鐘後第 {round_no}/{rounds} 輪重跑失敗的 target："
+            f"{', '.join(sorted(remaining))}"
+        )
+        time.sleep(wait_minutes * 60)
+        still_failed: List[str] = run_targets(set(remaining), from_date)
+        recovered: List[str] = sorted(set(remaining) - set(still_failed))
+        if recovered:
+            logger.info(f"第 {round_no} 輪重跑成功：{', '.join(recovered)}")
+        remaining = still_failed
+
+    return remaining
+
+
 def main() -> None:
-    """依 `--target` 逐一更新；任一 target 失敗仍跑完其餘，最後以非零結束碼收尾"""
+    """依 `--target` 逐一更新；失敗的 target 依 `--retry-failed` 重跑，仍失敗就以非零結束碼收尾"""
 
     args: argparse.Namespace = parse_arguments()
     targets: Set[str] = set(args.target)
     from_date: Optional[datetime.date] = args.from_date
-    failed_targets: List[str] = []
 
     if from_date is not None:
         logger.info(f"--from {from_date}：以日期為單位的 target 一律由此日起算")
 
     targets = expand_targets(targets)
 
-    # **PRICE 必須排在 CHIP／MARGIN 之前**：那兩個以 `price` 表的交易日為
-    # 日曆，price 還沒更新到今天的話，它們今天就不會被請求——結果是永遠
-    # 落後一天。`DatePlanner.extend_calendar_tail()` 是第二層保險，
-    # 但正確的執行順序仍應在這裡表達
-    if DataType.PRICE.name.lower() in targets:
-        with target_guard("price", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.PRICE,
-                from_date=from_date,
-            )
-            stock_price_updater: StockPriceUpdater = StockPriceUpdater()
-            try:
-                stock_price_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_price_updater.close()
-
-    # **TICK 必須排在 PRICE 之後**：tick 入庫以 `price` 表判斷「這天這檔是不是上市櫃」，
-    # `price` 表整天沒資料的日子會被當成日 K 還沒更新而計為失敗。tick 先跑的話，
-    # `--target all` 收盤後跑當天的 tick 一律失敗
-    if DataType.TICK.name.lower() in targets:
-        with target_guard("tick", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.TICK,
-                from_date=from_date,
-            )
-            stock_tick_updater: StockTickUpdater = StockTickUpdater()
-            stock_tick_updater.update(
-                start_date=time_config["start_date"], end_date=time_config["end_date"]
-            )
-
-    if DataType.CHIP.name.lower() in targets:
-        with target_guard("chip", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.CHIP,
-                from_date=from_date,
-            )
-            stock_chip_updater: StockChipUpdater = StockChipUpdater()
-            try:
-                stock_chip_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_chip_updater.close()
-
-    if DataType.MARGIN.name.lower() in targets:
-        with target_guard("margin", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.MARGIN,
-                from_date=from_date,
-            )
-            stock_margin_updater: StockMarginUpdater = StockMarginUpdater()
-            try:
-                stock_margin_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_margin_updater.close()
-
-    if DataType.SHORT_SALE_LIST.name.lower() in targets:
-        with target_guard("short_sale_list", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.SHORT_SALE_LIST,
-                from_date=from_date,
-            )
-            short_sale_list_updater: StockShortSaleListUpdater = (
-                StockShortSaleListUpdater()
-            )
-            try:
-                short_sale_list_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                short_sale_list_updater.close()
-
-    if DataType.DAY_TRADE_LIST.name.lower() in targets:
-        with target_guard("day_trade_list", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.DAY_TRADE_LIST,
-                from_date=from_date,
-            )
-            day_trade_list_updater: StockDayTradeListUpdater = (
-                StockDayTradeListUpdater()
-            )
-            try:
-                day_trade_list_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                day_trade_list_updater.close()
-
-    if DataType.DIVIDEND.name.lower() in targets:
-        with target_guard("dividend", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.DIVIDEND,
-                from_date=from_date,
-            )
-            stock_dividend_updater: StockDividendUpdater = StockDividendUpdater()
-            try:
-                stock_dividend_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                stock_dividend_updater.close()
-
-    if DataType.CORPORATE_ACTION.name.lower() in targets:
-        with target_guard("corporate_action", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.CORPORATE_ACTION,
-                from_date=from_date,
-            )
-            corporate_action_updater: CorporateActionUpdater = CorporateActionUpdater()
-            try:
-                corporate_action_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                corporate_action_updater.close()
-
-    if DataType.FUTURES_PRICE.name.lower() in targets:
-        with target_guard("futures_price", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FUTURES_PRICE,
-                from_date=from_date,
-            )
-            futures_price_updater: FuturesPriceUpdater = FuturesPriceUpdater()
-            try:
-                futures_price_updater.update(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                futures_price_updater.close()
-
-    if DataType.FUTURES_STOCK_PRICE.name.lower() in targets:
-        with target_guard("futures_stock_price", failed_targets):
-            # **股期不走 FUTURES_TARGET_PRODUCTS**：320 檔且會隨掛牌／下市異動，
-            # 清單改由 futures_stock_universe 提供。預設只爬流動性前 N 檔——
-            # 全爬是每天 640 次請求，而尾端商品一天只成交個位數口
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FUTURES_PRICE,
-                from_date=from_date,
-            )
-            stock_futures_updater: FuturesPriceUpdater = FuturesPriceUpdater()
-            try:
-                stock_futures_updater.update_stock_futures(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                    top_n=STOCK_FUTURES_TOP_N,
-                )
-            finally:
-                stock_futures_updater.close()
-
-    if DataType.FUTURES_CHIP.name.lower() in targets:
-        with target_guard("futures_chip", failed_targets):
-            # 三個資料集各自從自己表內的最新日續跑（見 FuturesChipUpdater）；
-            # **籌碼是盤後公布**，當日盤中跑只會拿到「無資料」，那是正常狀態
-            futures_chip_updater: FuturesChipUpdater = FuturesChipUpdater()
-            try:
-                futures_chip_updater.update()
-            finally:
-                futures_chip_updater.close()
-
-    if DataType.FUTURES_CONTINUOUS.name.lower() in targets:
-        with target_guard("futures_continuous", failed_targets):
-            # 連續合約是**衍生表**：來源是同一個 DB 的 futures_price_daily，
-            # 不連網路。逆向調整的調整量會隨「之後又換了幾次月」而改變，
-            # 故一律整段重建而非增量（見 FuturesContinuousUpdater.update()）
-            futures_continuous_updater: FuturesContinuousUpdater = (
-                FuturesContinuousUpdater()
-            )
-            try:
-                futures_continuous_updater.update()
-            finally:
-                futures_continuous_updater.close()
-
-    if DataType.FUTURES_STOCK_UNIVERSE.name.lower() in targets:
-        with target_guard("futures_stock_universe", failed_targets):
-            # 標的池是「當下快照」，沒有回補區間，故不取 time_config
-            futures_stock_universe_updater: FuturesStockUniverseUpdater = (
-                FuturesStockUniverseUpdater()
-            )
-            try:
-                futures_stock_universe_updater.update()
-            finally:
-                futures_stock_universe_updater.close()
-
-    if DataType.FUTURES_MARGIN.name.lower() in targets:
-        with target_guard("futures_margin", failed_targets):
-            # 保證金是「現行一覽表」，一次請求就結束，沒有回補區間，故不取 time_config；
-            # 沒有調整時不會新增列（主鍵相同被 INSERT OR IGNORE 擋掉），那是正常狀態
-            futures_margin_updater: FuturesMarginUpdater = FuturesMarginUpdater()
-            try:
-                futures_margin_updater.update()
-            finally:
-                futures_margin_updater.close()
-
-    if DataType.MARKET_HOLIDAY.name.lower() in targets:
-        with target_guard("market_holiday", failed_targets):
-            # 一年一次請求、固定抓去年／今年／明年，沒有回補區間，故不取 time_config；
-            # 明年的公告 12 月前多半還沒出來，那一年記一行 info 跳過屬正常
-            market_holiday_updater: MarketHolidayUpdater = MarketHolidayUpdater()
-            try:
-                market_holiday_updater.update()
-            finally:
-                market_holiday_updater.close()
-
-    if DataType.FS.name.lower() in targets:
-        with target_guard("fs", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FS,
-                from_date=from_date,
-            )
-            fs_updater: FinancialStatementUpdater = FinancialStatementUpdater()
-            try:
-                fs_updater.update(
-                    start_year=time_config["start_year"],
-                    end_year=time_config["end_year"],
-                    start_season=time_config["start_season"],
-                    end_season=time_config["end_season"],
-                )
-            finally:
-                fs_updater.close()
-
-    if DataType.MRR.name.lower() in targets:
-        with target_guard("mrr", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.MRR,
-                from_date=from_date,
-            )
-            mrr_updater: MonthlyRevenueReportUpdater = MonthlyRevenueReportUpdater()
-            try:
-                mrr_updater.update(
-                    start_year=time_config["start_year"],
-                    end_year=time_config["end_year"],
-                    start_month=time_config["start_month"],
-                    end_month=time_config["end_month"],
-                )
-            finally:
-                mrr_updater.close()
-
-    # FinMind 資料更新
-    if DataType.FINMIND.name.lower() in targets:
-        with target_guard("finmind", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                data_type=DataType.FINMIND,
-                from_date=from_date,
-            )
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update_all(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                finmind_updater.close()
-
-    # FinMind 子類型更新
-    if FinMindDataType.STOCK_INFO.value.lower() in targets:
-        with target_guard("stock_info", failed_targets):
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update(data_type=FinMindDataType.STOCK_INFO)
-            finally:
-                finmind_updater.close()
-
-    if FinMindDataType.STOCK_INFO_WITH_WARRANT.value.lower() in targets:
-        with target_guard("stock_info_with_warrant", failed_targets):
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update(
-                    data_type=FinMindDataType.STOCK_INFO_WITH_WARRANT
-                )
-            finally:
-                finmind_updater.close()
-
-    if FinMindDataType.BROKER_INFO.value.lower() in targets:
-        with target_guard("broker_info", failed_targets):
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update(data_type=FinMindDataType.BROKER_INFO)
-            finally:
-                finmind_updater.close()
-
-    if FinMindDataType.BROKER_TRADING.value.lower() in targets:
-        with target_guard("broker_trading", failed_targets):
-            time_config: Dict[str, datetime.date | int] = get_update_time_config(
-                FinMindDataType.BROKER_TRADING.value.lower(),
-                from_date=from_date,
-            )
-            finmind_updater: FinMindUpdater = FinMindUpdater()
-            try:
-                finmind_updater.update_broker_trading_daily_report(
-                    start_date=time_config["start_date"],
-                    end_date=time_config["end_date"],
-                )
-            finally:
-                finmind_updater.close()
+    failed_targets: List[str] = run_targets(targets, from_date)
+    failed_targets = retry_failed_targets(
+        failed_targets,
+        from_date,
+        rounds=args.retry_failed,
+        wait_minutes=args.retry_wait,
+    )
 
     # **一定要在結束碼判斷之前**：失敗的那幾天正是 `logs/api/` 長最多的時候，
     # 放在 `sys.exit(1)` 之後等於永遠跑不到

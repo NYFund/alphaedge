@@ -37,6 +37,8 @@ def make_order(
     action: Action = Action.BUY,
     position_type: PositionType = PositionType.LONG,
 ) -> StockOrder:
+    """組一張 2330 一張、單價 1000 的委託"""
+
     return StockOrder(
         stock_id=symbol,
         action=action,

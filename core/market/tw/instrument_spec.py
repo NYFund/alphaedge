@@ -1,11 +1,13 @@
 import datetime
 import math
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 
 from core.market.instrument_spec import InstrumentSpec
+from core.models import BaseOrder, PriceLimits
 from core.utils import (
+    FUTURES_MULTIPLIER,
     FUTURES_TICK_SIZE,
     PRICE_LIMIT_RATIO,
     PRICE_LIMIT_RATIO_LEGACY,
@@ -13,6 +15,7 @@ from core.utils import (
     Action,
 )
 from core.utils.instrument import StockUtils
+from core.utils.time import TimeUtils
 
 """台灣市場的商品規格：台股（`TwStockSpec`）與台期貨（`TwFuturesSpec`）"""
 
@@ -20,10 +23,14 @@ from core.utils.instrument import StockUtils
 class TwStockSpec(InstrumentSpec):
     """台股規格：1 張 ＝ 1000 股、六段跳動點、漲跌停 ±10%"""
 
-    def to_units(self, volume: int) -> int:
-        """張 → 股（×1000）"""
+    def get_unit_size(
+        self,
+        product: Optional[str],
+        date: Union[datetime.date, datetime.datetime],
+    ) -> int:
+        """一張 ＝ 1000 股，與個股、日期無關"""
 
-        return StockUtils.convert_lot_to_share(volume)
+        return StockUtils.convert_lot_to_share(1)
 
     def round_to_tick(
         self,
@@ -80,7 +87,7 @@ class TwStockSpec(InstrumentSpec):
         prev_close: float,
         date: Optional[datetime.date] = None,
         product: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> PriceLimits:
         """
         - Description:
             台股漲跌停為前收 ±幅度，並各自往內對齊檔位（漲停捨去、跌停進位）
@@ -106,12 +113,12 @@ class TwStockSpec(InstrumentSpec):
             - product: Optional[str]
                 證券代號，用於選檔位表（ETF 與普通股不同）；未提供時用普通股表
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                （跌停價, 漲停價）；基準價為 0 時皆為 None
+            - PriceLimits
+                漲停與跌停（以欄位名存取）；基準價為 0 時皆為 None
         """
 
         if not prev_close:
-            return (None, None)
+            return PriceLimits.none()
 
         ratio: float = self.get_price_limit_ratio(date, product)
 
@@ -121,7 +128,7 @@ class TwStockSpec(InstrumentSpec):
         limit_down: float = self.round_to_tick(
             self.scale_price(prev_close, -ratio), "up", product
         )
-        return (limit_down, limit_up)
+        return PriceLimits(limit_up=limit_up, limit_down=limit_down)
 
     def is_locked_at_limit(
         self,
@@ -163,8 +170,10 @@ class TwStockSpec(InstrumentSpec):
         if not prev_close:
             return False
 
-        limit_down, limit_up = self.get_price_limits(prev_close, date, product)
-        limit: Optional[float] = limit_up if side == Action.BUY else limit_down
+        limits: PriceLimits = self.get_price_limits(prev_close, date, product)
+        limit: Optional[float] = (
+            limits.limit_up if side == Action.BUY else limits.limit_down
+        )
         if limit is None:
             return False
 
@@ -181,14 +190,13 @@ class TwFuturesSpec(InstrumentSpec):
 
     與 `TwStockSpec` 的兩個根本差異，兩個都會讓沿用股票習慣的人靜默算錯：
 
-    1. **計價單位換算逐契約不同**（TX 200、MTX 50、TE 4000），而 `to_units()`
-       只拿得到數量、拿不到商品——單一 spec 無法代表整個期貨市場。故本方法一律
-       回傳口數，**乘數改由 `FuturesPosition.multiplier` 提供**（該欄位在開倉時
-       由 `FUTURES_MULTIPLIER` 查得）；要算損益一律走
-       `FuturesPositionManager.calculate_pnl()`，不要自己乘。
+    1. **計價單位換算逐契約不同**（TX 200、MTX 50、TE 4000），股票期貨的契約單位
+       還會隨除權息調整。故 `get_unit_size()` 要帶商品與日期，查詢交給注入的乘數解析器
+       ——與部位管理層（`FuturesPositionManager.get_multiplier()`）同一個，兩邊算出的
+       乘數才不會分岔。要算損益仍一律走 `FuturesPositionManager.calculate_pnl()`。
     2. **沒有固定漲跌停**：期貨採動態價格穩定措施（撮合價超出參考區間即延後撮合），
        區間隨前幾分鐘的成交價變動，不是「前收 ±10%」這種可事先算出的固定區間。
-       故 `get_price_limits()` 一律回傳 `(None, None)`，`TwFuturesFillModel`
+       故 `get_price_limits()` 一律回傳兩側皆 None 的 `PriceLimits`，`TwFuturesFillModel`
        也不做漲跌停檢查。
 
     **跳動點逐商品查表**（`FUTURES_TICK_SIZE`，只登錄已查證的商品）：同一個
@@ -200,10 +208,20 @@ class TwFuturesSpec(InstrumentSpec):
     # 未帶商品資訊、或商品尚未登錄時的退回值（台指期系列的跳動點）
     DEFAULT_TICK_SIZE: float = 1.0
 
-    def __init__(self, tick_size: Optional[float] = None) -> None:
+    def __init__(
+        self,
+        tick_size: Optional[float] = None,
+        multiplier_resolver: Optional[Callable[[str, datetime.date], int]] = None,
+    ) -> None:
         # **明確指定時一律覆寫查表**：留給尚未登錄的商品與單一契約的測試；
         # `None`（正常回測路徑）代表逐商品查 `FUTURES_TICK_SIZE`
         self.tick_size: Optional[float] = tick_size
+        # 乘數解析器，由組裝層注入資料源的 `resolve_multiplier()`（回測與實盤各一個），
+        # 與部位管理層同一個。**未注入時退回常數表**，與部位管理層同一條規則：
+        # 留給不經資料源的純記憶體測試，那些測試只跑指數期貨
+        self.multiplier_resolver: Optional[Callable[[str, datetime.date], int]] = (
+            multiplier_resolver
+        )
 
     def get_tick_size(self, product: Optional[str] = None) -> float:
         """
@@ -242,10 +260,40 @@ class TwFuturesSpec(InstrumentSpec):
 
         return FUTURES_TICK_SIZE[product]
 
-    def to_units(self, volume: int) -> int:
-        """口 → 口（**不乘契約乘數**，理由見 class docstring 第 1 點）"""
+    def get_unit_size(
+        self,
+        product: Optional[str],
+        date: Union[datetime.date, datetime.datetime],
+    ) -> int:
+        """
+        - Description:
+            一口的契約乘數
 
-        return volume
+            **查不到一律中斷，不退回近似值**：乘數猜錯不會有任何徵兆，只會讓金額
+            靜默偏掉幾十倍，那比中斷難查得多。
+        - Parameters:
+            - product: Optional[str]
+                商品代碼（`TX`，不是契約代號 `TX202601`）
+            - date: Union[datetime.date, datetime.datetime]
+                交易日；股期的契約單位隨日期變動
+        - Return:
+            - int
+                契約乘數（股期為契約單位股數）
+        - Raise:
+            - KeyError
+                沒有商品代碼，或未注入解析器且商品不在 `FUTURES_MULTIPLIER` 內
+        """
+
+        if not product:
+            raise KeyError("期貨的計價單位要有商品代碼，才查得到契約乘數")
+        if self.multiplier_resolver is not None:
+            return self.multiplier_resolver(product, TimeUtils.to_date(date))
+        return FUTURES_MULTIPLIER[product]
+
+    def resolve_product(self, order: BaseOrder) -> Optional[str]:
+        """期貨的規格鍵是商品代碼（`TX`），不是契約代號（`TX202601`）"""
+
+        return getattr(order, "product", None)
 
     def round_to_tick(
         self,
@@ -299,13 +347,13 @@ class TwFuturesSpec(InstrumentSpec):
         prev_close: float,
         date: Optional[datetime.date] = None,
         product: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> PriceLimits:
         """
-        期貨**沒有固定漲跌停**，一律回傳 `(None, None)`
+        期貨**沒有固定漲跌停**，一律回傳兩側皆 None 的 `PriceLimits`
 
         現行制度是動態價格穩定措施，區間由前幾分鐘的成交價即時算出，
-        無法由前一交易日收盤推得。回傳 `(None, None)` 的語意是「本市場無此制度」，
+        無法由前一交易日收盤推得。兩側皆 None 的語意是「本市場無此制度」，
         呼叫端（`FillModel`）據此跳過該項檢查，**不是「查不到資料」**。
         """
 
-        return (None, None)
+        return PriceLimits.none()

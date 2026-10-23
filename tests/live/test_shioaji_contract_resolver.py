@@ -71,6 +71,8 @@ class FakeCategory:
 
 
 class FakeApi:
+    """只帶股票與期貨合約清單的 shioaji API 替身"""
+
     def __init__(self, stocks: Any, futures: Any) -> None:
         self.Contracts = type("Contracts", (), {"Stocks": stocks, "Futures": futures})()
 
@@ -122,6 +124,8 @@ def api() -> FakeApi:
 
 @pytest.fixture
 def resolver(api: FakeApi) -> ShioajiContractResolver:
+    """接上 API 替身的合約轉換器"""
+
     return ShioajiContractResolver(api)
 
 

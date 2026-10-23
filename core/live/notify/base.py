@@ -78,6 +78,8 @@ def redact(text: str) -> str:
     """
 
     def mask_account(match: re.Match) -> str:
+        """帳號只留末四碼，其餘以星號取代"""
+
         digits: str = match.group(0)
         return f"****{digits[-4:]}"
 
@@ -150,6 +152,7 @@ class BaseNotifier(ABC):
     @abstractmethod
     def deliver(self, level: NotifyLevel, title: str, body: str) -> None:
         """實際送出；例外由骨架處理，子類別不必自己包 try"""
+
         pass
 
 

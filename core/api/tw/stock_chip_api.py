@@ -12,15 +12,17 @@ from core.config.schema import ChipColumn
 from core.dao.base import BaseDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
 
-"""Institutional investors chip API: query chip table through StockChipDAO"""
+"""Stock Chip API：經 `StockChipDAO` 查詢三大法人盤後籌碼（`chip` 表）"""
 
 
 class StockChipAPI(BaseDataAPI):
-    """Institutional investors chip API"""
+    """三大法人籌碼 API"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = StockChipDAO
     LOG_FILE_NAME: str = "stock_chip_api.log"
+    # 三大法人籌碼盤後才公布：訊號只能用 `get_available(date)` 或自行取前一交易日
+    PUBLISHED_AFTER_CLOSE: bool = True
 
     # 建構、連線與 log 由 `BaseDataAPI` 負責；本類只寫查詢
 

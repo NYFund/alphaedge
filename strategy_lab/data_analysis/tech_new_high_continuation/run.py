@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from strategy_lab.data_analysis.tech_new_high_continuation.analysis import (
+    run_analysis,
+    write_outputs,
+)
+
 """
 台股科技業「創高後續上行機率」分析入口。
 
@@ -13,17 +23,10 @@
 輸出目錄：strategy_lab/data_analysis/tech_new_high_continuation/output/
 """
 
-from __future__ import annotations
-
-from pathlib import Path
-
-from strategy_lab.data_analysis.tech_new_high_continuation.analysis import (
-    run_analysis,
-    write_outputs,
-)
-
 
 def main() -> Path:
+    """執行完整分析並寫出 CSV，回傳輸出目錄"""
+
     events, by_stock, summary = run_analysis()
     return write_outputs(events, by_stock, summary)
 

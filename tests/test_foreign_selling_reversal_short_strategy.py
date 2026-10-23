@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from core.backtest.backtester import Backtester
-from core.backtest.factory import build_cost_config
 from core.models import StockAccount, StockOrder, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
+from core.position.assembly import build_cost_config
 from core.utils import (
     Action,
     BarExecutionSequence,

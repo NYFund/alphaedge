@@ -206,7 +206,7 @@ def test_direction_summary_and_event_report(
     assert event_df[event_df["Event"] == "limit_up_cover_failed"]["Count"].iloc[0] == 1
 
 
-# === 分割調整：已由 corporate_action 經還原係數統一處理（還原價 S3）===
+# === 分割調整：已由 corporate_action 經還原係數統一處理===
 def test_adjustment_factor_covers_splits_and_reductions(
     dao_factory: Callable[..., BaseDAO],
 ) -> None:
@@ -247,22 +247,24 @@ def test_adjustment_factor_covers_splits_and_reductions(
 
 def test_reporter_no_longer_double_adjusts() -> None:
     """
-    reporter 不可再對還原價套一次分割調整
+    對標序列從報表端到圖上不可再被調整一次
 
-    **重複調整實測會讓 0050 的期間報酬由 1.82% 變成 303%**。這條釘住
-    `get_adjusted_price()` 已退化為原樣回傳——它保留只是為了讓兩處呼叫端
-    不必各自改。
+    **重複調整實測會讓 0050 的期間報酬由 1.82% 變成 303%**。還原係數已含除權息、
+    分割與減資，`load_benchmark_series()` 取出來的就是最終口徑；當年那層
+    「再調整一次」的入口（`get_adjusted_price`）已整個拿掉，渲染器直接拿序列畫。
     """
 
-    reporter: StockBacktestReporter = StockBacktestReporter.__new__(
-        StockBacktestReporter
-    )
-    raw: pd.Series = pd.Series(
-        [188.65, 47.57],
-        index=[datetime.date(2025, 6, 10), datetime.date(2025, 6, 18)],
-    )
+    import inspect
 
-    assert reporter.get_adjusted_price(raw, "0050").equals(raw)
+    from core.backtest.report import plotting
+    from core.backtest.report.base import BaseBacktestReporter
+    from core.backtest.report.futures_reporter import FuturesBacktestReporter
+
+    for cls in (BaseBacktestReporter, StockBacktestReporter, FuturesBacktestReporter):
+        assert not hasattr(cls, "get_adjusted_price"), f"{cls.__name__} 又多了一層調整"
+    assert "adjust" not in inspect.getsource(plotting).lower().replace(
+        "adjusted_close", ""
+    ), "渲染器不可自己調整對標序列"
 
 
 def test_transitional_split_table_is_gone() -> None:

@@ -1,8 +1,9 @@
 import datetime
 from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Optional, Tuple
+from typing import Optional, Union
 
+from core.models import BaseOrder, PriceLimits
 from core.utils import (
     Action,
 )
@@ -91,17 +92,47 @@ class InstrumentSpec(ABC):
         scaled: Decimal = Decimal(str(price)) * (Decimal(1) + Decimal(str(ratio)))
         return float(scaled)
 
-    @abstractmethod
-    def to_units(self, volume: int) -> int:
+    def resolve_product(self, order: BaseOrder) -> Optional[str]:
         """
         - Description:
-            下單數量 → 計價單位（台股：張 → 股 ×1000；期貨：口 → 契約乘數）
+            從訂單取出查跳動點、漲跌停等規格時要用的商品鍵
+
+            台股的規格依個股而定（ETF 的檔位表不同），鍵就是代號；期貨的跳動點依
+            商品代碼而定（同一個 `symbol` 是 `{商品}{到期月}`），鍵是 `product`。
+            成交價模型原本自己決定傳哪個欄位，兩個市場各傳各的；把它放在規格裡，
+            呼叫端只需要把訂單交出來。
         - Parameters:
-            - volume: int
-                下單數量（台股為張、期貨為口）
+            - order: BaseOrder
+                要查規格的訂單
+        - Return:
+            - Optional[str]
+                商品鍵；預設為訂單的 `symbol`
+        """
+
+        return order.symbol
+
+    @abstractmethod
+    def get_unit_size(
+        self,
+        product: Optional[str],
+        date: Union[datetime.date, datetime.datetime],
+    ) -> int:
+        """
+        - Description:
+            一個下單單位對應多少計價單位（台股：一張 1000 股；期貨：一口的契約乘數）
+
+            **要帶商品與日期**：期貨的乘數逐契約不同（TX 200、MTX 50），股票期貨的
+            契約單位還會隨除權息調整。只收數量的話，期貨無從查起，只能原樣回傳口數，
+            各呼叫端就得各自繞路去乘乘數——實盤的委託金額曾因此少乘了乘數。
+            金額 ＝ 價格 × 數量 × 本方法的回傳值。
+        - Parameters:
+            - product: Optional[str]
+                商品鍵（由 `resolve_product()` 取得：台股是代號、期貨是商品代碼）
+            - date: Union[datetime.date, datetime.datetime]
+                交易日
         - Return:
             - int
-                計價單位數量
+                每單位的計價單位數
         """
 
         pass
@@ -136,10 +167,10 @@ class InstrumentSpec(ABC):
         prev_close: float,
         date: Optional[datetime.date] = None,
         product: Optional[str] = None,
-    ) -> Tuple[Optional[float], Optional[float]]:
+    ) -> PriceLimits:
         """
         - Description:
-            依漲跌停基準價推算漲跌停區間
+            依漲跌停基準價推算漲跌停區間（具名結果，一律以欄位名存取）
         - Parameters:
             - prev_close: float
                 漲跌停基準價（一般為前一交易日收盤）
@@ -148,8 +179,8 @@ class InstrumentSpec(ABC):
             - product: Optional[str]
                 商品代碼；檔位依商品而不同時（台股的 ETF 與普通股）會用到
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                (跌停價, 漲停價)；無漲跌停制度時回傳 (None, None)
+            - PriceLimits
+                漲停與跌停（以欄位名存取）；無漲跌停制度時兩側皆為 None
         """
 
         pass

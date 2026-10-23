@@ -3,6 +3,7 @@ from typing import List, Tuple
 
 import pytest
 
+from core.market.tw.cost_model import TwFuturesCostModel
 from core.models import (
     BaseOrder,
     FuturesAccount,
@@ -10,12 +11,13 @@ from core.models import (
     StockAccount,
     StockPosition,
 )
+from core.models.cost_config import FuturesCostConfig
 from core.portfolio.construction import (
     FuturesPortfolioConstructor,
     StockPortfolioConstructor,
 )
 from core.portfolio.signal import Signal
-from core.portfolio.sizing import EqualWeightSizer
+from core.portfolio.sizing import EqualWeightSizer, MarginSizer
 from core.utils import Action, FuturesSession, PositionType, Scale
 
 """
@@ -170,6 +172,15 @@ def futures_signal(quote: FuturesQuote) -> Signal:
     )
 
 
+def futures_constructor(max_lots: int) -> FuturesPortfolioConstructor:
+    """比率模式、零費率的期貨建構器：本檔只驗口數換算，不驗費用"""
+
+    return FuturesPortfolioConstructor(
+        MarginSizer(max_lots=max_lots, max_capital_usage=0.5),
+        cost_model=TwFuturesCostModel(FuturesCostConfig.free()),
+    )
+
+
 def test_futures_lots_come_from_margin_not_contract_value() -> None:
     """
     口數＝可動用預算 ÷ 每口保證金
@@ -180,9 +191,9 @@ def test_futures_lots_come_from_margin_not_contract_value() -> None:
     """
 
     account: FuturesAccount = FuturesAccount(init_capital=3_000_000)
-    orders: List[BaseOrder] = FuturesPortfolioConstructor(
-        max_lots=10, max_capital_usage=0.5
-    ).build([futures_signal(make_futures_quote("202403"))], account)
+    orders: List[BaseOrder] = futures_constructor(max_lots=10).build(
+        [futures_signal(make_futures_quote("202403"))], account
+    )
 
     assert order_fields(orders) == [
         ("TX202403", DAY_1, Action.BUY, PositionType.LONG, 18000.0, 4)
@@ -198,9 +209,7 @@ def test_futures_stops_at_remaining_lots() -> None:
         futures_signal(make_futures_quote("202406")),
     ]
 
-    orders: List[BaseOrder] = FuturesPortfolioConstructor(
-        max_lots=1, max_capital_usage=0.5
-    ).build(signals, account)
+    orders: List[BaseOrder] = futures_constructor(max_lots=1).build(signals, account)
 
     assert order_fields(orders) == [
         ("TX202403", DAY_1, Action.BUY, PositionType.LONG, 18000.0, 1)
@@ -213,7 +222,7 @@ def test_futures_zero_max_lots_opens_nothing() -> None:
     account: FuturesAccount = FuturesAccount(init_capital=3_000_000)
 
     assert (
-        FuturesPortfolioConstructor(max_lots=0).build(
+        futures_constructor(max_lots=0).build(
             [futures_signal(make_futures_quote("202403"))], account
         )
         == []

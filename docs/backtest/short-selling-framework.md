@@ -8,7 +8,7 @@
 
 1. **單一引擎**：`core/backtest/backtester.py` 的 `Backtester` 統一處理多空，不另開 `ShortBacktester`。方向差異全部收斂到「成本模型 + 部位管理器 + 結算模型」。
 2. **方向來自訂單，策略只做白名單**：記帳與成本路徑一律依**每一張 `StockOrder` 自己的 `position_type`** 決定；策略層的 `direction` 只用於驗證（方向白名單）。這與業界框架（Lean／Backtrader／Zipline 的 signed quantity 模型）一致——方向是部位的屬性，不是策略的屬性——要做多空並存的市場中性策略時不需重構引擎。
-3. **成本模型可插拔**：手續費／稅／券費／利息／保證金集中在 `StockCostModel`，由「放空管道（`ShortMethod`）+ 是否當沖」決定參數組合，不在 `PositionManager` 裡散落 if-else。
+3. **成本模型可插拔**：手續費／稅／券費／利息／保證金集中在 `TwStockCostModel`，由「放空管道（`ShortMethod`）+ 是否當沖」決定參數組合，不在 `PositionManager` 裡散落 if-else。
 4. **當沖與留倉同骨架**：兩者差別只是「是否收借券費／利息、是否佔用保證金、稅率是否減半」，共用同一組開倉／平倉流程。
 5. **保守預設、可調參數**：所有費率集中在 `core/utils/constant/` 與策略可覆寫的 config，不寫死在公式裡；預設值取市場常見值（見 §2.3）。
 6. **不可靜默失敗**：放空路徑任何無法成交（券源不足、非可空標的、漲停無法回補、保證金不足）都必須 log warning 或計入統計，禁止讓單安靜地消失。
@@ -76,12 +76,12 @@
 |------|------|----------|
 | 融券／借券資格與平盤下放空 | 只有可融資融券的證券能融券；個股可能被暫停融券或借券；前一交易日收盤跌停者本日不得平盤下融（借）券 | `ShortConstraint.check_short_sale_list`，預設關閉；資料來自 `short_sale_list` 表（交易所每日公告，2013-09-23 起，`SHORT_SALE_LIST_START_DATE`），拒單計入 `rejected_short_halted`／`rejected_below_reference` |
 | 現股當沖標的清單 | 只有名單內的證券能現股當沖；個股可能被暫停先賣後買 | `ShortConstraint.check_day_trade_list`，預設關閉；資料來自 `day_trade_list` 表（2014-01-06 起，`DAY_TRADE_LIST_START_DATE`），拒單計入 `rejected_not_day_tradable` |
-| 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表，拒單計入 `rejected_no_borrow` |
+| 券源／融券餘額上限 | 借不到券就無法放空 | `ShortConstraint.check_borrowable`，預設關閉；資料來自 `margin` 表**前一交易日公布**的餘額（盤後才公布，當天的數字當天不可知），拒單計入 `rejected_no_borrow` |
 | 停券期間（除權息） | 強制回補；停券期間不得新增融券賣出 | 由 `dividend` 表推導融券最後回補日（`auto_force_cover_on_ex_dividend`，預設開啟）；另可用 `ShortConstraint.force_cover_dates` 手動指定。回補日之後到除權息交易日之間的融券開倉由 `TwStockFillModel.check_short_not_suspended()` 拒單，計入 `rejected_short_suspended` |
 | 停券期間（股東會） | 強制回補 | **無資料源**，仍以 `max_holding_days` 保險絲近似 |
-| 除息日的股利補償 | 放空者須補償出借方現金股利 | `CostConfig.compensate_cash_dividend`（預設開啟），逐筆計入 `dividend_compensation` |
+| 除息日的股利補償 | 放空者須補償出借方現金股利 | `CostConfig.compensate_cash_dividend`（預設開啟），逐筆計入 `dividend_compensation_paid` |
 | 漲停無法回補 | 當沖放空無法平倉，實務轉借券 | 見 §5.1 |
-| 券資比／單一標的空單上限 | 風控 | `max_short_exposure_ratio` 部位上限檢查 |
+| 券資比／單一標的空單上限 | 風控 | `ShortConstraint.max_short_exposure_ratio`（預設不限），超過時由部位管理層拒單，計入 `rejected_short_exposure` |
 
 **券源檢核只作用在需要券源的放空管道**（`TwStockFillModel.check_short_borrowable()`）：`ShortMethod.DAY_TRADE`（現股當沖沖賣，先賣後買）直接放行，`MARGIN`／`SBL` 才比對餘額——判準是 `short_method`，不是 `is_day_trade`（融券當沖的 `is_day_trade` 也是 True，卻確實借了券）。
 
@@ -93,7 +93,7 @@
 | `SBL` 借券 | 未暫停借券；**不要求在名單內** | 須在名單內且未被註記跌停禁止 |
 | `DAY_TRADE` 現股當沖先賣 | 須在當沖名單內且未暫停先賣後買 | **不受限**：先賣後買是現股賣出，交易所不以平盤下規則限制 |
 
-比較的是委託價（滑價前），平盤本身可以賣。
+日 K 比較的是委託價（滑價前）；逐筆回測比較的是實際成交價（市價放空以委買價成交，決策價在平盤上、成交價仍可能落在平盤下）。平盤本身可以賣。
 
 **開啟名單檢核時，資料缺口一律拒絕執行而不是放行**（與券源檢核相反）：
 - 回測起日早於制度起點：平盤下名單 2013-09-23、現股當沖先賣後買 **2014-06-30**（`SELL_FIRST_DAY_TRADE_START_DATE`；名單 2014-01-06 就有，但當時只開放先買後賣）。
@@ -103,8 +103,7 @@
 券源檢核查無資料時放行，是因為 `margin` 表缺資料時「查不到」不等於「借不到」；名單則是「不在名單上＝不得交易」，
 缺資料若照常放行，等於把整段區間當成每檔都在名單內，正是這兩個檢核要修正的高估。
 
-兩份名單的歷史資料已於 2026-10-03 回補完成（平盤下名單 2013-09-23 起、當沖名單 2014-01-06 起，涵蓋 `price` 表的全部交易日），
-之後隨每日資料更新（`no_tick`）一起更新。
+兩份名單隨每日資料更新（`python -m apps.update_db` 預設的 `no_tick` 目標）一起更新，也可用 `--target short_sale_list`／`day_trade_list` 單獨補。
 
 ### 2.5 價格檔位（tick size）
 
@@ -131,14 +130,15 @@
 strategy (宣告 direction / allow_day_trade / short_method；generate_*_signals → List[Signal])
     ↓ core/portfolio (construction + sizing → StockOrder；order_rules：方向白名單、執行順序、檔數上限、排序)
 Backtester (統一迴圈、逐日盯市；以同名方法薄包裝 order_rules)
+    ↓ simulator（BarSimulator：日 K 當根成交；TickSimulator：在途委託、下一筆 tick 撮合）
     ↓ StockOrder
 StockPositionManager (方向分派：open/close × LONG/SHORT)
     ↓
-StockCostModel (成本與損益公式；依 ShortMethod + is_day_trade 決定參數)
+TwStockCostModel (成本與損益公式；依 ShortMethod + is_day_trade 決定參數)
     ↓
 StockUtils (純數學工具：手續費、稅、股數換算)
 
-TwStockFillModel (開倉前：成交價驗證、交易所名單、券源、停券、成交量上限、滑價)
+TwStockFillModel (開倉前：成交價驗證、交易所名單、券源、停券、成交量上限、滑價；逐筆另有 fill_tick)
 
 TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計提、股利補償、配股等股數調整、最長持有天數／停券回補／維持率追繳、做多連續無報價出場)
 ```
@@ -153,16 +153,16 @@ TwStockSettlementModel (每根 bar 收盤後：當沖強制回補、借券費計
 | `MarginCallPolicy(str, Enum)` | `FORCE_COVER`（預設）/ `WARN_ONLY` | 維持率追繳（§5.2） |
 | `ShortCost(float, Enum)` / `MarginCost(float, Enum)` | 見 §2.3 | 放空與融資費率 |
 
-⚠️ **型別注意**：`Commission` / `ShortCost` 是 `(float, Enum)`，塞不進 `date` 或 `int` 語意的成員。因此 `DAY_TRADE_TAX_EXPIRY = datetime.date(2027, 12, 31)` 與 `DAYS_PER_YEAR = 365` 一律放 **module-level 常數**。回測區間跨過 `DAY_TRADE_TAX_EXPIRY` 時，`StockCostModel` 會 `logger.warning` 提醒「當沖稅率減半假設可能已失效」——**看的是回測區間，不是執行當下的日期**。
+⚠️ **型別注意**：`Commission` / `ShortCost` 是 `(float, Enum)`，塞不進 `date` 或 `int` 語意的成員。因此 `DAY_TRADE_TAX_EXPIRY = datetime.date(2027, 12, 31)` 與 `DAYS_PER_YEAR = 365` 一律放 **module-level 常數**。回測區間跨過 `DAY_TRADE_TAX_EXPIRY` 時，`TwStockCostModel` 會 `logger.warning` 提醒「當沖稅率減半假設可能已失效」——**看的是回測區間，不是執行當下的日期**。
 
 ### 3.3 成本模型（`core/market/tw/cost_model.py`；設定類別在 `core/models/cost_config.py`）
 
-`CostConfig` 為一次回測固定的成本參數，`StockCostModel` 為方向感知的成本／損益計算，`PositionManager` 只呼叫這一層。
+`CostConfig` 為一次回測固定的成本參數，`TwStockCostModel` 為方向感知的成本／損益計算，`PositionManager` 只呼叫這一層。
 
 ```python
-class StockCostModel:
+class TwStockCostModel:
     # --- 單邊成本 ---
-    def commission(self, price, volume) -> int: ...
+    def commission(self, price, volume, product=None) -> int: ...
     def tax(self, price, volume, action, is_day_trade=None, date=None) -> int:
         """買進恆為 0；賣出依 is_day_trade 與成交日 date 選 0.15% / 0.3%
            （is_day_trade_tax_effective(date) 看 DAY_TRADE_TAX_START～EXPIRY）"""
@@ -180,17 +180,16 @@ class StockCostModel:
     def maintenance_ratio(self, proceeds, margin, cur_price, volume) -> float: ...
     def check_margin_call(self, proceeds, margin, cur_price, volume) -> bool: ...  # 純判定，執行在 SettlementModel
 
-    # --- 損益（方向統一入口）---
+    # --- 損益與報酬率：公式在 BaseCostModel，台股只提供兩種分母 ---
     def realized_pnl(self, position_type, entry_price, exit_price, volume,
-                     entry_cost=0, exit_cost=0, carry_cost=0) -> float:
-        """LONG : (exit - entry) × shares - 成本
-           SHORT: (entry - exit) × shares - 成本"""
-    def roi(self, position_type, entry_price, exit_price, volume,
-            entry_cost=0, exit_cost=0, carry_cost=0) -> float:
-        """名目報酬率：分母一律為「開倉價金 + 開倉成本」→ 存入 record.roi"""
-    def roi_on_capital(self, position_type, entry_price, exit_price, volume,
-                       entry_cost=0, exit_cost=0, carry_cost=0, margin=0.0) -> float:
-        """資金效率：分母為「實際佔用的資金」（放空為保證金）→ 存入 record.roi_on_capital"""
+                     unit_size, cost=0.0) -> float:   # 繼承自 BaseCostModel
+        """(exit - entry) × unit_size × volume × 方向 - 成本；台股 unit_size = 每張股數"""
+    def roi(self, pnl, capital_base) -> float:        # 繼承自 BaseCostModel
+        """pnl ÷ capital_base × 100"""
+    def notional_capital(self, entry_price, volume, entry_cost=0) -> float:
+        """名目報酬率的分母：開倉價金 + 開倉成本 → roi(pnl, …) 存入 record.roi"""
+    def occupied_capital(self, position_type, entry_price, volume, entry_cost=0, margin=0.0) -> float:
+        """資金效率的分母：實際佔用的資金 → roi(pnl, …) 存入 record.roi_on_capital"""
 ```
 
 **兩個 ROI 的用途分工（必須遵守）**：任何跨交易的聚合統計（平均報酬、獲利因子、勝率分組）**一律使用 `record.roi`**。若當沖用名目、融券用保證金當分母，兩者混在同一個平均值裡毫無意義（保證金基準的數值天生高一截）。`roi_on_capital` 只出現在報表的獨立欄位，供評估資金運用效率。
@@ -202,7 +201,7 @@ class StockCostModel:
 | `MARGIN` 融券手續費 0.08% | **開倉時**一次收 | `StockPositionManager.open_short_position()` |
 | `MARGIN` 融券利息（收入） | **平倉時**用 `exit_date − entry_date` 一次算 | `StockPositionManager.close_short_position()` |
 | `SBL` 借券費（年化） | **逐日計提**到 `position.accrued_borrow_fee`，平倉當天最後一段另補足 | `TwStockSettlementModel.accrue_holding_cost()`、`StockPositionManager.accrue_final_borrow_fee()` |
-| 維持率／強制回補判定 | 每日收盤 | `TwStockSettlementModel.check_margin_call()`（判定式在 `StockCostModel.check_margin_call()`） |
+| 維持率／強制回補判定 | 每日收盤 | `TwStockSettlementModel.check_margin_call()`（單一迴圈；無報價、最長持有、停券三種強制回補由 `check_short_forced_exits()` 判定，維持率由它自己做，判定式在 `TwStockCostModel.check_margin_call()`） |
 
 即：每日部位檢查**不碰融券利息**（`MARGIN` 的利息只在平倉時算一次），`accrued_borrow_fee` 欄位**只有 `SBL` 會用**。這條規則同時寫在 `StockPosition` 的 docstring，否則很容易在兩個地方各算一次。
 
@@ -239,16 +238,23 @@ class StockCostModel:
 
 ### 3.5 方向中立機制
 
-前三個是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
-`Backtester` 以 `validate_orders()` 薄包裝呼叫，`resolve_*_action()` 則由呼叫端直接呼叫，引擎上沒有同名方法。
+以下都是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
+`Backtester` 只以 `validate_orders()`／`sort_orders()`／`get_execution_sequence()` 薄包裝其中幾支，其餘由呼叫端直接呼叫。
 
 ```python
 resolve_open_action(position_type)   # LONG → BUY；SHORT → SELL
 resolve_close_action(position_type)  # LONG → SELL；SHORT → BUY
+is_opening(order) / is_closing(order)              # 這張單是開倉還是平倉（互補）
+is_opening_record(position_type, action)           # 同一條判定，吃 `live_order` 的字串欄位；
+is_closing_record(position_type, action)           # 看不懂的值拋 ValueError，不猜
 validate_orders(orders, stage)       # 白名單 + action 與方向是否相符，不符 warning 剔除
 ```
 
-隨單欄位補值屬市場規則，住在 `StockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
+「這張單是開倉還是平倉」只有這一份：實盤的 parity、當沖回補、跨策略守門、事前風控、
+帳戶同步、日終補單與部位管理層都呼叫它，不自己寫 if（券商閘道層因分層限制保留一份，
+由測試與這裡互相釘住）。
+
+隨單欄位補值屬市場規則，住在 `TwStockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
 
 ```python
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
@@ -257,11 +263,11 @@ enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_
 另外兩個方法：
 
 ```python
-BaseSimulator.validate_fill_price(order, quote)  # 轉呼叫 FillModel.validate()，§5.6 的檢查
+BaseSimulator.validate_fill_price(order, quote)  # 轉呼叫 FillModel.validate()，§5.6 的檢查（僅日 K）
 Backtester.snapshot_daily_equity(...)            # 含未實現損益的逐日權益
 ```
 
-單根 K 棒的流程固定為（`Backtester.prepare_day()` → `BarSimulator.process_bar()` → `Backtester.finish_day()`）：
+日 K 單根 K 棒的流程固定為（`Backtester.prepare_day()` → `BarSimulator.process_bar()` → `Backtester.finish_day()`）：
 
 ```python
 prepare_day(date)                    # 漲跌停參考價、券源、停券、名單、除權息
@@ -270,12 +276,15 @@ if order == BarExecutionSequence.OPEN_THEN_CLOSE:
 else:
     execute_close_signal(quotes); execute_open_signal(quotes)
 settlement.settle_day(date, quotes, account, event_counts)
-    # 當沖日終強制回補 → 無報價天數更新 → 借券費計提 → 現金股利（補償／收取）
-    # → 配股等股數調整 → 最長持有天數／停券回補／維持率追繳 → 做多連續無報價出場
+    # 當沖日終強制回補 → 持有／無報價天數更新 → 借券費計提 → 現金股利（補償／收取）
+    # → 配股等股數調整 → 空單逐筆：連續無報價／最長持有天數／停券回補／維持率追繳
+    # → 做多連續無報價出場
 snapshot_daily_equity(date, quotes)
 ```
 
-開倉單處理順序固定為 **`check_*_signal` → `validate_orders` → `enrich_orders` → `sort_orders` → `check_max_holdings` → 無報價拒單 → `validate_fill_price` → `apply_fill_model`（`FillModel.fill()`：交易所名單 → 券源 → 停券 → 滑價 → 成交量上限）→ `PositionManager`**。
+日 K 開倉單處理順序固定為 **`check_*_signal` → `validate_orders` → `enrich_orders` → `sort_orders` → `check_max_holdings` → 無報價拒單 → `validate_fill_price` → `apply_fill_model`（`FillModel.fill()`：交易所名單 → 券源 → 停券 → 滑價 → 成交量上限）→ `PositionManager`**。
+
+逐筆回測（`TickSimulator`）前四步相同，之後委託進在途委託簿，等同一檔的下一筆 tick 撮合，成交時由 `TwStockFillModel.fill_tick()` 走同一串制度擋板（交易所名單 → 券源 → 停券 → 滑價 → 成交量上限）再交給 `PositionManager`；放空開平倉、成本與結算的記帳路徑與日 K 完全相同。
 
 **逐日權益快照是放空的必要條件**：每日部位檢查本來就要取當日收盤價算維持率，順手產出「含未實現損益的每日權益快照」成本極低但價值很高——放空最大的風險就是持倉期間的逆勢，只認已實現損益的權益曲線會把這段完全抹平。
 
@@ -376,7 +385,7 @@ snapshot_daily_equity(date, quotes)
 |------|----------|------|
 | 日 K | `open == high == low == close == limit_up`（全日鎖死） | 視為**無法回補**，不論政策一律轉融券留倉，計入 `limit_up_cover_failed` |
 | 日 K | `close == limit_up` 但盤中曾打開 | 視為**可回補**，依 `day_trade_uncovered_policy` 處理（預設以收盤價＝漲停價回補，計入 `forced_cover_day_trade`），不另計事件 |
-| Tick | — | **未實作**：tick 報價沒有當日四價，無從判定鎖死 |
+| Tick | — | **未實作**：逐筆的收盤報價沒有當日四價，鎖死判定恆為否，日終一律依政策處理（盤中鎖漲停時委賣為 0，回補委託本來就不會成交） |
 
 鎖死的情況單獨計入 `limit_up_cover_failed`——這是放空策略最致命的尾部風險，不能被平均掉。
 
@@ -389,7 +398,7 @@ snapshot_daily_equity(date, quotes)
 - `FORCE_COVER`（預設）：**以觸發當日收盤價立即回補**，記為斷頭事件。
 - `WARN_ONLY`：僅記錄，適合研究純訊號績效。
 
-> **為什麼不是「次一交易日開盤價」**：實務上追繳有 T+1 補繳期，但現行引擎**沒有跨日的 pending order 機制**（每天從頭跑，訊號當下就撮合完畢），要做 T+1 延遲成交必須先設計 order queue，等同引擎重構。因此一律**當日收盤價立即回補**，並註明「斷頭價格較實務樂觀（少了一天的補繳緩衝，但也少了一天的續跌／續漲風險）」。見 [多市場回測引擎架構 §5.1](multi-market-engine.md#51-事件驅動迴圈長期方向)。
+> **為什麼不是「次一交易日開盤價」**：實務上追繳有 T+1 補繳期，但現行引擎**沒有跨日的委託佇列**（日 K 訊號當下就撮合完畢；逐筆回測的在途委託收盤即作廢），要做 T+1 延遲成交必須先設計跨日的 order queue，等同引擎重構。因此一律**當日收盤價立即回補**，並註明「斷頭價格較實務樂觀（少了一天的補繳緩衝，但也少了一天的續跌／續漲風險）」。見 [多市場回測引擎架構 §5.1](multi-market-engine.md#51-事件驅動迴圈長期方向)。
 
 停牌無報價時，盯市沿用前一交易日收盤價並記 warning。
 
@@ -457,7 +466,7 @@ snapshot_daily_equity(date, quotes)
 | Scale | 高低點來源 | 說明 |
 |-------|-----------|------|
 | `DAY` | `StockQuote.high` / `.low` | 已有 OHLC 欄位，直接用 |
-| `TICK` | 不用區間 | 逐筆回測由 `TickSimulator` 重放，委託在同一檔的下一筆才撮合，成交價取自那一筆的委賣／委買價（或限價、集合競價價），不經 `validate()` 的區間檢查；`intraday_range` 只累計「到目前這一筆為止」的高低點，供結算層的強制出場夾價 |
+| `TICK` | 不用區間 | 逐筆回測由 `TickSimulator` 重放，委託在同一檔的下一筆才撮合，成交價取自那一筆的委賣／委買價（或限價、集合競價價），不經 `validate()` 的區間檢查；`intraday_range` 只累計「到目前這一筆為止」的高低點，供結算層強制出場的區間警告（`close_price_out_of_range`） |
 
 漲跌停基準取前一交易日收盤（`reference_prices`）；除權息日改用 `FillModel.prepare_day()` 由 `DataFeed.get_price_limit_basis()` 取得的開盤競價基準。首個交易日無前收時跳過該項檢查。
 
@@ -474,7 +483,6 @@ snapshot_daily_equity(date, quotes)
 | 盤中臨時變更交易與處置股的分盤撮合 | 名單是當日開盤前的公告，盤中臨時新增的變更交易標的（會被暫停融資融券）不在名單內 | 缺盤中公告的歷史資料源 |
 | 融資做多槓桿 | LONG 一律以現金全額買進，資金效率被低估 | 會動到 LONG 的資金計算、破壞回歸保護線，且**目前無策略需求** |
 | 同一標的雙向持倉（net position 語意） | 無法對同一檔做多空轉換 | 跨標的的多空並存**不受限**。放寬需要 `StockPosition` 改成淨部位語意、成本攤提與報表全部連動，且**目前無策略需求** |
-| TICK 級別的成交量上限 | Tick 回測的下單張數不受累計成交量約束 | 日 K 已有 `FillConfig.max_volume_share`，見 [`core/backtest/README.md`](../../core/backtest/README.md)〈成交假設〉 |
 
 ---
 
@@ -484,7 +492,7 @@ snapshot_daily_equity(date, quotes)
 
 | 本框架元件 | 業界對應 | 對齊程度 |
 |------------|----------|----------|
-| `StockCostModel` + `CostConfig` | Lean `FeeModel`；Backtrader `CommissionInfo`；Zipline `CommissionModel` | ✅ 一致。Lean 另把 `BuyingPowerModel`／`MarginInterestRateModel` 拆開，本專案合併，需留意 `CostConfig` 不要膨脹成 god object |
+| `TwStockCostModel` + `CostConfig` | Lean `FeeModel`；Backtrader `CommissionInfo`；Zipline `CommissionModel` | ✅ 一致。Lean 另把 `BuyingPowerModel`／`MarginInterestRateModel` 拆開，本專案合併，需留意 `CostConfig` 不要膨脹成 god object |
 | `SettlementModel` 的每日部位檢查 | Lean `MarginCallModel` + `MarginInterestRateModel`；Backtrader `interest_long`；Nautilus 每日 mark-to-market | ✅ 一致 |
 | `ShortConstraint.check_borrowable` | Lean `IShortableProvider` | ✅ 概念一致 |
 | `validate_fill_price` | 各框架的 fill model 都限制成交價於 bar range 內 | ✅ 一致 |
@@ -500,14 +508,15 @@ snapshot_daily_equity(date, quotes)
 
 | 檔案 | 內容 |
 |------|------|
-| `core/backtest/backtester.py` | 方向驅動、訂單驗證與補值、成交價驗證、`execute_bar()`、逐日權益 |
-| `core/market/tw/cost_model.py` | `StockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
+| `core/backtest/backtester.py` | 方向白名單、補值與排序的薄包裝、每日準備與收盤結算、逐日權益 |
+| `core/backtest/simulator/` | 開平倉執行、成交價驗證、檔數上限（日 K 與逐筆） |
+| `core/market/tw/cost_model.py` | `TwStockCostModel`（`CostConfig`／`ShortConstraint` 定義在 `core/models/cost_config.py`）|
 | `core/backtest/models/fill_model.py` | 成交價驗證、交易所名單檢核、券源檢核、停券期間拒單、當日累計高低點 |
 | `core/backtest/datafeed/tw/stock_datafeed.py` | 推導停券與回補日、提供券源／名單／除權息給 model 的 `prepare_day()`、開跑前檢查名單涵蓋 |
 | `core/backtest/models/settlement_model/` | 當沖強制回補、借券費計提、維持率追繳、停券回補、股利補償 |
 | `core/position/stock/position_manager.py` | 放空開平倉兩個分支、FIFO 方向篩選、雙向持倉拒單 |
-| `core/backtest/report/reporter.py` | 時間軸用 `exit_date`、放空欄位、多空統計、事件報表 |
-| `core/utils/constant/`／`instrument.py` | enum、費率、檔位表、`round_to_tick` |
+| `core/backtest/report/base.py`、`core/backtest/report/reporter.py` | 時間軸用 `exit_date`、多空統計、事件報表（基底）；台股放空欄位（`reporter.py`） |
+| `core/utils/constant/`、`core/utils/instrument.py` | enum、費率、檔位表、`round_to_tick` |
 | `core/models/stock/*` | 放空欄位、`entry/exit` 實體欄位、方向感知查詢 |
 | `tests/backtest/` | 單元／整合測試、SHORT 快照回歸、LONG 逐筆回歸 |
 

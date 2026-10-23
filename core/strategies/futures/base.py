@@ -5,8 +5,10 @@ from typing import Dict, List, Optional
 from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.datafeed.base import BaseDataFeed
+from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
@@ -16,6 +18,7 @@ from core.portfolio.construction import (
     normalize_quote_date,
 )
 from core.portfolio.signal import Signal
+from core.portfolio.sizing import BasePositionSizer, MarginSizer
 from core.strategies.base import BaseStrategy
 from core.utils import FuturesSession, InstrumentType, Market
 
@@ -32,8 +35,8 @@ BaseFuturesStrategy: 台期貨策略基底
 
 2. **數量單位是口，且受保證金約束**
    股票是「用多少錢買多少股」，期貨是「繳多少保證金開幾口」。
-   可開口數 = 可動用餘額 × 資金使用上限 ÷ 每口保證金，
-   見 `calculate_max_lots()`——**不是用契約價值算**。
+   可開口數 = 可動用餘額 × 資金使用上限 ÷ 每口需要的資金（原始保證金 ＋ 開倉手續費與稅），
+   見 `MarginSizer`——**不是用契約價值算**。要自訂演算法就覆寫 `self.sizer`。
 
 3. **沒有 `max_holdings`，只有口數上限**
    股票的 `max_holdings` 是「同時持有幾檔」；期貨通常只交易一兩個商品，
@@ -52,7 +55,7 @@ BaseFuturesStrategy: 台期貨策略基底
 
 
 class BaseFuturesStrategy(BaseStrategy):
-    """Futures Strategy Framework (Base Template)"""
+    """期貨策略骨架：補上商品、時段、口數上限、保證金與換月設定"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -73,12 +76,21 @@ class BaseFuturesStrategy(BaseStrategy):
         # （同一交易日的夜盤列 ＋ 日盤列，跨盤別跳空保留在 bar 內）
         self.session: FuturesSession = FuturesSession.DAY
         self.max_lots: int = 0  # 總口數上限（0 表示不開倉）
+        # 契約連續幾根 bar 沒有盯市價就以最近一次結算價強制出場（到期契約的兜底，
+        # 多單計入 `forced_exit_no_quote`、空單 `forced_cover_no_quote`）。
+        # 預設 3：單日資料缺漏與契約到期在報價層看起來一樣，設 1 會把前者當成到期。
+        # None 表示不做兜底——到期部位會留到回測結束並持續佔用保證金
+        self.max_no_quote_days: Optional[int] = 3
         # 期貨限制的是**總口數**不是持倉檔數。值與 `BaseStrategy` 的預設相同，
         # 明寫一次是為了讓「期貨不用檔數上限」這件事在基底裡看得見
         self.max_holdings: Optional[int] = None
         # 單次開倉最多動用可動用餘額的比例；保證金交易若不設限，
         # 一次就能把帳戶壓到追繳邊緣
         self.max_capital_usage: float = 0.5
+        # 部位大小模型。**None 表示每次組裝依 `max_lots`／`max_capital_usage` 建
+        # `MarginSizer`**：這兩個欄位是在 `super().__init__()` 之後才填的，在這裡就建好
+        # 會永遠讀到 0。要自訂演算法才覆寫成自己的 `BasePositionSizer`
+        self.sizer: Optional[BasePositionSizer] = None
 
         """ === Cost & Margin ===
 
@@ -88,6 +100,9 @@ class BaseFuturesStrategy(BaseStrategy):
         """
         self.cost_config: Optional[FuturesCostConfig] = None
         self.margin_config: Optional[FuturesMarginConfig] = None
+        # 保證金模型：由 factory 注入，與部位管理層**同一個實例**（可開口數與應繳保證金
+        # 才會是同一個數字）；未注入時依 `margin_config` 自建
+        self.margin_model: Optional[FuturesMarginModel] = None
         # 換月設定；**策略挑合約與結算模型轉倉共用這一份**（見 `FuturesRollConfig`）
         self.roll_config: Optional[FuturesRollConfig] = None
         # 成交假設（滑價、成交量上限）；None 時全部關閉，成交價即策略給的委託價。
@@ -179,50 +194,18 @@ class BaseFuturesStrategy(BaseStrategy):
         期貨的部位建構器：保證金約束
 
         **每次組裝都重建**（理由見 `BaseStrategy.make_portfolio_constructor()`）：
-        `max_lots` 在 `super().__init__()` 之後才填，`margin_config` 更是由
+        `max_lots` 在 `super().__init__()` 之後才填，`margin_model` 更是由
         `core/backtest/factory.py` 在策略建構完成之後才注入——建一次存起來會
         永遠看到 `None`，於是**靜默退回比率近似**而不是查表。
         """
 
         return FuturesPortfolioConstructor(
-            max_lots=self.max_lots,
-            max_capital_usage=self.max_capital_usage,
-            margin_config=self.margin_config,
+            sizer=self.sizer or MarginSizer(self.max_lots, self.max_capital_usage),
+            margin_model=self.margin_model
+            or FuturesMarginModel(self.margin_config or FuturesMarginConfig.default()),
+            cost_model=TwFuturesCostModel(self.cost_config),
             log_context=self.strategy_name,
         )
-
-    def calculate_max_lots(self, quote: FuturesQuote) -> int:
-        """
-        - Description:
-            以**保證金**算出這筆訂單最多能開幾口
-
-            公式本體在 `FuturesPortfolioConstructor`：股票是「用多少錢買多少股」，
-            期貨是「繳多少保證金開幾口」，拿契約價值去除可動用餘額會嚴重低估
-            可開口數（TX 一口契約價值 900 萬、保證金只有 70 萬）。
-
-            **本方法是可覆寫的鉤子**，供子類客製口數上限。
-        - Parameters:
-            - quote: FuturesQuote
-                目標契約的報價
-        - Return:
-            - int
-                可開口數；帳戶或報價不足以計算時為 0
-        """
-
-        if self.account is None:
-            return 0
-
-        return self.make_portfolio_constructor().calculate_max_lots(quote, self.account)
-
-    def get_margin_per_lot(self, quote: FuturesQuote) -> float:
-        """
-        取得每口原始保證金
-
-        委派給 `FuturesPortfolioConstructor`，與 `FuturesPositionManager` 的
-        比率模式一致——兩處若不一致，策略算出來的口數會開不進去（或開得太少）。
-        """
-
-        return self.make_portfolio_constructor().get_margin_per_lot(quote)
 
     @staticmethod
     def normalize_quote_date(date) -> datetime.date:
@@ -292,16 +275,5 @@ class BaseFuturesStrategy(BaseStrategy):
             if not signal.volume or signal.volume <= 0:
                 continue
 
-            quote: FuturesQuote = signal.quote
-            orders.append(
-                FuturesOrder(
-                    product=quote.product,
-                    expiry=quote.expiry,
-                    date=quote.date,
-                    action=signal.action,
-                    position_type=signal.position_type,
-                    price=signal.order_price,
-                    volume=signal.volume,
-                )
-            )
+            orders.append(FuturesOrder.from_signal(signal, signal.volume))
         return orders

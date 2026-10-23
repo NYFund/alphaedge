@@ -1,4 +1,5 @@
 import datetime
+from typing import Optional
 
 from core.utils import PositionType
 
@@ -35,6 +36,9 @@ class BaseTradeRecord:
         transaction_cost: float = 0.0,
         realized_pnl: float = 0.0,
         roi: float = 0.0,
+        margin: float = 0.0,
+        holding_days: int = 0,
+        roi_on_capital: Optional[float] = None,
     ) -> None:
         # Basic Info
         self.id: int = id  # 交易編號（每筆交易唯一編號）
@@ -62,6 +66,13 @@ class BaseTradeRecord:
         # Transaction Performance
         self.realized_pnl: float = realized_pnl  # 已實現損益
         self.roi: float = roi  # 名目報酬率（供聚合統計使用）
+        # 資金效率：以實際佔用的資金為分母的報酬率，**只供報表參考**，跨交易的聚合統計一律用 `roi`。
+        # 未指定時與 `roi` 相同：期貨的分母本來就是保證金；台股放空由部位管理層另算後傳入
+        self.roi_on_capital: float = roi if roi_on_capital is None else roi_on_capital
+
+        # Capital Usage & Holding
+        self.margin: float = margin  # 開倉時繳交的保證金；無保證金制度的交易為 0
+        self.holding_days: int = holding_days  # 持有曆日數
 
         # Direction-neutral Info（依方向自動推導，報表與統計一律使用這組欄位）
         self.entry_date: datetime.date = None

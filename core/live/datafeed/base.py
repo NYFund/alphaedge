@@ -1,18 +1,17 @@
 import datetime
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from loguru import logger
 
 from core.config.settings import now_live
-from core.dao.connection import DBConnection
 from core.datafeed.base import BaseDataFeed
 from core.live.datafeed.calendar import (
     TradingCalendarSource,
     resolve_trading_day,
 )
-from core.models import BaseOrder, BaseQuote
+from core.models import BaseOrder, BaseQuote, PriceLimits
 from core.strategies.base import BaseStrategy
 from core.utils import ExecutionTiming, Scale
 
@@ -92,15 +91,21 @@ class BaseLiveDataFeed(BaseDataFeed):
                 歷史資料庫路徑；連線由子類在 `setup()` 內建立
         """
 
+        super().__init__()
+
         self.broker: Any = broker
         self.calendar_sources: List[TradingCalendarSource] = list(
             calendar_sources or []
         )
         self._now: Callable[[], datetime.datetime] = now_provider
         self.db_path: Any = db_path
-        self.conn: Optional[DBConnection] = None
 
     # === 交易日 ===
+    def build_calendar(self) -> None:
+        """實盤不預建日曆：交易日由多個來源互相佐證（`is_market_open()`），判不出來一律拋出"""
+
+        return None
+
     def is_market_open(self, date: datetime.date) -> bool:
         """
         - Description:
@@ -171,6 +176,7 @@ class BaseLiveDataFeed(BaseDataFeed):
             - Optional[Any]
                 合約物件
         """
+
         pass
 
     # === 資料新鮮度 ===
@@ -313,6 +319,7 @@ class BaseLiveDataFeed(BaseDataFeed):
             - List[BaseQuote]
                 報價；查無資料的標的不會出現
         """
+
         pass
 
     def get_price_limit_basis(self, date: datetime.date) -> Dict[str, float]:
@@ -335,7 +342,7 @@ class BaseLiveDataFeed(BaseDataFeed):
 
         return {}
 
-    def get_price_limits(self, symbol: str) -> Tuple[Optional[float], Optional[float]]:
+    def get_price_limits(self, symbol: str) -> PriceLimits:
         """
         - Description:
             取得某商品當日的漲跌停（券商合約檔的公告值）
@@ -347,16 +354,16 @@ class BaseLiveDataFeed(BaseDataFeed):
             - symbol: str
                 商品代號
         - Return:
-            - Tuple[Optional[float], Optional[float]]
-                （漲停, 跌停）
+            - PriceLimits
+                漲停與跌停（以欄位名存取）
         """
 
         contract: Optional[Any] = self._resolve_contract(symbol)
         if contract is None:
-            return (None, None)
-        return (
-            self._as_optional_float(contract, "limit_up"),
-            self._as_optional_float(contract, "limit_down"),
+            return PriceLimits.none()
+        return PriceLimits(
+            limit_up=self._as_optional_float(contract, "limit_up"),
+            limit_down=self._as_optional_float(contract, "limit_down"),
         )
 
     def get_reference_price(self, symbol: str) -> Optional[float]:
@@ -430,13 +437,6 @@ class BaseLiveDataFeed(BaseDataFeed):
         raise NotImplementedError(
             f"實盤不從歷史表逐日取報價；策略需要歷史資料時走 API（{self.HISTORY_API_HINT}）"
         )
-
-    def close(self) -> None:
-        """關閉歷史資料連線；可重複呼叫（引擎以 `try/finally` 保證它跑到）"""
-
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None
 
     def plan_rolls(
         self, positions: Sequence[Any], today: datetime.date

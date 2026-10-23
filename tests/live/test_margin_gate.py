@@ -6,7 +6,6 @@ from typing import Any, List, Optional, Tuple
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import build_live_trader
 from core.live.risk.margin_gate import MarginGate
 from core.live.trader import LiveTrader, StrategyContext, mark_execution
@@ -30,6 +29,8 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 22, 13, 35)
 
 
 def snapshot(available: float, equity: float) -> Any:
+    """只帶可用保證金與權益數的帳戶快照"""
+
     return SimpleNamespace(available_margin=available, total_equity=equity)
 
 
@@ -128,8 +129,9 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
@@ -155,6 +157,16 @@ def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
     return trader
 
 
+def stub_margin_amount(context: StrategyContext) -> None:
+    """
+    資金占用改用固定值：本檔的測試庫沒有保證金表，查表會拋例外
+
+    保證金檢查本身另由各測試改 `calculate_opening_requirement` 控制。
+    """
+
+    context.calculate_notional = lambda order: 100_000.0
+
+
 def futures_order(action: Action) -> FuturesOrder:
     """與策略鉤子產出的委託同形狀：不帶價格類型，由送單路徑標註後交給執行層"""
 
@@ -172,6 +184,8 @@ def futures_order(action: Action) -> FuturesOrder:
 
 
 def margin_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
+    """已寫入的保證金不足事件（策略，類別）"""
+
     return dao.conn.execute(
         "SELECT strategy_name, category FROM live_risk_event "
         "WHERE category = 'MARGIN_INSUFFICIENT'"
@@ -215,6 +229,7 @@ def test_sufficient_margin_order_is_sent(dao: LiveTradeDAO) -> None:
     trader: LiveTrader = build_futures_trader(dao, simulation=True)
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 100_000.0
+    stub_margin_amount(context)
 
     unsent: List[Tuple[StrategyContext, BaseOrder]] = trader.dispatch(
         [(context, futures_order(Action.BUY))], None
@@ -225,7 +240,12 @@ def test_sufficient_margin_order_is_sent(dao: LiveTradeDAO) -> None:
 
 
 def test_closing_order_skips_the_margin_check(dao: LiveTradeDAO) -> None:
-    """平倉釋放保證金，擋下它只會讓部位留在場上"""
+    """
+    平倉釋放保證金，擋下它只會讓部位留在場上
+
+    測試庫沒有保證金表，出場單的資金占用也算不出來——那同樣不可擋下出場
+    （`LiveTrader._order_amount()` 記 0 照送）。
+    """
 
     trader: LiveTrader = build_futures_trader(dao, simulation=False)
     context: StrategyContext = trader.contexts[0]

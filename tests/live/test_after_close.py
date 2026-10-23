@@ -40,6 +40,8 @@ def add_order(
     status: str = "FILLED",
     decision_price: Optional[float] = None,
 ) -> None:
+    """寫入一筆委託紀錄，預設為全部成交的 2330 買單"""
+
     dao.upsert_order(
         {
             "client_order_id": client_order_id,
@@ -69,6 +71,8 @@ def add_fill(
     price: float = 1000.0,
     volume: int = 2,
 ) -> None:
+    """寫入一筆 2330 買進的成交紀錄"""
+
     dao.insert_fill(
         {
             "broker_seqno": "000001",

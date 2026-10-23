@@ -28,7 +28,7 @@ from core.utils import (
 )
 from core.utils.log_manager import LogManager
 
-"""Backtesting engine that simulates trading based on strategy signals"""
+"""回測引擎：依策略訊號逐日模擬交易"""
 
 
 class InvalidTickUniverseError(ValueError):
@@ -177,7 +177,7 @@ class Backtester:
             )
 
     def setup(self) -> None:
-        """Set Up the Config of Backtester"""
+        """回測前的設定：建立結果資料夾與 backtest log（需寫出報表時），再載入資料"""
 
         if self.write_artifacts:
             # 確保每個 strategy 有獨立的結果資料夾
@@ -259,7 +259,7 @@ class Backtester:
 
     # === Main Backtest Loop ===
     def run(self) -> None:
-        """Execute Backtest"""
+        """執行回測"""
 
         logger.info("========== Backtest Start ==========")
         logger.info(f"* Strategy Name: {self.strategy.strategy_name}")
@@ -372,7 +372,9 @@ class Backtester:
 
         for position in self.account.get_positions():
             price: float = self.settlement.get_mark_price(position, quote_map)
-            units: int = self.instrument.to_units(position.volume)
+            units: int = position.volume * self.instrument.get_unit_size(
+                self.instrument.resolve_product(position), date
+            )
 
             # 「這個部位替權益貢獻多少」是**資金佔用方式**的問題，屬結算模型：
             # 股票買進是把現金換成標的（部位價值＝市值），期貨開倉只凍結保證金
@@ -386,7 +388,7 @@ class Backtester:
 
     # === Report ===
     def generate_backtest_report(self) -> None:
-        """Generate backtest report"""
+        """產生回測報表"""
 
         # `price` 共用 DataFeed 已開好的連線，避免一次回測對同一個 SQLite
         # 檔案開出兩條連線

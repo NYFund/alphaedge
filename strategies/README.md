@@ -486,9 +486,12 @@ def make_portfolio_constructor(self) -> StockPortfolioConstructor:
 > `super().__init__()` **之後**才填的，期貨的 `margin_config` 更是由 factory 在策略
 > 建構完成後才注入——存起來會永遠讀到舊值，而症狀是部位大小整段偏掉，不會報錯。
 
-**期貨走的是保證金約束，不是資金切分**：`FuturesPortfolioConstructor` 以
-「可動用餘額 × `max_capital_usage` ÷ 每口保證金」算可開口數，再與 `max_lots` 取小值。
-拿契約價值去除餘額會嚴重低估（TX 一口契約價值 900 萬、保證金只有 70 萬）。
+**期貨走的是保證金約束，不是資金切分**：預設的 `MarginSizer(max_lots, max_capital_usage)`
+以「可動用餘額 × `max_capital_usage` ÷ 每口需要的資金（原始保證金 ＋ 開倉手續費與稅）」
+算可開口數，再與剩餘口數取小值；`max_lots`／`max_capital_usage` 照常在策略上設定，
+要自訂演算法才覆寫 `self.sizer`。每口保證金由 `FuturesMarginModel` 查表，與部位管理層
+是同一個實例（個股期貨走比例表也查得到）。拿契約價值去除餘額會嚴重低估
+（TX 一口契約價值 900 萬、保證金只有 70 萬）。
 
 > **⚠️ `max_holdings` 另有引擎側硬上限**：即使策略回傳超額開倉單，引擎也會剔除超出
 > `max_holdings` 的部分並計數，所以 `max_holdings` 是真正的硬上限而非建議值。
@@ -586,6 +589,7 @@ def build_cover_order(self, action: PendingAction) -> StockOrder:
 | `live_tag` | `str` | 策略代號，只寫進本地紀錄庫，不送券商 | `""` |
 | `live_capital` | `Optional[float]` | 實盤資金額度；`None` 沿用 `init_capital` | `None` |
 | `live_max_holdings` | `Optional[int]` | 實盤最大持倉檔數；`None` 沿用 `max_holdings`，與 `live_capital` 成對調整 | `None` |
+| `live_risk_config` | `Optional[BaseRiskConfig]` | 實盤風控門檻；股票宣告 `StockRiskConfig(...)`、期貨宣告 `FuturesRiskConfig(...)`，只填要改的欄位，不可超過全域上限；部署端可再以 `deploy/live_risk.toml` 收緊（見 `docs/live/live-engine.md`〈三、委託路徑〉的事前風控） | `None`（該市場預設值） |
 
 > **不要填 `price_type`，也不要把 `live_execution` 設成 `StockPriceType.MKT`。**
 > 價格類型、委託價與 ROD／IOC 由實盤執行層（`core/live/execution/`）依段落換算：
@@ -688,7 +692,8 @@ close_map: Dict[str, Any] = self.price.get_close_map(date)
 # {stock_id: 成交量（張）}
 volume_map: Dict[str, int] = self.price.get_volume_lots_map(date)
 
-# 單一個股的收盤價序列
+# 單一個股的收盤價序列：index 為 datetime.date、值為 float、name 為「收盤價」
+# （期貨的 get_close_series() 也是同一個契約，見 BaseDataAPI.build_close_series()）
 close_series = self.price.get_close_series(
     stock_id="2330",
     start_date=datetime.date(2024, 1, 1),

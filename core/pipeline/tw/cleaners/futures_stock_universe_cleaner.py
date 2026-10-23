@@ -40,7 +40,7 @@ Futures Stock Universe Cleaner：把 TAIFEX 標的一覽表收斂成一列一商
 
 
 class FuturesStockUniverseCleaner(BaseDataCleaner):
-    """Futures Stock Universe Cleaner (Transform)"""
+    """股票期貨標的 cleaner（Transform）"""
 
     # 標的一覽表原始欄位（依位置，共 14 欄）
     RAW_COLS: List[str] = [
@@ -74,16 +74,16 @@ class FuturesStockUniverseCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Futures Stock Universe DataFrame Cleaned Columns
+        # 清洗後輸出的欄位順序（由 `setup()` 設定）
         self.universe_cleaned_cols: Optional[List[str]] = None
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.universe_dir: Path = FUTURES_UNIVERSE_DOWNLOADS_PATH
 
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         # 主鍵為 (snapshot_date, product_id)：本表是快照序列，不是現況表
         self.universe_cleaned_cols = [

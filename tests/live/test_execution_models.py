@@ -196,9 +196,7 @@ def test_stock_position_snapshot_carries_order_cond() -> None:
 
 
 def test_futures_ticket_and_snapshot_split_product_and_expiry() -> None:
-    """
-    換月期間同一商品會有兩個月份的部位，只看 symbol 會把兩者混成一件事
-    """
+    """換月期間同一商品會有兩個月份的部位，只看 symbol 會把兩者混成一件事"""
 
     ticket: FuturesOrderTicket = FuturesOrderTicket(
         client_order_id="r1-0003",

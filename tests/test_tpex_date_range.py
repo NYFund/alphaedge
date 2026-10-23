@@ -66,7 +66,7 @@ def test_capital_reduction_with_wrong_range_is_a_failure(
         lambda url: FetchResult(FetchStatus.OK, _Response(payload)),
     )
 
-    result = CorporateActionCrawler().crawl_tpex_capital_reduction(START, END)
+    result = CorporateActionCrawler().crawl_tpex_corporate_action(START, END)
 
     assert result.status is CrawlStatus.FAILED
     assert result.reason == "date_range_mismatch"

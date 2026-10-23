@@ -1,5 +1,3 @@
-import random
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -9,7 +7,9 @@ from loguru import logger
 
 from core.config import BALANCE_SHEET_TABLE_NAME, EQUITY_CHANGE_TABLE_NAME
 from core.dao.tw.stock_info_dao import StockInfoDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
 from core.pipeline.shared.season_planner import SeasonPlanner, SeasonProgressStore
 from core.pipeline.utils.exceptions import DataLoadError
 from core.utils import TimeUtils
@@ -141,7 +141,7 @@ class EquityChangeMixin:
     ) -> None:
         """
         - Description:
-            Update Equity Changes
+            更新權益變動表
 
             與其他三張報表不同，MOPS 的權益變動表端點是**逐檔查詢**，一個年季要打
             兩千多次請求、整段回補以十萬次計（數十小時）。因此這條流程的前提是
@@ -204,7 +204,7 @@ class EquityChangeMixin:
                         )
                     )
 
-                    # Step 1: 逐檔 resume——只補這個年季還沒入庫的公司
+                    # Step 1：逐檔 resume——只補這個年季還沒入庫的公司
                     pending_stock_ids: List[str] = self.plan_pending_stock_ids(
                         target_stock_ids=season_targets,
                         progress=progress,
@@ -216,7 +216,7 @@ class EquityChangeMixin:
                         logger.info(f"* {year}Q{season} already complete, skipped")
                         continue
 
-                    # Step 2: 有待補的公司才與磁碟對帳（整季已完成時掃全季 CSV 純屬浪費）
+                    # Step 2：有待補的公司才與磁碟對帳（整季已完成時掃全季 CSV 純屬浪費）
                     if self.reconcile_season_csv_files(year, season, failed_files):
                         pending_stock_ids = self.plan_pending_stock_ids(
                             target_stock_ids=season_targets,
@@ -250,7 +250,7 @@ class EquityChangeMixin:
                         )
                     )
 
-                    # Step 3: 逐檔爬取並分批入庫
+                    # Step 3：逐檔爬取並分批入庫
                     stats: EquityChangeSeasonStats = self.update_equity_changes_season(
                         year=year,
                         season=season,
@@ -337,29 +337,30 @@ class EquityChangeMixin:
 
         stats: EquityChangeSeasonStats = EquityChangeSeasonStats()
         cleaned_df_list: List[pd.DataFrame] = []
+        throttle: RateLimitPolicy = self.build_equity_change_rate_limit_policy()
         # 申報期是否已關閉只與年季有關，逐檔問一次是浪費
         settled: bool = self.is_season_settled(year, season)
 
         try:
             for stock_id in stock_ids:
-                # Step 1: Crawl
-                df_list: Optional[List[pd.DataFrame]] = self.crawl_equity_changes_one(
+                # Step 1：爬取
+                result: CrawlResult = self.crawl_equity_changes_one(
                     year, season, stock_id, stats
                 )
 
-                if df_list is None:
+                if result.is_failed:
                     # 站方過載或連線失敗：**沒問到**，不是「沒有資料」
                     stats.unreachable += 1
                     progress.record_incomplete(year, season, stock_id)
-                elif not df_list:
+                elif result.is_no_data:
                     # 該年季這檔沒有報表（多半是當時尚未上市）；本迴圈**不做任何早退**，
-                    # 見 update_equity_changes() 對「未申報年季」的處理
+                    # 見 `update_equity_changes()` 對「未申報年季」的處理
                     stats.no_data += 1
                     progress.record_no_data(year, season, stock_id, settled=settled)
                 else:
-                    # Step 2: Clean
+                    # Step 2：清洗
                     cleaned_df: Optional[pd.DataFrame] = self.clean_equity_changes_one(
-                        df_list, year, season, stock_id
+                        result.tables, year, season, stock_id
                     )
 
                     if cleaned_df is None:
@@ -377,7 +378,7 @@ class EquityChangeMixin:
 
                 stats.requested += 1
 
-                # Step 3: Load（分批入庫，中斷最多只損失最後一批）
+                # Step 3：Load（分批入庫，中斷最多只損失最後一批）
                 if len(cleaned_df_list) >= self.EQUITY_CHANGE_LOAD_BATCH_SIZE:
                     self.load_equity_changes_batch(
                         cleaned_df_list, year, season, failed_files
@@ -390,12 +391,12 @@ class EquityChangeMixin:
                 ):
                     progress.save()
 
-                # Step 4: 收工檢查放在節流之前——被中止時沒有理由再睡一輪
+                # Step 4：收工檢查放在節流之前——被中止時沒有理由再睡一輪
                 if stop.requested:
                     stats.stopped = True
                     break
 
-                self.throttle_per_request(stop, request_cnt=stats.requested)
+                throttle.tick(stop, count=stats.requested)
         finally:
             # 收尾：不滿一批的資料一律先入庫。**這個 finally 是「隨時可中斷」的關鍵**——
             # 中止訊號、清洗以外的例外、第二次 Ctrl+C 的 KeyboardInterrupt 都會走到這裡，
@@ -409,44 +410,27 @@ class EquityChangeMixin:
 
         return stats
 
-    def throttle_per_request(
-        self, stop: Optional[GracefulStop] = None, request_cnt: int = 0
-    ) -> None:
+    def build_equity_change_rate_limit_policy(self) -> RateLimitPolicy:
         """
         - Description:
-            以**請求**為單位的節流；權益變動表逐檔查詢之間用它
+            權益變動表逐檔查詢的節流：以**本季累計請求數取模**決定長睡，計數不歸零
 
-            與基底的 `throttle_per_file()` 判準不同：這裡取模、計數從不歸零
-            （數的是本季累計送出幾個請求），那裡達門檻後歸零。
-
-            **不直接用 `time.sleep()`**：它被訊號打斷會自動續睡（PEP 475），
-            於是「每 50 檔睡 15 秒」那一段按下 Ctrl+C 得等滿 15 秒才有反應。
-        - Parameters:
-            - stop: Optional[GracefulStop]
-                中止旗標；None 時退化成不可打斷的 sleep
-            - request_cnt: int
-                目前已送出的請求數，決定是否輪到「每 N 檔多睡一段」
+            與其他 updater 的 `build_rate_limit_policy()` 判準不同：這裡數的是
+            本季累計送出幾個請求（`stats.requested`，由呼叫端傳入），
+            那裡數的是自上次長睡以來處理了幾個單位、達門檻後歸零。
+            兩者由 `RateLimitPolicy.reset_after_long_sleep` 區分，不可混用。
+        - Return:
+            - RateLimitPolicy
+                本季逐檔查詢用的節流
         """
 
-        seconds: float = random.uniform(
-            self.EQUITY_CHANGE_RANDOM_DELAY_MIN,
-            self.EQUITY_CHANGE_RANDOM_DELAY_MAX,
+        return RateLimitPolicy(
+            delay_min=self.EQUITY_CHANGE_RANDOM_DELAY_MIN,
+            delay_max=self.EQUITY_CHANGE_RANDOM_DELAY_MAX,
+            long_sleep_every=self.EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES,
+            long_sleep_seconds=self.EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS,
+            reset_after_long_sleep=False,
         )
-
-        if (
-            request_cnt
-            and request_cnt % self.EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES == 0
-        ):
-            seconds = float(self.EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS)
-            logger.info(
-                f"Sleep {self.EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS} seconds..."
-            )
-
-        if stop is None:
-            time.sleep(seconds)
-            return
-
-        stop.sleep(seconds)
 
     def crawl_equity_changes_one(
         self,
@@ -454,7 +438,7 @@ class EquityChangeMixin:
         season: int,
         stock_id: str,
         stats: Optional["EquityChangeSeasonStats"] = None,
-    ) -> Optional[List[pd.DataFrame]]:
+    ) -> CrawlResult:
         """
         - Description:
             爬取單一檔的權益變動表，**把非預期例外隔離在這一檔之內**
@@ -476,15 +460,15 @@ class EquityChangeMixin:
             - stats: Optional[EquityChangeSeasonStats]
                 本季統計；用來累計連續例外數，None 時不啟用斷路器（試探用）
         - Return:
-            - Optional[List[pd.DataFrame]]
-                crawler 的三態回傳值；非預期例外一律回 None（＝待重試）
+            - CrawlResult
+                crawler 的三態回傳值；非預期例外一律回 `FAILED`（＝待重試）
         - Raise:
             - Exception
                 連續 `EQUITY_CHANGE_MAX_CONSECUTIVE_ERRORS` 檔都拋例外時原樣往上拋
         """
 
         try:
-            df_list: Optional[List[pd.DataFrame]] = self.crawler.crawl_equity_changes(
+            result: CrawlResult = self.crawler.crawl_equity_changes(
                 year, season, stock_id
             )
         except Exception as error:
@@ -504,12 +488,12 @@ class EquityChangeMixin:
                 f"Failed to crawl equity changes on {stock_id} {year}Q{season}"
                 f"（{type(error).__name__}: {error}），本檔計為待重試"
             )
-            return None
+            return CrawlResult.failed(f"{type(error).__name__}: {error}")
 
         if stats is not None:
             stats.consecutive_errors = 0
 
-        return df_list
+        return result
 
     def clean_equity_changes_one(
         self,

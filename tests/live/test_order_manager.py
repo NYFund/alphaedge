@@ -35,6 +35,8 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 @pytest.fixture
 def degradations() -> List[str]:
+    """收集委託管理器觸發的降級原因"""
+
     return []
 
 
@@ -42,6 +44,8 @@ def degradations() -> List[str]:
 def oms(
     fake_broker: FakeBroker, dao: LiveTradeDAO, degradations: List[str]
 ) -> OrderManager:
+    """降級時把原因記進 `degradations` 的委託管理器"""
+
     return OrderManager(
         broker=fake_broker,
         dao=dao,
@@ -55,6 +59,8 @@ def oms(
 def make_order(
     symbol: str = "2330", volume: int = 2, price: float = 1000.0
 ) -> StockOrder:
+    """組一張限價台股買單"""
+
     return StockOrder(
         stock_id=symbol,
         action=Action.BUY,
@@ -555,7 +561,9 @@ def test_cancel_filters_by_timing(oms: OrderManager, fake_broker: FakeBroker) ->
     open_order: StockOrder = make_order()
     open_order.timing = ExecutionTiming.AT_OPEN
     oms.submit(open_order, "VolumeBreakoutMomentumStrategy")
-    oms.submit(make_order(symbol="2317"), "VolumeBreakoutMomentumStrategy")  # AT_CLOSE
+    oms.submit(
+        make_order(symbol="2317"), "VolumeBreakoutMomentumStrategy"
+    )  # 預設時點為 AT_CLOSE
 
     cancelled: List[OrderTicket] = oms.cancel_open_orders(ExecutionTiming.AT_CLOSE)
 

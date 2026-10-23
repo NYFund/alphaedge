@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+
+from __future__ import annotations
+
+import datetime as dt
+
+from strategy_lab.strategies.tsmc_overnight_signal.pipeline import main
+
 """
 台積電跨市場隔夜訊號回測入口。
 
@@ -12,12 +19,6 @@
 輸出目錄：`strategy_lab/strategies/tsmc_overnight_signal/output/`
 （資產曲線、MDD、滾動 Sharpe、月報酬熱圖、IC 等）。
 """
-
-from __future__ import annotations
-
-import datetime as dt
-
-from strategy_lab.strategies.tsmc_overnight_signal.pipeline import main
 
 if __name__ == "__main__":
     output_path = main(

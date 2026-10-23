@@ -178,7 +178,7 @@ def test_daily_updater_raises_when_latest_day_is_unreachable(
         (StockDividendUpdater, ("crawl_twse_dividend", "crawl_tpex_dividend")),
         (
             CorporateActionUpdater,
-            ("crawl_twse_capital_reduction", "crawl_tpex_capital_reduction"),
+            ("crawl_twse_corporate_action", "crawl_tpex_corporate_action"),
         ),
     ],
 )
@@ -232,6 +232,8 @@ def test_update_db_lists_the_target_as_failed_and_exits_non_zero(
         lambda: SimpleNamespace(
             target=["price"],
             from_date=datetime.date.today() - datetime.timedelta(days=10),
+            retry_failed=0,
+            retry_wait=0,
         ),
     )
 

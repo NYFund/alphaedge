@@ -25,6 +25,8 @@ class ExecutionEventDeduplicator:
     """
 
     def __init__(self) -> None:
+        """建立去重器（尚未看過任何事件）"""
+
         self._seen: Set[Tuple[Any, ...]] = set()
 
     def is_new(self, event: Union[ExecutionReport, OrderStatusEvent]) -> bool:

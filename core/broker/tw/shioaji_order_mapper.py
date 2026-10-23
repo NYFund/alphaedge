@@ -202,6 +202,11 @@ class ShioajiOrderMapper:
 
             **不推導 `DayTrade`**：當沖的保證金減收要先以期貨商公告核對規則，
             在那之前當日開當日平也送 `Cover`——結果正確，只是少了減收。
+
+            **與 `order_rules.is_opening()` 是同一條規則，卻在這裡另寫一份**：
+            券商閘道層只可 import `core.config`／`core.utils`／`core.models`，
+            不可往上拿部位建構層。兩邊由 `test_octype_follows_direction_and_action`
+            釘在一起，改其中一邊另一邊的測試就會紅。
         - Parameters:
             - order: FuturesOrder
                 本專案的期貨訂單

@@ -7,7 +7,6 @@ import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.base import RollPlan
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.factory import build_live_trader, to_live_roll_config
 from core.live.risk.trading_mode import TradingMode
@@ -77,6 +76,8 @@ def test_open_interest_rule_is_refused() -> None:
 
 # === 資料源：今天該不該換、換去哪 ===
 def weekdays(start: datetime.date, end: datetime.date) -> List[datetime.date]:
+    """區間內的所有平日，當作交易日曆"""
+
     days: List[datetime.date] = []
     current: datetime.date = start
     while current <= end:
@@ -87,7 +88,7 @@ def weekdays(start: datetime.date, end: datetime.date) -> List[datetime.date]:
 
 
 class FakeResolver:
-    """列出掛牌月份、以（商品, 月份）取合約"""
+    """列出掛牌月份、以（商品，月份）取合約"""
 
     def __init__(self, expiries: List[str]) -> None:
         self.expiries: List[str] = expiries
@@ -129,6 +130,8 @@ def make_feed(
     prices: Optional[Dict[str, float]] = None,
     expiries: Optional[List[str]] = None,
 ) -> TwFuturesLiveDataFeed:
+    """建立指定日期、可指定各月份報價與掛牌月份的期貨實盤資料源"""
+
     config: FuturesRollConfig = to_live_roll_config(FuturesRollConfig())
     config.calendar = FuturesCalendar(
         weekdays(datetime.date(2026, 9, 1), datetime.date(2026, 12, 31))
@@ -145,6 +148,8 @@ def make_feed(
 
 
 def long_position(expiry: str = "202610", volume: int = 2) -> Any:
+    """TX 指定月份的多方部位"""
+
     return SimpleNamespace(
         product="TX",
         expiry=expiry,
@@ -240,8 +245,9 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, FakeBroker]:
@@ -265,6 +271,9 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
     trader._sleep = lambda seconds: None
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 0.0
+    # 測試庫沒有保證金表、測試策略的額度也撐不起一口台指期：資金占用與曝險一併放行
+    context.calculate_notional = lambda order: 0.0
+    context.calculate_exposure = lambda order: 0.0
     # 測試的資料庫沒有保證金表：部位管理改用比率模式，再先開好一口 10 月多單，
     # 平倉腿的成交才會被帳戶同步認成「平多」而不是「開空」
     context.position_manager.margin_config = FuturesMarginConfig.ratio()
@@ -302,6 +311,8 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
 
 
 def roll_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
+    """已寫入的換月事件（類別，嚴重度）"""
+
     return dao.conn.execute(
         "SELECT category, severity FROM live_risk_event "
         "WHERE category LIKE 'ROLL_%' ORDER BY event_id"
@@ -309,6 +320,8 @@ def roll_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
 
 
 def placed_symbols(broker: FakeBroker) -> List[str]:
+    """券商替身收到的委託標的"""
+
     return [ticket.order.symbol for ticket in broker.tickets.values()]
 
 

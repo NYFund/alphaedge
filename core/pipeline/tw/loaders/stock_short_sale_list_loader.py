@@ -9,7 +9,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 
 
 class StockShortSaleListLoader(BaseDataLoader):
-    """Stock ShortSale List Loader"""
+    """台股平盤下賣出名單 loader"""
 
     DAO_CLASS: Type[Any] = StockShortSaleListDAO
     SOURCE: str = "short_sale_list"

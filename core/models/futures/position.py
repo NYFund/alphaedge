@@ -53,6 +53,8 @@ class FuturesPosition(BasePosition):
             transaction_cost=transaction_cost,
             unrealized_pnl=unrealized_pnl,
             unrealized_roi=unrealized_roi,
+            margin=margin,
+            holding_days=holding_days,
         )
 
         # Contract Info
@@ -60,13 +62,8 @@ class FuturesPosition(BasePosition):
         self.expiry: str = expiry  # 到期月份（Ex: 202601）
         self.multiplier: int = multiplier  # 契約乘數（元／點）
 
-        # 開倉價：`price` 會被逐日結算重設，真正的進場價保存在此
-        self.entry_price: float = price
-
         # Margin & Settlement
-        self.margin: float = margin  # 已繳原始保證金（佔用資金，平倉時全額釋回）
         self.settled_pnl: float = settled_pnl  # 逐日盯市已結算的累計損益
-        self.holding_days: int = holding_days  # 已持有曆日數
 
     @property
     def contract_id(self) -> str:

@@ -223,6 +223,8 @@ def test_telegram_error_does_not_leak_the_token() -> None:
     notifier: TelegramNotifier = TelegramNotifier("secret-token", "chat", blocking=True)
 
     class Response:
+        """狀態碼 403 的 HTTP 回應替身"""
+
         status_code: int = 403
 
     notifier_module = sys.modules["core.live.notify.telegram_notifier"]
@@ -258,6 +260,8 @@ class _Recorder:
         status_code: int = self.status_code
 
         class Response:
+            """只帶狀態碼的 HTTP 回應替身"""
+
             pass
 
         response: Response = Response()
@@ -386,6 +390,8 @@ def make_row(
     end_reason: Optional[str] = "正常結束",
     instrument_type: Optional[str] = None,
 ) -> Tuple[Any, ...]:
+    """組一筆段落執行紀錄，預設為正常結束"""
+
     return (phase, started_at, ended_at, end_reason, instrument_type)
 
 
@@ -807,6 +813,8 @@ def test_notifier_failure_does_not_stop_trading(tmp_path: Path) -> None:
     from .test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 

@@ -31,6 +31,8 @@ def no_data(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def artifact_paths(strategy_name: str) -> List[Path]:
+    """回測會寫出的產物路徑：結果目錄與 log 檔"""
+
     return [
         Path(BACKTEST_RESULT_DIR_PATH) / strategy_name,
         Path(BACKTEST_LOGS_DIR_PATH) / f"{strategy_name}.log",

@@ -16,6 +16,7 @@ class FuturesTradeRecord(BaseTradeRecord):
 
     欄位語意其餘部分與 `BaseTradeRecord` 相同（buy_* / sell_* 對應操作動作，
     entry_* / exit_* 為方向中立欄位，報表時間軸一律用 exit_date）。
+    `roi_on_capital` 與 `roi` 相同：期貨報酬率的分母本來就是保證金。
     """
 
     def __init__(
@@ -57,6 +58,8 @@ class FuturesTradeRecord(BaseTradeRecord):
             transaction_cost=transaction_cost,
             realized_pnl=realized_pnl,
             roi=roi,
+            margin=margin,
+            holding_days=holding_days,
         )
 
         # Contract Info
@@ -65,9 +68,7 @@ class FuturesTradeRecord(BaseTradeRecord):
         self.multiplier: int = multiplier  # 契約乘數（元／點）
 
         # Margin & Settlement
-        self.margin: float = margin  # 開倉時繳交的原始保證金
         self.settled_pnl: float = settled_pnl  # 平倉前逐日盯市已結算的累計損益
-        self.holding_days: int = holding_days  # 持有曆日數
 
     @property
     def contract_id(self) -> str:

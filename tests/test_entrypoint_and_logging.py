@@ -58,15 +58,14 @@ def test_targets_that_read_price_run_after_price() -> None:
     執行順序就是 `main()` 裡各區塊的先後，所以直接比原始碼位置。
     """
 
-    source: str = Path("apps/update_db.py").read_text(encoding="utf-8")
+    from apps.update_db import TARGETS
 
-    def position(data_type: str) -> int:
-        marker: str = f"if DataType.{data_type}.name.lower() in targets:"
-        assert marker in source, f"找不到 {data_type} 的執行區塊"
-        return source.index(marker)
+    order: List[str] = [spec.name for spec in TARGETS]
 
-    for dependent in ("CHIP", "MARGIN", "TICK"):
-        assert position("PRICE") < position(dependent), f"{dependent} 排在 PRICE 之前"
+    for dependent in ("chip", "margin", "tick"):
+        assert order.index("price") < order.index(dependent), (
+            f"{dependent} 排在 price 之前"
+        )
 
 
 def test_finmind_is_paused_from_daily_update() -> None:
@@ -280,7 +279,7 @@ def test_pipeline_bucket_is_the_complement() -> None:
     assert not accept(make_record("core.api.tw.stock_price_api"))
 
 
-# === S7：日誌檔被外部刪除後要重建（2026-09-03 事故）===
+# === 日誌檔被外部刪除後要重建（2026-09-03 事故）===
 def test_log_file_is_recreated_after_external_deletion(tmp_path: Path) -> None:
     """
     檔案被刪掉之後，下一筆記錄要重新建立它

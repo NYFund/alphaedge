@@ -23,7 +23,7 @@ from core.utils import TimeUtils
 
 
 class StockChipCleaner(BaseDataCleaner):
-    """Stock Chip Cleaner (Transform)"""
+    """台股三大法人籌碼 cleaner（Transform）"""
 
     # TWSE 三大法人資料改制日期
     TWSE_FIRST_REFORM_DATE: datetime.date = datetime.date(2014, 12, 1)
@@ -35,7 +35,7 @@ class StockChipCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Chip DataFrame Cleaned Columns
+        # 清洗後輸出的欄位順序（由 `setup()` 設定）
         self.chip_cleaned_cols: Optional[List[str]] = None
 
         self.twse_first_reform_date: datetime.date = self.TWSE_FIRST_REFORM_DATE
@@ -43,16 +43,14 @@ class StockChipCleaner(BaseDataCleaner):
         self.tpex_first_reform_date: datetime.date = self.TPEX_FIRST_REFORM_DATE
         self.tpex_second_reform_date: datetime.date = self.TPEX_SECOND_REFORM_DATE
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.chip_dir: Path = CHIP_DOWNLOADS_PATH
 
-        # Set Up
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Set Up Chip DataFrame Cleaned Columns
         self.chip_cleaned_cols = [
             "date",
             "stock_id",
@@ -75,7 +73,6 @@ class StockChipCleaner(BaseDataCleaner):
             "三大法人買賣超股數",
         ]
 
-        # Generate downloads directory
         self.chip_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -104,7 +101,7 @@ class StockChipCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         date: datetime.date,
     ) -> pd.DataFrame:
-        """Clean TWSE Stock Chip Data"""
+        """清洗上市三大法人資料"""
 
         if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels > 1:
             df.columns = df.columns.droplevel(0)
@@ -152,7 +149,6 @@ class StockChipCleaner(BaseDataCleaner):
             keep="first",
         )
 
-        # Save df to csv file
         aligned_df.to_csv(
             self.chip_dir / f"twse_{TimeUtils.format_date(date)}.csv",
             index=False,
@@ -165,7 +161,7 @@ class StockChipCleaner(BaseDataCleaner):
         df: pd.DataFrame,
         date: datetime.date,
     ) -> pd.DataFrame:
-        """Clean TPEX Stock Chip Data"""
+        """清洗上櫃三大法人資料"""
 
         if isinstance(df.columns, pd.MultiIndex) and df.columns.nlevels > 1:
             df.columns = df.columns.droplevel(0)
@@ -253,7 +249,7 @@ class StockChipCleaner(BaseDataCleaner):
             df = df.drop(columns=drop_cols)
             df.insert(0, "date", date)
 
-            # Rename df.columns
+            # 依位置套上標準欄名
             old_col_name: List[str] = list(df.columns)
             new_col_name: List[str] = self.chip_cleaned_cols
             # `zip()` 長度不一時會**安靜地截斷**，多出來的欄位保留原名、
@@ -286,7 +282,6 @@ class StockChipCleaner(BaseDataCleaner):
             keep="first",
         )
 
-        # Save df to csv file
         aligned_df.to_csv(
             self.chip_dir / f"tpex_{TimeUtils.format_date(date)}.csv",
             index=False,

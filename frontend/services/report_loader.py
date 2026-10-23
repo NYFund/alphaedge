@@ -254,7 +254,7 @@ def build_equity_series(
     - Description:
         由 `daily_equity.csv` 建出權益序列，index 為日期
 
-        **與 `StockBacktestReporter.get_equity_series()` 同一個口徑**：一天多筆
+        **與 `BaseBacktestReporter.get_equity_series()` 同一個口徑**：一天多筆
         時取當日最後一筆，並在最前面補上初始資金節點——否則曲線的第一個節點
         會是「第一個交易日結束後」的權益，回測首日的損益看不見，MDD 也跟著短一截。
     - Parameters:

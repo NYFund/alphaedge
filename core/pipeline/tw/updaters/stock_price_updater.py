@@ -27,7 +27,7 @@ TPEX 網站提供資料日期：
 
 
 class StockPriceUpdater(DailyTwoMarketUpdater):
-    """Stock Price Updater"""
+    """台股收盤行情 updater"""
 
     SOURCE: str = "price"
     SOURCE_LABEL: str = "Price"

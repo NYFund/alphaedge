@@ -1,4 +1,6 @@
 import datetime
+import re
+from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 import pytest
@@ -26,6 +28,8 @@ def make_order(
     position_type: PositionType = PositionType.LONG,
     date: Optional[datetime.date] = None,
 ) -> StockOrder:
+    """建一筆預設為多單買進的委託"""
+
     return StockOrder(
         stock_id=symbol,
         action=action,
@@ -250,3 +254,92 @@ def test_module_does_not_import_strategy_or_engine() -> None:
     assert "core.strategies" not in source
     assert "core.backtest" not in source
     assert "core.live" not in source
+
+
+# === 開倉／平倉判定：只有這一份 ===
+@pytest.mark.parametrize(
+    "position_type, action, opening",
+    [
+        (PositionType.LONG, Action.BUY, True),
+        (PositionType.LONG, Action.SELL, False),
+        (PositionType.SHORT, Action.SELL, True),
+        (PositionType.SHORT, Action.BUY, False),
+    ],
+)
+def test_opening_and_closing_are_complements(
+    position_type: PositionType, action: Action, opening: bool
+) -> None:
+    """LONG 買進、SHORT 賣出是開倉，其餘是平倉；兩個判定互補"""
+
+    order: BaseOrder = make_order(action=action, position_type=position_type)
+
+    assert order_rules.is_opening(order) is opening
+    assert order_rules.is_closing(order) is (not opening)
+
+
+@pytest.mark.parametrize(
+    "position_type, action, opening",
+    [
+        ("LONG", "Buy", True),
+        ("LONG", "Sell", False),
+        ("SHORT", "Sell", True),
+        ("SHORT", "Buy", False),
+    ],
+)
+def test_record_versions_follow_the_same_rule(
+    position_type: str, action: str, opening: bool
+) -> None:
+    """資料列的字串欄位走同一條判定；`live_order` 存的是 enum 的值"""
+
+    assert order_rules.is_opening_record(position_type, action) is opening
+    assert order_rules.is_closing_record(position_type, action) is (not opening)
+
+
+@pytest.mark.parametrize(
+    "position_type, action",
+    [("", "Buy"), ("LONG", ""), ("long", "Buy"), ("LONG", "BUY")],
+)
+def test_record_versions_reject_unknown_values(position_type: str, action: str) -> None:
+    """看不懂的值拋錯、不猜：靜靜回 False 會把壞掉的列當成平倉單處理"""
+
+    with pytest.raises(ValueError):
+        order_rules.is_opening_record(position_type, action)
+    with pytest.raises(ValueError):
+        order_rules.is_closing_record(position_type, action)
+
+
+CORE_DIR: Path = Path(__file__).resolve().parents[2] / "core"
+ORDER_RULES: Path = CORE_DIR / "portfolio" / "order_rules.py"
+
+# 刻意保留一份的檔案與理由；新增一個就要在這裡寫為什麼
+ALLOWED_HANDWRITTEN: Dict[str, str] = {
+    # 券商閘道層只可 import config／utils／models，不可往上拿部位建構層；
+    # 由 tests/live/test_futures_symbol_and_octype.py 與 order_rules 互相釘住
+    "broker/tw/shioaji_order_mapper.py": "券商閘道層不可 import 部位建構層",
+}
+
+# 手寫開倉／平倉判定的三種長相：
+# 1. 曾經存在過的那幾個函式名（parity、當沖回補、守門、風控、帳戶同步、日終補單、部位管理層）
+# 2. 把 `order.action` 拿去和 `resolve_*_action()` 比
+# 3. 直接以方向推買賣別的三元式
+HANDWRITTEN_JUDGEMENT: re.Pattern = re.compile(
+    r"def (_is_opening_order|_is_opening|_is_closing|is_closing_order|cover_action"
+    r"|_is_exit_row|resolve_open_action|resolve_close_action)\("
+    r"|\.action\s+(is|==|!=)\s+(not\s+)?(self\.|order_rules\.)?resolve_(open|close)_action\("
+    r"|Action\.(BUY|SELL)\s+if\s+.*PositionType\.(LONG|SHORT)"
+)
+
+
+def test_open_close_judgement_lives_only_in_order_rules() -> None:
+    """`core/` 其他地方不可再手寫一份開倉／平倉判定；要判定就呼叫這裡的四個函式"""
+
+    offenders: List[str] = []
+    for path in sorted(CORE_DIR.rglob("*.py")):
+        relative: str = str(path.relative_to(CORE_DIR))
+        if path == ORDER_RULES or relative in ALLOWED_HANDWRITTEN:
+            continue
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            if HANDWRITTEN_JUDGEMENT.search(line):
+                offenders.append(f"{relative}:{lineno}")
+
+    assert offenders == [], f"手寫的開倉／平倉判定：{offenders}"

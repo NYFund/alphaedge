@@ -124,7 +124,7 @@ def test_no_self_built_data_access_in_strategies(
     - Description:
         策略層不得自建資料連線或 API 物件
 
-        「策略不得自行建立 API／連線」原本**只寫在 `strategies/README.md`**，
+        「策略不得自行建立 API／連線」原本**只是書面約定**，
         沒有任何測試釘住它。目前 grep 無違規，所以這條是**預防性**護欄——
         下一支策略寫 `StockPriceAPI()` 時不會有任何東西變紅，而症狀是
         一次回測多開好幾條互不相干的連線，不會報錯、只會慢慢累積。
@@ -283,6 +283,8 @@ def test_strategy_loader_rejects_duplicate_class_names() -> None:
         module = types.ModuleType(module_name)
 
         class Duplicated(BaseStrategy):
+            """與另一個模組同名的最小策略"""
+
             def setup_account(self, account) -> None: ...
 
             def setup_apis(self, feed) -> None: ...

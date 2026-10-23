@@ -14,13 +14,13 @@ from core.live.attribution.position_ledger import ACCOUNT_STRATEGY
 from core.live.notify.base import NotifyLevel
 from core.live.risk import event_categories as risk_events
 from core.models import BaseOrder
+from core.portfolio import order_rules
 from core.utils import (
     Action,
     ExecutionStyle,
     ExecutionTiming,
     LiveOrderStatus,
     OrderType,
-    PositionType,
 )
 
 """
@@ -395,6 +395,8 @@ class ParityChecker:
             ] = self.closing_limit
 
             def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
+                """把交易日綁成比對當天，換成 `compare()` 要的兩參數形狀"""
+
                 return closing_limit(symbol, side, run_date)
 
         phases_of: Optional[Callable[[BaseOrder], Set[str]]] = None
@@ -402,6 +404,8 @@ class ParityChecker:
             order_phases: OrderPhaseLookup = self.order_phases
 
             def phases_of(order: BaseOrder) -> Set[str]:
+                """把策略名綁成本次比對的策略，換成 `compare()` 要的單參數形狀"""
+
                 return order_phases(strategy_name, order)
 
         return compare(
@@ -565,7 +569,7 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            # 優先序：風控／守門事件 → 段落中止 → 快照口徵（反方向）→ 未解釋
+            # 優先序：風控／守門事件 → 段落中止 → 快照口徑（反方向）→ 未解釋
             missing_note: str = ""
             category: Optional[str] = None
             if symbol in blocked:
@@ -582,7 +586,7 @@ def compare(
                     "當天非正常結束，策略沒有機會做決定"
                 )
             if category is None:
-                if ran_cleanly and all(_is_opening_order(o) for o in bt_orders):
+                if ran_cleanly and all(order_rules.is_opening(o) for o in bt_orders):
                     category = CATEGORY_SNAPSHOT_GAP
                     missing_note = (
                         "回測以收盤價觸發開倉、實盤決策時的快照未觸發；當天段落正常結束"
@@ -701,7 +705,10 @@ def _is_threshold_gap(live_rows: Sequence[Dict[str, Any]]) -> bool:
     """
 
     return all(
-        str(row.get("position_type", "")) and _is_opening(row) for row in live_rows
+        str(row.get("position_type", ""))
+        and str(row.get("action", ""))
+        and order_rules.is_opening_record(str(row["position_type"]), str(row["action"]))
+        for row in live_rows
     )
 
 
@@ -757,24 +764,6 @@ def _run_strategies(run: Dict[str, Any]) -> Set[str]:
         return {str(name) for name in json.loads(str(raw)).get("strategies", [])}
     except (ValueError, AttributeError):
         return set()
-
-
-def _is_opening_order(order: BaseOrder) -> bool:
-    """回測的這張委託是不是開倉單"""
-
-    return (
-        order.position_type is PositionType.LONG and order.action is Action.BUY
-    ) or (order.position_type is PositionType.SHORT and order.action is Action.SELL)
-
-
-def _is_opening(row: Dict[str, Any]) -> bool:
-    """這筆 `live_order` 是不是開倉單"""
-
-    action: str = str(row.get("action", ""))
-    position_type: str = str(row.get("position_type", ""))
-    return (position_type == "LONG" and action == "Buy") or (
-        position_type == "SHORT" and action == "Sell"
-    )
 
 
 def _compare_volume(
@@ -907,7 +896,7 @@ def _unfilled_category(
             `(標的, 買賣別) → (收盤價, 漲跌停價)`
     - Return:
         - Tuple[str, str]
-            （類別, 附加說明）；說明為空字串時不附加
+            （類別，附加說明）；說明為空字串時不附加
     """
 
     style: str = str(row.get("execution_style") or "")

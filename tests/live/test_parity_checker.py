@@ -59,6 +59,8 @@ def make_live_order(
     status: str = "FILLED",
     position_type: str = "LONG",
 ) -> Dict[str, Any]:
+    """組一筆實盤委託紀錄，預設為全部成交的 2330 買單"""
+
     return {
         "symbol": symbol,
         "action": action,
@@ -73,6 +75,8 @@ def make_live_order(
 def make_backtest_order(
     symbol: str = "2330", action: Action = Action.BUY, volume: int = 2
 ) -> BaseOrder:
+    """組一張回測委託"""
+
     return StockOrder(
         stock_id=symbol,
         date=TODAY,
@@ -84,6 +88,8 @@ def make_backtest_order(
 
 
 def make_event(category: str, symbol: str = "2317") -> Dict[str, Any]:
+    """組一筆 Alpha 的風控事件"""
+
     return {"category": category, "symbol": symbol, "strategy_name": "Alpha"}
 
 
@@ -328,7 +334,7 @@ def unfilled_order(
 
 
 def closing_at(close: float, limit: float) -> ClosingLimitLookup:
-    """假的收盤查詢：任何標的都回同一組（收盤價, 漲跌停價）"""
+    """假的收盤查詢：任何標的都回同一組（收盤價，漲跌停價）"""
 
     def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
         return (close, limit)
@@ -592,6 +598,8 @@ def test_loaded_strategy_without_orders_is_still_compared(
 
 # === 回測多出的開倉單（反方向的快照口徑）===
 def clean_run(phase: str = "close", end_reason: str = "正常結束") -> Dict[str, Any]:
+    """組一筆沒有異常的段落執行紀錄"""
+
     return {
         "phase": phase,
         "end_reason": end_reason,

@@ -14,7 +14,7 @@ from core.utils import (
 """
 成本設定：一次回測（或一次實盤）固定的手續費、稅、借券與保證金參數
 
-**與成本模型本體分開**：`StockCostModel`／`TwFuturesCostModel` 是回測引擎的可插拔
+**與成本模型本體分開**：`TwStockCostModel`／`TwFuturesCostModel` 是回測引擎的可插拔
 model，而這三個 dataclass 只是參數容器——策略層、部位管理層與實盤組裝層都要建一份。
 放在 `core/backtest/models/` 的話，`core/position/` 為了拿一個 dataclass 就得
 import 回測套件，那是部位管理層不該有的方向。
@@ -51,7 +51,7 @@ class ShortConstraint:
     auto_force_cover_on_ex_dividend: bool = True
     # 單一空單曝險上限（佔初始本金比例）；`None` ＝ 不限制。
     #
-    # **實盤有一份對應的設定**：`RiskConfig.single_symbol_exposure_ratio`，
+    # **實盤有一份對應的設定**：`StockRiskConfig.single_symbol_exposure_ratio`，
     # 預設 0.35、多空皆適用、超限是批次截斷而非整筆拒絕。
     # 公式兩邊共用（`order_rules.exceeds_symbol_exposure()`），四個面向的
     # 差異寫在那支函式的 docstring——**改這一邊之前先看那份對照表**，
@@ -108,7 +108,7 @@ class CostConfig:
     short_constraint: ShortConstraint = field(default_factory=ShortConstraint)
 
     # 回測區間（由 factory 依策略注入）。**只用於稅制邊界的警示**，不參與任何計算；
-    # 拿不到時一律靜默，見 `StockCostModel.check_day_trade_tax_expiry()`
+    # 拿不到時一律靜默，見 `TwStockCostModel.check_day_trade_tax_expiry()`
     backtest_start_date: Optional[datetime.date] = None
     backtest_end_date: Optional[datetime.date] = None
 
