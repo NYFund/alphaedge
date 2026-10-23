@@ -156,7 +156,7 @@ This entrypoint only knows backtest flags: a live flag such as `--production` is
 | 1 | Invalid strategy settings (a removed setting field, or the strategy's own `scale` contradicts `supported_scales`); the strategy enables the exchange-list checks (`ShortConstraint.check_short_sale_list` / `check_day_trade_list`) and the period starts before the list's start date or the list has missing days; or the period contains no trading day at all. The reason is printed to stderr — run the matching `update_db` target or change the period. Any other unexpected exception is also 1 |
 | 2 | Usage error: unknown strategy name (available strategies are listed), unknown flag, start after end, start before the data start (2013-01-01 for stocks, 2015-01-01 for futures), non-positive capital, a `--scale` the strategy does not support, `--tick-universe` on a DAY backtest, or `strategy` universe on a TICK backtest whose strategy does not override `get_live_symbols()` |
 
-Results are written to `results/<StrategyName>/` (the root can be changed with the `ALPHAEDGE_RESULTS_DIR` environment variable).
+Results are written to `results/<strategy_name>/` (the root can be changed with the `ALPHAEDGE_RESULTS_DIR` environment variable). The directory is the strategy's `self.strategy_name`, **not** the class name that `--strategy` takes (`VolumeBreakoutMomentumStrategy` → `results/Volume-Breakout-Momentum/`).
 
 ## Live trading: `python -m apps.live --strategy <StrategyClassName[,…]> --phase <phase>`
 

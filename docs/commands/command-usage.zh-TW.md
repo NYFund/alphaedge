@@ -154,7 +154,7 @@ python -m apps.backtest --strategy <StrategyClassName> --scale TICK --tick-unive
 | 1 | 策略設定有誤（用了已移除的設定欄位，或策略自己的 `scale` 與 `supported_scales` 矛盾）；策略開啟交易所名單檢核（`ShortConstraint.check_short_sale_list`／`check_day_trade_list`）而區間早於名單起點或名單有缺日；回測區間內沒有任何交易日。原因印在 stderr，先跑對應的 `update_db` target 或改區間。其他未預期的例外也是 1 |
 | 2 | 用法錯誤：策略名找不到（會列出可用策略）、未知旗標、起日晚於迄日、起日早於歷史資料起點（台股 2013-01-01、期貨 2015-01-01）、資金不為正數、`--scale` 不在策略支援範圍、DAY 回測帶 `--tick-universe`、TICK 回測選 `strategy` 但策略沒覆寫 `get_live_symbols()` |
 
-結果輸出在 `results/<策略名>/`（可用環境變數 `ALPHAEDGE_RESULTS_DIR` 改根目錄）。
+結果輸出在 `results/<strategy_name>/`（可用環境變數 `ALPHAEDGE_RESULTS_DIR` 改根目錄）。目錄名取策略的 `self.strategy_name`，**不是** `--strategy` 吃的類別名（`VolumeBreakoutMomentumStrategy` → `results/Volume-Breakout-Momentum/`）。
 
 ## 實盤：`python -m apps.live --strategy <StrategyClassName[,…]> --phase <段落>`
 

@@ -59,7 +59,7 @@ python -m apps.backtest --strategy IntradayMomentumStrategy --scale TICK
 
 ## 4) 檢視結果
 
-回測結果輸出在 `results/<StrategyName>/`，所有檔名都以策略名稱為前綴：
+回測結果輸出在 `results/<strategy_name>/`，所有檔名都以同一個名稱為前綴。**這裡的名稱是策略的 `self.strategy_name`，不是 `--strategy` 吃的類別名**（`VolumeBreakoutMomentumStrategy` → `results/Volume-Breakout-Momentum/`）：
 
 | 檔案 | 內容 |
 |------|------|

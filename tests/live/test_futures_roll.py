@@ -428,3 +428,80 @@ def test_close_segment_rolls_before_collecting_signals(
     assert placed_symbols(broker)[: len(expected)] == expected
     if not expected:
         assert "TX202611" not in placed_symbols(broker)
+
+
+def test_roll_legs_are_checked_against_the_snapshot_not_yesterdays_settlement(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    偏離檢查以換月計畫的快照價為基準：參考價 45,700、快照 48,000（+5%）→ 兩腿都送出
+
+    換月先於收訊號，此時本段落還沒有報價，基準退回合約檔的前一日結算價；
+    當日漲跌超過 3% 時平倉腿會被 `PRICE_DEVIATION` 擋下、整筆 `ROLL_ABANDONED`，
+    而隔天已經換不了（最後交易日）。既有換月測試都走「取不到參考價放行」，測不到這條。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=1.0)
+    context: StrategyContext = trader.contexts[0]
+    context.data_feed.get_reference_price = lambda symbol: 45700.0  # type: ignore
+
+    assert trader.execute_rolls(None) == 1
+    assert placed_symbols(broker) == ["TX202610", "TX202611"]
+    assert roll_events(dao) == []
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'PRICE_DEVIATION'"
+    ).fetchone() == (0,)
+
+
+def test_partially_filled_close_leg_is_critical_and_rolls_the_filled_part(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    平倉腿只成交一部分：記 CRITICAL，開倉腿改送已平的口數補回曝險
+
+    以前只判 FILLED，IOC 成交 3／5 口後被取消也只記 WARN「放棄」，
+    已平的口數曝險消失卻沒有人會知道。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=0.5)
+    context: StrategyContext = trader.contexts[0]
+    # 再補一口，讓部位有 2 口可換；兩腿各 2 口、券商只成交一半
+    trader.account_sync.apply_fill(
+        ExecutionReport(
+            broker_seqno="seed2",
+            broker_trade_id="seed2",
+            symbol="TX202610",
+            action=Action.BUY,
+            price=48000.0,
+            volume=1,
+            ts=datetime.datetime(2026, 10, 19, 13, 30),
+        ),
+        strategy_name=context.name,
+    )
+
+    def leg(expiry: str, action: Action) -> FuturesOrder:
+        return FuturesOrder(
+            product="TX",
+            expiry=expiry,
+            action=action,
+            position_type=PositionType.LONG,
+            volume=2,
+            price=48000.0,
+        )
+
+    context.data_feed.plan_rolls = lambda positions, today: [  # type: ignore
+        RollPlan(
+            close_order=leg("202610", Action.SELL),
+            open_order=leg("202611", Action.BUY),
+            reason="TX202610 → TX202611（2 口）",
+        )
+    ]
+
+    trader.execute_rolls(None)
+
+    legs: List[Any] = [ticket.order for ticket in broker.tickets.values()]
+    assert [(order.symbol, order.volume) for order in legs] == [
+        ("TX202610", 2),
+        ("TX202611", 1),
+    ]
+    assert ("ROLL_PARTIAL", "CRITICAL") in roll_events(dao)

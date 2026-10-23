@@ -144,6 +144,11 @@ class FakeBroker(BaseBroker):
         if volume <= 0:
             return
 
+        # 成交落在委託當天：券商序號每天從頭配發，紀錄庫以「交易日＋序號」反查歸屬，
+        # 成交日與委託日不同就查不到擁有者
+        created: datetime.datetime = ticket.created_at or datetime.datetime(
+            2026, 9, 19, 13, 25
+        )
         report: ExecutionReport = ExecutionReport(
             broker_seqno=ticket.broker_seqno or "",
             broker_trade_id=f"T{next(self._trade_seq):06d}",
@@ -151,7 +156,7 @@ class FakeBroker(BaseBroker):
             action=ticket.order.action,
             price=ticket.order.price,
             volume=volume,
-            ts=datetime.datetime(2026, 9, 19, 13, 25),
+            ts=datetime.datetime.combine(created.date(), datetime.time(13, 25)),
             raw={"source": "FakeBroker"},
         )
         if self.defer_reports:

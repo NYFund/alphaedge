@@ -12,7 +12,7 @@ from core.broker.tw.shioaji_execution_handler import ShioajiExecutionHandler
 from core.broker.tw.shioaji_order_mapper import ShioajiOrderMapper
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.broker.tw.shioaji_session import ShioajiSession
-from core.config.settings import now_live
+from core.config.settings import get_live_timezone, now_live
 from core.models import (
     BaseQuote,
     BrokerAccountSnapshot,
@@ -445,7 +445,9 @@ class ShioajiBroker(BaseBroker):
         if trade is None:
             raise LookupError(f"找不到 {ticket.client_order_id} 對應的 Trade，無法改價")
 
-        aligned: float = self.mapper.align_price(price, ticket.order.action)
+        aligned: float = self.mapper.align_price(
+            price, ticket.order.action, ticket.order.symbol
+        )
         self.rate_limiter.acquire(RateLimitCategory.ORDER)
         self._apply_trade(
             ticket,
@@ -597,6 +599,18 @@ class ShioajiBroker(BaseBroker):
             ticket.status = self.to_live_status(getattr(status, "status", None))
             ticket.filled_volume = int(getattr(status, "deal_quantity", 0) or 0)
             ticket.reject_reason = str(getattr(status, "msg", "") or "") or None
+            # 券商端的送單時刻：重啟接管的模糊比對以它和本地建立時刻的差距排除候選。
+            # Shioaji 給的是 naive 本地時間，補上實盤時區才能和本地的 aware 時刻相減
+            order_datetime: Any = getattr(status, "order_datetime", None)
+            if (
+                isinstance(order_datetime, datetime.datetime)
+                and ticket.created_at is None
+            ):
+                ticket.created_at = (
+                    order_datetime.replace(tzinfo=get_live_timezone())
+                    if order_datetime.tzinfo is None
+                    else order_datetime
+                )
 
     @staticmethod
     def to_live_status(broker_status: Any) -> LiveOrderStatus:

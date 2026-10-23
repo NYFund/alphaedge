@@ -419,7 +419,7 @@ reporter 與前端兩份實作）。MDD 圖的逐日序列與 CSV 的最深點�
 
 `metrics_summary.csv` 實際輸出的 `Metric` 列：`Trades`、`Win Count`、`Loss Count`、`Win Rate (%)`、
 `Win/Loss Ratio`、`Profit Factor`、`Avg ROI (%)`、`Avg Holding Days`、`Total PnL`、`Slippage Cost`、
-`Slippage Cost / |Total PnL| (%)`、`Max Drawdown (%)`、`Annualized Volatility (%)`、`Sharpe Ratio`、
+`Slippage Cost / |Total PnL| (%)`、`Final Equity`、`Max Drawdown (%)`、`Annualized Volatility (%)`、`Sharpe Ratio`、
 `Sortino Ratio`、`Benchmark`、`Information Ratio`、`Equity Basis`。**沒有年化報酬率**；帳戶總 ROI 只印在 log。
 
 ## 使用方式

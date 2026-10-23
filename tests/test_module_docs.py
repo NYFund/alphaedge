@@ -2,8 +2,12 @@ import ast
 import pathlib
 from typing import List, Tuple
 
+from tests.test_entrypoint_and_logging import _GUARDED_PACKAGES
+
 _PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[1]
-_CORE: pathlib.Path = _PROJECT_ROOT / "core"
+# 掃描根與入口／日誌護欄同一份清單，再加 `frontend/`（該護欄不管它：前端不寫 loguru 檔）。
+# CLAUDE.md §2 適用 `**/*.py`，只掃 `core/` 時 `frontend/app.py` 一直沒有說明也沒人發現
+_SCANNED_PACKAGES: Tuple[str, ...] = (*_GUARDED_PACKAGES, "frontend")
 # 具體策略的商品類別目錄（框架只留契約，具體策略在頂層 `strategies/`）
 _STRATEGY_DIRS: Tuple[pathlib.Path, ...] = (
     _PROJECT_ROOT / "strategies" / "stock",
@@ -11,7 +15,7 @@ _STRATEGY_DIRS: Tuple[pathlib.Path, ...] = (
 )
 
 """
-`core/` 每個模組都要有模組層級說明
+每個模組都要有模組層級說明（`core/`、`apps/`、`strategies/`、`scripts/`、`strategy_lab/`、`frontend/`）
 
 2026-09-26 補齊時有 11 個模組與 14 個 `__init__.py` 完全沒有說明，最大一支 658 行。
 補完是一次性的，**維持才是問題**：新增模組時沒有任何東西會提醒，於是覆蓋率
@@ -55,10 +59,14 @@ def _iter_strategy_files() -> List[pathlib.Path]:
 
 
 def _iter_modules() -> List[pathlib.Path]:
-    """`core/` 下所有 `.py`"""
+    """掃描範圍內所有 `.py`，扣掉具體策略檔（它們的規則見 `_iter_strategy_files()`）"""
 
+    strategy_files: set = set(_iter_strategy_files())
     return sorted(
-        path for path in _CORE.rglob("*.py") if "__pycache__" not in path.parts
+        path
+        for package in _SCANNED_PACKAGES
+        for path in (_PROJECT_ROOT / package).rglob("*.py")
+        if "__pycache__" not in path.parts and path not in strategy_files
     )
 
 
@@ -71,8 +79,13 @@ def test_the_scan_actually_finds_modules() -> None:
 
     modules: List[pathlib.Path] = _iter_modules()
 
-    assert len(modules) >= 200, f"只掃到 {len(modules)} 個模組，掃描範圍可能已失效"
+    assert len(modules) >= 300, f"只掃到 {len(modules)} 個模組，掃描範圍可能已失效"
     assert any(path.name == "__init__.py" for path in modules)
+    # 每個宣告的目錄都要真的掃到東西：目錄改名時清單會留著舊名字、靜默少掃一塊
+    for package in _SCANNED_PACKAGES:
+        assert any(
+            path.relative_to(_PROJECT_ROOT).parts[0] == package for path in modules
+        ), f"{package}/ 一個模組都沒掃到"
 
 
 def test_every_module_has_a_module_level_description() -> None:

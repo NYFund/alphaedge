@@ -233,8 +233,26 @@ def test_run_record_carries_the_loaded_strategies(dao: LiveTradeDAO) -> None:
 
     (raw,) = dao.conn.execute("SELECT strategy_params_json FROM live_run").fetchone()
     assert json.loads(raw) == {
-        "strategies": ["LiveStockStrategy", "AnotherLiveStockStrategy"]
+        "strategies": ["LiveStockStrategy", "AnotherLiveStockStrategy"],
+        "live_tags": {},
     }
+
+
+def test_run_record_carries_the_live_tags(dao: LiveTradeDAO) -> None:
+    """
+    有設定 `live_tag` 的策略，代號寫進啟動紀錄；沒設定的不列
+
+    `live_tag` 宣稱「只寫本地紀錄」，這裡就是它唯一落地的地方——
+    沒有讀取端的話，那句說明就是空話。
+    """
+
+    tagged: LiveStockStrategy = LiveStockStrategy()
+    tagged.live_tag = "動能A"
+
+    build([tagged, AnotherLiveStockStrategy()], dao)
+
+    (raw,) = dao.conn.execute("SELECT strategy_params_json FROM live_run").fetchone()
+    assert json.loads(raw)["live_tags"] == {"LiveStockStrategy": "動能A"}
 
 
 def test_run_record_carries_the_instrument_type(dao: LiveTradeDAO) -> None:

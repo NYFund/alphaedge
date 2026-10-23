@@ -137,6 +137,8 @@ RISK_EVENT_TO_CATEGORY: Dict[str, str] = {
     risk_events.MODE_REDUCE_ONLY: CATEGORY_RISK_REJECTED,
     risk_events.MARGIN_INSUFFICIENT: CATEGORY_RISK_REJECTED,
     risk_events.EXECUTION_UNAVAILABLE: CATEGORY_RISK_REJECTED,
+    # 時窗之外被丟掉的開倉單：兩邊都有訊號、實盤沒送出去，是執行面而不是制度面
+    risk_events.SUBMIT_DEADLINE_PASSED: CATEGORY_SEND_FAILED,
 }
 
 CATEGORY_GROUP: Dict[str, str] = {

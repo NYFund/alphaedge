@@ -26,6 +26,7 @@ from core.models import BaseQuote, PreOpenStockQuote
 from core.models.stock.trading_list import DayTradeListSnapshot
 from core.strategies.base import BaseStrategy
 from core.utils import ExecutionTiming
+from core.utils.instrument import StockUtils
 
 """
 台股的實盤資料源：歷史資料到 T−1 由 `tw_stock.db` 提供，今天由券商提供
@@ -126,12 +127,17 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
     def fill_default_universe(self, strategy: BaseStrategy) -> None:
         """
         - Description:
-            策略沒宣告 `symbols` 時，以「`price` 表最新交易日有行情的全部股票」為標的池
+            策略沒宣告 `symbols` 時，以「`price` 表最新交易日有行情的全部普通股」為標的池
 
             **與回測每天的標的池相同**：回測餵給策略的是當天價格表上的每一檔，
             實盤若只抓策略宣告的幾檔，全市場掃描型的策略（例如漲幅選股）
             在實盤永遠拿不到報價、永遠不出訊號，而且不會有任何錯誤。
             以前一交易日為準（今天的資料要收盤後才進來）。
+
+            **過濾與回測共用 `StockUtils.filter_common_stocks()`**：回測在報價轉換時就濾掉
+            ETF 與權證，實盤若拿價格表全部代號，槓桿型 ETF（00631L、00715L）會過漲幅門檻、
+            實盤買了回測從不會買的東西，而 parity 只看得到「實盤多出一張單」。
+            要交易 ETF 的策略自己宣告 `symbols`。
 
             策略覆寫了 `get_live_symbols()`（例如受逐筆訂閱上限所限的盤中策略）時，
             改用它篩出的標的池。
@@ -171,9 +177,11 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             logger.warning(f"{name} 未宣告標的池，且價格表沒有資料，本次沒有任何標的")
             return
 
-        strategy.symbols = sorted(frame["stock_id"].astype(str).unique())
+        strategy.symbols = sorted(
+            StockUtils.filter_common_stocks(frame["stock_id"].astype(str).unique())
+        )
         logger.info(
-            f"{name} 未宣告標的池，以 {latest} 有行情的 {len(strategy.symbols)} 檔股票為標的"
+            f"{name} 未宣告標的池，以 {latest} 有行情的 {len(strategy.symbols)} 檔普通股為標的"
         )
 
     def get_day_trade_list(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:

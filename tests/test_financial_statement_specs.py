@@ -1,5 +1,6 @@
+from dataclasses import fields
 from pathlib import Path
-from typing import List
+from typing import List, Set
 
 import pytest
 
@@ -8,7 +9,7 @@ from core.config import (
     CASH_FLOW_TABLE_NAME,
     COMPREHENSIVE_INCOME_TABLE_NAME,
 )
-from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.tw.updaters.financial_statement import (
     EquityChangeMixin,
     EquityChangeSeasonStats,
@@ -180,7 +181,24 @@ def test_updater_still_exposes_the_equity_change_constants() -> None:
         )
 
     assert issubclass(FinancialStatementUpdater, EquityChangeMixin)
-    assert EquityChangeSeasonStats is not None
+
+
+def test_equity_change_stats_counters_stay_aligned_with_update_stats() -> None:
+    """
+    權益變動表的統計與 `UpdateStats` 共用同一組計數欄位
+
+    兩者刻意不共用類別（權益變動表是一檔一次請求、結果三態），但收尾印出的統計行
+    要能和其他 target 對照著讀；任一邊改名或拿掉欄位，對照就斷了。
+    """
+
+    shared: Set[str] = {"requested", "ok", "no_data", "unreachable", "clean_failed"}
+    equity_fields: Set[str] = {item.name for item in fields(EquityChangeSeasonStats)}
+    update_fields: Set[str] = {item.name for item in fields(UpdateStats)}
+
+    assert shared <= equity_fields
+    assert shared <= update_fields
+    fresh: EquityChangeSeasonStats = EquityChangeSeasonStats()
+    assert all(getattr(fresh, name) == 0 for name in shared)
 
 
 def test_equity_change_throttle_does_not_shadow_the_shared_one() -> None:

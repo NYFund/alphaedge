@@ -36,6 +36,9 @@ EXECUTION_UNAVAILABLE: str = "EXECUTION_UNAVAILABLE"
 CAPITAL_EXHAUSTED: str = "CAPITAL_EXHAUSTED"
 # 跨策略同標的守門（`core/live/attribution/conflict_guard.py`）
 CROSS_STRATEGY_BLOCKED: str = "CROSS_STRATEGY_BLOCKED"
+# 送單時窗之外（還沒到或已過）被丟掉的開倉單（`core/live/trader.py`）：出場單另排補平並寫
+# `UNSENT_EXIT`，開倉單以前只有 log，parity 會把它歸成快照口徑而不推播
+SUBMIT_DEADLINE_PASSED: str = "SUBMIT_DEADLINE_PASSED"
 
 ORDER_BLOCK_CATEGORIES: FrozenSet[str] = frozenset(
     {
@@ -54,6 +57,7 @@ ORDER_BLOCK_CATEGORIES: FrozenSet[str] = frozenset(
         EXECUTION_UNAVAILABLE,
         CAPITAL_EXHAUSTED,
         CROSS_STRATEGY_BLOCKED,
+        SUBMIT_DEADLINE_PASSED,
     }
 )
 
@@ -65,14 +69,22 @@ DEGRADE: str = "DEGRADE"
 # 盤中與送單流程（`core/live/trader.py`）
 DAY_TRADE_COVER_FAILED: str = "DAY_TRADE_COVER_FAILED"
 PENDING_ACTION_TRUNCATED: str = "PENDING_ACTION_TRUNCATED"
+# 出場單送出前被同標的「在途出場量」截短或截到 0：開盤段先送的補平單 09:00 才撮合，
+# 策略接著對同一個部位再送一張平倉，兩張同時撮合就是超賣、把部位做反
+EXIT_TRUNCATED: str = "EXIT_TRUNCATED"
 UNSENT_EXIT: str = "UNSENT_EXIT"
 REFERENCE_PRICE_MISSING: str = "REFERENCE_PRICE_MISSING"
 ROLL_SKIPPED: str = "ROLL_SKIPPED"
 ROLL_FAILED: str = "ROLL_FAILED"
 ROLL_ABANDONED: str = "ROLL_ABANDONED"
 ROLL_OPEN_FAILED: str = "ROLL_OPEN_FAILED"
+# 平倉腿只成交一部分（IOC 部分成交後被取消）：已平的口數曝險消失，開倉腿改送已平量補回
+ROLL_PARTIAL: str = "ROLL_PARTIAL"
 # 券商登入後仍組不出標的池：策略拿到 0 筆報價、永遠不會出訊號，而鉤子照常被呼叫、不會報錯
 UNIVERSE_EMPTY: str = "UNIVERSE_EMPTY"
+# 等不到送單時窗（行程提早太久啟動、或時鐘卡住）：本段落放棄送單。提早送出的尾盤單會在
+# 逐筆交易時段以掛漲停的限價成交，與回測的收盤價假設分岔，而且看起來完全正常
+SUBMIT_WINDOW_MISSED: str = "SUBMIT_WINDOW_MISSED"
 # 券商連線中斷與重連成功：**不降級**，是否有漏接由重連後的對帳判定（不一致時由對帳器降級）
 BROKER_SESSION_DOWN: str = "BROKER_SESSION_DOWN"
 BROKER_RECONNECTED: str = "BROKER_RECONNECTED"
@@ -88,7 +100,20 @@ FILL_BACKFILLED: str = "FILL_BACKFILLED"
 FILL_UNMATCHED: str = "FILL_UNMATCHED"
 FILL_REPORT_MISSING: str = "FILL_REPORT_MISSING"
 ORDER_STATE_INVALID: str = "ORDER_STATE_INVALID"
+# 撤單或改價被券商拒絕：單仍在場上（多半是已經成交了才撤不掉），狀態不動只留事件
+ORDER_OP_FAILED: str = "ORDER_OP_FAILED"
 RECOVER_AMBIGUOUS: str = "RECOVER_AMBIGUOUS"
+# 券商已受理、本地卻寫不進紀錄庫：單是活的，不可當成送單失敗去補平
+ORDER_PERSIST_FAILED: str = "ORDER_PERSIST_FAILED"
+# 成交入帳時部位管理拒絕開倉（餘額不足、曝險超限）：券商已成交，部位仍要進帳，
+# 但這代表 sizer 或成交價與額度對不上，要有人看
+FILL_ACCOUNT_REJECTED: str = "FILL_ACCOUNT_REJECTED"
+# 以券商部位重建歸屬帳（`core/live/attribution/resync.py`）：每一筆 lot 異動一筆事件
+RESYNC_FROM_BROKER: str = "RESYNC_FROM_BROKER"
+# 啟動重建時券商有、歸屬帳查無來源的部位被收進 `__unattributed__`
+# （`core/live/attribution/position_ledger.py`）：每一筆收進一筆事件。這是對帳「一致」
+# 的盲點——收進去之後對帳就對得上，沒有事件的話沒人知道有部位脫離了策略
+POSITION_UNATTRIBUTED: str = "POSITION_UNATTRIBUTED"
 
 OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
     {
@@ -97,13 +122,16 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         DEGRADE,
         DAY_TRADE_COVER_FAILED,
         PENDING_ACTION_TRUNCATED,
+        EXIT_TRUNCATED,
         UNSENT_EXIT,
         REFERENCE_PRICE_MISSING,
         ROLL_SKIPPED,
         ROLL_FAILED,
         ROLL_ABANDONED,
         ROLL_OPEN_FAILED,
+        ROLL_PARTIAL,
         UNIVERSE_EMPTY,
+        SUBMIT_WINDOW_MISSED,
         BROKER_SESSION_DOWN,
         BROKER_RECONNECTED,
         UNFILLED_EXIT,
@@ -114,7 +142,12 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         FILL_UNMATCHED,
         FILL_REPORT_MISSING,
         ORDER_STATE_INVALID,
+        ORDER_OP_FAILED,
         RECOVER_AMBIGUOUS,
+        ORDER_PERSIST_FAILED,
+        FILL_ACCOUNT_REJECTED,
+        RESYNC_FROM_BROKER,
+        POSITION_UNATTRIBUTED,
     }
 )
 

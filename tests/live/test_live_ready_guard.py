@@ -76,10 +76,24 @@ def test_strategy_is_not_live_ready_by_default() -> None:
     **預設不可上實盤**
 
     預設可以的話，一支剛寫完、沒人確認過實盤語意的策略就會直接送真單。
+    **不可用 `FakeStrategy` 測**：它在 `__init__` 自己覆寫 `live_ready`，
+    斷言的是覆寫值，基底的預設改成 True 也照樣綠。
     """
 
-    assert BaseStrategy.__init__ is not None
-    assert FakeStrategy(live_ready=False).live_ready is False
+    class Bare(BaseStrategy):
+        """不碰 `live_ready` 的最小策略，只吃基底的預設"""
+
+        def setup_account(self, account: object) -> None:
+            """測試不需要帳戶"""
+
+    strategy: Bare = Bare()
+    strategy.execution_schedule = BOTH_AT_CLOSE
+    strategy.live_execution = ExecutionStyle.MARKET
+
+    assert strategy.live_ready is False
+    problems: List[str] = inspect_strategy(strategy)
+    assert len(problems) == 1
+    assert "live_ready" in problems[0]
 
 
 def test_missing_live_ready_is_rejected() -> None:

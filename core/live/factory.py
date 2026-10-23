@@ -414,7 +414,7 @@ def build_live_trader(
         now_provider=now_provider,
     )
     ledger: PositionAttributionLedger = PositionAttributionLedger(
-        resolved_dao, now_provider
+        resolved_dao, now_provider, run_id=resolved_run_id
     )
     allocator: CapitalAllocator = CapitalAllocator(
         {name: live_capital(strategy) for name, strategy in zip(names, strategies)},
@@ -464,6 +464,7 @@ def build_live_trader(
         resolved_dao,
         now_provider,
         order_builders=order_builders,
+        run_id=resolved_run_id,
     )
     # OMS 比逐策略元件先建（它是單例），建構器要等策略都組好才齊
     order_manager.order_rebuilder = make_order_rebuilder(order_builders, now_provider)
@@ -537,6 +538,11 @@ def build_live_trader(
         phase,
         [type(strategy).__name__ for strategy in strategies],
         _run_instrument_type(strategies),
+        live_tags={
+            type(strategy).__name__: strategy.live_tag
+            for strategy in strategies
+            if strategy.live_tag
+        },
         risk_config={
             "account": account_risk.to_dict(),
             "strategies": {
@@ -1355,6 +1361,7 @@ def _record_run(
     strategy_names: Sequence[str] = (),
     instrument_type: Optional[str] = None,
     risk_config: Optional[Dict[str, Any]] = None,
+    live_tags: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -1370,6 +1377,8 @@ def _record_run(
     **本次載入的策略寫進 `strategy_params_json`**（`{"strategies": [...]}`）：盤後 parity
     要知道某支策略當天的段落有沒有正常跑完，才分得出「回測多出的開倉單」是快照口徑
     還是實盤根本沒跑到。這一欄先前從未寫入，2026-10-08 以前的紀錄為 NULL。
+    有設定 `live_tag` 的策略另記在同一欄的 `live_tags`（`{策略類別名: 代號}`）：策略代號
+    宣稱「只寫本地紀錄」，這裡就是它落地的地方；沒設定的策略不列，免得每筆紀錄都帶一串空字串。
 
     **商品類別寫進 `instrument_type`**：股票與期貨是兩個行程、段落名相同，存活監控
     要靠它分辨「期貨尾盤沒跑」而不是被股票尾盤的紀錄遮住。更早的紀錄為 NULL。
@@ -1399,7 +1408,11 @@ def _record_run(
             "git_commit": _git_commit(),
             "shioaji_version": _shioaji_version(),
             "strategy_params_json": json.dumps(
-                {"strategies": list(strategy_names)}, ensure_ascii=False
+                {
+                    "strategies": list(strategy_names),
+                    "live_tags": dict(live_tags or {}),
+                },
+                ensure_ascii=False,
             ),
             "instrument_type": instrument_type,
             "risk_config_json": (

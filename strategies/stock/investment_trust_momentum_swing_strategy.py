@@ -154,28 +154,39 @@ class InvestmentTrustMomentumSwingStrategy(BaseStockStrategy):
 
         return MarketCalendar.previous_trading_day_from_api(self.price, date)
 
-    def count_holding_days(
-        self, open_date: datetime.date, date: datetime.date
-    ) -> Optional[int]:
+    def count_holding_days(self, open_date: datetime.date, date: datetime.date) -> int:
         """
         - Description:
             計算從開倉日到 `date` 經過幾個交易日（開倉日當天為 0）
 
-            用交易日而不是曆日：連假會讓曆日持有期整段縮水。
+            用交易日而不是曆日：連假會讓曆日持有期整段縮水。優先查預備好的清單，
+            **查不到（實盤日期超出回測區間）就回頭問資料庫**，不以曆日換算近似——
+            跨春節時曆日除以固定倍數會比交易日多出好幾天，實盤提早出場、回測卻續抱。
+
+            問資料庫時**當天另計 1 天**：當天的日 K 要到隔天資料更新後才入庫，
+            查開倉日與當天之間（不含兩端）的交易日再加上當天；策略只在交易日被呼叫，
+            當天必然是交易日。
         - Parameters:
             - open_date: datetime.date
                 開倉日
             - date: datetime.date
                 當前報價日
         - Return:
-            - Optional[int]
-                經過的交易日數；任一日期不在清單內時為 None（交由呼叫端退回曆日判斷）
+            - int
+                經過的交易日數
         """
 
         try:
             return self.trading_days.index(date) - self.trading_days.index(open_date)
         except ValueError:
-            return None
+            pass
+
+        if date <= open_date:
+            return 0
+        between: List[datetime.date] = self.price.get_trading_days(
+            open_date + datetime.timedelta(days=1), date - datetime.timedelta(days=1)
+        )
+        return len(between) + 1
 
     def check_market_uptrend(self, signal_date: datetime.date) -> bool:
         """
@@ -334,12 +345,7 @@ class InvestmentTrustMomentumSwingStrategy(BaseStockStrategy):
             )
             due_volume: int = 0
             for position in positions:
-                holding_days: Optional[int] = self.count_holding_days(
-                    position.date, quote.date
-                )
-                # 清單查不到（實盤日期超出回測區間）時以曆日 1.4 倍近似
-                if holding_days is None:
-                    holding_days = int((quote.date - position.date).days / 1.4)
+                holding_days: int = self.count_holding_days(position.date, quote.date)
                 if holding_days >= self.HOLDING_DAYS:
                     due_volume += position.volume
 

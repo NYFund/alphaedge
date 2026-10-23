@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 from typing import Any, Callable, Dict, List, Optional
 
 import pytest
@@ -748,3 +749,340 @@ def test_ambiguous_fuzzy_match_degrades_instead_of_guessing(
     assert ambiguous is not None
     assert ambiguous.status is LiveOrderStatus.FAILED
     assert any("模糊比對" in reason for reason in degradations)
+
+
+def test_persist_failure_after_broker_accepts_is_not_a_send_failure(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    券商已受理、本地落地失敗：不往上拋，單留在記憶體照常收回報
+
+    `dispatch()` 把 `submit()` 的例外一律當成「沒送出」——出場單會被排成次日補平，
+    對已在場上的單再平一次。這種失敗要以 CRITICAL 事件浮出來，而不是變成第二張單。
+    """
+
+    original: Callable[[Dict[str, Any]], None] = dao.upsert_order
+
+    def failing_after_seqno(row: Dict[str, Any]) -> None:
+        if row.get("broker_seqno"):
+            raise sqlite3.OperationalError("database is locked")
+        original(row)
+
+    dao.upsert_order = failing_after_seqno  # type: ignore[method-assign]
+
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    assert fake_broker.placed_count == 1
+    assert ticket.broker_seqno is not None
+    assert oms.tickets[ticket.client_order_id] is ticket
+    categories: List[str] = [
+        row[0] for row in dao.conn.execute("SELECT category FROM live_risk_event")
+    ]
+    assert categories == ["ORDER_PERSIST_FAILED"]
+
+
+# === 送單逾時被標 FAILED 的單 ===
+def _failed_send_row(client_order_id: str = "run1-0009") -> Dict[str, Any]:
+    """送單途中逾時、沒拿到序號就被標 FAILED 的委託列"""
+
+    return {
+        "client_order_id": client_order_id,
+        "run_id": "run1",
+        "strategy_name": "VolumeBreakoutMomentumStrategy",
+        "symbol": "2330",
+        "action": "Buy",
+        "position_type": "LONG",
+        "price": 1000.0,
+        "volume": 2,
+        "status": "FAILED",
+        "reject_reason": "Timeout Topic: api/v1/paper/place_order",
+        "custom_field": "010009",
+        "created_at": NOW,
+    }
+
+
+def _broker_order(
+    custom_field: str,
+    status: LiveOrderStatus = LiveOrderStatus.SUBMITTED,
+    filled_volume: int = 0,
+    created_at: Optional[datetime.datetime] = None,
+    seqno: str = "000777",
+) -> OrderTicket:
+    """券商端刷新回來的委託（還沒對上本地委託，只有壓縮碼與序號）"""
+
+    return OrderTicket(
+        order=make_order(),
+        status=status,
+        broker_seqno=seqno,
+        broker_order_id=f"A{seqno}",
+        filled_volume=filled_volume,
+        custom_field=custom_field,
+        created_at=created_at,
+    )
+
+
+def test_recover_takes_over_a_failed_send_the_broker_actually_accepted(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    送單逾時被標 FAILED、券商端其實有單：接管後以券商狀態為準，序號落地
+
+    2026-10-20 換月開倉腿逾時 5 秒被標 FAILED，券商 2 秒後成交；當時的接管清單
+    排除 FAILED，這張單永遠不會被配對，成交落進 `__unattributed__`。
+    """
+
+    dao.upsert_order(_failed_send_row())
+    fake_broker.tickets["broker-side"] = _broker_order("010009")
+
+    recovered: List[OrderTicket] = oms.recover(TODAY)
+
+    assert recovered[0].status is LiveOrderStatus.SUBMITTED
+    assert recovered[0].broker_seqno == "000777"
+    assert dao.conn.execute(
+        "SELECT status, broker_seqno FROM live_order WHERE client_order_id = 'run1-0009'"
+    ).fetchone() == ("SUBMITTED", "000777")
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'ORDER_STATE_INVALID'"
+    ).fetchone() == (0,)
+
+
+def test_recover_keeps_a_failed_send_failed_when_the_broker_has_no_such_order(
+    oms: OrderManager,
+    dao: LiveTradeDAO,
+    fake_broker: FakeBroker,
+    degradations: List[str],
+) -> None:
+    """券商端也查無此單：維持 FAILED，不重送、不降級、不重複寫事件"""
+
+    dao.upsert_order(_failed_send_row())
+    before: int = fake_broker.placed_count
+
+    recovered: List[OrderTicket] = oms.recover(TODAY)
+
+    assert recovered[0].status is LiveOrderStatus.FAILED
+    assert fake_broker.placed_count == before
+    assert degradations == []
+    assert dao.conn.execute("SELECT COUNT(*) FROM live_risk_event").fetchone() == (0,)
+
+
+def test_recover_does_not_copy_the_filled_volume_from_the_broker(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    接管只補狀態與序號，成交量留給成交回填
+
+    把券商的累計成交量直接抄進 `filled_volume`，盤後與啟動時的回填會以為沒東西要補，
+    那些成交就進不了歸屬帳、被重建收進 `__unattributed__`。
+    """
+
+    dao.upsert_order(_failed_send_row())
+    fake_broker.tickets["broker-side"] = _broker_order(
+        "010009", status=LiveOrderStatus.FILLED, filled_volume=2
+    )
+
+    recovered: List[OrderTicket] = oms.recover(TODAY)
+
+    assert recovered[0].status is LiveOrderStatus.FILLED
+    assert recovered[0].filled_volume == 0
+
+
+def test_recover_persists_the_seqno_even_when_the_status_is_unchanged(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """以壓縮碼對回來、狀態沒變的單，補到的序號也要落地，否則成交回填對不到它"""
+
+    dao.upsert_order({**_failed_send_row(), "status": "SUBMITTED"})
+    fake_broker.tickets["broker-side"] = _broker_order("010009")
+
+    oms.recover(TODAY)
+
+    assert dao.conn.execute(
+        "SELECT broker_seqno FROM live_order WHERE client_order_id = 'run1-0009'"
+    ).fetchone() == ("000777",)
+
+
+def test_fuzzy_match_ignores_candidates_outside_the_time_window(
+    oms: OrderManager,
+    dao: LiveTradeDAO,
+    fake_broker: FakeBroker,
+    degradations: List[str],
+) -> None:
+    """
+    同標的同價量的兩筆候選，只有送單時刻落在時窗內的那筆算
+
+    同一支策略早上與尾盤各送一張同價同量的單，少了時間窗就是永遠要人工確認。
+    券商端沒有時間的候選不排除。
+    """
+
+    dao.upsert_order(
+        {**_failed_send_row(), "status": "PENDING_SUBMIT", "custom_field": "zz9999"}
+    )
+    fake_broker.tickets["morning"] = _broker_order(
+        "", created_at=NOW - datetime.timedelta(hours=4), seqno="000111"
+    )
+    fake_broker.tickets["now"] = _broker_order(
+        "", created_at=NOW + datetime.timedelta(seconds=30), seqno="000222"
+    )
+
+    recovered: List[OrderTicket] = oms.recover(TODAY)
+
+    assert recovered[0].broker_seqno == "000222"
+    assert degradations == []
+
+
+def test_fuzzy_match_without_broker_timestamps_still_reports_ambiguity(
+    oms: OrderManager,
+    dao: LiveTradeDAO,
+    fake_broker: FakeBroker,
+    degradations: List[str],
+) -> None:
+    dao.upsert_order(
+        {**_failed_send_row(), "status": "PENDING_SUBMIT", "custom_field": "zz9999"}
+    )
+    fake_broker.tickets["a"] = _broker_order("", seqno="000111")
+    fake_broker.tickets["b"] = _broker_order("", seqno="000222")
+
+    recovered: List[OrderTicket] = oms.recover(TODAY)
+
+    assert recovered[0].status is LiveOrderStatus.FAILED
+    assert any("模糊比對" in reason for reason in degradations)
+
+
+def test_late_ack_after_a_failed_send_moves_the_order_to_submitted(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    """送單逾時被標 FAILED 之後才到的新單確認：券商受理了，單是活的"""
+
+    def timing_out(ticket: OrderTicket) -> OrderTicket:
+        # 真券商逾時：沒有回應，本地拿不到序號
+        raise TimeoutError("Timeout Topic: api/v1/paper/place_order")
+
+    fake_broker.place_order = timing_out  # type: ignore[assignment]
+    with pytest.raises(TimeoutError):
+        oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+    ticket: OrderTicket = next(iter(oms.tickets.values()))
+    assert ticket.status is LiveOrderStatus.FAILED
+    assert ticket.broker_seqno is None
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno="000777",
+            op_type="New",
+            op_code="00",
+            custom_field=ticket.custom_field or "",
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.SUBMITTED
+    assert ticket.broker_seqno == "000777"
+
+
+def test_a_fill_moves_a_failed_send_forward_instead_of_being_parked(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    """FAILED 的單收到成交：它其實送到了，照狀態機推進到 FILLED，不是「成交照收、狀態不動」"""
+
+    fake_broker.ack_on_submit = False
+    original: Callable[..., Any] = fake_broker.place_order
+
+    def timing_out(ticket: OrderTicket) -> OrderTicket:
+        original(ticket)
+        raise TimeoutError("timeout")
+
+    fake_broker.place_order = timing_out  # type: ignore[assignment]
+    with pytest.raises(TimeoutError):
+        oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+    ticket: OrderTicket = next(iter(oms.tickets.values()))
+    ticket.broker_seqno = "000777"  # 接管或遲到的確認補上序號之後
+
+    fake_broker.execution_queue.put(
+        ExecutionReport(
+            broker_seqno="000777",
+            broker_trade_id="T1",
+            symbol="2330",
+            action=Action.BUY,
+            price=1000.0,
+            volume=2,
+            ts=NOW,
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.FILLED
+    assert ticket.filled_volume == 2
+
+
+# === 事件序號與撤單失敗 ===
+def test_event_seq_continues_across_processes(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    另一個行程對同一張單寫轉移時，序號接著紀錄庫既有的最大值
+
+    每個行程都從 1 起算會撞 `(client_order_id, seq)` 主鍵、被靜默吞掉，
+    事件表少掉的正是盤後寫的 FILLED／CANCELLED。
+    """
+
+    fake_broker.fill_ratio = 0.0
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    after_close: OrderManager = OrderManager(
+        fake_broker, dao, "after", run_index=9, now_provider=lambda: NOW
+    )
+    recovered: OrderTicket = after_close.recover(TODAY)[0]
+    after_close.transition(recovered, LiveOrderStatus.CANCELLED, op_type="expire")
+
+    rows: List[Any] = dao.conn.execute(
+        "SELECT seq, to_status FROM live_order_event WHERE client_order_id = ? "
+        "ORDER BY seq",
+        (ticket.client_order_id,),
+    ).fetchall()
+    assert rows == [(1, "PENDING_SUBMIT"), (2, "SUBMITTED"), (3, "CANCELLED")]
+
+
+def test_cancel_failure_does_not_reject_a_live_order(
+    oms: OrderManager, fake_broker: FakeBroker, dao: LiveTradeDAO
+) -> None:
+    """
+    撤單失敗（多半是已經成交了才撤不掉）：單仍在場上，不可標成 REJECTED
+
+    標成終態會釋放保留、不再核對，盤後也不替它排補平。
+    """
+
+    fake_broker.fill_ratio = 0.0
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "",
+            op_type="Cancel",
+            op_code="88",
+            op_msg="委託已成交，無法刪單",
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.SUBMITTED
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'ORDER_OP_FAILED'"
+    ).fetchone() == (1,)
+
+
+def test_new_order_failure_is_still_a_rejection(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    fake_broker.ack_on_submit = False
+    ticket: OrderTicket = oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+
+    fake_broker.execution_queue.put(
+        OrderStatusEvent(
+            broker_seqno=ticket.broker_seqno or "",
+            op_type="New",
+            op_code="88",
+            op_msg="餘額不足",
+        )
+    )
+    oms.drain_executions()
+
+    assert ticket.status is LiveOrderStatus.REJECTED

@@ -529,6 +529,22 @@ class PreTradeRiskManager:
             return RiskDecision.reject("ORDER_RATE", reason)
         return RiskDecision.ok()
 
+    def preload_daily_amount(self, strategy_name: str, amount: float) -> None:
+        """
+        - Description:
+            啟動時以紀錄庫裡當日已送出的委託金額起算累計
+
+            三個段落是三個行程、重啟也會歸零，而單日累計上限要防的正是「重啟反覆送單」：
+            每個行程都從 0 起算，這條上限只管得住單一段落。
+        - Parameters:
+            - strategy_name: str
+                策略名
+            - amount: float
+                本行程啟動前當日已送出的委託金額
+        """
+
+        self.daily_amount[strategy_name] = amount
+
     def _record_submission(self, strategy_name: str, amount: float) -> None:
         """通過後才計入流量與頻率：被拒的單沒有送出去，不該佔額度"""
 
