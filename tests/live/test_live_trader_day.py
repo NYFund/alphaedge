@@ -491,6 +491,111 @@ def test_halted_strategy_hooks_are_not_called() -> None:
     assert harness.broker.placed_count == 0
 
 
+# === 報價日期 ===
+class QuoteRecorder(ScriptedStrategy):
+    """記下每個鉤子收到的報價代號；開倉送一張預設買單"""
+
+    def __init__(self) -> None:
+        super().__init__("Recorder", [make_order()])
+        self.seen: List[Tuple[str, List[str]]] = []
+
+    def check_open_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+        self.seen.append(("open", [quote.symbol for quote in quotes]))
+        return super().check_open_signal(quotes)
+
+    def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+        self.seen.append(("close", [quote.symbol for quote in quotes]))
+        return super().check_close_signal(quotes)
+
+
+def stale_quote(symbol: str = "2330") -> StockQuote:
+    """日期停在前一日的報價（行情源沒有更新）"""
+
+    return StockQuote(
+        stock_id=symbol,
+        scale=Scale.DAY,
+        date=TODAY - datetime.timedelta(days=1),
+        cur_price=100.0,
+        close=100.0,
+    )
+
+
+def quote_stale_events(harness: Harness) -> List[Tuple[str, str, str]]:
+    """本次寫下的 `QUOTE_STALE` 事件：`(策略, 嚴重度, 訊息)`"""
+
+    return harness.dao.conn.execute(
+        "SELECT strategy_name, severity, message FROM live_risk_event "
+        "WHERE category = 'QUOTE_STALE' ORDER BY rowid"
+    ).fetchall()
+
+
+def test_all_stale_quotes_skip_every_hook() -> None:
+    """
+    報價全是前一日的：開倉、平倉、停損鉤子都不呼叫，寫 CRITICAL 事件，策略不降級
+
+    2026-10-23 模擬環境的收盤段快照全停在前一日，策略把報價日當成前一日：
+    「持有滿一天才平倉」不成立而不賣、選股照前一日的漲幅重選，整段沒有任何事件。
+    """
+
+    strategy: QuoteRecorder = QuoteRecorder()
+    harness: Harness = Harness([strategy])
+    harness.contexts[0].data_feed._quotes = [stale_quote()]
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert strategy.seen == []
+    assert harness.broker.placed_count == 0
+    events: List[Tuple[str, str, str]] = quote_stale_events(harness)
+    assert [(name, severity) for name, severity, _ in events] == [
+        ("QuoteRecorder", "CRITICAL")
+    ]
+    assert "本段落不呼叫鉤子" in events[0][2]
+    # 行情源的問題不是策略的錯：不降級，下一個段落報價恢復就照常
+    assert harness.mode_state.effective_mode("QuoteRecorder") is TradingMode.NORMAL
+
+
+def test_only_the_stale_symbols_are_dropped() -> None:
+    """只有部分標的停在前一日：剔除那幾檔、其餘照常呼叫鉤子並送單"""
+
+    strategy: QuoteRecorder = QuoteRecorder()
+    harness: Harness = Harness([strategy])
+    harness.contexts[0].data_feed._quotes = [make_quote("2330"), stale_quote("2317")]
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert strategy.seen == [("close", ["2330"]), ("open", ["2330"])]
+    assert harness.broker.placed_count == 1
+    events: List[Tuple[str, str, str]] = quote_stale_events(harness)
+    assert len(events) == 1
+    assert "2317" in events[0][2] and "已剔除" in events[0][2]
+
+
+@pytest.mark.parametrize(
+    "quote_date",
+    [TODAY, NOW],
+    ids=["daily_date", "tick_datetime"],
+)
+def test_todays_quotes_pass_without_an_event(
+    quote_date: datetime.date,
+) -> None:
+    """當日報價照常通過；逐筆報價帶時刻（`datetime`）也以日期部分比對"""
+
+    strategy: QuoteRecorder = QuoteRecorder()
+    harness: Harness = Harness([strategy])
+    harness.contexts[0].data_feed._quotes = [
+        StockQuote(
+            stock_id="2330",
+            scale=Scale.DAY,
+            date=quote_date,
+            cur_price=100.0,
+            close=100.0,
+        )
+    ]
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert ("open", ["2330"]) in strategy.seen
+    assert harness.broker.placed_count == 1
+    assert quote_stale_events(harness) == []
+
+
 def test_reduce_only_blocks_opening_orders() -> None:
     """`REDUCE_ONLY` 下開倉鉤子不呼叫，平倉照常"""
 

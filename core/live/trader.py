@@ -12,6 +12,7 @@ from typing import (
     Sequence,
     Set,
     Tuple,
+    Union,
 )
 
 from loguru import logger
@@ -1371,6 +1372,10 @@ class LiveTrader:
             quotes: List[BaseQuote] = context.data_feed.get_live_quotes(
                 timing, self.quote_symbols(context)
             )
+            fresh: Optional[List[BaseQuote]] = self._fresh_quotes(context, quotes)
+            if fresh is None:
+                return []
+            quotes = fresh
             # 先記下市場價再呼叫鉤子：鉤子產生的每一張委託都要拿同一份報價當偏離基準
             context.quote_prices = quote_prices_of(quotes)
             orders: List[BaseOrder] = self._invoke_hooks(context, timing, quotes)
@@ -1379,6 +1384,61 @@ class LiveTrader:
             return []
 
         return [(context, order) for order in orders]
+
+    def _fresh_quotes(
+        self, context: StrategyContext, quotes: List[BaseQuote]
+    ) -> Optional[List[BaseQuote]]:
+        """
+        - Description:
+            剔除日期不是今天的報價；**全部都不是今天時回 None**，本段落不呼叫這支策略的鉤子
+
+            實盤報價的日期取自券商快照的時戳。行情源停在前一日時（模擬環境實際發生過：
+            收盤段拿到的快照全是前一日 14:30），策略會把報價日當成前一日決策——
+            「持有滿一天才平倉」的出場不成立而不賣、選股照前一日的漲幅重選，
+            整段照常結束、沒有任何錯誤。開段的資料新鮮度檢查只看歷史資料，擋不到這種情況。
+
+            只剔除過期的那幾檔、其餘照常：個別標的的快照停住（例如當日暫停交易）
+            不該拖住整支策略。有剔除或整段跳過時寫 CRITICAL 事件並推播。
+            出場鉤子跟著不呼叫——部位留到下一個段落再由策略判斷，不排次日補平：
+            報價不可信時連「該不該出場」都不知道。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - quotes: List[BaseQuote]
+                資料源給的段落報價
+        - Return:
+            - Optional[List[BaseQuote]]
+                今天的報價；原本有報價、但全部都不是今天時為 None
+        """
+
+        today: datetime.date = self._now().date()
+        fresh: List[BaseQuote] = [
+            quote for quote in quotes if _quote_day(quote) == today
+        ]
+        if len(fresh) == len(quotes):
+            return quotes
+
+        stale: List[BaseQuote] = [
+            quote for quote in quotes if _quote_day(quote) != today
+        ]
+        days: str = "、".join(sorted({str(_quote_day(quote)) for quote in stale}))
+        sample: str = "、".join(quote.symbol for quote in stale[:5])
+        outcome: str = (
+            "本段落不呼叫鉤子（開倉、平倉、停損都不做）" if not fresh else "已剔除"
+        )
+        message: str = (
+            f"{context.name} 有 {len(stale)}／{len(quotes)} 檔報價的日期不是今天 {today}"
+            f"（{days}），{outcome}：{sample}"
+        )
+        logger.error(message)
+        self.events.write(
+            category=event_categories.QUOTE_STALE,
+            severity=NotifyLevel.CRITICAL,
+            message=message,
+            strategy_name=context.name,
+        )
+        self._notify(NotifyLevel.CRITICAL, "報價日期不是今天", message)
+        return fresh or None
 
     def _invoke_hooks(
         self,
@@ -3059,3 +3119,12 @@ def mark_execution(
         order.timing = timing
         order.execution_style = style
     return orders
+
+
+def _quote_day(quote: BaseQuote) -> Optional[datetime.date]:
+    """報價的日期部分；逐筆報價帶的是 `datetime`，日頻報價是 `date`"""
+
+    value: Optional[Union[datetime.date, datetime.datetime]] = quote.date
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    return value
