@@ -1398,7 +1398,10 @@ class LiveTrader:
             整段照常結束、沒有任何錯誤。開段的資料新鮮度檢查只看歷史資料，擋不到這種情況。
 
             只剔除過期的那幾檔、其餘照常：個別標的的快照停住（例如當日暫停交易）
-            不該拖住整支策略。有剔除或整段跳過時寫 CRITICAL 事件並推播。
+            不該拖住整支策略。有剔除或整段跳過時寫 CRITICAL 事件並推播一次。
+            **事件的寫法讓 parity 分得出兩種情況**：整段跳過寫一筆不帶標的的事件
+            （以 `run_id` 對到段落）；部分剔除則每檔一筆、帶標的——只有被剔除的那幾檔
+            的差異可以歸給它，其餘標的的差異照常判定。
             出場鉤子跟著不呼叫——部位留到下一個段落再由策略判斷，不排次日補平：
             報價不可信時連「該不該出場」都不知道。
         - Parameters:
@@ -1431,12 +1434,25 @@ class LiveTrader:
             f"（{days}），{outcome}：{sample}"
         )
         logger.error(message)
-        self.events.write(
-            category=event_categories.QUOTE_STALE,
-            severity=NotifyLevel.CRITICAL,
-            message=message,
-            strategy_name=context.name,
-        )
+        if not fresh:
+            self.events.write(
+                category=event_categories.QUOTE_STALE,
+                severity=NotifyLevel.CRITICAL,
+                message=message,
+                strategy_name=context.name,
+            )
+        else:
+            for quote in stale:
+                self.events.write(
+                    category=event_categories.QUOTE_STALE,
+                    severity=NotifyLevel.CRITICAL,
+                    message=(
+                        f"{quote.symbol} 報價日期 {_quote_day(quote)} 不是今天 {today}，"
+                        "已剔除"
+                    ),
+                    strategy_name=context.name,
+                    symbol=quote.symbol,
+                )
         self._notify(NotifyLevel.CRITICAL, "報價日期不是今天", message)
         return fresh or None
 

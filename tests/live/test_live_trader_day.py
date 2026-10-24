@@ -520,11 +520,11 @@ def stale_quote(symbol: str = "2330") -> StockQuote:
     )
 
 
-def quote_stale_events(harness: Harness) -> List[Tuple[str, str, str]]:
-    """本次寫下的 `QUOTE_STALE` 事件：`(策略, 嚴重度, 訊息)`"""
+def quote_stale_events(harness: Harness) -> List[Tuple[str, str, Optional[str], str]]:
+    """本次寫下的 `QUOTE_STALE` 事件：`(策略, 嚴重度, 標的, 訊息)`"""
 
     return harness.dao.conn.execute(
-        "SELECT strategy_name, severity, message FROM live_risk_event "
+        "SELECT strategy_name, severity, symbol, message FROM live_risk_event "
         "WHERE category = 'QUOTE_STALE' ORDER BY rowid"
     ).fetchall()
 
@@ -544,11 +544,10 @@ def test_all_stale_quotes_skip_every_hook() -> None:
 
     assert strategy.seen == []
     assert harness.broker.placed_count == 0
-    events: List[Tuple[str, str, str]] = quote_stale_events(harness)
-    assert [(name, severity) for name, severity, _ in events] == [
-        ("QuoteRecorder", "CRITICAL")
-    ]
-    assert "本段落不呼叫鉤子" in events[0][2]
+    events: List[Tuple[str, str, Optional[str], str]] = quote_stale_events(harness)
+    # 整段跳過：一筆、不帶標的（parity 以 run_id 對到段落）
+    assert [event[:3] for event in events] == [("QuoteRecorder", "CRITICAL", None)]
+    assert "本段落不呼叫鉤子" in events[0][3]
     # 行情源的問題不是策略的錯：不降級，下一個段落報價恢復就照常
     assert harness.mode_state.effective_mode("QuoteRecorder") is TradingMode.NORMAL
 
@@ -563,9 +562,10 @@ def test_only_the_stale_symbols_are_dropped() -> None:
 
     assert strategy.seen == [("close", ["2330"]), ("open", ["2330"])]
     assert harness.broker.placed_count == 1
-    events: List[Tuple[str, str, str]] = quote_stale_events(harness)
-    assert len(events) == 1
-    assert "2317" in events[0][2] and "已剔除" in events[0][2]
+    events: List[Tuple[str, str, Optional[str], str]] = quote_stale_events(harness)
+    # 部分剔除：每檔一筆、帶標的，parity 只把那幾檔的差異歸給它
+    assert [event[:3] for event in events] == [("QuoteRecorder", "CRITICAL", "2317")]
+    assert "已剔除" in events[0][3]
 
 
 @pytest.mark.parametrize(
