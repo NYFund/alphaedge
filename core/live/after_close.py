@@ -388,12 +388,19 @@ class AfterCloseRunner:
             if trade.open_seqno
             else []
         )
+        # 期貨沒有委託序號：以（契約, 買賣別, 開倉價）回查開倉成交，估算器靠它分當沖與留倉
+        if trade.is_futures and trade.direction and trade.entry_price:
+            opening = self.dao.get_latest_opening_fills(
+                trade.symbol, trade.direction, trade.entry_price, run_date
+            )
         actual: Optional[float] = self._actual_cost(trade, opening)
         estimated: Optional[float] = self.cost_estimator(trade, opening, run_date)
 
         note: str = ""
         if actual is None:
             note = "開倉成交不在本地紀錄，算不出實際成本"
+        elif estimated is None and trade.is_futures and not opening:
+            note = "開倉成交不在本地紀錄，分不出當沖或留倉，不估算"
         elif estimated is None:
             note = "成本模型算不出估算值"
 
@@ -426,6 +433,17 @@ class AfterCloseRunner:
             "estimated_cost": estimated,
             "diff": diff,
             "diff_ratio": ratio,
+            # 券商原值與口徑一併留下：只存合計的話，偏差出現時要再查一次券商才分得出
+            # 是稅還是手續費、是單腿還是兩腿（2026-10-20／21 的期貨偏差就是這樣）
+            "broker_fee": trade.fee,
+            "broker_tax": trade.tax,
+            "entry_price": (
+                trade.entry_price
+                if trade.entry_price is not None
+                else (weighted_fill_price(opening) if opening else None)
+            ),
+            "cover_price": trade.cover_price,
+            "opened_on": str(opening[0]["filled_at"])[:10] if opening else None,
             "note": note,
         }
 

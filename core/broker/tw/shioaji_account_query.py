@@ -257,6 +257,8 @@ class ShioajiAccountQuery:
                 or []
             ):
                 code: str = str(getattr(row, "code", ""))
+                # 券商給的是買賣別的列舉；只留字面值，與本地成交的 `action` 欄位同一種寫法
+                direction: Any = getattr(row, "direction", None)
                 trades.append(
                     RealizedTradeSnapshot(
                         symbol=(
@@ -272,6 +274,11 @@ class ShioajiAccountQuery:
                         tax=float(getattr(row, "tax", 0.0) or 0.0),
                         is_futures=True,
                         raw=self._dump(row),
+                        direction=(
+                            str(getattr(direction, "value", direction))
+                            if direction is not None
+                            else None
+                        ),
                     )
                 )
 

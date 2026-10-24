@@ -1257,6 +1257,50 @@ class LiveTradeDAO(BaseDAO):
             broker_seqno, datetime.date.fromisoformat(latest)
         )
 
+    def get_latest_opening_fills(
+        self,
+        symbol: str,
+        action: str,
+        price: float,
+        on_or_before: datetime.date,
+    ) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            某契約以某價開倉的成交，**最近一次出現**那天的全部（只看指定日以前）
+
+            期貨的已實現交易不帶委託序號，只給開倉價與買賣別；盤後校正成本要知道
+            開倉在哪一天（當沖與留倉的費用範圍不同），只能用（契約, 買賣別, 價格）回查。
+            取最近的那一天：離平倉日最近的開倉才是這筆交易的開倉。
+        - Parameters:
+            - symbol: str
+                契約代號
+            - action: str
+                開倉的買賣別（`Buy`／`Sell`）
+            - price: float
+                開倉價
+            - on_or_before: datetime.date
+                只看這一天（含）以前
+        - Return:
+            - List[Dict[str, Any]]
+                成交清單；查無時為空
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT MAX(trade_date) FROM {LIVE_FILL_TABLE_NAME} "
+            "WHERE symbol = ? AND action = ? AND price = ? AND trade_date <= ?",
+            _to_live_params(symbol, action, price, on_or_before),
+        ).fetchall()
+        latest: Optional[str] = rows[0][0] if rows else None
+        if not latest:
+            return []
+        found: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_FILL_TABLE_NAME} "
+            "WHERE symbol = ? AND action = ? AND price = ? AND trade_date = ? "
+            "ORDER BY filled_at",
+            _to_live_params(symbol, action, price, latest),
+        ).fetchall()
+        return self._to_dicts(LIVE_FILL_TABLE_NAME, found)
+
     def get_fills_by_date(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
         - Description:

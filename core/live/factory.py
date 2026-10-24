@@ -806,11 +806,15 @@ def make_trade_cost_estimator(
         **成本模型取實盤記帳用的那一個**（各策略脈絡裡的 `cost_model`），校正比對的
         才是「實盤記帳用的那套」估得準不準。費率是帳戶層級的設定，同一個帳戶跑多支
         策略時取第一支該市場策略的成本模型；沒有該市場的策略才退回預設費率。
-        - 期貨：**只估平倉那一腿**（一次手續費＋平倉價的期交稅），與券商欄位的範圍一致——
-          2026-09-22 模擬環境實測，台指期一口來回的已實現紀錄 `fee=50`、`tax=193`，
-          正好是單邊手續費與單邊期交稅（開平倉價的稅在這個價位都是 193，分不出是哪一腿；
-          平倉回報列的是平倉，故取平倉腿）。照來回估的話每筆都會被誤報 -50%。
-          乘數取 `FUTURES_MULTIPLIER`，不在表內（股票期貨）時回 None。
+        - 期貨：**估算範圍依開倉日分兩種**，與券商已實現紀錄的範圍一致（模擬環境實測）：
+          - 當沖（開倉日 ＝ 交易日）：**只估平倉那一腿**（一次手續費＋平倉價的期交稅）。
+            2026-09-22 台指期一口當沖的紀錄是 `fee=50`、`tax=193`，正好是單邊。
+          - 留倉（開倉日早於交易日）：**開平兩腿**（兩次手續費＋開倉價與平倉價的期交稅）。
+            2026-10-20、10-21 兩筆留倉的紀錄都是 `tax=374`（189＋185、186＋188）、`fee=40`，
+            只估平倉腿時每筆被誤報 +74%～+76%。
+          開倉日由盤後以（契約, 買賣別, 開倉價）回查的本地成交提供，**查不到時回 None**：
+          分不出是哪一種，猜錯一種就差一倍。乘數取 `FUTURES_MULTIPLIER`，
+          不在表內（股票期貨）時也回 None。手續費費率沿用成本模型的設定，不由這裡校正。
         - 股票：手續費開平倉各一次；證交稅只課賣出那一腿——多單課在平倉價、
           空單課在開倉價；開倉日與交易日同一天時用當沖稅率。缺開倉成交時回 None。
     - Parameters:
@@ -849,12 +853,17 @@ def make_trade_cost_estimator(
         if trade.is_futures:
             product, _ = split_contract_id(trade.symbol)
             multiplier: Optional[int] = FUTURES_MULTIPLIER.get(product)
-            if multiplier is None or trade.entry_price is None:
+            if multiplier is None or trade.entry_price is None or not opening:
                 return None
-            return float(
-                futures_cost.commission(volume=quantity, product=product)
-                + futures_cost.tax(trade.cover_price, quantity, multiplier)
+            commission: int = futures_cost.commission(volume=quantity, product=product)
+            cover_tax: int = futures_cost.tax(trade.cover_price, quantity, multiplier)
+            opened_on: datetime.date = datetime.date.fromisoformat(
+                str(opening[0]["filled_at"])[:10]
             )
+            if opened_on == run_date:
+                return float(commission + cover_tax)
+            entry_tax: int = futures_cost.tax(trade.entry_price, quantity, multiplier)
+            return float(commission * 2 + entry_tax + cover_tax)
 
         if not opening:
             return None

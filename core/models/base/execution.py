@@ -268,6 +268,7 @@ class RealizedTradeSnapshot:
     | `fee`／`tax` | 無 | 有 |
     | `entry_price` | 無（以 `open_seqno` 回查本地成交） | 有 |
     | `open_seqno` | 開倉委託序號 | 無 |
+    | `direction` | 無 | 開倉的買賣別（以它與開倉價回查本地成交） |
     """
 
     def __init__(
@@ -282,6 +283,7 @@ class RealizedTradeSnapshot:
         open_seqno: Optional[str] = None,
         is_futures: bool = False,
         raw: Optional[Dict[str, Any]] = None,
+        direction: Optional[str] = None,
     ) -> None:
         self.symbol: str = symbol
         self.quantity: int = quantity  # 股票為張、期貨為口
@@ -292,6 +294,8 @@ class RealizedTradeSnapshot:
         self.tax: Optional[float] = tax  # 交易稅（整筆交易）；股票給不出
         self.open_seqno: Optional[str] = open_seqno  # 開倉委託序號；期貨給不出
         self.is_futures: bool = is_futures
+        # 開倉的買賣別（`Buy` 為多單、`Sell` 為空單）；股票給不出
+        self.direction: Optional[str] = direction
         self.raw: Dict[str, Any] = raw if raw is not None else {}
 
 

@@ -10,9 +10,9 @@ from core.broker.tw.shioaji_account_query import ShioajiAccountQuery
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
 from core.live.factory import make_trade_cost_estimator
-from core.market.tw.cost_model import TwStockCostModel
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.models import RealizedTradeSnapshot
-from core.models.cost_config import CostConfig
+from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.utils import Action
 
 """
@@ -23,7 +23,8 @@ from core.utils import Action
 期貨直接比費用與稅，股票以本地開倉成交價算毛損益、減去券商淨損益推得實際成本。
 
 fixture 的數字取自當天模擬環境的實際回傳：2330 買 2480、賣 2475，淨損益 -14,903；
-TXFJ6 一口 48271 → 48264，fee 50、tax 193。
+TXFJ6 一口 48271 → 48264，fee 50、tax 193（當沖）。期貨留倉的數字取自 2026-10-20、10-21：
+TXFJ6 47224（10/16 開）→ 46300、TXFK6 46471（10/20 開）→ 47045，兩筆都是 fee 40、tax 374。
 """
 
 TODAY: datetime.date = datetime.date(2026, 9, 22)
@@ -68,6 +69,8 @@ class ProfitLossApi:
                 cover_price=48264.0,
                 tax=193,
                 fee=50,
+                # Shioaji 給的是買賣別列舉，正規化只留字面值
+                direction=SimpleNamespace(value="Buy"),
             )
         ]
 
@@ -96,6 +99,7 @@ def test_realized_trades_are_normalized_per_market() -> None:
         48271.0,
     )
     assert futures.is_futures and not stock.is_futures
+    assert (futures.direction, stock.direction) == ("Buy", None)
     assert {q["begin"] for q in api.queries} == {"2026-09-22"}
 
 
@@ -170,11 +174,11 @@ def test_day_trade_tax_rate_applies_only_to_same_day_trades() -> None:
     assert same_day < overnight
 
 
-def test_futures_estimate_covers_one_leg_like_the_broker() -> None:
+def test_futures_day_trade_estimate_covers_one_leg_like_the_broker() -> None:
     """
-    期貨只估平倉那一腿，與券商欄位的範圍一致
+    期貨當沖只估平倉那一腿，與券商欄位的範圍一致
 
-    2026-09-22 實測：台指期一口來回的已實現紀錄 `fee=50`、`tax=193`，正好是單邊。
+    2026-09-22 實測：台指期一口當沖的已實現紀錄 `fee=50`、`tax=193`，正好是單邊。
     照來回估會得到兩倍，每筆都被誤報 -50%。
     """
 
@@ -186,9 +190,61 @@ def test_futures_estimate_covers_one_leg_like_the_broker() -> None:
         fee=50.0,
         tax=193.0,
         is_futures=True,
+        direction="Buy",
     )
 
-    assert make_trade_cost_estimator()(trade, [], TODAY) == 243.0
+    estimated: Optional[float] = make_trade_cost_estimator()(
+        trade, [opening_fill("Buy", 48271.0, "2026-09-22T10:00:00+08:00")], TODAY
+    )
+
+    assert estimated == 243.0
+
+
+def test_futures_overnight_estimate_covers_both_legs() -> None:
+    """
+    期貨留倉估開平兩腿：兩次手續費＋開倉價與平倉價的期交稅
+
+    2026-10-20 實測：TXFJ6 10/16 以 47224 開、10/20 以 46300 平，券商紀錄 `tax=374`
+    ＝ 189＋185 兩腿、`fee=40` 也是兩腿。只估平倉腿時估 235，被誤報 +76%。
+    """
+
+    trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
+        symbol="TX202610",
+        quantity=1,
+        entry_price=47224.0,
+        cover_price=46300.0,
+        fee=40.0,
+        tax=374.0,
+        is_futures=True,
+        direction="Buy",
+    )
+    model: TwFuturesCostModel = TwFuturesCostModel(FuturesCostConfig.default())
+
+    estimated: Optional[float] = make_trade_cost_estimator()(
+        trade,
+        [opening_fill("Buy", 47224.0, "2026-10-16T13:30:02+08:00")],
+        datetime.date(2026, 10, 20),
+    )
+
+    # 兩腿的稅：模型無條件捨去（188＋185＝373），券商四捨五入（189＋185＝374），
+    # 每筆差 1 元；改捨入會動到回測結果，另案處理。其餘差距只在手續費費率
+    assert model.tax(47224.0, 1, 200) + model.tax(46300.0, 1, 200) == 373
+    assert estimated == float(model.commission(volume=1, product="TX") * 2 + 373)
+
+
+def test_futures_without_an_opening_fill_is_not_guessed() -> None:
+    """查不到開倉成交就分不出當沖或留倉；猜錯一種就差一倍，所以不估"""
+
+    trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
+        symbol="TX202610",
+        quantity=1,
+        entry_price=47224.0,
+        cover_price=46300.0,
+        is_futures=True,
+        direction="Buy",
+    )
+
+    assert make_trade_cost_estimator()(trade, [], datetime.date(2026, 10, 20)) is None
 
 
 def test_estimator_gives_up_without_what_it_needs() -> None:
@@ -301,6 +357,97 @@ def test_futures_actual_cost_is_broker_fee_plus_tax(
     ).calibrate_costs(TODAY)
 
     assert rows[0]["actual_cost"] == 243.0
+
+
+def test_futures_opening_is_found_by_contract_side_and_price(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    期貨沒有委託序號：以（契約, 買賣別, 開倉價）回查開倉成交，交給估算器並寫進報表
+
+    2026-10-21 實測：TXFK6 10/20 以 46471 買進、10/21 以 47045 平倉。報表要留下券商的
+    fee、tax 原值與開倉日——只存合計的話，偏差出現時要再查一次券商才分得出原因。
+    """
+
+    for day, price in (
+        (datetime.date(2026, 10, 15), 46471.0),
+        (datetime.date(2026, 10, 20), 46471.0),
+    ):
+        dao.insert_fill(
+            {
+                "broker_seqno": f"S{day.day}",
+                "broker_trade_id": f"S{day.day}",
+                "symbol": "TX202611",
+                "action": "Buy",
+                "price": price,
+                "volume": 1,
+                "filled_at": datetime.datetime.combine(day, datetime.time(13, 30, 9)),
+            }
+        )
+    trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
+        symbol="TX202611",
+        quantity=1,
+        pnl=114800.0,
+        entry_price=46471.0,
+        cover_price=47045.0,
+        fee=40.0,
+        tax=374.0,
+        is_futures=True,
+        direction="Buy",
+    )
+    seen: List[List[Dict[str, Any]]] = []
+    runner: AfterCloseRunner = make_runner(dao, [trade], 474.0, tmp_path)
+    runner.cost_estimator = lambda trade, opening, run_date: (
+        seen.append(opening) or 474.0
+    )
+
+    rows: List[Dict[str, Any]] = runner.calibrate_costs(datetime.date(2026, 10, 21))
+
+    # 取平倉日以前最近一次的開倉，不是更早那筆同價的
+    assert [str(fill["filled_at"])[:10] for fill in seen[0]] == ["2026-10-20"]
+    row: Dict[str, Any] = rows[0]
+    assert (row["broker_fee"], row["broker_tax"], row["opened_on"]) == (
+        40.0,
+        374.0,
+        "2026-10-20",
+    )
+    assert (row["entry_price"], row["cover_price"]) == (46471.0, 47045.0)
+    report: pd.DataFrame = pd.read_csv(
+        tmp_path / "account" / "2026-10-21_cost_calibration.csv"
+    )
+    assert {
+        "broker_fee",
+        "broker_tax",
+        "entry_price",
+        "cover_price",
+        "opened_on",
+    } <= set(report.columns)
+
+
+def test_futures_without_a_local_opening_is_noted(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """期貨查不到開倉成交：實際成本照列，估算留空並註明原因，不寫偏差事件"""
+
+    trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
+        symbol="TX202611",
+        quantity=1,
+        entry_price=46471.0,
+        cover_price=47045.0,
+        fee=40.0,
+        tax=374.0,
+        is_futures=True,
+        direction="Buy",
+    )
+
+    rows: List[Dict[str, Any]] = make_runner(
+        dao, [trade], None, tmp_path
+    ).calibrate_costs(datetime.date(2026, 10, 21))
+
+    assert rows[0]["actual_cost"] == 414.0
+    assert rows[0]["estimated_cost"] is None
+    assert "分不出當沖或留倉" in rows[0]["note"]
+    assert drift_events(dao) == []
 
 
 def test_large_gap_writes_a_drift_event_and_the_report(
