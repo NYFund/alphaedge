@@ -19,7 +19,7 @@ python -m tasks.update_db --target chip price      # 只更新指定資料
 python -m tasks.update_db --target tick            # 台股 tick（需 DolphinDB 與 Shioaji 金鑰）
 ```
 
-- 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日。
+- 候選日期是差集，中間缺的日子會自動補回，平常不需要指定起日；要把起點拉到比預設更早時才加 `--from YYYY-MM-DD`。
 - 任一 target 失敗不中斷其餘 target，但整批跑完會以**結束碼 1** 收場；請看 log 尾端的統計行。
 - `futures_stock_price`、`futures_tick`、`finmind` 不含在 `all`／`no_tick` 內，要以 `--target` 明確點名才會跑。
 - **長跑的 ETL 進行中不要動 `logs/` 與 `data/db/`**。
@@ -37,7 +37,12 @@ python -m apps.backtest --strategy MomentumFuturesStrategy            # 台指�
 
 # 覆寫回測區間與初始資金（皆選填，不帶時沿用策略預設）
 python -m apps.backtest --strategy MomentumStrategy1 --start 2024-01-01 --end 2024-12-31 --capital 500000
+
+# 回測結束後在瀏覽器開啟圖表（預設不開，PNG 一律會存；也可設 ALPHAEDGE_SHOW_FIGURES=1）
+python -m apps.backtest --strategy MomentumStrategy1 --show
 ```
+
+退出碼：`0` 正常結束；`2` 用法錯誤（策略名找不到、未知旗標、覆寫值不合法）；`1` 其他失敗（例如策略設了已移除的欄位、交易名單缺日，訊息會寫明怎麼修）。
 
 策略放在 `core/strategies/stock/` 與 `core/strategies/futures/`，由 `StrategyLoader` 收錄（頂層 `strategies/` 目前只是空門面，載入器不掃它）；
 怎麼寫策略見 [策略開發指南](../../core/strategies/README.md)。
@@ -50,22 +55,22 @@ python -m apps.backtest --strategy MomentumStrategy1 --start 2024-01-01 --end 20
 
 ## 4) 檢視結果
 
-回測結果輸出在 `results/<StrategyName>/`，所有檔名都以策略名稱為前綴：
+回測結果輸出在 `results/<strategy_name>/`，所有檔名都以同一個名稱為前綴。這個名稱是策略的 `strategy_name` 屬性，**不是** `--strategy` 用的類別名稱（例如 `MomentumStrategy1` 輸出到 `results/Momentum-1/`）：
 
 | 檔案 | 內容 |
 |------|------|
-| `<StrategyName>_trading_report.csv` | 已平倉交易的逐筆明細與損益 |
-| `<StrategyName>_direction_summary.csv` | 多空分開的勝率、損益與成本統計 |
-| `<StrategyName>_event_report.csv` | 強制回補、斷頭、拒單等事件計數 |
-| `<StrategyName>_daily_equity.csv` | 含未實現損益的逐日權益序列 |
-| `<StrategyName>_metrics_summary.csv` | Sharpe／Sortino／IR／MDD／波動度等整體指標（`Metric`／`Value`／`Note` 長表）|
-| `<StrategyName>_balance_curve.png` | 資產曲線 |
-| `<StrategyName>_networth.png` | 策略與 benchmark（`0050`）淨值比較 |
-| `<StrategyName>_mdd.png` | 最大回撤 |
-| `<StrategyName>_everyday_profit.png` | 每日損益 |
-| `<StrategyName>_everyday_equity_change.png` | 每日權益變化 |
+| `<strategy_name>_trading_report.csv` | 已平倉交易的逐筆明細與損益 |
+| `<strategy_name>_direction_summary.csv` | 多空分開的勝率、損益與成本統計 |
+| `<strategy_name>_event_report.csv` | 強制回補、斷頭、拒單等事件計數 |
+| `<strategy_name>_daily_equity.csv` | 含未實現損益的逐日權益序列 |
+| `<strategy_name>_metrics_summary.csv` | Sharpe／Sortino／IR／MDD／波動度等整體指標（`Metric`／`Value`／`Note` 長表）|
+| `<strategy_name>_balance_curve.png` | 資產曲線 |
+| `<strategy_name>_networth.png` | 策略與 benchmark（`0050`）淨值比較 |
+| `<strategy_name>_mdd.png` | 最大回撤 |
+| `<strategy_name>_everyday_profit.png` | 每日損益 |
+| `<strategy_name>_everyday_equity_change.png` | 每日權益變化 |
 
-日誌落在 `logs/backtest/`。用前端瀏覽（需 `uv sync --extra frontend`）：
+日誌落在 `logs/backtest/<strategy_name>.log`。用前端瀏覽（需 `uv sync --extra frontend`）：
 
 ```bash
 streamlit run frontend/app.py

@@ -101,7 +101,7 @@ ruff check . --select B006,B904             # 看逐處位置
 |------|------|------|
 | `__init__.py` | `F401` | 套件的 re-export 門面，import 就是對外介面 |
 | `core/pipeline/tw/utils/stock_tick_utils.py`、`scripts/manual/manual_tick_updater.py` | `F401` | `dolphindb` 是選用相依，該處 import 是「可用性探測」 |
-| `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法（24 處）的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
+| `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法與手動腳本 helper 的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
 
 per-file-ignores 同樣不能長期失明：`scripts/manual/*` 原本豁免的 `E402` 與 `stock_tick_loader.py`
 的 `F401` 都在歸零後移除。`tests/test_config_consistency.py` 會檢查每一條 per-file-ignores
@@ -117,8 +117,8 @@ per-file-ignores 同樣不能長期失明：`scripts/manual/*` 原本豁免的 `
 > 有五種回傳型別、`BaseDataLoader.add_to_db()` 有 `None` 與 `int` 兩種），
 > 只能逐一對照子類簽章才抓得到。這類方法一律標 `Any` 並在該處註明理由。
 
-只開這兩條、不開整組 `ANN`：`ANN001`（參數）另有 400 多處未標，
-而 `ANN002`／`ANN003`（`*args`／`**kwargs`）與 `ANN101`（`self`）跟本專案既有寫法衝突。
+只開這兩條、不開整組 `ANN`：`ANN001`（參數）另有近 500 處未標，
+而 `ANN002`／`ANN003`（`*args`／`**kwargs`）跟本專案既有寫法衝突（`ANN101`（`self`）已從 ruff 移除，不必再考慮）。
 
 `*.md` 已加入 `extend-exclude`：ruff 會連 Markdown 內的 Python 程式碼區塊一起格式化，
 而文件裡的範例常刻意對齊註解以利閱讀。`CLAUDE.md` §2.5／§2.10 規範的對象是程式碼，不是文件。

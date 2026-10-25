@@ -9,11 +9,11 @@
 
 | 面向 | 現況 |
 |------|------|
-| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 股期）、連續合約（3 種調整；換月規則預設只建 `LAST_TRADING_DAY`）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池；逐筆成交走 DolphinDB |
+| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 股期）、連續合約（3 種調整；預設只建日盤 ＋ `LAST_TRADING_DAY` 換月規則）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池；逐筆成交走 DolphinDB |
 | 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price`／`futures_tick` |
 | 回測 | 與台股**共用同一支引擎**：`(TW, FUTURE)` 的 model 組（規格／成交／成本／結算／資料源）由 `core/backtest/factory.py` 注入 |
 | 期貨語意 | 逐日盯市、保證金查表與追繳、換月轉倉、日夜盤整併、期交稅與跳動點滑價 |
-| 策略 | `MomentumFuturesStrategy`（示範），`python -m apps.backtest --strategy MomentumFuturesStrategy` |
+| 策略 | `MomentumFuturesStrategy`（示範），`python -m apps.backtest --strategy MomentumFuturesStrategy`；另有 `FuturesRolloverRehearsalStrategy`（只供模擬環境的換月演練，回測無意義） |
 
 ---
 
@@ -74,17 +74,19 @@ python -m tasks.update_db --target futures_chip            # 三大法人、大�
 python -m tasks.update_db --target futures_tick            # 逐筆成交（需 [tick] 相依、Shioaji 金鑰、DolphinDB；已裁示不收，只保留爬取路徑，見〈已知限制〉）
 ```
 
-- `futures_price` 已被 `--target all` 與 `no_tick` 涵蓋；日常更新以**商品為單位**從表內該商品的最新日接續。
+- `futures_price` 已被 `--target all` 與 `no_tick` 涵蓋；日常更新以**商品為單位**從表內該商品的最新日接續，
+  並順便回補表內「現貨有開市卻沒有行情」的中間缺口。
   `futures_stock_price` 與 `futures_tick` 則**兩個捷徑都不含**（`EXPLICIT_ONLY_DATA_TYPES`），只在明確點名時才跑。
 - **往前擴張回補區間不能用日常指令**：resume 會從表內最新日接續，整段歷史補不到而只顯示「已是最新」。
   要以明確區間呼叫 `FuturesPriceUpdater.update(start_date=..., end_date=..., resume=False)`。
-- **新商品的回補起點要用它的上市日**（`FUTURES_PRODUCT_LISTING_DATES`），不可沿用 `DEFAULT_FUTURES_START_DATE`：
-  上市前每一天都查無資料，累積到 `EMPTY_PRODUCT_ABORT_THRESHOLD` 會中止並 raise——這道保險絲是為了擋
-  「代碼拼錯而每天安靜地查無資料」。
+- **新商品要先在 `FUTURES_PRODUCT_LISTING_DATES` 登錄上市日**：updater 會把起點自動夾到上市日；未登錄時從
+  `DEFAULT_FUTURES_START_DATE` 起算，上市前每一天都查無資料，連續累積到 `EMPTY_PRODUCT_ABORT_THRESHOLD`（20 天）
+  會中止並 raise——這道保險絲是為了擋「代碼拼錯而每天安靜地查無資料」。
 - 新商品的連續合約要等該商品的行情補完後再跑 `--target futures_continuous`。
 - 股期**不要一次爬 320 檔**：預設 `STOCK_FUTURES_TOP_N=20`，尾端有整批一天成交個位數口的商品，
-  納入回測只會製造「回測賺錢、實際掛不到單」的假訊號。排序依已入庫行情的平均日成交量，
-  第一次跑還沒有行情時會退回整份清單並提醒。
+  納入回測只會製造「回測賺錢、實際掛不到單」的假訊號。排序依已入庫行情的平均日成交量（每檔至少 5 個交易日），
+  表內行情還不夠排序時改取標的池前 N 檔（依商品代碼，非流動性）當暖身樣本並提醒，**不會放大成整份清單**；
+  暖身後再跑一次才依成交量選出前 N 檔。
 
 ### 2.4 商品與乘數
 
@@ -111,7 +113,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 
 | 來源 | 坑 | 處理 |
 |------|----|------|
-| TAIFEX 行情頁 | 擋流量時回 **HTTP 200 ＋ 沒有行情表的頁面**，與非交易日長得一樣 | 空產出一律等待後重試一次才算數，等待隨連續空產出遞增；節流約 0.4 req/s。重試仍空而現貨當天有開市時記為取不到，最近一天取不到則商品失敗 |
+| TAIFEX 行情頁 | 擋流量時回 **HTTP 200 ＋ 沒有行情表的頁面**，與非交易日長得一樣 | 未取得日盤（含只拿到夜盤）一律等待後重試一次才算數，等待隨連續空產出遞增；只有夜盤的日子整天不入庫，下次重試；節流約 0.4 req/s。重試仍空而現貨當天有開市時記為取不到，最近一天取不到則商品失敗 |
 | TAIFEX 行情頁 | 頁面第二張表是「價差對價差成交」 | 以「是否有單層 `契約` 欄」辨識，不用位置索引 |
 | TAIFEX 行情頁 | `到期月份` 被 pandas 讀成 `202609.0` | 以字串讀入 |
 | TAIFEX 行情頁 | 商品下拉選單內容不穩定，股期代碼含逗號（`EE1,EEF`） | 不以下拉當白名單；股期代碼改取自標的一覽表 |
@@ -161,14 +163,16 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 
 | 掛點 | 期貨實作 | 重點 |
 |------|----------|------|
-| `InstrumentSpec` | `TwFuturesSpec` | 契約乘數、跳動點 |
-| `FillModel` | `TwFuturesFillModel` | 成交價須落在 bar range；滑價以**跳動點**表達 |
+| `InstrumentSpec` | `TwFuturesSpec` | 跳動點逐商品查表、無固定漲跌停；乘數不在 spec，由部位的 `multiplier` 提供 |
+| `FillModel` | `TwFuturesFillModel` | 成交價須落在 bar range（不做漲跌停與券源檢核）；滑價以**跳動點**表達 |
 | `CostModel` | `TwFuturesCostModel` | 期交稅 ＋ 每口手續費（§3.3） |
 | `SettlementModel` | `TwFuturesSettlementModel` | 逐日結算、保證金追繳、換月轉倉、保證金口徑的權益計價 |
 | `DataFeed` | `TwFuturesDataFeed` | `tw_futures.db`、期貨交易日曆、乘數解析、日夜盤整併 |
 | 報表 | `FuturesBacktestReporter` | 繼承台股報表，只覆寫交易明細欄位（`Contract ID`）、多空統計欄位、對標序列 |
 
-**對標序列是「近月拼接」，不是連續合約**：換月當天有一段展期價差造成的假跳空，只能當粗略參考。
+**對標序列優先讀連續合約**（`futures_continuous` 的 `BACKWARD`，換月規則對齊策略的 `roll_config.rule`）；
+查不到該組設定時退回「近月拼接」，換月當天有一段展期價差造成的假跳空，只能當粗略參考，此時不計算 IR。
+圖表註腳會標明採用哪一種。
 
 ### 3.2 記帳：保證金交易與逐日盯市
 
@@ -207,7 +211,8 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
   `setup()` 會比對回測起始日與涵蓋區間，早於涵蓋起點時開跑前就警告。查表模式查不到會 raise（刻意的）。
 - **設定物件只有一份**：factory 建好後回寫給策略，策略（算可開口數）、部位管理層（算應繳保證金）、
   結算模型（算追繳門檻）與 DataFeed 四者共用。兩份設定會造成「策略算得出口數、部位管理層卻開不進去」。
-- **追繳判斷的是權益，不是可動用餘額**：浮動損益每日結算進帳戶，權益低於維持保證金才追繳；
+- **追繳判斷的是權益，不是可動用餘額**：浮動損益每日結算進帳戶，權益低於維持保證金總額 × `margin_call_ratio`
+  （預設 1.0，即交易所口徑；調高為自訂的提早出場）才追繳；
   浮動獲利可以支撐加碼。**維持保證金是另一個公告值**，不可由原始保證金乘比率推得（`get_maintenance_margin()`）。
 - **強制平倉砍到足額為止**：每平一筆就重算，先砍佔用保證金最多的契約。
   `WARN_ONLY` 只記 log **不計數**——`forced_cover_margin_call` 的語意是「強制平倉幾次」。
@@ -232,7 +237,8 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
   建連續合約、策略挑合約（`select_near_month()`）、結算模型轉倉都走它。兩處不一致會出現「訊號在次月、部位還在近月」。
 - **轉倉 ＝ 平舊倉 ＋ 以相同口數與方向開新倉**，展期價差**如實入帳**。
 - 週契約不由本規則轉倉；新契約當日無報價時不轉倉；新倉開不進去（保證金調高）只記 warning 不還原。
-- 契約到期後仍拿不到報價時，以最近一次結算價強制出場並計入 `forced_cover_no_quote`（兜底，不是換月）。
+- 契約連續 `MAX_NO_QUOTE_DAYS`（3）根 bar 拿不到報價時，以最近一次結算價強制出場並計入 `forced_cover_no_quote`
+  （兜底，不是換月）。`FuturesRollConfig.enabled=False` 時不自動轉倉，留倉部位最後都走這條。
 
 ### 3.7 連續合約
 
@@ -292,6 +298,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 策略層查不到保證金時**開 0 口**而非拋錯；真正 raise 的是部位管理層（已決定開倉卻算不出保證金）。
 
 `MomentumFuturesStrategy` 的用途是**驗證介面能跑通**，不是可用的交易邏輯——門檻是隨手取的。
+`FuturesRolloverRehearsalStrategy` 以固定日期建倉並撐過換月日，只用來在模擬環境演練換月兩腿，不是交易策略。
 
 ---
 
@@ -316,7 +323,7 @@ python -m tasks.update_db --target futures_tick            # 逐筆成交（需 
 | 價差部位保證金未模擬 | 同商品跨月份部位兩腿各繳全額，高估保證金、低估可開口數（保守；同契約雙向持倉已直接拒單） | 出現價差／對沖策略需求時，先確認 TAIFEX 價差保證金的收取語意（單邊全額／專屬金額／比例），再決定併入 `futures_margin_history` 或另立一張表 |
 | 三大法人籌碼只有近三年 | 來源只保留約三年，更早無法回補 | 另找歷史來源 |
 | 股期的調整型契約（`EE1` 等數字尾碼）與官方掛牌／下市日未入庫 | 契約單位與日期只能由快照差分近似；標的池建立之前的調整一律看不到 | 另抓 TAIFEX 契約調整與商品異動公告 |
-| 對標序列在缺連續合約時退回近月拼接 | `futures_continuous` 沒建過該組（商品, 調整方式, 換月規則）時，對標曲線在換月接點有展期價差造成的假跳空；圖表註腳會標明採用哪一種 | 跑 `--target futures_continuous` 建出策略用的那一組換月規則（目前表內只有 `LAST_TRADING_DAY`） |
+| 對標序列在缺連續合約時退回近月拼接 | `futures_continuous` 沒建過該組（商品, 調整方式, 換月規則）時，對標曲線在換月接點有展期價差造成的假跳空；圖表註腳會標明採用哪一種 | 跑 `--target futures_continuous` 建出策略用的那一組換月規則（目前表內只有日盤 ＋ `LAST_TRADING_DAY`） |
 
 ## 相關文件
 

@@ -8,33 +8,28 @@
 
 ## 一、分層與相依方向
 
-相依**單向由上往下**，同層之間不互相 import。違反時 `scripts/check_layer_deps.py` 會以非零狀態碼結束（CI 有跑）。
+等級與規則的權威來源是 `scripts/check_layer_deps.py` 的 `_LAYER_RULES`（數字越大越上層）。
+相依**只能由上往下**（可以跨層）；低層 import 高層會讓腳本以非零狀態碼結束（CI 與 pre-commit 都跑）。
+同一等級、不同套件之間的 import 只列出不擋，見 §七。
 
 ```
-入口層      apps/backtest.py ── apps/live.py ── tasks/update_db.py
-              │
-策略層      core/strategies/、strategies/  ← 宣告 market，是 factory 的分派鍵
-            （Alpha：generate_*_signals() → List[Signal]）
-              │
-部位建構層  core/portfolio/           ← 回測與實盤共用，不屬於任一市場
-            （Signal ＋ Account → List[Order]；**只做開倉**）
-              │
-組裝層      core/backtest/factory.py  ← 回測路徑唯一的 if market ==（實盤另有 core/live/factory.py）
-              │
-引擎層      core/backtest/backtester.py（市場無關，無子類）
-              ├── core/backtest/models/      FillModel、SettlementModel（回測模擬）
-              ├── core/market/               InstrumentSpec、CostModel、交易日曆（市場規則，回測與實盤共用）
-              ├── core/portfolio/order_rules.py  訂單規則（方向白名單、執行順序、持倉上限、排序；回測與實盤共用）
-              ├── core/backtest/datafeed/    資料載入與交易日判定
-              ├── core/position/             部位進出與帳務
-              └── core/backtest/report/      報表與圖表
-              │
-資料層      core/api/ ── core/adapters/
-              │
-資料存取層  core/dao/（SQL、連線與交易只寫在這裡）── data/db/
-              │
-領域層      core/models/（帳戶、訂單、部位、報價、交易紀錄）
-共用層      core/utils/（enum、路徑、時間、日誌、StockUtils）
+等級  層                檔案（回測路徑上會經過的部分）
+ 8    入口層            apps/backtest.py（實盤 apps/live.py、ETL tasks/update_db.py 同級）
+ 7    策略層            core/strategies/{stock,futures}/ 的具體策略、strategy_loader.py、strategies/
+                          （Alpha：generate_*_signals() → List[Signal]；宣告 market ＋ instrument_type）
+ 6    組裝層            core/backtest/factory.py   ← 回測路徑唯一的 if market ==（實盤另有 core/live/factory.py）
+ 5    引擎層            core/backtest/backtester.py（市場無關，無子類）
+ 4    元件層            策略契約    core/strategies/base.py、stock/base.py、futures/base.py
+                        部位建構    core/portfolio/（signal／sizing／construction／order_rules，回測與實盤共用）
+                        資料源契約  core/datafeed/base.py（BaseDataFeed）
+                        部位帳務    core/position/
+                        回測零件    core/backtest/models/（FillModel、SettlementModel）、datafeed/、report/
+ 3    資料與市場層      core/api/、core/adapters/、core/pipeline/
+                        core/market/（InstrumentSpec、CostModel、交易日曆、換月、保證金設定）
+ 2    領域與資料存取層  core/models/（帳戶、訂單、部位、報價、交易紀錄、成本與成交設定）
+                        core/dao/（SQL、連線與交易只寫在這裡）── data/db/
+ 1    共用層            core/utils/（enum、時間、日誌、StockUtils）、core/analysis/（績效指標純函式）
+ 0    設定              core/config/（路徑、資料表 schema、設定常數）
 ```
 
 **頂層 `strategies/` 套件**是具體策略日後的落點（相依只能 `strategies` → `core`，`core/` 反向 import 會被
@@ -76,18 +71,20 @@ sequenceDiagram
 
     CLI->>Loader: load([策略名稱])
     Loader-->>CLI: {類別名稱: 策略類別}
-    CLI->>F: build_backtester(strategy, overrides)
+    CLI->>F: build_backtester(strategy, overrides=...)
 
-    Note over F: 先套用 --start／--end／--capital 覆寫<br/>再依 strategy.market 組裝<br/>account / position_manager / 四個 model / data_feed
+    Note over F: 先擋已移除的策略欄位、套用 --start／--end／--capital 覆寫<br/>再依 (market, instrument_type) 組裝<br/>account / position_manager / 四個 model / data_feed
     F->>BT: Backtester(全部注入)
-    CLI->>BT: run()
+    Note over BT: 建構子內的 setup()：資料在組裝階段就載好，<br/>名單缺日會在這裡拋 TradingListCoverageError
     BT->>Feed: setup(strategy)（建立唯一的 SQLite 連線）
     BT->>Feed: ensure_trading_list_coverage()（開啟名單檢核時）
     BT->>S: setup_apis(data_feed)（策略取用 API，不自行建立）
+    F-->>CLI: backtester
+    CLI->>BT: run()
 
     loop 回測期間的每一天
         BT->>Feed: is_market_open(date)
-        BT->>Feed: get_quotes(date, scale)
+        BT->>Feed: get_quotes(date, scale, adjusted=...)
         Note over BT: execute_bar()：先推入當日市場事件（漲跌停基準、券源、停券、名單、除權息），<br/>再依 BarExecutionSequence 決定開平倉先後
         BT->>S: check_open_signal(quotes)
         BT->>BT: validate_orders() → enrich_orders() → sort_orders() → check_max_holdings() → validate_fill_price() → apply_fill_model()
@@ -95,13 +92,14 @@ sequenceDiagram
         BT->>S: check_stop_loss_signal() / check_close_signal()
         BT->>PM: close_position(order)
         BT->>SM: on_bar_close(date, quotes, account, event_counts)
-        BT->>BT: snapshot_daily_equity(date, quotes)
+        BT->>BT: snapshot_daily_equity(date, quotes) → update_prev_close(quotes)
     end
 
+    Note over BT,R: 以下只在 write_artifacts=True 時執行（實盤 parity 比對傳 False）
     BT->>R: generate_trading_report() / generate_direction_summary() / generate_event_report() / generate_metrics_summary()
     BT->>R: save_report(<策略>_daily_equity.csv)
     BT->>R: 五張圖
-    BT->>Feed: close()
+    BT->>Feed: close()（放在 finally，回測中途拋例外也會關連線）
 ```
 
 ### 單根 bar 的訂單流
@@ -192,7 +190,7 @@ sequenceDiagram
 
 ## 四、輸出檔案
 
-全部落在 `results/<策略名稱>/`：
+全部落在 `results/<strategy_name>/`（策略的 `strategy_name` 屬性，例如 `MomentumStrategy1` 是 `Momentum-1`；不是類別名稱）：
 
 | 檔案 | 內容 | 產生者 |
 |------|------|--------|
@@ -268,7 +266,7 @@ sequenceDiagram
 
 ## 七、已知的相依例外
 
-§一的圖描述的是**呼叫方向**；實際 `import` 方向與圖不同的地方分兩類，由
+§一的圖是**分層等級**；不符合「由上往下」的 import 分兩類，由
 `scripts/check_layer_deps.py` 分開處理：
 
 - **反向相依**（低層 import 高層）：`_KNOWN_REVERSE` 現在是**空字典**，也就是一條都沒有。
@@ -281,7 +279,7 @@ sequenceDiagram
 
 | 現況 | 為什麼是這樣 |
 |---|---|
-| 策略契約與引擎互相引用：引擎／factory／報表／`core/datafeed/base.py` → 策略契約（三個 `base.py`） | 圖的用途是說明呼叫序列，改畫相依圖反而難讀；`check_layer_deps.py` 以獨立的「策略契約」等級處理，不列入反向相依 |
+| 資料源與報表 → 策略契約：`core/backtest/datafeed/`、`core/backtest/report/`、`core/datafeed/base.py` → 三個 `base.py` | 策略契約與它們同在第 4 級：引擎、factory、報表都要認得那份介面，具體策略（第 7 級）才是策略層。`check_layer_deps.py` 以獨立的「策略契約」等級處理，引擎若 import 到具體策略仍會被擋 |
 | `core/pipeline/tw/updaters/*` → `core/api/tw/*`（期貨行情、標的池 API） | 單向：api 已不再 import pipeline（欄位常數下沉到 `core/config/schema.py`、SQLite 工具收進 `core/dao/`） |
 | `core/pipeline/tw/` → `core/market/tw/`（`futures_calendar`、`futures_roll`） | 交易日曆與換月規則屬市場結構，**已經住在 `core/market/`**，與 pipeline 同層。清洗連續合約需要換月規則，是刻意的 |
 | `core/backtest/models/settlement_model/` → `core/position/*/position_manager.py` | 期貨轉倉與股票的除權息記帳需要 manager，打破了「model 之間不互相依賴」；升級路徑是把轉倉抽成獨立的 `RollModel` 掛點 |
