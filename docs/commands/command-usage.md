@@ -148,7 +148,9 @@ python -m tasks.update_db --target price --from 2013-01-01
 **Rarely needed**: candidate dates are the difference set "calendar − already in
 table − confirmed no data", so gaps in the middle are backfilled automatically.
 Use `--from` only to start earlier than the default. It affects date-based targets
-only; `fs` / `mrr` (year-quarter, year-month) are unaffected.
+only; `fs` / `mrr` (year-quarter, year-month) are unaffected, and so are the targets that
+choose their own range: `futures_chip`, `futures_continuous`, `futures_margin`,
+`futures_stock_universe` and `market_holiday`.
 
 ## Deleting one day of price data: `python -m tasks.delete_price_data`
 
@@ -176,7 +178,8 @@ python -m tasks.clean_logs --apply             # delete, keeping 30 days by defa
 python -m tasks.clean_logs --apply --bucket api --days 7
 ```
 
-Only rotated files (timestamped names) are removed; active `xxx.log` files are kept.
+Only rotated files (timestamped names) are removed; active `xxx.log` files are kept. `--bucket` can be
+repeated; without it the `api`, `pipeline` and `backtest` buckets are all cleaned.
 
 ## Backtest: `python -m apps.backtest --strategy <StrategyClassName>`
 
@@ -194,7 +197,8 @@ An unknown strategy name, a start date after the end date, a start date before t
 (2013-01-01 for stocks, 2015-01-01 for futures), or a non-positive capital exits with code 2. If the strategy enables the
 exchange-list checks (`check_short_sale_list` / `check_day_trade_list`) and the period starts before the list's start
 date or the list has missing days, the reason is printed and the run exits with code 1 (run the matching `update_db`
-target or move the start date). Results are written to `results/<StrategyName>/`.
+target or move the start date). A strategy that sets a removed setting field also exits with code 1, printing what to
+use instead. Results are written to `results/<strategy_name>/` — the strategy's `strategy_name` attribute (e.g. `Momentum-1` for `MomentumStrategy1`), not the class name.
 
 ## Live trading: `python -m apps.live --strategy <StrategyClassName[,…]> --phase <phase>`
 

@@ -73,7 +73,7 @@ import 它們會被分層檢查判成反向相依；`core.models` 同層，會�
 
 **一次執行中同一個 DB 只開一條連線**：舊版 updater 與 loader 各開一條到同一個 DB，
 updater 那條從不關閉，兩條連線還會互搶寫入鎖（券商分點曾得先 commit loader 那條才查得動）。
-`tasks/update_db.py` 的每個 SQLite target 一律 `try/finally: updater.close()`（tick 走 DolphinDB，另以 `logout()` 收尾）。
+`tasks/update_db.py` 的每個 SQLite target 一律 `try/finally: updater.close()`。兩種 tick 走 DolphinDB、不經 DAO：期貨 tick 由 `update_db` 以 `try/finally: logout()` 收尾，台股 tick 則在 `StockTickUpdater.update()` 的 `finally` 內自行 `cleanup()`。
 
 **唯讀連線**（`connect_sqlite(path, read_only=True)`）用在只讀的場合：不會與背景 ETL 搶寫入鎖，
 檔案不存在時也不會被 `sqlite3.connect()` 默默建出一個空 DB。

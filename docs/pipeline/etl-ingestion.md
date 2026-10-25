@@ -137,9 +137,10 @@ quota 耗盡瞬間多個在途組合要重試。**真正能縮短回補時間的
 被既有商品的進度擋住而整段歷史都補不到。`FuturesStockUniverseUpdater` 則沒有回補
 區間——來源是一張當下的完整清單，一次請求就結束，故「resume」退化成「今天抓過沒有」。
 
-**`StockTickUpdater` 是唯一沒有重載防護的**：DolphinDB 建表時
+**`StockTickUpdater`、`FuturesTickUpdater` 是僅有的兩個沒有重載防護的**：DolphinDB 建表時
 `keepDuplicates=ALL` 是 tick 語意的刻意選擇（同一時間戳可以有多筆成交），
 代價是同一批 CSV 重複 load 會產生重複 tick，需由入庫流程自行把關。
+期貨 tick 另外只在 `--target futures_tick` 點名時才跑（`tasks.update_db.EXPLICIT_ONLY_DATA_TYPES`）。
 
 ---
 

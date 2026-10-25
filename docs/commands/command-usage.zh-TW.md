@@ -140,7 +140,8 @@ python -m tasks.update_db --target price --from 2013-01-01
 **平常不需要用**：updater 的候選日期是「日曆 − 表內已有 − 已確認沒有資料」的
 差集，中間缺的日子會自動被補回來。
 `--from` 是給「要把起點拉到比預設更早」的情境用的，只影響以**日期**為單位的
-target；`fs`／`mrr` 這種以年季／年月為單位的不受影響。
+target；`fs`／`mrr` 這種以年季／年月為單位的不受影響，自行決定區間的 `futures_chip`、
+`futures_continuous`、`futures_margin`、`futures_stock_universe`、`market_holiday` 也不受影響。
 
 ## 刪除單日行情：`python -m tasks.delete_price_data`
 
@@ -168,7 +169,8 @@ python -m tasks.clean_logs --apply             # 實際刪除，預設保留 30 
 python -m tasks.clean_logs --apply --bucket api --days 7
 ```
 
-只刪檔名帶時間戳的已輪替檔，使用中的 `xxx.log` 一律保留。
+只刪檔名帶時間戳的已輪替檔，使用中的 `xxx.log` 一律保留。`--bucket` 可重複指定，
+未指定時清 `api`、`pipeline`、`backtest` 三個桶。
 
 ## 回測：`python -m apps.backtest --strategy <StrategyClassName>`
 
@@ -184,8 +186,9 @@ python -m apps.backtest --strategy <StrategyClassName> --start 2024-01-01 --end 
 
 策略名稱找不到、起日晚於迄日、起日早於歷史資料起點（台股 2013-01-01、期貨 2015-01-01）、
 資金不為正數時，都以結束碼 2 結束。策略開啟交易所名單檢核（`check_short_sale_list`／`check_day_trade_list`）
-而回測區間早於名單起點或名單有缺日時，印出原因並以結束碼 1 結束（先跑對應的 `update_db` target 或改起日）。
-結果輸出在 `results/<StrategyName>/`。
+而回測區間早於名單起點或名單有缺日時，印出原因並以結束碼 1 結束（先跑對應的 `update_db` target 或改起日）；
+策略設了已移除的設定欄位時，同樣印出該改用什麼並以結束碼 1 結束。
+結果輸出在 `results/<strategy_name>/`（策略的 `strategy_name` 屬性，例如 `MomentumStrategy1` 是 `Momentum-1`；不是類別名稱）。
 
 ## 實盤：`python -m apps.live --strategy <StrategyClassName[,…]> --phase <段落>`
 

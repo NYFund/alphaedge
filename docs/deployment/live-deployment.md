@@ -83,7 +83,7 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 
 | 時間 | 指令 | 說明 |
 |------|------|------|
-| 08:00 | `uv run --no-sync python -m tasks.update_db` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它 |
+| 06:00 | `uv run --no-sync python -m tasks.update_db`，接著股票、期貨各跑一次 `--phase parity` | 資料更新預設 `--target no_tick`，更新到前一個交易日，實盤啟動時的資料新鮮度檢查靠它；排 06:00 是留時間給 08:30 的開盤段。parity 要用前一交易日的日 K，故接在資料更新之後；資料更新失敗時照跑，由 parity 自己的新鮮度檢查以退出碼 3 留下原因 |
 | 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59） |
 | 08:40 | `... run --rm live --strategy <期貨策略> --phase open` | 期貨開盤段（送單時窗 08:45～08:59） |
 | 13:20 | `... run --rm live --strategy <股票策略> --phase close` | 台股尾盤段；程式會等到 13:25 才送單 |
@@ -96,7 +96,7 @@ docker compose --profile live run --rm live --strategy MomentumStrategy1 --phase
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  6 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m tasks.update_db && uv run --no-sync python -m apps.live --strategy MomentumStrategy1 --phase parity
+0  6 * * 1-5  cd /path/to/AlphaEdge && { uv run --no-sync python -m tasks.update_db; uv run --no-sync python -m apps.live --strategy MomentumStrategy1 --phase parity; uv run --no-sync python -m apps.live --strategy MomentumFuturesStrategy --phase parity; }
 30 8 * * 1-5  ... run --rm live --strategy MomentumStrategy1 --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
 20 13 * * 1-5 ... run --rm live --strategy MomentumStrategy1 --phase close
@@ -111,7 +111,7 @@ CRON_TZ=Asia/Taipei
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
 - **存活監控要和實盤分開排程**：和實盤同一個行程或同一個容器的心跳，會跟著被監控的東西一起死。它唯讀開 `tw_trading.db`、不連券商，預設以 `open=08:30 close=13:20 after_close=14:30` 比對，且**只看段落名、不分市場**：股票與期貨同一段落只要有任一筆紀錄就算有跑。期貨尾盤 13:28 才啟動時可帶 `--expect ... close=13:28` 放寬截止，但這不會分別監控兩個市場。
   **非交易日不告警**：檢查前先以週末＋官方開休市日曆（`tw_stock.db` 的 `market_holiday` 表，與實盤段落同一套判定、不連券商）判斷今天是否為交易日，休市日直接以 0 結束；判斷不出來（平日遇到官方日曆尚未入庫的年度、或研究庫開不了）時照交易日檢查，並把「無法判定交易日」列為告警。每年 12 月公告隔年日曆後要跑一次 `--target market_holiday`，否則隔年第一個交易日起每次都會告警。
-- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`）；資料更新排在台北 06:00（留時間給 08:30 開盤段），跑完接著對股票與期貨示範策略各跑一次 `--phase parity`，前一步失敗不中斷後面，存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
+- macOS 用 launchd 時，每一行寫成一個 `StartCalendarInterval` 的 plist；launchd 以系統時區觸發、無法逐排程指定時區。`scripts/launchd/rehearsal_schedule.py` 以台北時間撰寫整組模擬環境演練排程（不經容器，直接 `uv run --no-sync python -m apps.live ...`，標籤前綴 `com.alphaedge.live.`），安裝時依當下時差換算成本機時間並處理星期錯開（`--install`／`--status`／`--uninstall`）；資料更新排在台北 06:00，跑完接著對股票與期貨示範策略各跑一次 `--phase parity`，前一步失敗不中斷後面；股票與期貨的交易段落除了示範策略，另外載入演練專用策略（`StockRoundTripRehearsalStrategy`、`FuturesRolloverRehearsalStrategy`，parity 不比它們）；存活監控由 `scripts/launchd/watchdog_in_window.sh` 限定在台北 08:00～15:00 執行。**本機若有夏令時間，切換後要重新安裝**。
 - **不要放進排程**的指令：`--resume-trading`（寫進排程就等於自動解除降級）、`--resync-from-broker --confirm-resync`（重建要人看過計畫才寫入）。
 
 ## 5) 對帳不一致後以券商部位重建歸屬帳
@@ -161,7 +161,7 @@ uv run --no-sync python -m apps.live --strategy <策略> --phase after_close --r
 
 | 碼 | 意義 |
 |----|------|
-| 0 | 正常結束（含休市日、只跑對帳的段落） |
+| 0 | 正常結束（含休市日、只跑對帳的段落；`--phase parity` 有未解釋差異時也回 0，改以 CRITICAL 推播告警） |
 | 1 | 未預期的例外 |
 | 2 | 用法錯誤（策略名、旗標組合，例如缺 `--phase`、`--production` 沒帶 `--confirm-production`、重建旗標與 `--phase`／`--resume-trading` 併用、同一行混合兩個市場的策略） |
 | 3 | 資料未更新到前一個交易日，或判定不出是否為交易日 |
