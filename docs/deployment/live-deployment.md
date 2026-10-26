@@ -85,8 +85,8 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 
 | 時間 | 指令 | 說明 |
 |------|------|------|
-| 06:00 | `uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它。失敗的 target 每 60 分鐘只重跑失敗的那幾個、最多 4 輪 |
-| 06:00（接在資料更新後） | `uv run --no-sync python -m apps.live --strategy <策略> --phase parity` | 逐條線各跑一次，補比前一交易日 |
+| 06:00 | `uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它。排 06:00 是留時間給 08:30 的開盤段；失敗的 target 每 60 分鐘只重跑失敗的那幾個、最多 4 輪 |
+| 06:00（接在資料更新後） | `uv run --no-sync python -m apps.live --strategy <策略> --phase parity` | 逐條線各跑一次（尾盤股票策略、盤中策略、期貨策略），補比前一交易日；要用前一交易日的日 K，故接在資料更新之後，資料更新失敗時照跑，由自己的新鮮度檢查以退出碼 3 留下原因 |
 | 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59）；有盤中策略時要一起載入，它的隔日出場在這一段 |
 | 08:40 | `... run --rm live --strategy <期貨策略> --phase open` | 期貨開盤段（送單時窗 08:45～08:59） |
 | 09:06 | `... run --rm live --strategy <盤中策略> --phase intraday` | 台股盤中逐筆段落（只有 `is_tick_triggered` 的策略）；開盤段 09:05 收線後才啟動 |
@@ -100,7 +100,7 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  6 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60; for s in VolumeBreakoutMomentumStrategy IntradayMomentumStrategy MomentumFuturesStrategy; do uv run --no-sync python -m apps.live --strategy $s --phase parity; done
+0  6 * * 1-5  cd /path/to/AlphaEdge && { uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60; for s in VolumeBreakoutMomentumStrategy IntradayMomentumStrategy MomentumFuturesStrategy; do uv run --no-sync python -m apps.live --strategy $s --phase parity; done; }
 30 8 * * 1-5  ... run --rm live --strategy VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
 6  9 * * 1-5  ... run --rm live --strategy IntradayMomentumStrategy --phase intraday
@@ -166,7 +166,7 @@ uv run --no-sync python -m apps.live --strategy <策略> --phase after_close --r
 
 | 碼 | 意義 |
 |----|------|
-| 0 | 正常結束（含休市日、只跑對帳的段落） |
+| 0 | 正常結束（含休市日、只跑對帳的段落；`--phase parity` 有未解釋差異時也回 0，改以 CRITICAL 推播告警） |
 | 1 | 未預期的例外 |
 | 2 | 用法錯誤（策略名、旗標組合，例如缺 `--phase`、`--production` 沒帶 `--confirm-production`、重建旗標與 `--phase`／`--resume-trading` 併用、同一行混合兩個市場的策略） |
 | 3 | 資料未更新到前一個交易日，或判定不出是否為交易日 |
