@@ -7,7 +7,7 @@ from typing import Dict, List, Set, Tuple
 """
 `core/api/` 無主公開介面檢查：以 AST 掃出公開方法，逐一比對全 repo 的呼叫點
 
-`core/api/` 是**策略作者的公開介面**（見 `core/strategies/README.md`），
+`core/api/` 是**策略作者的公開介面**（策略類別直接呼叫它們取資料），
 「`core/` 內部零呼叫」對它們是正常狀態——所以判準不是「有沒有人呼叫」，
 而是「有沒有東西盯著它」：**零呼叫且零測試**才算無主。
 
@@ -31,7 +31,6 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "core",
     "apps",
     "strategies",
-    "tasks",
     "frontend",
     "strategy_lab",
     "scripts",
@@ -153,7 +152,25 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # 掃描範圍缺漏一律算失敗：`_iter_python_files()` 對不存在的目錄回空清單，
+    # 不擋的話 `core/api/` 搬家後這支檢查掃到 0 個方法、照樣回 0；
+    # 呼叫點的掃描目錄少一個，被它獨佔使用的方法又會變成假的無主介面
+    missing: List[str] = [
+        name for name in _SCAN_DIRS if not (_PROJECT_ROOT / name).is_dir()
+    ]
+    missing.extend(name for name in _SCAN_FILES if not (_PROJECT_ROOT / name).is_file())
+    if not _API_DIR.is_dir():
+        missing.insert(0, str(_API_DIR))
+    if missing:
+        print("宣告的掃描範圍不存在（搬家或改名後要同步更新）：")
+        for name in missing:
+            print(f"  {name}")
+        return 1
+
     methods: Dict[str, List[Tuple[str, str]]] = collect_public_methods()
+    if not methods:
+        print(f"{_API_DIR} 掃不到任何公開方法：結果為空的檢查不能算通過")
+        return 1
     call_sites: Dict[str, Set[str]] = collect_call_sites(set(methods))
 
     orphans: List[str] = []

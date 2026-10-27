@@ -1,6 +1,3 @@
-import datetime
-import random
-import time
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -9,36 +6,32 @@ from loguru import logger
 from core.config import TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection
 from core.dao.tw.corporate_action_dao import CorporateActionDAO
-from core.pipeline.shared.base_crawler import CrawlResult
-from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
+from core.pipeline.shared.base_updater import YearlyRangeTwoMarketUpdater
 from core.pipeline.tw.cleaners.corporate_action_cleaner import (
     OUTPUT_COLUMNS,
     CorporateActionCleaner,
 )
 from core.pipeline.tw.crawlers.corporate_action_crawler import CorporateActionCrawler
 from core.pipeline.tw.loaders.corporate_action_loader import CorporateActionLoader
-from core.pipeline.utils.exceptions import CleanFailureError, ColumnLayoutError
-from core.utils import TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 非除權息公司行動（減資／面額變更）更新器
 
 兩個來源都支援日期區間，故一律**以「年」為單位請求**：2013~今日各只要十餘次請求，
 不退化成逐日爬取。實測全期間上市 360 筆、上櫃 283 筆，量很小。
-
-**每次都掃整個區間，不從 `MAX(date)+1` 續跑**：這類事件是「事後公告」，
-而且量少到重掃整段也只有二十幾次請求；用 `MAX(date)+1` 會讓中間任何一年的缺漏
-永遠補不回來。入庫走 `INSERT OR REPLACE`，重跑是冪等的。
+這類事件是「事後公告」，每次重掃整個區間；流程見 `YearlyRangeTwoMarketUpdater`。
 """
 
 
-class CorporateActionUpdater(BaseDataUpdater):
-    """Corporate Action Updater"""
+class CorporateActionUpdater(YearlyRangeTwoMarketUpdater):
+    """公司行動（減資、面額變更）updater"""
 
-    # 區間請求之間的節流（一年一次請求，不需要像逐日爬蟲那樣長時間休息）
-    YEAR_REQUEST_DELAY_MIN: int = 3
-    YEAR_REQUEST_DELAY_MAX: int = 8
+    SOURCE: str = "corporate_action"
+    SOURCE_LABEL: str = "Corporate Action"
+    TABLE_LABEL: str = "Corporate action"
+    LOG_FILE_NAME: str = "update_corporate_action.log"
+    # 公司行動的清洗檔名要自帶 `.csv`（cleaner 照原樣落地），與除權息不同
+    FILE_SUFFIX: str = ".csv"
 
     def __init__(self) -> None:
         super().__init__()
@@ -52,106 +45,6 @@ class CorporateActionUpdater(BaseDataUpdater):
         self.loader: CorporateActionLoader = CorporateActionLoader(dao=self.dao)
 
         self.setup()
-
-    def setup(self) -> None:
-        """Set Up the Config of Updater"""
-
-        LogManager.setup_logger("update_corporate_action.log")
-
-    def close(self) -> None:
-        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
-
-        self.dao.close()
-        self.conn = None
-
-    def update(
-        self,
-        start_date: datetime.date,
-        end_date: Optional[datetime.date] = None,
-    ) -> None:
-        """
-        - Description:
-            更新公司行動事件表（減資、面額變更）
-        - Parameters:
-            - start_date: datetime.date
-                回補起日
-            - end_date: Optional[datetime.date]
-                回補迄日；None 取當日（預設值不可在 def 行求值）
-        """
-
-        logger.info("* Start Updating TWSE & TPEX Corporate Action Data...")
-
-        end_date = end_date or datetime.date.today()
-
-        if start_date > end_date:
-            logger.info("Corporate action data is already up to date")
-            return
-
-        years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
-        stats: UpdateStats = UpdateStats()
-        layout_failures: List[str] = []
-
-        for year in years:
-            year_start: datetime.date = max(start_date, datetime.date(year, 1, 1))
-            year_end: datetime.date = min(end_date, datetime.date(year, 12, 31))
-
-            period: str = (
-                f"{TimeUtils.format_date(year_start)}_{TimeUtils.format_date(year_end)}"
-            )
-
-            twse: CrawlResult = self.crawler.crawl_twse_capital_reduction(
-                year_start, year_end
-            )
-            tpex: CrawlResult = self.crawler.crawl_tpex_capital_reduction(
-                year_start, year_end
-            )
-            stats.record(twse, tpex)
-
-            # 版面改制逐年隔離，但收尾必須非零結束：減資與股票分割同樣是還原價的輸入
-            for result, source in ((twse, "twse"), (tpex, "tpex")):
-                if not result.is_ok:
-                    continue
-                try:
-                    cleaned: Optional[pd.DataFrame] = self.cleaner.clean(
-                        result.data, source=source, file_name=f"{source}_{period}.csv"
-                    )
-                except ColumnLayoutError as error:
-                    logger.error(
-                        f"[corporate_action] {source.upper()} {year} 版面改制：{error}"
-                    )
-                    layout_failures.append(f"{source} {year}")
-                    stats.count_clean_failure()
-                    continue
-
-                if cleaned is None or cleaned.empty:
-                    logger.warning(
-                        f"Cleaned {source.upper()} dataframe empty for {year}"
-                    )
-
-            delay: int = random.randint(
-                self.YEAR_REQUEST_DELAY_MIN, self.YEAR_REQUEST_DELAY_MAX
-            )
-            time.sleep(delay)
-
-        # `requested` 的單位是「年」而不是「天」：本來源支援區間查詢，一年一次請求
-        stats.report("corporate_action（單位：年）")
-
-        # **先入庫再拋**：沒改制的年份已經清洗好了，不入庫等於這次白跑
-        self.loader.add_to_db(remove_files=False)
-
-        table_latest_date: Optional[str] = self.dao.get_latest_date()
-        if table_latest_date:
-            logger.info(
-                "Corporate action data updated. "
-                f"Latest available date: {table_latest_date}"
-            )
-        else:
-            logger.warning("No new corporate action data was updated")
-
-        if layout_failures:
-            raise CleanFailureError("corporate_action", layout_failures)
-
-        self.raise_if_unreachable("corporate_action", stats)
 
     def load_detected_events(
         self, events: List[Dict[str, object]], file_name: str = "detected.csv"

@@ -19,6 +19,8 @@ class StockMarginDAO(BaseDAO):
     # 與建表 DDL 的 PRIMARY KEY 一致；`load_csv_directory()` 以它做檔內去重
     PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("date", "stock_id")
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：融資券餘額的回補是獨立作業，尚未執行時券源檢核以「查無資料」跳過
+    OPTIONAL_TABLE: bool = True
     NEEDS_SYMBOL_DATE_INDEX: bool = True
 
     # === 建表 ===
@@ -60,7 +62,10 @@ class StockMarginDAO(BaseDAO):
 
     # === 查詢 ===
     def get_short_balance(self, date: datetime.date) -> pd.DataFrame:
-        """取得所有股票指定日期的融券餘額與券資比（券源檢核用）"""
+        """取得所有股票指定日期的融券餘額與券資比（券源檢核用）；缺表時為空表"""
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""
@@ -74,7 +79,10 @@ class StockMarginDAO(BaseDAO):
     def get_stock_short_balance(
         self, stock_id: str, date: datetime.date
     ) -> pd.DataFrame:
-        """取得指定個股在指定日期的融券今日餘額（單欄；查無資料時為空表）"""
+        """取得指定個股在指定日期的融券今日餘額（單欄；查無資料或缺表時為空表）"""
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""

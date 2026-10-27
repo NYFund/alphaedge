@@ -33,6 +33,8 @@ class FinancialStatementDAO(BaseDAO):
     """
 
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：尚未回補時查詢回空表、規劃端視為全部待抓
+    OPTIONAL_TABLE: bool = True
 
     # 允許存取的資料表；表名不可參數化，只能以白名單擋下非預期的值
     ALLOWED_TABLES: Tuple[str, ...] = (
@@ -115,7 +117,14 @@ class FinancialStatementDAO(BaseDAO):
         return table_name
 
     # === 建表 ===
-    def ensure_table(self, columns: List[str]) -> None:
+    def ensure_table(self) -> None:
+        """欄位由清洗器的欄位清單決定，無參數的建表無從下手：請改呼叫 `ensure_table_from_columns()`"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 的欄位由清單決定，請用 ensure_table_from_columns(columns)"
+        )
+
+    def ensure_table_from_columns(self, columns: List[str]) -> None:
         """
         - Description:
             確保資料表存在；可重複呼叫
@@ -201,6 +210,9 @@ class FinancialStatementDAO(BaseDAO):
             - pd.DataFrame
                 區間內的財報；起點晚於終點時為空表
         """
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""

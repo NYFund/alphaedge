@@ -48,9 +48,8 @@ def dao() -> FuturesMarginDAO:
     """TX 在 2024-08-09、2024-08-22 各調整一次，08-22 同時有一覽表那一列"""
 
     margin_dao: FuturesMarginDAO = FuturesMarginDAO(conn=sqlite3.connect(":memory:"))
-    margin_dao.ensure_tables()
+    margin_dao.ensure_table()
     margin_dao.insert_rows(
-        FuturesMarginDAO.TABLE_NAME,
         make_margin(
             [
                 ["2024-08-09", "TX", 265000, "announcement"],
@@ -96,7 +95,6 @@ def test_updater_consistency_check_uses_the_exclusive_query(
 
     updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
     updater.dao.insert_rows(
-        FuturesMarginDAO.TABLE_NAME,
         make_margin(
             [
                 ["2024-08-09", "TX", 265000, "announcement"],
@@ -121,10 +119,14 @@ def test_fallback_to_earliest(dao: FuturesMarginDAO) -> None:
 def test_missing_tables_return_none() -> None:
     """尚未跑過保證金 ETL：金額、比例、涵蓋範圍一律回 None"""
 
-    margin_dao: FuturesMarginDAO = FuturesMarginDAO(conn=sqlite3.connect(":memory:"))
+    from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
+
+    conn: sqlite3.Connection = sqlite3.connect(":memory:")
+    margin_dao: FuturesMarginDAO = FuturesMarginDAO(conn=conn)
+    rate_dao: StockFuturesMarginRateDAO = StockFuturesMarginRateDAO(conn=conn)
 
     assert margin_dao.get_margin_in_effect("TX", datetime.date(2024, 8, 22)) is None
-    assert margin_dao.get_rates_in_effect("CDF", datetime.date(2024, 8, 22)) is None
+    assert rate_dao.get_rates_in_effect("CDF", datetime.date(2024, 8, 22)) is None
     assert margin_dao.get_covered_date_range("TX") is None
 
 
@@ -141,8 +143,8 @@ def test_insert_counts_only_new_rows_and_replace_overwrites(
         [["2024-08-22", "TX", 292000, "announcement"]]
     )
 
-    assert dao.insert_rows(FuturesMarginDAO.TABLE_NAME, duplicated) == 0
-    assert dao.insert_rows(FuturesMarginDAO.TABLE_NAME, corrected, replace=True) == 0
+    assert dao.insert_rows(duplicated) == 0
+    assert dao.insert_rows(corrected, replace=True) == 0
     assert dao.get_announcement_margins("TX") == [
         ("2024-08-09", 265000),
         ("2024-08-22", 292000),
@@ -150,13 +152,22 @@ def test_insert_counts_only_new_rows_and_replace_overwrites(
     assert dao.get_latest_snapshot_margin("TX") is None
 
 
-def test_table_name_whitelist(dao: FuturesMarginDAO) -> None:
-    """表名只能是兩張保證金表之一"""
+def test_each_margin_table_has_its_own_dao() -> None:
+    """一張表一個 DAO：金額表與比例表不再靠表名參數切換，各自的鍵欄也不同"""
 
-    with pytest.raises(ValueError):
-        dao.count_rows("price")
-    with pytest.raises(ValueError):
-        dao.insert_rows("price; DROP TABLE x", make_margin([]))
+    from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
+
+    conn: sqlite3.Connection = sqlite3.connect(":memory:")
+    amount: FuturesMarginDAO = FuturesMarginDAO(conn=conn)
+    rate: StockFuturesMarginRateDAO = StockFuturesMarginRateDAO(conn=conn)
+    amount.ensure_table()
+    rate.ensure_table()
+
+    assert amount.TABLE_NAME != rate.TABLE_NAME
+    assert (amount.KEY_COLUMNS, rate.KEY_COLUMNS) == (("product",), ("product_id",))
+    assert amount.DATE_COLUMN == rate.DATE_COLUMN == "effective_date"
+    assert not hasattr(amount, "get_rates_in_effect")
+    assert not hasattr(rate, "get_margin_in_effect")
 
 
 # === updater／loader／設定 ===
@@ -206,11 +217,11 @@ def test_loader_failed_insert_leaves_no_partial_rows(
     original_insert: Callable[..., int] = FuturesMarginDAO.insert_rows
 
     def insert_then_fail(
-        self: FuturesMarginDAO, table: str, df: pd.DataFrame, replace: bool = False
+        self: FuturesMarginDAO, df: pd.DataFrame, replace: bool = False
     ) -> int:
         """照常寫入後模擬寫到一半失敗"""
 
-        original_insert(self, table, df, replace=replace)
+        original_insert(self, df, replace=replace)
         raise OSError("disk I/O error")
 
     monkeypatch.setattr(FuturesMarginDAO, "insert_rows", insert_then_fail)
@@ -251,7 +262,6 @@ def test_chain_check_reports_a_gap_and_is_wired_into_update(
     updater: FuturesMarginUpdater = make_updater(tmp_path, monkeypatch)
     # TX 連續三次公告，而中間那次「刻意不入庫」——模擬漏抓一則公告
     updater.dao.insert_rows(
-        FuturesMarginDAO.TABLE_NAME,
         make_margin(
             [
                 ["2024-01-05", "TX", 184000, "announcement"],

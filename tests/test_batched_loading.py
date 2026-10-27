@@ -173,6 +173,8 @@ def test_updater_load_batch_passes_only_its_dates(
     received: List[Optional[set]] = []
 
     class SpyLoader:
+        """只記錄收到的 `only_dates`，不真的入庫"""
+
         def add_to_db(self, remove_files: bool = False, only_dates=None) -> None:
             received.append(only_dates)
 

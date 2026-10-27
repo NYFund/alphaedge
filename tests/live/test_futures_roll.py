@@ -7,7 +7,6 @@ import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.datafeed.base import RollPlan
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.factory import build_live_trader, to_live_roll_config
 from core.live.risk.trading_mode import TradingMode
@@ -77,6 +76,8 @@ def test_open_interest_rule_is_refused() -> None:
 
 # === 資料源：今天該不該換、換去哪 ===
 def weekdays(start: datetime.date, end: datetime.date) -> List[datetime.date]:
+    """區間內的所有平日，當作交易日曆"""
+
     days: List[datetime.date] = []
     current: datetime.date = start
     while current <= end:
@@ -87,7 +88,7 @@ def weekdays(start: datetime.date, end: datetime.date) -> List[datetime.date]:
 
 
 class FakeResolver:
-    """列出掛牌月份、以（商品, 月份）取合約"""
+    """列出掛牌月份、以（商品，月份）取合約"""
 
     def __init__(self, expiries: List[str]) -> None:
         self.expiries: List[str] = expiries
@@ -129,6 +130,8 @@ def make_feed(
     prices: Optional[Dict[str, float]] = None,
     expiries: Optional[List[str]] = None,
 ) -> TwFuturesLiveDataFeed:
+    """建立指定日期、可指定各月份報價與掛牌月份的期貨實盤資料源"""
+
     config: FuturesRollConfig = to_live_roll_config(FuturesRollConfig())
     config.calendar = FuturesCalendar(
         weekdays(datetime.date(2026, 9, 1), datetime.date(2026, 12, 31))
@@ -145,6 +148,8 @@ def make_feed(
 
 
 def long_position(expiry: str = "202610", volume: int = 2) -> Any:
+    """TX 指定月份的多方部位"""
+
     return SimpleNamespace(
         product="TX",
         expiry=expiry,
@@ -240,8 +245,9 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, FakeBroker]:
@@ -265,6 +271,9 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
     trader._sleep = lambda seconds: None
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 0.0
+    # 測試庫沒有保證金表、測試策略的額度也撐不起一口台指期：資金占用與曝險一併放行
+    context.calculate_notional = lambda order: 0.0
+    context.calculate_exposure = lambda order: 0.0
     # 測試的資料庫沒有保證金表：部位管理改用比率模式，再先開好一口 10 月多單，
     # 平倉腿的成交才會被帳戶同步認成「平多」而不是「開空」
     context.position_manager.margin_config = FuturesMarginConfig.ratio()
@@ -302,6 +311,8 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
 
 
 def roll_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
+    """已寫入的換月事件（類別，嚴重度）"""
+
     return dao.conn.execute(
         "SELECT category, severity FROM live_risk_event "
         "WHERE category LIKE 'ROLL_%' ORDER BY event_id"
@@ -309,6 +320,8 @@ def roll_events(dao: LiveTradeDAO) -> List[Tuple[Any, ...]]:
 
 
 def placed_symbols(broker: FakeBroker) -> List[str]:
+    """券商替身收到的委託標的"""
+
     return [ticket.order.symbol for ticket in broker.tickets.values()]
 
 
@@ -415,3 +428,80 @@ def test_close_segment_rolls_before_collecting_signals(
     assert placed_symbols(broker)[: len(expected)] == expected
     if not expected:
         assert "TX202611" not in placed_symbols(broker)
+
+
+def test_roll_legs_are_checked_against_the_snapshot_not_yesterdays_settlement(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    偏離檢查以換月計畫的快照價為基準：參考價 45,700、快照 48,000（+5%）→ 兩腿都送出
+
+    換月先於收訊號，此時本段落還沒有報價，基準退回合約檔的前一日結算價；
+    當日漲跌超過 3% 時平倉腿會被 `PRICE_DEVIATION` 擋下、整筆 `ROLL_ABANDONED`，
+    而隔天已經換不了（最後交易日）。既有換月測試都走「取不到參考價放行」，測不到這條。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=1.0)
+    context: StrategyContext = trader.contexts[0]
+    context.data_feed.get_reference_price = lambda symbol: 45700.0  # type: ignore
+
+    assert trader.execute_rolls(None) == 1
+    assert placed_symbols(broker) == ["TX202610", "TX202611"]
+    assert roll_events(dao) == []
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'PRICE_DEVIATION'"
+    ).fetchone() == (0,)
+
+
+def test_partially_filled_close_leg_is_critical_and_rolls_the_filled_part(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    平倉腿只成交一部分：記 CRITICAL，開倉腿改送已平的口數補回曝險
+
+    以前只判 FILLED，IOC 成交 3／5 口後被取消也只記 WARN「放棄」，
+    已平的口數曝險消失卻沒有人會知道。
+    """
+
+    trader, broker = build_trader(dao, fill_ratio=0.5)
+    context: StrategyContext = trader.contexts[0]
+    # 再補一口，讓部位有 2 口可換；兩腿各 2 口、券商只成交一半
+    trader.account_sync.apply_fill(
+        ExecutionReport(
+            broker_seqno="seed2",
+            broker_trade_id="seed2",
+            symbol="TX202610",
+            action=Action.BUY,
+            price=48000.0,
+            volume=1,
+            ts=datetime.datetime(2026, 10, 19, 13, 30),
+        ),
+        strategy_name=context.name,
+    )
+
+    def leg(expiry: str, action: Action) -> FuturesOrder:
+        return FuturesOrder(
+            product="TX",
+            expiry=expiry,
+            action=action,
+            position_type=PositionType.LONG,
+            volume=2,
+            price=48000.0,
+        )
+
+    context.data_feed.plan_rolls = lambda positions, today: [  # type: ignore
+        RollPlan(
+            close_order=leg("202610", Action.SELL),
+            open_order=leg("202611", Action.BUY),
+            reason="TX202610 → TX202611（2 口）",
+        )
+    ]
+
+    trader.execute_rolls(None)
+
+    legs: List[Any] = [ticket.order for ticket in broker.tickets.values()]
+    assert [(order.symbol, order.volume) for order in legs] == [
+        ("TX202610", 2),
+        ("TX202611", 1),
+    ]
+    assert ("ROLL_PARTIAL", "CRITICAL") in roll_events(dao)

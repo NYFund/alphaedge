@@ -4,9 +4,9 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
-from core.live.risk.risk_config import RiskConfig
 from core.live.risk.risk_manager import ExposureItem, truncate_batch_by_exposure
 from core.models import StockOrder
+from core.models.risk_config import StockRiskConfig
 from core.portfolio.order_rules import exceeds_symbol_exposure
 from core.utils import Action, PositionType
 
@@ -18,7 +18,7 @@ from core.utils import Action, PositionType
 
 | | 回測 | 實盤 |
 |---|---|---|
-| 設定 | `ShortConstraint.max_short_exposure_ratio` | `RiskConfig.single_symbol_exposure_ratio` |
+| 設定 | `ShortConstraint.max_short_exposure_ratio` | `StockRiskConfig.single_symbol_exposure_ratio` |
 | 預設 | `None`（關閉） | `0.35` |
 | 適用 | **只有空單** | 多空皆適用 |
 | 超限行為 | 整筆拒絕開倉 | 批次截斷 |
@@ -87,7 +87,7 @@ def test_live_truncation_agrees_with_the_shared_formula() -> None:
     批次截斷就要把它截掉；說沒超過的就要放行。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     ratio: float = config.single_symbol_exposure_ratio
     cap: float = INIT_CAPITAL * ratio
 
@@ -104,7 +104,7 @@ def test_live_truncation_agrees_with_the_shared_formula() -> None:
             [ExposureItem(make_order(), amount)],
             existing_exposure=0.0,
             existing_symbol_exposure={},
-            init_capital=INIT_CAPITAL,
+            capital_limit=INIT_CAPITAL,
             config=config,
         )
         was_truncated: bool = bool(truncated)
@@ -122,7 +122,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
     只看單張的話，同一檔拆成多張、每張都低於上限，就能繞過單一標的上限。
     """
 
-    config: RiskConfig = RiskConfig()
+    config: StockRiskConfig = StockRiskConfig()
     cap: float = INIT_CAPITAL * config.single_symbol_exposure_ratio
 
     allowed, truncated = truncate_batch_by_exposure(
@@ -130,7 +130,7 @@ def test_existing_symbol_exposure_accumulates() -> None:
         existing_exposure=0.0,
         # 這一檔已經佔掉六成的額度，只剩四成，放不下這張半額度的單
         existing_symbol_exposure={"2330": cap * 0.6},
-        init_capital=INIT_CAPITAL,
+        capital_limit=INIT_CAPITAL,
         config=config,
     )
 
@@ -150,7 +150,7 @@ def test_backtest_default_is_off_and_live_default_is_on() -> None:
     from core.models.cost_config import ShortConstraint
 
     assert ShortConstraint().max_short_exposure_ratio is None, "回測預設不限制"
-    assert RiskConfig().single_symbol_exposure_ratio == 0.35, "實盤預設 35%"
+    assert StockRiskConfig().single_symbol_exposure_ratio == 0.35, "實盤預設 35%"
 
 
 def test_backtest_only_applies_it_to_shorts() -> None:
@@ -270,20 +270,12 @@ def _operand_name(node: ast.expr) -> str:
 
 
 # 允許出現「資金 × 單一標的比例」的位置。**每一處都要有理由**。
-# 2026-09-25 現查只有這兩處：
 # **權威實作不會被命中，那是刻意的**：`exceeds_symbol_exposure()` 是純函式，
 # 參數名就叫 `ratio`——它不知道自己在算哪一種比例，所以沒有 `symbol` 字樣。
 # 反過來說，任何把比例**具名成單一標的**再自己乘一次的地方，就是在重算這條公式。
-_ALLOWED_SYMBOL_EXPOSURE_SITES: Dict[str, int] = {
-    # **批次截斷這條路徑其實沒有呼叫權威實作，而是把同一條公式再算一次**
-    # （`symbol_cap = init_capital * symbol_ratio`）。它上方的註解宣稱
-    # 「公式與回測共用」，但程式是內嵌重算的——兩者之間沒有任何東西保證一致。
-    # 之所以還沒收掉：`exceeds_symbol_exposure()` 回的是 bool（單筆判定），
-    # 批次截斷要的是 cap（跟累計值比），改法要先決定介面。
-    # 收掉的做法是讓權威實作多一個「回 cap」的入口，兩邊都呼叫它；
-    # 那會動到實盤風控，故尚未施作。**這一筆例外不可再增加**
-    "core/live/risk/risk_manager.py": 1,
-}
+# 例外清單刻意留空：批次截斷曾經內嵌重算同一條公式，已改為呼叫
+# `order_rules.symbol_exposure_cap()`。**新增任何一筆之前，先改成呼叫權威實作**
+_ALLOWED_SYMBOL_EXPOSURE_SITES: Dict[str, int] = {}
 
 
 def test_the_detector_actually_matches_the_formula() -> None:

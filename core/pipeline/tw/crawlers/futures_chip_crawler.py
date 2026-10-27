@@ -4,7 +4,7 @@ from typing import Dict, Optional
 import requests
 from loguru import logger
 
-from core.pipeline.shared.base_crawler import BaseDataCrawler
+from core.pipeline.shared.base_crawler import BaseDataCrawler, CrawlResult
 from core.pipeline.shared.request_utils import RequestUtils
 from core.pipeline.tw.utils.url_manager import URLManager
 from core.utils import FileEncoding
@@ -74,17 +74,18 @@ class FuturesChipCrawler(BaseDataCrawler):
         super().__init__()
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
-    def crawl(self, date: datetime.date) -> Optional[str]:
+    def crawl(self, date: datetime.date) -> CrawlResult:
         """預設路徑：爬三大法人（其餘兩個資料集各有專屬方法）"""
 
         return self.crawl_institutional(date)
 
     def crawl_institutional(
         self, start_date: datetime.date, end_date: Optional[datetime.date] = None
-    ) -> Optional[str]:
+    ) -> CrawlResult:
         """三大法人（自營商／投信／外資）的逐商品多空口數與未平倉"""
 
         return self.fetch_csv(
@@ -93,7 +94,7 @@ class FuturesChipCrawler(BaseDataCrawler):
 
     def crawl_large_trader(
         self, start_date: datetime.date, end_date: Optional[datetime.date] = None
-    ) -> Optional[str]:
+    ) -> CrawlResult:
         """大額交易人：前五大／前十大的買賣方部位，含特定法人拆分"""
 
         return self.fetch_csv(
@@ -102,7 +103,7 @@ class FuturesChipCrawler(BaseDataCrawler):
 
     def crawl_put_call_ratio(
         self, start_date: datetime.date, end_date: Optional[datetime.date] = None
-    ) -> Optional[str]:
+    ) -> CrawlResult:
         """選擇權 Put/Call Ratio：一天一列"""
 
         return self.fetch_csv("TAIFEX_FUTURES_PCR_URL", start_date, end_date, "PCR")
@@ -113,14 +114,15 @@ class FuturesChipCrawler(BaseDataCrawler):
         start_date: datetime.date,
         end_date: Optional[datetime.date] = None,
         label: str = "",
-    ) -> Optional[str]:
+    ) -> CrawlResult:
         """
         - Description:
             以日期區間查詢並取回 CSV 原文（big5 解碼）
 
-            `end_date` 省略時等同單日查詢。**回傳 None 有兩種成因且本層分不出來**
+            `end_date` 省略時等同單日查詢。**`NO_DATA` 有兩種成因且本層分不出來**
             ——非交易日／尚未公布，或被擋流量（兩者都是 HTTP 200 ＋ HTML）。
-            只有 updater 知道那天是不是交易日，故判斷該不該重試是它的責任。
+            只有 updater 知道那天是不是交易日，故把「有交易日卻 `NO_DATA`」
+            升級成 `FAILED` 並重試是它的責任；本層只在連線層失敗時回 `FAILED`。
         - Parameters:
             - url_name: str
                 `URLManager` 的 key
@@ -129,8 +131,9 @@ class FuturesChipCrawler(BaseDataCrawler):
             - label: str
                 log 用的資料集名稱
         - Return:
-            - Optional[str]
-                CSV 原文；不是 CSV（非交易日或被擋）時為 None
+            - CrawlResult
+                `OK` 時 `text` 為 CSV 原文；不是 CSV（非交易日或被擋）時為 `NO_DATA`；
+                連線層失敗時為 `FAILED`
         """
 
         end: datetime.date = end_date or start_date
@@ -149,7 +152,7 @@ class FuturesChipCrawler(BaseDataCrawler):
         )
         if response is None:
             logger.warning(f"[Futures Chip] 取得{label}失敗：{span}")
-            return None
+            return CrawlResult.failed(f"{label} {span}: 無回應")
 
         text: str = response.content.decode(FileEncoding.BIG5.value, errors="replace")
         lines: list = [line for line in text.splitlines() if line.strip()]
@@ -157,11 +160,11 @@ class FuturesChipCrawler(BaseDataCrawler):
         # 非交易日與被擋流量回的都是 HTML（見 `CSV_HEADER_KEYWORD`）
         if not lines or self.CSV_HEADER_KEYWORD not in lines[0] or "," not in lines[0]:
             logger.info(f"{span} {label}: 沒有取得 CSV（非交易日、未公布或被擋）")
-            return None
+            return CrawlResult.no_data("回的是 HTML：非交易日、未公布或被擋")
 
         # 只有表頭代表該區間內確實沒有資料
         if len(lines) < self.MIN_DATA_LINES:
             logger.info(f"{span} {label}: no data")
-            return None
+            return CrawlResult.no_data("只有表頭")
 
-        return text
+        return CrawlResult.ok_text(text)

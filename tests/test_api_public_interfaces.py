@@ -13,14 +13,13 @@ from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
 from core.config import (
     FUTURES_LARGE_TRADER_TABLE_NAME,
-    STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_chip_dao import FuturesChipDAO
-from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
 from core.dao.tw.stock_chip_dao import StockChipDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 from core.dao.tw.stock_margin_dao import StockMarginDAO
 
 _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
@@ -32,7 +31,7 @@ _PROJECT_ROOT: Path = Path(__file__).resolve().parents[1]
 （逐一實測過都正常回傳），問題是沒有任何東西盯著它們：下一次資料表欄位一改，
 它們會安靜地跟著壞而沒有東西會紅。
 
-`core/api/` 是策略作者的公開介面（見 `core/strategies/README.md`），
+`core/api/` 是策略作者的公開介面（見 `strategies/README.md`），
 「`core/` 內部沒有呼叫端」對它們是正常狀態，**有測試才是維護的證據**。
 
 一律以 in-memory SQLite 灌樣本，不連 `data/db/tw_stock.db`。
@@ -382,8 +381,7 @@ def futures_margin_api(dao_factory: Callable[..., BaseDAO]) -> FuturesMarginAPI:
     """建立含股期適用比例與契約單位的 in-memory 表"""
 
     margin_dao: BaseDAO = dao_factory(
-        FuturesMarginDAO,
-        records_table=STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
+        StockFuturesMarginRateDAO,
         records=[
             {
                 "product_id": "CDF",
@@ -482,7 +480,7 @@ def test_get_last_tick_takes_the_last_row() -> None:
     當日最後一筆 tick ＝ `get_stock_ticks()` 結果的最後一列
 
     以替身取代 `get_stock_ticks()`，本測試驗的是**取尾與空表處理**這段邏輯，
-    不需要 DolphinDB 連線（`StockTickAPI` 的 `__init__` 會連 tick 庫，
+    不需要 TimescaleDB 連線（`StockTickAPI` 的 `__init__` 會連 tick 庫，
     故以 `__new__` 建立空殼）。
     """
 

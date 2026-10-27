@@ -53,6 +53,8 @@ class EligibilityApi(FakeApi):
 
 
 def make_broker(day_trade: Any = "Yes", short_source: Optional[int] = 10) -> Any:
+    """建立可指定當沖資格與券源的券商轉接器，連同 API 替身一起回傳"""
+
     limiter: RateLimiter = RateLimiter(time_source=lambda: 0.0, sleep=lambda s: None)
     api: EligibilityApi = EligibilityApi(day_trade, short_source)
     broker: ShioajiBroker = ShioajiBroker(FakeSession(api, limiter), limiter)
@@ -67,6 +69,8 @@ def ticket(
     is_day_trade: bool = False,
     volume: int = 2,
 ) -> OrderTicket:
+    """組一張 2330 限價委託的委託憑單"""
+
     return OrderTicket(
         client_order_id="run1-0001",
         custom_field="010001",
@@ -85,6 +89,8 @@ def ticket(
 
 
 def short_day_trade() -> OrderTicket:
+    """現股當沖賣出（先賣後買）的委託憑單"""
+
     return ticket(Action.SELL, PositionType.SHORT, ShortMethod.DAY_TRADE)
 
 

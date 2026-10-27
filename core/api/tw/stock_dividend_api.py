@@ -18,7 +18,7 @@ from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 
 """
-Stock dividend API: query dividend table through StockDividendDAO（除權除息計算結果表）
+Stock Dividend API：經 `StockDividendDAO` 查詢 `dividend` 表（除權除息計算結果）
 
 本表同時服務兩個互不相同的需求，取值時務必分清楚：
 - **價格序列還原**：用「還原係數」
@@ -30,7 +30,7 @@ Stock dividend API: query dividend table through StockDividendDAO（除權除息
 
 
 class StockDividendAPI(BaseDataAPI):
-    """Stock dividend API"""
+    """除權除息 API（還原係數、現金股利、股數倍率）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = StockDividendDAO
@@ -295,7 +295,7 @@ class StockDividendAPI(BaseDataAPI):
             logger.warning(
                 f"[dividend] 找不到 {CORPORATE_ACTION_TABLE_NAME}，還原價僅涵蓋除權息；"
                 "減資與分割的假跳空不會被消除。"
-                "請跑 `python -m tasks.update_db --target corporate_action`"
+                "請跑 `python -m apps.update_db --target corporate_action`"
             )
             return dividend_df.sort_values(["stock_id", "date"], kind="stable")
 

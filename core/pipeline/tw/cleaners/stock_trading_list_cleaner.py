@@ -22,7 +22,7 @@ Stock Trading List Cleaner：把兩份交易所資格名單收斂成各自一組
 
 
 class StockTradingListCleaner(BaseDataCleaner):
-    """Stock Trading List Cleaner (Transform)"""
+    """台股平盤下賣出名單與當沖名單 cleaner（Transform）"""
 
     SHORT_SALE_RAW_COLS: List[str] = [
         "stock_id",
@@ -57,7 +57,7 @@ class StockTradingListCleaner(BaseDataCleaner):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         self.short_sale_dir.mkdir(parents=True, exist_ok=True)
         self.day_trade_dir.mkdir(parents=True, exist_ok=True)

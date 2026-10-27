@@ -9,7 +9,9 @@ from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.models import BaseOrder, FuturesQuote, StockQuote
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 
 """
 報價日期的型別在回測與實盤必須一致
@@ -137,14 +139,14 @@ def test_strategy_can_compare_a_live_quote_date_with_its_calendar(
     策略拿實盤報價的日期去比對交易日清單，不可拋型別錯誤
 
     這是 2026-09-24 演練尾盤段的實際崩潰點：
-    `MomentumStrategy1.get_previous_trading_date()` 的
+    `VolumeBreakoutMomentumStrategy.get_previous_trading_date()` 的
     `date <= self.trading_days[-1]`。
     """
 
     quote: Optional[StockQuote] = stream.from_stock_snapshot(FakeSnapshot())
     assert quote is not None
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.trading_days = [
         datetime.date(2026, 9, 18),
         datetime.date(2026, 9, 21),
@@ -256,6 +258,8 @@ def build_pre_open_futures_quotes() -> List[Any]:
 
     # 與 shioaji 1.7 的 `FuturesInfo` 同形狀：沒有 `symbol`，只有月份字母碼
     class Contract:
+        """帶參考價與漲跌停價的期貨合約替身"""
+
         code: str = "TXFJ6"
         reference: float = 24000.0
         limit_up: float = 26400.0
@@ -263,10 +267,14 @@ def build_pre_open_futures_quotes() -> List[Any]:
         multiplier: int = 200
 
     class Resolver:
+        """把月份字母碼轉成專案契約代號的轉換器"""
+
         def to_futures_symbol(self, code: str) -> str:
             return {"TXFJ6": "TX202610"}.get(code, code)
 
     class Broker:
+        """只帶合約轉換器的券商替身"""
+
         resolver: Resolver = Resolver()
 
     feed: TwFuturesLiveDataFeed = TwFuturesLiveDataFeed(

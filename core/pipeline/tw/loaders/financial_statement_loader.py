@@ -17,7 +17,7 @@ from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import PipelineError
 
 """
-Financial Statement Loader（四大報表）
+財報 loader（四大報表）
 
 資產負債表、綜合損益表、現金流量表、權益變動表各一張表，**欄位由 cleaner 產出的
 `*_cleaned_columns.json` 決定**：四大報表的欄位逐年增修，寫死 schema 會在來源
@@ -28,7 +28,7 @@ Financial Statement Loader（四大報表）
 
 
 class FinancialStatementLoader(BaseDataLoader):
-    """Financial Statement Loader"""
+    """財報 loader：四大報表各寫入一張表"""
 
     def __init__(self, conn: Optional[DBConnection] = None) -> None:
         """
@@ -46,7 +46,7 @@ class FinancialStatementLoader(BaseDataLoader):
         self.conn: Optional[DBConnection] = conn
         self.owns_conn: bool = conn is None
 
-        # Reports Cleaned Columns Path
+        # 各報表清洗後欄名的 JSON 路徑（建表依它決定欄位）
         self.balance_sheet_cleaned_cols_path: Path = (
             FINANCIAL_STATEMENT_META_DIR_PATH
             / FinancialStatementType.BALANCE_SHEET.lower()
@@ -75,7 +75,7 @@ class FinancialStatementLoader(BaseDataLoader):
             FinancialStatementType.EQUITY_CHANGE: self.equity_change_cleaned_cols_path,
         }
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.fs_dir: Path = FINANCIAL_STATEMENT_DOWNLOADS_PATH
         self.balance_sheet_dir: Path = (
             self.fs_dir / FinancialStatementType.BALANCE_SHEET.lower()
@@ -93,12 +93,12 @@ class FinancialStatementLoader(BaseDataLoader):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
-        # Connect Database
+        # 連線資料庫
         self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         self.fs_dir.mkdir(parents=True, exist_ok=True)
@@ -108,7 +108,7 @@ class FinancialStatementLoader(BaseDataLoader):
         self.equity_change_dir.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> None:
-        """Connect to the Database"""
+        """連線到資料庫"""
 
         if self.conn is None:
             # 路徑在呼叫當下從本模組讀取，測試才能以 monkeypatch 改寫
@@ -194,7 +194,7 @@ class FinancialStatementLoader(BaseDataLoader):
         if self.conn is None:
             self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         dao: FinancialStatementDAO = self.get_dao(table_name)
@@ -207,7 +207,7 @@ class FinancialStatementLoader(BaseDataLoader):
             list(dir_path.iterdir()) if only_files is None else only_files
         )
         for file_path in target_files:
-            # Skip non-CSV files
+            # 只處理 CSV 檔
             if file_path.suffix != ".csv":
                 continue
             try:

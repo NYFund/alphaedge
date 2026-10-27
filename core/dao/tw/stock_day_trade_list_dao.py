@@ -22,6 +22,8 @@ class StockDayTradeListDAO(BaseDAO):
     # 與建表 DDL 的 PRIMARY KEY 一致；`load_csv_directory()` 以它做檔內去重
     PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("date", "stock_id")
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：名單只在開啟檢核時才需要；缺表＝未入庫
+    OPTIONAL_TABLE: bool = True
     NEEDS_SYMBOL_DATE_INDEX: bool = True
 
     # === 建表 ===

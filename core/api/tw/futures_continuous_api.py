@@ -12,7 +12,7 @@ from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
 from core.utils.constant import FuturesAdjustMethod, FuturesRollRule, FuturesSession
 
 """
-Futures Continuous API: query futures_continuous table through FuturesContinuousDAO
+Futures Continuous API：經 `FuturesContinuousDAO` 查詢 `futures_continuous` 連續合約表
 
 **與 `FuturesPriceAPI` 的分工**：那一份回傳當日**所有**掛牌合約（一天多列），
 本份回傳**一天一列**的連續序列——換月已經接好、價差已經調整掉。
@@ -27,7 +27,7 @@ Futures Continuous API: query futures_continuous table through FuturesContinuous
 
 
 class FuturesContinuousAPI(BaseDataAPI):
-    """Futures Continuous API"""
+    """期貨連續合約 API（一天一列、換月已接好）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = FuturesContinuousDAO
@@ -64,10 +64,7 @@ class FuturesContinuousAPI(BaseDataAPI):
         """
 
         # 表不存在＝尚未跑過 `--target futures_continuous`，那是「還沒有資料」
-        # 不是查詢寫錯（全新環境本來就會走到這裡），語意與其他 API 一致
-        if not self.dao.table_exists():
-            return pd.DataFrame()
-
+        # 不是查詢寫錯（全新環境本來就會走到這裡）；DAO 宣告為可缺的表，缺表回空表
         return self.dao.get_series(
             product,
             session.value,
@@ -88,14 +85,15 @@ class FuturesContinuousAPI(BaseDataAPI):
     ) -> pd.Series:
         """
         - Description:
-            取連續合約的收盤價序列，index 為 `datetime.date`
+            取連續合約的收盤價序列
 
             對標曲線只要收盤價，`get_series()` 的其餘欄位對它沒有意義。
         - Parameters:
             - 同 `get_series()`
         - Return:
             - pd.Series
-                index 為交易日、值為收盤價；查無資料時為空 Series
+                價格序列（契約見 `BaseDataAPI.build_close_series()`：index 為
+                `datetime.date`、dtype float、name 為「收盤價」）；查無資料時為空 Series
         """
 
         df: pd.DataFrame = self.get_series(
@@ -106,9 +104,4 @@ class FuturesContinuousAPI(BaseDataAPI):
             method=method,
             roll_rule=roll_rule,
         )
-        if df.empty:
-            return pd.Series(dtype=float)
-
-        series: pd.Series = df[FuturesPriceColumn.CLOSE.value].astype(float)
-        series.index = pd.to_datetime(df["date"]).dt.date
-        return series
+        return self.build_close_series(df, "date", FuturesPriceColumn.CLOSE.value)

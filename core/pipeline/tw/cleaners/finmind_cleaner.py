@@ -23,16 +23,16 @@ FinMind 參考資料清洗：股票基本資料與券商分點
 
 
 class FinMindCleaner(BaseDataCleaner):
-    """FinMind Cleaner (Transform): validate data, write CSV, return DataFrame"""
+    """FinMind cleaner（Transform）：驗證資料、寫出 CSV 並回傳 DataFrame"""
 
     def __init__(self) -> None:
         super().__init__()
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.finmind_dir: Path = FINMIND_DOWNLOADS_PATH
         self.setup()
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         self.finmind_dir.mkdir(parents=True, exist_ok=True)
 

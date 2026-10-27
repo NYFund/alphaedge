@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
@@ -15,9 +15,12 @@ class SecuritiesTraderInfoDAO(BaseDAO):
 
     TABLE_NAME: str = SECURITIES_TRADER_INFO_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：券商清單缺表時為空
+    OPTIONAL_TABLE: bool = True
 
-    # 單鍵的現況快照：一家券商分點一列
+    # 單鍵的現況快照：一家券商分點一列（沒有日期欄）
     KEY_COLUMN: str = "securities_trader_id"
+    KEY_COLUMNS: Tuple[str, ...] = (KEY_COLUMN,)
 
     # === 建表 ===
     def create_table(self) -> None:

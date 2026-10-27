@@ -7,7 +7,7 @@ from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
     TwStockSettlementModel,
 )
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import (
@@ -67,7 +67,7 @@ def make_stock_settlement(
 ) -> TwStockSettlementModel:
     """組出台股結算模型；`fill_config` 為 None 時不注入 fill_model"""
 
-    cost_model: StockCostModel = StockCostModel(CostConfig.default())
+    cost_model: TwStockCostModel = TwStockCostModel(CostConfig.default())
     fill_model: Optional[TwStockFillModel] = None
     if fill_config is not None:
         fill_model = TwStockFillModel(
@@ -78,7 +78,7 @@ def make_stock_settlement(
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,
-        prev_close={},
+        reference_prices={},
         fill_model=fill_model,
     )
 
@@ -170,7 +170,7 @@ def test_returns_a_copy_and_leaves_the_original_untouched() -> None:
     assert order.price == 100.0  # 傳入的那一張沒被動過
 
 
-# === S9：超出當日區間只警告不夾回 ===
+# === 超出當日區間只警告不夾回 ===
 def test_forced_cover_price_out_of_range_is_counted_not_clamped() -> None:
     """
     滑價把強制回補價推出當日區間時只計數，不夾回
@@ -331,7 +331,7 @@ ONE_TICK: FuturesFillConfig = FuturesFillConfig(
 )
 
 
-# === S3：期貨強制出場 ===
+# === 期貨強制出場 ===
 def test_margin_call_close_pays_the_slippage() -> None:
     """
     保證金追繳的強制平倉含滑價，方向對持有者不利
@@ -392,13 +392,13 @@ def test_expired_position_exit_pays_the_slippage() -> None:
     settlement: TwFuturesSettlementModel = make_futures_settlement(fill_config=ONE_TICK)
     open_futures_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
-    event_counts: Dict[str, int] = {"forced_cover_no_quote": 0}
+    event_counts: Dict[str, int] = {"forced_exit_no_quote": 0}
 
-    # 連續無報價達 MAX_NO_QUOTE_DAYS 才出場
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS):
+    # 連續無報價達 max_no_quote_days 才出場
+    for _ in range(settlement.max_no_quote_days):
         settlement.close_expired_positions(FUTURES_DAY_2, {}, account, event_counts)
 
-    assert event_counts["forced_cover_no_quote"] == 1
+    assert event_counts["forced_exit_no_quote"] == 1
     assert account.trade_records[-1].sell_price == 19999.0
 
 
@@ -406,7 +406,7 @@ def test_expired_position_exit_survives_a_missing_quote() -> None:
     """到期出場本來就沒有報價，區間檢查要跳過而不是出錯"""
 
     event_counts: Dict[str, int] = {
-        "forced_cover_no_quote": 0,
+        "forced_exit_no_quote": 0,
         "close_price_out_of_range": 0,
     }
     settlement: TwFuturesSettlementModel = make_futures_settlement(
@@ -415,7 +415,7 @@ def test_expired_position_exit_survives_a_missing_quote() -> None:
     open_futures_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
 
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS):
+    for _ in range(settlement.max_no_quote_days):
         settlement.close_expired_positions(FUTURES_DAY_2, {}, account, event_counts)
 
     assert event_counts["close_price_out_of_range"] == 0
@@ -427,15 +427,15 @@ def test_futures_forced_exit_without_fill_model_is_unchanged() -> None:
     settlement: TwFuturesSettlementModel = make_futures_settlement()
     open_futures_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
-    event_counts: Dict[str, int] = {"forced_cover_no_quote": 0}
+    event_counts: Dict[str, int] = {"forced_exit_no_quote": 0}
 
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS):
+    for _ in range(settlement.max_no_quote_days):
         settlement.close_expired_positions(FUTURES_DAY_2, {}, account, event_counts)
 
     assert account.trade_records[-1].sell_price == 20000.0
 
 
-# === S4：換月轉倉兩腿 ===
+# === 換月轉倉兩腿 ===
 def test_roll_pays_the_slippage_on_both_legs() -> None:
     """
     轉倉的平舊月與開新月**兩腿都吃滑價**（D2）
@@ -449,7 +449,7 @@ def test_roll_pays_the_slippage_on_both_legs() -> None:
     account: FuturesAccount = settlement.position_manager.account
     event_counts: Dict[str, int] = {}
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         FUTURES_DAY_2,
         [make_futures_quote("202404", 20100.0)],
         account,
@@ -471,7 +471,7 @@ def test_roll_without_slippage_is_unchanged() -> None:
     open_futures_position(settlement, expiry="202403", price=20000.0)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         FUTURES_DAY_2, [make_futures_quote("202404", 20100.0)], account, {}
     )
 
@@ -487,7 +487,7 @@ def test_short_roll_pays_the_slippage_on_both_legs() -> None:
     )
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         FUTURES_DAY_2, [make_futures_quote("202404", 20100.0)], account, {}
     )
 

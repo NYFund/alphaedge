@@ -1,9 +1,3 @@
-"""
-Chinese / English narrative bodies for TSMC overnight quant Word reports.
-
-Called from generate_docx.build_report with document helper callbacks.
-"""
-
 from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple
@@ -12,11 +6,18 @@ import pandas as pd
 
 from strategy_lab.strategies.tsmc_overnight_signal.reports import docx_common as g
 
-Lang = str  # type alias; actual lang literals passed from caller
+"""
+TSMC 隔夜訊號 Word 量化報告的中文／英文敘事本文
+
+由 `generate_docx.build_report()` 呼叫；表格、圖片與樣式等零件一律取自 `docx_common`。
+"""
+
+Lang = str  # 型別別名；實際的語言字面值由呼叫端傳入
 
 
 def _baseline_numeric_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
-    """Headers and rows for baseline_comparison.csv (test set)."""
+    """`baseline_comparison.csv`（測試集）的表頭與資料列；檔案不存在時回傳空表"""
+
     p = g._OUTPUT / "baseline_comparison.csv"
     if not p.exists():
         return [], []
@@ -24,6 +25,8 @@ def _baseline_numeric_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
     df = pd.read_csv(p)
 
     def fmt_cr(v: float) -> str:
+        """小數累積報酬轉百分比字串"""
+
         return f"{100.0 * float(v):.2f}%"
 
     name_map_zh = {
@@ -105,9 +108,10 @@ def _ic_test_rows(lang: Lang) -> List[List[str]]:
 
 def _ic_consistency_footnote(lang: Lang) -> str:
     """
-    Explain small gap between diagnostic IC (exec_df merge, optional zero-filled preds)
-    and placebo baseline IC (strict panel_test). Values are read from output CSVs when present.
+    說明診斷用 IC（以 exec_df 合併、缺預測的日子補 0）與安慰劑基準 IC（只用嚴格的
+    panel_test）之間的小落差；數值在輸出 CSV 存在時才讀取，否則回傳空字串
     """
+
     p_ic = g._OUTPUT / "signal_ic_test.csv"
     p_pb = g._OUTPUT / "placebo_ic_alignment.csv"
     if not p_ic.exists() or not p_pb.exists():
@@ -142,7 +146,8 @@ def _ic_consistency_footnote(lang: Lang) -> str:
 
 
 def _yearly_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
-    """Returns (headers, rows). Position switches ≈ sum of 0.5 per day the discrete position flips."""
+    """回傳（表頭, 資料列）；部位切換次數 ≈ 部位每翻轉一次記 0.5 的加總"""
+
     p = g._OUTPUT / "yearly_diagnostics.csv"
     if not p.exists():
         return [], []
@@ -156,6 +161,8 @@ def _yearly_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
         col_sw = "turnover_round_trips_approx"
 
     def pct(x: float) -> str:
+        """小數報酬轉百分比字串"""
+
         return f"{100.0 * float(x):.2f}%"
 
     rows = []
@@ -197,6 +204,8 @@ def _yearly_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
 
 
 def _gap_kv(metric: str) -> Optional[float]:
+    """從 `ic_pnl_gap.csv` 取單一指標值；檔案或指標不存在時回傳 None"""
+
     p = g._OUTPUT / "ic_pnl_gap.csv"
     if not p.exists():
         return None
@@ -206,11 +215,15 @@ def _gap_kv(metric: str) -> Optional[float]:
 
 
 def _threshold_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
+    """`threshold_robustness_ridge.csv` 的表頭與資料列（門檻以 bp 顯示）"""
+
     p = g._OUTPUT / "threshold_robustness_ridge.csv"
     if not p.exists():
         return [], []
 
     def pct(v: float) -> str:
+        """小數報酬轉百分比字串"""
+
         return f"{100.0 * float(v):.2f}%"
 
     df = pd.read_csv(p)
@@ -249,7 +262,8 @@ def _threshold_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
 
 
 def _placebo_ic_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
-    """placebo_ic_alignment.csv: baseline vs ±1-row feature shifts on TW panel."""
+    """`placebo_ic_alignment.csv`：基準 IC 與台股面板特徵錯開 ±1 列後的 IC 對照"""
+
     p = g._OUTPUT / "placebo_ic_alignment.csv"
     if not p.exists():
         return [], []
@@ -279,12 +293,16 @@ def _placebo_ic_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
 
 
 def _capital_sensitivity_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
+    """`capital_sensitivity.csv` 的表頭與資料列"""
+
     p = g._OUTPUT / "capital_sensitivity.csv"
     if not p.exists():
         return [], []
     df = pd.read_csv(p)
 
     def fmt_million(cap: float) -> str:
+        """資金以百萬為單位顯示，整數時不帶小數"""
+
         m = float(cap) / 1_000_000.0
         if abs(m - round(m)) < 1e-9:
             return f"{int(round(m))}M"
@@ -322,12 +340,16 @@ def _capital_sensitivity_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
 
 
 def _passive_benchmark_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
+    """`passive_benchmarks.csv`（買進持有與持有現金）的表頭與資料列"""
+
     p = g._OUTPUT / "passive_benchmarks.csv"
     if not p.exists():
         return [], []
     df = pd.read_csv(p)
 
     def fmt(v: float) -> str:
+        """小數報酬轉百分比字串"""
+
         return f"{100.0 * float(v):.2f}%"
 
     rows = []
@@ -382,25 +404,35 @@ def _sanity_check_rows(lang: Lang) -> Tuple[List[str], List[List[str]]]:
 def _reconciliation_rows(
     m_vec: Dict[str, str], m_real: Dict[str, str], lang: Lang
 ) -> List[List[str]]:
+    """向量化與逐張兩條回測路徑的績效對照列"""
+
     san = g.sanitize_for_word
 
     def fmt_cr(m: Dict[str, str]) -> str:
+        """累積報酬與對應的財富倍數；缺欄位時顯示 N/A"""
+
         if "策略累積報酬" not in m:
             return "N/A"
         cr = float(m["策略累積報酬"])
         return san(f"{cr:.4f} (wealth ~{1 + cr:.2f}x)")
 
     def fmt_cagr(m: Dict[str, str]) -> str:
+        """年化報酬（%）；缺欄位時顯示 N/A"""
+
         if "策略年化報酬" not in m:
             return "N/A"
         return f"{100 * float(m['策略年化報酬']):.2f}%"
 
     def fmt_mdd(m: Dict[str, str]) -> str:
+        """最大回撤（%）；缺欄位時顯示 N/A"""
+
         if "策略最大回撤%" not in m:
             return "N/A"
         return f"{float(m['策略最大回撤%']):.2f}%"
 
     def fmt_sh(m: Dict[str, str]) -> str:
+        """Sharpe；缺欄位時顯示 N/A"""
+
         if "策略Sharpe" not in m:
             return "N/A"
         return f"{float(m['策略Sharpe']):.3f}"
@@ -488,6 +520,20 @@ def _reconciliation_rows(
 def append_zh_report(
     document, meta: Dict[str, str], m_real: Dict[str, str], m_vec: Dict[str, str]
 ) -> None:
+    """
+    - Description:
+        把中文報告本文（摘要、研究問題、資料與模型、回測結果、訊號診斷、穩健性檢查、限制與結論、附錄圖表）依序寫入文件
+    - Parameters:
+        - document: Document
+            python-docx 文件物件
+        - meta: Dict[str, str]
+            `run_meta.csv` 的執行參數
+        - m_real: Dict[str, str]
+            逐張回測的摘要指標
+        - m_vec: Dict[str, str]
+            向量化回測的摘要指標
+    """
+
     _paragraph = g._paragraph
     _add_table_from_rows = g._add_table_from_rows
     _add_figure = g._add_figure
@@ -905,6 +951,20 @@ def append_zh_report(
 def append_en_report(
     document, meta: Dict[str, str], m_real: Dict[str, str], m_vec: Dict[str, str]
 ) -> None:
+    """
+    - Description:
+        把英文報告本文依序寫入文件，章節結構與 `append_zh_report()` 對應
+    - Parameters:
+        - document: Document
+            python-docx 文件物件
+        - meta: Dict[str, str]
+            `run_meta.csv` 的執行參數
+        - m_real: Dict[str, str]
+            逐張回測的摘要指標
+        - m_vec: Dict[str, str]
+            向量化回測的摘要指標
+    """
+
     _paragraph = g._paragraph
     _add_table_from_rows = g._add_table_from_rows
     _format_metrics_rows = g._format_metrics_rows

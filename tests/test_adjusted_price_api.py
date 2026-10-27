@@ -9,6 +9,7 @@ from core.api.tw.stock_price_api import StockPriceAPI
 from core.dao.base import BaseDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.dao.tw.stock_price_dao import StockPriceDAO
+from core.models import PriceLimits
 
 """
 還原價（後復權）查詢測試
@@ -173,6 +174,9 @@ def test_adjusted_series_is_continuous(price_api: StockPriceAPI) -> None:
     assert len(series) == 2
     assert series.iloc[0] == pytest.approx(909.0)
     assert series.iloc[1] == pytest.approx(900.0 * FIRST_FACTOR)
+    # 還原序列與原始序列同一個契約：index 為 datetime.date、name 為「收盤價」
+    assert all(type(value) is datetime.date for value in series.index)
+    assert series.name == "收盤價"
 
 
 def test_single_and_cumulative_factor_maps_differ(price_api: StockPriceAPI) -> None:
@@ -293,7 +297,7 @@ def test_adapter_attaches_adjusted_close_only_when_enabled(
 
 
 # === 除權息日的漲跌停基準 ===
-def test_price_limit_basis_overrides_prev_close() -> None:
+def test_price_limit_basis_overrides_reference_price() -> None:
     """
     除權息日的漲跌停基準改用交易所公告的開盤競價基準
 
@@ -307,14 +311,16 @@ def test_price_limit_basis_overrides_prev_close() -> None:
     fill_model: TwStockFillModel = TwStockFillModel()
     spec: TwStockSpec = TwStockSpec()
 
-    fill_model.on_bar_close([StockQuoteStub(symbol="2454", close=953.0)])
-    assert fill_model.prev_close["2454"] == pytest.approx(953.0)
+    fill_model.update_reference_prices([StockQuoteStub(symbol="2454", close=953.0)])
+    assert fill_model.reference_prices["2454"] == pytest.approx(953.0)
 
     # 除權息日：以開盤競價基準覆寫
     fill_model.apply_price_limit_basis({"2454": 928.0})
 
-    assert fill_model.prev_close["2454"] == pytest.approx(928.0)
-    assert spec.get_price_limits(928.0) == (836.0, 1020.0)
+    assert fill_model.reference_prices["2454"] == pytest.approx(928.0)
+    assert spec.get_price_limits(928.0) == PriceLimits(
+        limit_up=1020.0, limit_down=836.0
+    )
 
 
 def test_price_limit_basis_only_touches_listed_symbols() -> None:
@@ -323,7 +329,7 @@ def test_price_limit_basis_only_touches_listed_symbols() -> None:
     from core.backtest.models.fill_model import TwStockFillModel
 
     fill_model: TwStockFillModel = TwStockFillModel()
-    fill_model.on_bar_close(
+    fill_model.update_reference_prices(
         [
             StockQuoteStub(symbol="2454", close=953.0),
             StockQuoteStub(symbol="2330", close=600.0),
@@ -332,8 +338,8 @@ def test_price_limit_basis_only_touches_listed_symbols() -> None:
 
     fill_model.apply_price_limit_basis({"2454": 928.0})
 
-    assert fill_model.prev_close["2454"] == pytest.approx(928.0)
-    assert fill_model.prev_close["2330"] == pytest.approx(600.0)
+    assert fill_model.reference_prices["2454"] == pytest.approx(928.0)
+    assert fill_model.reference_prices["2330"] == pytest.approx(600.0)
 
 
 def test_empty_basis_is_a_no_op() -> None:
@@ -342,15 +348,15 @@ def test_empty_basis_is_a_no_op() -> None:
     from core.backtest.models.fill_model import TwStockFillModel
 
     fill_model: TwStockFillModel = TwStockFillModel()
-    fill_model.on_bar_close([StockQuoteStub(symbol="2330", close=600.0)])
+    fill_model.update_reference_prices([StockQuoteStub(symbol="2330", close=600.0)])
 
     fill_model.apply_price_limit_basis({})
 
-    assert fill_model.prev_close["2330"] == pytest.approx(600.0)
+    assert fill_model.reference_prices["2330"] == pytest.approx(600.0)
 
 
 class StockQuoteStub:
-    """`on_bar_close()` 只取 symbol 與 close，故以最小 stub 代替完整報價"""
+    """`update_reference_prices()` 只取 symbol 與 close，故以最小 stub 代替完整報價"""
 
     def __init__(self, symbol: str, close: float) -> None:
         self.symbol: str = symbol

@@ -3,20 +3,21 @@ from typing import Dict, List
 
 import pandas as pd
 
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models.cost_config import CostConfig
+from core.utils import Units
 from core.utils.constant import Action, PositionType
 from core.utils.instrument import StockUtils
 
 """
 LONG 成本口徑差異比對（分析工具，非測試；保留供日後調整成本模型時重跑）
 
-用途：在動生產程式碼**之前**量化「舊 `StockUtils` 路徑」與「新 `StockCostModel` 路徑」
+用途：在動生產程式碼**之前**量化「舊 `StockUtils` 路徑」與「新 `TwStockCostModel` 路徑」
 的差異分布，避免拿回歸測試的紅燈當探索工具。
 
 兩條路徑的實際差異只有一處——**部分平倉時開倉手續費的攤提方式**：
 
-| | 舊路徑（`position_manager` LONG 分支） | 新路徑（`StockCostModel`） |
+| | 舊路徑（`position_manager` LONG 分支） | 新路徑（`TwStockCostModel`） |
 |---|---|---|
 | 記錄用的開倉手續費 | `int(原始手續費 × 平倉張數 / 開倉張數)`（等比例攤提） | 同左 |
 | **損益用的開倉手續費** | `calculate_net_profit()` 內部**以平倉張數重算**，最低手續費 20 元會**再套一次** | 沿用等比例攤提值 |
@@ -35,7 +36,7 @@ LONG 成本口徑差異比對（分析工具，非測試；保留供日後調整
 
 差異 **100% 落在部分平倉**，其中 **91.7%** 觸及最低手續費 20 元門檻。
 
-據此於 2026-08-15 將 `position_manager.py` 的 LONG 分支收斂到 `StockCostModel`。
+據此於 2026-08-15 將 `position_manager.py` 的 LONG 分支收斂到 `TwStockCostModel`。
 LONG baseline 的 915 筆全部是全額平倉，故該次切換**未改變 baseline**，回歸雙線逐筆相同。
 
 執行：`python -m tests.backtest.compare_cost_formula`
@@ -64,10 +65,10 @@ OPEN_VOLUMES: List[int] = [1, 2, 3, 5, 10, 50, 100]
 MIN_FEE: int = 20
 
 
-def build_cost_model() -> StockCostModel:
+def build_cost_model() -> TwStockCostModel:
     """建立與生產路徑同設定的成本模型"""
 
-    return StockCostModel(CostConfig())
+    return TwStockCostModel(CostConfig())
 
 
 def compute_old(
@@ -103,13 +104,13 @@ def compute_old(
 
 
 def compute_new(
-    cost_model: StockCostModel,
+    cost_model: TwStockCostModel,
     buy_price: float,
     sell_price: float,
     open_volume: int,
     close_volume: int,
 ) -> Dict[str, float]:
-    """新路徑：`StockCostModel` ＋ 等比例攤提"""
+    """新路徑：`TwStockCostModel` ＋ 等比例攤提"""
 
     open_commission: int = cost_model.commission(price=buy_price, volume=open_volume)
     entry_cost: int = int(open_commission * (close_volume / open_volume))
@@ -118,25 +119,21 @@ def compute_new(
         price=sell_price, volume=close_volume, action=Action.SELL, is_day_trade=False
     )
     exit_cost: int = exit_commission + exit_tax
+    pnl: float = cost_model.realized_pnl(
+        position_type=PositionType.LONG,
+        entry_price=buy_price,
+        exit_price=sell_price,
+        volume=close_volume,
+        unit_size=Units.LOT,
+        cost=entry_cost + exit_cost,
+    )
 
     return {
         "commission": entry_cost + exit_commission,
         "tax": exit_tax,
-        "realized_pnl": cost_model.realized_pnl(
-            position_type=PositionType.LONG,
-            entry_price=buy_price,
-            exit_price=sell_price,
-            volume=close_volume,
-            entry_cost=entry_cost,
-            exit_cost=exit_cost,
-        ),
+        "realized_pnl": pnl,
         "roi": cost_model.roi(
-            position_type=PositionType.LONG,
-            entry_price=buy_price,
-            exit_price=sell_price,
-            volume=close_volume,
-            entry_cost=entry_cost,
-            exit_cost=exit_cost,
+            pnl, cost_model.notional_capital(buy_price, close_volume, entry_cost)
         ),
     }
 
@@ -144,7 +141,7 @@ def compute_new(
 def sweep() -> pd.DataFrame:
     """掃過所有組合（含部分平倉），輸出兩條路徑的四項數值與差值"""
 
-    cost_model: StockCostModel = build_cost_model()
+    cost_model: TwStockCostModel = build_cost_model()
     rows: List[Dict[str, float]] = []
 
     for buy_price, sell_price, open_volume in itertools.product(
@@ -228,6 +225,8 @@ def report(df: pd.DataFrame) -> None:
 
 
 def main() -> None:
+    """跑完整組參數比對、印出摘要並輸出明細 CSV"""
+
     df: pd.DataFrame = sweep()
     report(df)
 

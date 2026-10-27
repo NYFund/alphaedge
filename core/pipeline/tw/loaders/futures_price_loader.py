@@ -11,7 +11,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils.exceptions import PipelineError
 
 """
-Futures Price Loader
+期貨行情 loader
 
 **與其他 loader 唯一的結構性差異：寫入 `tw_futures.db` 而非 `tw_stock.db`**。
 期貨的主鍵是合約（product ＋ expiry ＋ session），與 `stock_id` 語意不同，
@@ -20,7 +20,7 @@ Futures Price Loader
 
 
 class FuturesPriceLoader(BaseDataLoader):
-    """Futures Price Loader"""
+    """期貨行情 loader"""
 
     def __init__(self, dao: Optional[FuturesPriceDAO] = None) -> None:
         """
@@ -33,17 +33,17 @@ class FuturesPriceLoader(BaseDataLoader):
                 未指定時 loader 自行建立，入庫完成即關閉
         """
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.futures_price_dir: Path = FUTURES_PRICE_DOWNLOADS_PATH
 
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         self.futures_price_dir.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_sync import AccountSynchronizer
 from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.fill_backfill import FillBackfiller
 from core.live.notify.base import BaseNotifier, NotifyLevel, notify_safely
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
@@ -16,9 +17,9 @@ from core.live.report.live_reporter import LiveReporter
 from core.live.report.parity_checker import ParityChecker, ParityDiff
 from core.live.risk.event_log import RiskEventLogger
 from core.live.risk.trading_mode import TradingModeState
-from core.models import ExecutionReport, RealizedTradeSnapshot
+from core.models import RealizedTradeSnapshot
 from core.portfolio import order_rules
-from core.utils import Action, PositionType, Units
+from core.utils import Action, LiveOrderStatus, Units
 
 """
 盤後作業：把當天發生的事收攏成可稽核的結果
@@ -42,6 +43,18 @@ TradeCostEstimator = Callable[
 
 # 券商實際成本與估算值的差距超過這個比例就寫事件
 COST_DRIFT_RATIO: float = 0.2
+
+
+def pending_cover_action_id(run_date: datetime.date, client_order_id: str) -> str:
+    """
+    一張出場單的次日補平待辦編號
+
+    **段落內與盤後兩條路要算出同一個編號**：送單途中拋例外的出場單，段落內
+    （`LiveTrader._record_unsent_exit()`）與盤後掃殘量（`handle_unfilled_remainders()`）
+    都會替它排補平，編號不同就是兩筆待辦、次日兩張補平單。
+    """
+
+    return f"{run_date.isoformat()}-{client_order_id}"
 
 
 def weighted_fill_price(fills: List[Dict[str, Any]]) -> float:
@@ -130,6 +143,11 @@ class AfterCloseRunner:
         self.events: RiskEventLogger = RiskEventLogger(
             self.dao, self.run_id, now_provider=self._now
         )
+        self.backfiller: FillBackfiller = FillBackfiller(
+            order_manager, account_sync, dao, run_id, now_provider, notifier
+        )
+        # 券商刷新回來的累計成交量（client_order_id → 量），殘量處理用；見 `expire_open_orders()`
+        self.broker_filled: Dict[str, int] = {}
 
         # 本次對帳結果；實盤入口（`apps/live.py`）由它決定退出碼，故盤後跑完要回填給 `LiveTrader`
         self.last_reconcile: Optional[Any] = None
@@ -153,26 +171,32 @@ class AfterCloseRunner:
             self.broker.connect()
             self.mode_state.load()
 
-            # 0. 成交事實先於狀態：另一個行程先收到的成交回報已在 `live_fill`，
+            # 0. 接管當日委託：盤後是獨立行程，委託管理器手上沒有任何 ticket，
+            #    不先由紀錄庫重建並向券商對一次，後面的刷新沒有對象、標撤會把券商端
+            #    已成交的出場單標成未成交，殘量處理再對已經平掉的部位排次日補平
+            self.recover_orders(today)
+
+            # 1. 成交事實先於狀態：另一個行程先收到的成交回報已在 `live_fill`，
             #    本行程的委託卻可能還停在送出狀態。不先回填的話，下一步會把已成交的單
             #    標成「日終未成交」，殘量處理再對已經平掉的部位排補平
             self.backfill_fills(today)
 
-            # 1. 刷新委託狀態：ROD 未成交單在券商端日終自動失效
+            # 2. 刷新委託狀態（券商成交多於本地時寫事件），再把仍未終結的標成已撤：
+            #    ROD 未成交單在券商端日終自動失效
             self.expire_open_orders()
 
-            # 2. 對帳與快照
+            # 3. 對帳與快照
             positions: List[Any] = self.broker.get_positions()
             self.account_sync.rebuild_from_broker(positions)
             self.last_reconcile = self.reconciler.check(positions)
 
-            # 3. 以券商的已實現損益校正成本估算（差額是校正成本設定的依據）
+            # 4. 以券商的已實現損益校正成本估算（差額是校正成本設定的依據）
             self.calibrate_costs(today)
 
-            # 4. 未成交殘量依政策處理
+            # 5. 未成交殘量依政策處理
             remainders: int = self.handle_unfilled_remainders(today)
 
-            # 5. 報表與滑價
+            # 6. 報表與滑價
             reports: Dict[str, Path] = self.reporter.write_daily_reports(today)
             slippage: Dict[str, float] = self.reporter.summarize_slippage(today)
 
@@ -245,32 +269,60 @@ class AfterCloseRunner:
         )
         return total
 
+    def recover_orders(self, run_date: datetime.date) -> List[Any]:
+        """
+        - Description:
+            由紀錄庫重建本行程策略的當日委託，並向券商對一次狀態與序號
+
+            與段落啟動時的接管是同一支 `OrderManager.recover()`：送單逾時被標失敗、
+            券商其實受理的單（2026-10-20 的換月開倉腿）在這裡對回序號，接著的成交回填
+            才找得到它的成交。
+        - Parameters:
+            - run_date: datetime.date
+                交易日
+        - Return:
+            - List[Any]
+                接管後的委託
+        """
+
+        return self.order_manager.recover(run_date)
+
     def expire_open_orders(self) -> List[Any]:
         """
         - Description:
-            把當日仍未終結的委託標成已撤
+            向券商刷新一次委託，再把當日仍未終結的委託標成已撤
 
             ROD 單在券商端日終自動失效，**本地要跟著標**：不標的話，
             明天的恢復流程會把它們當成「還在場上」去接管，然後撤一張不存在的單。
+
+            刷新回來的券商累計成交量留著給殘量處理：券商成交多於本地時，差額不是
+            「未成交」而是「本地沒收到回報」（已寫 `FILL_REPORT_MISSING`），
+            照本地數字排補平會對已經平掉的部位再平一次。
         - Return:
             - List[Any]
                 被標記的委託
         """
 
-        self.order_manager.refresh_from_broker()
+        broker_tickets: List[Any] = self.order_manager.refresh_from_broker()
+        by_seqno: Dict[str, int] = {
+            ticket.broker_seqno: int(ticket.filled_volume or 0)
+            for ticket in broker_tickets
+            if ticket.broker_seqno
+        }
+        self.broker_filled = {
+            client_order_id: by_seqno[ticket.broker_seqno]
+            for client_order_id, ticket in self.order_manager.tickets.items()
+            if ticket.broker_seqno and ticket.broker_seqno in by_seqno
+        }
         return self.order_manager.expire_unfinished(self._now().date())
 
     def backfill_fills(self, run_date: datetime.date) -> int:
         """
         - Description:
-            以 `live_fill` 的成交事實回填本行程策略的委託與歸屬帳
+            以 `live_fill` 的成交事實回填本行程策略的委託與歸屬帳（`FillBackfiller`）
 
-            股票線與期貨線是兩個行程、同一個帳號，券商的成交回報兩個行程都收得到，
-            而 `live_fill` 只有一張。回報先到非擁有者那邊時，成交已經在表裡、擁有者的委託
-            卻沒有套進去——盤中的認領（`OrderManager._claim_fill()`）只在擁有者行程還活著時
-            有用，收線後才到的回報只剩這裡能補。對每張當日委託：把尚未歸屬的同序號成交
-            歸給它，成交合計多於委託已記的量就補套進委託、記進歸屬帳，並以 CRITICAL 事件
-            留下紀錄——它代表盤中有一筆成交沒有被擁有者即時處理。
+            **一定排在刷新與殘量處理之前**：順序反了，已成交的單會被標成日終未成交，
+            再對已經平掉的部位排補平——2026-10-13 的實況。
         - Parameters:
             - run_date: datetime.date
                 交易日
@@ -279,99 +331,7 @@ class AfterCloseRunner:
                 被回填的委託數
         """
 
-        backfilled: int = 0
-        for row in self.order_manager.orders_of_day(run_date):
-            broker_seqno: str = str(row.get("broker_seqno") or "")
-            if not broker_seqno:
-                continue
-            client_order_id: str = str(row["client_order_id"])
-            strategy_name: str = str(row["strategy_name"])
-
-            fills: List[Dict[str, Any]] = self.dao.get_fills_by_seqno(broker_seqno)
-            for fill in fills:
-                if not fill.get("client_order_id") and self.dao.attribute_fill(
-                    broker_seqno,
-                    str(fill["broker_trade_id"]),
-                    client_order_id,
-                    strategy_name,
-                ):
-                    fill["client_order_id"] = client_order_id
-            mine: List[Dict[str, Any]] = [
-                fill for fill in fills if fill.get("client_order_id") == client_order_id
-            ]
-
-            recorded: int = int(row.get("filled_volume") or 0)
-            total: int = sum(int(fill.get("volume") or 0) for fill in mine)
-            if total <= recorded:
-                continue
-
-            reports: List[ExecutionReport] = self._reports_after(mine, recorded)
-            self.order_manager.book_backfilled_fills(row, reports)
-            if self.account_sync is not None:
-                position_type: PositionType = PositionType(str(row["position_type"]))
-                closing: bool = self._is_exit_row(row)
-                for report in reports:
-                    self.account_sync.book_backfilled_fill(
-                        report, strategy_name, position_type, closing
-                    )
-
-            message: str = (
-                f"委託 {client_order_id}（{row['symbol']}）本地只記到成交 {recorded}，"
-                f"成交明細合計 {total}；成交回報當時沒有套進本行程，"
-                f"盤後依成交明細回填 {total - recorded}，歸屬帳已更新"
-            )
-            logger.error(message)
-            self.events.write(
-                category="FILL_BACKFILLED",
-                severity=NotifyLevel.CRITICAL,
-                message=message,
-                strategy_name=strategy_name,
-                symbol=str(row["symbol"]),
-                client_order_id=client_order_id,
-            )
-            self._notify(NotifyLevel.CRITICAL, "成交回報盤後回填", message)
-            backfilled += 1
-
-        if backfilled:
-            logger.warning(f"盤後回填 {backfilled} 張委託的成交")
-        return backfilled
-
-    @staticmethod
-    def _reports_after(
-        fills: List[Dict[str, Any]], recorded: int
-    ) -> List[ExecutionReport]:
-        """
-        成交列 → 尚未套進委託的那部分成交回報
-
-        成交依時間排序，前面累計到 `recorded` 的量視為委託已經套過（委託只會依序累進）；
-        跨在邊界上的那一筆只取超出的部分。
-        """
-
-        reports: List[ExecutionReport] = []
-        skipped: int = 0
-        for fill in fills:
-            volume: int = int(fill.get("volume") or 0)
-            if skipped + volume <= recorded:
-                skipped += volume
-                continue
-            remaining: int = volume - max(recorded - skipped, 0)
-            skipped = recorded
-            filled_at: Any = fill.get("filled_at")
-            if filled_at and not isinstance(filled_at, datetime.datetime):
-                filled_at = datetime.datetime.fromisoformat(str(filled_at))
-            reports.append(
-                ExecutionReport(
-                    broker_seqno=str(fill["broker_seqno"]),
-                    broker_trade_id=str(fill["broker_trade_id"]),
-                    symbol=str(fill["symbol"]),
-                    action=Action(str(fill["action"])),
-                    price=float(fill.get("price") or 0.0),
-                    volume=remaining,
-                    ts=filled_at,
-                    raw={"source": "live_fill", "backfilled": True},
-                )
-            )
-        return reports
+        return self.backfiller.backfill(run_date)
 
     def calibrate_costs(self, run_date: datetime.date) -> List[Dict[str, Any]]:
         """
@@ -422,8 +382,11 @@ class AfterCloseRunner:
     ) -> Dict[str, Any]:
         """比對一筆已平倉交易；超過門檻時寫事件"""
 
+        # 券商只給開倉委託序號、不給開倉日；序號每天從頭配發，取平倉日以前最近一次的那天
         opening: List[Dict[str, Any]] = (
-            self.dao.get_fills_by_seqno(trade.open_seqno) if trade.open_seqno else []
+            self.dao.get_latest_fills_by_seqno(trade.open_seqno, run_date)
+            if trade.open_seqno
+            else []
         )
         actual: Optional[float] = self._actual_cost(trade, opening)
         estimated: Optional[float] = self.cost_estimator(trade, opening, run_date)
@@ -511,6 +474,11 @@ class AfterCloseRunner:
             **待辦要有狀態才冪等**：只記「明天要補」而沒有完成標記的話，
             次日開盤段重跑或崩潰重啟會重複送補平單——而重複的補平單不是多買一點，
             是直接把部位做反。
+
+            **同一張單只能有一筆待辦**：送單途中拋例外的出場單已經在段落內以
+            `{日期}-{client_order_id}` 排過補平（`LiveTrader._record_unsent_exit()`），
+            這裡掃到它的殘量時用同一個 `action_id`，紀錄庫會擋下第二筆；
+            兩筆待辦在次日開盤段會各送一張，把部位做反。
         - Parameters:
             - run_date: datetime.date
                 交易日
@@ -520,40 +488,51 @@ class AfterCloseRunner:
         """
 
         created: int = 0
-        for order_row in self.dao.get_orders_by_date(run_date):
-            remainder: int = int(order_row.get("volume") or 0) - int(
-                order_row.get("filled_volume") or 0
+        # 只掃本行程策略的委託：股票線與期貨線共用紀錄庫，掃全部會拿另一條線的委託
+        # 替它排待辦、重複推播，而那條線自己的盤後也會再排一次
+        for order_row in self.order_manager.orders_of_day(run_date):
+            client_order_id: str = str(order_row["client_order_id"])
+            # **已是 FILLED 的沒有殘量**：FILLED 只會由券商的事實推到（成交回報、接管、刷新），
+            # 本地成交量仍不足代表回報漏接（刷新已寫 `FILL_REPORT_MISSING`），
+            # 不是沒成交。券商刷新回來的累計量同理優先於本地
+            if str(order_row.get("status")) == LiveOrderStatus.FILLED.value:
+                continue
+            filled: int = max(
+                int(order_row.get("filled_volume") or 0),
+                self.broker_filled.get(client_order_id, 0),
             )
+            remainder: int = int(order_row.get("volume") or 0) - filled
             if remainder <= 0:
                 continue
 
-            if not self._is_exit_row(order_row):
+            if not order_rules.is_closing_record(
+                str(order_row["position_type"]), str(order_row["action"])
+            ):
                 logger.info(
                     f"開倉單 {order_row['client_order_id']} 殘量 {remainder} 放棄，"
                     "不追價（追價等於在偏離訊號價的位置建倉）"
                 )
                 continue
 
-            self._record_pending_cover(order_row, remainder, run_date)
-            created += 1
+            if self._record_pending_cover(order_row, remainder, run_date):
+                created += 1
 
         return created
 
     def _record_pending_cover(
         self, order_row: Dict[str, Any], remainder: int, run_date: datetime.date
-    ) -> None:
-        """寫一筆待辦與一則 CRITICAL 事件，並推播"""
+    ) -> bool:
+        """寫一筆待辦與一則 CRITICAL 事件，並推播；這張單已排過待辦時回 False、什麼都不寫"""
 
         client_order_id: str = str(order_row["client_order_id"])
         message: str = (
             f"平倉／停損單 {client_order_id}（{order_row['symbol']}）殘量 {remainder} "
             "未成交，已成為預期外的隔夜部位；次日開盤段第一件事補平"
         )
-        logger.error(message)
 
-        self.dao.insert_pending_action(
+        is_new: bool = self.dao.insert_pending_action(
             {
-                "action_id": f"{run_date.isoformat()}-{client_order_id}",
+                "action_id": pending_cover_action_id(run_date, client_order_id),
                 "strategy_name": order_row["strategy_name"],
                 "symbol": order_row["symbol"],
                 "action": order_row["action"],
@@ -566,6 +545,13 @@ class AfterCloseRunner:
                 "created_at": self._now(),
             }
         )
+        if not is_new:
+            logger.info(
+                f"平倉／停損單 {client_order_id} 的補平待辦已在段落內排過，不重複寫入"
+            )
+            return False
+
+        logger.error(message)
         self.events.write(
             category="UNFILLED_EXIT",
             severity=NotifyLevel.CRITICAL,
@@ -575,21 +561,7 @@ class AfterCloseRunner:
             client_order_id=client_order_id,
         )
         self._notify(NotifyLevel.CRITICAL, "平倉單未成交", message)
-
-    @staticmethod
-    def _is_exit_row(order_row: Dict[str, Any]) -> bool:
-        """
-        這張委託是不是出場單
-
-        以持倉方向與買賣別推導，與 `order_rules.resolve_close_action()` 同一套
-        規則——散在多處會漂移，而漂移的後果是開倉單被當成平倉單去補，
-        那會憑空建出一個新部位。
-        """
-
-        position_type: PositionType = PositionType(str(order_row["position_type"]))
-        return str(order_row["action"]) == (
-            order_rules.resolve_close_action(position_type).value
-        )
+        return True
 
     def _notify(self, level: NotifyLevel, title: str, body: str) -> None:
         """推播；失敗一律吞掉，監控不可拖垮被監控的東西"""

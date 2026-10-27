@@ -118,7 +118,9 @@ class ShioajiOrderMapper:
 
     # === 價格 ===
     @staticmethod
-    def align_price(price: float, action: Action) -> float:
+    def align_price(
+        price: float, action: Action, symbol: Optional[str] = None
+    ) -> float:
         """
         - Description:
             把價格對齊台股分段檔位，**方向一律保守**
@@ -128,18 +130,22 @@ class ShioajiOrderMapper:
 
             實作委派給 `StockUtils.round_to_tick()`，與回測共用同一份檔位表——
             這裡另抄一份的話，實盤送出的價格會和回測算的價格慢慢分岔。
+            **代號要帶**：ETF 的檔位表與普通股不同（50 元以上 0.05、以下 0.01），不帶的話
+            0050 掛漲停 119.9 會被對成 119.5、00631L 44.58 對成 44.55，鎖漲跌停時排不到隊。
         - Parameters:
             - price: float
                 原始價格
             - action: Action
                 買賣別
+            - symbol: Optional[str]
+                證券代號，用來選檔位表；未提供時用普通股表
         - Return:
             - float
                 對齊後的價格
         """
 
         direction: str = "down" if action is Action.BUY else "up"
-        return StockUtils.round_to_tick(price, direction)
+        return StockUtils.round_to_tick(price, direction, symbol=symbol)
 
     # === 轉換 ===
     def to_shioaji_stock_order(
@@ -174,7 +180,7 @@ class ShioajiOrderMapper:
 
         price: float = self._resolve_price(price_type, order)
         if price > 0:
-            price = self.align_price(price, order.action)
+            price = self.align_price(price, order.action, order.symbol)
             self._validate_price_limits(price, contract)
 
         fields: Dict[str, Any] = {
@@ -202,6 +208,11 @@ class ShioajiOrderMapper:
 
             **不推導 `DayTrade`**：當沖的保證金減收要先以期貨商公告核對規則，
             在那之前當日開當日平也送 `Cover`——結果正確，只是少了減收。
+
+            **與 `order_rules.is_opening()` 是同一條規則，卻在這裡另寫一份**：
+            券商閘道層只可 import `core.config`／`core.utils`／`core.models`，
+            不可往上拿部位建構層。兩邊由 `test_octype_follows_direction_and_action`
+            釘在一起，改其中一邊另一邊的測試就會紅。
         - Parameters:
             - order: FuturesOrder
                 本專案的期貨訂單

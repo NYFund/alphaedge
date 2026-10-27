@@ -4,7 +4,7 @@ from typing import List, Optional
 import pytest
 
 from core.backtest.models.fill_model import TwFuturesFillModel
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.instrument_spec import TwFuturesSpec
 from core.models import FuturesAccount, FuturesOrder, FuturesTradeRecord
@@ -75,7 +75,7 @@ def test_tax_is_charged_on_both_sides(cost_model: TwFuturesCostModel) -> None:
 
     assert buy_tax == sell_tax > 0
     # 對照組：同樣的參數在股票模型上，買進是 0
-    assert StockCostModel().tax(20000, 1, action=Action.BUY) == 0
+    assert TwStockCostModel().tax(20000, 1, action=Action.BUY) == 0
 
 
 def test_tax_base_is_contract_value(cost_model: TwFuturesCostModel) -> None:
@@ -187,6 +187,29 @@ def test_costs_are_deducted_from_realized_pnl() -> None:
     expected_cost: float = 50 + 72 + 50 + 72  # 18,000／18,100 的稅取整後皆為 72
     assert records[0].transaction_cost == expected_cost
     assert records[0].realized_pnl == (18100 - 18000) * MULTIPLIER - expected_cost
+
+
+def test_record_roi_uses_the_released_margin_as_capital_base() -> None:
+    """
+    交易紀錄的報酬率以**釋回的保證金**為分母，公式走成本模型基底
+
+    用契約價值當分母會把槓桿效果整個抹掉：同一筆 100 點的獲利，
+    對 36 萬保證金是 5.5%，對 362 萬契約價值只剩 0.55%。
+    """
+
+    account: FuturesAccount = FuturesAccount(init_capital=INIT_CAPITAL)
+    manager: FuturesPositionManager = FuturesPositionManager(
+        account, margin_config=FuturesMarginConfig(initial_margin_ratio=0.1)
+    )
+
+    manager.open_position(make_order(Action.BUY, PositionType.LONG, price=18000))
+    record: FuturesTradeRecord = manager.close_position(
+        make_order(Action.SELL, PositionType.LONG, price=18100, date=DAY_2)
+    )[0]
+
+    assert record.margin == 18000 * MULTIPLIER * 0.1
+    assert record.roi == manager.cost_model.roi(record.realized_pnl, record.margin)
+    assert record.roi == round(record.realized_pnl / record.margin * 100, 2)
 
 
 # === 滑價（跳動點）===
@@ -350,7 +373,7 @@ def test_base_fill_config_is_rejected_for_futures() -> None:
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
     from core.models.fill_config import FillConfig
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -372,7 +395,7 @@ def test_futures_fill_config_is_accepted(fill_config) -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -395,7 +418,7 @@ def test_strategy_cost_config_flows_into_the_backtester() -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -419,7 +442,7 @@ def test_default_strategy_uses_real_rates() -> None:
     零成本是驗證接線用的口徑（`FuturesCostConfig.free()`），不該是預設。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 

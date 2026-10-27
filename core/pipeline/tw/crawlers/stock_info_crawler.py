@@ -25,11 +25,13 @@ class StockInfoCrawler(BaseDataCrawler):
         super().__init__()
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     def crawl(self, *args, **kwargs) -> None:
         """本爬蟲沒有統一入口，請改用 `crawl_twse_stock_info()` 等方法"""
+
         pass
 
     @staticmethod

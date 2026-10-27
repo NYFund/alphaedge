@@ -1,96 +1,95 @@
 # Data Coverage — AlphaEdge 資料覆蓋範圍
 
-本文件描述 `AlphaEdge` 程式碼中**實際可用**的資料來源與對應模組。
-本地資料庫的實際內容可能與預設起日不同，一律以庫內最早一筆為準。
+本文件描述 `AlphaEdge` 程式碼中**實際可用**的資料：每張表從哪裡抓、用哪個類別讀、從哪天開始有資料。
 
-## 總覽
+## 資料表一覽
 
-| 類別 | 來源 | 主要模組 | 儲存位置 | 起始日期 | 備註 |
-| --- | --- | --- | --- | --- | --- |
-| 股票日線 | TWSE／TPEX 每日收盤行情 | `StockPriceAPI` | SQLite `price` | 2013-01-01（`DEFAULT_PRICE_START_DATE`） | 回測常用 |
-| 三大法人籌碼 | TWSE／TPEX | `StockChipAPI` | SQLite `chip` | 2013-01-01（`DEFAULT_CHIP_START_DATE`） | 回測／選股可用 |
-| 除權除息 | **上市**：證交所 `TWT49U`；**上櫃**：櫃買中心 `bulletin/exDailyQ` | `StockDividendAPI` | SQLite `dividend` | 2013-01-01（`DEFAULT_DIVIDEND_START_DATE`） | 股價還原係數、現金股利、開盤競價基準 |
-| 公司行動（減資、分割、面額變更） | **上市**：證交所 `TWTAUU`；**上櫃**：櫃買中心 `bulletin/revivt`；另有由行情偵測並人工確認的事件 | `StockDividendAPI`（併入還原係數） | SQLite `corporate_action` | 2013-01-01 | 見 [非除權息的公司行動](../pipeline/corporate-action.md) |
-| 融資融券餘額 | **上市**：證交所 `MI_MARGN`；**上櫃**：櫃買中心 `margin/balance` | `StockMarginAPI` | SQLite `margin` | 2013-01-01（`DEFAULT_MARGIN_START_DATE`） | 券源檢核（`TwStockFillModel.check_short_borrowable()`）、券資比 |
-| 平盤下得融（借）券賣出名單 | **上市**：證交所 `TWT92U`；**上櫃**：櫃買中心 `margin/mark` | `StockShortSaleListAPI` | SQLite `short_sale_list` | 2013-09-23（`SHORT_SALE_LIST_START_DATE`；更早來源無資料） | 回測放空檢核（`ShortConstraint.check_short_sale_list`，預設關閉）；含暫停融券／暫停借券／禁止平盤下三個註記；來源損毀的市場日（`SHORT_SALE_LIST_CORRUPTED_DAYS`）以前後交易日推估 |
-| 現股當沖標的名單 | **上市**：證交所 `TWTB4U`；**上櫃**：櫃買中心 `intraday/list` | `StockDayTradeListAPI` | SQLite `day_trade_list` | 2014-01-06（`DAY_TRADE_LIST_START_DATE`）；先賣後買自 2014-06-30（`SELL_FIRST_DAY_TRADE_START_DATE`） | 回測現股當沖先賣檢核（`ShortConstraint.check_day_trade_list`，預設關閉）；含暫停先賣後買註記 |
-| 月營收 | MOPS | `MonthlyRevenueReportAPI` | SQLite `monthly_revenue` | 2013-01（`DEFAULT_START_YEAR` 起、1 月） | 基本面可用 |
-| 財報 | MOPS | `FinancialStatementAPI` | SQLite `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | 2013 年第 1 季（`DEFAULT_START_YEAR`） | 權益變動表的資料形狀與限制見 [權益變動表](../pipeline/equity-change.md) |
-| FinMind 參考資料 | FinMind API | `FinMindAPI` | SQLite FinMind 相關表 | 券商分點：`2021-06-30`（`FINMIND_BROKER_TRADING_START_DATE`）；台股總覽／證券商為 API 快照 | 股票、券商、分點 |
-| 台期貨日線 | TAIFEX 每日行情頁（POST） | `FuturesPriceAPI` | SQLite `tw_futures.db` `futures_price_daily` | 2015-01-01（`DEFAULT_FUTURES_START_DATE`） | 日盤／夜盤分列存（`session` 欄位）；指數期貨 7 檔（`FUTURES_TARGET_PRODUCTS`）＋ 股票期貨（預設流動性前 20 檔） |
-| 台期貨連續合約 | 由 `futures_price_daily` 衍生（不連網路） | `FuturesContinuousAPI` | SQLite `tw_futures.db` `futures_continuous` | 同上 | 3 種調整方式 × 換月規則（`--target futures_continuous` 預設只建 `LAST_TRADING_DAY`）；每次整段重建 |
-| 台期貨保證金 | TAIFEX 保證金一覽表（CSV，日常更新）；2020-03 起的歷史取自調整公告附件（`FuturesMarginUpdater.update_history()`，不在 `update_db` 內） | `FuturesMarginAPI` | SQLite `tw_futures.db` `futures_margin_history`（指數類每口金額）、`stock_futures_margin_rate_history`（股票類比例） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
-| 台期貨籌碼 | TAIFEX 三大法人／大額交易人／選擇權 PCR | `FuturesChipAPI` | SQLite `tw_futures.db` `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | 三大法人：2023-09-04（來源只保留約三年）；大額交易人、PCR：2015-01-01（`FuturesChipUpdater.DEFAULT_START_DATE`） | `get_available()` 只回傳查詢日之前已公布者（避免前視） |
-| 股票期貨標的池 | TAIFEX 標的證券一覽表（GET） | `FuturesStockUniverseAPI` | SQLite `tw_futures.db` `futures_stock_universe` | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
-| 市場開休市日期 | TWSE `holidaySchedule`（JSON，一年一次請求） | `MarketHolidayAPI` | SQLite `market_holiday` | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
-| Tick 逐筆 | Shioaji + DolphinDB | `StockTickAPI` | DolphinDB `tickDB` | 預設更新起日 `2024-05-10`（`TICK_UPDATE_START_DATE`）；Shioaji 可查區間約自 **2020-03-02** | 需 DDB 環境 |
+每張表從哪裡抓、用哪個類別讀，一張表看完。**Crawler** 在 `core/pipeline/tw/crawlers/`、**API** 在 `core/api/tw/`；
+更新指令是 `python -m apps.update_db --target <target>`。
 
-## API 與資料表對照
+**`data/db/tw_stock.db`（台股）**
 
-| API 類別 | 檔案 | 後端 | 關鍵資料表／資料庫 |
+| 資料表 | 內容 | `--target` | Crawler | API |
+| --- | --- | --- | --- | --- |
+| `price` | 每日收盤行情（日 K） | `price` | `StockPriceCrawler` | `StockPriceAPI` |
+| `chip` | 三大法人買賣超 | `chip` | `StockChipCrawler` | `StockChipAPI` |
+| `margin` | 融資融券餘額 | `margin` | `StockMarginCrawler` | `StockMarginAPI` |
+| `short_sale_list` | 平盤下得融（借）券賣出名單 | `short_sale_list` | `StockTradingListCrawler` | `StockShortSaleListAPI` |
+| `day_trade_list` | 現股當沖標的名單 | `day_trade_list` | `StockTradingListCrawler` | `StockDayTradeListAPI` |
+| `dividend` | 除權除息（還原係數、現金股利） | `dividend` | `StockDividendCrawler` | `StockDividendAPI` |
+| `corporate_action` | 減資、分割、面額變更 | `corporate_action` | `CorporateActionCrawler` | `StockDividendAPI`（併入還原係數） |
+| `monthly_revenue` | 月營收 | `mrr` | `MonthlyRevenueReportCrawler` | `MonthlyRevenueReportAPI` |
+| `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | 財報四表 | `fs` | `FinancialStatementCrawler` | `FinancialStatementAPI` |
+| `market_holiday` | 開休市日曆 | `market_holiday` | `MarketHolidayCrawler` | `MarketHolidayAPI` |
+| `taiwan_stock_info`、`taiwan_stock_info_with_warrant` | 台股總覽（不含／含權證） | `stock_info`、`stock_info_with_warrant`* | `FinMindCrawler` | `FinMindAPI` |
+| `taiwan_securities_trader_info` | 證券商資訊 | `broker_info`* | `FinMindCrawler` | `FinMindAPI` |
+| `taiwan_stock_trading_daily_report_secid_agg` | 券商分點進出 | `broker_trading`* | `FinMindCrawler` | `FinMindAPI` |
+
+**`data/db/tw_futures.db`（台期貨）**
+
+| 資料表 | 內容 | `--target` | Crawler | API |
+| --- | --- | --- | --- | --- |
+| `futures_price_daily` | 各月份契約日 K（日盤、夜盤分列） | `futures_price`；股期另跑 `futures_stock_price`* | `FuturesPriceCrawler` | `FuturesPriceAPI` |
+| `futures_continuous` | 連續合約（換月接續） | `futures_continuous` | 無（由 `futures_price_daily` 建出） | `FuturesContinuousAPI` |
+| `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | 三大法人、大額交易人、選擇權 PCR | `futures_chip` | `FuturesChipCrawler` | `FuturesChipAPI` |
+| `futures_margin_history`、`stock_futures_margin_rate_history` | 保證金（指數類每口金額、股票類比例） | `futures_margin` | `FuturesMarginCrawler` | `FuturesMarginAPI` |
+| `futures_stock_universe` | 股票期貨標的池（快照） | `futures_stock_universe` | `FuturesStockUniverseCrawler` | `FuturesStockUniverseAPI` |
+
+**TimescaleDB（台股 tick，需 `docker compose up -d postgres`）**
+
+| 資料表 | 內容 | `--target` | Crawler | API |
+| --- | --- | --- | --- | --- |
+| `stock_tick`、`stock_tick_load_log` | 逐筆成交、各「股票 × 交易日」的入庫紀錄 | `tick` | `StockTickCrawler` | `StockTickAPI` |
+
+**`data/db/tw_trading.db`（實盤紀錄庫）**：不由 `update_db` 更新，由實盤引擎寫入、以 `LiveTradeDAO` 讀寫，
+共 11 張 `live_*` 表（啟動紀錄、委託、成交、部位歸屬、快照、風控事件、待辦、parity 等）。
+
+> \* 標 `*` 的 target 只在明確點名時才跑，`all`／`no_tick` 不含（FinMind 帳號權限不足、股期行情缺口，見下方〈更新入口〉）。
+> 每張表的來源網址與起始日期見下一節〈資料來源與起始日期〉。
+
+## 資料來源與起始日期
+
+各表的資料來源與預設起始日期（常數除另行註明者外皆定義於 `core/config/settings.py`）。本地資料庫的實際內容可能與預設起日不同，一律以庫內最早一筆為準。
+
+| 資料表 | 來源 | 起始日期 | 備註 |
 | --- | --- | --- | --- |
-| `StockPriceAPI` | `core/api/tw/stock_price_api.py` | SQLite | `price` |
-| `StockChipAPI` | `core/api/tw/stock_chip_api.py` | SQLite | `chip` |
-| `StockDividendAPI` | `core/api/tw/stock_dividend_api.py` | SQLite | `dividend`、`corporate_action` |
-| `StockMarginAPI` | `core/api/tw/stock_margin_api.py` | SQLite | `margin` |
-| `StockShortSaleListAPI` | `core/api/tw/stock_short_sale_list_api.py` | SQLite | `short_sale_list` |
-| `StockDayTradeListAPI` | `core/api/tw/stock_day_trade_list_api.py` | SQLite | `day_trade_list` |
-| `MonthlyRevenueReportAPI` | `core/api/tw/monthly_revenue_report_api.py` | SQLite | `monthly_revenue` |
-| `FinancialStatementAPI` | `core/api/tw/financial_statement_api.py` | SQLite | `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` |
-| `FinMindAPI` | `core/api/tw/finmind_api.py` | SQLite | `taiwan_stock_info`、`taiwan_stock_info_with_warrant`、`taiwan_securities_trader_info`、`taiwan_stock_trading_daily_report_secid_agg` |
-| `StockTickAPI` | `core/api/tw/stock_tick_api.py` | DolphinDB | `tickDB` / `tick` |
-| `FuturesPriceAPI` | `core/api/tw/futures_price_api.py` | SQLite | `futures_price_daily`（`tw_futures.db`） |
-| `FuturesContinuousAPI` | `core/api/tw/futures_continuous_api.py` | SQLite | `futures_continuous`（`tw_futures.db`） |
-| `FuturesMarginAPI` | `core/api/tw/futures_margin_api.py` | SQLite | `futures_margin_history`、`stock_futures_margin_rate_history` |
-| `FuturesChipAPI` | `core/api/tw/futures_chip_api.py` | SQLite | `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` |
-| `FuturesStockUniverseAPI` | `core/api/tw/futures_stock_universe_api.py` | SQLite | `futures_stock_universe` |
-| `MarketHolidayAPI` | `core/api/tw/market_holiday_api.py` | SQLite | `market_holiday` |
-
-起始日期常數皆定義於 `core/config/settings.py`。
+| `price` | TWSE／TPEX 每日收盤行情 | 2013-01-01（`DEFAULT_PRICE_START_DATE`） | 回測常用 |
+| `chip` | TWSE／TPEX | 2013-01-01（`DEFAULT_CHIP_START_DATE`） | 回測／選股可用 |
+| `dividend` | **上市**：證交所 `TWT49U`；**上櫃**：櫃買中心 `bulletin/exDailyQ` | 2013-01-01（`DEFAULT_DIVIDEND_START_DATE`） | 股價還原係數、現金股利、開盤競價基準 |
+| `corporate_action` | **上市**：證交所 `TWTAUU`；**上櫃**：櫃買中心 `bulletin/revivt`；另有由行情偵測並人工確認的事件 | 2013-01-01 | 見 [非除權息的公司行動](../pipeline/corporate-action.md) |
+| `margin` | **上市**：證交所 `MI_MARGN`；**上櫃**：櫃買中心 `margin/balance` | 2013-01-01（`DEFAULT_MARGIN_START_DATE`） | 券源檢核（`TwStockFillModel.check_short_borrowable()`）、券資比 |
+| `short_sale_list` | **上市**：證交所 `TWT92U`；**上櫃**：櫃買中心 `margin/mark` | 2013-09-23（`SHORT_SALE_LIST_START_DATE`；更早來源無資料） | 回測放空檢核（`ShortConstraint.check_short_sale_list`，預設關閉）；含暫停融券／暫停借券／禁止平盤下三個註記；來源損毀的市場日（`SHORT_SALE_LIST_CORRUPTED_DAYS`）以前後交易日推估 |
+| `day_trade_list` | **上市**：證交所 `TWTB4U`；**上櫃**：櫃買中心 `intraday/list` | 2014-01-06（`DAY_TRADE_LIST_START_DATE`）；先賣後買自 2014-06-30（`SELL_FIRST_DAY_TRADE_START_DATE`） | 回測現股當沖先賣檢核（`ShortConstraint.check_day_trade_list`，預設關閉）；含暫停先賣後買註記 |
+| `monthly_revenue` | MOPS | 2013-01（`DEFAULT_START_YEAR` 起、1 月） | 基本面可用 |
+| `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | MOPS | 2013 年第 1 季（`DEFAULT_START_YEAR`） | 權益變動表的資料形狀與限制見 [權益變動表](../pipeline/equity-change.md) |
+| FinMind 四表 | FinMind API | 券商分點：`2021-06-30`（`FINMIND_BROKER_TRADING_START_DATE`）；台股總覽／證券商為 API 快照 | 股票、券商、分點 |
+| `futures_price_daily` | TAIFEX 每日行情頁（POST） | 2015-01-01（`DEFAULT_FUTURES_START_DATE`） | 日盤／夜盤分列存（`session` 欄位）；指數期貨 7 檔（`FUTURES_TARGET_PRODUCTS`）＋ 股票期貨（預設流動性前 20 檔） |
+| `futures_continuous` | 由 `futures_price_daily` 衍生（不連網路） | 同上 | 3 種調整方式 × 換月規則（`--target futures_continuous` 預設只建日盤 ＋ `LAST_TRADING_DAY`）；每次整段重建 |
+| `futures_margin_history`、`stock_futures_margin_rate_history` | TAIFEX 保證金一覽表（CSV，日常更新）；2020-03 起的歷史取自調整公告附件（`FuturesMarginUpdater.update_history()`，不在 `update_db` 內） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
+| `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | TAIFEX 三大法人／大額交易人／選擇權 PCR | 三大法人：2023-09-04（來源只保留約三年）；大額交易人、PCR：2015-01-01（`FuturesChipUpdater.DEFAULT_START_DATE`） | `get_available()` 只回傳查詢日之前已公布者（避免前視）；三張表各自以交易日曆的差集決定要請求的月份，盤後才公布 |
+| `futures_stock_universe` | TAIFEX 標的證券一覽表（GET） | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
+| `market_holiday` | TWSE `holidaySchedule`（JSON，一年一次請求） | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
+| `stock_tick` | Shioaji（每日更新）＋歷史 CSV（一次匯入） | 歷史存檔 2020-04-01～2024-05-10（`scripts/manual/manual_tick_history_import.py` 匯入後才有資料）；Shioaji 可查區間約自 **2020-03-02**；每日更新自 2024-05-10（`TICK_UPDATE_START_DATE`）起接續 | 需執行中的 TimescaleDB（開 Docker Desktop 後 `docker compose up -d postgres`）；興櫃時期不入庫 |
 
 ## 更新入口
 
 資料更新統一入口：
 
 ```bash
-python -m tasks.update_db --target <targets...>
+python -m apps.update_db --target <targets...>
 ```
 
-不帶 `--target` 時等同 `--target no_tick`。`all`／`no_tick` 兩個捷徑**都不含**
-`futures_stock_price`、`futures_tick`、`finmind`
-（`EXPLICIT_ONLY_DATA_TYPES`），這三個只在明確點名時才跑；`no_tick` 另外排除 `tick`。
-`--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 與自行決定區間的
-`futures_chip`、`futures_continuous`、`futures_margin`、`futures_stock_universe`、`market_holiday` 不受影響）。
+不帶 `--target` 時等同 `--target no_tick`。各 target 註冊在 `apps/update_db.py` 的 `TARGETS`，
+執行順序固定為註冊表順序（與點名順序無關）。
 
-各 target 的預設起始（與 `get_update_time_config`／各 updater 行為一致）：
+- `all`／`no_tick` 兩個捷徑**都不含** `futures_stock_price` 與 `finmind`（含 `stock_info`、`stock_info_with_warrant`、
+  `broker_info`、`broker_trading` 四個子項）；這些 target 標為 `explicit_only`，只在明確點名時才跑。
+- `no_tick` 另外排除 `tick`（需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB）。
+- `--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 與自行決定區間的 `futures_chip`、`futures_continuous`、
+  `futures_margin`、`futures_stock_universe`、`market_holiday`、`stock_info`、`stock_info_with_warrant`、`broker_info` 不受影響）。
+- `--retry-failed N` 讓失敗的 target 最多再重跑 N 輪（只重跑失敗的那幾個），每輪前等 `--retry-wait` 分鐘（預設 60）。
 
-| `--target` | 預設起始日期 |
-| --- | --- |
-| `price` | 2013-01-01 |
-| `chip` | 2013-01-01 |
-| `dividend` | 2013-01-01 |
-| `corporate_action` | 2013-01-01；每次掃整個區間（事件是事後公告） |
-| `margin` | 2013-01-01（`DEFAULT_MARGIN_START_DATE`） |
-| `short_sale_list` | 2013-09-23（`SHORT_SALE_LIST_START_DATE`；交易所名單起點，更早無資料） |
-| `day_trade_list` | 2014-01-06（`DAY_TRADE_LIST_START_DATE`；先賣後買 2014-06-30 才開放） |
-| `fs` | 2013 年第 1 季；`equity_change` 為逐檔查詢，整段回補以十萬次請求計 |
-| `mrr` | 2013 年 1 月 |
-| `tick` | 2024-05-10（`TICK_UPDATE_START_DATE`）；Shioaji 可查約自 2020-03-02 |
-| `finmind` | `broker_trading` 區間自 2021-06-30；其餘子項見下 |
-| `stock_info` | 快照更新，無日期區間 |
-| `stock_info_with_warrant` | 快照更新，無日期區間 |
-| `broker_info` | 快照更新，無日期區間 |
-| `broker_trading` | 2021-06-30 |
-| `futures_price` | 2015-01-01（`DEFAULT_FUTURES_START_DATE`）；寫入 `tw_futures.db` |
-| `futures_stock_universe` | 快照更新，無日期區間；同一天重跑不產生第二份快照 |
-| `futures_stock_price` | 2015-01-01；商品清單取自標的池、預設流動性前 20 檔（`STOCK_FUTURES_TOP_N`） |
-| `futures_continuous` | 無區間；由 `futures_price_daily` 整段重建 |
-| `futures_margin` | 快照更新（現行一覽表），沒調整時不新增列 |
-| `futures_chip` | 2015-01-01（三大法人自 2023-09-04）；之後各表最新日 +1，另回補表內中間缺口的月份（盤後公布，盤中跑到「無資料」屬正常） |
-| `market_holiday` | 無區間；固定抓去年／今年／明年，每年整年替換；尚未公告的年度跳過 |
-| `futures_tick` | 2015-01-01；需 `[tick]` 相依與 Shioaji 金鑰，DolphinDB 寫入路徑未實測 |
-
-完整參數與範例見 [指令教學](../commands/command-usage.zh-TW.md)。
+各 target 的起始日期見上方〈資料來源與起始日期〉；請求量、回補時間與各 target 的更新行為見 [指令教學](../commands/command-usage.zh-TW.md)〈各 target 的注意事項〉。
 
 ## 股價還原（除權息與公司行動調整）
 
@@ -130,8 +129,9 @@ python -m tasks.update_db --target <targets...>
   詳見 [權益變動表](../pipeline/equity-change.md)〈已知限制〉。
 - **`balance_sheet`、`comprehensive_income`、`cash_flow` 的主鍵含 `公司名稱`**：來源在公司名稱後加註 `*`，
   或公司更名後重爬，同一檔同一年季就會多一列（例如 `5904` 的 `寶雅`／`寶雅*`）。以 `stock_id` 聚合的查詢需自行去重；
-  改主鍵屬 schema 變更，排在 [PostgreSQL 遷移計畫](../../backlog/PostgreSQL遷移計畫.md) 評估。
-- `tick` 依賴 DolphinDB 環境與對應連線參數，未設定時無法使用 tick 相關流程。
+  改主鍵屬 schema 變更，尚未處理。
+- `tick` 依賴執行中的 TimescaleDB 與 `TICK_DATABASE_URL`，未設定時無法使用 tick 相關流程（連不上時錯誤訊息會說明啟動方式）。
+  `stock_tick` 沒有主鍵，冪等靠「整天刪除後重寫 ＋ `stock_tick_load_log`」；儲存與匯入設計見 [ETL 入庫約定](../pipeline/etl-ingestion.md)〈台股 tick〉。
 
 ### 指數期貨日行情
 

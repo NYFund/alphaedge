@@ -8,7 +8,7 @@ from core.config import TW_STOCK_DB_PATH
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
 
 """
-Financial Statement Data API: query financial statement tables through FinancialStatementDAO
+Financial Statement API：經 `FinancialStatementDAO` 查詢財報四表
 
 **表名由呼叫端傳入**（四張報表共用同一組查詢），白名單由 `FinancialStatementDAO`
 把關：傳錯表名在當下就報錯，而不是回一張空表。
@@ -16,7 +16,7 @@ Financial Statement Data API: query financial statement tables through Financial
 
 
 class FinancialStatementAPI(BaseDataAPI):
-    """Financial Statement Data API"""
+    """財報 API（資產負債表、綜合損益表、現金流量表、權益變動表）"""
 
     # 允許查詢的資料表（與 DAO 的白名單同一份）
     ALLOWED_TABLES: Set[str] = set(FinancialStatementDAO.ALLOWED_TABLES)

@@ -8,7 +8,7 @@ Shioaji 金鑰容器
 
 
 class ShioajiAPI:
-    """Shioaji API_KEY and API_SECRET_KEY"""
+    """一組 Shioaji 金鑰（`API_KEY` 與 `API_SECRET_KEY`）"""
 
     def __init__(self, api_key: str, api_secret_key: str) -> None:
         self.api_key: str = api_key

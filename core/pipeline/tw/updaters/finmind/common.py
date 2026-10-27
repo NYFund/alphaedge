@@ -10,6 +10,7 @@ from core.dao.connection import DBConnection
 from core.dao.tw.broker_trading_dao import BrokerTradingDAO
 from core.dao.tw.securities_trader_info_dao import SecuritiesTraderInfoDAO
 from core.dao.tw.stock_info_dao import StockInfoDAO
+from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.tw.cleaners.finmind_cleaner import FinMindCleaner
 from core.pipeline.tw.crawlers.finmind_crawler import FinMindCrawler
 from core.pipeline.tw.loaders.finmind_loader import FinMindLoader
@@ -33,7 +34,7 @@ FinMind 各資料集共用的執行環境與 metadata 儲存
 class FinMindContext:
     """FinMind 四個資料集共用的執行環境：ETL 三件組、DB 連線與 API quota 狀態"""
 
-    # API Quota 相關常數（供 wait_for_quota_reset 使用）
+    # API quota 相關常數（供 `wait_for_quota_reset()` 使用）
     QUOTA_RESET_INTERVAL_SECONDS: int = (
         3600  # 配額重置間隔（秒），用於 fallback 推算下次重置時間
     )
@@ -140,14 +141,25 @@ class FinMindContext:
             logger.debug(f"Could not query API remaining quota from FinMind API: {e}")
         return None
 
-    def wait_for_quota_reset(self) -> bool:
+    def wait_for_quota_reset(self, stop: Optional[GracefulStop] = None) -> bool:
         """
         - Description:
             等待 API quota 重置，每隔 `QUOTA_CHECK_INTERVAL_MINUTES` 查詢一次 usage
+
+            **等待可被中止打斷**：一次要等好幾分鐘、最長數十分鐘，裸 `time.sleep()`
+            被訊號打斷會自動續睡（PEP 475），按下 Ctrl+C 要等滿一個間隔才有反應。
+            呼叫端沒有中止旗標時，本方法在等待期間自己接手訊號。
+        - Parameters:
+            - stop: Optional[GracefulStop]
+                中止旗標；None 時在等待期間自建一個
         - Return:
             - bool
-                True 表示 quota 已恢復；False 表示達到最大等待時間或發生錯誤
+                True 表示 quota 已恢復；False 表示達到最大等待時間、被要求中止或發生錯誤
         """
+
+        if stop is None:
+            with GracefulStop(label="finmind_quota") as own_stop:
+                return self.wait_for_quota_reset(own_stop)
 
         check_interval_seconds: int = (
             self.QUOTA_CHECK_INTERVAL_MINUTES * self.SECONDS_PER_MINUTE
@@ -194,7 +206,9 @@ class FinMindContext:
                 f"(Elapsed: {elapsed / self.SECONDS_PER_MINUTE:.1f} minutes)"
             )
 
-            time.sleep(check_interval_seconds)
+            if not stop.sleep(check_interval_seconds):
+                logger.warning("⚠️ 收到中止要求，停止等待 API quota 重置")
+                return False
 
     def get_stock_list(self) -> List[str]:
         """
@@ -403,7 +417,7 @@ class BrokerTradingMetadataStore:
             self.metadata_path,
             ensure_ascii=False,
         )
-        # 寫入成功後更新快取，迴圈內後續 load() 只讀快取
+        # 寫入成功後更新快取，迴圈內後續 `load()` 只讀快取
         self._cache = metadata
 
     def get_existing_dates(

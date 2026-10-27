@@ -36,7 +36,7 @@ Futures Price Cleaner：把日盤與夜盤兩種版面的 TAIFEX 行情表收斂
 
 
 class FuturesPriceCleaner(BaseDataCleaner):
-    """Futures Price Cleaner (Transform)"""
+    """期貨行情 cleaner（Transform）"""
 
     # 日盤原始表格欄位（依位置，共 17 欄）
     DAY_RAW_COLS: List[str] = [
@@ -97,16 +97,16 @@ class FuturesPriceCleaner(BaseDataCleaner):
     def __init__(self) -> None:
         super().__init__()
 
-        # Futures Price DataFrame Cleaned Columns
+        # 清洗後輸出的欄位順序（由 `setup()` 設定）
         self.futures_price_cleaned_cols: Optional[List[str]] = None
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.futures_price_dir: Path = FUTURES_PRICE_DOWNLOADS_PATH
 
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         # 主鍵為 (date, product, expiry, session)：同一天同一契約的日盤與夜盤
         # 是兩筆獨立行情，少了 session 會互相覆蓋

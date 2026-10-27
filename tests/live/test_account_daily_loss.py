@@ -59,6 +59,8 @@ def make_trader(snapshot: Optional[BrokerAccountSnapshot], broker: Any) -> LiveT
 
 
 def snapshot_with(unrealized: float) -> BrokerAccountSnapshot:
+    """只有未實現損益不同的券商帳戶快照"""
+
     return BrokerAccountSnapshot(
         available_balance=100_000.0, total_equity=500_000.0, unrealized_pnl=unrealized
     )
@@ -117,6 +119,8 @@ def test_realized_query_uses_today() -> None:
     seen: List[datetime.date] = []
 
     class RecordingBroker(FakeBroker):
+        """記下已實現損益查詢日期的券商替身"""
+
         def get_realized_trades(self, date: datetime.date) -> List[FakeTrade]:
             seen.append(date)
             return []

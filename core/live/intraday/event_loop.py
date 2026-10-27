@@ -64,8 +64,8 @@ class IntradayEventLoop:
 
         三個來源（行情回呼、回報回呼、心跳）共用一個 queue，主迴圈只從這一個
         queue 取事件依序處理。**本層不認識策略也不認識引擎**：要做什麼由外部
-        注入的三個 callable 決定，否則這一層就得 import `core.live.trader`
-        （分層 5），而它在元件層。
+        注入的三個 callable 決定，否則這一層（元件層）就得往上 import 引擎層的
+        `core.live.trader`，分層相依檢查不允許。
     """
 
     def __init__(
@@ -172,6 +172,7 @@ class IntradayEventLoop:
         # 同一個坑在 `LiveTrader` 的等待迴圈已經踩過一次
         frozen_since: Optional[datetime.datetime] = None
         frozen_beats: int = 0
+        last_beat: datetime.datetime = self._now()
 
         while self._now() < deadline:
             moment: datetime.datetime = self._now()
@@ -189,16 +190,42 @@ class IntradayEventLoop:
                 break
 
             event: Optional[Event] = self._next_event()
-            if event is None:
-                stats.heartbeats += 1
-                self._check_market_data_silence()
-                self._beat(stats)
-                continue
+            if event is not None:
+                self._dispatch(event, stats)
+                # **心跳依時刻觸發，不只在空等逾時時才跑**：行情連續湧入、每筆間隔都不到
+                # 心跳間隔時，queue 永遠不會空，斷線偵測、重連與日終回補就會一直延後
+                if (self._now() - last_beat).total_seconds() < self.heartbeat_seconds:
+                    continue
 
-            self._dispatch(event, stats)
+            stats.heartbeats += 1
+            self._check_market_data_silence()
+            self._beat(stats)
+            last_beat = self._now()
 
         stats.stale_symbols = self.stale_symbols()
         return stats
+
+    def flush_executions(self) -> LoopStats:
+        """
+        - Description:
+            不等待地消化 queue 裡剩下的回報；行情丟棄
+
+            迴圈收線（`run_until()` 時限一到就停）之後，queue 裡可能還留著回報；回報改回
+            直接的 queue 之後它們就沒人讀了。它們比之後進來的早，要先處理完，順序才不會亂；
+            之後的回報交給段落收尾在直接的 queue 上收到 `drain_end`。
+        - Return:
+            - LoopStats
+                這段的統計（只計回報與處理失敗）
+        """
+
+        stats: LoopStats = LoopStats()
+        while True:
+            try:
+                event: Event = self.events.get_nowait()
+            except queue.Empty:
+                return stats
+            if event.kind is EventKind.EXECUTION:
+                self._dispatch(event, stats)
 
     def _beat(self, stats: LoopStats) -> None:
         """跑一次心跳工作；**失敗不中斷迴圈**，但要計進統計"""

@@ -12,6 +12,7 @@ from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.dao.tw.stock_day_trade_list_dao import StockDayTradeListDAO
 from core.dao.tw.stock_short_sale_list_dao import StockShortSaleListDAO
 from core.datafeed.base import TradingListCoverageError
+from core.market.tw.market_calendar import MarketCalendar
 from core.models import ShortSaleListSnapshot
 
 """
@@ -50,7 +51,7 @@ def make_feed(
     feed: TwStockDataFeed = TwStockDataFeed()
     feed.start_date = start
     feed.end_date = end
-    feed.trading_days = set(trading_days or [DAY_1, DAY_2])
+    feed.calendar = MarketCalendar(trading_days or [DAY_1, DAY_2])
     feed.short_sale_list = StockShortSaleListAPI(conn=conn)
     feed.day_trade_list = StockDayTradeListAPI(conn=conn)
     return feed
@@ -178,7 +179,7 @@ def test_backtest_entry_reports_coverage_errors(
 
     monkeypatch.setattr(backtest_entry, "build_backtester", refuse)
 
-    code: int = backtest_entry.main(["--strategy", "MomentumStrategy1"])
+    code: int = backtest_entry.main(["--strategy", "VolumeBreakoutMomentumStrategy"])
 
     assert code == 1
     assert "名單缺 3 個交易日" in capsys.readouterr().err

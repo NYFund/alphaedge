@@ -23,6 +23,10 @@ class BrokerTradingDAO(BaseDAO):
 
     TABLE_NAME: str = STOCK_TRADING_DAILY_REPORT_TABLE_NAME
     DEFAULT_DB_PATH: Optional[Path] = TW_STOCK_DB_PATH
+    # 可缺：分點進出是選用資料集
+    OPTIONAL_TABLE: bool = True
+    # 一檔股票一天有多家分點各一列：鍵是組合，沒有單一標的欄
+    KEY_COLUMNS: Tuple[str, ...] = ("stock_id", "securities_trader_id")
 
     PRIMARY_KEY_COLUMNS: Tuple[str, ...] = ("stock_id", "date", "securities_trader_id")
 

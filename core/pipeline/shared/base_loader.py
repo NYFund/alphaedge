@@ -14,11 +14,11 @@ from core.pipeline.utils.exceptions import (
 )
 from core.utils.constant import FileEncoding
 
-"""Abstract base class for all data loaders that write processed data to a storage system"""
+"""所有 loader 的共同基底：把清洗後的資料寫進儲存系統"""
 
 
 class BaseDataLoader(ABC):
-    """Base Class of Data Loader"""
+    """資料 loader 的抽象基底"""
 
     # 代號與名稱的欄名在清洗後已標準化，三條台股日頻線（price／chip／margin）一致
     SYMBOL_COLUMN: str = "stock_id"
@@ -84,7 +84,7 @@ class BaseDataLoader(ABC):
             downloads.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> None:
-        """Connect to the Database"""
+        """連線到資料庫"""
 
         if self.dao is None and self.DAO_CLASS is not None:
             self.dao = self.DAO_CLASS(db_path=self.db_path())
@@ -93,7 +93,7 @@ class BaseDataLoader(ABC):
             self.conn = self.dao.conn
 
     def disconnect(self) -> None:
-        """Disconnect the Database；共用的 DAO 由建立者關閉"""
+        """關閉資料庫連線；共用的 DAO 由建立者關閉"""
 
         if not self.owns_dao:
             return
@@ -104,13 +104,14 @@ class BaseDataLoader(ABC):
         self.conn = None
 
     def create_db(self, *args, **kwargs) -> None:
-        """Create New Database"""
+        """建立資料表"""
 
         self.dao.create_table()
 
     @abstractmethod
     def create_missing_tables(self) -> None:
-        """Ensure Database Tables Exist；各表的索引不同，一律由子類實作"""
+        """確保資料表存在；各表的索引不同，一律由子類實作"""
+
         pass
 
     def preprocess(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -121,7 +122,8 @@ class BaseDataLoader(ABC):
     @abstractmethod
     # 有些 loader 回傳新增列數（期貨線），有些不回傳（台股線），故標 `Any`
     def add_to_db(self, *args, **kwargs) -> Any:
-        """Add Data into Database"""
+        """把資料寫入資料庫"""
+
         pass
 
     def upsert(self, df: pd.DataFrame) -> int:

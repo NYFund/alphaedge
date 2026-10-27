@@ -13,11 +13,11 @@ from core.dao.connection import DBConnection
 from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.utils.constant import Units
 
-"""Stock Price API: query price table through StockPriceDAO"""
+"""Stock Price API：經 `StockPriceDAO` 查詢 `price` 表（台股日 K）"""
 
 
 class StockPriceAPI(BaseDataAPI):
-    """Stock Price API"""
+    """台股日 K 價格 API（原始價與後復權還原價）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_STOCK_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = StockPriceDAO
@@ -154,18 +154,12 @@ class StockPriceAPI(BaseDataAPI):
                 結束日（含）
         - Return:
             - series: pd.Series
-                index 為原始 date 欄位、已依日期排序；查無資料時為空 Series
+                價格序列（契約見 `BaseDataAPI.build_close_series()`：index 為
+                `datetime.date`、dtype float、name 為「收盤價」）；查無資料時為空 Series
         """
 
         df: pd.DataFrame = self.get_stock_price(stock_id, start_date, end_date)
-
-        if df.empty or PriceColumn.CLOSE.value not in df.columns:
-            return pd.Series(dtype=float, name=PriceColumn.CLOSE.value)
-
-        df = df.sort_values("date")
-        series: pd.Series = df[PriceColumn.CLOSE.value]
-        series.index = df["date"]
-        return series
+        return self.build_close_series(df, "date", PriceColumn.CLOSE.value)
 
     # === 還原價（後復權）：僅供訊號計算，成交與成本一律走上面的原始價 ===
     def get_adjusted_close_map(self, date: datetime.date) -> Dict[str, Any]:
@@ -229,7 +223,8 @@ class StockPriceAPI(BaseDataAPI):
                 結束日（含）
         - Return:
             - series: pd.Series
-                index 為原始 date 欄位、已依日期排序；查無資料時為空 Series
+                還原後的價格序列，形狀與 `get_close_series()` 相同（index 為
+                `datetime.date`、dtype float、name 為「收盤價」）；查無資料時為空 Series
         """
 
         series: pd.Series = self.get_close_series(stock_id, start_date, end_date)
@@ -246,7 +241,8 @@ class StockPriceAPI(BaseDataAPI):
             index=series.index,
             dtype=float,
         )
-        return pd.to_numeric(series, errors="coerce") * factors
+        # 兩個 Series 相乘後 name 會被丟掉，補回來才符合價格序列的契約
+        return (series * factors).rename(self.CLOSE_SERIES_NAME)
 
     @staticmethod
     def to_date(value: Any) -> datetime.date:

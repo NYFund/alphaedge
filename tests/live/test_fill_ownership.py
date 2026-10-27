@@ -37,6 +37,8 @@ def connected_broker() -> FakeBroker:
 def make_oms(
     dao: LiveTradeDAO, run_id: str, run_index: int, strategy: str
 ) -> OrderManager:
+    """以指定的執行代號與策略建立委託管理器"""
+
     return OrderManager(
         broker=connected_broker(),
         dao=dao,
@@ -48,6 +50,8 @@ def make_oms(
 
 
 def buy_order(volume: int = 2) -> StockOrder:
+    """組一張 2330 買單"""
+
     return StockOrder(
         stock_id="2330",
         action=Action.BUY,
@@ -61,6 +65,8 @@ def buy_order(volume: int = 2) -> StockOrder:
 def fill_for(
     ticket: OrderTicket, volume: int = 2, trade_id: str = "T1"
 ) -> ExecutionReport:
+    """依委託單組出成交回報"""
+
     return ExecutionReport(
         broker_seqno=ticket.broker_seqno or "",
         broker_trade_id=trade_id,
@@ -73,10 +79,14 @@ def fill_for(
 
 
 def fill_rows(dao: LiveTradeDAO) -> List[Dict[str, Any]]:
+    """當日所有成交紀錄"""
+
     return dao.get_fills_by_date(TODAY)
 
 
 def categories(dao: LiveTradeDAO) -> List[str]:
+    """當日風控事件的類別清單"""
+
     return [str(row["category"]) for row in dao.get_risk_events_by_date(TODAY)]
 
 

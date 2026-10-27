@@ -1,5 +1,4 @@
 import datetime
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -9,14 +8,18 @@ from loguru import logger
 from core.config import FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH, TW_FUTURES_DB_PATH
 from core.dao.connection import DBConnection, DBError
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.step_runner import run_isolated
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.crawlers.futures_margin_crawler import FuturesMarginCrawler
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
 from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import AnnouncementParseError, DataLoadError
 from core.utils import TimeUtils
-from core.utils.log_manager import LogManager
 
 """
 台期貨保證金 Updater
@@ -138,7 +141,9 @@ class AnnouncementMetadataStore:
 
 
 class FuturesMarginUpdater(BaseDataUpdater):
-    """Futures Margin Updater"""
+    """期貨保證金 updater"""
+
+    LOG_FILE_NAME: str = "update_futures_margin.log"
 
     # 歷史回補的節流：每則公告要開明細頁 ＋ 下載附件（2 次請求）
     ANNOUNCEMENT_DELAY_SECONDS: float = 1.5
@@ -154,7 +159,8 @@ class FuturesMarginUpdater(BaseDataUpdater):
             FUTURES_MARGIN_ANNOUNCEMENT_METADATA_PATH
         )
 
-        # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一個 DAO**（tw_futures.db）
+        # **讀（摘要、公告一致性、鏈式驗證）與寫（loader）共用同一條連線**（tw_futures.db）：
+        # 金額表的 DAO 擁有連線，比例表的 DAO 掛在同一條上
         TW_FUTURES_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self.dao: FuturesMarginDAO = FuturesMarginDAO(db_path=TW_FUTURES_DB_PATH)
         self.conn: Optional[DBConnection] = self.dao.conn
@@ -163,13 +169,14 @@ class FuturesMarginUpdater(BaseDataUpdater):
         self.crawler: FuturesMarginCrawler = FuturesMarginCrawler()
         self.cleaner: FuturesMarginCleaner = FuturesMarginCleaner()
         self.loader: FuturesMarginLoader = FuturesMarginLoader(dao=self.dao)
+        self.rate_dao: StockFuturesMarginRateDAO = self.loader.rate_dao
 
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        LogManager.setup_logger("update_futures_margin.log")
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
@@ -189,24 +196,18 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 有來源失敗時，於兩支都跑完後拋出（中途不中斷）
         """
 
-        failures: List[str] = []
-
-        for name, step in (
-            ("index_margin", self.update_index_margin),
-            ("stock_margin", self.update_stock_margin),
-        ):
-            try:
-                step()
-            except Exception as error:
-                # **這層盲捕不可收斂成列舉**：`step` 是一整條子管線（抓取→清洗→
-                # 入庫），拋得出什麼由那一側決定，漏掉哪一種就會讓排在後面的
-                # `update_stock_margin()` 完全不跑。兩段互不相干，一段失敗不該連累
-                # 另一段。**`DataLoadError` 尤其要攔**：兩個 step 正是用它表達
-                # 「取得一覽表失敗」「清洗結果為空」這些最常見的失敗
-                logger.error(
-                    f"[Futures Margin] {name} 失敗：{type(error).__name__}: {error}"
-                )
-                failures.append(name)
+        # 兩段互不相干，一段失敗不該連累另一段；**`DataLoadError` 尤其要攔**：
+        # 兩個 step 正是用它表達「取得一覽表失敗」「清洗結果為空」這些最常見的失敗
+        failures: List[str] = [
+            name
+            for name, _ in run_isolated(
+                [
+                    ("index_margin", self.update_index_margin),
+                    ("stock_margin", self.update_stock_margin),
+                ],
+                "Futures Margin",
+            )
+        ]
 
         self.log_summary()
         self.log_margin_chain_gaps()
@@ -224,13 +225,17 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
         logger.info("* Start Updating TAIFEX Futures Margin (Index)")
 
-        text: Optional[str] = self.crawler.crawl_index_margin()
-        if text is None:
+        result: CrawlResult = self.crawler.crawl_index_margin()
+        if not result.is_ok:
             # **「跳過」不能是靜默的**：保證金一覽表沒抓到就代表這次沒有任何
             # 新資料，若只記 warning，行程仍以成功結束，缺漏要事後對帳才會發現
-            raise DataLoadError("futures_margin", ["index: 取得一覽表失敗"])
+            raise DataLoadError(
+                "futures_margin", [f"index: 取得一覽表失敗（{result.reason}）"]
+            )
 
-        cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_index_margin(text)
+        cleaned_df: Optional[pd.DataFrame] = self.cleaner.clean_index_margin(
+            result.text
+        )
         if cleaned_df is None or cleaned_df.empty:
             raise DataLoadError("futures_margin", ["index: 清洗結果為空"])
 
@@ -253,12 +258,14 @@ class FuturesMarginUpdater(BaseDataUpdater):
 
         logger.info("* Start Updating TAIFEX Futures Margin (Stock)")
 
-        text: Optional[str] = self.crawler.crawl_stock_margin()
-        if text is None:
-            raise DataLoadError("futures_margin", ["stock: 取得一覽表失敗"])
+        result: CrawlResult = self.crawler.crawl_stock_margin()
+        if not result.is_ok:
+            raise DataLoadError(
+                "futures_margin", [f"stock: 取得一覽表失敗（{result.reason}）"]
+            )
 
         cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
-            self.cleaner.clean_stock_margin(text)
+            self.cleaner.clean_stock_margin(result.text)
         )
         if cleaned is None:
             raise DataLoadError("futures_margin", ["stock: 清洗結果為空"])
@@ -364,7 +371,10 @@ class FuturesMarginUpdater(BaseDataUpdater):
         **新增 0 列是正常狀態不是失敗**：保證金沒調整時本來就不會有新列。
         """
 
-        for table, total, products, earliest, latest in self.dao.get_table_summaries():
+        for table, total, products, earliest, latest in (
+            self.dao.get_summary(),
+            self.rate_dao.get_summary(),
+        ):
             logger.info(
                 f"* {table}：{total} 列、{products} 個商品，"
                 f"生效日範圍 {earliest} ~ {latest}"
@@ -409,7 +419,10 @@ class FuturesMarginUpdater(BaseDataUpdater):
         # **必須限定 source**：snapshot 恰好同一天時會讓該則公告被整則跳過
         loaded_dates: Dict[str, Set[str]] = {
             table: self.loader.get_effective_dates(table, source="announcement")
-            for table in (FuturesMarginDAO.TABLE_NAME, FuturesMarginDAO.RATE_TABLE_NAME)
+            for table in (
+                FuturesMarginDAO.TABLE_NAME,
+                StockFuturesMarginRateDAO.TABLE_NAME,
+            )
         }
         store: AnnouncementMetadataStore = AnnouncementMetadataStore(
             self.announcement_metadata_path
@@ -423,130 +436,155 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 if store.is_processed(announcement["link"], loaded_dates)
             }
         )
-        resolved: List[Tuple[Dict[str, str], Optional[str]]] = self.resolve_csv_urls(
-            announcements,
-            known_urls={
-                link: store.records[link]["csv_url"] for link in processed_links
-            },
+        # 公告之間固定間隔；中止收在公告與公告之間（處理紀錄每則即時寫檔）
+        throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.ANNOUNCEMENT_DELAY_SECONDS,
+            delay_max=self.ANNOUNCEMENT_DELAY_SECONDS,
         )
-        stats: Dict[str, int] = {
-            "loaded": 0,
-            "loaded_rates": 0,
-            "skipped_existing": 0,
-            "download_failed": 0,
-            "no_csv": 0,
-            "no_futures_rows": 0,
-            "parse_failed": 0,
-            "chain_gaps": 0,
-        }
-        gap_products: set = set()
-
-        for announcement, csv_url in resolved:
-            announcement_date: datetime.date = TimeUtils.to_date(
-                announcement["date"].replace("/", "-")
-            )
-
-            if announcement["link"] in processed_links:
-                stats["skipped_existing"] += 1
-                continue
-
-            if csv_url is None:
-                # 2015~2019 的掃描 PDF、以及新商品上市的 SPAN 參數公告
-                stats["no_csv"] += 1
-                continue
-
-            text: Optional[str] = self.crawler.crawl_announcement_csv(csv_url)
-            if text is None:
-                # 下載失敗不記進處理紀錄，下次回補重試
-                stats["download_failed"] += 1
-                time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
-                continue
-
-            try:
-                cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
-                    self.cleaner.clean_margin_announcement(
-                        text, announcement["title"], announcement_date
-                    )
+        with GracefulStop(label="futures_margin") as stop:
+            resolved: List[Tuple[Dict[str, str], Optional[str]]] = (
+                self.resolve_csv_urls(
+                    announcements,
+                    known_urls={
+                        link: store.records[link]["csv_url"] for link in processed_links
+                    },
+                    stop=stop,
                 )
-            except AnnouncementParseError as error:
-                # 比照下載失敗：不記進處理紀錄，下次回補重試。記成「沒有期貨列」
-                # 的話，版面改制或下載到錯誤頁的公告從此不再下載
-                logger.warning(f"[Futures Margin] {error}；不寫處理紀錄，下次重試")
-                stats["parse_failed"] += 1
-                time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
-                continue
-            if cleaned is None:
-                # 選擇權或部位限制公告：有 CSV 但沒有期貨列，不是解析失敗
-                stats["no_futures_rows"] += 1
+            )
+            if stop.requested:
+                # 共用網址的判斷要看到全部公告才成立，解析到一半的結果不可拿來入庫
+                logger.warning(
+                    "[Futures Margin] 收到中止要求，附件網址尚未解析完，本次不入庫"
+                )
+                return
+            stats: Dict[str, int] = {
+                "loaded": 0,
+                "loaded_rates": 0,
+                "skipped_existing": 0,
+                "download_failed": 0,
+                "no_csv": 0,
+                "no_futures_rows": 0,
+                "parse_failed": 0,
+                "chain_gaps": 0,
+            }
+            gap_products: set = set()
+
+            for announcement, csv_url in resolved:
+                if stop.requested:
+                    # 每則公告處理完就寫進處理紀錄，停在這裡不會遺失已入庫的部分
+                    logger.warning(
+                        "[Futures Margin] 收到中止要求，已處理的公告不會遺失，"
+                        "未處理的下次執行會接續"
+                    )
+                    break
+
+                announcement_date: datetime.date = TimeUtils.to_date(
+                    announcement["date"].replace("/", "-")
+                )
+
+                if announcement["link"] in processed_links:
+                    stats["skipped_existing"] += 1
+                    continue
+
+                if csv_url is None:
+                    # 2015~2019 的掃描 PDF、以及新商品上市的 SPAN 參數公告
+                    stats["no_csv"] += 1
+                    continue
+
+                attachment: CrawlResult = self.crawler.crawl_announcement_csv(csv_url)
+                if not attachment.is_ok:
+                    # 下載失敗不記進處理紀錄，下次回補重試
+                    stats["download_failed"] += 1
+                    throttle.tick(stop)
+                    continue
+
+                try:
+                    cleaned: Optional[Dict[str, Optional[pd.DataFrame]]] = (
+                        self.cleaner.clean_margin_announcement(
+                            attachment.text, announcement["title"], announcement_date
+                        )
+                    )
+                except AnnouncementParseError as error:
+                    # 比照下載失敗：不記進處理紀錄，下次回補重試。記成「沒有期貨列」
+                    # 的話，版面改制或下載到錯誤頁的公告從此不再下載
+                    logger.warning(f"[Futures Margin] {error}；不寫處理紀錄，下次重試")
+                    stats["parse_failed"] += 1
+                    throttle.tick(stop)
+                    continue
+                if cleaned is None:
+                    # 選擇權或部位限制公告：有 CSV 但沒有期貨列，不是解析失敗
+                    stats["no_futures_rows"] += 1
+                    store.record(
+                        announcement["link"],
+                        announcement_date,
+                        csv_url,
+                        AnnouncementMetadataStore.STATUS_NO_FUTURES_ROWS,
+                    )
+                    throttle.tick(stop)
+                    continue
+
+                margin_df: Optional[pd.DataFrame] = cleaned.get("margin")
+                rate_df: Optional[pd.DataFrame] = cleaned.get("rate")
+                reference_df: pd.DataFrame = (
+                    margin_df if margin_df is not None else rate_df
+                )
+                effective_date: str = str(reference_df["effective_date"].iloc[0])
+
+                if margin_df is not None:
+                    _, mismatches = self.check_announcement_consistency(margin_df)
+                    if mismatches:
+                        # **只記缺口不拒收**：公告載明的「調整後」本來就是對的，
+                        # 「調整前」對不上代表**我們的歷史有缺口**（某則公告的附件被
+                        # 站方覆寫而取不到），不代表這一則的值有問題。
+                        # 拒收只會讓缺口往後連鎖擴大——2026-09-01 實測，
+                        # 一個缺口造成後續 46 則全被拒收，表內只剩 186 列。
+                        #
+                        # 真正會寫錯歷史的「附件被覆寫」已由 `resolve_csv_urls()` 的
+                        # 網址去重**結構性擋掉**，不需要再用數值猜。
+                        stats["chain_gaps"] += 1
+                        gap_products.update(m.split(":")[0] for m in mismatches)
+                        logger.warning(
+                            f"* {announcement_date} → 生效日 {effective_date}："
+                            f"{len(mismatches)} 個商品的「調整前」與表內不符，"
+                            f"代表前面有缺口（仍入庫）。前三筆：{mismatches[:3]}"
+                        )
+
+                    inserted: int = self.loader.add_announcements_to_db(
+                        margin_df[self.cleaner.margin_cleaned_cols]
+                    )
+                    stats["loaded"] += inserted
+                    logger.info(
+                        f"* {announcement_date} → 生效日 {effective_date}（金額）："
+                        f"{len(margin_df)} 個商品、新增 {inserted} 列"
+                    )
+
+                if rate_df is not None:
+                    inserted: int = self.loader.add_rates_to_db(
+                        rate_df[self.cleaner.rate_cleaned_cols], replace=True
+                    )
+                    stats["loaded_rates"] += inserted
+                    logger.info(
+                        f"* {announcement_date} → 生效日 {effective_date}（比例）："
+                        f"{len(rate_df)} 檔、新增 {inserted} 列"
+                    )
+
+                # 寫入後才記：loader 每次寫入即 commit，紀錄不會領先資料庫
                 store.record(
                     announcement["link"],
                     announcement_date,
                     csv_url,
-                    AnnouncementMetadataStore.STATUS_NO_FUTURES_ROWS,
+                    AnnouncementMetadataStore.STATUS_LOADED,
+                    effective_date,
+                    [
+                        table
+                        for table, df in (
+                            (FuturesMarginDAO.TABLE_NAME, margin_df),
+                            (StockFuturesMarginRateDAO.TABLE_NAME, rate_df),
+                        )
+                        if df is not None
+                    ],
                 )
-                time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
-                continue
-
-            margin_df: Optional[pd.DataFrame] = cleaned.get("margin")
-            rate_df: Optional[pd.DataFrame] = cleaned.get("rate")
-            reference_df: pd.DataFrame = margin_df if margin_df is not None else rate_df
-            effective_date: str = str(reference_df["effective_date"].iloc[0])
-
-            if margin_df is not None:
-                _, mismatches = self.check_announcement_consistency(margin_df)
-                if mismatches:
-                    # **只記缺口不拒收**：公告載明的「調整後」本來就是對的，
-                    # 「調整前」對不上代表**我們的歷史有缺口**（某則公告的附件被
-                    # 站方覆寫而取不到），不代表這一則的值有問題。
-                    # 拒收只會讓缺口往後連鎖擴大——2026-09-01 實測，
-                    # 一個缺口造成後續 46 則全被拒收，表內只剩 186 列。
-                    #
-                    # 真正會寫錯歷史的「附件被覆寫」已由 `resolve_csv_urls()` 的
-                    # 網址去重**結構性擋掉**，不需要再用數值猜。
-                    stats["chain_gaps"] += 1
-                    gap_products.update(m.split(":")[0] for m in mismatches)
-                    logger.warning(
-                        f"* {announcement_date} → 生效日 {effective_date}："
-                        f"{len(mismatches)} 個商品的「調整前」與表內不符，"
-                        f"代表前面有缺口（仍入庫）。前三筆：{mismatches[:3]}"
-                    )
-
-                inserted: int = self.loader.add_announcements_to_db(
-                    margin_df[self.cleaner.margin_cleaned_cols]
-                )
-                stats["loaded"] += inserted
-                logger.info(
-                    f"* {announcement_date} → 生效日 {effective_date}（金額）："
-                    f"{len(margin_df)} 個商品、新增 {inserted} 列"
-                )
-
-            if rate_df is not None:
-                inserted: int = self.loader.add_rates_to_db(
-                    rate_df[self.cleaner.rate_cleaned_cols], replace=True
-                )
-                stats["loaded_rates"] += inserted
-                logger.info(
-                    f"* {announcement_date} → 生效日 {effective_date}（比例）："
-                    f"{len(rate_df)} 檔、新增 {inserted} 列"
-                )
-
-            # 寫入後才記：loader 每次寫入即 commit，紀錄不會領先資料庫
-            store.record(
-                announcement["link"],
-                announcement_date,
-                csv_url,
-                AnnouncementMetadataStore.STATUS_LOADED,
-                effective_date,
-                [
-                    table
-                    for table, df in (
-                        (FuturesMarginDAO.TABLE_NAME, margin_df),
-                        (FuturesMarginDAO.RATE_TABLE_NAME, rate_df),
-                    )
-                    if df is not None
-                ],
-            )
-            time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
+                throttle.tick(stop)
 
         logger.info(
             f"📊 回補統計：金額新增 {stats['loaded']} 列、比例新增 "
@@ -567,6 +605,7 @@ class FuturesMarginUpdater(BaseDataUpdater):
         self,
         announcements: List[Dict[str, str]],
         known_urls: Optional[Dict[str, Optional[str]]] = None,
+        stop: Optional[GracefulStop] = None,
     ) -> List[Tuple[Dict[str, str], Optional[str]]]:
         """
         - Description:
@@ -586,6 +625,8 @@ class FuturesMarginUpdater(BaseDataUpdater):
                 依日期排序的公告清單
             - known_urls: Optional[Dict[str, Optional[str]]]
                 已知附件網址的公告（連結 → 網址），不再開明細頁
+            - stop: Optional[GracefulStop]
+                中止旗標；收到要求時提早返回，結果不完整，呼叫端不可拿來入庫
         - Return:
             - List[Tuple[Dict[str, str], Optional[str]]]
                 每則公告與其可信的附件網址（不可信或沒有時為 None）
@@ -594,13 +635,19 @@ class FuturesMarginUpdater(BaseDataUpdater):
         logger.info(f"* 解析 {len(announcements)} 則公告的附件網址…")
 
         known: Dict[str, Optional[str]] = known_urls or {}
+        throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.ANNOUNCEMENT_DELAY_SECONDS,
+            delay_max=self.ANNOUNCEMENT_DELAY_SECONDS,
+        )
         urls: List[Optional[str]] = []
         for announcement in announcements:
+            if stop is not None and stop.requested:
+                break
             if announcement["link"] in known:
                 urls.append(known[announcement["link"]])
                 continue
             urls.append(self.crawler.resolve_announcement_csv(announcement["link"]))
-            time.sleep(self.ANNOUNCEMENT_DELAY_SECONDS)
+            throttle.tick(stop)
 
         # 同一網址只保留最後（最新）一則
         latest_index: Dict[str, int] = {}

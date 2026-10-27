@@ -8,7 +8,7 @@ from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.config import TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.config.settings import now_live
-from core.dao.connection import DBConnection, connect_sqlite
+from core.dao.connection import DBConnection
 from core.live.datafeed.base import BaseLiveDataFeed, RollPlan
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
@@ -20,6 +20,7 @@ from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import BaseQuote, FuturesOrder, PreOpenFuturesQuote
+from core.portfolio import order_rules
 from core.strategies.base import BaseStrategy
 from core.utils import (
     FUTURES_MULTIPLIER,
@@ -102,21 +103,26 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         self.stock_conn: Optional[DBConnection] = None
         self.market_holiday: Optional[MarketHolidayAPI] = None
 
-    def setup(self, strategy: BaseStrategy) -> None:
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
         """
-        建立歷史資料 API（唯讀）與交易日來源
+        建立歷史資料 API（唯讀）
 
-        期貨沿用 TWSE 公告的開休市日曆當主來源（期貨市場的休市日原則上與證券市場相同）；
-        它在 `tw_stock.db`，另開一條唯讀連線。
+        期貨沿用 TWSE 公告的開休市日曆當交易日主來源（期貨市場的休市日原則上與
+        證券市場相同）；它在 `tw_stock.db`，另開一條唯讀連線。
         """
 
-        self.conn = connect_sqlite(self.db_path, read_only=True)
-        self.stock_conn = connect_sqlite(self.stock_db_path, read_only=True)
+        self.conn = self.connect_db(self.db_path, read_only=True)
+        self.stock_conn = self.connect_db(self.stock_db_path, read_only=True)
         self.futures_price = FuturesPriceAPI(conn=self.conn)
         self.margin = FuturesMarginAPI(conn=self.conn)
         self.market_holiday = MarketHolidayAPI(conn=self.stock_conn)
         self.inject_margin_api()
         self.inject_roll_calendar()
+
+    def setup(self, strategy: BaseStrategy) -> None:
+        """基底的外框之後：補預設的交易日來源、把資料源交給策略、補契約清單"""
+
+        super().setup(strategy)
 
         if not self.calendar_sources:
             self.calendar_sources = [
@@ -307,12 +313,12 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
             return None
 
         position_type: PositionType = position.position_type
-        opening: Action = (
-            Action.BUY if position_type is PositionType.LONG else Action.SELL
-        )
-        closing: Action = Action.SELL if opening is Action.BUY else Action.BUY
+        opening: Action = order_rules.resolve_open_action(position_type)
+        closing: Action = order_rules.resolve_close_action(position_type)
 
         def leg(expiry: str, action: Action, price: float) -> FuturesOrder:
+            """組一腿轉倉單：方向與口數沿用原部位，只換到期月、買賣別與價格"""
+
             return FuturesOrder(
                 product=product,
                 expiry=expiry,
@@ -391,6 +397,12 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                     "本段落略過"
                 )
                 continue
+            # 取不到乘數只略過這個契約；帶著乘數 0 進到部位建構會讓可開口數靜默歸零
+            try:
+                multiplier: int = self._resolve_multiplier(product, contract)
+            except KeyError as exc:
+                logger.error(f"期貨合約 {product}{expiry} {exc}，本段落略過")
+                continue
             quotes.append(
                 PreOpenFuturesQuote(
                     product=product,
@@ -400,7 +412,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
                     date=now.date(),
                     reference_price=reference,
                     session=self._resolve_session(now),
-                    multiplier=self._resolve_multiplier(product, contract),
+                    multiplier=multiplier,
                     limit_up=self._as_optional_float(contract, "limit_up"),
                     limit_down=self._as_optional_float(contract, "limit_down"),
                 )
@@ -449,8 +461,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         那段時間沒有行情，但歸夜盤會讓收盤後的快照被記成次一交易日的帳。
         """
 
-        hour: int = moment.hour
-        return FuturesSession.NIGHT if hour >= 15 or hour < 5 else FuturesSession.DAY
+        return FuturesSession.resolve_or_day(moment)
 
     @staticmethod
     def _resolve_multiplier(product: str, contract: Any) -> int:
@@ -458,7 +469,8 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         取契約乘數
 
         指數期貨查登錄表；查不到改用合約的欄位（股期的乘數會隨除權息調整，
-        寫死必錯）。兩邊都沒有回 0——**猜一個值會讓 PnL 靜默偏掉**。
+        寫死必錯）。兩邊都沒有就拋 `KeyError`——**猜一個值或回 0 都會讓
+        可開口數與 PnL 靜默偏掉**，由呼叫端略過該契約。
         """
 
         # 合約的 `symbol` 前綴是 Shioaji 分類（TXF），登錄表的鍵是 TAIFEX 代碼（TX），
@@ -471,8 +483,48 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         if product in FUTURES_MULTIPLIER:
             return int(FUTURES_MULTIPLIER[product])
 
-        logger.warning(f"取不到 {product} 的契約乘數，PnL 將無法計算")
-        return 0
+        raise KeyError(f"取不到 {product} 的契約乘數（登錄表與合約欄位皆無）")
+
+    def resolve_multiplier(self, product: str, date: datetime.date) -> int:
+        """
+        - Description:
+            給部位管理層的契約乘數 resolver：登錄表優先，沒登錄的商品查券商合約
+
+            與回測資料源同一個契約（`TwFuturesDataFeed.resolve_multiplier()`），部位管理層
+            才不必退回常數表——股期不在常數表內，退回等於第一筆開倉就 KeyError。
+            `date` 用不到：實盤只有當下的合約檔，股期的契約單位隨除權息調整，當下的值
+            就是現在要用的值。兩邊都查不到就拋 `KeyError`，猜一個值會讓保證金與 PnL
+            靜默偏掉。
+        - Parameters:
+            - product: str
+                商品代碼
+            - date: datetime.date
+                交易日（為對齊回測的簽名而收，實盤用不到）
+        - Return:
+            - int
+                契約乘數
+        - Raise:
+            - KeyError
+                登錄表與券商合約都查不到
+        """
+
+        if product in FUTURES_MULTIPLIER:
+            return int(FUTURES_MULTIPLIER[product])
+
+        resolver: Any = getattr(self.broker, "resolver", None)
+        if resolver is not None:
+            try:
+                expiries: List[str] = list(
+                    resolver.list_index_futures_expiries(product)
+                )
+                if expiries:
+                    return self._resolve_multiplier(
+                        product, resolver.resolve_index_futures(product, expiries[0])
+                    )
+            except LookupError:
+                pass
+
+        raise KeyError(f"取不到 {product} 的契約乘數（登錄表與券商合約皆無）")
 
     def close(self) -> None:
         """

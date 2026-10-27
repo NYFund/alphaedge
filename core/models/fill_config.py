@@ -25,7 +25,7 @@ class FillConfig:
     """
     成交假設設定
 
-    **與成交模型本體分開**（對照 `CostConfig` 之於 `StockCostModel`）：策略基底要宣告它，
+    **與成交模型本體分開**（對照 `CostConfig` 之於 `TwStockCostModel`）：策略基底要宣告它，
     放在 `core/backtest/models/` 的話，策略層為了拿一個 dataclass 就得 import 回測套件。
     使用它的模擬邏輯在 `core/backtest/models/fill_model.py`。
 

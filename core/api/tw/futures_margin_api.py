@@ -7,9 +7,10 @@ from core.config import TW_FUTURES_DB_PATH
 from core.dao.base import BaseDAO
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 from core.dao.tw.futures_stock_universe_dao import FuturesStockUniverseDAO
+from core.dao.tw.stock_futures_margin_rate_dao import StockFuturesMarginRateDAO
 
 """
-Futures Margin API: query the two margin tables in tw_futures.db
+Futures Margin API：查詢 `tw_futures.db` 的兩張保證金表
 
 **兩張表、兩種取值方式**（分表依據是「金額 vs 比例」，不是「指數 vs 股票」——
 ETF 股期給的也是每口金額，語意與指數期貨相同）：
@@ -43,7 +44,7 @@ ETF 股期給的也是每口金額，語意與指數期貨相同）：
 
 
 class FuturesMarginAPI(BaseDataAPI):
-    """Futures Margin API"""
+    """期貨保證金 API（指數期貨金額表 ＋ 股票期貨比例表）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = FuturesMarginDAO
@@ -53,6 +54,9 @@ class FuturesMarginAPI(BaseDataAPI):
         """建連線與主 DAO 由基底負責；此處只補本 API 多出來的 DAO"""
 
         super().setup()
+        self.rate_dao: StockFuturesMarginRateDAO = StockFuturesMarginRateDAO(
+            conn=self.conn
+        )
         self.universe_dao: FuturesStockUniverseDAO = FuturesStockUniverseDAO(
             conn=self.conn
         )
@@ -163,7 +167,7 @@ class FuturesMarginAPI(BaseDataAPI):
 
         # 表不存在時與 `get_margin()` 同樣回 None：兩者的缺表語意必須一致，
         # 否則同一個「還沒跑 ETL」的環境下，查金額回 None、查比例卻拋例外
-        row: Optional[Tuple[Any, ...]] = self.dao.get_rates_in_effect(
+        row: Optional[Tuple[Any, ...]] = self.rate_dao.get_rates_in_effect(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )
 
@@ -175,12 +179,16 @@ class FuturesMarginAPI(BaseDataAPI):
             "原始保證金適用比例": row[2],
         }
 
-    def get_contract_size(self, product_id: str, date: datetime.date) -> Optional[int]:
+    def get_margin_contract_size(
+        self, product_id: str, date: datetime.date
+    ) -> Optional[int]:
         """
         - Description:
-            取得股期的契約單位（股數）
+            取得算**保證金**用的股期契約單位（股數）
 
-            來源是 `futures_stock_universe` 的**快照序列**，故同樣取
+            名字帶 `margin`：與 `FuturesStockUniverseAPI.get_contract_size()`（回測乘數）
+            是兩種語意，同一個 (product, date) 可能給出不同的數字——這裡以該商品自己的
+            快照序列為準，那邊看該日全表快照。來源是 `futures_stock_universe` 的**快照序列**，故同樣取
             `snapshot_date <= date` 的最大者。
 
             ⚠️ **快照序列只回溯到本表建立之日**（2026-08-29），更早的日期會取到
@@ -297,7 +305,7 @@ class FuturesMarginAPI(BaseDataAPI):
         rates: Optional[Dict[str, float]] = self.get_margin_rates(
             product_id, date, fallback_to_earliest=fallback_to_earliest
         )
-        contract_size: Optional[int] = self.get_contract_size(product_id, date)
+        contract_size: Optional[int] = self.get_margin_contract_size(product_id, date)
 
         if rates is None or contract_size is None:
             return None

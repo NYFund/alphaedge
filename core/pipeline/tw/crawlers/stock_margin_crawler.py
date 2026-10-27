@@ -34,11 +34,12 @@ class StockMarginCrawler(BaseDataCrawler):
         super().__init__()
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     def crawl(self, date: datetime.date) -> None:
-        """Crawl TWSE & TPEX Margin Trading Data"""
+        """爬取上市與上櫃的融資融券資料"""
 
         self.crawl_twse_margin(date)
         self.crawl_tpex_margin(date)

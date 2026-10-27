@@ -1,9 +1,27 @@
 import datetime
-from typing import Optional
+from typing import Any, Optional, Protocol
 
 from core.utils import Action, ExecutionStyle, ExecutionTiming, OrderType, PositionType
 
 """BaseOrder: 市場與商品皆無關的訂單骨架（識別欄位一律為 symbol）"""
+
+
+class OrderSignal(Protocol):
+    """
+    `from_signal()` 吃的訊號形狀
+
+    真正的 `Signal` 住在部位建構層（`core/portfolio/signal.py`），領域層不往上 import；
+    這裡只宣告訂單工廠會讀的欄位，型別檢查以結構比對。
+    """
+
+    quote: Any
+    action: Action
+    position_type: PositionType
+    order_price: float
+
+    @property
+    def symbol(self) -> str:
+        """訊號標的的商品代號"""
 
 
 class BaseOrder:
@@ -42,7 +60,7 @@ class BaseOrder:
         # **為什麼要存在訂單上**：滑價成本＝（成交價 − 委託價）× 數量 × 計價單位，
         # 而這三項分散在不同層——委託價只有 `FillModel`／`SettlementModel` 知道
         # （它們回傳的是副本，原單不往下走），計價單位只有部位管理層知道
-        # （期貨的乘數逐契約不同，`InstrumentSpec.to_units()` 拿不到商品）。
+        # （期貨的乘數逐契約不同，要帶商品與日期查，見 `InstrumentSpec.get_unit_size()`）。
         # 把委託價掛在副本上，兩者才會在同一個地方碰頭。
         #
         # **這不是帳務欄位**：滑價是**內含在成交價裡**的，不像手續費與稅那樣
@@ -57,7 +75,7 @@ class BaseOrder:
 
         # 這張單要在哪一個段落送出。
         #
-        # `None` 表示「由引擎依策略的 `live_schedule` 決定」，策略不必逐單填。
+        # `None` 表示「由引擎依策略的 `execution_schedule` 決定」，策略不必逐單填。
         # 日 K 在實盤不存在——回測一次呼叫就拿到當日 OHLC，實盤在開盤前不知道
         # close、收盤前不知道完整 OHLC，所以同一支策略的鉤子要拆成兩個時點送單
         self.timing: Optional[ExecutionTiming] = timing

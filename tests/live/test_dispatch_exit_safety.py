@@ -1,6 +1,7 @@
 import datetime
 from typing import Any, Dict, List, Tuple
 
+from core.models import PriceLimits
 from core.utils import Action, ExecutionStyle, ExecutionTiming
 
 from .test_live_execution_layer import events, sent_orders
@@ -129,7 +130,7 @@ def test_exit_blocked_by_risk_creates_a_next_day_cover() -> None:
 def test_exit_skipped_by_the_execution_layer_creates_a_next_day_cover() -> None:
     """取不到漲跌停、執行層略過該檔，同樣要補"""
 
-    harness: Harness = Harness([PlainExit()], price_limits=(None, None))
+    harness: Harness = Harness([PlainExit()], price_limits=PriceLimits.none())
     seed_holding(harness, "PlainExit", 1)
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 

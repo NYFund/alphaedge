@@ -12,6 +12,7 @@ from core.config import (
     STOCK_FUTURES_MARGIN_RATE_HISTORY_TABLE_NAME,
 )
 from core.dao.tw.futures_margin_dao import FuturesMarginDAO
+from core.pipeline.shared.base_crawler import CrawlResult
 from core.pipeline.tw.cleaners.futures_margin_cleaner import FuturesMarginCleaner
 from core.pipeline.tw.loaders.futures_margin_loader import FuturesMarginLoader
 from core.pipeline.tw.updaters.futures_margin_updater import FuturesMarginUpdater
@@ -1046,6 +1047,7 @@ def make_updater(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     updater = FuturesMarginUpdater.__new__(FuturesMarginUpdater)
     updater.loader = FuturesMarginLoader()
     updater.dao = updater.loader.dao
+    updater.rate_dao = updater.loader.rate_dao
     updater.conn = updater.loader.conn
     updater.ANNOUNCEMENT_DELAY_SECONDS = 0
     return updater
@@ -1072,6 +1074,8 @@ def test_shared_attachment_url_keeps_only_the_latest(
     urls = {"a": shared, "b": "https://taifex/attach/0101.csv", "c": shared}
 
     class Stub:
+        """附件網址照表回傳的爬蟲替身"""
+
         def resolve_announcement_csv(self, link: str):
             return urls[link]
 
@@ -1095,6 +1099,8 @@ def test_unique_attachment_urls_are_all_kept(
     ]
 
     class Stub:
+        """每則公告各有專屬附件網址的爬蟲替身"""
+
         def resolve_announcement_csv(self, link: str):
             return f"https://taifex/attach/{link}.csv"
 
@@ -1269,11 +1275,14 @@ class _RecordingCrawler:
             return None
         return f"https://taifex/attach/{link}.csv"
 
-    def crawl_announcement_csv(self, csv_url: str) -> Optional[str]:
+    def crawl_announcement_csv(self, csv_url: str) -> CrawlResult:
         """回傳附件原文；內容設為 None 時模擬下載失敗"""
 
         self.downloaded_urls.append(csv_url)
-        return self.contents[csv_url]
+        text: Optional[str] = self.contents[csv_url]
+        if text is None:
+            return CrawlResult.failed("下載失敗")
+        return CrawlResult.ok_text(text)
 
 
 def make_history_updater(
@@ -1320,7 +1329,7 @@ def test_second_backfill_skips_processed_announcements(
 
     assert len(crawler.downloaded_urls) == 3
     assert updater.dao.count_rows() == 2
-    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 2
+    assert updater.rate_dao.count_rows() == 2
 
     crawler.resolved_links.clear()
     crawler.downloaded_urls.clear()
@@ -1345,14 +1354,14 @@ def test_same_effective_date_does_not_mark_other_announcements_loaded(
     crawler.contents["https://taifex/attach/stock.csv"] = None
     updater.update_history()
 
-    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 0
+    assert updater.rate_dao.count_rows() == 0
 
     crawler.contents["https://taifex/attach/stock.csv"] = ANNOUNCEMENT_RATE_CSV
     crawler.downloaded_urls.clear()
     updater.update_history()
 
     assert crawler.downloaded_urls == ["https://taifex/attach/stock.csv"]
-    assert updater.dao.count_rows(FuturesMarginDAO.RATE_TABLE_NAME) == 2
+    assert updater.rate_dao.count_rows() == 2
 
 
 def test_record_is_ignored_when_the_database_lost_the_rows(

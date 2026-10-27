@@ -1,5 +1,5 @@
 import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -358,3 +358,90 @@ def test_lots_held_at_the_start_of_a_day(dao: LiveTradeDAO) -> None:
     ]
 
     assert held == ["closed-today", "held"]
+
+
+def test_adopting_a_broker_position_leaves_a_critical_event(dao: LiveTradeDAO) -> None:
+    """
+    收進 `__unattributed__` 要寫 CRITICAL 事件
+
+    收進去之後對帳就「一致」：沒有事件的話，一口策略的部位脫離歸屬看起來和
+    對帳通過一模一樣，而它只允許平倉、不再被策略管理。沒帶 `run_id` 的歸屬帳只留 log。
+    """
+
+    with_events: PositionAttributionLedger = PositionAttributionLedger(
+        dao, now_provider=lambda: NOW, run_id="run1"
+    )
+    with_events.adopt_broker_positions(
+        [
+            BrokerPositionSnapshot(
+                symbol="2330", direction=PositionType.LONG, volume=1, avg_price=1000.0
+            )
+        ]
+    )
+
+    rows: List[Any] = dao.conn.execute(
+        "SELECT severity, strategy_name, symbol FROM live_risk_event "
+        "WHERE category = 'POSITION_UNATTRIBUTED'"
+    ).fetchall()
+    assert rows == [("CRITICAL", UNATTRIBUTED_STRATEGY, "2330")]
+
+    silent: PositionAttributionLedger = PositionAttributionLedger(
+        dao, now_provider=lambda: NOW
+    )
+    silent.adopt_broker_positions(
+        [
+            BrokerPositionSnapshot(
+                symbol="2317", direction=PositionType.LONG, volume=1, avg_price=100.0
+            )
+        ]
+    )
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'POSITION_UNATTRIBUTED'"
+    ).fetchone() == (1,)
+
+
+def test_two_processes_opening_lots_in_the_same_second_both_land(
+    dao: LiveTradeDAO,
+) -> None:
+    """
+    股票線與期貨線是兩個行程，收盤成交都在同一秒：各自第一筆 lot 不可撞主鍵
+
+    以前 lot_id ＝ 秒級時戳＋行程內從 1 起算的序號，撞號後 `INSERT OR IGNORE`
+    把後寫者靜靜吞掉，下一段落那口部位就被收進 `__unattributed__`。
+    """
+
+    stock_line: PositionAttributionLedger = PositionAttributionLedger(
+        dao, now_provider=lambda: NOW, run_id="20260919132005"
+    )
+    futures_line: PositionAttributionLedger = PositionAttributionLedger(
+        dao, now_provider=lambda: NOW, run_id="20260919132805"
+    )
+
+    first: str = stock_line.open_lot("A", make_fill(), PositionType.LONG)
+    second: str = futures_line.open_lot("F", make_fill("TX202610"), PositionType.LONG)
+
+    assert first != second
+    assert {("A", "2330"), ("F", "TX202610")} <= {
+        (str(row["strategy_name"]), str(row["symbol"])) for row in dao.get_open_lots()
+    }
+    # 同一天內的 FIFO 仍由 lot_id 決定：同秒內先啟動的行程排前，行程內依序號
+    assert sorted([first, second]) == [first, second]
+
+
+def test_lot_write_that_is_ignored_raises(dao: LiveTradeDAO) -> None:
+    """同一個 lot_id 寫第二次要響：被吞掉等於那口部位沒進歸屬帳，而且沒有任何錯誤"""
+
+    row: Dict[str, Any] = {
+        "lot_id": "20260919132500-x-000001",
+        "strategy_name": "A",
+        "symbol": "2330",
+        "direction": "LONG",
+        "volume": 1,
+        "open_date": NOW.date(),
+        "open_price": 1000.0,
+        "client_order_id": None,
+    }
+    dao.open_lot(row)
+
+    with pytest.raises(RuntimeError, match="lot_id 已存在"):
+        dao.open_lot(row)

@@ -1,11 +1,16 @@
 import datetime
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import pytest
 import shioaji as sj
 
+from core.broker.base import (
+    BROKER_CLOCK_SKEW,
+    BROKER_RECONNECT_EXHAUSTED,
+    BROKER_SESSION_DOWN,
+)
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw import shioaji_session as session_module
 from core.broker.tw.shioaji_session import ShioajiSession
@@ -28,6 +33,8 @@ TAIPEI: ZoneInfo = ZoneInfo("Asia/Taipei")
 
 
 class FakeContract:
+    """只帶合約更新日期的合約替身"""
+
     def __init__(self, update_date: Any = "2026-09-19") -> None:
         self.update_date: Any = update_date
 
@@ -43,6 +50,8 @@ class FakeStockCategory:
 
 
 class FakeContracts:
+    """對應 shioaji 的 `api.Contracts`，只提供股票類別"""
+
     def __init__(self, contract: Optional[FakeContract]) -> None:
         self.Stocks: FakeStockCategory = FakeStockCategory(contract)
 
@@ -425,20 +434,22 @@ def test_report_clock_skew_triggers_degrade(
     這是登入時做不到的那一半：合約檔只有日期。
     """
 
-    reasons: List[str] = []
-    session: ShioajiSession = make_session(fixed_now, on_degrade=reasons.append)
+    events: List[Tuple[str, str]] = []
+    session: ShioajiSession = make_session(
+        fixed_now, on_degrade=lambda kind, reason: events.append((kind, reason))
+    )
 
     within: float = session.check_report_clock_skew(
         datetime.datetime(2026, 9, 19, 13, 24, 58, tzinfo=TAIPEI)
     )
     assert within == pytest.approx(2.0)
-    assert reasons == []
+    assert events == []
 
     beyond: float = session.check_report_clock_skew(
         datetime.datetime(2026, 9, 19, 13, 24, 0, tzinfo=TAIPEI)
     )
     assert beyond == pytest.approx(60.0)
-    assert len(reasons) == 1
+    assert [kind for kind, _ in events] == [BROKER_CLOCK_SKEW]
 
 
 # === 斷線與重連 ===
@@ -452,10 +463,12 @@ def test_session_down_callback_marks_disconnected_and_degrades(
     而重連期間進來的回報正是最不能丟的。
     """
 
-    reasons: List[str] = []
+    events: List[Tuple[str, str]] = []
     api: FakeShioaji = FakeShioaji()
     session: ShioajiSession = make_session(
-        fixed_now, api=api, on_degrade=reasons.append
+        fixed_now,
+        api=api,
+        on_degrade=lambda kind, reason: events.append((kind, reason)),
     )
     session.connect()
 
@@ -463,7 +476,7 @@ def test_session_down_callback_marks_disconnected_and_degrades(
     api.session_down_callback()
 
     assert session.is_connected() is False
-    assert len(reasons) == 1
+    assert [kind for kind, _ in events] == [BROKER_SESSION_DOWN]
 
 
 def test_reconnect_backoff_is_exponential_and_capped(
@@ -492,14 +505,19 @@ def test_reconnect_stops_at_the_daily_cap_and_degrades(
     而需要重連 20 次的那一天本來就不該繼續交易。
     """
 
-    reasons: List[str] = []
-    session: ShioajiSession = make_session(fixed_now, on_degrade=reasons.append)
+    events: List[Tuple[str, str]] = []
+    session: ShioajiSession = make_session(
+        fixed_now, on_degrade=lambda kind, reason: events.append((kind, reason))
+    )
 
     for _ in range(ShioajiSession.MAX_DAILY_RECONNECTS):
         session.reconnect()
 
     assert session.reconnect() is False
-    assert any("單日上限" in reason for reason in reasons)
+    assert any(
+        kind == BROKER_RECONNECT_EXHAUSTED and "單日上限" in reason
+        for kind, reason in events
+    )
 
 
 def test_reset_daily_counters(fixed_now: Callable[[], datetime.datetime]) -> None:
@@ -671,6 +689,8 @@ def test_logout_failure_does_not_leak_the_session_token(
     )
 
     class LeakyLogout(FakeShioaji):
+        """登出逾時、錯誤訊息夾帶 session token 的 shioaji 替身"""
+
         def logout(self) -> None:
             raise TimeoutError(
                 "Topic: api/v1/auth/logout, Corr: c11, "

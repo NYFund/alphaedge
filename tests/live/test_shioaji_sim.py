@@ -94,6 +94,8 @@ def wait_for(
 
 
 def today() -> datetime.date:
+    """實盤時區的今天"""
+
     return now_live().date()
 
 
@@ -254,6 +256,8 @@ def near_month_expiry(broker: ShioajiBroker) -> str:
 
 
 def make_ticket(order: Any, custom_field: str) -> OrderTicket:
+    """依委託單與自訂欄位組出委託憑單"""
+
     return OrderTicket(
         client_order_id=f"sim-{custom_field}",
         custom_field=custom_field,

@@ -40,16 +40,22 @@ NOW: datetime.datetime = datetime.datetime(2026, 9, 19, 13, 25)
 
 @pytest.fixture
 def ledger(dao: LiveTradeDAO) -> PositionAttributionLedger:
+    """部位歸屬帳本，時間固定在 `NOW`"""
+
     return PositionAttributionLedger(dao, now_provider=lambda: NOW)
 
 
 def make_manager(capital: float = 10_000_000.0) -> StockPositionManager:
+    """建立指定資金的台股部位管理器"""
+
     account: StockAccount = StockAccount(init_capital=capital)
     return StockPositionManager(account)
 
 
 @pytest.fixture
 def managers() -> Dict[str, StockPositionManager]:
+    """兩支策略（A、B）各自的部位管理器"""
+
     return {"A": make_manager(), "B": make_manager()}
 
 
@@ -59,6 +65,8 @@ def sync(
     ledger: PositionAttributionLedger,
     dao: LiveTradeDAO,
 ) -> AccountSynchronizer:
+    """接上兩支策略部位管理器的帳戶同步器"""
+
     return AccountSynchronizer(managers, ledger, dao, now_provider=lambda: NOW)
 
 
@@ -69,6 +77,8 @@ def make_fill(
     price: float = 1000.0,
     seqno: str = "000001",
 ) -> ExecutionReport:
+    """組一筆成交回報，預設為 2330 買進 2 張"""
+
     return ExecutionReport(
         broker_seqno=seqno,
         broker_trade_id=f"T{seqno}",
@@ -244,6 +254,8 @@ def test_rebuild_and_apply_fill_are_separate_functions() -> None:
 # === 對帳 ===
 @pytest.fixture
 def degradations() -> List[str]:
+    """收集對帳觸發的降級原因"""
+
     return []
 
 
@@ -254,6 +266,8 @@ def reconciler(
     dao: LiveTradeDAO,
     degradations: List[str],
 ) -> Reconciler:
+    """降級時把原因記進 `degradations` 的對帳器"""
+
     return Reconciler(
         ledger,
         managers,
@@ -610,3 +624,50 @@ def test_strategy_snapshot_carries_the_avg_price(
 
     assert row is not None, "策略層快照沒有寫進去"
     assert row[0] == pytest.approx(175.0)
+
+
+# === 成交入帳不可被送單前的檢查擋下 ===
+def test_fill_rejected_by_the_balance_check_is_still_booked(
+    ledger: PositionAttributionLedger, dao: LiveTradeDAO
+) -> None:
+    """
+    餘額不足時部位仍要進帳，並寫 CRITICAL
+
+    券商已經成交；集合競價成交價高於決策價、或 sizer 已把額度切滿時 `open_position()`
+    回 None，策略帳戶沒有這口部位、歸屬帳卻照開 lot，段落內的停損鉤子看不到它。
+    """
+
+    poor: StockPositionManager = make_manager(capital=1_000.0)
+    sync: AccountSynchronizer = AccountSynchronizer(
+        {"A": poor}, ledger, dao, now_provider=lambda: NOW, run_id="run1"
+    )
+    register_order(dao, "000001", "A")
+
+    assert sync.apply_fill(make_fill()) == "A"
+
+    assert poor.account.get_position_count() == 1
+    assert poor.account.balance == 0.0
+    assert ledger.get_strategy_positions("A") == {("2330", "LONG"): 2}
+    assert dao.conn.execute(
+        "SELECT severity FROM live_risk_event WHERE category = 'FILL_ACCOUNT_REJECTED'"
+    ).fetchall() == [("CRITICAL",)]
+
+
+def test_rebuild_bypasses_the_short_exposure_cap(
+    sync: AccountSynchronizer,
+    managers: Dict[str, StockPositionManager],
+    ledger: PositionAttributionLedger,
+) -> None:
+    """重建時空單不可被曝險上限整筆拒絕：策略設了 `max_short_exposure_ratio` 時空單會靜默消失"""
+
+    managers["A"].cost_model.config.short_constraint.max_short_exposure_ratio = 0.0001
+    ledger.open_lot("A", make_fill(action=Action.SELL, volume=2), PositionType.SHORT)
+
+    sync.rebuild_from_broker(
+        [BrokerPositionSnapshot(symbol="2330", direction=PositionType.SHORT, volume=2)]
+    )
+
+    assert managers["A"].account.get_position_count() == 1
+    assert managers[
+        "A"
+    ].cost_model.config.short_constraint.max_short_exposure_ratio == (0.0001)

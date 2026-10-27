@@ -1,5 +1,5 @@
 ---
-description: 在 AlphaEdge 開發／撰寫／新增交易策略時使用。當使用者提到「開發策略」、「寫一個策略」、「新增策略」、「策略邏輯」、「策略回測」，或要在 core/strategies/{stock,futures}/ 底下新增/修改繼承 BaseStockStrategy 或 BaseFuturesStrategy 的策略類別時套用此規則。
+description: 在 AlphaEdge 開發／撰寫／新增交易策略時使用。當使用者提到「開發策略」、「寫一個策略」、「新增策略」、「策略邏輯」、「策略回測」，或要在 strategies/{stock,futures}/ 底下新增/修改繼承 BaseStockStrategy 或 BaseFuturesStrategy 的策略類別時套用此規則。
 alwaysApply: false
 ---
 
@@ -7,7 +7,7 @@ alwaysApply: false
 
 [`.claude/skills/develop-strategy/SKILL.md`](../../.claude/skills/develop-strategy/SKILL.md)
 是本專案策略開發流程的**唯一權威來源**，它定義了完整執行步驟，並指向
-`core/strategies/README.md`（SDD 流程、`BaseStockStrategy` 六個必實作方法、
+`strategies/README.md`（SDD 流程、`BaseStockStrategy` 六個必實作方法、
 策略參數表、資料 API 用法、自動載入規則與回測執行方式）。
 
 本檔只是指標，**不重複任何規則內容**——策略開發的邊界條件會隨引擎重構調整，
@@ -16,7 +16,7 @@ alwaysApply: false
 ## 執行步驟
 
 1. 一律先完整讀取 [`.claude/skills/develop-strategy/SKILL.md`](../../.claude/skills/develop-strategy/SKILL.md)，
-   再依其指示讀取 `core/strategies/README.md`，然後才開始撰寫或修改策略程式碼。
+   再依其指示讀取 `strategies/README.md`，然後才開始撰寫或修改策略程式碼。
 2. 不要向使用者要求先手動貼上文件內容——讀取是套用此規則後的第一步，自動完成。
 
 > 規則需要修改時，改 `.claude/skills/develop-strategy/SKILL.md`，不要改本檔。

@@ -29,7 +29,7 @@ OUTPUT_PATTERN: re.Pattern = re.compile(
 # 會列出報表檔名的文件。**不含 `docs/`**：那裡描述的是模組關係而不是產出清單
 DOCS: List[str] = [
     "core/backtest/README.md",
-    "core/strategies/README.md",
+    "strategies/README.md",
 ]
 
 
@@ -84,7 +84,7 @@ def test_documented_filenames_all_exist_in_code() -> None:
 
 def test_strategies_readme_lists_every_output() -> None:
     """
-    `core/strategies/README.md` 要列出**全部**產出
+    `strategies/README.md` 要列出**全部**產出
 
     它是策略作者的入口，漏列等於那份產出不存在。
     `core/backtest/README.md` 不納入本條——它以表格分 CSV 與圖表兩節，
@@ -92,9 +92,9 @@ def test_strategies_readme_lists_every_output() -> None:
     """
 
     outputs: Set[str] = actual_outputs()
-    text: str = (PROJECT_ROOT / "core/strategies/README.md").read_text(encoding="utf-8")
+    text: str = (PROJECT_ROOT / "strategies/README.md").read_text(encoding="utf-8")
     documented: Set[str] = set(re.findall(r"`<策略>_([a-z_]+\.(?:png|csv))`", text))
 
     missing: List[str] = sorted(outputs - documented)
 
-    assert not missing, f"`core/strategies/README.md` 漏列了這些產出：{missing}"
+    assert not missing, f"`strategies/README.md` 漏列了這些產出：{missing}"

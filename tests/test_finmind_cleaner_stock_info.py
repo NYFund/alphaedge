@@ -16,6 +16,8 @@ FinMind 每個身分各給一列，興櫃轉上市櫃的公司同時有過期的
 
 @pytest.fixture
 def cleaner(tmp_path: Path) -> FinMindCleaner:
+    """略過 `__init__`、把下載目錄指向暫存目錄的清洗器"""
+
     instance: FinMindCleaner = FinMindCleaner.__new__(FinMindCleaner)
     instance.finmind_dir = tmp_path
     return instance

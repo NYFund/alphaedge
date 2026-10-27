@@ -1,10 +1,11 @@
 # ETL 入庫約定
 
-> 本文件描述 `core/pipeline/` **入庫階段**的現行約定：分批時機、冪等性、失敗語意與結束碼。
+> 本文件描述 `core/pipeline/` **入庫階段**的現行約定：分批時機、resume、冪等性、失敗語意、
+> 中斷與節流，以及結束碼。
 >
 > **各項設計的理由寫在程式碼的 docstring**（`core.dao.base.insert_or_ignore()` / `BaseDAO.savepoint()`、
-> `BaseDataLoader.finish_load()` / `select_csv_files()` / `check_symbol_name_uniqueness()`、`DataLoadError`、`tasks.update_db.target_guard()`、
-> `core/pipeline/shared/date_planner.py`）。本文件只放**跨檔案的全貌**與新增 updater 時的檢查表。
+> `BaseDataLoader.finish_load()` / `select_csv_files()` / `check_symbol_name_uniqueness()`、`DataLoadError`、`apps.update_db.target_guard()`、
+> `core/pipeline/shared/date_planner.py`、`core/pipeline/shared/base_updater.py`）。本文件只放**跨檔案的全貌**與新增 updater 時的檢查表。
 >
 > 連線、交易與 SQL 一律在 `core/dao/`，loader／updater 不寫 SQL；連線所有權與 commit 時點的全貌見
 > [資料存取層（DAO）](../dev/data-access-layer.md)。
@@ -13,15 +14,25 @@
 
 ## 一、四層流程與入庫時機
 
-pipeline 為 crawler → cleaner → loader → updater 四層：crawler 回傳 DataFrame、
-cleaner 落地成 `data/downloads/tw_stock/<source>/{market}_{YYYYMMDD}.csv`（期貨為 `data/downloads/tw_futures/<source>/`）、loader 把 CSV 寫進資料庫、
-updater 負責串起流程與決定要處理哪些日期。
+pipeline 為 crawler → cleaner → loader → updater 四層：crawler 回傳 `CrawlResult`、
+cleaner 落地成 `data/downloads/tw_stock/<source>/{market}_{YYYYMMDD}.csv`（期貨為 `data/downloads/tw_futures/<source>/`）、
+loader 把 CSV 寫進資料庫、updater 負責串起流程與決定要處理哪些日期。
+
+入口是 `apps/update_db.py`：每個 target 在 `TARGETS` 註冊表各佔一列（`TargetSpec`：
+怎麼建 updater、取哪一組回補區間、怎麼呼叫、是否只在點名時跑、是否需要 tick 環境），
+**註冊表的順序就是執行順序**，與 `--target` 的點名順序無關（`price` 一定先於以它為日曆的 `chip`／`margin`／`tick`）。
 
 **入庫時機是這一層最關鍵的設計選擇。** 「整段日期全部爬完才一次 `add_to_db()`」
 會讓中斷成本等於全部重來——已爬了幾千個 CSV，程序一中斷，資料庫仍是 0 列。
 
-高風險的逐日來源（price／chip／margin 與兩份交易所名單）因此**每 100 天入庫一次**
-（`DailyTwoMarketUpdater.LOAD_BATCH_SIZE`），中斷最多只損失最後一批。
+兩個共用骨架都在 `core/pipeline/shared/base_updater.py`：
+
+| 骨架 | 子類 | 流程 |
+|------|------|------|
+| `DailyTwoMarketUpdater` | price／chip／margin／`short_sale_list`／`day_trade_list` | 規劃日期 → 逐日爬上市＋上櫃 → 清洗 → 記進度 → **每 100 天入庫一次**（`LOAD_BATCH_SIZE`）→ 節流 |
+| `YearlyRangeTwoMarketUpdater` | dividend／corporate_action | 逐年區間查詢上市＋上櫃 → 清洗（版面改制逐年隔離）→ 全部跑完一次入庫 |
+
+逐日來源分批入庫，中斷最多只損失最後一批。
 
 ---
 
@@ -31,39 +42,37 @@ updater 負責串起流程與決定要處理哪些日期。
 
 | Updater | 入庫時機 | Resume 依據 | 重載防護 | 失敗可見度 |
 |---------|----------|-------------|----------|-----------|
-| `StockPriceUpdater` | **每 100 天** | **差集**（見下方說明） | `INSERT OR IGNORE` | `DataLoadError` |
-| `StockChipUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
-| `StockMarginUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
+| `StockPriceUpdater` | **每 100 天** | **差集**（平日 ＋ chip／margin 已有的補行交易日，見 §3.3） | `INSERT OR IGNORE` | `DataLoadError` |
+| `StockChipUpdater`、`StockMarginUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表） | `INSERT OR IGNORE` | `DataLoadError` |
 | `StockShortSaleListUpdater`、`StockDayTradeListUpdater` | **每 100 天** | **差集**（日曆取自 `price` 表；起日不早於名單起點 2013-09-23／2014-01-06） | `INSERT OR IGNORE` | `DataLoadError`；回應日期與查詢日不符一律記為失敗；日期相符的 0 列判為查無資料（休市日）；平盤下名單在 `SHORT_SALE_LIST_CORRUPTED_DAYS` 列出的來源損毀市場日改以前後交易日推估（`StockShortSaleListUpdater.merge_strictest()`） |
-| `StockDividendUpdater` | 全部跑完 | **每次都掃整個區間**（一年一次請求） | `INSERT OR REPLACE` | `DataLoadError` |
-| `CorporateActionUpdater` | 全部跑完 | **每次都掃整個區間**（事件是事後公告） | `INSERT OR REPLACE` | `DataLoadError` |
-| `MonthlyRevenueReportUpdater` | 全部跑完 | 年 × 月的差集 | `INSERT OR IGNORE` | `DataLoadError` |
-| `FinancialStatementUpdater`（前三張報表） | 每種報表一次 | 年 × 季的差集 | `INSERT OR IGNORE` | `DataLoadError` |
+| `StockDividendUpdater`、`CorporateActionUpdater` | 全部跑完 | **每次都掃整個區間**（一年一次請求；公司行動是事後公告） | `INSERT OR REPLACE` | `DataLoadError`；版面改制拋 `CleanFailureError`（其餘年份照常入庫後才拋） |
+| `MonthlyRevenueReportUpdater` | 全部跑完 | 年 × 月的差集（申報期未關閉的月份不算收齊） | `INSERT OR IGNORE` | `DataLoadError` |
+| `FinancialStatementUpdater`（前三張報表） | 每種報表一次 | 年 × 季的差集（申報期未關閉的年季不算收齊） | `INSERT OR IGNORE` | `DataLoadError`（四張表都跑完才拋） |
 | `FinancialStatementUpdater`（equity_change） | **每 100 檔** ＋ 收到中止訊號時 | **差集**（表內已有 ＋ `SeasonProgressStore`） | `INSERT OR IGNORE` | `DataLoadError`（整段跑完才拋） |
-| `FinMindUpdater`（broker_trading） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
+| `FinMindUpdater`（broker_trading，實作在 `BrokerTradingUpdater`） | 逐組合、每 50 組 commit | metadata ＋ DB | `INSERT OR IGNORE` | `DataLoadError` |
 | `FinMindUpdater`（台股總覽、含權證、證券商資訊） | 每張表一次 | 無（現況快照，每次整份重抓） | `INSERT OR REPLACE`（同鍵以最新快照覆蓋；快照裡已沒有的舊列保留） | `DataLoadError` |
-| `StockTickUpdater` | 全部跑完 | 固定起日 ＋ `tick_metadata.json` | **無**（`keepDuplicates=ALL`） | `DataLoadError` |
-| `FuturesPriceUpdater` | **每 100 天** | 逐**商品**查該商品在表內的最新 `date` +1，**加上**表內最早與最新之間、現貨有開市卻沒有行情的日子（日曆取自 `tw_stock.db` 的 `price` 表，2013 年前偵測不到） | `INSERT OR IGNORE` | `DataLoadError` |
+| `StockTickUpdater` | 每個「股票 × 交易日」一個交易 | 逐檔查 `stock_tick_load_log` 的最後交易日，不晚於它就跳過 | **整天刪除後重寫**（沒有唯一鍵，見〈台股 tick〉） | `DataLoadError` |
+| `FuturesPriceUpdater` | **每 100 天** | 逐**商品**的**差集**：平日 ＋ 補行交易日（取自 `tw_stock.db` 的 `price` 表）− 該商品已有 − 已確認無資料 ＋ 上次沒跑完；進度檔逐商品一份。續跑不回頭看該商品第一筆之前，往前擴張用 `resume=False` | `INSERT OR IGNORE` | `ProductUpdateError`（逐商品隔離，全部跑完才拋） |
+| `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品差集（同上）；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | 同上 |
 | `FuturesStockUniverseUpdater` | 一次（單次請求） | 當日快照是否已入庫 | `INSERT OR IGNORE` | `DataLoadError` |
-| `FuturesPriceUpdater.update_stock_futures()`（股期） | **每 100 天** | 逐商品最新 `date` +1；商品清單取自標的池前 N 檔 | `INSERT OR IGNORE` | `DataLoadError` |
-| `FuturesMarginUpdater` | 一次（單次請求） | 主鍵 `(effective_date, product)` 相同即略過 | `INSERT OR IGNORE` | `DataLoadError` |
-| `FuturesContinuousUpdater` | 每組（商品, 換月規則）寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
-| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自最新 `date` +1，**加上**表內最早與最新之間、期貨有交易卻沒有籌碼的月份（交易日取自 `futures_price_daily`） | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
-| `FuturesTickUpdater` | 全部跑完 | 以日線行情表決定契約、預設只爬近月 | **無**（DolphinDB `keepDuplicates=ALL`，寫入路徑尚未實測） | `DataLoadError` |
+| `FuturesMarginUpdater` | 指數類、股票類一覽表各一次請求（逐來源隔離）；歷史公告另走 `update_history()` | 主鍵 `(effective_date, product)` 相同即略過；公告以連結記錄是否處理過 | `INSERT OR IGNORE` | `DataLoadError` |
+| `FuturesContinuousUpdater` | 每組（商品, 換月規則）包一個 savepoint、寫完 commit | 無 resume（逆向調整量會隨後續換月改變，一律重建） | **先刪該序列**再 `INSERT OR REPLACE` | `DataLoadError`（有行情卻排不出換月表時） |
+| `FuturesChipUpdater` | 每個月批次寫完 commit | 三張表各自的**差集**：交易日曆（`futures_price_daily`）− 該表已有 − 已確認無資料 ＋ 上次沒跑完，落在哪些月份就請求那些月份；被擋的月份記成待重試 | `INSERT OR IGNORE` | `DataLoadError`（該有資料卻沒拿到時） |
 | `MarketHolidayUpdater` | 每年度寫完 | 逐年度重抓前一年、今年與明年（**先刪後寫**，站方更正公告時舊列才不會留著） | `INSERT OR IGNORE`（先刪該年度） | `DataLoadError`（全部年度跑完才拋） |
 
 **未分批的幾個並非疏漏**：dividend／mrr／fs 的量級是十餘年 × 數十個年月或年季，
-單次執行以分鐘計，中斷重跑的成本可接受。tick 走 DolphinDB，語意與 SQLite 組不同。
+單次執行以分鐘計，中斷重跑的成本可接受。tick 寫 TimescaleDB，語意與 SQLite 組不同（見〈台股 tick〉）。
 
 ### Resume 為什麼是「差集」而不是 `MAX(date) + 1`
 
-台股逐日更新的 updater（price／chip／margin 與兩份交易所名單，皆繼承 `DailyTwoMarketUpdater`）的候選日期是：
+逐日來源（`DailyTwoMarketUpdater` 的子類、期貨行情與籌碼）由 `DatePlanner.plan()` 算候選日期：
 
     候選 ＝ 日曆 − 表內已有的日期 − 已確認沒有資料的日期 ＋ 上次沒跑完的日期
 
 `MAX(date) + 1` 的問題是**中間缺的日子永遠不會再被嘗試**：某天因為連線失敗
 沒抓到，隔天照樣從新的 `MAX(date)+1` 起跑，那個洞就留在資料庫裡；
-而回測遇到缺日會當成休市靜默跳過。
+而回測遇到缺日會當成休市靜默跳過。年季、年月來源（財報、月營收）用同一套差集，
+實作在 `PeriodPlanner.plan_pending_periods()`。
 
 最後一項尤其關鍵：這幾支 updater 每天都打**上市與上櫃兩次**請求。
 任一邊沒有完整取得時整天不入庫（§3.5），但表內仍可能已有該日的部分資料
@@ -81,13 +90,13 @@ updater 負責串起流程與決定要處理哪些日期。
 （證交所是空白報表、櫃買中心融資融券沒有表格），所以 HTML 解析不出表格時，`parse_html_table()`
 會改問同一端點的 JSON 版：證交所明說查無資料、或櫃買中心回查詢日的 0 列，才判 `NO_DATA`；
 JSON 也有資料就仍是 `FAILED`（HTML 版面改了）。櫃買中心收盤行情與三大法人的休市頁是只有「共0筆」的空表，
-由 `is_placeholder_table()` 判為空表。判準與實查紀錄見 `BaseDataCrawler.confirm_no_data_by_json()`。
+由 `is_placeholder_table()` 判為空表。判準見 `BaseDataCrawler.confirm_no_data_by_json()`。
 確認不了的路徑（確認請求失敗、回應無法解析、JSON 有資料）都會記 warning，該日維持失敗、下次重試。
 
 **櫃買中心的頁面要核對資料日期。** 櫃買中心收到不合格式的日期時不報錯，而是靜靜回近幾日的資料，表格照樣解析得出來；
 以 `INSERT OR IGNORE` 入庫之後，重跑也蓋不掉。所以上櫃收盤行情、三大法人、融資融券三支爬蟲都帶 `page_date`，
-由 `check_page_date()` 比對頁面標示的日期（收盤行情與融資融券是「資料日期:115/09/24」、三大法人是「115年09月24日」，
-2013～2026 各年代實查皆有）：**不符或找不到都記為失敗**——找不到代表版面改了，與「解析不出表格」同一原則。
+由 `check_page_date()` 比對頁面標示的日期（收盤行情與融資融券是「資料日期:115/09/24」、三大法人是「115年09月24日」）：
+**不符或找不到都記為失敗**——找不到代表版面改了，與「解析不出表格」同一原則。
 JSON 端點（兩份交易所名單）則直接核對回應的 `date` 欄位。
 
 ### `equity_change` 是 fs 裡的例外
@@ -95,31 +104,30 @@ JSON 端點（兩份交易所名單）則直接核對回應的 `date` 欄位。
 MOPS 的權益變動表端點（`ajax_t164sb06`）是**逐檔查詢**，一個年季就要打兩千多次請求，
 整段回補以十萬次計——量級跟 price／chip／margin 同一等級，所以入庫時機與 resume 依據
 都得比照它們，而不是比照同一支 updater 裡的另外三張報表。
-Resume 尤其不能用「表最大年季 +1」：一個年季爬到一半中斷時，該年季已經有資料，
+Resume 不能用「表最大年季 +1」：一個年季爬到一半中斷時，該年季已經有資料，
 會被判定為已完成而整季跳過，沒爬到的公司永遠補不回來。
 
-**它也是唯一「中斷是常態」的來源**，故另外有三件逐日來源不需要的機制，
-實作見 `core/pipeline/shared/graceful_stop.py` 與 `season_planner.py` 的模組說明：
+除了各 updater 共用的中止機制（〈中斷、節流與重試〉），它另有兩件只有逐檔來源需要的機制，
+實作見 `core/pipeline/shared/season_planner.py` 與 `EquityChangeMixin`：
 
 | 機制 | 沒有它會發生什麼 |
 |------|------------------|
-| `GracefulStop`：訊號只立旗標，本檔跑完才收工 | `KeyboardInterrupt` 從當下那行炸出去，記憶體裡等湊滿一批的最多 100 檔全部作廢 |
 | `SeasonProgressStore`：「年季 × 個股」的 `no_data`／`incomplete` | 查無資料的公司在表裡不留列，與「還沒爬」無法區分，每次重跑重打 |
-| 磁碟 CSV 對帳 | 「CSV 已落地、尚未入庫」時被中止，那批的請求成本白付 |
+| 磁碟 CSV 對帳（`reconcile_season_csv_files()`） | 「CSV 已落地、尚未入庫」時被中止，那批的請求成本白付 |
 
 `no_data` 的寫入條件是**該年季的申報期已關閉**（各行業最晚期限 ＋ 30 天寬限），
 與逐日來源「當天（含未來）不寫入」同源：財報逐家公司申報，申報期間的「查無資料」
 多半只代表那家還沒送件，這時寫進永久名單，它送件之後再也不會被抓。
+資料形狀與節流見 [權益變動表](equity-change.md)。
 
 ### 券商分點（`broker_trading`）：不寫 CSV、不並行
 
-券商分點是 FinMind 四個資料集裡唯一逐 **(券商 × 股票)** 組合請求的，組合數以百萬計。
+券商分點是 FinMind 資料集裡唯一逐 **(券商 × 股票)** 組合請求的，組合數以百萬計。
 
-**批量更新清洗後直接入庫，不寫 `broker_trading/{broker_id}/{stock_id}.csv`**：
-resume 依據是 DB ＋ metadata，用不到 CSV；而寫 CSV 要把同組合的舊檔整份讀進來合併再寫回，
-每個組合都付一次檔案 I/O。**已知限制**：既有的 CSV 因此只涵蓋當初仍寫 CSV 時期的資料，
-不能拿來重建 DB，DB 才是券商分點的唯一來源。
-`FinMindCleaner.clean_broker_trading_daily_report()` 預設仍寫 CSV，單獨呼叫時行為不變。
+**批量更新清洗後直接入庫，不寫 CSV**：resume 依據是 DB ＋ metadata，用不到 CSV；
+而寫 CSV 要把同組合的舊檔整份讀進來合併再寫回，每個組合都付一次檔案 I/O。
+**已知限制**：既有的 CSV 只涵蓋當初仍寫 CSV 時期的資料，不能拿來重建 DB，DB 才是券商分點的唯一來源。
+`FinMindCleaner.clean_broker_trading_daily_report()` 預設仍寫 CSV（`write_csv=True`），單獨呼叫時行為不變。
 
 **刻意不做並行爬取與跨組合批次寫入**：瓶頸是 FinMind 每小時的 API quota，
 不是網路延遲——循序執行時就已經會把 quota 用完（`wait_for_quota_reset()` 被觸發），
@@ -132,15 +140,47 @@ quota 耗盡瞬間多個在途組合要重試。**真正能縮短回補時間的
 ### 期貨線
 
 **期貨的 updater 寫的是 `tw_futures.db` 不是 `tw_stock.db`**（主鍵語意不同，見
-`futures_price_loader` 的說明）。`FuturesPriceUpdater` 的 resume **以商品為單位而非
-全表最新日**：各商品上市日不同、且會陸續加進爬取範圍，用全表最新日會讓新加的商品
-被既有商品的進度擋住而整段歷史都補不到。`FuturesStockUniverseUpdater` 則沒有回補
-區間——來源是一張當下的完整清單，一次請求就結束，故「resume」退化成「今天抓過沒有」。
+`futures_price_loader` 的說明）。`FuturesPriceUpdater` 的 resume **以商品為單位算差集**
+（`DatePlanner` ＋ 逐商品的進度檔）：各商品上市日不同、且會陸續加進爬取範圍，用全表的
+日期會讓新加的商品被既有商品擋住而整段歷史都補不到；中間被擋掉的日子下次仍會被請求。
+`FuturesStockUniverseUpdater` 則沒有回補區間——來源是一張當下的完整清單，一次請求就結束，
+故「resume」退化成「今天抓過沒有」。期貨資料的全貌見 [台期貨平台](../futures/tw-futures-platform.md)。
 
-**`StockTickUpdater`、`FuturesTickUpdater` 是僅有的兩個沒有重載防護的**：DolphinDB 建表時
-`keepDuplicates=ALL` 是 tick 語意的刻意選擇（同一時間戳可以有多筆成交），
-代價是同一批 CSV 重複 load 會產生重複 tick，需由入庫流程自行把關。
-期貨 tick 另外只在 `--target futures_tick` 點名時才跑（`tasks.update_db.EXPLICIT_ONLY_DATA_TYPES`）。
+### 台股 tick（TimescaleDB）
+
+**存放**：TimescaleDB（PostgreSQL extension，跑在 `docker compose` 的 `postgres` service，連線字串為 `TICK_DATABASE_URL`）的
+`stock_tick` hypertable，SQL 與連線全在 `core/dao/tw/stock_tick_dao.py`／`core/dao/timescale.py`。
+psycopg、ConnectorX 與 Shioaji 屬 `[tick]` 選用相依；沒有這套環境的機器用預設的 `--target no_tick` 即可（`TargetSpec.needs_tick`）。
+
+| 設計 | 選擇 | 理由 |
+|------|------|------|
+| 表名 | `stock_tick` | 和日頻資料日後共用同一個 PostgreSQL，台股表一律補 `stock_` 前綴 |
+| 時間型別 | `TIMESTAMP`（無時區）、精度 microsecond | 資料本身是台北當地時間、沒有時區；用 `TIMESTAMPTZ` 的話 ConnectorX 讀出來是 UTC，比日期會差 8 小時 |
+| 價格型別 | `DOUBLE PRECISION` | float32 會把 `33.55` 讀成 `33.549999…`；`NUMERIC` 讀進 pandas 變 `Decimal`、不能向量化 |
+| `seq` 欄 | 同一股票、同一交易日內的原始列序 | `(stock_id, time)` 不唯一（同一瞬間撮合出多筆成交），要有 `seq` 排序才可重現；讀取時不回傳 |
+| 主鍵 | **不設** | 完全相同的重複列也是真實成交，沒有自然唯一鍵；冪等由「整天刪除後重寫＋`stock_tick_load_log`」保證 |
+| chunk | 7 天（`StockTickDAO.CHUNK_INTERVAL`），從 1970-01-01（週四）起算 | 1 天一個 chunk 會多出上千個、planning 成本偏高；單日查詢靠壓縮 batch 的時間範圍跳過無關資料 |
+| 壓縮 | `segmentby = stock_id`、`orderby = time, seq`；policy 壓 14 天前的 chunk（`COMPRESS_AFTER`） | 最近兩週保持未壓縮，重跑最近幾天時不用先解壓 |
+
+**寫入**（`StockTickLoader`）：CSV 正規化成固定欄位（歷史存檔的 `ts`、沒有 `stock_id`、欄序不一、`105.0`、毫秒時間都在這裡處理），
+依規則排除後，每個「股票 × 交易日」一個交易：刪掉當天舊資料 → `COPY` 寫入 → 在 `stock_tick_load_log` 登記
+`source_rows`（來源列數）與 `row_count`（寫入列數）。排除規則：
+
+- `close = 0` 的全零列、`volume < 0` 的列（來源端的壞列）。
+- **興櫃時期**：當天 `price` 表沒有這檔就整天排除（興櫃以「股」為單位、交易到 15:00 後，混進來成交量差上千倍）。
+- `price` 表**整天**沒資料時不是排除而是失敗：代表日 K 還沒更新，照興櫃排除並登記成已載入的話，那天就再也不會補。
+  這也是 `TARGETS` 把 `tick` 排在 `price` 之後的原因。
+
+**續跑**：`StockTickUpdater` 開工時先刪掉已完整入庫的 CSV（每個交易日都在 `load_log` 且來源列數一致），
+再逐檔只爬「晚於該檔已入庫最後一天」的日期。前提是寫入不留洞：
+某檔某天爬取失敗時只寫失敗日之前的日子，下次從失敗日接著爬（crawler 失敗一律拋 `ConnectionError`，不可回「沒資料」）。
+有任何股票爬取失敗時，入庫後拋 `DataLoadError`。
+
+**讀取**（`StockTickAPI`）：ConnectorX 以 Arrow 回傳再轉 pandas（直接回 pandas 的路徑用到 pandas 已棄用的內部 API），
+欄位、dtype 與排序固定，另附該檔當日累計量 `cum_volume`（與實盤 TICK 報價的 `volume` 同義）；
+`get_ordered_ticks()` 依 `time, stock_id, seq` 排序，同一時間跨股票的順序固定，回測才可重現。
+
+**歷史匯入**：`scripts/manual/manual_tick_history_import.py` 依 chunk 切檔、逐 chunk 載入並壓縮，跑完做完整性比對；預設只列計畫。
 
 ---
 
@@ -148,8 +188,9 @@ quota 耗盡瞬間多個在途組合要重試。**真正能縮短回補時間的
 
 ### 3.1 冪等：重跑不得產生重複列，也不得被誤判為失敗
 
-loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會再被送一次。
-三種結果要分清楚，否則「重跑」會被當成「出錯」：
+CSV 入庫後不刪（`remove_files=False`），loader 預設掃整個 `downloads/` 目錄，
+逐日來源分批時只挑本批日期（`select_csv_files(only_dates=...)`）——兩種情況下，
+已入庫的檔案都會再被送一次。三種結果要分清楚，否則「重跑」會被當成「出錯」：
 
 | 結果 | 判定 | 處置 |
 |------|------|------|
@@ -173,16 +214,17 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
   `commit()` 一起寫進去——否則資料表多出半份檔案，`finish_load()` 回報的卻是「這個檔案失敗」。
 - **updater 持有 DAO（或連線），loader 共用**：一次更新對同一個 DB 只開一條連線，`updater.close()` 負責關閉；
   loader 在共用模式下不關連線，updater 入庫後還要用它查最新日期。
-- **查詢錯誤不吞**：只有「表不存在」可以回空值，其餘錯誤往外拋——吞掉會讓 updater 從預設起日靜默重跑整段回補。
+- **查詢錯誤不吞**：只有「表不存在」可以回空值（且只限宣告 `BaseDAO.OPTIONAL_TABLE` 的表），其餘錯誤往外拋——
+  吞掉會讓 updater 從預設起日靜默重跑整段回補。
 
 ### 3.2 失敗必須浮出來
 
 單檔失敗**不中止整批**（其餘檔案仍該入庫），但整批跑完後若有任何失敗，
-`finish_load()` 會拋出 `DataLoadError`，最終讓 `tasks/update_db.py` 以**結束碼 1** 結束
+`finish_load()` 會拋出 `DataLoadError`，最終讓 `apps/update_db.py` 以**結束碼 1** 結束
 且不印 `✅`。`except` 之後只留 warning、行程照樣回報成功，比不 catch 更危險——
 缺的列只能靠事後逐日比對列數才發現。
 
-同時，單一 target 失敗**不中斷其餘 target**（`target_guard()`）——一次
+同時，單一 target 失敗**不中斷其餘 target**（`target_guard()` 收下任何例外）——一次
 `--target no_tick` 會跑十來個 updater、耗時數小時，若其中一個失敗就中止整批，
 等於拿可用性換可見度。
 
@@ -194,19 +236,24 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 | 來源 | 判準 | 不算失敗 |
 |------|------|----------|
 | 逐日（`DailyTwoMarketUpdater`：price／chip／margin／兩份交易所名單） | **最近一個應有資料的日子**取不到（含單一市場查無資料、清洗失敗） | 休市日（兩邊都查無資料）、**台北的今天**（可能還沒公布；上櫃未公布時會回別天的頁面而被判為取不到）、更早日子的偶發失敗 |
-| 以年、月為單位查詢（dividend／corporate_action／mrr） | 本批一個單位都沒拿到，且有取不到的 | 有拿到任何一個單位 |
+| 以年、年季、年月為單位查詢（dividend／corporate_action／財報前三張表／mrr） | 本批一個單位都沒拿到，且有取不到的 | 有拿到任何一個單位 |
 | 期貨行情（`FuturesPriceUpdater`，逐商品） | 最近一個應有資料的日子取不到；分類見〈期貨的時段層完整性〉 | 同逐日來源；表內中間的缺口只是順便回補，不當成最近一天（否則週末沒有新日期時，補不到的舊缺口會讓 target 天天失敗） |
 
-逐商品判斷，一個商品失敗不擋其餘商品，`update()` 收齊後以 `ProductUpdateError` 統一拋出。
-**已知限制**：財報、權益變動表各有自己的統計，不走這條判準。
+期貨行情逐商品判斷，一個商品失敗不擋其餘商品，`update()` 收齊後以 `ProductUpdateError` 統一拋出。
+**已知限制**：權益變動表的 `unreachable` 只在 log 尾端彙總、不讓 target 失敗（只有入庫失敗才拋），
+因為整段回補以數十小時計，偶發失敗下次重跑就會補上。
 
 **提高失敗可見度之前，要先讓「正常的重複」不算失敗**（§3.1）。兩者必須同時做，
 否則日常更新會因為每次重載已入庫檔案而天天以結束碼 1 收場。
 
+失敗的 target 可用 `--retry-failed ROUNDS` 自動重跑（只重跑失敗的那幾個，每輪前等 `--retry-wait` 分鐘，預設 60）；
+交易所封鎖來源 IP 通常要數十分鐘以上才解除。全部補上就提前結束，最後仍失敗才以結束碼 1 收尾。
+
 ### 3.3 交易日判定不可用「非週末」近似
 
 台股有**補行交易日**（補班的週六照常開市）。以 `date.weekday()` 判斷會整天漏掉這些日子。
-正確做法是以 `price` 表實際有資料的日期為準（見 `StockMarginUpdater.plan_dates()`）。
+正確做法是以 `price` 表實際有資料的日期為準（`DailyTwoMarketUpdater.plan_dates_by_price_calendar()`）。
+日曆尾端由 `DatePlanner.extend_calendar_tail()` 以平日補到迄日，`price` 還沒更新到今天時 chip／margin 也不會落後一天。
 
 `price` 自己就是日曆來源，候選母集合只能是平日，於是**被刪掉的補行交易日不會再被請求**。
 故 `StockPriceUpdater` 以 `chip` ∪ `margin` 在區間內的週末日期當 `plan()` 的 `extra_dates`
@@ -217,7 +264,7 @@ loader **每次都掃整個 `downloads/` 目錄**，已入庫的檔案必然會�
 
 `pd.read_csv()`／`read_html()` 只要看到某份檔案的代號**全是數字**就會整欄推斷成整數，
 `0050` 因此變成 `50`——**兩個代號都查得到，只是查不到同一檔**，不會有任何錯誤。
-crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`，price／chip／margin
+crawler 端用 `converters={0: str}`、loader 端用 `BaseDataLoader.READ_CSV_DTYPE`（`{"stock_id": str}`），price／chip／margin
 三條線都要有；`tests/test_stock_id_leading_zero.py` 釘住這件事。
 
 **被吃成「另一個合法代號」的那種，要靠名稱才驗得出來。** 常見盤點查詢是
@@ -250,13 +297,13 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 | 來源 | 欄位語言 | 現有例子 |
 |------|----------|----------|
 | 交易所網頁／檔案（TWSE、TPEX、TAIFEX、MOPS） | **保留來源的中文欄名** | `price` 的 `開盤價`、`chip` 的 `外資買進股數`、`futures_price_daily` 的 `結算價` |
-| API（FinMind、未來的美股 provider） | **用來源的英文欄名** | `taiwan_stock_info` 的 `stock_id`／`stock_name`、規劃中的 `us_price_daily` 的 `ticker`／`trade_date` |
+| API（FinMind、未來的美股 provider） | **用來源的英文欄名** | `taiwan_stock_info` 的 `stock_id`／`stock_name` |
 
 兩者皆**以英文命名主鍵欄**（`date`、`stock_id`、`product`、`session`），理由是主鍵會出現在每一句查詢裡。
 
 **為什麼不統一成英文**：多數表是中文欄，程式側的中文欄位字面值橫跨數十個檔。改成英文要同時動 schema、
-資料與所有下游，而 [PostgreSQL 遷移](../../backlog/PostgreSQL遷移計畫.md) 本來就會重寫這一層——
-真要收斂就在那個批次做，不值得為它單獨開一次遷移。
+資料與所有下游；日頻資料日後遷往 PostgreSQL 時本來就會重寫這一層，真要收斂就在那時做，
+不值得為它單獨開一次遷移。
 
 **為什麼不讓美股用中文**：`開盤價` 這種欄名對 AAPL 沒有來源依據（美股 provider 回的
 本來就是 `open`／`close`），硬翻是憑空造一套對照表；而且專案裡已經有全英文的表，
@@ -271,22 +318,22 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 | 範圍 | 判定為「沒有完整取得」 | 處置 | 實作 |
 |------|------------------------|------|------|
 | 日頻三表與兩份交易所名單（逐日） | 任一市場 `FAILED`、任一市場清洗失敗、**一邊 `NO_DATA` 一邊 `OK`** | 兩邊都不清洗／不入庫，記 `incomplete` 下次重試 | `BaseDataUpdater.record_market_day()`、`report_partial_day()` |
-| 財報三表（逐年季） | 任一市場請求失敗、拋例外或解析不出表格 | crawler 整季回 `None`；年季改差集，失敗的那季下次仍會被請求 | `FinancialStatementCrawler._crawl_listing_boards()`、`FinancialStatementUpdater.plan_pending_year_seasons()` |
+| 財報三表（逐年季） | 任一市場請求失敗、拋例外或解析不出表格 | crawler 整季回 `FAILED`；年季為差集，失敗的那季下次仍會被請求 | `FinancialStatementCrawler._crawl_listing_boards()`、`FinancialStatementUpdater.plan_pending_year_seasons()` |
 | 月營收（逐年月） | 任一市場請求失敗、**一邊 `NO_DATA` 一邊 `OK`** | 整個年月不入庫；年月為差集，失敗的那個月下次仍會被請求 | `MonthlyRevenueReportCrawler.crawl()`、`MonthlyRevenueReportUpdater.plan_pending_year_months()` |
 
 **一邊 `NO_DATA`、一邊 `OK` 也算沒有完整取得**：站方的「查無資料」涵蓋「尚未公布」，
 而兩個市場的公布時間不同，收盤後先公布的那一邊若照常入庫，當日就只有半個市場。
 代價是若真有「一個市場開市、另一個休市」的日子，它會每輪被重試；那只是多幾次請求。
-這條判定放在日頻三表的 updater 與月營收 crawler，**不改共用的 `UpdateStats.record()`**
+這條判定放在 `record_market_day()` 與月營收 crawler，**不改共用的 `UpdateStats.record()`**
 ——除權息、減資是**區間**查詢，一個市場在整段區間內查無資料是正常的；月營收則是
-逐「年月」查詢，與日頻三表同型（2026/04 補回時「只有 26 檔」即此成因）。
+逐「年月」查詢，與日頻三表同型。
 
 **不在這條規則內，另有一套判準**：申報期內的部分申報（財報、月營收在申報期間只
 拿得到已送件的公司）是「來源當下就只有這麼多」，不是市場失敗。判準是**申報期關沒關**：
 
 | 來源 | 申報期限 | 判準 |
 |------|----------|------|
-| 財報三表、權益變動表 | 各季取各行業最晚那一天（Q1 5/30、Q2 8/31、Q3 11/29、Q4 次年 3/31） | `FinancialStatementUpdater.is_season_settled()` |
+| 財報三表、權益變動表 | 各季取各行業最晚那一天（Q1 5/30、Q2 8/31、Q3 11/29、Q4 次年 3/31；`FILING_DEADLINES`） | `FinancialStatementUpdater.is_season_settled()` |
 | 月營收 | 次月 10 日 | `MonthlyRevenueReportUpdater.is_month_settled()` |
 
 兩者都再加 30 天寬限（逾期申報與申請延期都落在期限之後）。申報期尚未關閉的年季／
@@ -307,9 +354,9 @@ crawler 端用 `converters={0: str}`、loader 端用 `dtype={"stock_id": str}`�
 | 情況 | 處置 | 理由 |
 |------|------|------|
 | 有日盤、有夜盤 | 入庫 | 完整 |
-| 有日盤、無夜盤 | **照常入庫** | 夜盤整天沒有成交是常態（2017-05-15 之後 TF 有 1,977 天、TE 有 381 天只有日盤），要求齊全會讓這些商品永遠記不成完成、每次執行重問一次 |
-| 無日盤、有夜盤 | **整天不入庫**，下次重試；記為取不到 | 一定是異常：日盤尚未收盤，或站方正在擋。續跑起點是「表內該商品最新日 +1」，入庫會讓它越過這天，缺的日盤永遠不會再被請求 |
-| 兩段皆無 | 等待後重試一次；仍無時，**請求失敗**（HTTP 錯誤、被擋、解析器出錯）或**現貨當天有開市**記為取不到，其餘才是非交易日 | TAIFEX 擋流量時回 HTTP 200 加一頁 HTML，頁面本身與非交易日無法區分；以現貨交易日曆（`price` 表）分辨。2015 年起七個指數期貨商品在每個現貨交易日都有日盤，前提成立 |
+| 有日盤、無夜盤 | **照常入庫** | 夜盤整天沒有成交是常態，且各商品納入盤後交易的日期不同（`FUTURES_PRODUCT_NIGHT_SESSION_START_DATES`，例如 TF 到 2025-06-24 才有夜盤）；要求齊全會讓這些商品永遠記不成完成、每次執行重問一次 |
+| 無日盤、有夜盤 | **整天不入庫**，下次重試；記為取不到 | 一定是異常：日盤尚未收盤，或站方正在擋。入庫會讓差集把這天當成已有，缺的日盤永遠不會再被請求 |
+| 兩段皆無 | 等待後重試一次；仍無時，**請求失敗**（HTTP 錯誤、被擋、解析器出錯）或**現貨當天有開市**記為取不到，其餘才是非交易日 | TAIFEX 擋流量時回 HTTP 200 加一頁 HTML，頁面本身與非交易日無法區分；以現貨交易日曆（`price` 表）分辨。七個指數期貨商品在上市後的每個現貨交易日都有日盤，前提成立 |
 
 「記為取不到」的日子若是該商品最近一個應有資料的日子（台北的今天除外），商品記為失敗（見 §3.2）。
 crawler 回 `CrawlResult` 三態（`FuturesPriceCrawler.crawl_futures_price()`、`parse_quote_page()`），
@@ -319,27 +366,54 @@ crawler 回 `CrawlResult` 三態（`FuturesPriceCrawler.crawl_futures_price()`�
 實作見 `FuturesPriceUpdater.is_day_complete()`；`tests/test_futures_price_updater.py`
 固定前三種情況，另有一條 slow 測試掃全表確認沒有「只有夜盤」的交易日。
 
+### 3.6 中斷、節流與重試
+
+三個流程骨架各只有一份，updater 只決定判準與數字：
+
+| 骨架 | 位置 | 行為 | 使用者 |
+|------|------|------|--------|
+| `GracefulStop` | `core/pipeline/shared/graceful_stop.py` | 第一次 Ctrl+C／SIGTERM 只立旗標，迴圈收在安全點：手上這批先入庫、進度存檔、印完統計行才離開；第二次立刻中止 | 逐日骨架、逐年骨架、財報（含權益變動表）、月營收、期貨行情／保證金／籌碼；券商分點只在等 quota 重置時可中斷 |
+| `RateLimitPolicy` | `core/pipeline/shared/request_utils.py` | 每次請求後隨機短睡，每 N 次長睡一次；睡眠可被中止打斷 | 見下 |
+| `run_isolated()`／`retry_if_blocked()` | `core/pipeline/shared/step_runner.py` | 前者逐子項執行、收集例外與子項回報的失敗；後者「疑似被擋就等待後重取，等待隨次數線性遞增、可被中止」 | 前者：期貨行情逐商品、保證金逐來源、籌碼逐表、休市日逐年；後者：籌碼的月份、行情的日盤 |
+
+**節流數字**由 `BaseDataUpdater` 的 `BATCH_*` 類別常數經 `build_rate_limit_policy()` 建出，子類只覆寫常數：
+
+| Updater | 隨機延遲 | 長睡 |
+|---------|----------|------|
+| 預設（`BaseDataUpdater`，逐日骨架沿用） | 1~5 秒 | 每 100 次睡 120 秒 |
+| `FinancialStatementUpdater`（前三張）、`MonthlyRevenueReportUpdater` | 1~5 秒 | 每 10 次睡 30 秒 |
+| `FuturesPriceUpdater` | 3~6 秒 | 每 50 次睡 120 秒 |
+| `YearlyRangeTwoMarketUpdater`（dividend／corporate_action） | 3~8 秒 | 無（一年一次請求） |
+| 權益變動表（`EQUITY_CHANGE_*`） | 0.5~1.5 秒 | 每 50 檔睡 15 秒，以本季累計請求數取模 |
+
+這是爬公開資料時主動放慢速度，與 `core/broker/rate_limiter.py` 的券商下單配額無關。
+
+怎樣算被擋、等多久仍由各來源決定。target 層級的重跑見 §3.2 的 `--retry-failed`。
+
 ---
 
 ## 四、新增或修改 updater 的檢查表
 
 以下每一條都對應過真實發生、且**當下沒有任何錯誤訊息**的資料缺漏：
 
-1. **長時間回補必須分批入庫**，不要等整段爬完才寫資料庫。
+1. **長時間回補必須分批入庫**，不要等整段爬完才寫資料庫；逐日雙市場來源直接繼承 `DailyTwoMarketUpdater`、逐年區間來源繼承 `YearlyRangeTwoMarketUpdater`，不要再抄一份迴圈。
 2. **入庫失敗要拋 `DataLoadError`**，不可只記 warning；重複鍵要走 `INSERT OR IGNORE`，不可算成失敗（§3.1、§3.2）。
 3. **主鍵必須能唯一識別商品。** `price` 把上市與上櫃合併存放卻沒有市場欄位，兩邊曾有代號相撞（上櫃 ETF 早年用 4 碼代號）；主鍵含證券名稱的表會兩者並存、不含的表會直接撞鍵。`core/adapters/quote_validation.py` 的 `warn_duplicate_symbols()`（股票與期貨的報價轉接層都呼叫）讓同一 bar 內的重複代號不再靜默。
 4. **不要用「連續 N 筆都沒資料」判斷「整批都沒資料」。** 股票代號是排序過的，某個號段連續都是新上市股完全正常；早退條件一旦與順序耦合，連 resume 都會在同一個地方再次誤判。要判斷整批是否為空，就去找能代表整批的樣本（`EQUITY_CHANGE_PROBE_STOCK_IDS`：三檔長期上市的權值股全部查無資料才判定未申報）。
-5. **每批結束留一行統計，而且要數到最後一層。** 統計只數請求層（`N requested / N no data / N unreachable`）時，「兩千次請求全部成功、清洗後零列入庫」會長得跟正常一模一樣。現行格式是 `N requested / N ok / N no data / N unreachable / N cleaned empty`，`cleaned empty` 非 0 即升為 warning。
+5. **每批結束留一行統計，而且要數到最後一層。** 統計只數請求層（`N requested / N no data / N unreachable`）時，「兩千次請求全部成功、清洗後零列入庫」會長得跟正常一模一樣。權益變動表的格式是 `N requested / N ok / N no data / N unreachable / N cleaned empty`，`cleaned empty` 非 0 即升為 warning；共用的 `UpdateStats` 另把清洗失敗與單一市場查無資料列在同一行。
 6. **跨期間的來源要逐期間實查，測試 fixture 要涵蓋每一種期間。** MOPS 權益變動表的本期標籤 Q1 是「第N季」、Q2／Q3／Q4 分別是「上半年度／前3季／年度」；只用 Q1 驗證時，測試與實跑會同時漏掉另外三季。
 7. **把暫時性失敗記成 `FAILED`，不要記成「沒有資料」。** 連線失敗、被擋、版面解析不出來都要讓那一天或那一年下次重試；記成 `NO_DATA` 會讓它永遠不再被補。
 8. **多個來源拼成一份的資料，任一來源沒有完整取得就整份不入庫**（§3.5）。只入庫問到的那一邊不會有任何錯誤；同理，resume 不可用 `MAX + 1`，否則失敗的那一期被後面成功的期間越過之後永遠不會再被請求。
-9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 提供 `close()` 並在 `tasks/update_db.py` 以 `try/finally` 呼叫**（§3.1.1）。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
+9. **SQL 寫進 DAO，loader 逐檔包 savepoint，updater 的收尾一律叫 `close()`**（`BaseDataUpdater` 提供預設、日誌檔名以 `LOG_FILE_NAME` 宣告）。新 target 在 `apps/update_db.py` 的 `TARGETS` 註冊表加一列 `TargetSpec`，依資料相依決定位置，不需要 Shioaji／TimescaleDB 以外的特殊環境就不要設 `needs_tick`，帳號等級或量級不適合每日跑的設 `explicit_only`。新增資料表的完整檢查表見[資料存取層 §七](../dev/data-access-layer.md#七新增一張資料表的檢查表)。
+10. **crawler 的 `crawl_*` 一律回 `CrawlResult` 三態**（`core/pipeline/shared/base_crawler.py`），不回 `Optional[...]`：`None` 分不出「沒問到」與「沒有資料」，而前者要重試、後者不必。CSV 原文放 `text`、多張表放 `tables`。分不出來的來源（期交所籌碼回 HTTP 200 ＋ HTML）回 `NO_DATA`，由 updater 以交易日曆升級成 `FAILED`。整批「該有資料卻一個都沒拿到」要讓 target 失敗（`UpdateStats.failure_reason()`）。守門：`tests/test_crawl_result_contract.py` 掃 `core/pipeline/tw/crawlers/` 的回傳型別標註。
+11. **長迴圈要能中斷、要節流**：迴圈包在 `GracefulStop` 內、每次請求後呼叫 `RateLimitPolicy.tick(stop)`（§3.6），不要裸 `time.sleep()`——被訊號打斷會自動續睡，按 Ctrl+C 沒反應，逼人 `kill -9` 時手上未入庫的那批就會消失。
 
 ## 相關文件
 
 - [指令教學](../commands/command-usage.zh-TW.md)——`update_db` 的完整 target 對照與範例
 - [權益變動表](equity-change.md)——`equity_change` 的資料形狀、涵蓋範圍、已知限制與爬取節流
 - [非除權息的公司行動](corporate-action.md)——`corporate_action` 表的資料源與調整倍率
+- [台期貨平台](../futures/tw-futures-platform.md)——期貨資料表、來源格式與回測語意
 - [資料存取層（DAO）](../dev/data-access-layer.md)——連線所有權、savepoint、commit 時點與錯誤語意
 - [程式碼品質工具鏈](../dev/code-quality.md)——盲捕 `except Exception` 的收斂方向
 - [資料覆蓋範圍](../exchanges/data_coverage.md)——各資料來源的時間涵蓋與已知限制

@@ -1,7 +1,8 @@
+import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import requests
 from fake_useragent import UserAgent
@@ -12,6 +13,7 @@ from requests.exceptions import (
 )
 from requests.exceptions import ConnectionError as RequestsConnectionError
 
+from core.pipeline.shared.graceful_stop import GracefulStop
 from core.pipeline.utils.exceptions import IPBlockedError
 
 """
@@ -102,7 +104,7 @@ class FetchResult:
 
 
 class RequestUtils:
-    """Requests utils"""
+    """HTTP 請求工具：Session 建立、重試與結果分類"""
 
     # Session 建立與 HTTP 請求常數
     SESSION_INIT_MAX_ATTEMPTS: int = 10
@@ -279,3 +281,93 @@ class RequestUtils:
         """
 
         return cls.fetch(url, method="post", **kwargs).response_if_ok()
+
+
+@dataclass
+class RateLimitPolicy:
+    """
+    - Description:
+        ETL 請求之間的節流：每次請求後隨機短睡，每 N 次改成長睡一次
+
+        **與券商下單配額無關**：`core/broker/rate_limiter.py` 的 rate limiter 是券商
+        API 的硬性配額，超過會被拒絕；這裡是爬公開資料時主動放慢速度，避免被站方
+        限流或封 IP，只影響等待時間，不影響寫入的資料。
+
+        **計數的兩種語意不可混用**（`reset_after_long_sleep`）：
+        - True（預設）：達到門檻長睡一次後計數歸零。逐日、逐年月的回補用這種。
+        - False：計數不歸零，以「累計請求數取模」判斷。權益變動表數的是本季累計
+          送出幾個請求，由呼叫端傳入 `count`，中途跳過的股票也算在累計裡。
+
+        **一律可中斷**：傳入 `stop` 時睡眠走 `GracefulStop.sleep()`；裸
+        `time.sleep()` 被訊號打斷會自動續睡（PEP 475），長睡那一段按下 Ctrl+C
+        要等滿才有反應，等於逼人用 `kill -9`，手上未入庫的那批就會消失。
+    """
+
+    # 一般請求之間的隨機延遲（秒）；兩者相同時就是固定間隔
+    delay_min: float
+    delay_max: float
+    # 每幾次請求長睡一次；0 表示不長睡
+    long_sleep_every: int = 0
+    # 長睡秒數
+    long_sleep_seconds: float = 0.0
+    # 長睡後計數是否歸零（見 class docstring）
+    reset_after_long_sleep: bool = True
+    # 自上次歸零以來的請求數；`tick()` 未傳 `count` 時由本物件自己累計
+    count: int = field(default=0, init=False)
+
+    def plan_next(self, count: Optional[int] = None) -> Tuple[float, bool]:
+        """
+        - Description:
+            決定這一次要睡多久，並推進計數（不睡；`tick()` 與測試共用）
+        - Parameters:
+            - count: Optional[int]
+                呼叫端自行累計的請求數；None 時由本物件累計
+        - Return:
+            - Tuple[float, bool]
+                (秒數, 是否為長睡)
+        """
+
+        if count is None:
+            self.count += 1
+            count = self.count
+
+        if self.long_sleep_every > 0:
+            if self.reset_after_long_sleep:
+                is_long: bool = count >= self.long_sleep_every
+            else:
+                is_long = count > 0 and count % self.long_sleep_every == 0
+
+            if is_long:
+                if self.reset_after_long_sleep:
+                    self.count = 0
+                return float(self.long_sleep_seconds), True
+
+        return random.uniform(self.delay_min, self.delay_max), False
+
+    def tick(
+        self, stop: Optional[GracefulStop] = None, count: Optional[int] = None
+    ) -> bool:
+        """
+        - Description:
+            一次請求之後的節流：決定秒數並睡，長睡時留一行 log
+        - Parameters:
+            - stop: Optional[GracefulStop]
+                中止旗標；None 時退化成不可中斷的 `time.sleep()`
+            - count: Optional[int]
+                呼叫端自行累計的請求數（不歸零語意用）；None 時由本物件累計
+        - Return:
+            - bool
+                睡完為 True；中途被要求收工而提早返回為 False
+        """
+
+        seconds, is_long = self.plan_next(count)
+        if is_long:
+            # 訊息帶出實際秒數：長睡秒數由各 updater 設定，寫死字面會與行為對不上
+            logger.info(f"Sleep {self.long_sleep_seconds:g} seconds...")
+
+        if stop is not None:
+            return stop.sleep(seconds)
+
+        # 沒有旗標可問時只能照睡；這條路徑保留給沒有長迴圈、也就沒有中止點的呼叫端
+        time.sleep(seconds)
+        return True

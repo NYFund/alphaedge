@@ -13,10 +13,14 @@ from core.config import (
     FINANCIAL_STATEMENT_DOWNLOADS_PATH,
     TW_STOCK_DB_PATH,
 )
+from core.config.settings import now_live
 from core.dao.connection import DBConnection, connect_sqlite
 from core.dao.tw.financial_statement_dao import FinancialStatementDAO
-from core.pipeline.shared.base_updater import BaseDataUpdater
+from core.pipeline.shared.base_crawler import CrawlResult
+from core.pipeline.shared.base_updater import BaseDataUpdater, UpdateStats
 from core.pipeline.shared.graceful_stop import GracefulStop
+from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.shared.season_planner import PeriodPlanner
 from core.pipeline.tw.cleaners.financial_statement_cleaner import (
     FinancialStatementCleaner,
 )
@@ -28,29 +32,30 @@ from core.pipeline.tw.updaters.financial_statement import (
     EquityChangeMixin,
 )
 from core.pipeline.utils import FinancialStatementType
-from core.utils import TimeUtils
-from core.utils.log_manager import LogManager
+from core.pipeline.utils.exceptions import DataLoadError
 
 """
-* Crawl Balance Sheet (資產負債表)
-資料區間（但是只有 102 年以後才可以爬）
-上市: 民國 78 (1989) 年 ~ present
-上櫃: 民國 82 (1993) 年 ~ present
+四大報表在 MOPS 的資料區間：
 
-* Crawl Statement of Comprehensive Income (綜合損益表)
-資料區間（但是只有 102 年以後才可以爬）
-上市: 民國 77 (1988) 年 ~ present
-上櫃: 民國 82 (1993) 年 ~ present
+* 資產負債表（Balance Sheet）
+資料區間（但只有 102 年以後才爬得到）
+上市：民國 78（1989）年至今
+上櫃：民國 82（1993）年至今
 
-* Crawl Cash Flow Statement (現金流量表)
+* 綜合損益表（Statement of Comprehensive Income）
+資料區間（但只有 102 年以後才爬得到）
+上市：民國 77（1988）年至今
+上櫃：民國 82（1993）年至今
+
+* 現金流量表（Cash Flow Statement）
 資料區間
-上市: 民國 102 (2013) 年 ~ present
-上櫃: 民國 102 (2013) 年 ~ present
+上市：民國 102（2013）年至今
+上櫃：民國 102（2013）年至今
 
-* Crawl Statement of Changes in Equity (權益變動表)
+* 權益變動表（Statement of Changes in Equity）
 資料區間
-上市: 民國 102 (2013) 年 ~ present
-上櫃: 民國 102 (2013) 年 ~ present
+上市：民國 102（2013）年至今
+上櫃：民國 102（2013）年至今
 """
 
 """
@@ -97,10 +102,10 @@ class StatementSpec:
     """
 
     table_name: str  # 目標資料表
-    crawl: Callable[[int, int], Optional[List[pd.DataFrame]]]  # crawler 的爬取函式
+    crawl: Callable[[int, int], CrawlResult]  # crawler 的爬取函式
     clean: Callable[..., Optional[pd.DataFrame]]  # cleaner 的清洗函式
     dir_path: Path  # downloads 底下的落地目錄
-    label: str  # log 用的人話名稱，Title Case（Ex: "Balance Sheet"）
+    label: str  # log 用的人話名稱，Title Case（例如 `"Balance Sheet"`）
 
     @property
     def log_label(self) -> str:
@@ -116,7 +121,9 @@ class StatementSpec:
 
 
 class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
-    """Financial Statement Updater"""
+    """財報 updater：依年季更新四大報表"""
+
+    LOG_FILE_NAME: str = "update_financial_statement.log"
 
     BATCH_SLEEP_EVERY_N_FILES: int = 10
     BATCH_SLEEP_DURATION_SECONDS: int = 30
@@ -153,7 +160,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         self.cleaner: FinancialStatementCleaner = FinancialStatementCleaner()
         self.loader: FinancialStatementLoader = FinancialStatementLoader(conn=self.conn)
 
-        # Data directories for each report
+        # 各報表的落地目錄
         self.fs_dir: Path = FINANCIAL_STATEMENT_DOWNLOADS_PATH
         self.balance_sheet_dir: Path = (
             self.fs_dir / FinancialStatementType.BALANCE_SHEET.lower()
@@ -175,10 +182,10 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        # 設定 log 檔案儲存路徑
-        LogManager.setup_logger("update_financial_statement.log")
+        # 由基底依 `LOG_FILE_NAME` 開日誌檔
+        super().setup()
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一條連線，一併結束）"""
@@ -253,16 +260,32 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         start_season: int,
         end_season: int,
     ) -> None:
-        """Update the Database"""
+        """更新資料庫"""
+
+        # **拿不到最新資料要讓 target 失敗**：原本三張報表的迴圈只是 `continue`，
+        # 站方整批失聯時行程照樣以結束碼 0 收場，表停在舊資料上而失敗清單列它成功。
+        # 失敗先收起來，四張報表都跑完才拋：一張失敗不該讓其餘三張連跑都不跑
+        failures: List[str] = []
 
         # 三張「全市場一次查完」的報表走同一份流程，差異全在 spec 裡
         for spec in self.statement_specs():
-            self.update_statement(spec, start_year, end_year, start_season, end_season)
+            stats: UpdateStats = self.update_statement(
+                spec, start_year, end_year, start_season, end_season
+            )
+            reason: Optional[str] = stats.failure_reason(now_live().date())
+            if reason:
+                failures.append(f"{spec.table_name}: {reason}")
 
-        # Update Equity Changes
+        # 權益變動表
         # 逐檔查詢，量級與前三張報表差三個數量級（一個年季約兩千次請求），
         # 故放在最後：即使這裡耗時或中斷，前三張報表已經入庫完成
-        self.update_equity_changes(start_year, end_year, start_season, end_season)
+        try:
+            self.update_equity_changes(start_year, end_year, start_season, end_season)
+        except DataLoadError as error:
+            failures.extend(f"{error.source}: {item}" for item in error.failed_files)
+
+        if failures:
+            raise DataLoadError("fs", failures)
 
     def update_statement(
         self,
@@ -271,7 +294,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         end_year: int,
         start_season: int,
         end_season: int,
-    ) -> None:
+    ) -> UpdateStats:
         """
         - Description:
             更新單一張「全市場一次查完」的財報
@@ -286,11 +309,14 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
                 這張報表的資料表名、爬取／清洗函式、落地目錄與 log 標籤
             - start_year / end_year / start_season / end_season: int
                 回補的年季區間
+        - Return:
+            - UpdateStats
+                本批統計（單位是年季）；由 `update()` 判斷要不要讓 target 失敗
         """
 
         logger.info(f"* Start Updating {spec.label} Data...")
 
-        # Step 1: Crawl
+        # Step 1：爬取
         # 候選年季是差集而不是 `MAX + 1`（理由見 `plan_pending_year_seasons()`）
         year_seasons: List[Tuple[int, int]] = self.plan_pending_year_seasons(
             table_name=spec.table_name,
@@ -299,27 +325,43 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
             end_year=end_year,
             end_season=end_season,
         )
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
+        stats: UpdateStats = UpdateStats()
 
-        for year, season in year_seasons:
-            logger.info(f"* {year}Q{season}")
-            df_list: Optional[List[pd.DataFrame]] = spec.crawl(year, season)
+        # 中止收在年季與年季之間：已清洗的年季照常入庫，未爬的下次執行會接續
+        with GracefulStop(label=spec.table_name) as stop:
+            for year, season in year_seasons:
+                logger.info(f"* {year}Q{season}")
+                result: CrawlResult = spec.crawl(year, season)
+                stats.record(result)
 
-            # Step 2: Clean
-            if df_list is None or not df_list:
-                continue
+                # Step 2：清洗
+                # 沒問到的年季下次執行會再進候選（候選是差集），這裡只記統計
+                if not result.is_ok:
+                    continue
 
-            cleaned_df: pd.DataFrame = spec.clean(df_list, year, season)
+                cleaned_df: pd.DataFrame = spec.clean(result.tables, year, season)
 
-            if cleaned_df is None or cleaned_df.empty:
-                logger.warning(
-                    f"Cleaned {spec.lowercase_label} dataframe empty on {year}Q{season}"
-                )
-                continue
+                if cleaned_df is None or cleaned_df.empty:
+                    logger.warning(
+                        f"Cleaned {spec.lowercase_label} dataframe empty "
+                        f"on {year}Q{season}"
+                    )
+                    continue
 
-            file_cnt = self.throttle_per_file(file_cnt + 1)
+                if stop.requested:
+                    logger.warning(
+                        f"[{spec.table_name}] 收到中止要求，停在 {year}Q{season}；"
+                        f"已清洗的年季照常入庫，未爬的下次執行會接續"
+                    )
+                    break
 
-        # Step 3: Load
+                throttle.tick(stop)
+
+        # `requested` 的單位是「年季」而不是「天」：一個年季上市、上櫃各一次請求
+        stats.report(f"{spec.table_name}（單位：年季）")
+
+        # Step 3：入庫
         self.loader.add_to_db(
             dir_path=spec.dir_path,
             table_name=spec.table_name,
@@ -328,6 +370,7 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
 
         # 重新取得更新後的最新年度跟季度
         self.log_latest_year_season(spec.table_name, spec.log_label)
+        return stats
 
     @classmethod
     def is_season_settled(
@@ -404,21 +447,24 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         if self.get_crawled_stock_ids(year, season):
             return True
 
+        # 試探只打兩、三檔，用不到長睡；只保留請求之間的隨機延遲
+        probe_throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.EQUITY_CHANGE_RANDOM_DELAY_MIN,
+            delay_max=self.EQUITY_CHANGE_RANDOM_DELAY_MAX,
+        )
         for stock_id in self.EQUITY_CHANGE_PROBE_STOCK_IDS:
             if stop is not None and stop.requested:
                 # 收工途中不必再判定：回 False 只是略過本季，重跑會重新試探
                 return False
 
-            df_list: Optional[List[pd.DataFrame]] = self.crawl_equity_changes_one(
-                year, season, stock_id
-            )
+            result: CrawlResult = self.crawl_equity_changes_one(year, season, stock_id)
 
-            # None 是站方過載或非預期例外，不是「沒有資料」，
-            # 不能拿來證明整季未申報
-            if df_list is None or df_list:
+            # FAILED 是站方過載或非預期例外，不是「沒有資料」，
+            # 不能拿來證明整季未申報；只有明確的 NO_DATA 才往下試探下一檔
+            if not result.is_no_data:
                 return True
 
-            self.throttle_per_request(stop)
+            probe_throttle.tick(stop)
 
         return False
 
@@ -434,12 +480,10 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
         - Description:
             算出該報表這次要請求的年季：區間內所有年季 − 表內**已收齊**的年季
 
-            **不可用 `MAX(year, season) + 1` 起跑**：某一季失敗被跳過之後，只要下一季
-            成功入庫，`MAX` 就越過它，那一季從此不會再被請求——資產負債表 2021Q1
-            整季缺就是這樣來的。逐日來源的 `DatePlanner.plan()` 改用差集是同一個理由。
-
-            代價是來源本就沒有的年季（2013Q1）與尚未公布的年季每輪都會再問一次，
-            每張報表每季只是上市、上櫃各一次請求。
+            規劃與月營收共用 `PeriodPlanner.plan_pending_periods()`（差集、
+            申報期內不算收齊、缺口回報的理由都寫在那裡），這裡只提供年季的
+            申報期判準 `is_season_settled()`。每張報表每季只是上市、上櫃各一次請求，
+            來源本就沒有的年季（2013Q1）每輪重問的代價很小。
         - Parameters:
             - table_name: str
                 目標資料表
@@ -452,51 +496,14 @@ class FinancialStatementUpdater(EquityChangeMixin, BaseDataUpdater):
                 由早到晚排序的 (year, season)
         """
 
-        # **不可用 years × seasons 的笛卡兒積**：起點 2024Q3、終點 2026Q4 時
-        # `seasons` 只會是 [3, 4]，2025Q1／Q2 與 2026Q1／Q2 整整四季不會被爬，
-        # 且不會有任何錯誤——它們只是從來沒出現在迴圈裡
-        year_seasons: List[Tuple[int, int]] = TimeUtils.generate_year_period_range(
-            start_year, start_season, end_year, end_season, periods_per_year=4
+        pending: List[Tuple[int, int]] = PeriodPlanner.plan_pending_periods(
+            start=(start_year, start_season),
+            end=(end_year, end_season),
+            periods_per_year=4,
+            existing=self.get_existing_year_seasons(table_name),
+            is_settled=self.is_season_settled,
+            label=table_name,
         )
-        existing: Set[Tuple[int, int]] = self.get_existing_year_seasons(table_name)
-
-        # **申報期還沒關閉的年季不算完成**：財報是逐家公司申報的，申報期內入庫的
-        # 只是「當下已送件的那批公司」。把它當成完成，年季差集從此跳過它，
-        # 後送件的公司永遠補不進來——而每季申報期間跑一次日常更新就會踩到。
-        # 重問的代價很小（每張報表每季只有上市、上櫃各一次請求），且寫入走
-        # `INSERT OR IGNORE`，已入庫的列不會重複，只有新送件的公司會被加進來
-        incomplete: Set[Tuple[int, int]] = {
-            year_season
-            for year_season in existing
-            if not self.is_season_settled(*year_season)
-        }
-        if incomplete:
-            logger.info(
-                f"[{table_name}] {len(incomplete)} 個年季仍在申報期內"
-                f"（{sorted(f'{y}Q{s}' for y, s in incomplete)}），"
-                f"本次一併重問以補進後送件的公司"
-            )
-
-        settled: Set[Tuple[int, int]] = existing - incomplete
-        pending: List[Tuple[int, int]] = [
-            year_season for year_season in year_seasons if year_season not in settled
-        ]
-
-        # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的年季
-        # （2013Q1），晚於最新的是新年季，兩者每輪都會出現，報出來只是噪音
-        if existing:
-            earliest: Tuple[int, int] = min(existing)
-            latest: Tuple[int, int] = max(existing)
-            gaps: List[str] = [
-                f"{year}Q{season}"
-                for year, season in pending
-                if earliest < (year, season) < latest
-            ]
-            if gaps:
-                logger.warning(
-                    f"[{table_name}] 偵測到 {len(gaps)} 個年季缺口"
-                    f"（表內最新為 {latest[0]}Q{latest[1]}），本次一併回補：{gaps[:10]}"
-                )
 
         logger.info(f"[{table_name}] 本次待更新年季：{len(pending)} 季")
         return pending

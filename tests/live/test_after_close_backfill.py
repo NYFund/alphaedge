@@ -43,6 +43,8 @@ class _Stub:
 
 
 def make_order(symbol: str, action: Action, volume: int) -> StockOrder:
+    """組一張限價台股委託"""
+
     return StockOrder(
         stock_id=symbol,
         action=action,
@@ -56,6 +58,8 @@ def make_order(symbol: str, action: Action, volume: int) -> StockOrder:
 def report_for(
     ticket: OrderTicket, volume: int, price: float, trade_id: str = "T1"
 ) -> ExecutionReport:
+    """依委託單組出指定量價的成交回報"""
+
     order: Any = ticket.order
     return ExecutionReport(
         broker_seqno=ticket.broker_seqno or "",
@@ -88,6 +92,8 @@ def store_without_owner(dao: LiveTradeDAO, report: ExecutionReport) -> None:
 
 
 def open_lots(dao: LiveTradeDAO, strategy: str) -> List[Tuple[str, int]]:
+    """指定策略未平倉 lot 的（標的，張數）"""
+
     return [
         (str(row["symbol"]), int(row["volume"]))
         for row in dao.get_open_lots(strategy_name=strategy)
@@ -95,11 +101,15 @@ def open_lots(dao: LiveTradeDAO, strategy: str) -> List[Tuple[str, int]]:
 
 
 def categories(dao: LiveTradeDAO) -> List[str]:
+    """當日風控事件的類別清單"""
+
     return [str(row["category"]) for row in dao.get_risk_events_by_date(TODAY)]
 
 
 @pytest.fixture
 def broker() -> FakeBroker:
+    """已連線、送出後一律不成交的券商替身，成交由測試手動補回報"""
+
     fake: FakeBroker = FakeBroker()
     fake.connect()
     fake.fill_ratio = 0.0
@@ -108,6 +118,8 @@ def broker() -> FakeBroker:
 
 @pytest.fixture
 def oms(broker: FakeBroker, dao: LiveTradeDAO) -> OrderManager:
+    """收盤後補登用的委託管理器"""
+
     return OrderManager(
         broker=broker,
         dao=dao,
@@ -120,11 +132,15 @@ def oms(broker: FakeBroker, dao: LiveTradeDAO) -> OrderManager:
 
 @pytest.fixture
 def ledger(dao: LiveTradeDAO) -> PositionAttributionLedger:
+    """部位歸屬帳本，時間固定在 `NOW`"""
+
     return PositionAttributionLedger(dao, lambda: NOW)
 
 
 @pytest.fixture
 def sync(dao: LiveTradeDAO, ledger: PositionAttributionLedger) -> AccountSynchronizer:
+    """不帶任何策略部位管理器的帳戶同步器"""
+
     return AccountSynchronizer(
         position_managers={}, ledger=ledger, dao=dao, now_provider=lambda: NOW
     )
@@ -134,6 +150,8 @@ def sync(dao: LiveTradeDAO, ledger: PositionAttributionLedger) -> AccountSynchro
 def runner(
     dao: LiveTradeDAO, oms: OrderManager, sync: AccountSynchronizer
 ) -> AfterCloseRunner:
+    """只接委託、同步與紀錄庫的收盤後流程，其餘元件用替身"""
+
     return AfterCloseRunner(
         data_feeds=[],
         broker=oms.broker,
@@ -151,6 +169,8 @@ def runner(
 def seed_long_lot(
     ledger: PositionAttributionLedger, symbol: str, volume: int, price: float
 ) -> None:
+    """在帳本預先開一筆多方 lot，模擬前一日留下的持倉"""
+
     ledger.open_lot(
         "Alpha",
         ExecutionReport(
@@ -185,9 +205,9 @@ def test_backfill_books_an_exit_fill_stored_by_another_process(
     assert row["status"] == "FILLED"
     assert row["filled_volume"] == 2
     assert row["avg_fill_price"] == pytest.approx(46.45)
-    assert dao.get_fills_by_seqno(ticket.broker_seqno or "")[0]["client_order_id"] == (
-        ticket.client_order_id
-    )
+    assert dao.get_fills_by_seqno(ticket.broker_seqno or "", TODAY)[0][
+        "client_order_id"
+    ] == (ticket.client_order_id)
     assert open_lots(dao, "Alpha") == []
     assert "FILL_BACKFILLED" in categories(dao)
 

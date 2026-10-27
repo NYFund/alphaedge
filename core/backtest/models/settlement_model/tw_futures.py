@@ -15,11 +15,10 @@ from core.models import (
     FuturesOrder,
     FuturesPosition,
     FuturesQuote,
-    FuturesTradeRecord,
 )
+from core.portfolio import order_rules
 from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import (
-    Action,
     MarginCallPolicy,
     PositionType,
 )
@@ -45,9 +44,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     ⚠️ **到期契約的權宜出場**：已到期的契約不會再有報價，策略因此拿不到報價、
     也就下不出那張平倉單——不處理的話該部位會一路留到回測結束並持續佔用保證金
     （實測：示範策略在 2024-04 開的近月部位卡到 12 月，凍結 79 萬保證金）。
-    故本 model 在契約連續 `MAX_NO_QUOTE_DAYS` 根 bar 沒有報價時，以**最近一次
-    結算價**強制出場並計入 `forced_cover_no_quote`。這是**兜底不是換月**：
-    換月轉倉會先把月契約部位轉走，本段接住的是轉倉接不到的部位（例如週契約）。
+    故本 model 在契約連續 `max_no_quote_days` 根 bar 沒有報價時，以**最近一次
+    結算價**強制出場，多單計入 `forced_exit_no_quote`、空單計入 `forced_cover_no_quote`
+    （與台股同一組 key）。這是**兜底不是換月**：換月轉倉會先把月契約部位轉走，
+    本段接住的是轉倉接不到的部位（例如週契約）。門檻由策略的 `max_no_quote_days`
+    決定（預設 `DEFAULT_MAX_NO_QUOTE_DAYS`），設成 None 就不做兜底。
 
     ⚠️ **強制平倉與換月轉倉都走 `apply_fill_price()`**：追繳、到期兜底與轉倉的
     兩腿吃的是與策略同一組 `fill_config`，故 log 印的「以 X 強制平倉」是**滑價前的
@@ -55,13 +56,13 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     成本）。設定裡沒開滑價時兩者相同。
     """
 
-    # 契約連續幾根 bar 沒有報價就強制出場。
+    # 契約連續幾根 bar 沒有盯市價就強制出場的預設門檻（策略可改）。
     #
-    # **不設成 1**：單日的資料缺漏（爬蟲漏一天、當日零成交）與「契約已到期」
+    # **不設成 1**：單日的資料缺漏（爬蟲漏一天、夜盤零成交）與「契約已到期」
     # 在報價層看起來一模一樣，設成 1 會讓前者被誤判成到期而提早平倉。
-    # 到期契約晚幾天出場不影響損益——盯市價已凍結在最後一次結算價，
+    # 到期契約晚幾天出場不影響損益——盯市價已凍結在最近一次盯市價，
     # 那幾天的每日結算損益都是 0。
-    MAX_NO_QUOTE_DAYS: int = 3
+    DEFAULT_MAX_NO_QUOTE_DAYS: int = 3
 
     def __init__(
         self,
@@ -69,8 +70,13 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         instrument: Optional[InstrumentSpec] = None,
         roll_config: Optional[FuturesRollConfig] = None,
         fill_model: Optional[BaseFillModel] = None,
+        max_no_quote_days: Optional[int] = DEFAULT_MAX_NO_QUOTE_DAYS,
     ) -> None:
-        super().__init__(fill_model=fill_model)
+        super().__init__(
+            position_manager,
+            fill_model=fill_model,
+            max_no_quote_days=max_no_quote_days,
+        )
 
         self.position_manager: FuturesPositionManager = position_manager
         self.instrument: InstrumentSpec = instrument or TwFuturesSpec()
@@ -78,16 +84,13 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         # 換月設定；`calendar` 由 DataFeed 注入同一個物件（見 `FuturesRollConfig`）
         self.roll_config: FuturesRollConfig = roll_config or FuturesRollConfig()
 
-        # {契約代號: 連續無報價的 bar 數}；同一契約的多個部位共用同一個計數
-        self.no_quote_days: Dict[str, int] = {}
-
     @property
     def margin_config(self) -> FuturesMarginConfig:
         """保證金設定；唯一來源是部位管理層持有的那一份，不另存副本"""
 
         return self.position_manager.margin_config
 
-    def on_bar_close(
+    def settle_day(
         self,
         date: datetime.date,
         quotes: List[FuturesQuote],
@@ -99,7 +102,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             一根 bar 收盤後逐日盯市：以當日結算價結清每個未平倉部位的當日損益
 
             保證金追繳的強制平倉計入 `forced_cover_margin_call`，
-            到期兜底出場計入 `forced_cover_no_quote`。
+            到期兜底出場依方向計入 `forced_exit_no_quote`／`forced_cover_no_quote`。
         - Parameters:
             - date: datetime.date
                 當前交易日
@@ -112,6 +115,8 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         """
 
         quote_map: Dict[str, FuturesQuote] = {quote.symbol: quote for quote in quotes}
+
+        self.update_holding_days(date, account.get_positions())
 
         for position in list(account.get_positions()):
             self.position_manager.settle_daily(
@@ -194,7 +199,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             )
             event_counts["forced_cover_margin_call"] += 1
 
-            if not self.close_position_at(
+            if not self.force_close_position(
                 position, date, price, quote_map.get(position.symbol)
             ):
                 # 平不掉就停手，否則會在同一根 bar 內無限重試
@@ -288,6 +293,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             if active is None or active <= position.expiry:
                 continue
 
+            # 新契約當日零成交（收盤價為 0）也不轉：轉進去等於以不存在的價格建倉
             new_quote: Optional[FuturesQuote] = quote_map.get(
                 f"{position.product}{active}"
             )
@@ -299,8 +305,8 @@ class TwFuturesSettlementModel(BaseSettlementModel):
                 continue
 
             self.roll_single_position(position, new_quote, date, quote_map)
-            # 引擎的 `new_event_counts()` 沒有這個 key（那是台股的清單），
-            # 期貨場次自行加入；台股的事件報表因此完全不受影響
+            # 期貨的事件計數器已含這個 key；用 `.get` 是讓直接傳空 dict 的呼叫端
+            # （單獨測試本模型）也能計到，而不是因為 key 不存在
             event_counts["rolled_contract"] = event_counts.get("rolled_contract", 0) + 1
 
     def roll_single_position(
@@ -337,7 +343,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         exit_price: float = self.get_mark_price(position, quote_map)
         entry_price: float = self.get_quote_mark_price(new_quote)
 
-        self.close_position_at(
+        self.force_close_position(
             position, date, exit_price, quote_map.get(position.symbol)
         )
 
@@ -347,9 +353,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
                 product=new_quote.product,
                 expiry=new_quote.expiry,
                 date=date,
-                action=(
-                    Action.BUY if position_type == PositionType.LONG else Action.SELL
-                ),
+                action=order_rules.resolve_open_action(position_type),
                 position_type=position_type,
                 price=entry_price,
                 volume=volume,
@@ -403,85 +407,46 @@ class TwFuturesSettlementModel(BaseSettlementModel):
         self.update_no_quote_days(quote_map, account.get_positions())
 
         for position in list(account.get_positions()):
-            if self.no_quote_days.get(position.symbol, 0) < self.MAX_NO_QUOTE_DAYS:
+            if not self.has_exceeded_no_quote_limit(position.symbol):
                 continue
 
             logger.warning(
-                f"[Expired] {position.symbol} 連續 {self.MAX_NO_QUOTE_DAYS} 根 bar "
-                f"無報價（契約已到期），以最近一次結算價 {position.price} 強制出場"
+                f"[Expired] {position.symbol} 連續 {self.no_quote_days[position.symbol]} "
+                f"根 bar 無報價（契約已到期），以最近一次結算價 {position.price} 強制出場"
             )
-            event_counts["forced_cover_no_quote"] += 1
+            # 多單出場、空單回補各記各的桶（與台股同一組 key）
+            if position.position_type == PositionType.LONG:
+                event_counts["forced_exit_no_quote"] += 1
+            else:
+                event_counts["forced_cover_no_quote"] += 1
             # 走到這裡的定義就是「連續無報價」，故一律傳 None 跳過區間檢查
-            self.close_position_at(position, date, position.price, None)
+            self.force_close_position(position, date, position.price, None)
 
-    def close_position_at(
-        self,
-        position: FuturesPosition,
-        date: datetime.date,
-        price: float,
-        quote: Optional[FuturesQuote],
-    ) -> List[FuturesTradeRecord]:
-        """
-        - Description:
-            以指定價格強制平掉部位（多單賣出、空單買進回補）
+    def build_exit_order(
+        self, position: FuturesPosition, date: datetime.date, price: float
+    ) -> FuturesOrder:
+        """全量平倉單：多單賣出、空單買進回補；契約由部位的商品與到期月決定"""
 
-            **追繳、到期兜底與轉倉的平倉腿共用這一條**，滑價因此只接一次；
-            三者要拆開不同口徑的話得先在此處分流，而不是各自繞過 `apply_fill_price()`。
-        - Parameters:
-            - position: FuturesPosition
-                要平掉的部位
-            - date: datetime.date
-                成交日
-            - price: float
-                平倉參考價（滑價前，一般為當日結算價）
-            - quote: Optional[FuturesQuote]
-                當根 bar 的報價，供區間檢查；到期無報價那條路徑傳 `None`
-        - Return:
-            - List[FuturesTradeRecord]
-                平倉產生的交易紀錄
-        """
-
-        order: FuturesOrder = FuturesOrder(
+        return FuturesOrder(
             product=position.product,
             expiry=position.expiry,
             date=date,
-            action=(
-                Action.SELL
-                if position.position_type == PositionType.LONG
-                else Action.BUY
-            ),
+            action=order_rules.resolve_close_action(position.position_type),
             position_type=position.position_type,
             price=price,
             volume=position.volume,
         )
-        return self.position_manager.close_position(self.apply_fill_price(order, quote))
 
-    def update_no_quote_days(
-        self,
-        quote_map: Dict[str, FuturesQuote],
-        positions: List[FuturesPosition],
-    ) -> None:
+    def has_quote(self, quote: FuturesQuote) -> bool:
         """
-        - Description:
-            更新每個契約的連續無報價 bar 數（有報價即歸零）
+        期貨的「有報價」是有盯市價，不是有成交
 
-            **計數掛在 model 而不是部位上**：無報價是**契約**的狀態不是部位的狀態，
-            同一契約的多個部位共用同一個答案，記在部位上只會存好幾份一樣的數。
-        - Parameters:
-            - quote_map: Dict[str, FuturesQuote]
-                當根 bar 的報價
-            - positions: List[FuturesPosition]
-                目前的未平倉部位
+        遠月契約整天零成交是常態，但日盤仍會公告結算價，契約還掛在交易所上，
+        不是到期；夜盤沒有結算價、零成交時也沒有收盤價，才算沒有報價——
+        與契約到期後整筆消失同一種處理，由 `max_no_quote_days` 吸收單日缺漏。
         """
 
-        for position in positions:
-            quote: Optional[FuturesQuote] = quote_map.get(position.symbol)
-            if quote is not None and (quote.close or quote.cur_price):
-                self.no_quote_days[position.symbol] = 0
-            else:
-                self.no_quote_days[position.symbol] = (
-                    self.no_quote_days.get(position.symbol, 0) + 1
-                )
+        return bool(self.get_quote_mark_price(quote))
 
     def get_mark_price(
         self, position: FuturesPosition, quote_map: Dict[str, FuturesQuote]
@@ -493,9 +458,11 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             結算價缺漏時退回收盤價——夜盤本來就沒有結算價（來源即為 NULL），
             日盤偶有缺漏。**不可當成 0**：那會讓部位在一天內被結算成歸零。
 
-            當日完全無報價（契約已到期、或資料缺這一天）時沿用
-            `position.price`——逐日盯市之後它就是**最近一次結算價**
-            （尚未結算過則為開倉價），見 `FuturesPosition`。
+            零成交的契約也照這個順序：日盤零成交仍有結算價，就以結算價盯市；
+            夜盤零成交兩種價都沒有（adapter 把它們收斂成 0），與當日完全無報價
+            （契約已到期、或資料缺這一天）同一種處理——沿用 `position.price`，
+            逐日盯市之後它就是**最近一次盯市價**（尚未結算過則為開倉價），
+            見 `FuturesPosition`。
         - Parameters:
             - position: FuturesPosition
                 待盯市的部位
@@ -553,13 +520,13 @@ class TwFuturesSettlementModel(BaseSettlementModel):
             （TX 一口契約價值 900 萬、保證金只有 70 萬），沿用基底的現金帳戶口徑
             會讓權益曲線整段偏高一個數量級。
 
-            `on_bar_close()` 的逐日盯市已把當日損益結進 `balance`，故本方法在
+            `settle_day()` 的逐日盯市已把當日損益結進 `balance`，故本方法在
             多數日子算出的未實現損益是 **0——那是對的，不是沒算到**；
             只有當日無結算價（沿用舊價）或報價缺漏時才會有殘值。
 
-            **`units` 用不到**：期貨的乘數逐契約不同，`InstrumentSpec.to_units()`
-            拿不到商品（見 `TwFuturesSpec`），乘數一律取自部位自身的
-            `multiplier`，損益公式直接走 `FuturesPositionManager.calculate_pnl()`。
+            **`units` 用不到**：損益公式直接走 `FuturesPositionManager.calculate_pnl()`，
+            乘數取自部位自身的 `multiplier`（開倉當時的契約單位）——股期的契約單位會隨
+            除權息調整，持倉期間要沿用開倉時那一個，不能每天以當日的計價單位重算。
         - Parameters:
             - position: FuturesPosition
                 未平倉部位；`unrealized_pnl` 與 `unrealized_roi` 會被就地更新

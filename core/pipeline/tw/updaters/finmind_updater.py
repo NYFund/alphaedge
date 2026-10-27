@@ -18,10 +18,9 @@ from core.pipeline.tw.updaters.finmind import (
     StockInfoUpdater,
 )
 from core.pipeline.utils import FinMindDataType
-from core.utils.log_manager import LogManager
 
 """
-FinMind data updater: stock info with warrant, broker info, broker trading daily report
+FinMind updater：台股總覽（含權證）、證券商資訊、券商分點統計
 
 本檔是**門面（facade）**：對外只暴露 `update_*()`，實作按資料集分別放在
 `StockInfoUpdater`、`BrokerInfoUpdater`、`BrokerTradingUpdater`。
@@ -29,9 +28,11 @@ FinMind data updater: stock info with warrant, broker info, broker trading daily
 
 
 class FinMindUpdater(BaseDataUpdater):
-    """FinMind Updater"""
+    """FinMind updater"""
 
-    # 預設日期（update_all 時 broker_trading 若未給 start_date）
+    LOG_FILE_NAME: str = "update_finmind.log"
+
+    # `update_all()` 未給 `start_date` 時，券商分點統計的預設起日
     DEFAULT_BROKER_TRADING_START_DATE: datetime.date = datetime.date(2021, 6, 30)
 
     def __init__(self) -> None:
@@ -52,9 +53,9 @@ class FinMindUpdater(BaseDataUpdater):
         self.setup()
 
     def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Updater"""
+        """初始化 updater 的設定"""
 
-        LogManager.setup_logger("update_finmind.log")
+        super().setup()
 
         # 共用執行環境：四個資料集打的是同一把 token，quota 狀態掛在這裡
         self.context: FinMindContext = FinMindContext(
@@ -91,6 +92,8 @@ class FinMindUpdater(BaseDataUpdater):
 
     @api_quota_limit.setter
     def api_quota_limit(self, value: int) -> None:
+        """設定 FinMind 每小時配額上限（寫回 `context`）"""
+
         self.context.api_quota_limit = value
 
     def update(
@@ -106,11 +109,11 @@ class FinMindUpdater(BaseDataUpdater):
         - Parameters:
             - data_type: Optional[Union[str, FinMindDataType]]
                 資料類型，可選值：
-                - FinMindDataType.STOCK_INFO 或 "stock_info": 更新台股總覽（不含權證）
-                - FinMindDataType.STOCK_INFO_WITH_WARRANT 或 "stock_info_with_warrant": 更新台股總覽（含權證）
-                - FinMindDataType.BROKER_INFO 或 "broker_info": 更新證券商資訊
-                - FinMindDataType.BROKER_TRADING 或 "broker_trading": 更新券商分點統計
-                - "all" 或 None: 更新所有資料
+                - FinMindDataType.STOCK_INFO 或 "stock_info"：更新台股總覽（不含權證）
+                - FinMindDataType.STOCK_INFO_WITH_WARRANT 或 "stock_info_with_warrant"：更新台股總覽（含權證）
+                - FinMindDataType.BROKER_INFO 或 "broker_info"：更新證券商資訊
+                - FinMindDataType.BROKER_TRADING 或 "broker_trading"：更新券商分點統計
+                - "all" 或 None：更新所有資料
             - start_date: Optional[Union[datetime.date, str]]
                 起始日期（僅用於 BROKER_TRADING）
             - end_date: Optional[Union[datetime.date, str]]
@@ -172,7 +175,7 @@ class FinMindUpdater(BaseDataUpdater):
         self.stock_info.update_stock_info()
 
     def update_stock_info_with_warrant(self) -> None:
-        """更新台股總覽(含權證)資料"""
+        """更新台股總覽（含權證）資料"""
 
         self.stock_info.update_stock_info_with_warrant()
 
@@ -186,7 +189,7 @@ class FinMindUpdater(BaseDataUpdater):
         start_date: Union[datetime.date, str],
         end_date: Union[datetime.date, str],
     ) -> None:
-        """批量更新當日券商分點統計表資料（逐 (券商 × 股票) 組合）"""
+        """批量更新當日券商分點統計表資料（逐（券商 × 股票）組合）"""
 
         self.broker_trading.update(start_date=start_date, end_date=end_date)
 

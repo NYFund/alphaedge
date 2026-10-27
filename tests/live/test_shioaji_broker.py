@@ -1,6 +1,6 @@
 import inspect
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import pytest
 import shioaji as sj
@@ -28,6 +28,8 @@ from core.utils import (
 
 
 class FakeOrder:
+    """shioaji 委託物件替身"""
+
     def __init__(
         self, seqno: str = "000001", ordno: str = "AB123", custom_field: str = "010001"
     ) -> None:
@@ -37,6 +39,8 @@ class FakeOrder:
 
 
 class FakeStatus:
+    """shioaji 委託狀態物件替身"""
+
     def __init__(
         self, status: str = "Submitted", deal_quantity: int = 0, msg: str = ""
     ) -> None:
@@ -46,6 +50,8 @@ class FakeStatus:
 
 
 class FakeTrade:
+    """shioaji 交易物件替身（委託加狀態）"""
+
     def __init__(
         self,
         status: str = "Submitted",
@@ -59,6 +65,8 @@ class FakeTrade:
 
 
 class FakeContract:
+    """帶漲跌停價的股票合約替身"""
+
     def __init__(self, code: str = "2330") -> None:
         self.code: str = code
         self.limit_up: float = 1100.0
@@ -92,6 +100,8 @@ def make_account(account_id: str = "1234567") -> Any:
 
 
 class FakeApi:
+    """shioaji API 替身"""
+
     def __init__(self) -> None:
         self.stock_account: Any = make_account()
         self.futopt_account: Any = make_account("7654321")
@@ -159,11 +169,17 @@ class FakeApi:
 
 
 class FakeSession:
+    """連線狀態可控的 shioaji session 替身"""
+
     def __init__(self, api: FakeApi, limiter: RateLimiter) -> None:
         self.api: Optional[FakeApi] = api
         self.rate_limiter: RateLimiter = limiter
         self.connected: bool = False
         self.skew_checks: List[Any] = []
+        self.degrade_handler: Optional[Callable[[str, str], None]] = None
+
+    def set_degrade_handler(self, handler: Callable[[str, str], None]) -> None:
+        self.degrade_handler = handler
 
     def connect(self) -> None:
         self.connected = True
@@ -181,16 +197,22 @@ class FakeSession:
 
 @pytest.fixture
 def limiter() -> RateLimiter:
+    """假時鐘限流器：測試不該真的睡"""
+
     return RateLimiter(time_source=lambda: 0.0, sleep=lambda seconds: None)
 
 
 @pytest.fixture
 def api() -> FakeApi:
+    """shioaji API 替身"""
+
     return FakeApi()
 
 
 @pytest.fixture
 def broker(api: FakeApi, limiter: RateLimiter) -> ShioajiBroker:
+    """已連線的券商轉接器"""
+
     instance: ShioajiBroker = ShioajiBroker(FakeSession(api, limiter), limiter)
     instance.connect()
     return instance
@@ -212,7 +234,7 @@ def make_broker_ticket(volume: int = 2, price: float = 1000.0) -> OrderTicket:
     return OrderTicket(
         client_order_id="run1-0001",
         custom_field="010001",
-        strategy_name="MomentumStrategy1",
+        strategy_name="VolumeBreakoutMomentumStrategy",
         order=StockOrder(
             stock_id="2330",
             action=Action.BUY,
@@ -668,3 +690,21 @@ def test_recovered_order_can_be_cancelled_by_a_new_broker(
     assert recovered[0].custom_field == submitted.custom_field
     assert recovered[0].broker_seqno == "000001"
     assert len(api.cancelled) == 1
+
+
+def test_stock_subscription_is_tick_only(broker: ShioajiBroker, api: FakeApi) -> None:
+    """
+    股票只訂成交、不訂委買賣
+
+    委買賣沒有消費者；一併訂閱會讓每一檔佔兩個名額，券商若分開計數，
+    200 檔的盤中標的池在啟動時就會超過上限而整段中止。
+    """
+
+    calls: List[Any] = []
+    api.subscribe = lambda contract, quote_type, version: calls.append(  # type: ignore
+        (contract.code, quote_type)
+    )
+
+    broker.subscribe_quotes(["2330"])
+
+    assert calls == [("2330", sj.QuoteType.Tick)]

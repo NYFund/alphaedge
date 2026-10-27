@@ -12,15 +12,17 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 - Features:
     1. 反向相依：低層 import 高層（例如 core/api → core/backtest）、`core/` import 到
-       `tasks/`／`frontend/`／`strategy_lab/`／`tests/`／`scripts/`
+       `apps/`／`frontend/`／`strategy_lab/`／`tests/`／`scripts/`
     2. 循環 import：檔案層級的強連通分量（含套件 `__init__.py` 的 re-export 邊）
     3. 市場語意洩漏：`_ENGINE_FILES` 列出的引擎本體（回測與實盤）不得出現
        Stock／Futures／Tw 字樣，
        `if market ==` 只允許出現在 `factory.py`
     4. 跨軸目錄污染：每層目錄只承載一條軸（市場 `tw/`／`us/` 或商品類別 `stock/`／`futures/`）
     5. `sys.path` 注入：專案已以 editable 方式安裝，逐處列出以便複查
-    6. 資料庫驅動外洩：`core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
+    6. 資料庫驅動外洩：`core/`、`apps/`、`strategies/` 內 `core/dao/` 以外的檔案不得 `import sqlite3`
     7. 純轉換層做 I/O：`core/adapters/` 不得 import `core.api`、`core.dao` 或資料庫驅動
+    8. 掃描範圍缺漏：`_SCAN_DIRS`／`_SCAN_FILES`／`_ENGINE_FILES` 宣告的目標不存在、
+       或一個檔案都沒掃到，一律算違規——結果為空的檢查不能算通過
 - 使用場景:
     python scripts/check_layer_deps.py            # 只印報告，違規時以非零狀態碼結束
     python scripts/check_layer_deps.py --edges     # 另外把所有跨套件的 import 邊倒出來
@@ -33,7 +35,6 @@ _SCAN_DIRS: Tuple[str, ...] = (
     "core",
     "apps",
     "strategies",
-    "tasks",
     "frontend",
     "strategy_lab",
     "scripts",
@@ -72,6 +73,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.backtest.models", 4, "引擎層／可插拔 model", False),
     ("core.backtest.datafeed", 4, "引擎層／資料載入", False),
     ("core.backtest.report", 4, "引擎層／報表", False),
+    ("core.backtest.simulator", 4, "引擎層／一天怎麼跑（日 K、逐筆）", False),
     ("core.position", 4, "引擎層／部位與帳務", False),
     ("core.backtest.backtester", 5, "引擎層／引擎本體", False),
     ("core.backtest.factory", 6, "組裝層", False),
@@ -107,18 +109,18 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.after_close", 5, "實盤／盤後作業", False),
     ("core.live.factory", 6, "組裝層", False),
     # 策略「契約」（抽象基底與其套件門面）是引擎、factory、報表都要認得的介面，
-    # 與可插拔 model 同層；具體策略（momentum_strategy_1 等）才是策略層。
-    # 引擎若 import 到任何具體策略，仍會被列為反向相依
+    # 與可插拔 model 同層。`core/strategies/` 只放契約，具體策略一律在頂層
+    # `strategies/`（策略層）；有人把具體策略放回 `core/strategies/` 時，分層等級擋不住
+    # （它 import 的都是同層或更低層），由 `check_strategy_contract_only()` 擋下
     ("core.strategies.base", 4, "策略契約", False),
     ("core.strategies.stock.base", 4, "策略契約", False),
     ("core.strategies.futures.base", 4, "策略契約", False),
     ("core.strategies.stock", 4, "策略契約（套件門面）", True),
     ("core.strategies.futures", 4, "策略契約（套件門面）", True),
-    ("core.strategies", 7, "策略層", False),
-    # 頂層的具體策略套件：與 `core.strategies` 的具體策略同層，只能往下 import 框架
+    ("core.strategies", 4, "策略契約（套件門面）", True),
+    # 頂層的具體策略套件：只能往下 import 框架
     ("strategies", 7, "策略層", False),
     ("apps", 8, "入口層", False),
-    ("tasks", 8, "入口層", False),
     ("frontend", 8, "應用層", False),
     ("strategy_lab", 8, "研究層", False),
     ("scripts", 8, "工具", False),
@@ -137,7 +139,6 @@ _KNOWN_REVERSE: Dict[Tuple[str, str], str] = {}
 _NON_CORE_TOPS: Set[str] = {
     "apps",
     "strategies",
-    "tasks",
     "frontend",
     "strategy_lab",
     "scripts",
@@ -159,9 +160,11 @@ _MARKET_AXIS_PACKAGES: Tuple[str, ...] = (
 )
 # 引擎本體：市場語意一律由注入物件承載，檔案內不得出現 Stock／Futures／Tw 字樣。
 # 回測與實盤各一支，兩邊用同一條規則——實盤引擎若分出 `TwStockLiveTrader` 子類，
-# 就會重演回測引擎當初的分裂
+# 就會重演回測引擎當初的分裂。回測的開平倉執行在 simulator，與引擎本體同一條規則
 _ENGINE_FILES: Tuple[str, ...] = (
     "core/backtest/backtester.py",
+    "core/backtest/simulator/base.py",
+    "core/backtest/simulator/bar_simulator.py",
     "core/live/trader.py",
 )
 _INSTRUMENT_AXIS_PACKAGES: Tuple[str, ...] = (
@@ -196,6 +199,42 @@ def collect_files() -> List[Path]:
         if p.exists():
             files.append(p)
     return sorted(files)
+
+
+def check_scan_targets(files: List[Path]) -> List[str]:
+    """
+    - Description:
+        宣告的掃描範圍必須真的存在，而且掃得到東西
+
+        `collect_files()` 與 `check_market_leakage()` 遇到不存在的目錄或檔案都直接略過，
+        那是為了讓單一缺漏不至於讓整支檢查崩潰；但略過的結果是**那一塊的檢查靜默消失**，
+        結束碼照樣是 0。最容易發生在拆檔與搬家：`core/live/trader.py` 拆開後，
+        引擎的市場語意洩漏檢查就不再掃任何東西。所以缺漏要算違規，
+        要嘛同步更新宣告，要嘛把檔案放回來。
+    - Parameters:
+        - files: List[Path]
+            `collect_files()` 收到的檔案
+    - Return:
+        - List[str]
+            缺漏的宣告與「什麼都沒掃到」的說明；範圍完整時為空
+    """
+
+    problems: List[str] = []
+    for name in _SCAN_DIRS:
+        if not (_PROJECT_ROOT / name).is_dir():
+            problems.append(f"_SCAN_DIRS 宣告的目錄不存在：{name}")
+    for name in _SCAN_FILES:
+        if not (_PROJECT_ROOT / name).is_file():
+            problems.append(f"_SCAN_FILES 宣告的檔案不存在：{name}")
+    for engine_rel in _ENGINE_FILES:
+        if not (_PROJECT_ROOT / engine_rel).is_file():
+            problems.append(
+                f"_ENGINE_FILES 宣告的引擎檔不存在：{engine_rel}"
+                "（拆檔或改名後要同步更新，否則市場語意洩漏檢查會靜默消失）"
+            )
+    if not files:
+        problems.append("掃描範圍內沒有任何 .py 檔：結果為空的檢查不能算通過")
+    return problems
 
 
 def resolve_import(module: str, node: ast.AST, known_modules: Set[str]) -> List[str]:
@@ -362,6 +401,8 @@ def strongly_connected(graph: Dict[str, Set[str]]) -> List[List[str]]:
     sys.setrecursionlimit(10000)
 
     def visit(v: str) -> None:
+        """Tarjan 演算法的深度優先走訪：以 low-link 判定強連通分量的根"""
+
         index[v] = low[v] = counter[0]
         counter[0] += 1
         stack.append(v)
@@ -412,6 +453,7 @@ def check_market_leakage() -> List[str]:
     for engine_rel in _ENGINE_FILES:
         engine: Path = _PROJECT_ROOT / engine_rel
         if not engine.exists():
+            # 缺檔由 `check_scan_targets()` 計為違規；這裡只略過，免得同一件事報兩次
             continue
         for lineno, code in sorted(code_lines(engine).items()):
             if re.search(r"\b(Stock|Futures|Tw)[A-Za-z]*\b", code):
@@ -489,6 +531,49 @@ def check_strategy_facades(graph: Dict[str, Set[str]]) -> List[str]:
     return problems
 
 
+# `core/strategies/` 只准有的檔案：契約（抽象基底）與套件門面
+_STRATEGY_CONTRACT_FILES: Set[str] = {
+    "core/strategies/__init__.py",
+    "core/strategies/base.py",
+    "core/strategies/stock/__init__.py",
+    "core/strategies/stock/base.py",
+    "core/strategies/futures/__init__.py",
+    "core/strategies/futures/base.py",
+}
+
+
+def check_strategy_contract_only(root: Path = _PROJECT_ROOT) -> List[str]:
+    """
+    - Description:
+        `core/strategies/` 只准放契約；具體策略要放頂層 `strategies/`
+
+        分層檢查擋不住這一條：具體策略 import 的都是契約、部位建構、資料源契約，
+        與 `core.strategies` 同層或更低，放回 `core/` 照樣零違規。放回去的代價是
+        框架又開始承載具體策略，而且策略載入器不掃 `core/strategies/`——那支策略
+        在 `--strategy` 清單裡會憑空消失。新增商品類別的契約時把檔案登記進
+        `_STRATEGY_CONTRACT_FILES`。
+    - Parameters:
+        - root: Path
+            專案根目錄（測試以暫存目錄替代）
+    - Return:
+        - List[str]
+            不在白名單內的 `.py` 檔（相對路徑）
+    """
+
+    strategy_dir: Path = root / "core" / "strategies"
+    if not strategy_dir.exists():
+        return []
+    return [
+        f"{relative}：core/strategies/ 只放契約，具體策略請放頂層 strategies/"
+        for relative in sorted(
+            path.relative_to(root).as_posix()
+            for path in strategy_dir.rglob("*.py")
+            if "__pycache__" not in path.parts
+        )
+        if relative not in _STRATEGY_CONTRACT_FILES
+    ]
+
+
 # 只有 DAO 層可以直接碰資料庫驅動；其餘一律經由 `core.dao`
 # 純轉換層：不得自己查資料。`core/adapters/` 只把來源資料轉成報價模型，
 # 查詢由資料源（feed）負責——adapter 自己查會讓轉換規則綁死在一個 API 上，
@@ -496,7 +581,9 @@ def check_strategy_facades(graph: Dict[str, Set[str]]) -> List[str]:
 _PURE_TRANSFORM_DIRS: Tuple[str, ...] = ("core/adapters",)
 _PURE_TRANSFORM_FORBIDDEN: Tuple[str, ...] = ("core.api", "core.dao", "sqlite3")
 
-_DB_DRIVER_MODULES: Set[str] = {"sqlite3"}
+# psycopg／connectorx 是台股 tick 的 TimescaleDB 驅動（寫入／讀取），連線入口在
+# `core/dao/timescale.py`
+_DB_DRIVER_MODULES: Set[str] = {"sqlite3", "psycopg", "connectorx"}
 _PIPELINE_PACKAGE: str = "core.pipeline"
 _PIPELINE_DIR: str = "core/pipeline"
 # 回測引擎的內部零件：只有回測自己與測試可以 import
@@ -504,16 +591,17 @@ _BACKTEST_INTERNAL_PACKAGES: Tuple[str, ...] = (
     "core.backtest.models",
     "core.backtest.datafeed",
     "core.backtest.report",
+    "core.backtest.simulator",
 )
 _BACKTEST_DIR: str = "core/backtest"
-_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "strategies", "tasks")
+_DB_DRIVER_GUARDED_DIRS: Tuple[str, ...] = ("core", "apps", "strategies")
 _DB_DRIVER_ALLOWED_DIR: str = "core/dao"
 
 
 def check_db_driver_imports(files: List[Path]) -> List[str]:
     """
     - Description:
-        `core/`、`tasks/` 內 `core/dao/` 以外的檔案不得 import 資料庫驅動
+        `core/`、`apps/`、`strategies/` 內 `core/dao/` 以外的檔案不得 import 資料庫驅動
 
         「SQL、連線與交易只寫在 DAO」不能只是慣例：慣例擋不住下一個人順手
         `import sqlite3`，而散在各層的連線會出現沒人關閉、彼此搶鎖的情況。
@@ -597,7 +685,7 @@ def check_framework_pipeline_imports(files: List[Path]) -> List[str]:
         框架（回測、實盤、API、市場結構）只讀資料庫，不碰 ETL 的中間狀態；
         一旦依賴長回來，資料管線就搬不出 `core/`，搬家時才會發現整串 import 斷掉。
         分層等級擋不住這條：`core.pipeline` 與 `core.api` 同級，引擎層往下 import
-        它屬於「合法的向下相依」。`tasks/`、`scripts/`、`tests/` 不受限。
+        它屬於「合法的向下相依」。`apps/`、`scripts/`、`tests/` 不受限。
         以 AST 判定，說明文字裡的字樣不算。
     - Parameters:
         - files: List[Path]
@@ -785,11 +873,12 @@ def main() -> int:
                     f"{paths[src].relative_to(_PROJECT_ROOT)}:{lineno}: {src} -> {dst}"
                 )
 
+    scan_targets: List[str] = check_scan_targets(files)
     # 循環只看執行期的 import：`TYPE_CHECKING` 區塊不會執行，循環不成立
     cycles: List[List[str]] = strongly_connected(runtime_graph)
     leakage: List[str] = check_market_leakage()
     axis: List[str] = check_axis_dirs()
-    facades: List[str] = check_strategy_facades(graph)
+    facades: List[str] = check_strategy_facades(graph) + check_strategy_contract_only()
     sys_path_hits: List[str] = check_sys_path(files)
     db_driver_hits: List[str] = check_db_driver_imports(files)
     pure_transform_hits: List[str] = check_pure_transform_layers(files)
@@ -797,6 +886,8 @@ def main() -> int:
     backtest_internal_hits: List[str] = check_backtest_internal_imports(files)
 
     def section(title: str, items: List[str]) -> None:
+        """印出一類違規的標題與逐筆明細"""
+
         print(f"\n=== {title}（{len(items)}）===")
         for item in items:
             print(f"  {item}")
@@ -804,15 +895,18 @@ def main() -> int:
     print(
         f"掃描 {len(files)} 個檔案，{sum(len(v) for v in graph.values())} 條專案內 import 邊"
     )
+    section("0. 掃描範圍缺漏（宣告了卻不存在、或什麼都沒掃到）", scan_targets)
     section("A. core/ 反向 import 到非 core 套件", core_to_outside)
     section("B. 低層 import 高層（違反單向相依，新出現者）", reverse)
     section("B'. 已登錄的反向相依（附錄 A 追蹤中，不影響結束碼）", known_reverse)
     section("C. 循環 import（強連通分量）", [" <-> ".join(c) for c in cycles])
     section("D. 市場語意洩漏", leakage)
     section("E. 跨軸目錄污染", axis)
-    section("E'. 策略套件門面 eager import 具體策略", facades)
     section(
-        "E''. DAO 以外 import 資料庫驅動（core／apps／strategies／tasks）",
+        "E'. 策略套件門面 eager import 具體策略／core/strategies 放了具體策略", facades
+    )
+    section(
+        "E''. DAO 以外 import 資料庫驅動（core／apps／strategies）",
         db_driver_hits,
     )
     section("E'''. 純轉換層 import 資料層（core/adapters）", pure_transform_hits)
@@ -827,7 +921,8 @@ def main() -> int:
         section("H. 全部跨套件 import 邊", edges_out)
 
     violations: int = (
-        len(core_to_outside)
+        len(scan_targets)
+        + len(core_to_outside)
         + len(reverse)
         + len(cycles)
         + len(leakage)

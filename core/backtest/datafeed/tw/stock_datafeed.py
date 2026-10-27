@@ -20,7 +20,6 @@ from core.config import (
     SHORT_SALE_LIST_START_DATE,
     TW_STOCK_DB_PATH,
 )
-from core.dao.connection import DBConnection, connect_sqlite
 from core.datafeed.base import BaseDataFeed, TradingListCoverageError
 from core.market.tw.market_calendar import MarketCalendar
 from core.models import DayTradeListSnapshot, ShortSaleListSnapshot, StockQuote
@@ -31,7 +30,7 @@ from core.utils import Scale
 
 
 class TwStockDataFeed(BaseDataFeed):
-    """台股資料源：SQLite 的日 K 與籌碼、DolphinDB 的 Tick"""
+    """台股資料源：SQLite 的日 K 與籌碼、TimescaleDB 的 Tick"""
 
     # 融券最後回補日 = 除權息交易日往前推 4 個營業日。
     #
@@ -50,11 +49,14 @@ class TwStockDataFeed(BaseDataFeed):
     # 21 個曆日足以涵蓋 4 個營業日加上農曆年連假
     FORCE_COVER_LOOKBACK_DAYS: int = 21
 
-    def __init__(self) -> None:
-        # 單次回測共用一條 SQLite 連線：六個 API 查的是同一個 DB 檔，
-        # 各開一條沒有任何好處，只會讓連線數隨 API 數量線性成長
-        self.conn: Optional[DBConnection] = None
+    # 回測區間內沒有交易日時，錯誤訊息建議的補資料指令
+    BACKFILL_COMMAND: str = "python -m apps.update_db --target price"
 
+    def __init__(self) -> None:
+        super().__init__()
+
+        # 單次回測共用一條 SQLite 連線（基底的 `conn`）：六個 API 查的是同一個 DB 檔，
+        # 各開一條沒有任何好處，只會讓連線數隨 API 數量線性成長
         self.tick: Optional[StockTickAPI] = None
         self.chip: Optional[StockChipAPI] = None
         self.price: Optional[StockPriceAPI] = None
@@ -69,11 +71,7 @@ class TwStockDataFeed(BaseDataFeed):
             None  # 官方休市日（缺日診斷用）
         )
 
-        # 回測區間：停券日推導需要往後多看幾個交易日，故必須知道區間
-        self.start_date: Optional[datetime.date] = None
-        self.end_date: Optional[datetime.date] = None
-
-        # {融券最後回補日: {stock_id}}；由除權息行事曆推導，整場回測只建一次
+        # `{融券最後回補日: {stock_id}}`；由除權息行事曆推導，整場回測只建一次
         self.force_cover_map: Optional[Dict[datetime.date, Set[str]]] = None
         # 停券期間（回補日 ~ 除權息交易日前一日）的逐日標的表，同樣只建一次
         self.short_suspended_map: Optional[Dict[datetime.date, Set[str]]] = None
@@ -82,17 +80,10 @@ class TwStockDataFeed(BaseDataFeed):
             Tuple[List[datetime.date], List[Tuple[str, datetime.date, datetime.date]]]
         ] = None
 
-        # 回測區間內的交易日集合；`setup()` 建一次，供 `is_market_open()` 查表。
-        # **不建的話每個曆日都會對 price 表做一次 `SELECT *` 只為了判斷空不空**：
-        # 13 年就是 4,700 次全表掃描
-        self.trading_days: Optional[Set[datetime.date]] = None
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
+        """開 SQLite 連線並建立台股的資料 API；Tick 級別才建立 TimescaleDB 連線"""
 
-    def setup(self, strategy: BaseStrategy) -> None:
-        """從資料庫載入資料；Tick 級別才建立 DolphinDB 連線"""
-
-        self.conn = connect_sqlite(TW_STOCK_DB_PATH)
-        self.start_date = strategy.start_date
-        self.end_date = strategy.end_date
+        self.conn = self.connect_db(TW_STOCK_DB_PATH)
 
         self.chip = StockChipAPI(conn=self.conn)
         self.mrr = MonthlyRevenueReportAPI(conn=self.conn)
@@ -107,94 +98,38 @@ class TwStockDataFeed(BaseDataFeed):
         if strategy.scale == Scale.TICK:
             self.tick = StockTickAPI()
 
-        # 交易日集合一次建立，順便報告區間內的可疑缺日。
-        # **`start_date`／`end_date` 在 `BaseStrategy` 是 Optional 且預設 None**，
-        # 沒設的策略在這裡查 `get_trading_days(None, None)` 會 TypeError；
-        # 那種策略退回逐日查詢即可（`is_market_open()` 有 fallback）
-        if self.start_date and self.end_date:
-            self.trading_days = set(
-                self.price.get_trading_days(self.start_date, self.end_date)
-            )
-            self.report_calendar_gaps()
-        else:
+    def build_calendar(self) -> Optional[MarketCalendar]:
+        """
+        區間內的交易日曆：當日有日 K 資料即視為開盤
+
+        **`start_date`／`end_date` 在 `BaseStrategy` 是 Optional 且預設 None**，
+        沒設的策略查 `get_trading_days(None, None)` 會 TypeError；那種策略回 None，
+        退回逐日查詢（`is_market_open_without_calendar()`）。
+        """
+
+        if not self.start_date or not self.end_date:
             logger.warning(
-                "[DataFeed] 策略未設定回測區間，交易日集合不預先建立，"
+                "[DataFeed] 策略未設定回測區間，交易日曆不預先建立，"
                 "改為逐日查詢（每個曆日一次 SELECT）"
             )
+            return None
 
-    def is_market_open(self, date: datetime.date) -> bool:
-        """台股開盤日判定：當日有日 K 資料即視為開盤"""
+        return MarketCalendar.from_api(self.price, self.start_date, self.end_date)
 
-        if self.trading_days is not None:
-            return date in self.trading_days
+    def is_market_open_without_calendar(self, date: datetime.date) -> bool:
+        """沒有預建日曆時逐日向 `price` 表查"""
 
-        # `setup()` 尚未跑過（單元測試直接呼叫）時退回逐日查詢
         return MarketCalendar.from_api(self.price, date, date).is_trading_day(date)
 
-    def report_calendar_gaps(self) -> int:
-        """
-        - Description:
-            報告回測區間內「平日卻沒有行情」的日期
+    def get_official_closures(
+        self, start_date: datetime.date, end_date: datetime.date
+    ) -> Optional[Tuple[Set[int], Set[datetime.date]]]:
+        """官方休市行事曆（`market_holiday` 表）：已入庫年度與區間內的休市日"""
 
-            **回測遇到缺日會當成休市靜默跳過**：資料缺一天與
-            當天休市在引擎眼裡完全相同，策略少做一天的判斷卻不會有任何跡象。
-            根治在 ETL，這裡負責**讓它在回測起跑時就被看見**。
-
-            **扣掉交易所公告的休市日**（`market_holiday` 表）：國定假日不是缺口。
-            只有官方行事曆已入庫的年度才下判斷；未入庫的年度無法分辨連假與缺日，
-            那一段只報數字——寧可說不知道，也不要把連假講成資料缺失。
-            `--target market_holiday` 只抓去年到明年，更早的年度一律落在這一段。
-
-            颱風假等臨時休市不在交易所年初公告的行事曆裡，這類日期會被列為
-            「不在休市清單裡」。這是刻意的保守行為，不是漏判：
-            看到那幾天時對照當年的颱風停班公告即可。
-        - Return:
-            - int
-                無法歸因為休市的缺日數（含未入庫年度中無法判斷的日期）
-        """
-
-        if not self.start_date or not self.end_date or self.trading_days is None:
-            return 0
-
-        weekdays: Set[datetime.date] = {
-            self.start_date + datetime.timedelta(days=offset)
-            for offset in range((self.end_date - self.start_date).days + 1)
-            if (self.start_date + datetime.timedelta(days=offset)).weekday() < 5
-        }
-        missing: Set[datetime.date] = weekdays - self.trading_days
-        if not missing:
-            return 0
-
-        covered_years: Set[int] = self.market_holiday.get_covered_years()
-        closures: Set[datetime.date] = self.market_holiday.get_closures(
-            self.start_date, self.end_date
+        return (
+            self.market_holiday.get_covered_years(),
+            self.market_holiday.get_closures(start_date, end_date),
         )
-        undetermined: List[datetime.date] = sorted(
-            day for day in missing if day.year not in covered_years
-        )
-        gaps: List[datetime.date] = sorted(
-            day for day in missing if day.year in covered_years and day not in closures
-        )
-
-        if undetermined:
-            logger.info(
-                f"[Calendar] 區間內有 {len(undetermined)} 個平日沒有行情，"
-                f"落在官方休市行事曆未入庫的年度，無法分辨連假與缺日"
-            )
-
-        if gaps:
-            logger.warning(
-                f"[Calendar] 區間內有 {len(gaps)} 個平日沒有行情、"
-                f"且**不在**官方休市清單裡，很可能是資料缺口："
-                f"{gaps[:10]}" + ("…（僅列前 10 筆）" if len(gaps) > 10 else "")
-            )
-        elif not undetermined:
-            logger.info(
-                f"[Calendar] 區間內有 {len(missing)} 個平日沒有行情，"
-                f"皆為官方公告的休市日"
-            )
-
-        return len(undetermined) + len(gaps)
 
     def get_quotes(
         self,
@@ -203,15 +138,30 @@ class TwStockDataFeed(BaseDataFeed):
         adjusted: bool = False,
     ) -> List[StockQuote]:
         """
-        依級別取得當日報價
+        - Description:
+            取得當日的日 K 報價
 
-        tick 不做還原：tick 為當日盤中資料，跨日還原無意義
+            **TICK 不從這裡取**：把一天的 tick 一次交出去就是前視（早盤的委託會拿下午的價位成交），
+            逐筆回測由 `StockTickDataFeed` 依時間逐筆產生。
+        - Parameters:
+            - date: datetime.date
+                交易日
+            - scale: Scale
+                級別；只接受 `Scale.DAY`
+            - adjusted: bool
+                是否附上還原價（只影響訊號用的 `adj_close`）
+        - Return:
+            - List[StockQuote]
+                當日報價
+        - Raise:
+            - ValueError
+                要求 `Scale.TICK`
         """
 
         if scale == Scale.TICK:
-            # 一次取一天的 tick，避免資料量太大 RAM 爆掉
-            ticks: pd.DataFrame = self.tick.get_ordered_ticks(date, date)
-            return StockQuoteAdapter.from_tick_rows(ticks, date)
+            raise ValueError(
+                "TICK 報價不能一次取整天（那是前視）；逐筆回測請用 StockTickDataFeed"
+            )
 
         price_df: pd.DataFrame = self.price.get(date)
         adjusted_close_map: Dict[str, Any] = (
@@ -235,16 +185,17 @@ class TwStockDataFeed(BaseDataFeed):
 
     def get_short_balance(self, date: datetime.date) -> Dict[str, int]:
         """
-        當日融券今日餘額（張），供券源檢核使用
+        站在當天早上能知道的融券餘額（張）：前一次公布的「融券今日餘額」，供券源檢核使用
 
-        `margin` 表尚未建立或該日無資料時回傳空 dict——`FillModel` 會據此放行並記錄，
+        餘額盤後才公布，當天盤中借得到多少券只能看前一交易日的數字；拿當天的就是前視偏差。
+        `margin` 表尚未建立或之前沒有資料時回傳空 dict——`FillModel` 會據此放行並記錄，
         不會把「查無資料」當成「借不到券」
         """
 
         if self.margin is None:
             return {}
 
-        return self.margin.get_short_balance_map(date)
+        return self.margin.get_available_short_balance_map(date)
 
     def get_short_sale_list(
         self, date: datetime.date
@@ -307,11 +258,7 @@ class TwStockDataFeed(BaseDataFeed):
         if not checks:
             return
 
-        if (
-            self.start_date is None
-            or self.end_date is None
-            or self.trading_days is None
-        ):
+        if self.start_date is None or self.end_date is None or self.calendar is None:
             raise TradingListCoverageError(
                 "開啟名單檢核需要回測區間，策略未設定 start_date／end_date"
             )
@@ -326,13 +273,15 @@ class TwStockDataFeed(BaseDataFeed):
             covered: Set[datetime.date] = set(
                 api.get_covered_dates(self.start_date, self.end_date)
             )
-            missing: List[datetime.date] = sorted(self.trading_days - covered)
+            missing: List[datetime.date] = sorted(
+                self.calendar.trading_day_set - covered
+            )
             if missing:
                 preview: str = "、".join(str(day) for day in missing[:5])
                 raise TradingListCoverageError(
                     f"{label}在回測區間內缺 {len(missing)} 個交易日（{preview}"
                     f"{'…' if len(missing) > 5 else ''}）；請先執行 "
-                    f"`python -m tasks.update_db --target {target} --from {missing[0]}`"
+                    f"`python -m apps.update_db --target {target} --from {missing[0]}`"
                 )
 
     def get_force_cover_symbols(self, date: datetime.date) -> Set[str]:
@@ -513,10 +462,10 @@ class TwStockDataFeed(BaseDataFeed):
 
         return self.dividend.get_share_ratio_map(date)
 
-    def close(self) -> None:
-        """關閉所有資料連線；回測結束時由引擎的 `finally` 呼叫"""
+    def data_apis(self) -> Tuple[Any, ...]:
+        """本資料源建立的 API（供基底的 `close()` 逐一關閉）"""
 
-        for api in (
+        return (
             self.chip,
             self.mrr,
             self.fs,
@@ -525,11 +474,6 @@ class TwStockDataFeed(BaseDataFeed):
             self.margin,
             self.short_sale_list,
             self.day_trade_list,
+            self.market_holiday,
             self.tick,
-        ):
-            if api is not None:
-                api.close()
-
-        if self.conn is not None:
-            self.conn.close()
-            self.conn = None
+        )

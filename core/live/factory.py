@@ -3,16 +3,20 @@ import json
 import math
 import os
 import subprocess
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from loguru import logger
 
+from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.backtest.backtester import Backtester
 from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimiter
+from core.config.live_risk import LiveRiskOverrides, load_live_risk_overrides
+from core.config.paths import LIVE_RISK_CONFIG_PATH
 from core.config.settings import (
     LIVE_NOTIFY_CHANNEL,
     LIVE_NOTIFY_TARGET,
@@ -45,37 +49,52 @@ from core.live.notify.base import BaseNotifier, NullNotifier
 from core.live.notify.factory import build_notifier
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
-from core.live.report.parity_checker import ParityChecker
-from core.live.risk.risk_config import RiskConfig
+from core.live.report.parity_checker import TIMING_TO_PHASE, ParityChecker
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
-from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.market.cost_model import BaseCostModel
+from core.market.instrument_spec import InstrumentSpec
+from core.market.segment import SegmentSchedule, SegmentWindow
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
+from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
 from core.models import (
     BaseOrder,
+    BasePosition,
     BrokerAccountSnapshot,
     FuturesAccount,
     FuturesOrder,
+    PriceLimits,
     RealizedTradeSnapshot,
     StockAccount,
     StockPositionSnapshot,
 )
 from core.models.cost_config import CostConfig, FuturesCostConfig
-from core.portfolio.order_rules import resolve_open_action
+from core.models.risk_config import (
+    RISK_CONFIG_BY_INSTRUMENT,
+    AccountRiskConfig,
+    BaseRiskConfig,
+)
+from core.portfolio.order_rules import is_opening, resolve_open_action
+from core.position.assembly import (
+    TwFuturesModels,
+    TwStockModels,
+    build_tw_futures_models,
+    build_tw_stock_models,
+)
 from core.position.base.position_manager import BasePositionManager
 from core.position.futures.position_manager import FuturesPositionManager
-from core.position.stock.position_manager import StockPositionManager
-from core.strategies.base import BaseStrategy
+from core.strategies.base import BaseStrategy, resolve_hook_timing
 from core.utils import (
     FUTURES_MULTIPLIER,
     Action,
     ExecutionTiming,
     FuturesRollRule,
     InstrumentType,
+    LiveHook,
     Market,
     PositionType,
     Units,
@@ -94,45 +113,9 @@ from core.utils import (
 **清單只有一支時，行為與單策略完全相同**——多策略不是另一條程式路徑。
 """
 
-# 台股的段落時窗。
-#
-# 尾盤段 **13:25 才開始送單**：13:25 之前送出的限價單會在逐筆交易時段就成交，
-# 成交價不是收盤價，與回測「以收盤價成交」的假設對不上，而且看起來完全正常。
-# 13:29 停止送單讓委託進得了收盤集合競價；**13:35 才收線**，因為收盤集合競價的
-# 成交回報要 13:30 之後才會進來——送完單就收線會讓當日成交明細出現一段空窗。
-TW_STOCK_SEGMENTS: SegmentSchedule = {
-    ExecutionTiming.AT_OPEN: SegmentWindow(
-        submit_start=datetime.time(8, 30),
-        submit_end=datetime.time(8, 59),
-        drain_end=datetime.time(9, 5),
-    ),
-    ExecutionTiming.AT_CLOSE: SegmentWindow(
-        submit_start=datetime.time(13, 25),
-        submit_end=datetime.time(13, 29),
-        drain_end=datetime.time(13, 35),
-    ),
-}
-
-# 台期貨的段落時窗。
-#
-# ⚠️ **這組時點尚未以 TAIFEX 公告逐條核對**，用的是日盤 08:45~13:45 的常識值。
-# 上正式環境前要在模擬環境實際驗一次：收盤規則寫錯不會報錯，只會讓整段安靜地不送單。
-TW_FUTURES_SEGMENTS: SegmentSchedule = {
-    ExecutionTiming.AT_OPEN: SegmentWindow(
-        submit_start=datetime.time(8, 45),
-        submit_end=datetime.time(8, 59),
-        drain_end=datetime.time(9, 5),
-    ),
-    ExecutionTiming.AT_CLOSE: SegmentWindow(
-        submit_start=datetime.time(13, 30),
-        submit_end=datetime.time(13, 44),
-        drain_end=datetime.time(13, 50),
-    ),
-}
-
 
 class UnsupportedMarketError(ValueError):
-    """沒有對應實作的（市場, 商品）組合"""
+    """沒有對應實作的（市場，商品）組合"""
 
 
 def live_capital(strategy: BaseStrategy) -> float:
@@ -331,9 +314,10 @@ def build_live_trader(
     simulation: bool = True,
     dry_run: bool = False,
     resume_trading: bool = False,
+    resume_strategies: Optional[Sequence[str]] = None,
     run_id: Optional[str] = None,
     dao: Optional[LiveTradeDAO] = None,
-    risk_config: Optional[RiskConfig] = None,
+    live_risk_path: Optional[Path] = None,
     now_provider: Callable[[], datetime.datetime] = now_live,
     phase: str = "",
 ) -> LiveTrader:
@@ -356,12 +340,15 @@ def build_live_trader(
             走完整流程但不真的送出
         - resume_trading: bool
             人工恢復交易模式
+        - resume_strategies: Optional[Sequence[str]]
+            只恢復這幾支策略、帳戶層不動；None 時恢復帳戶層與所有已記錄的策略
         - run_id: Optional[str]
             本次啟動的識別碼；None 時以時戳產生
         - dao: Optional[LiveTradeDAO]
             實盤紀錄庫；None 時自行開啟
-        - risk_config: Optional[RiskConfig]
-            風控設定；None 時用預設值
+        - live_risk_path: Optional[Path]
+            部署端的風控設定檔（只能收緊）；None 時用 `LIVE_RISK_CONFIG_PATH`。
+            檔案不存在時只用策略宣告與預設值
         - now_provider: Callable[[], datetime.datetime]
             取得目前時間
         - phase: str
@@ -372,9 +359,10 @@ def build_live_trader(
             組裝好的引擎
     - Raise:
         - UnsupportedMarketError
-            某支策略的（市場, 商品）組合沒有對應實作
+            某支策略的（市場，商品）組合沒有對應實作
         - ValueError
-            策略清單為空、或策略名稱重複
+            策略清單為空、策略名稱重複，或風控設定不合法（宣告的類別與市場不符、
+            部署設定比策略宣告寬或寫了不存在的欄位）
     """
 
     if not strategies:
@@ -389,6 +377,18 @@ def build_live_trader(
             "重名會讓兩支策略的部位與損益混在一起，而合計仍然正確——對帳看不出來"
         )
 
+    # 風控設定在組裝任何元件之前解析完：設定不合法是啟動錯誤，不該留下半套元件
+    overrides: LiveRiskOverrides = load_live_risk_overrides(
+        live_risk_path if live_risk_path is not None else LIVE_RISK_CONFIG_PATH
+    )
+    account_risk: AccountRiskConfig = AccountRiskConfig().with_overrides(
+        overrides.account
+    )
+    strategy_risks: Dict[str, BaseRiskConfig] = {
+        name: resolve_strategy_risk_config(name, strategy, overrides)
+        for name, strategy in zip(names, strategies)
+    }
+
     resolved_run_id: str = run_id or now_provider().strftime("%Y%m%d%H%M%S")
     resolved_dao: LiveTradeDAO = dao if dao is not None else LiveTradeDAO()
     resolved_dao.ensure_tables()
@@ -400,17 +400,21 @@ def build_live_trader(
     )
 
     mode_state: TradingModeState = TradingModeState(
-        resolved_dao, resolved_run_id, now_provider, resume_trading=resume_trading
+        resolved_dao,
+        resolved_run_id,
+        now_provider,
+        resume_trading=resume_trading,
+        resume_strategies=resume_strategies,
     )
     risk_manager: PreTradeRiskManager = PreTradeRiskManager(
         mode_state,
-        risk_config,
+        account_risk,
         resolved_dao,
         resolved_run_id,
         now_provider=now_provider,
     )
     ledger: PositionAttributionLedger = PositionAttributionLedger(
-        resolved_dao, now_provider
+        resolved_dao, now_provider, run_id=resolved_run_id
     )
     allocator: CapitalAllocator = CapitalAllocator(
         {name: live_capital(strategy) for name, strategy in zip(names, strategies)},
@@ -438,7 +442,7 @@ def build_live_trader(
         # 要在組裝任何讀 `max_holdings` 的元件之前寫回
         apply_live_max_holdings(strategy)
         context, schedule = _build_context(
-            name, strategy, resolved_broker, risk_config, now_provider
+            name, strategy, resolved_broker, strategy_risks[name], now_provider
         )
         contexts.append(context)
         managers[name] = context.position_manager
@@ -460,6 +464,7 @@ def build_live_trader(
         resolved_dao,
         now_provider,
         order_builders=order_builders,
+        run_id=resolved_run_id,
     )
     # OMS 比逐策略元件先建（它是單例），建構器要等策略都組好才齊
     order_manager.order_rebuilder = make_order_rebuilder(order_builders, now_provider)
@@ -483,19 +488,12 @@ def build_live_trader(
         make_daily_backtest_runner(strategies, resolved_dao.get_lots_held_at_start),
         strategy_names=[type(strategy).__name__ for strategy in strategies],
         closing_limit=make_closing_limit_lookup(),
+        order_phases=make_order_phase_lookup(strategies),
     )
-    _record_run(
-        resolved_dao,
-        resolved_run_id,
-        simulation,
-        dry_run,
-        not isinstance(notifier, NullNotifier),
-        now_provider,
-        phase,
-        [type(strategy).__name__ for strategy in strategies],
-    )
-
-    return LiveTrader(
+    # 先組好引擎、再寫 `live_run`：組裝過程中任何一步拋錯（例如兩個市場的時窗
+    # 沒有交集）都是設定錯誤，那時不該留下一筆沒有結束時間的執行紀錄——
+    # 下一次啟動會把它當成崩潰，發 CRITICAL 並觸發「以券商為準重建部位」
+    trader: LiveTrader = LiveTrader(
         contexts=contexts,
         broker=resolved_broker,
         order_manager=order_manager,
@@ -511,7 +509,7 @@ def build_live_trader(
         schedule=_merge_schedules(schedules),
         dry_run=dry_run,
         simulation=simulation,
-        cost_estimator=make_trade_cost_estimator(),
+        cost_estimator=make_trade_cost_estimator(contexts),
         # 查哪個帳戶是商品語意，由這裡決定後注入（引擎本體不認得「股票」「期貨」）
         fetch_account=make_account_fetcher(resolved_broker, strategies, resolved_dao),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
@@ -523,11 +521,100 @@ def build_live_trader(
             )
             else None
         ),
-        resume_trading=resume_trading,
+        # 引擎用它放行「帳戶層非 NORMAL」的送單路徑：只有帳戶層真的被恢復時才成立，
+        # 指名恢復策略時帳戶層不動，不可讓它放行
+        resume_trading=resume_trading and resume_strategies is None,
         notifier=notifier,
         now_provider=now_provider,
         parity_checker=parity_checker,
     )
+    _record_run(
+        resolved_dao,
+        resolved_run_id,
+        simulation,
+        dry_run,
+        not isinstance(notifier, NullNotifier),
+        now_provider,
+        phase,
+        [type(strategy).__name__ for strategy in strategies],
+        _run_instrument_type(strategies),
+        live_tags={
+            type(strategy).__name__: strategy.live_tag
+            for strategy in strategies
+            if strategy.live_tag
+        },
+        risk_config={
+            "account": account_risk.to_dict(),
+            "strategies": {
+                name: {"class": type(config).__name__, **config.to_dict()}
+                for name, config in strategy_risks.items()
+            },
+        },
+    )
+
+    return trader
+
+
+def resolve_strategy_risk_config(
+    name: str, strategy: BaseStrategy, overrides: LiveRiskOverrides
+) -> BaseRiskConfig:
+    """
+    - Description:
+        決定一支策略實際套用的風控門檻：策略宣告（沒有就用該市場預設）→ 部署設定收緊
+
+        **宣告的類別必須與策略的市場相符**：股票策略宣告了 `FuturesRiskConfig` 的話，
+        它的欄位（口數、名目槓桿）在股票的送單路徑上一條都用不到，等於沒有宣告，
+        而且不會有任何錯誤訊息。
+    - Parameters:
+        - name: str
+            策略名（部署設定以它分段）
+        - strategy: BaseStrategy
+            策略實例
+        - overrides: LiveRiskOverrides
+            部署設定
+    - Return:
+        - BaseRiskConfig
+            實際套用的門檻
+    - Raise:
+        - ValueError
+            宣告的類別與市場不符，或部署設定不合法
+    """
+
+    expected: Optional[type] = RISK_CONFIG_BY_INSTRUMENT.get(strategy.instrument_type)
+    if expected is None:
+        raise ValueError(
+            f"{name} 的商品類別 {strategy.instrument_type} 沒有對應的實盤風控設定"
+        )
+
+    declared: Optional[BaseRiskConfig] = getattr(strategy, "live_risk_config", None)
+    if declared is not None and type(declared) is not expected:
+        raise ValueError(
+            f"{name} 宣告的 live_risk_config 是 {type(declared).__name__}，"
+            f"但它是 {strategy.instrument_type.value} 策略，應使用 {expected.__name__}"
+        )
+
+    base: BaseRiskConfig = declared if declared is not None else expected()
+    try:
+        return base.with_overrides(overrides.for_strategy(name))
+    except ValueError as exc:
+        raise ValueError(f"{name}：{exc}") from exc
+
+
+def _run_instrument_type(strategies: Sequence[BaseStrategy]) -> Optional[str]:
+    """
+    本次行程載入的商品類別；只有一種才寫，混合或沒宣告時為 None
+
+    股票與期貨各是一個行程、段落名相同，存活監控靠這一欄分辨是哪一條線沒跑。
+    混合市場的行程組裝時就會被拒絕，這裡回 None 只是不替未定義的情況編一個值。
+    """
+
+    instruments: Set[Optional[InstrumentType]] = {
+        strategy.instrument_type for strategy in strategies
+    }
+    if len(instruments) != 1:
+        return None
+    (instrument,) = instruments
+    return instrument.value if instrument is not None else None
 
 
 def make_order_rebuilder(
@@ -552,6 +639,8 @@ def make_order_rebuilder(
     """
 
     def rebuild(row: Dict[str, Any]) -> Optional[BaseOrder]:
+        """依該列的策略取建構器還原訂單；標的或數量是空的列回 None"""
+
         if not row.get("symbol") or not int(row.get("volume") or 0):
             return None
 
@@ -608,7 +697,7 @@ def _build_context(
     name: str,
     strategy: BaseStrategy,
     broker: BaseBroker,
-    risk_config: Optional[RiskConfig],
+    risk_config: BaseRiskConfig,
     now_provider: Callable[[], datetime.datetime],
 ) -> Tuple[StrategyContext, SegmentSchedule]:
     """依 `(market, instrument_type)` 分派出這支策略需要的一整組元件"""
@@ -618,13 +707,21 @@ def _build_context(
 
     if market == Market.TW and instrument == InstrumentType.STOCK:
         account: StockAccount = StockAccount(init_capital=live_capital(strategy))
-        cost_model: StockCostModel = StockCostModel(CostConfig.default())
-        manager: BasePositionManager = StockPositionManager(account, cost_model)
+        # 與回測同一組法：成本設定依策略宣告推導（當沖策略的空單走現股當沖沖賣），
+        # 不再一律用預設費率——否則實盤本地帳與回測記出不同的帳，且不會有任何錯誤訊息
+        stock_models: TwStockModels = build_tw_stock_models(strategy, account)
+        cost_model: BaseCostModel = stock_models.cost_model
+        manager: BasePositionManager = stock_models.position_manager
         feed: BaseLiveDataFeed = TwStockLiveDataFeed(broker, now_provider=now_provider)
         spec: TwStockSpec = TwStockSpec()
         schedule: SegmentSchedule = TW_STOCK_SEGMENTS
         build_order: FilledOrderBuilder = build_stock_order
         opening_requirement: Optional[Callable[[BaseOrder], float]] = None
+        # 股票的資金占用與曝險是同一個數（價 × 股數）
+        notional: Callable[[BaseOrder], float] = _make_contract_value_calculator(
+            spec, now_provider
+        )
+        exposure: Callable[[BaseOrder], float] = notional
         execution_model: BaseExecutionModel = StockExecutionModel(
             price_limits=feed.get_price_limits
         )
@@ -640,24 +737,38 @@ def _build_context(
             getattr(strategy, "margin_config", None) or FuturesMarginConfig.default()
         )
         strategy.margin_config = margin_config
-        futures_manager: FuturesPositionManager = FuturesPositionManager(
-            futures_account,
-            TwFuturesCostModel(FuturesCostConfig.default()),
-            margin_config=margin_config,
-        )
-        manager = futures_manager
         roll_config: FuturesRollConfig = to_live_roll_config(
             getattr(strategy, "roll_config", None) or FuturesRollConfig()
         )
         strategy.roll_config = roll_config
-        feed = TwFuturesLiveDataFeed(
+        futures_feed: TwFuturesLiveDataFeed = TwFuturesLiveDataFeed(
             broker,
             now_provider=now_provider,
             margin_config=margin_config,
             roll_config=roll_config,
         )
+        feed = futures_feed
+        # 與回測同一組法：成本設定讀策略宣告、保證金模型與部位管理層共用同一個、
+        # 乘數由資料源解析（股期的契約單位不在常數表，退回常數表會 KeyError）。
+        # 股期標的股價在實盤沒有來源，比例表那條路暫不接
+        futures_models: TwFuturesModels = build_tw_futures_models(
+            strategy,
+            futures_account,
+            multiplier_resolver=futures_feed.resolve_multiplier,
+        )
+        cost_model = futures_models.cost_model
+        futures_manager: FuturesPositionManager = futures_models.position_manager
+        manager = futures_manager
         opening_requirement = _make_opening_requirement(futures_manager, now_provider)
-        spec = TwFuturesSpec()
+        # 資金占用是保證金、曝險是契約價值：一口台指期押約 70 萬、承擔約 900 萬的風險
+        # 乘數解析器與部位管理層同一個：spec 與記帳算出的乘數不會分岔
+        futures_spec: TwFuturesSpec = TwFuturesSpec(
+            multiplier_resolver=futures_feed.resolve_multiplier
+        )
+        notional = _make_futures_margin_calculator(
+            futures_manager, futures_spec, now_provider
+        )
+        exposure = _make_contract_value_calculator(futures_spec, now_provider)
         schedule = TW_FUTURES_SEGMENTS
         build_order = _build_futures_order
         execution_model = FuturesExecutionModel(price_limits=feed.get_price_limits)
@@ -672,9 +783,12 @@ def _build_context(
         strategy=strategy,
         account=account,
         position_manager=manager,
+        cost_model=cost_model,
         data_feed=feed,
         symbols=list(getattr(strategy, "symbols", []) or []),
-        calculate_notional=_make_notional_calculator(spec),
+        calculate_notional=notional,
+        calculate_exposure=exposure,
+        risk_config=risk_config,
         build_filled_order=build_order,
         calculate_opening_requirement=opening_requirement,
         execution_model=execution_model,
@@ -682,13 +796,16 @@ def _build_context(
     return (context, schedule)
 
 
-def make_trade_cost_estimator() -> TradeCostEstimator:
+def make_trade_cost_estimator(
+    contexts: Optional[Sequence[StrategyContext]] = None,
+) -> TradeCostEstimator:
     """
     - Description:
         盤後校正成本用的估算器：依成本模型重算一筆已平倉交易的手續費與稅
 
-        成本模型與實盤部位管理用的是同一組預設設定（`CostConfig.default()`、
-        `FuturesCostConfig.default()`），校正比對的才是「實盤記帳用的那套」估得準不準。
+        **成本模型取實盤記帳用的那一個**（各策略脈絡裡的 `cost_model`），校正比對的
+        才是「實盤記帳用的那套」估得準不準。費率是帳戶層級的設定，同一個帳戶跑多支
+        策略時取第一支該市場策略的成本模型；沒有該市場的策略才退回預設費率。
         - 期貨：**只估平倉那一腿**（一次手續費＋平倉價的期交稅），與券商欄位的範圍一致——
           2026-09-22 模擬環境實測，台指期一口來回的已實現紀錄 `fee=50`、`tax=193`，
           正好是單邊手續費與單邊期交稅（開平倉價的稅在這個價位都是 193，分不出是哪一腿；
@@ -696,19 +813,38 @@ def make_trade_cost_estimator() -> TradeCostEstimator:
           乘數取 `FUTURES_MULTIPLIER`，不在表內（股票期貨）時回 None。
         - 股票：手續費開平倉各一次；證交稅只課賣出那一腿——多單課在平倉價、
           空單課在開倉價；開倉日與交易日同一天時用當沖稅率。缺開倉成交時回 None。
+    - Parameters:
+        - contexts: Optional[Sequence[StrategyContext]]
+            已組好的策略脈絡；None 或沒有該市場的策略時用預設費率
     - Return:
         - TradeCostEstimator
             估算器
     """
 
-    stock_cost: StockCostModel = StockCostModel(CostConfig.default())
-    futures_cost: TwFuturesCostModel = TwFuturesCostModel(FuturesCostConfig.default())
+    stock_cost: TwStockCostModel = next(
+        (
+            context.cost_model
+            for context in contexts or []
+            if isinstance(context.cost_model, TwStockCostModel)
+        ),
+        TwStockCostModel(CostConfig.default()),
+    )
+    futures_cost: TwFuturesCostModel = next(
+        (
+            context.cost_model
+            for context in contexts or []
+            if isinstance(context.cost_model, TwFuturesCostModel)
+        ),
+        TwFuturesCostModel(FuturesCostConfig.default()),
+    )
 
     def estimate(
         trade: RealizedTradeSnapshot,
         opening: List[Dict[str, Any]],
         run_date: datetime.date,
     ) -> Optional[float]:
+        """依市場重算一筆已平倉交易的手續費與稅；算不出來時回 None"""
+
         quantity: int = trade.quantity
         if trade.is_futures:
             product, _ = split_contract_id(trade.symbol)
@@ -811,6 +947,8 @@ def _make_opening_requirement(
     """
 
     def calculate(order: BaseOrder) -> float:
+        """開倉需要的原始保證金與開倉成本（保證金表以今天為準）"""
+
         return manager.calculate_opening_requirement(order, now_provider().date())
 
     return calculate
@@ -835,11 +973,9 @@ def make_daily_backtest_runner(
         **資金與檔數照實盤的口徑**（`live_capital`、`live_max_holdings`）：parity 量的是
         訊號有沒有漂移，不是兩邊設定不同。用研究回測的 `init_capital`／`max_holdings`
         的話，宣告了實盤額度的策略每天都會因為張數與檔數不同而報未解釋差異——
-        `MomentumStrategy1` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
+        `VolumeBreakoutMomentumStrategy` 實盤 40 萬切 3 檔、研究回測 100 萬切 10 檔，
         2026-10-06 試跑的三筆未解釋差異全是這個原因。
-    - Parameters:
-        - strategies: Sequence[BaseStrategy]
-            本次實盤載入的策略實例；只用來取類別與 `init_capital`
+
         **起始部位＝實盤當天開盤前的持倉**（`held_lots`）：從零部位跑的話，回測帳上
         沒有前一天留下的部位，實盤當天的平倉單在回測一定沒有對應，平倉日必定報
         未解釋差異——開倉→次日平倉這組驗收永遠過不了。順帶的效果是：開倉沒成交
@@ -860,6 +996,8 @@ def make_daily_backtest_runner(
     }
 
     def run(strategy_name: str, run_date: datetime.date) -> List[BaseOrder]:
+        """以新建的策略實例跑一天回測，回傳它會送出的委託"""
+
         blueprint: Optional[BaseStrategy] = blueprints.get(strategy_name)
         if blueprint is None:
             raise UnsupportedMarketError(f"本次執行沒有載入策略 {strategy_name}")
@@ -884,8 +1022,53 @@ def make_daily_backtest_runner(
     return run
 
 
+def make_order_phase_lookup(
+    strategies: Sequence[BaseStrategy],
+) -> Callable[[str, BaseOrder], Set[str]]:
+    """
+    - Description:
+        產生 parity 用的「回測這張單該在哪些段落送出」查詢
+
+        開倉單看 `open` 鉤子的段落；平倉單同時看 `close` 與 `stop_loss`——回測的委託分不出
+        是一般平倉還是停損，兩個段落都要中止，parity 才能把它歸給段落中止。
+        段落沿用實盤引擎同一套解析（`resolve_hook_timing()`，沒宣告的鉤子會退回 `close`），
+        兩邊各算一份的話，宣告改了只有一邊跟上。
+    - Parameters:
+        - strategies: Sequence[BaseStrategy]
+            本次行程載入的策略
+    - Return:
+        - Callable[[str, BaseOrder], Set[str]]
+            `(策略名, 回測委託) → 段落名集合`；認不得的策略或沒有段落時為空集合
+    """
+
+    by_name: Dict[str, BaseStrategy] = {
+        type(strategy).__name__: strategy for strategy in strategies
+    }
+
+    def lookup(strategy_name: str, order: BaseOrder) -> Set[str]:
+        """這張回測委託該送出的段落名；任一鉤子解析不出段落就回空集合"""
+
+        strategy: Optional[BaseStrategy] = by_name.get(strategy_name)
+        if strategy is None:
+            return set()
+        opening: bool = is_opening(order)
+        hooks: List[LiveHook] = (
+            [LiveHook.OPEN] if opening else [LiveHook.CLOSE, LiveHook.STOP_LOSS]
+        )
+        phases: Set[str] = set()
+        for hook in hooks:
+            timing: Optional[ExecutionTiming] = resolve_hook_timing(strategy, hook)
+            if timing is None or timing not in TIMING_TO_PHASE:
+                return set()
+            phases.add(TIMING_TO_PHASE[timing])
+        return phases
+
+    return lookup
+
+
 def make_closing_limit_lookup(
     api_factory: Callable[[], StockPriceAPI] = StockPriceAPI,
+    dividend_api_factory: Callable[[], StockDividendAPI] = StockDividendAPI,
 ) -> Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]:
     """
     - Description:
@@ -894,14 +1077,18 @@ def make_closing_limit_lookup(
         集合競價的 `MARKET` 委託掛在漲跌停卻沒成交時，parity 要確認收盤是不是真的鎖住，
         才能歸「鎖漲跌停」；收盤沒鎖住卻沒成交是另一回事（例如模擬環境不撮合集合競價）。
 
-        **漲跌停以前一交易日收盤為基準自行計算**（`TwStockSpec.get_price_limits()`）：
-        除權息日的真正基準是開盤競價基準，算出來的漲跌停會偏，該日鎖住的單會被歸到
-        `UNFILLED`、`note` 寫出兩個價——寧可多一筆要人看，不會把沒鎖住的誤判成鎖住。
+        **漲跌停基準與回測同一口徑**：前一交易日收盤，除權息日改用交易所公告的
+        開盤競價基準（`StockDividendAPI.get_opening_reference_price_map()`，與
+        `TwStockFillModel.apply_price_limit_basis()` 同一來源），再以
+        `TwStockSpec.get_price_limits()` 推算。兩邊口徑不同時，除權息日鎖住的單會被
+        歸到 `UNFILLED`，沒鎖住的也可能被誤判成鎖住。
 
         **同一天只查一次資料庫**：一天的差異可能有好幾檔，逐檔連線查詢沒有意義。
     - Parameters:
         - api_factory: Callable[[], StockPriceAPI]
             建立價格 API 的函式；測試以此注入假的資料來源
+        - dividend_api_factory: Callable[[], StockDividendAPI]
+            建立除權息 API 的函式（開盤競價基準）；測試以此注入假的資料來源
     - Return:
         - Callable[[str, str, datetime.date], Optional[Tuple[float, float]]]
             `(標的, 買賣別, 交易日) → (收盤價, 該方向的漲跌停價)`；當日或前一交易日
@@ -912,6 +1099,8 @@ def make_closing_limit_lookup(
     cache: Dict[datetime.date, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
 
     def load(run_date: datetime.date) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """取當日收盤價與漲跌停基準（前收，除權息日改用開盤競價基準）；同一天只查一次"""
+
         if run_date not in cache:
             with api_factory() as api:
                 # 往前 30 個曆日足以跨過任何連假
@@ -923,20 +1112,29 @@ def make_closing_limit_lookup(
                 prev_closes: Dict[str, Any] = (
                     api.get_close_map(days[-1]) if days else {}
                 )
-            cache[run_date] = (closes, prev_closes)
+            # 除權息日的開盤競價基準覆寫前收：與回測 `apply_price_limit_basis()` 同一條規則
+            with dividend_api_factory() as dividend:
+                basis: Dict[str, float] = dividend.get_opening_reference_price_map(
+                    run_date
+                )
+            cache[run_date] = (closes, {**prev_closes, **basis})
         return cache[run_date]
 
     def lookup(
         symbol: str, side: str, run_date: datetime.date
     ) -> Optional[Tuple[float, float]]:
-        closes, prev_closes = load(run_date)
+        """當日收盤價與該方向的漲跌停價；任一項取不到時回 None"""
+
+        closes, references = load(run_date)
         close: Optional[float] = _positive_price(closes.get(symbol))
-        prev_close: Optional[float] = _positive_price(prev_closes.get(symbol))
-        if close is None or prev_close is None:
+        reference: Optional[float] = _positive_price(references.get(symbol))
+        if close is None or reference is None:
             return None
 
-        limit_down, limit_up = spec.get_price_limits(prev_close, run_date, symbol)
-        limit: Optional[float] = limit_up if side == Action.BUY.value else limit_down
+        limits: PriceLimits = spec.get_price_limits(reference, run_date, symbol)
+        limit: Optional[float] = (
+            limits.limit_up if side == Action.BUY.value else limits.limit_down
+        )
         if limit is None:
             return None
         return (close, float(limit))
@@ -1013,16 +1211,79 @@ def _build_futures_order(
     )
 
 
-def _make_notional_calculator(spec: Any) -> Callable[[BaseOrder], float]:
+def _make_contract_value_calculator(
+    spec: InstrumentSpec, now_provider: Callable[[], datetime.datetime]
+) -> Callable[[BaseOrder], float]:
     """
-    以 `InstrumentSpec` 的計價單位換算委託金額
+    - Description:
+        委託（或部位）的契約價值：價格 × 數量 × 計價單位（`InstrumentSpec.get_unit_size()`）
 
-    **單位是市場特性**：台股一張是 1000 股、期貨一口要乘契約乘數。
-    引擎本體算不出來也不該知道，故在這裡包成一個函式注入進去。
+        **兩個市場同一個公式，單位由 spec 決定**：台股一張 1000 股、期貨一口乘契約乘數
+        （由注入 spec 的解析器查，與部位管理層同一個來源，股期也查得到）。
+        股票的資金占用與曝險都是它；期貨只有曝險（名目槓桿）用它，資金占用另算保證金，
+        見 `_make_futures_margin_calculator()`。
+    - Parameters:
+        - spec: InstrumentSpec
+            商品規格
+        - now_provider: Callable[[], datetime.datetime]
+            取得目前時間；計價單位以今天為準（股期的契約單位會隨除權息調整）
+    - Return:
+        - Callable[[BaseOrder], float]
+            委託或部位 → 契約價值
     """
 
     def calculate(order: BaseOrder) -> float:
-        return float(order.price) * float(spec.to_units(order.volume))
+        """價格 × 數量 × 計價單位"""
+
+        unit: int = spec.get_unit_size(spec.resolve_product(order), now_provider())
+        return float(order.price) * float(order.volume) * float(unit)
+
+    return calculate
+
+
+def _make_futures_margin_calculator(
+    manager: FuturesPositionManager,
+    spec: InstrumentSpec,
+    now_provider: Callable[[], datetime.datetime],
+) -> Callable[[BaseOrder], float]:
+    """
+    - Description:
+        期貨的資金占用：原始保證金（**以今天查保證金表**）
+
+        風控的單筆與當日上限、資金保留、已用額度都用它。以契約價值計的話，
+        一口台指期就是千萬級，任何合理的額度連一口都送不出去；只算點數 × 口數
+        （不乘乘數）則一口只算幾萬元，金額類風控等於沒有作用。
+
+        **未平倉部位用它記帳時繳的保證金，不重新查表**：已用額度與權益在段落一開始就要算，
+        當天的保證金表若查不到，重新查表會讓整個段落起不來——連平倉都送不出去。
+        委託才查表；查不到時拋 `ValueError`，開倉單在那之前已被保證金檢查擋下。
+    - Parameters:
+        - manager: FuturesPositionManager
+            部位管理層（保證金表與記帳同一份）
+        - spec: InstrumentSpec
+            商品規格；契約乘數由它提供，與契約價值同一個來源
+        - now_provider: Callable[[], datetime.datetime]
+            取得目前時間；保證金與乘數都以今天為準
+    - Return:
+        - Callable[[BaseOrder], float]
+            委託或部位 → 原始保證金
+    """
+
+    def calculate(order: BaseOrder) -> float:
+        """部位取記帳時繳的保證金；委託（或沒有紀錄的部位）以今天查保證金表"""
+
+        recorded: float = float(getattr(order, "margin", 0.0) or 0.0)
+        if isinstance(order, BasePosition) and recorded > 0:
+            return recorded
+
+        today: datetime.date = now_provider().date()
+        product: Optional[str] = spec.resolve_product(order)
+        multiplier: int = spec.get_unit_size(product, today)
+        return float(
+            manager.calculate_margin(
+                order.price, order.volume, multiplier, product=product, date=today
+            )
+        )
 
     return calculate
 
@@ -1098,6 +1359,9 @@ def _record_run(
     now_provider: Callable[[], datetime.datetime],
     phase: str,
     strategy_names: Sequence[str] = (),
+    instrument_type: Optional[str] = None,
+    risk_config: Optional[Dict[str, Any]] = None,
+    live_tags: Optional[Dict[str, str]] = None,
 ) -> None:
     """
     寫入啟動紀錄，含稽核欄位
@@ -1113,6 +1377,15 @@ def _record_run(
     **本次載入的策略寫進 `strategy_params_json`**（`{"strategies": [...]}`）：盤後 parity
     要知道某支策略當天的段落有沒有正常跑完，才分得出「回測多出的開倉單」是快照口徑
     還是實盤根本沒跑到。這一欄先前從未寫入，2026-10-08 以前的紀錄為 NULL。
+    有設定 `live_tag` 的策略另記在同一欄的 `live_tags`（`{策略類別名: 代號}`）：策略代號
+    宣稱「只寫本地紀錄」，這裡就是它落地的地方；沒設定的策略不列，免得每筆紀錄都帶一串空字串。
+
+    **商品類別寫進 `instrument_type`**：股票與期貨是兩個行程、段落名相同，存活監控
+    要靠它分辨「期貨尾盤沒跑」而不是被股票尾盤的紀錄遮住。更早的紀錄為 NULL。
+
+    **實際生效的風控門檻寫進 `risk_config_json`**（帳戶層一份、各策略各一份，已套用部署設定）：
+    風控值會因策略宣告與部署設定而不同，拒單數突然變了時要能回答「那天的上限是多少」。
+    這一欄先前從未寫入。
     """
 
     if not notify_enabled:
@@ -1135,7 +1408,17 @@ def _record_run(
             "git_commit": _git_commit(),
             "shioaji_version": _shioaji_version(),
             "strategy_params_json": json.dumps(
-                {"strategies": list(strategy_names)}, ensure_ascii=False
+                {
+                    "strategies": list(strategy_names),
+                    "live_tags": dict(live_tags or {}),
+                },
+                ensure_ascii=False,
+            ),
+            "instrument_type": instrument_type,
+            "risk_config_json": (
+                json.dumps(risk_config, ensure_ascii=False)
+                if risk_config is not None
+                else None
             ),
         }
     )

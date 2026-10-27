@@ -4,7 +4,7 @@ from typing import Optional
 from core.models.base.record import BaseTradeRecord
 from core.utils import PositionType, ShortMethod
 
-"""StockTradeRecord: single stock trade event in backtesting (transaction and performance details)"""
+"""StockTradeRecord：單筆台股交易紀錄（成交、成本與績效，含放空的借券費與股利補償）"""
 
 
 class StockTradeRecord(BaseTradeRecord):
@@ -59,9 +59,10 @@ class StockTradeRecord(BaseTradeRecord):
             transaction_cost=transaction_cost,
             realized_pnl=realized_pnl,
             roi=roi,
+            margin=margin,
+            holding_days=holding_days,
+            roi_on_capital=roi_on_capital,
         )
-
-        self.roi_on_capital: float = roi_on_capital  # 資金效率（僅供報表參考）
 
         # Short Info（LONG 一律維持預設值）
         # 台股的 transaction_cost 口徑 = 交易手續費 + 交易稅 + 借券費 + 股利補償 − 利息
@@ -70,8 +71,6 @@ class StockTradeRecord(BaseTradeRecord):
         self.interest: float = interest  # 融券保證金利息收入
         # 持有期間跨越除息日時補償給出借方的現金股利
         self.dividend_compensation: float = dividend_compensation
-        self.margin: float = margin  # 開倉時繳交的保證金
-        self.holding_days: int = holding_days  # 持有曆日數
 
     @property
     def stock_id(self) -> str:

@@ -1,13 +1,3 @@
-"""
-測試 `finmind/broker_trading_loader.load_from_dataframe()` 的去重語意：
-重複的 key 不重插、新日期可插入、其他組合不受影響。去重交給資料庫主鍵
-（`INSERT OR IGNORE`），不再先把已存在的 key 查回記憶體。
-
-**資料庫走 pytest 的 `tmp_path`**：本測試原本在 `tests/temp/` 建帶時間戳的 `.db`
-且從不刪除，跑一次留一個 12 MB 的檔——2026-09-13 清理時已累積 560 個、275 MB
-。`tmp_path` 由 pytest 負責回收，且每個測試各自隔離。
-"""
-
 import sqlite3
 from pathlib import Path
 from typing import List
@@ -16,6 +6,16 @@ from unittest.mock import patch
 import pandas as pd
 
 from core.config import STOCK_TRADING_DAILY_REPORT_TABLE_NAME
+
+"""
+測試 `finmind/broker_trading_loader.load_from_dataframe()` 的去重語意：
+重複的 key 不重插、新日期可插入、其他組合不受影響。去重交給資料庫主鍵
+（`INSERT OR IGNORE`），不再先把已存在的 key 查回記憶體。
+
+**資料庫走 pytest 的 `tmp_path`**：本測試原本在 `tests/temp/` 建帶時間戳的 `.db`
+且從不刪除，跑一次留一個 12 MB 的檔——2026-09-13 清理時已累積 560 個、275 MB。
+`tmp_path` 由 pytest 負責回收，且每個測試各自隔離。
+"""
 
 
 def _make_broker_trading_df(

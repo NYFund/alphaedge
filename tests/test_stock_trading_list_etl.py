@@ -350,6 +350,8 @@ def make_updater(
     calls: List[Tuple[str, datetime.date]] = []
 
     class FakeCrawler:
+        """照表回傳爬取結果並記錄呼叫順序的爬蟲替身"""
+
         def crawl_twse_short_sale_list(self, date: datetime.date) -> CrawlResult:
             calls.append(("TWSE", date))
             return results[("TWSE", date)]
@@ -359,6 +361,8 @@ def make_updater(
             return results[("TPEX", date)]
 
     class FakeDAO:
+        """不連資料庫的 DAO 替身"""
+
         conn: Any = None
 
     monkeypatch.setattr(
@@ -514,7 +518,7 @@ def test_daily_update_includes_both_lists() -> None:
     之後的日子，就會因名單缺日而拒絕執行。
     """
 
-    from tasks.update_db import expand_targets
+    from apps.update_db import expand_targets
 
     for shortcut in ("no_tick", "all"):
         targets = expand_targets({shortcut})

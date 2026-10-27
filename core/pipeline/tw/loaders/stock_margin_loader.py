@@ -11,7 +11,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 
 
 class StockMarginLoader(BaseDataLoader):
-    """Stock Margin Loader"""
+    """台股融資融券 loader"""
 
     DAO_CLASS: Type[Any] = StockMarginDAO
     SOURCE: str = "margin"

@@ -12,7 +12,7 @@ from core.dao.tw.futures_price_dao import FuturesPriceDAO
 from core.utils.constant import FuturesSession
 
 """
-Futures Price API: query futures_price_daily table through FuturesPriceDAO
+Futures Price API：經 `FuturesPriceDAO` 查詢 `futures_price_daily` 每日行情表
 
 **只讀 `tw_futures.db`，不讀 `downloads/` 下的中繼檔**：中繼檔只是 crawler 到
 loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才是唯一的真相來源。
@@ -31,7 +31,7 @@ loader 之間的暫存，唯一鍵與去重要入庫後才成立，資料庫才�
 
 
 class FuturesPriceAPI(BaseDataAPI):
-    """Futures Price API"""
+    """期貨每日行情 API（當日所有到期月的合約）"""
 
     DEFAULT_DB_PATH: Path = Path(TW_FUTURES_DB_PATH)
     DAO_CLASS: Type[BaseDAO] = FuturesPriceDAO
@@ -201,14 +201,14 @@ class FuturesPriceAPI(BaseDataAPI):
         return self.dao.get_products()
 
     # === 具名查詢：下游一律走這一組，不要自行操作 DataFrame 欄位 ===
-    @staticmethod
-    def build_expiry_map(df: pd.DataFrame, column: str) -> Dict[str, Any]:
+    @classmethod
+    def build_expiry_map(cls, df: pd.DataFrame, column: str) -> Dict[str, Any]:
         """
         - Description:
             由單日單商品的 DataFrame 建立 `{expiry: 欄位值}` 對照表
 
-            期貨版的 `BaseDataAPI.build_column_map()`——後者的鍵寫死為
-            `stock_id`，期貨在固定商品之後的自然鍵是到期月。
+            就是 `BaseDataAPI.build_column_map()` 以到期月當鍵——期貨在固定商品之後的
+            自然鍵是到期月。到期月一律轉成字串當鍵，與 `FuturesQuote.expiry` 同型別。
 
             **值維持資料庫原樣不做轉型**（含 `NaN`）：夜盤的 `結算價` 本來就是
             NULL，把它補成 0 會讓「沒有結算價」與「結算價為 0」混為一談。
@@ -222,11 +222,10 @@ class FuturesPriceAPI(BaseDataAPI):
                 對照表；`df` 為空或無該欄位時回傳空 dict
         """
 
-        if df.empty or column not in df.columns or "expiry" not in df.columns:
-            return {}
-
-        deduped: pd.DataFrame = df.drop_duplicates(subset="expiry", keep="first")
-        return dict(zip(deduped["expiry"].astype(str), deduped[column]))
+        return {
+            str(expiry): value
+            for expiry, value in cls.build_column_map(df, column, key="expiry").items()
+        }
 
     def get_close_map(
         self,
@@ -294,7 +293,7 @@ class FuturesPriceAPI(BaseDataAPI):
     ) -> pd.Series:
         """
         - Description:
-            取得單一合約的收盤價序列（index 為日期字串）
+            取得單一合約的收盤價序列
 
             技術指標的共通輸入。固定合約之後才有「序列」可言——跨合約直接接起來
             會在換月接點產生假跳空，那要走 `futures_continuous` 連續合約。
@@ -307,7 +306,9 @@ class FuturesPriceAPI(BaseDataAPI):
                 交易時段
         - Return:
             - pd.Series
-                收盤價序列；查無資料時為空 Series
+                價格序列（契約見 `BaseDataAPI.build_close_series()`：index 為
+                `datetime.date`、dtype float、name 為「收盤價」）；查無資料時為空 Series。
+                `session=None` 時同一天日夜盤各一列，不在此挑選
         """
 
         df: pd.DataFrame = self.get_contract_price(
@@ -317,8 +318,4 @@ class FuturesPriceAPI(BaseDataAPI):
             end_date=end_date,
             session=session,
         )
-        close_col: str = FuturesPriceColumn.CLOSE.value
-
-        if df.empty or close_col not in df.columns:
-            return pd.Series(dtype=float)
-        return df.set_index("date")[close_col]
+        return self.build_close_series(df, "date", FuturesPriceColumn.CLOSE.value)

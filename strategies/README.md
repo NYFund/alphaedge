@@ -1,0 +1,1155 @@
+# Strategy 策略撰寫指南
+
+**AlphaEdge** 的策略系統提供了一個完整的框架，讓開發者能夠輕鬆撰寫、測試和執行交易策略。本文件將詳細說明如何撰寫和使用策略。
+
+## 目錄
+
+- [Strategy 策略撰寫指南](#strategy-策略撰寫指南)
+  - [目錄](#目錄)
+  - [策略架構概述](#策略架構概述)
+    - [目錄結構](#目錄結構)
+  - [如何撰寫新策略](#如何撰寫新策略)
+    - [步驟 1: 建立策略檔案](#步驟-1-建立策略檔案)
+    - [步驟 2: 繼承 BaseStockStrategy](#步驟-2-繼承-basestockstrategy)
+    - [步驟 3: 設定策略參數](#步驟-3-設定策略參數)
+    - [步驟 4: 實作必須的方法](#步驟-4-實作必須的方法)
+  - [必須實作的方法詳解](#必須實作的方法詳解)
+    - [1. setup_account](#1-setup_account)
+    - [2. setup_apis](#2-setup_apis)
+    - [3. generate_open_signals](#3-generate_open_signals)
+    - [4. generate_close_signals](#4-generate_close_signals)
+    - [5. generate_stop_loss_signals](#5-generate_stop_loss_signals)
+    - [6. 部位大小由 portfolio 層決定](#6-部位大小由-portfolio-層決定)
+  - [選配：實盤的跨日補平](#選配實盤的跨日補平)
+  - [策略設定參數說明](#策略設定參數說明)
+    - [策略基本資訊](#策略基本資訊)
+    - [帳戶設定](#帳戶設定)
+    - [回測設定](#回測設定)
+    - [回測級別說明](#回測級別說明)
+    - [盤中逐筆策略：`is_tick_triggered`](#盤中逐筆策略is_tick_triggered)
+    - [當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序)
+  - [資料 API 使用方式](#資料-api-使用方式)
+    - [StockPriceAPI - 日線價格資料](#stockpriceapi---日線價格資料)
+    - [StockTickAPI - 逐筆成交資料](#stocktickapi---逐筆成交資料)
+    - [StockChipAPI - 籌碼資料](#stockchipapi---籌碼資料)
+    - [MonthlyRevenueReportAPI - 月營收資料](#monthlyrevenuereportapi---月營收資料)
+    - [FinancialStatementAPI - 財報資料](#financialstatementapi---財報資料)
+  - [策略載入機制](#策略載入機制)
+    - [自動載入規則](#自動載入規則)
+    - [使用策略名稱](#使用策略名稱)
+  - [使用策略進行回測](#使用策略進行回測)
+    - [基本語法](#基本語法)
+    - [參數說明](#參數說明)
+    - [使用範例](#使用範例)
+    - [回測結果](#回測結果)
+  - [完整範例](#完整範例)
+    - [快速開始範例](#快速開始範例)
+  - [如何撰寫放空策略](#如何撰寫放空策略)
+    - [放空策略的設定欄位](#放空策略的設定欄位)
+    - [訊號方向對照](#訊號方向對照)
+    - [放空策略範例](#放空策略範例)
+    - [放空策略注意事項](#放空策略注意事項)
+
+## 策略架構概述
+
+AlphaEdge 的策略系統採用物件導向設計，台股策略一律繼承 `BaseStockStrategy`（其上游為市場無關的 `BaseStrategy`）。這個架構提供了：
+
+- **分層由型別與目錄承載**: 策略只做 Alpha（選標的、定方向、給價），
+  部位大小交給 `core/portfolio/`；兩層之間的介面是 `Signal`
+- **統一的介面**: 所有策略都實作相同的方法，確保一致性
+- **自動載入機制**: `StrategyLoader`（`strategies/loader.py`）自動掃描頂層 `strategies/` 下的**所有商品類別子套件**
+- **完整的資料存取**: 資料 API 由引擎的 `DataFeed` 統一建立，策略只需宣告要用哪幾個
+- **市場由策略自己宣告**: `self.market` 是 `core/backtest/factory.py` 組裝 model 組合的分派鍵，CLI 不需要 `--market`
+- **靈活的回測設定**: 支援 `Scale.DAY` 與 `Scale.TICK` 兩種級別
+
+> 引擎如何依 `market` 組裝、單根 bar 的執行順序、訂單要通過哪幾道關卡，見
+> [多市場回測引擎架構](../docs/backtest/multi-market-engine.md) 與
+> [模組使用關係](../docs/backtest/module-map.md)。
+
+**策略與引擎之間的分工**：
+
+```
+策略（Alpha）          generate_open_signals()   → List[Signal]   選標的、定方向、給價
+    ↓
+部位建構（Portfolio）  core/portfolio/           → List[Order]    開倉各買幾張／幾口
+    ↓
+引擎契約               check_*_signal()          → List[Order]    由 BaseStrategy 提供
+```
+
+平倉與停損**不經過部位建構層**：張數來自持倉查詢、價格是交易邏輯，基底只做欄位搬運。
+
+> **期貨策略**繼承 `BaseFuturesStrategy`（`core/strategies/futures/base.py`）。本文件以台股為主，
+> 期貨策略與股票策略的差異（一天有多個到期月、口數由保證金決定、日夜盤是兩筆行情、沒有券源限制）見
+> [台期貨平台](../docs/futures/tw-futures-platform.md)〈四、策略〉。
+
+### 目錄結構
+
+```
+core/strategies/                   # 策略契約（只放抽象基底；具體策略放回這裡會被分層檢查擋下）
+├── __init__.py                    # 刻意不做套件層 eager import（避免循環 import）
+├── base.py                        # BaseStrategy：市場與商品皆無關的策略骨架
+├── stock/
+│   ├── __init__.py
+│   └── base.py                    # BaseStockStrategy（設定 self.market ＋ self.instrument_type）
+└── futures/
+    ├── __init__.py
+    └── base.py                    # BaseFuturesStrategy
+
+strategies/                        # 具體策略（相依只能 strategies → core）
+├── __init__.py                    # 門面一律空白，不 import 任何策略
+├── README.md                      # 本文件
+├── loader.py                      # 策略自動載入器（掃描所有商品類別子套件）
+├── stock/                         # 股票策略
+│   ├── __init__.py
+│   ├── volume_breakout_momentum_strategy.py     # 量能突破動能策略（日線，LONG 回歸 baseline 的唯一來源）
+│   ├── foreign_selling_reversal_short_strategy.py  # 外資大賣強勢股當沖放空（日線，SHORT）
+│   ├── investment_trust_momentum_swing_strategy.py  # 投信認同的強勢股短波段（日線，LONG）
+│   └── intraday_momentum_strategy.py  # 盤中動能（盤中觸及 9% 進場、隔日開盤出場；回測為日 K 近似、實盤逐筆）
+└── futures/                       # 期貨策略
+    ├── __init__.py
+    └── momentum_futures_strategy.py
+
+core/portfolio/                    # 部位建構層（回測與實盤共用，不屬於任一市場）
+├── signal.py                      # Signal：Alpha 層的輸出型別
+├── sizing.py                      # 資金切分公式（BasePositionSizer／EqualWeightSizer）
+├── construction.py                # Signal → Order 的開倉組裝（股票／期貨兩個實作）
+├── order_rules.py                 # 方向白名單、檔數上限、bar 內執行順序、決定性排序（回測與實盤共用）
+└── aggregation.py                 # 多策略共用帳戶的資金分配與同標的衝突解決
+```
+
+> **子目錄承載的是「商品類別」（軸 B），不是市場。** 市場由 `self.market` 宣告、
+> 由 `core/backtest/factory.py` 的 `(market, instrument_type)` 分派鍵表達，
+> 所以美股策略日後會放進 `stock/` 而不是新開 `us/`（見
+> [命名軸線](../docs/dev/naming-axes.md)〈落地位置〉）。
+
+> **策略是可以刪的。** 動能策略 2~5（`VolumeBreakoutMomentumStrategy` 的 Tick 級別、均線動能、開盤進出等變形）與 `OvernightLeadEventStrategy`（2330 隔夜訊號）都已刪除：前者維護成本高於價值，後者的特徵與目標在時序上對不齊（美股盤在台北時間當日清晨才收，那段跳空在進場時已經發生完畢），研究端的探索仍留在 `strategy_lab/strategies/tsmc_overnight_signal/`。`VolumeBreakoutMomentumStrategy` 是 LONG 回歸 baseline 的唯一來源，不可刪。
+
+## 如何撰寫新策略
+
+### 步驟 1: 建立策略檔案
+
+在 `strategies/stock/` 目錄下建立新的 Python 檔案，例如 `my_strategy.py`。
+
+### 步驟 2: 繼承 BaseStockStrategy
+
+```python
+from core.models import StockAccount, StockQuote
+from core.portfolio.signal import Signal
+from core.strategies.stock import BaseStockStrategy
+from core.utils import Action, PositionType, Scale, TradeDirection
+
+
+class MyStrategy(BaseStockStrategy):
+    """我的交易策略"""
+
+    def __init__(self):
+        super().__init__()
+        # 策略設定...
+```
+
+### 步驟 3: 設定策略參數
+
+在 `__init__` 方法中設定策略的基本參數：
+
+```python
+def __init__(self):
+    super().__init__()
+
+    # === 策略基本資訊 ===
+    self.strategy_name: str = "MyStrategy"
+    self.direction: TradeDirection = TradeDirection.LONG  # 只做多
+    self.allow_day_trade: bool = False  # 不當沖
+
+    # === 帳戶設定 ===
+    self.init_capital: float = 1000000.0  # 初始資金 100 萬
+    self.max_holdings: Optional[int] = 10  # 最大持倉 10 檔
+
+    # === 回測設定 ===
+    self.scale: str = Scale.DAY  # 使用日線回測
+    self.start_date: datetime.date = datetime.date(2020, 1, 1)
+    self.end_date: datetime.date = datetime.date(2025, 5, 31)
+```
+
+> `self.market` 與 `self.instrument_type` **不需要自己設**：`BaseStockStrategy` 已填入 `Market.TW` 與 `InstrumentType.STOCK`。
+>
+> **`__init__` 內不要呼叫 `setup_apis()`**：它需要引擎傳入的 `DataFeed`，由
+> `Backtester.load_datasets()` 在建立 `DataFeed` 之後呼叫。
+
+### 步驟 4: 實作必須的方法
+
+策略只需要實作 **Alpha 層**：選標的、定方向、給價。
+
+| 方法 | 做什麼 |
+|------|--------|
+| `setup_account()` | 載入虛擬帳戶 |
+| `setup_apis()` | 宣告要用的資料源 |
+| `generate_open_signals()` | 開倉訊號（**不決定張數**） |
+| `generate_close_signals()` | 平倉訊號（張數取自持倉） |
+| `generate_stop_loss_signals()` | 停損訊號 |
+
+**`check_open_signal()`／`check_close_signal()`／`check_stop_loss_signal()` 不需要實作**
+——它們是引擎的契約，由 `BaseStrategy` 提供：開倉會把訊號交給 portfolio 層換算張數，
+平倉／停損則直接依訊號組單。`calculate_position_size()` 同樣不必再寫。
+
+> **覆寫 `check_*_signal()` 會讓基底的實作失效，而且不會有任何錯誤訊息。**
+> 需要客製組裝時，覆寫 `make_portfolio_constructor()`（開倉）或 `build_close_orders()`（平倉）。
+
+## 必須實作的方法詳解
+
+### 1. setup_account()
+
+**用途**: 載入虛擬帳戶資訊，用於回測時管理資金和倉位。
+
+**參數**:
+- `account: StockAccount` - 虛擬帳戶物件
+
+**實作範例**:
+
+```python
+def setup_account(self, account: StockAccount):
+    """設置虛擬帳戶資訊"""
+    self.account = account
+```
+
+**說明**:
+- 這個方法會在回測開始時被自動呼叫
+- 將 `account` 儲存到 `self.account` 以便後續使用
+- 可以透過 `self.account` 存取帳戶餘額、持倉資訊等
+
+### 2. setup_apis()
+
+**用途**: 宣告本策略要用哪些資料源。**API 實例由引擎的 `DataFeed` 統一持有，策略不自行建立**。
+
+**實作範例**:
+
+```python
+def setup_apis(self, feed: BaseDataFeed) -> None:
+    """宣告本策略要用的資料源；實例由 DataFeed 統一持有"""
+
+    # 基本資料 API（可選）
+    self.chip = feed.chip  # 籌碼資料
+    self.mrr = feed.mrr  # 月營收資料
+    self.fs = feed.fs  # 財報資料
+
+    # 根據回測級別取用對應的價格資料
+    if self.scale == Scale.TICK:
+        self.tick = feed.tick  # 逐筆資料
+
+    elif self.scale == Scale.DAY:
+        self.price = feed.price  # 日線資料
+```
+
+**說明**:
+- 根據 `self.scale` 決定要取用哪些 API；目前支援 `Scale.DAY` 與 `Scale.TICK` 兩種
+- **不要在 `__init__` 內呼叫 `setup_apis()`**：它由 `Backtester.load_datasets()` 在建立 `DataFeed` 之後呼叫
+- **不要自行 `StockPriceAPI()`**：那會讓單次回測開出多條互不相干的資料連線（見 [多市場回測引擎架構](../docs/backtest/multi-market-engine.md)）
+
+### 3. generate_open_signals()
+
+**用途**: 開倉的 Alpha 邏輯，選出要開倉的標的並給價。**不決定張數**。
+
+**參數**:
+- `stock_quotes: List[StockQuote]` - 當前的股票報價列表
+
+**回傳值**:
+- `List[Signal]` - 開倉訊號；`volume` 一律留 `None`，由 portfolio 層換算
+
+**實作範例**:
+
+```python
+def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+    """開倉訊號（Long & Short）"""
+
+    open_positions: List[StockQuote] = []
+
+    # 檢查是否已達最大持倉數。
+    # **一定要先判斷 None**：基底預設是 `None`（不限制），直接拿去比大小會
+    # `TypeError: '>' not supported between instances of 'NoneType' and 'int'`
+    if (
+        self.max_holdings is not None
+        and self.account.get_position_count() >= self.max_holdings
+    ):
+        return []
+
+    # 取得前一個交易日（非日曆昨日）
+    yesterday: datetime.date = MarketCalendar.previous_trading_day_from_api(
+        self.price, stock_quotes[0].date
+    )
+
+    # 訊號用收盤價：與下方的 signal_close 成對，由引擎的還原模式統一決定
+    yesterday_close_map: Dict[str, Any] = self.get_signal_close_map(
+        stock_quotes, yesterday
+    )
+
+    for stock_quote in stock_quotes:
+        # 檢查是否已經持有該股票
+        if self.account.check_has_position(stock_quote.stock_id):
+            continue
+
+        # 你的開倉條件判斷
+        # 範例：當日漲幅 > 5% 且成交量 > 1000 張
+        if stock_quote.stock_id not in yesterday_close_map:
+            continue
+
+        yesterday_close: float = yesterday_close_map[stock_quote.stock_id]
+        if yesterday_close == 0:
+            continue
+
+        price_chg: float = (stock_quote.signal_close / yesterday_close - 1) * 100
+
+        if price_chg > 5 and stock_quote.volume > 1000:
+            open_positions.append(stock_quote)
+
+    # 張數交給 portfolio 層；策略只給方向與兩個價格
+    return [
+        Signal(
+            quote=stock_quote,
+            action=Action.BUY,
+            position_type=PositionType.LONG,
+            order_price=stock_quote.cur_price,  # 委託價
+            sizing_price=stock_quote.close,  # 算張數用的價格
+        )
+        for stock_quote in open_positions
+    ]
+```
+
+**說明**:
+- 此方法會在每個交易日被呼叫
+- 需要根據策略邏輯篩選出符合條件的股票
+- **張數不在這裡決定**：基底會把訊號交給 `make_portfolio_constructor()` 產生的
+  部位建構器換算，預設是等權資金切分
+
+> **`order_price` 與 `sizing_price` 是兩個欄位，不要合併。**
+> `order_price` 是要送出去的委託價，`sizing_price` 是算張數用的價格。
+> 兩者在現行資料源恰好同值（`cur_price` 等於 `close`），但那是資料源的實作巧合，
+> 不是型別契約——合併之後哪天資料源讓兩者分家，錯的會是部位大小，
+> 而回歸不會有任何一筆交易變動來提醒你。
+>
+> `sizing_price` 留 `None` 時，股票的部位建構器會**當場拋出**而不是默默少下一張單。
+
+> **⚠️ 資料取用的硬性規則**
+>
+> 策略層**不得直接對 raw `DataFrame` 取資料庫欄位字面值**（`"收盤價"`、`"成交股數"`、
+> `"投信買賣超"` 等），一律走 `core/api/` 的具名查詢方法。
+> `tests/test_strategy_data_access.py` 會掃描 `core/strategies/` 與 `strategies/` 全部原始碼並在 CI 擋下違規，
+> 例外清單刻意留空。詳見〈[資料 API 使用方式](#資料-api-使用方式)〉。
+>
+> **算漲跌幅時務必用 `self.get_signal_close_map()` 搭配 `quote.signal_close`**：
+> 「今日價格」來自 `StockQuote`、「昨日價格」來自 `StockPriceAPI` 是兩條不同路徑，
+> 若只有一邊套用股價還原，比值會混用還原價與原始價——**比完全不還原更糟，而且不會報錯**。
+> 成交價、手續費、證交稅、漲跌停與檔位判定則一律走原始價（`quote.close`）。
+
+### 4. generate_close_signals()
+
+**用途**: 平倉的 Alpha 邏輯，決定哪些持倉出場、平多少、用什麼價。
+
+**參數**:
+- `stock_quotes: List[StockQuote]` - 當前的股票報價列表
+
+**回傳值**:
+- `List[Signal]` - 平倉訊號；**必須填 `volume` 與 `order_price`**
+
+**實作範例**:
+
+```python
+def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+    """平倉訊號（Long & Short）"""
+
+    signals: List[Signal] = []
+
+    for stock_quote in stock_quotes:
+        # 檢查是否持有該股票
+        if not self.account.check_has_position(stock_quote.stock_id):
+            continue
+
+        # 取得持倉資訊
+        position = self.account.get_first_open_position(stock_quote.stock_id)
+        if position is None:
+            continue
+
+        # 你的平倉條件判斷
+        # 範例：持倉超過 5 天就平倉
+        holding_days = (stock_quote.date - position.date).days
+        if holding_days < 5:
+            continue
+
+        signals.append(
+            Signal(
+                quote=stock_quote,
+                action=Action.SELL,
+                position_type=position.position_type,
+                order_price=stock_quote.cur_price,
+                volume=position.volume,  # 平倉張數取自持倉
+            )
+        )
+
+    return signals
+```
+
+**說明**:
+- 此方法會在每個交易日被呼叫，且會在開倉之前執行
+- 需要檢查當前持倉並根據策略邏輯決定是否平倉
+- 使用 `self.account.get_first_open_position()` 取得持倉資訊
+
+> **平倉不經過 portfolio 層。** 張數來自持倉查詢、價格是交易邏輯——
+> 「平掉第一筆部位」「合併同標的所有部位」「留倉用開盤價、當日用收盤價」
+> 這些都是策略決策，部位建構器不該知道。
+> **同一標的有多筆同向部位時要合併成一張單**：`close_position()` 本來就會 FIFO
+> 掃過所有同向部位，逐筆送單會讓第一張吃掉後面那筆的張數。
+> `volume` 未填或不大於 0 的訊號會被略過，不會送出 0 張的單。
+
+### 5. generate_stop_loss_signals()
+
+**用途**: 停損的 Alpha 邏輯；語意與平倉相同，只是觸發條件不同。
+
+**參數**:
+- `stock_quotes: List[StockQuote]` - 當前的股票報價列表
+
+**回傳值**:
+- `List[Signal]` - 停損訊號；與平倉一樣必須填 `volume` 與 `order_price`
+
+**實作範例**:
+
+```python
+def generate_stop_loss_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+    """停損訊號"""
+
+    signals: List[Signal] = []
+
+    for stock_quote in stock_quotes:
+        # 檢查是否持有該股票
+        if not self.account.check_has_position(stock_quote.stock_id):
+            continue
+
+        # 取得持倉資訊
+        position = self.account.get_first_open_position(stock_quote.stock_id)
+        if position is None:
+            continue
+
+        # 計算虧損比例
+        loss_rate = (stock_quote.close / position.price - 1) * 100
+
+        # 停損條件：虧損超過 5%
+        if loss_rate < -5:
+            logger.warning(
+                f"股票 {stock_quote.stock_id} 觸發停損，虧損 {round(loss_rate, 2)}%"
+            )
+            signals.append(
+                Signal(
+                    quote=stock_quote,
+                    action=Action.SELL,
+                    position_type=position.position_type,
+                    order_price=stock_quote.cur_price,
+                    volume=position.volume,
+                )
+            )
+
+    return signals
+```
+
+**說明**:
+- 此方法會在每個交易日被呼叫
+- 用於風險控制，當虧損達到設定閾值時自動平倉
+- 如果不需要停損機制，可以回傳空列表
+
+### 6. 部位大小由 portfolio 層決定
+
+**策略不再實作 `calculate_position_size()`。** 開倉張數由 `core/portfolio/` 負責，
+策略只在訊號裡給 `sizing_price`。
+
+| 層 | 檔案 | 回答什麼 |
+|----|------|----------|
+| Alpha | `strategies/`（契約在 `core/strategies/`） | 買哪些、什麼方向、什麼價 |
+| Portfolio | `core/portfolio/construction.py` | 各買幾張／幾口 |
+| Portfolio | `core/portfolio/sizing.py` | 資金怎麼切（等權、日後可換） |
+
+預設的 `StockPortfolioConstructor` 走等權資金切分：
+
+```
+可開檔數 = max(0, max_holdings - 現有持倉檔數)   # max_holdings 為 None 時不限制
+每檔資金 = account.balance / 可開檔數
+張數     = int(每檔資金 / (sizing_price × Units.LOT))   # 無條件捨去
+下單條件 = 張數 >= 1
+```
+
+**要換配置演算法**（波動度加權、風險平價等），覆寫 `make_portfolio_constructor()`：
+
+```python
+def make_portfolio_constructor(self) -> StockPortfolioConstructor:
+    """改用自訂的部位大小模型"""
+
+    return StockPortfolioConstructor(MyVolatilitySizer(), self.max_holdings)
+```
+
+> **建構器要每次重建，不要存成欄位。** 策略的 `max_holdings` 是在
+> `super().__init__()` **之後**才填的，期貨的 `margin_config` 更是由 factory 在策略
+> 建構完成後才注入——存起來會永遠讀到舊值，而症狀是部位大小整段偏掉，不會報錯。
+
+**期貨走的是保證金約束，不是資金切分**：預設的 `MarginSizer(max_lots, max_capital_usage)`
+以「可動用餘額 × `max_capital_usage` ÷ 每口需要的資金（原始保證金 ＋ 開倉手續費與稅）」
+算可開口數，再與剩餘口數取小值；`max_lots`／`max_capital_usage` 照常在策略上設定，
+要自訂演算法才覆寫 `self.sizer`。每口保證金由 `FuturesMarginModel` 查表，與部位管理層
+是同一個實例（個股期貨走比例表也查得到）。拿契約價值去除餘額會嚴重低估
+（TX 一口契約價值 900 萬、保證金只有 70 萬）。
+
+> **⚠️ `max_holdings` 另有引擎側硬上限**：即使策略回傳超額開倉單，引擎也會剔除超出
+> `max_holdings` 的部分並計數，所以 `max_holdings` 是真正的硬上限而非建議值。
+> **那一道與 sizer 的檢查刻意不合併**——sizer 回答「資金切成幾份」（張數不足 1 張的
+> 候選不佔名額），引擎回答「這張單會不會讓帳戶超上限」（看逐單執行當下的即時持倉數，
+> 未成交的單不增加持倉）。兩者不等價，少任何一道都會漏掉對方擋得住的情況。
+> 詳見 `core/backtest/README.md`〈部位大小與檔數上限〉。
+>
+> **基底預設是 `None`（不限制）**，2026-09-03 由 `0` 改過來：
+> 舊預設會讓忘記設定的新策略**每一張開倉單都被引擎剔除**，回測跑完是零筆交易、
+> 零錯誤訊息。改成 `None` 之後忘記設定不會靜默歸零，但也就沒有引擎替你把關
+> ——**每支策略都應該自己設一個值**。
+
+## 選配：實盤的跨日補平
+
+**只有跑實盤才需要**，回測沒有這個概念（回測的單一送出就成交）。
+
+尾盤段的平倉／停損單若到收盤仍未成交，那些部位就變成**預期外的隔夜部位**。
+系統會寫一筆跨日待辦，次日開盤段的第一件事就是把它補平。
+
+**策略不實作也會補平**：引擎以待辦的標的、方向與數量，用合約參考價當決策價組出補平單，
+標成「要成交」（`ExecutionStyle.MARKET`）交給執行層——開盤集合競價賣掛跌停、買掛漲停。
+策略想自己決定補平方式時才覆寫 `build_cover_order()`；**不必填 `price_type`**，
+價格類型一律由執行層換算：
+
+```python
+def build_cover_order(self, action: PendingAction) -> StockOrder:
+    """由跨日待辦組出補平單"""
+
+    return StockOrder(
+        stock_id=action.symbol,
+        date=datetime.date.today(),
+        action=action.action,
+        position_type=action.position_type,
+        volume=action.volume,
+        price=...,                       # 決策價；送出的委託價由執行層決定
+    )
+```
+
+`PendingAction`（`core/models/base/execution.py`）帶的欄位：
+
+| 欄位 | 型別 | 說明 |
+|------|------|------|
+| `action_id` | `str` | 待辦識別碼 |
+| `strategy_name` | `str` | 歸屬策略 |
+| `symbol` | `str` | 商品代號 |
+| `action` | `Action` | 補平的買賣方向 |
+| `position_type` | `Optional[PositionType]` | 被補平的部位方向 |
+| `volume` | `int` | 要補平的數量（**已截到目前實際持有量**） |
+| `due_date` | `datetime.date` | 到期日 |
+| `status` | `str` | 待辦狀態（必填；由引擎維護） |
+| `reason` | `Optional[str]` | 為什麼產生這筆待辦 |
+
+> **`volume` 拿到手就是最終數量，不要再自己調整。** 待辦寫下之後部位可能已經變了
+> （遲到的成交、有人在券商端手動平倉、重建後部位已不在），引擎已經把它截到
+> 歸屬帳目前實際持有的量。照原數量送出的話，多出來的部分不是「多平一點」，
+> 是直接**把部位做反**。
+
+> **引擎取不到合約參考價時不送單**，待辦留在 `PENDING` 並推播，等人工處理——
+> 沒有決策價就沒有風控可比的基準，猜一個價格比留著不動更危險。
+
+## 策略設定參數說明
+
+在 `__init__` 方法中可以設定的參數：
+
+### 策略基本資訊
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `strategy_name` | `str` | 策略名稱，用於識別和報告 | `""` |
+| `market` | `Market` | 市場（地區），**由 `BaseStockStrategy` 填入，策略不需自己設**；與 `instrument_type` **兩者的組合**才是 `factory` 組裝 model 組合的分派鍵 | `Market.TW` |
+| `instrument_type` | `InstrumentType` | 商品類別，**由 `BaseStockStrategy` 填入，策略不需自己設**；見上列 | `InstrumentType.STOCK` |
+| `direction` | `TradeDirection` | 交易方向：`LONG`（只做多）、`SHORT`（只做空）、`BOTH`（多空都做）；方向不符的訂單會被引擎剔除 | `TradeDirection.LONG` |
+| `allow_day_trade` | `bool` | 能否當沖（同一天開倉又平倉同一檔），見[當沖與單根 bar 的執行順序](#當沖與單根-bar-的執行順序) | `False` |
+
+### 帳戶設定
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `init_capital` | `float` | 初始資金（元） | `0` |
+| `max_holdings` | `Optional[int]` | 最大持倉檔數，`None` 表示**無限制**（＝基底預設；每支策略都該自己設一個值） | `None` |
+
+### 執行段落（實盤與 TICK 回測共用，DAY 回測不讀）
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `execution_schedule` | `Dict[str, ExecutionTiming]` | 各鉤子（`open`／`close`／`stop_loss`）在哪個段落呼叫；`stop_loss` 沒宣告時同 `close`。舊名 `live_schedule` 已移除，設定舊名時啟動即報錯 | `{}` |
+
+### 實盤設定（回測不讀）
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `live_ready` | `bool` | 策略可上實盤；標 `True` 前要確認內部狀態能由「歷史資料 ＋ 當前部位」重建 | `False` |
+| `live_execution` | `Optional[ExecutionStyle]` | `MARKET`（要成交）或 `LIMIT`（照價掛單），開倉與平倉共用；**停損一律 `MARKET`**。沒宣告時啟動檢查拒絕。回測假設以收盤價成交的策略應宣告 `MARKET` | `None` |
+| `live_tag` | `str` | 策略代號，只寫進本地紀錄庫（`live_run.strategy_params_json` 的 `live_tags`），不送券商 | `""` |
+| `live_capital` | `Optional[float]` | 實盤資金額度；`None` 沿用 `init_capital` | `None` |
+| `live_max_holdings` | `Optional[int]` | 實盤最大持倉檔數；`None` 沿用 `max_holdings`，與 `live_capital` 成對調整 | `None` |
+| `live_risk_config` | `Optional[BaseRiskConfig]` | 實盤風控門檻；股票宣告 `StockRiskConfig(...)`、期貨宣告 `FuturesRiskConfig(...)`，只填要改的欄位，不可超過全域上限；部署端可再以 `deploy/live_risk.toml` 收緊（見 `docs/live/live-engine.md`〈三、委託路徑〉的事前風控） | `None`（該市場預設值） |
+
+> **不要填 `price_type`，也不要把 `live_execution` 設成 `StockPriceType.MKT`。**
+> 價格類型、委託價與 ROD／IOC 由實盤執行層（`core/live/execution/`）依段落換算：
+> 台股集合競價時段不收市價單，`MARKET` 會換成掛漲停（買）／跌停（賣）的限價單，
+> 成交價仍是競價結果。
+
+### 回測設定
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `scale` | `str` | 回測級別：`Scale.DAY`、`Scale.TICK` | `Scale.DAY` |
+| `supported_scales` | `Optional[Set[Scale]]` | 回測可用 `--scale` 切換的級別；`None` 表示只支援 `scale`。同時寫了日 K 與逐筆邏輯的策略才設成 `{Scale.DAY, Scale.TICK}`；`scale` 不在集合內時建立回測當場報錯 | `None` |
+| `start_date` | `datetime.date` | 回測起始日期 | `None` |
+| `end_date` | `datetime.date` | 回測結束日期 | `None` |
+
+### 回測級別說明
+
+- **`Scale.DAY`**: 日線回測，使用每日收盤價
+- **`Scale.TICK`**: 逐筆回測，使用每筆成交資料（僅台股；期貨 Tick 回測未實作）
+- 回測時可用 `--scale DAY`／`--scale TICK`（大小寫皆可）改用另一個級別，**只能選策略 `supported_scales` 宣告支援的**，否則以用法錯誤（退出碼 2）拒絕並列出支援的級別。只寫了日 K 邏輯的策略吃到 tick 不會報錯、只會默默算錯，所以預設只支援自己宣告的 `scale`。目前宣告支援 TICK 的只有 `IntradayMomentumStrategy`（`self.supported_scales = {Scale.DAY, Scale.TICK}`）；新增一支時要同時寫好逐筆分支，並更新 `tests/backtest/test_backtest_scale.py` 的 `TICK_CAPABLE_STRATEGIES`。
+- TICK 回測每天讀哪些標的由 `--tick-universe` 決定：預設 `strategy` 會以前一交易日呼叫策略的 `get_live_symbols()`、再加上當時的持倉（與實盤盤前訂閱一致），**沒有覆寫 `get_live_symbols()` 的策略要明確改用 `--tick-universe all`**（全市場，一天上百萬筆，較慢）。
+
+### 盤中逐筆策略：`is_tick_triggered`
+
+| 參數 | 類型 | 說明 | 預設值 |
+|------|------|------|--------|
+| `is_tick_triggered` | `bool` | 實盤是否**每收到一筆 tick 就呼叫一次策略鉤子** | `False` |
+
+與當沖無關：能不能當沖看 `allow_day_trade`。
+
+宣告 `is_tick_triggered = True` 之後：
+
+1. **每次鉤子只拿到一檔的一筆報價**——`List[StockQuote]` 長度為 1、`scale=TICK`、
+   帶 bid/ask。Shioaji 訂閱後本來就是有報價就 callback 推進來，逐筆最貼近原生語意。
+2. **橫斷面邏輯要自己維護狀態**。日頻策略的 `generate_open_signals(stock_quotes)`
+   一次拿到一批，可以「挑最強的前 N 檔」；逐筆之下每次只有一檔，
+   需要跨標的比較的策略**必須自己在策略內保存其他標的的最新報價**。
+3. **可以跑 `Scale.TICK` 回測**：逐筆重放每次同樣只給一筆，與實盤同一個契約
+   （成交規則與段落見 `core/backtest/README.md` 的〈`Scale.TICK`：逐筆重放〉）。
+   要同時保留日 K 近似，`supported_scales` 宣告 `{Scale.DAY, Scale.TICK}`，回測時用 `--scale` 切換。
+
+### 當沖與單根 bar 的執行順序
+
+策略只需要設 `allow_day_trade`，不分做多做空：
+
+| `allow_day_trade` | 同一根 bar 的處理順序 | 效果 |
+|-------------------|----------------------|------|
+| `False`（預設） | 先平倉、再開倉（`CLOSE_THEN_OPEN`） | 當天開的部位最快下一根 bar 才出場；先平倉可先釋放資金給新開倉 |
+| `True` | 先開倉、再平倉（`OPEN_THEN_CLOSE`） | 當天開的部位當天就會被檢查要不要平 |
+
+台股另有兩項成本效果：
+
+- 當天開平的部位，證交稅以當沖稅率計算（做多、做空皆同）。
+- 空單一律走**現股當沖沖賣**（`ShortMethod.DAY_TRADE`），收盤前必須回補；
+  要留倉放空（融券或借券）就把 `allow_day_trade` 設為 `False`，再指定 `short_method`。
+
+```python
+from core.utils import TradeDirection
+
+
+class MyDayTradeLongStrategy(BaseStockStrategy):
+    def __init__(self):
+        super().__init__()
+        self.direction: TradeDirection = TradeDirection.LONG
+        self.allow_day_trade: bool = True  # 做多當沖
+```
+
+執行順序沒有另外的設定欄位：與 `allow_day_trade` 相反的順序只會是「不當沖卻偷偷當沖」
+或「當沖卻當不了沖」，所以一律由它推導。
+
+> 舊版的 `position_type`、`allowed_directions`、`enable_intraday`、`bar_execution_order`、
+> `is_intraday` 已移除。策略若仍設定它們，回測與實盤啟動時會直接報錯並指出改用哪個欄位，
+> 不會被靜默忽略。
+
+同一根 bar 內多筆委託的處理順序（決定性排序）與同標的開平倉並存的規則，
+見[多市場回測引擎架構 §2.2.1 單根 bar 的委託順序](../docs/backtest/multi-market-engine.md#221-單根-bar-的委託順序)。
+
+## 資料 API 使用方式
+
+策略中可以透過以下 API 取得各種資料。API 實例由引擎的 `DataFeed` 建立，策略在 `setup_apis(feed)` 中取用後，直接使用 `self.price`、`self.tick` 等即可。
+
+> **⚠️ 策略層一律使用「具名查詢方法」，不要自己拆 `DataFrame` 欄位**
+>
+> 回傳 `DataFrame` 的方法（`get()`／`get_range()`／`get_stock_price()`）保留給
+> `strategy_lab/` 的研究用途。在 `strategies/` 底下寫策略時，**禁止**出現
+> `df["收盤價"]`、`df["成交股數"]`、`df["投信買賣超股數"]` 這類資料庫欄位字面值。
+>
+> 原因是失效模式**靜默**：欄位一旦更名，策略會走進既有的 `continue` 分支而安靜地不開倉，
+> 回測報表上只表現為「訊號變少」，極難察覺。`tests/test_strategy_data_access.py`
+> 會掃描 `core/strategies/` 與 `strategies/` 全部原始碼並在 CI 擋下，例外清單刻意留空。
+
+### StockPriceAPI - 日線價格資料
+
+**具名查詢（策略層請用這些）**:
+
+```python
+# {stock_id: 收盤價}，原始價
+close_map: Dict[str, Any] = self.price.get_close_map(date)
+
+# {stock_id: 成交量（張）}
+volume_map: Dict[str, int] = self.price.get_volume_lots_map(date)
+
+# 單一個股的收盤價序列：index 為 datetime.date、值為 float、name 為「收盤價」
+# （期貨的 get_close_series() 也是同一個契約，見 BaseDataAPI.build_close_series()）
+close_series = self.price.get_close_series(
+    stock_id="2330",
+    start_date=datetime.date(2024, 1, 1),
+    end_date=datetime.date(2024, 1, 31),
+)
+
+# 還原價版本（一般不直接呼叫，改用下方的 get_signal_close_map）
+adj_close_map: Dict[str, Any] = self.price.get_adjusted_close_map(date)
+adj_close_series = self.price.get_adjusted_close_series(...)
+```
+
+**訊號用收盤價（算漲跌幅時的唯一正確入口）**:
+
+```python
+# 由引擎傳入的報價決定要不要還原，呼叫端不需自己判斷還原模式
+close_map = self.get_signal_close_map(stock_quotes, yesterday)
+price_chg = quote.signal_close / close_map[quote.stock_id] - 1
+```
+
+`get_signal_close_map()` 與 `quote.signal_close` **必須成對使用**。成交價、手續費、
+證交稅、漲跌停與檔位判定則一律走原始價（`quote.close`、`get_close_map()`）。
+
+**取得指定日期的所有股票價格（研究用，策略層勿直接取欄位）**:
+
+```python
+# 取得 2024/1/1 的所有股票價格
+prices = self.price.get(date=datetime.date(2024, 1, 1))
+# 回傳 DataFrame，包含欄位：stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交股數等
+# 量的單位是股，不是張
+```
+
+**取得日期範圍的所有股票價格**:
+
+```python
+prices = self.price.get_range(
+    start_date=datetime.date(2024, 1, 1), end_date=datetime.date(2024, 1, 31)
+)
+```
+
+**取得指定個股的價格**:
+
+```python
+stock_prices = self.price.get_stock_price(
+    stock_id="2330",
+    start_date=datetime.date(2024, 1, 1),
+    end_date=datetime.date(2024, 1, 31),
+)
+```
+
+### StockTickAPI - 逐筆成交資料
+
+**取得指定日期的逐筆資料**:
+
+```python
+# 取得一段期間的逐筆資料（**收起訖日，不是單一天**）
+ticks = self.tick.get(
+    start_date=datetime.date(2024, 1, 1),
+    end_date=datetime.date(2024, 1, 1),
+)
+```
+
+**取得指定個股的逐筆資料**:
+
+```python
+stock_ticks = self.tick.get_stock_ticks(
+    stock_id="2330",
+    start_date=datetime.date(2024, 1, 1),
+    end_date=datetime.date(2024, 1, 1),
+)
+```
+
+### StockChipAPI - 籌碼資料
+
+**具名查詢（策略層請用這個）**:
+
+```python
+# {stock_id: 投信買賣超股數}
+trust_map: Dict[str, Any] = self.chip.get_trust_net_shares_map(date)
+```
+
+**取得指定日期的籌碼資料（研究用，策略層勿直接取欄位）**:
+
+```python
+# 取得 2024/1/1 的三大法人籌碼資料
+chips = self.chip.get(date=datetime.date(2024, 1, 1))
+# 回傳 DataFrame，包含欄位：stock_id, 外資買賣超股數, 投信買賣超股數, 自營商買賣超股數等
+```
+
+### MonthlyRevenueReportAPI - 月營收資料
+
+**取得指定年月的月營收資料**:
+
+```python
+# 取得 2024 年 1 月的月營收資料
+mrr = self.mrr.get(year=2024, month=1)
+# 回傳 DataFrame，包含欄位：stock_id, 當月營收, 上月比較增減(%), 去年同月增減(%)等
+```
+
+### FinancialStatementAPI - 財報資料
+
+**取得指定年季的財報資料**:
+
+```python
+# 取得 2024 年第 1 季的財報資料。**`table_name` 是必填**——
+# 財報有四張表（`balance_sheet`／`comprehensive_income`／`cash_flow`／`equity_change`），
+# 這支 API 不預設要查哪一張
+fs = self.fs.get(table_name="balance_sheet", year=2024, season=1)
+# 回傳 DataFrame，包含各種財務指標
+```
+
+## 策略載入機制
+
+AlphaEdge 使用 `StrategyLoader` 載入策略。入口的 `--strategy` 走 `StrategyLoader.load(names)`：先以 AST 讀檔找出每個類別名定義在哪個模組（不執行程式碼），只 import 那幾個模組——研究中策略的 module-level 程式碼不會在實盤行程被執行；類別名重複會直接拋 `ValueError`。`load_strategies()` 才是全掃描：以 `pkgutil.iter_modules` 走過頂層 `strategies/` 底下**所有子套件**（`stock/` 與 `futures/`），找出**非抽象的 `BaseStrategy` 子類**，壞掉的模組逐模組隔離並記 error——期貨策略就是靠同一條路徑載入的。
+
+### 自動載入規則
+
+1. **檔案位置**: 策略檔案必須放在 `strategies/<商品類別>/` 目錄下（台股現貨放 `stock/`、期貨放 `futures/`）
+2. **類別命名**: 策略類別名稱會作為策略識別名稱
+3. **繼承要求**: 必須是 `BaseStrategy` 的**非抽象**子類（台股繼承 `BaseStockStrategy`、期貨繼承 `BaseFuturesStrategy`），且類別**定義在該檔內**——從別處 import 進來的類別不會被收錄
+
+### 使用策略名稱
+
+執行回測時，使用策略的**類別名稱**（Class Name）來指定策略：
+
+```bash
+# 如果策略類別名稱是 VolumeBreakoutMomentumStrategy，則使用 "VolumeBreakoutMomentumStrategy"
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
+```
+
+## 使用策略進行回測
+
+### 基本語法
+
+```bash
+python -m apps.backtest --strategy <StrategyName>
+```
+
+### 參數說明
+
+- 回測與實盤是兩個入口：回測用 `python -m apps.backtest`，實盤用 `python -m apps.live`（跑段落時必須帶 `--phase`，可選 `open`／`close`／`after_close`／`intraday`／`parity`；`--resync-from-broker` 重建歸屬帳時則不可帶）
+- `--strategy`: 指定要使用的策略類別名稱（必填）
+
+### 使用範例
+
+```bash
+# 執行回測，使用名為 "VolumeBreakoutMomentumStrategy" 的策略（動能 1 日線）
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
+
+# 執行實盤（必須指定段落；目前只在模擬環境演練過）
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase open
+```
+
+### 回測結果
+
+回測完成後，結果會儲存在 `results/<策略>/` 目錄（檔名一律以同一個名稱為前綴）。
+
+⚠️ **`<策略>` 是 `strategy.strategy_name`，不是類別名**——上面 `--strategy` 吃的是類別名
+（`VolumeBreakoutMomentumStrategy`），而輸出目錄用的是 `strategy_name`（`Volume-Breakout-Momentum`），兩者可以不同。
+以下的 `<策略>` 一律指後者：
+
+1. **報表 CSV**:
+   - `<策略>_trading_report.csv` - 已平倉交易的逐筆明細與損益統計
+   - `<策略>_direction_summary.csv` - 多空分開的勝率、損益與成本統計
+   - `<策略>_event_report.csv` - 強制回補、斷頭、拒單等事件計數
+   - `<策略>_daily_equity.csv` - **含未實現損益**的逐日權益序列
+   - `<策略>_metrics_summary.csv` - 整體績效指標（`Metric`／`Value`／`Note` 長表）
+2. **圖表分析**:
+   - `<策略>_balance_curve.png` - 資產曲線圖
+   - `<策略>_networth.png` - 策略與 benchmark（`0050`）淨值比較圖
+   - `<策略>_mdd.png` - 最大回撤圖
+   - `<策略>_everyday_profit.png` - 每日損益圖
+   - `<策略>_everyday_equity_change.png` - 每日權益變化圖
+3. **日誌檔案** - 落在 `logs/backtest/`
+
+各檔案由哪個方法產生，見[模組使用關係 §4](../docs/backtest/module-map.md)。
+
+## 完整範例
+
+參考 `strategies/stock/volume_breakout_momentum_strategy.py` 查看完整的策略實作範例。該範例展示了：
+
+- 如何設定策略參數
+- 如何實作開倉、平倉、停損邏輯
+- 如何使用資料 API
+- 如何在 `Signal` 給 `order_price` 與 `sizing_price`，把張數交給 portfolio 層
+
+### 快速開始範例
+
+以下是一個最簡單的策略範例：
+
+```python
+import datetime
+from typing import List
+
+from core.datafeed.base import BaseDataFeed
+from core.models import StockAccount, StockQuote
+from core.portfolio.signal import Signal
+from core.strategies.stock import BaseStockStrategy
+from core.utils import Action, PositionType, Scale
+
+
+class SimpleStrategy(BaseStockStrategy):
+    """簡單策略範例"""
+
+    def __init__(self):
+        super().__init__()
+        self.strategy_name = "SimpleStrategy"
+        self.init_capital = 1000000.0
+        self.max_holdings = 5
+        self.scale = Scale.DAY
+        self.start_date = datetime.date(2020, 1, 1)
+        self.end_date = datetime.date(2025, 5, 31)
+
+    def setup_account(self, account: StockAccount):
+        self.account = account
+
+    def setup_apis(self, feed: BaseDataFeed) -> None:
+        if self.scale == Scale.DAY:
+            self.price = feed.price
+
+    def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        # 簡單策略：選前 3 檔股票；張數交給 portfolio 層
+        return [
+            Signal(
+                quote=quote,
+                action=Action.BUY,
+                position_type=PositionType.LONG,
+                order_price=quote.cur_price,
+                sizing_price=quote.close,
+            )
+            for quote in stock_quotes[:3]
+        ]
+
+    def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        # 簡單策略：持倉超過 3 天就平倉，張數取自持倉
+        signals = []
+        for stock_quote in stock_quotes:
+            if not self.account.check_has_position(stock_quote.stock_id):
+                continue
+
+            position = self.account.get_first_open_position(stock_quote.stock_id)
+            if position is None or (stock_quote.date - position.date).days < 3:
+                continue
+
+            signals.append(
+                Signal(
+                    quote=stock_quote,
+                    action=Action.SELL,
+                    position_type=position.position_type,
+                    order_price=stock_quote.cur_price,
+                    volume=position.volume,
+                )
+            )
+        return signals
+
+    def generate_stop_loss_signals(
+        self, stock_quotes: List[StockQuote]
+    ) -> List[Signal]:
+        return []
+```
+
+將此檔案儲存為 `strategies/stock/simple_strategy.py`，即可使用以下指令執行回測：
+
+```bash
+python -m apps.backtest --strategy SimpleStrategy
+```
+
+---
+
+**注意事項**:
+- 策略檔案必須放在 `strategies/<商品類別>/` 目錄下（本範例是現貨，故為 `stock/`）
+- 策略類別名稱會作為策略識別名稱
+- 確保所有必須的方法都已實作
+- 回測前請確認資料庫中有所需的資料（使用 `python -m apps.update_db` 更新資料）
+
+
+---
+
+## 如何撰寫放空策略
+
+回測框架支援放空（`PositionType.SHORT`），涵蓋**現股當沖沖賣**與**留倉（融券／借券）**兩種型態。
+成本模型、保證金、借券費、維持率追繳與強制回補全部由引擎處理，策略只需要宣告方向並回傳正確的訂單。
+
+完整規格見 [`docs/backtest/short-selling-framework.md`](../docs/backtest/short-selling-framework.md)。
+
+### 放空策略的設定欄位
+
+在 `__init__` 中宣告（皆有預設值，只需設定用得到的）：
+
+| 欄位 | 型別 | 預設 | 說明 |
+| --- | --- | --- | --- |
+| `direction` | `TradeDirection` | `LONG` | 設為 `SHORT` 即為放空策略；多空都做設為 `BOTH` |
+| `allow_day_trade` | `bool` | `False` | `True` 時空單一律走**現股當沖沖賣**並切換為「先開後平」，使同日開平倉成立；要留倉放空就維持 `False` |
+| `short_method` | `ShortMethod` | `MARGIN` | 留倉放空的管道：`MARGIN`（融券）或 `SBL`（借券）；當沖時由引擎強制為 `DAY_TRADE` |
+| `max_holding_days` | `Optional[int]` | `None` | 留倉放空的保險絲，超過即強制回補（建議 20~30 天）。除權息停券已由引擎自動處理，本欄位改為近似**股東會停券**，該部分仍無資料源 |
+| `cost_config` | `Optional[CostConfig]` | `None` | 覆寫費率（手續費折扣、券費率等），`None` 使用市場常見預設值 |
+| `short_constraint` | `Optional[ShortConstraint]` | `None` | 可成交限制：可當沖清單、券源檢核、停券日、單一標的曝險上限。停券的自動推導預設開啟（`auto_force_cover_on_ex_dividend`），`force_cover_dates` 則是手動加碼 |
+| `day_trade_uncovered_policy` | `DayTradeUncoveredPolicy` | `FORCE_COVER_AT_CLOSE` | 當沖日終未回補的處理 |
+| `margin_call_policy` | `MarginCallPolicy` | `FORCE_COVER` | 維持率跌破 130% 的處理 |
+
+### 訊號方向對照
+
+放空是**先賣後買**，動作與做多完全相反：
+
+| 方法 | 做多（LONG） | 放空（SHORT） |
+| --- | --- | --- |
+| `generate_open_signals` | `Action.BUY` | **`Action.SELL`** |
+| `generate_close_signals` | `Action.SELL` | **`Action.BUY`**（回補） |
+| `generate_stop_loss_signals` | `Action.SELL`，**價格下跌**觸發 | **`Action.BUY`**，**價格上漲**觸發 |
+
+> 訂單的 `position_type` 一律填 `PositionType.SHORT`。方向或動作填錯時，引擎會以 warning 剔除該筆訂單並計入拒單統計，不會靜默失敗。
+>
+> `short_method` 與 `is_day_trade` **不需要**自己填，引擎會依策略設定統一補值。
+
+### 放空策略範例
+
+```python
+import datetime
+from typing import List
+
+from core.datafeed.base import BaseDataFeed
+from core.models import StockAccount, StockQuote
+from core.portfolio.signal import Signal
+from core.strategies.stock import BaseStockStrategy
+from core.utils import Action, PositionType, Scale, ShortMethod, TradeDirection
+
+
+class SimpleShortStrategy(BaseStockStrategy):
+    """
+    簡易放空策略（日線、融券留倉）
+
+    賣出（開倉）條件：
+    - 當日漲幅 ≥ 9%（追高後的均值回歸）
+
+    回補（平倉）條件：
+    - 持有部位且報價日 ≥ 開倉日 + 1 日曆日
+
+    停損條件：
+    - 開倉後上漲超過 5%（放空是價格上漲才虧損）
+    """
+
+    MIN_PRICE_CHANGE_PCT: float = 9.0  # 開倉的最小漲幅（%）
+    STOP_LOSS_PCT: float = 5.0  # 停損的上漲幅度（%）
+
+    def __init__(self):
+        super().__init__()
+
+        self.strategy_name: str = "Simple-Short"
+        self.init_capital: float = 1000000.0
+        self.max_holdings: int = 5
+        self.scale: str = Scale.DAY
+
+        # 放空設定：融券留倉，最長持有 20 個曆日
+        self.direction: TradeDirection = TradeDirection.SHORT
+        self.allow_day_trade: bool = False  # 留倉融券
+        self.short_method: ShortMethod = ShortMethod.MARGIN
+        self.max_holding_days: int = 20
+
+        self.start_date: datetime.date = datetime.date(2024, 1, 1)
+        self.end_date: datetime.date = datetime.date(2024, 12, 31)
+
+    def setup_account(self, account: StockAccount) -> None:
+        """設置虛擬帳戶資訊"""
+
+        self.account: StockAccount = account
+
+    def setup_apis(self, feed: BaseDataFeed) -> None:
+        """設置資料 API"""
+
+        self.price = feed.price
+
+    def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        """開倉（賣出）：漲幅達門檻即放空"""
+
+        signals: List[Signal] = []
+        for quote in stock_quotes:
+            if self.account.check_has_position(quote.stock_id):
+                continue
+
+            price_change_pct: float = (quote.close / quote.open - 1) * 100
+            if price_change_pct < self.MIN_PRICE_CHANGE_PCT:
+                continue
+
+            signals.append(
+                Signal(
+                    quote=quote,
+                    action=Action.SELL,  # 放空開倉是賣出
+                    position_type=PositionType.SHORT,
+                    order_price=quote.close,
+                    sizing_price=quote.close,
+                )
+            )
+        return signals
+
+    def generate_close_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
+        """平倉（買進回補）：持有超過一個曆日即回補"""
+
+        signals: List[Signal] = []
+        for quote in stock_quotes:
+            positions = [
+                position
+                for position in self.account.get_positions(
+                    stock_id=quote.stock_id, position_type=PositionType.SHORT
+                )
+                if (quote.date - position.date).days >= 1
+            ]
+            # 同一標的的多筆部位要合併成一張單，逐筆送會被 FIFO 吃掉
+            cover_volume: int = sum(position.volume for position in positions)
+            if cover_volume <= 0:
+                continue
+
+            signals.append(
+                Signal(
+                    quote=quote,
+                    action=Action.BUY,  # 放空平倉是買進回補
+                    position_type=PositionType.SHORT,
+                    order_price=quote.close,
+                    volume=cover_volume,
+                )
+            )
+        return signals
+
+    def generate_stop_loss_signals(
+        self, stock_quotes: List[StockQuote]
+    ) -> List[Signal]:
+        """停損：放空是「價格上漲」才虧損，方向與做多相反"""
+
+        signals: List[Signal] = []
+        for quote in stock_quotes:
+            positions = [
+                position
+                for position in self.account.get_positions(
+                    stock_id=quote.stock_id, position_type=PositionType.SHORT
+                )
+                if (quote.close / position.price - 1) * 100 >= self.STOP_LOSS_PCT
+            ]
+            cover_volume: int = sum(position.volume for position in positions)
+            if cover_volume <= 0:
+                continue
+
+            signals.append(
+                Signal(
+                    quote=quote,
+                    action=Action.BUY,
+                    position_type=PositionType.SHORT,
+                    order_price=quote.close,
+                    volume=cover_volume,
+                )
+            )
+        return signals
+```
+
+### 放空策略注意事項
+
+1. **資金佔用與做多不同**：放空的賣出價款會留作擔保品，不會進入可用餘額；帳戶當下只扣「保證金 + 開倉成本」，損益要等回補才結算。融券保證金成數為 90%，等於 1 張 100 元的股票會佔用 9 萬元。
+2. **成本課在賣出端**：證交稅在放空**開倉**時就課（當沖 0.15%、留倉 0.3%），與做多相反；融券另有 0.08% 的融券手續費。
+3. **當沖必須當日結清**：`allow_day_trade=True` 時，日終仍未回補的部位會被引擎以收盤價強制回補並計數。若當日全日鎖漲停無法回補，會自動轉為融券留倉並記入 `limit_up_cover_failed`——這是放空最致命的尾部風險，**檢視回測結果時務必單獨看這個數字**。
+4. **維持率會斷頭**：留倉放空在維持率跌破 130% 時會被強制回補，不是等你自己的停損訊號。停損條件應設得比斷頭門檻更早觸發。
+5. **同一標的不可雙向持倉**：已有多單時開空單會被拒絕（反之亦然）。跨標的的多空並存則不受限制。
+6. **成交價會被驗證**：訂單價格必須落在當日高低區間與漲跌停內，否則會被拒單。當沖策略請明確宣告成交價假設（建議開倉用 `open`、回補用 `close`），並確保 `generate_open_signals` 只使用該時點之前可得的資訊。
+7. **報表要看放空專屬欄位**：交易報表新增了 `Borrow Fee`、`Interest`、`Margin`、`Holding Days`、`ROI on Capital`，另有 `*_direction_summary.csv`（多空分開統計）與 `*_event_report.csv`（強制回補、斷頭、拒單次數）。

@@ -83,7 +83,7 @@ def actual_counts(rules: List[str]) -> Dict[str, int]:
     return dict(_actual_counts(tuple(rules)))
 
 
-# **刻意的風格選擇，不是債務**：CLAUDE.md §2.4 要求 `Optional[T]` 而非 `T | None`，
+# **刻意的風格選擇，不是債務**：專案風格規定用 `Optional[T]` 而非 `T | None`，
 # 所以 `UP045` 的數量會隨每個新檔案增加，而那正是預期的結果。
 # 把它當 ratchet 是搞錯對象——它的註記只是規模的說明，不是「不可以再變多」。
 STYLE_CHOICES: Tuple[str, ...] = ("UP045",)

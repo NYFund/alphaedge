@@ -4,7 +4,8 @@
 
 # AlphaEdge
 
-AlphaEdge is a strategy research and trading framework focused on Taiwan market workflows (backtest + reporting + data update pipeline + Streamlit result viewer).
+AlphaEdge is a strategy research and trading framework focused on the Taiwan market: the same strategy class runs daily-bar and tick-by-tick backtests, and goes live on SinoPac Shioaji without a rewrite (currently rehearsed in the simulation environment).
+It also ships a TW stock / TW futures data update pipeline (SQLite + TimescaleDB) and a Streamlit front end for viewing backtest results.
 
 ## Architecture Overview
 
@@ -17,15 +18,15 @@ Layers are ordered from highest to lowest; an arrow means "may import" (skipping
 
 ```mermaid
 flowchart TB
-    Entry["<b>Entry layer</b><br/>apps/backtest.py ・ apps/live.py ・ tasks/update_db.py"]
-    Strategy["<b>Strategy layer</b><br/>concrete strategies in core/strategies/{stock,futures}/ ・ strategy_loader.py<br/>strategies/ (top-level package, currently an empty facade)"]
+    Entry["<b>Entry layer</b><br/>apps/backtest.py ・ apps/live.py ・ apps/update_db.py<br/>apps/clean_logs.py ・ apps/delete_price_data.py"]
+    Strategy["<b>Strategy layer</b><br/>concrete strategies in strategies/{stock,futures}/ ・ strategies/loader.py"]
     Assembly["<b>Assembly layer</b>: the only place allowed to branch on market<br/>core/backtest/factory.py ・ core/live/factory.py"]
     Engine["<b>Engine layer</b>: market-agnostic, no subclasses<br/>Backtester ・ LiveTrader ・ live/after_close.py"]
 
     subgraph Components ["Component layer"]
         direction LR
-        Shared["<b>Shared contracts</b> (both engines use the same copy)<br/>strategy contracts (three base.py files)<br/>core/portfolio ・ core/datafeed ・ core/position"]
-        BTParts["<b>Backtest parts</b> (importable only by backtest)<br/>backtest/models ・ backtest/datafeed<br/>backtest/report"]
+        Shared["<b>Shared contracts</b> (both engines use the same copy)<br/>strategy contracts (the three base.py files in core/strategies)<br/>core/portfolio ・ core/datafeed ・ core/position"]
+        BTParts["<b>Backtest parts</b> (importable only by backtest)<br/>backtest/models ・ backtest/datafeed<br/>backtest/simulator ・ backtest/report"]
         LiveParts["<b>Live parts</b><br/>live/oms ・ risk ・ execution ・ attribution<br/>live/datafeed ・ report ・ notify ・ intraday<br/>reconciler ・ capital_allocator ・ account_sync"]
         Shared ~~~ BTParts ~~~ LiveParts
     end
@@ -57,7 +58,7 @@ flowchart TB
         Gen -- "Signal" --> Build
     end
 
-    subgraph BT ["Backtest: Backtester daily loop"]
+    subgraph BT ["Backtest: Backtester daily loop; each day runs in BarSimulator / TickSimulator"]
         direction TB
         BTRules["order_rules<br/>direction whitelist → enrich → sort → max holdings"]
         Fill["FillModel<br/>fill-price plausibility, exchange lists, borrow, volume cap, slippage"]
@@ -95,22 +96,23 @@ flowchart LR
         Shioaji["SinoPac Shioaji"]
     end
 
-    Tasks["tasks/update_db.py"] --> Pipeline
+    Tasks["apps/update_db.py"] --> Pipeline
     Exchanges --> Pipeline["core/pipeline<br/>crawler → cleaner → loader<br/>(chained by an updater)"]
     FinMind --> Pipeline
     Shioaji -- "ticks" --> Pipeline
     Pipeline --> DAO["core/dao"]
     DAO --> SQLite[("data/db/<br/>tw_stock.db ・ tw_futures.db")]
-    Pipeline -- "ticks" --> DDB[("DolphinDB")]
+    DAO -- "ticks" --> TickDB[("TimescaleDB<br/>TW stock ticks")]
 
     SQLite --> API["core/api"]
-    DDB --> API
+    TickDB --> API
     API --> BTFeed["core/backtest/datafeed<br/>+ core/adapters"]
     BTFeed --> Backtester --> Results["results/strategy-name/"] --> Frontend["frontend (Streamlit)"]
 
     API -- "history up to T−1" --> LiveFeed["core/live/datafeed"]
     Shioaji -- "intraday snapshots, tick pushes" --> Broker["core/broker"]
-    Broker --> LiveFeed --> LiveTrader
+    Broker -- "snapshots" --> LiveFeed --> LiveTrader
+    Broker -- "tick pushes (intraday phase)" --> LiveTrader
     LiveTrader --> TradingDB[("data/db/tw_trading.db<br/>live trading records")]
     LiveTrader --> LiveResults["results/live/"]
 ```
@@ -123,7 +125,23 @@ flowchart LR
 
 **The shared-contract layer is the intersection of the two engines**: the strategy contracts, position construction (`core/portfolio/`), the data-feed contract (`core/datafeed/`) and position accounting (`core/position/`) belong to neither engine; both import them. **Every shared rule is written once** — the direction whitelist, max holdings and deterministic ordering, for instance, all live in `core/portfolio/order_rules.py`, so live blocks the same orders backtest does.
 
+**How a day runs is the simulator's job.** `Backtester` only owns the day loop, per-day pre/post processing and reporting; how the day's quotes reach the strategy and how orders fill is decided by the simulator the factory injects for the backtest scale: `BarSimulator` (daily bars, one bar at a time) or `TickSimulator` (tick replay: orders fill on the next tick and market orders take bid/ask, the same contract as live tick triggering).
+
 See [Multi-Market Engine](docs/backtest/multi-market-engine.md), [Module Map](docs/backtest/module-map.md) and [Live Execution Layer](docs/live/execution-layer.md).
+
+## Current Strategies
+
+Strategies live in `strategies/`; the class name is the `--strategy` value. To write a new one, see the [Strategy Development Guide](strategies/README.md).
+
+| Strategy | Market × Instrument | Direction | Backtest scale | Live |
+| -------- | ------------------- | --------- | -------------- | ---- |
+| `VolumeBreakoutMomentumStrategy` | TW stocks | LONG | `DAY` | ✅ in simulation rehearsal (enters and exits at the close) |
+| `IntradayMomentumStrategy` | TW stocks | LONG (stopped out the same day as a day trade) | `DAY` (approximation), `TICK` | ✅ tick-triggered intraday entry and stop (not yet run in simulation) |
+| `InvestmentTrustMomentumSwingStrategy` | TW stocks | LONG | `DAY` | — |
+| `ForeignSellingReversalShortStrategy` | TW stocks | SHORT (cash day trade) | `DAY` | — |
+| `MomentumFuturesStrategy` | TW index futures | LONG | `DAY` | ✅ in simulation rehearsal (demo) |
+
+"Live" means the strategy declares `live_ready`; the live entrypoint rejects strategies that don't.
 
 ## Backtest Coverage
 
@@ -133,7 +151,7 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-10-25 (data up
 
 | Market × Instrument | Status | Scope and data range | Bar scale | Directions | Strategy base |
 | ------------------- | ------ | -------------------- | --------- | ---------- | ------------- |
-| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-10-22 (2,400 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-10-22<br>Exchange below-reference short-sale list (from 2013-09-23) and day-trade list (from 2014-01-06): covering every trading day and updated daily | `DAY`, `TICK` (ticks live in DolphinDB, not `data/db`; needs the `[tick]` extra) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
+| TW stocks (`TW` × `STOCK`) | ✅ Supported | Symbols in `tw_stock.db`: prices 2013-01-02 – 2026-10-22 (2,400 symbols on the latest trading day)<br>Signals use adjusted prices by default; ex-dividend and corporate-action data also start 2013-01<br>Margin trading balances and institutional chip data 2013-01-02 – 2026-10-22<br>Exchange below-reference short-sale list (from 2013-09-23) and day-trade list (from 2014-01-06): covering every trading day and updated daily | `DAY`, `TICK` (ticks live in TimescaleDB, not `data/db`; needs the `[tick]` extra and `docker compose up -d postgres`) | **LONG**: fully cash-funded (no margin financing), overnight or intraday<br>**SHORT**: `DAY_TRADE` (cash day-trade short), `MARGIN` (margin-account short, overnight, default), `SBL` (securities borrowing, overnight); borrow fees, maintenance-ratio margin call and ex-dividend forced cover included<br>Long and short can coexist across symbols; opposite positions in the same symbol are rejected | `BaseStockStrategy` |
 | TW index futures (`TW` × `FUTURE`) | ✅ Supported | TX, MTX, TMF, TE, ZEF, TF, ZFF; automatic contract roll<br>**Day-session prices** (`DAY`): TX / MTX / TE / TF from 2015-01-05 (backfill start), ZEF from 2021-06-28, ZFF from 2021-12-06, TMF from 2024-07-29 (listing dates); all products updated to 2026-10-22<br>**Night-session prices** (`NIGHT` / `COMBINED`): TX / MTX from 2017-05-16, TE from 2018-11-20, ZEF from 2021-06-29, TMF from 2024-07-30; **TF / ZFF only from 2025-06-24**<br>**Margin** (lookup mode): TX / MTX from 2020-03-13, TE / TF from 2020-07-22, ZEF from 2021-08-12, ZFF from 2022-01-26, TMF from 2024-08-09 | `DAY` only | **LONG / SHORT**: the same margin trading, daily mark-to-market and margin call; no borrow availability or borrow fees<br>Long and short can coexist across contracts; opposite positions in the same contract are rejected | `BaseFuturesStrategy` |
 | Stock futures / ETF futures | ⚠️ Code works, prices missing | **Data**: universe of 320 products (249 single-stock, 47 mini single-stock, 21 ETF, 3 mini ETF), 21 universe snapshots from 2026-08-29 to 10-22; prices only for three trial products: CDF, NYF (2026-08-27 – 08-28) and EEF (2026-08-27 day session), **not enough for a meaningful backtest** (backfill tracked in [backlog/暫緩工作彙整.md](backlog/暫緩工作彙整.md) S4)<br>**Code path is wired**: the multiplier comes from the DataFeed's `resolve_multiplier()`, which reads the contract size from the universe snapshot for that day; margin looks up the amount table first (ETF future NYF is there from 2020-07-22) and falls back to the rate table for single-stock futures (`underlying price × contract size × rate`, with the underlying price read across from `tw_stock.db`)<br>**Remaining limit**: contract sizes only go back to the first snapshot on 2026-08-29, so earlier ex-dividend adjustments are invisible | `DAY` only | Same as TW index futures | `BaseFuturesStrategy` |
 | US market, options | ❌ Not supported | `Market.US` and `InstrumentType.OPTION` are defined only; the factory raises `ValueError` | — | — | — |
@@ -144,6 +162,7 @@ Data ranges below reflect an inventory of `data/db` taken on 2026-10-25 (data up
 
 ### Main limitations
 
+- TW stock tick backtests are only open to strategies whose `supported_scales` include `TICK` (currently only `IntradayMomentumStrategy`); any other strategy is rejected on the spot with `--scale TICK`. Tick data must be imported into TimescaleDB first.
 - Tick-level futures backtests are not implemented (`TwFuturesDataFeed.get_quotes()` returns an empty list).
 - The futures margin lookup start date differs per product (earliest 2020-03, see the table); earlier periods can only use the `FuturesMarginConfig.ratio()` approximation, which distorts tradable lots and margin-call thresholds.
 - Futures tick sizes cover only the seven verified index futures (TX / MTX / TMF 1 point, TE / ZEF 0.05, TF / ZFF 0.2); unregistered products fall back to 1 point with a warning, so slippage set in ticks is distorted for them (default slippage is 0, so unaffected).
@@ -158,7 +177,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 
 | Module          | Description                                                                                                                     |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `apps/`         | Entry points: `python -m apps.backtest` (backtest) and `python -m apps.live` (live); shared strategy-name resolution in `_common.py` |
+| `apps/`         | Command-line entrypoints: `backtest`, `live`, `update_db` (data update), `clean_logs`, `delete_price_data`; backtest and live share exit codes and strategy-name resolution through `_common.py` |
 | `core/`         | Core trading domain code (strategies, position bookkeeping, models, adapters, API, data access layer, ETL, backtest engine; outputs land in the top-level `results/`) |
 | `core/live/`    | Live trading: per-phase lifecycle, order management (OMS), execution layer (turns a strategy's `MARKET` / `LIMIT` execution style into broker orders), position attribution, reconciliation, risk control and after-close work |
 | `core/broker/`  | Broker integration: the `BaseBroker` interface, report de-duplication and per-category rate limiting; `tw/` is the Shioaji implementation (login, contract resolution, order mapping, report normalization, quote subscription and replay) |
@@ -167,11 +186,10 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | `core/datafeed/`  | The neutral `BaseDataFeed` contract; backtest and live each implement it, and it is the type of a strategy's `setup_apis(feed)` |
 | `core/market/`    | Market structure and rules (trading calendars, futures roll, margin config, `InstrumentSpec`, `CostModel`), owned by neither engine |
 | `frontend/`     | Streamlit Docker image for viewing backtest results                                                                             |
-| `tasks/`        | Data maintenance and database update scripts                                                                                    |
 | `tests/`        | Unit/integration tests, backtest regression lines (`tests/backtest/`) and live-trading tests (`tests/live/`, run against a fake broker gateway) |
 | `scripts/`      | Guardrail checks (layer deps, doc paths, orphan API methods), regression script and manual scripts                              |
 | `docs/`         | Usage and architecture docs (setup, commands, deployment, data, backtest and ETL design)                                       |
-| `strategies/`   | Top-level package for concrete strategies (empty facade for now; strategies still live in `core/strategies/{stock,futures}/` and will move in gradually); dependencies only flow `strategies` → `core` |
+| `strategies/`   | Concrete strategies (`stock/`, `futures/`) and the strategy loader; strategy contracts (abstract bases) stay in `core/strategies/`; dependencies only flow `strategies` → `core` |
 | `strategy_lab/` | Research workspace organized by concept (`strategies/`, `data_analysis/`, `notebooks/`, `ideas/`); see `strategy_lab/README.md` |
 | `backlog/`      | Internal notes and future work items                                                                                            |
 
@@ -185,10 +203,13 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Dev Deployment](docs/deployment/dev-deployment.md)     | Day-to-day local flow: update data, run a backtest, view results |
 | [Prod Deployment](docs/deployment/prod-deployment.md)   | Building Docker images, running containers, role separation   |
 | [Live Deployment](docs/deployment/live-deployment.md)   | Per-phase live runs, container and cron scheduling, stop and exit codes |
+| [Live Engine Architecture](docs/live/live-engine.md) | Phase lifecycle, order path and risk gates, trading-mode state machine, OMS, multi-strategy attribution, reconciliation, intraday loop, after-close and parity, alerts and known limits (in Chinese) |
 | [Live Execution Layer](docs/live/execution-layer.md) | How a strategy's execution style (`MARKET`/`LIMIT`) becomes a broker order per session; decision price, parity categories, known limits |
-| [Data Coverage](docs/exchanges/data_coverage.md)        | Data sources, API mapping, start dates and price adjustment   |
-| [Command Usage](docs/commands/command-usage.md)         | Full `update_db` target reference and runnable examples       |
-| [Strategy Development Guide](core/strategies/README.md) | How to implement strategies in this project                   |
+| [Production Launch Checklist (Stock)](docs/live/production-checklist-stock.md) | Tick-off list before the stock line first connects to production: credentials, risk and capital, alerts and monitoring, day-one dry run, stock-specific items (in Chinese) |
+| [Production Launch Checklist (Futures)](docs/live/production-checklist-futures.md) | Tick-off list before the futures line first connects to production: the shared items match the stock list, plus futures-specific items (margin account, margin table, notional leverage, contract roll, taken-over positions) |
+| [Data Coverage](docs/exchanges/data_coverage.md)        | Every database table with its crawler, API class and update target; data sources, start dates and price adjustment |
+| [Command Usage](docs/commands/command-usage.md)         | Flags, examples and exit codes for every `apps/` entrypoint (data update, backtest, live, log and data maintenance) |
+| [Strategy Development Guide](strategies/README.md) | How to implement strategies in this project                   |
 | [Backtest Usage](core/backtest/README.md)               | Bar scales, price basis, fill assumptions (slippage, volume cap, borrow checks) and performance metrics |
 | [Frontend Guide](frontend/README.md)                    | Pages and data sources of the Streamlit result viewer         |
 | [Multi-Market Engine](docs/backtest/multi-market-engine.md) | Backtest engine architecture: one engine, five pluggable models |
@@ -199,6 +220,7 @@ See [Short-Selling Framework](docs/backtest/short-selling-framework.md) and [TW 
 | [Equity Change Data](docs/pipeline/equity-change.md)    | `equity_change` data shape, known limits and throttling       |
 | [Corporate Actions](docs/pipeline/corporate-action.md)  | `corporate_action` table: sources, adjustment ratios and the false-gap guard |
 | [Code Quality](docs/dev/code-quality.md)                | Tooling (pyproject / ruff / CI / pre-commit) and lint ignore rationale |
+| [Testing and Regression](docs/dev/testing.md)           | Test layout, guard tests, tests needing external resources, regression lines and baseline regeneration, mutation-test convention (in Chinese) |
 | [Naming Axes](docs/dev/naming-axes.md)                  | Directory naming decision for the market axis vs the instrument-type axis |
 | [Data Access Layer](docs/dev/data-access-layer.md)      | `core/dao/` layering, connection ownership, savepoints and commit timing, error semantics, new-table checklist |
 | [Runtime Artifacts](docs/dev/runtime-artifacts.md)      | Conventions for `data/` / `results/` / `logs/`, log bucketing and retention |
@@ -223,6 +245,7 @@ AlphaEdge/
         └── tw_futures.db
 ```
 
+For every table in the databases, the crawler that fills it and the API that reads it, see the [table overview](docs/exchanges/data_coverage.md#資料表一覽).
 To bring the data up to date afterwards, see "Update database" under Command Usage below.
 
 ### 2. Choose how to run it (pick one)
@@ -258,7 +281,7 @@ uv sync
 .venv\Scripts\activate
 ```
 
-The project is installed into `.venv` in editable mode, so `core` / `tasks` / `tests` are importable
+The project is installed into `.venv` in editable mode, so `core` / `apps` / `strategies` / `tests` are importable
 from any directory. Activate the virtualenv in every new terminal (run `deactivate` to leave it);
 alternatively prefix commands with `uv run --no-sync`, e.g. `uv run --no-sync python -m apps.backtest ...`
 (plain `uv run` first syncs the environment to the default dependencies, removing any `frontend` / `lab` extras you installed).
@@ -266,11 +289,11 @@ alternatively prefix commands with `uv run --no-sync`, e.g. `uv run --no-sync py
 **Step 2: Run a backtest**
 
 ```bash
-python -m apps.backtest --strategy MomentumStrategy1
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy
 ```
 
-- `--strategy` takes a strategy class name; existing strategies live in `core/strategies/stock/` and `core/strategies/futures/`.
-- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--show` / `--no-show` decide whether charts open in a browser (with neither flag, `ALPHAEDGE_SHOW_FIGURES` decides; default off). Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
+- `--strategy` takes a strategy class name; existing strategies live in `strategies/stock/` and `strategies/futures/`.
+- Optional: `--start` / `--end` (`YYYY-MM-DD`) and `--capital` override the strategy's default period and initial capital; `--scale` switches to another bar scale the strategy declares as supported; `--tick-universe` picks the symbols a TICK backtest reads; `--show` / `--no-show` decide whether charts open in a browser (with neither flag, `ALPHAEDGE_SHOW_FIGURES` decides; default off). Live trading is a separate entry point (`python -m apps.live`); see [Live Deployment](docs/deployment/live-deployment.md) for usage and exit codes.
 - Results are written to `results/` at the project root.
 
 **Step 3: Open the frontend to view results**
@@ -286,10 +309,11 @@ Open `http://localhost:8501`. Leave the frontend running and use another termina
 
 #### Option 2: Docker Compose
 
-One command builds and starts two containers: `core` runs one backtest and exits, `frontend` keeps serving the page.
+One command builds and starts three containers: `core` runs one backtest and exits; `postgres` (TimescaleDB, holds TW stock ticks) comes up first and must pass its health check before `core` starts; `frontend` keeps serving the page.
+The live `live` service sits behind the `live` profile, so `up` never starts it (usage in [Live Deployment](docs/deployment/live-deployment.md)).
 
 ```bash
-# Build images and start (default strategy: MomentumStrategy1)
+# Build images and start (default strategy: VolumeBreakoutMomentumStrategy)
 docker compose up --build
 
 # Use a different strategy
@@ -322,7 +346,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 docker run --rm \
   -v "$(pwd)/data:/app/data:ro" \
   -v "$(pwd)/results:/app/results" \
-  alphaedge-core --strategy MomentumStrategy1
+  alphaedge-core --strategy VolumeBreakoutMomentumStrategy
 ```
 
 The image has no database, so mount the host `data/` read-only; results are written back to the host
@@ -347,7 +371,7 @@ cp .env.example .env
 
 | Variable | Purpose | Needed when |
 | -------- | ------- | ----------- |
-| `DDB_PATH`, `DDB_HOST`, `DDB_PORT`, `DDB_USER`, `DDB_PASSWORD` | DolphinDB connection | Accessing tick data, running tick backtests |
+| `TICK_DATABASE_URL` | TimescaleDB connection for TW stock ticks (start Docker Desktop, then `docker compose up -d postgres`) | Accessing tick data, running tick backtests, updating ticks |
 | `API_KEY`, `API_SECRET_KEY` (optional `API_KEY_1..4` / `API_SECRET_KEY_1..4` for multi-account rotation) | Sinopac Shioaji API | Crawling tick data, live login (simulation and production alike) |
 | `FINMIND_API_TOKEN` | FinMind API | Updating FinMind data (stock overview, brokers, broker branches) |
 | `SHIOAJI_CA_PATH`, `SHIOAJI_CA_PASSWORD`, `SHIOAJI_PERSON_ID` | Shioaji order-signing certificate | Live trading in production |
@@ -355,6 +379,9 @@ cp .env.example .env
 | `ALPHAEDGE_LIVE_NOTIFY_CHANNEL`, `ALPHAEDGE_LIVE_NOTIFY_TOKEN`, `ALPHAEDGE_LIVE_NOTIFY_TARGET` | Live alert delivery (Discord or Telegram) | When you want live alerts |
 | `ALPHAEDGE_DATA_DIR`, `ALPHAEDGE_RESULTS_DIR`, `ALPHAEDGE_LOGS_DIR` | Override runtime artifact roots | Mounting volumes in containers |
 | `ALPHAEDGE_SHOW_FIGURES` | Open charts in a browser after a backtest (same as `--show`) | When you do not want to pass the flag every time |
+| `STRATEGY` | Which strategy the `docker compose` `core` service runs (default `VolumeBreakoutMomentumStrategy`) | Switching strategies under compose |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Account and database name for the compose `postgres` (TimescaleDB) service (all default to `alphaedge`; change `TICK_DATABASE_URL` to match) | When not using the defaults |
+| `ALPHAEDGE_CA_DIR`, `SHIOAJI_CA_FILE` | Certificate directory and file name the compose `live` service mounts read-only (defaults `~/.alphaedge/ca`, `Sinopac.pfx`) | Running production live trading in a container |
 
 `.env` is read by the local code; the Docker images do not include it. Details in [Dev Setup](docs/setup/dev-setup.md).
 
@@ -366,12 +393,12 @@ The dev tools (pytest, pytest-timeout, pytest-cov, ruff) are the `dev` dependenc
 uv sync               # dependencies + the project + dev tools
 ```
 
-Other optional extras: `frontend` (Streamlit UI), `tick` (DolphinDB tick storage),
+Other optional extras: `frontend` (Streamlit UI), `tick` (TimescaleDB drivers for TW stock ticks: `psycopg`, `connectorx`, `pyarrow`),
 `lab` (`strategy_lab` report output and U.S./FX data: `python-docx`, `yfinance`);
 the backtest and ETL paths run without them.
 
 **`uv sync` makes the environment match exactly what you ask for**: extras not listed on the command are removed (the dev tools are not affected).
-To keep several extras, list them together, e.g. `uv sync --extra frontend --extra lab`, or use `uv sync --all-extras`.
+To keep several extras, list them together, e.g. `uv sync --extra frontend --extra lab --extra tick`, or use `uv sync --all-extras`.
 
 **Lint, format and tests**
 
@@ -395,6 +422,7 @@ pre-commit run --all-files
 layer-dependency gate (`scripts/check_layer_deps.py`), the doc path check
 (`scripts/check_doc_paths.py`), the remaining `pre-commit run --all-files` hooks, the API
 orphan-method check (`scripts/check_api_orphan_methods.py`), the SHORT regression line,
+the tick integration tests (the job runs a TimescaleDB service; **any skipped test fails the step**),
 `pytest -m "not slow"` (the coverage report rides along in the same run rather than
 repeating the whole suite). **A separate job
 runs in parallel** building the `core` and `frontend` Docker images and smoke-testing them (`core` runs two steps, `--help` and importing the strategy packages; `frontend` one) —
@@ -406,10 +434,12 @@ it declares no `needs:`, so it starts alongside the list above rather than after
 
 ### Update database
 
-For full target reference and single/multi-target examples, see [Command Usage](docs/commands/command-usage.md).
+For full target reference and single/multi-target examples, see [Command Usage](docs/commands/command-usage.md); for which tables each target writes, see the [table overview](docs/exchanges/data_coverage.md#資料表一覽).
 
 ```bash
-python -m tasks.update_db --target no_tick
+python -m apps.update_db                              # same as --target no_tick: everything except ticks
+python -m apps.update_db --target price chip          # only the named targets
+python -m apps.update_db --retry-failed 4             # rerun failed targets every 60 minutes, up to 4 rounds
 ```
 
 ### Run backtest
@@ -418,20 +448,30 @@ Replace `<StrategyClassName>` with your strategy class name. More command scenar
 
 ```bash
 python -m apps.backtest --strategy <StrategyClassName>
-# optional: --start/--end YYYY-MM-DD and --capital override strategy defaults; --show/--no-show decide whether charts open in a browser. Live trading uses python -m apps.live, see docs/deployment/live-deployment.md
+python -m apps.backtest --strategy VolumeBreakoutMomentumStrategy --start 2024-01-01 --end 2024-12-31 --capital 1000000
+python -m apps.backtest --strategy IntradayMomentumStrategy --scale TICK --tick-universe strategy   # tick backtest
 ```
+
+### Live trading
+
+Live trading runs per phase, launched one phase at a time by a scheduler (open, intraday, close, after-close), against the simulation environment by default:
+
+```bash
+python -m apps.live --strategy VolumeBreakoutMomentumStrategy --phase close
+```
+
+Phases, schedules, exit codes and ledger rebuilds are covered in [Live Deployment](docs/deployment/live-deployment.md).
 
 ## Project Structure
 
 ```text
 AlphaEdge/
-├── apps/                      # entry points: backtest.py (backtest), live.py (live), _common.py (shared)
+├── apps/                      # entry points: backtest.py (backtest), live.py (live), update_db.py (data update), clean_logs.py (old log cleanup), delete_price_data.py (delete one day of price), _common.py (shared by backtest and live)
 ├── core/                      # trading domain modules
-│   ├── strategies/            # strategy implementations
+│   ├── strategies/            # strategy contracts (abstract bases only; concrete strategies live in top-level strategies/)
 │   │   ├── base.py            # BaseStrategy (market-agnostic)
-│   │   ├── strategy_loader.py # auto-scans every instrument-type sub-package (stock / futures)
-│   │   ├── stock/             # BaseStockStrategy + concrete stock strategies
-│   │   └── futures/           # BaseFuturesStrategy + TW futures strategies
+│   │   ├── stock/             # BaseStockStrategy
+│   │   └── futures/           # BaseFuturesStrategy
 │   ├── api/                   # query interfaces and business rules (no SQL; builds DAOs with conn=)
 │   ├── dao/                   # data access layer: SQL, connections and transactions live only here
 │   │   ├── base.py            # BaseDAO: owns_conn, table_exists, savepoint, write methods
@@ -441,7 +481,7 @@ AlphaEdge/
 │   │   ├── quote_validation.py # source-agnostic quote checks: price validity, duplicate symbols
 │   │   └── tw/                # StockQuoteAdapter (one complete path each for day and tick), FuturesQuoteAdapter
 │   ├── datafeed/              # the neutral BaseDataFeed contract (shared; neither engine imports the other)
-│   ├── market/                # market structure and rules: trading calendars, futures roll, margin config, instrument spec, cost model (tw/ is the Taiwan implementation)
+│   ├── market/                # market structure and rules: trading calendars, trading phases, futures roll, margin, instrument spec, cost model (tw/ is the Taiwan implementation)
 │   ├── portfolio/             # position construction (shared): signal / sizing / construction / aggregation / order_rules (direction whitelist, max holdings, exposure, ordering)
 │   ├── position/              # position bookkeeping (position_manager.py under base/ + stock/ + futures/)
 │   ├── models/                # domain models (base/ + stock/ + futures/; cost_config.py / fill_config.py hold the cost and fill parameters a strategy declares)
@@ -451,21 +491,21 @@ AlphaEdge/
 │   ├── pipeline/              # ETL/update pipeline
 │   │   ├── shared/           # cross-market: four layer bases, HTTP helpers, date/season diffing, source priority, graceful stop
 │   │   ├── tw/               # TW equity/futures ETL (crawlers/cleaners/loaders/updaters)
-│   │   │   └── utils/        # Taiwan-only helpers (URL table, tick metadata, MOPS payload, TPEX date ranges)
+│   │   │   └── utils/        # Taiwan-only helpers (URL table, tick multi-key rotation and resume checks, MOPS payload, TPEX date ranges)
 │   │   └── utils/            # cross-market: constants, DataFrame and SQLite helpers, exceptions
 │   ├── backtest/              # backtest engine
 │   │   ├── README.md          # bar scales, price basis, fill assumptions, performance metrics
-│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses
+│   │   ├── backtester.py      # the only engine: market/instrument-agnostic, no subclasses; daily loop and pre/post-day steps
+│   │   ├── simulator/         # how one day runs: BarSimulator (daily bars), TickSimulator (tick replay), pending orders, tick universe; order execution lives in BaseSimulator
 │   │   ├── factory.py         # assembles the model set from (market, instrument_type)
 │   │   ├── overrides.py       # --start / --end / --capital command-line overrides, written back to the strategy before assembly
 │   │   ├── models/            # FillModel / SettlementModel / event counts (backtest simulation; instrument spec and cost model live in core/market/)
-│   │   ├── datafeed/          # per-market BaseDataFeed implementations (tw/stock_datafeed.py, tw/futures_datafeed.py)
+│   │   ├── datafeed/          # per-market BaseDataFeed implementations (tw/stock_datafeed.py, tw/stock_tick_datafeed.py, tw/futures_datafeed.py)
 │   │   └── report/            # trading report, direction summary, charts
 │   ├── broker/                # broker gateway: BaseBroker interface, report de-duplication, per-category rate limiting
 │   │   └── tw/                # Shioaji: login/CA, contract resolution, order mapping, report normalization, accounts, live quotes and quote replay
 │   └── live/                  # live trading engine
-│       ├── trader.py          # per-phase lifecycle (open / close / intraday / after-close)
-│       ├── segment.py         # phase definitions and which phase is due right now
+│       ├── trader.py          # per-phase lifecycle (open / close / intraday / after-close); phase definitions and windows live in core/market/segment.py
 │       ├── factory.py         # assembles live components from (market, instrument_type)
 │       ├── reconciler.py      # after-close reconciliation against broker positions
 │       ├── account_sync.py    # rebuild the attribution ledger from broker positions
@@ -476,8 +516,8 @@ AlphaEdge/
 │       ├── oms/               # order state machine, report queue, restart takeover
 │       ├── execution/         # execution layer: turns a strategy's MARKET / LIMIT style into broker orders per session (base / stock / futures)
 │       ├── risk/              # pre-trade risk, trading-mode state machine, margin gate, risk event log and category registry
-│       ├── attribution/       # multi-strategy position ledger and cross-strategy conflict guard
-│       ├── datafeed/          # history up to T−1; today's quotes come from the broker
+│       ├── attribution/       # multi-strategy position ledger, cross-strategy conflict guard, rebuild from broker positions
+│       ├── datafeed/          # history up to T−1; today's quotes come from the broker; trading-day check
 │       ├── intraday/          # intraday event loop and end-of-session forced actions
 │       ├── notify/            # alert delivery (Discord, Telegram; failures never affect the trading path)
 │       └── report/            # live daily report and live-vs-backtest signal parity
@@ -496,19 +536,19 @@ AlphaEdge/
 │   ├── Dockerfile             # frontend container image
 │   ├── README.md              # frontend usage notes
 │   └── __init__.py
-├── strategies/                # top-level package for concrete strategies (stock / futures; empty facade for now — strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
+├── deploy/                    # deployment settings (version-controlled): live_risk.toml (live risk overrides that may only tighten)
+├── strategies/                # concrete strategies and the strategy loader (stock / futures; strategy contracts stay in core/strategies/, dependencies only flow strategies → core)
 ├── strategy_lab/              # research workspace (strategies/ / data_analysis/ / notebooks/ / ideas/)
-├── tasks/                     # data update and maintenance entrypoints (update_db, delete_price_data, clean_logs)
 ├── tests/                     # test suites (`backtest/` engine and regression lines, `live/` live trading, `portfolio/` shared contracts, `analysis/` performance metrics, `fixtures/` test data; `downloads/` is a runtime artifact)
 ├── backlog/                   # internal planning notes
 ├── docs/                      # project docs
 │   ├── backtest/              # engine architecture, module map, short-selling spec
-│   ├── dev/                   # code quality, naming axes, data access layer, runtime artifacts
+│   ├── dev/                   # code quality, testing and regression, naming axes, data access layer, runtime artifacts
 │   ├── futures/               # TW futures platform: data, backtest semantics, known limits
 │   ├── pipeline/              # ETL ingestion contract, equity change, corporate actions
 │   ├── setup/                 # dev environment setup
 │   ├── deployment/            # dev and prod deployment
-│   ├── live/                  # live execution layer (how execution styles become broker orders)
+│   ├── live/                  # live engine architecture, execution layer, production launch checklist
 │   ├── exchanges/             # data coverage
 │   └── commands/              # command usage (zh-TW / en)
 ├── scripts/                   # guardrail checks and one-off tools
@@ -521,8 +561,8 @@ AlphaEdge/
 │   ├── check_overnight_positions.py  # does the simulation env keep overnight positions? (read-only analysis)
 │   ├── launchd/               # macOS launchd schedule generator and watchdog wrapper (one launch per phase for the simulation rehearsal)
 │   └── manual/                # scripts needing credentials or a database (see its README)
-├── Dockerfile                 # backend image (core, apps, tasks, strategies; shared by backtest, data update and live)
-├── docker-compose.yml         # compose: core + live (behind a profile, never started by `up`) + frontend + shared results volume
+├── Dockerfile                 # backend image (core, apps, strategies; shared by backtest, data update and live)
+├── docker-compose.yml         # compose: core + postgres (TimescaleDB) + live (behind a profile, never started by `up`) + frontend + results / pgdata volumes
 ├── pyproject.toml             # dependency declaration (single source) and ruff/pytest config
 ├── uv.lock                    # versions resolved by uv (do not edit; run `uv lock` after changing pyproject)
 ├── .github/workflows/ci.yml   # CI: lint, guardrail checks, regression lines, tests and Docker smoke tests

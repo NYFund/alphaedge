@@ -1,7 +1,5 @@
 from typing import Dict, List, Optional, Sequence
 
-from loguru import logger
-
 from core.portfolio.order_rules import get_execution_sequence
 from core.strategies.base import BaseStrategy
 from core.utils import BarExecutionSequence, ExecutionStyle, ExecutionTiming, LiveHook
@@ -12,8 +10,8 @@ from core.utils import BarExecutionSequence, ExecutionStyle, ExecutionTiming, Li
 擋的都是**不會報錯、只會讓結果安靜地不同**的情況：
 
 1. **沒宣告 `live_ready`** → 策略作者根本沒確認過它的實盤語意。
-2. **沒宣告 `live_schedule`** → 引擎不知道哪個鉤子該在哪一段呼叫。
-3. **`live_schedule` 與 `allow_day_trade` 矛盾** → 交易順序被默默改掉。
+2. **沒宣告 `execution_schedule`** → 引擎不知道哪個鉤子該在哪一段呼叫。
+3. **`execution_schedule` 與 `allow_day_trade` 矛盾** → 交易順序被默默改掉。
 4. **沒宣告或宣告錯 `live_execution`** → 執行層不知道這些委託要不要成交。
    放到送單時才發現的話，尾盤段只有幾分鐘可以送單，當天的單就沒了。
 
@@ -29,7 +27,11 @@ class LiveReadinessError(RuntimeError):
     """策略未通過上實盤前的檢查"""
 
 
-# 段落的時間先後。`IMMEDIATE` 是盤中逐筆，沒有段落之分，故所有鉤子都在同一格
+# 段落的時間先後。`IMMEDIATE` 刻意與開盤段同一格，不排在開盤與尾盤之間：
+# 盤中段落實際落在 09:05～13:18（開盤段之後），但「開倉在盤中、隔天開盤平倉」這類
+# 策略的平倉只處理前一天以前的部位、停損只處理當天的部位，兩者動的部位不重疊，
+# 排成不同格會被誤判成順序矛盾。代價是：真的讓同一批部位同時經過盤中鉤子與開盤段的
+# 策略，這裡檢查不出先後，要由策略自己保證兩個鉤子處理的部位不重疊
 _TIMING_ORDER: Dict[ExecutionTiming, int] = {
     ExecutionTiming.AT_OPEN: 0,
     ExecutionTiming.AT_CLOSE: 1,
@@ -93,9 +95,9 @@ def inspect_strategy(strategy: BaseStrategy) -> List[str]:
             "逐項確認後請寫進 class docstring 的〈實盤執行〉區塊"
         )
 
-    if not strategy.live_schedule:
+    if not strategy.execution_schedule:
         problems.append(
-            "未宣告 live_schedule：引擎不知道哪個鉤子該在哪一段呼叫。"
+            "未宣告 execution_schedule：引擎不知道哪個鉤子該在哪一段呼叫。"
             "日 K 在實盤不存在，同一支策略的鉤子要拆成開盤段與尾盤段"
         )
     else:
@@ -141,12 +143,12 @@ def _check_schedule_keys(strategy: BaseStrategy) -> List[str]:
     """鍵必須是認得的鉤子名；打錯字會讓那個鉤子整天不被呼叫"""
 
     known: set = {hook.value for hook in LiveHook}
-    unknown: List[str] = sorted(set(strategy.live_schedule) - known)
+    unknown: List[str] = sorted(set(strategy.execution_schedule) - known)
     if not unknown:
         return []
 
     return [
-        f"live_schedule 有不認得的鉤子名 {unknown}（可用的是 {sorted(known)}）；"
+        f"execution_schedule 有不認得的鉤子名 {unknown}（可用的是 {sorted(known)}）；"
         "打錯字的鉤子整天不會被呼叫，而且不會報錯"
     ]
 
@@ -154,7 +156,33 @@ def _check_schedule_keys(strategy: BaseStrategy) -> List[str]:
 def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
     """
     - Description:
-        檢查 `live_schedule` 與 `allow_day_trade` 是否矛盾
+        檢查 `execution_schedule` 的段落先後是否與回測的執行順序矛盾
+
+        兩條判準各自獨立，見 `_check_open_close_order()` 與 `_check_stop_loss_order()`；
+        兩條都矛盾時一併列出。
+    - Parameters:
+        - strategy: BaseStrategy
+            待檢查的策略
+    - Return:
+        - Optional[str]
+            矛盾說明；沒有矛盾時為 None
+    """
+
+    conflicts: List[str] = [
+        conflict
+        for conflict in (
+            _check_open_close_order(strategy),
+            _check_stop_loss_order(strategy),
+        )
+        if conflict is not None
+    ]
+    return "；".join(conflicts) if conflicts else None
+
+
+def _check_open_close_order(strategy: BaseStrategy) -> Optional[str]:
+    """
+    - Description:
+        檢查 `open`／`close` 的段落先後與 `allow_day_trade` 是否矛盾
 
         判準：
         - 開倉與平倉落在**同一段落**時，順序由 `get_execution_sequence()` 決定，
@@ -172,7 +200,7 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
             矛盾說明；沒有矛盾時為 None
     """
 
-    schedule: Dict[str, ExecutionTiming] = strategy.live_schedule
+    schedule: Dict[str, ExecutionTiming] = strategy.execution_schedule
     open_timing: Optional[ExecutionTiming] = schedule.get(LiveHook.OPEN.value)
     close_timing: Optional[ExecutionTiming] = schedule.get(LiveHook.CLOSE.value)
 
@@ -198,45 +226,44 @@ def check_schedule_conflicts(strategy: BaseStrategy) -> Optional[str]:
         effect = "當天開的部位要到下一個交易日才會被檢查要不要平，實盤當不了沖"
 
     return (
-        f"live_schedule 與 allow_day_trade={strategy.allow_day_trade} 矛盾："
+        f"execution_schedule 與 allow_day_trade={strategy.allow_day_trade} 矛盾："
         f"open 在 {open_timing.value}、close 在 {close_timing.value}，{effect}，"
         "回測卻不是這樣跑——兩邊的部位軌跡從當天起就不同。"
-        "請調整 live_schedule 或 allow_day_trade 讓兩者一致"
+        "請調整 execution_schedule 或 allow_day_trade 讓兩者一致"
     )
 
 
-def resolve_hook_timing(
-    strategy: BaseStrategy, hook: LiveHook
-) -> Optional[ExecutionTiming]:
+def _check_stop_loss_order(strategy: BaseStrategy) -> Optional[str]:
     """
     - Description:
-        取得某個鉤子的執行段落
+        檢查 `stop_loss` 的段落是否晚於 `close`
 
-        **停損沒宣告時退回平倉的段落**：兩者都是出場，把停損排在與平倉不同的
-        段落是刻意的決定，不該由「忘了寫」造成。
+        回測的平倉階段**固定先停損、再一般平倉**（引擎寫死）。實盤的停損若宣告在
+        比平倉更晚的段落，部位會先被一般平倉吃掉，停損等於沒發生——
+        順序被靜默改掉，回測與實盤的部位軌跡從那天起就不同。
+
+        同一段落或停損在前都與回測一致；未宣告 `stop_loss` 時退回 `close` 的段落
+        （見 `resolve_hook_timing()`），本來就一致，不必檢查。
     - Parameters:
         - strategy: BaseStrategy
-            策略
-        - hook: LiveHook
-            鉤子
+            待檢查的策略
     - Return:
-        - Optional[ExecutionTiming]
-            執行段落；未宣告且無從退回時為 None
+        - Optional[str]
+            矛盾說明；沒有矛盾時為 None
     """
 
-    timing: Optional[ExecutionTiming] = strategy.live_schedule.get(hook.value)
-    if timing is not None:
-        return timing
+    schedule: Dict[str, ExecutionTiming] = strategy.execution_schedule
+    stop_timing: Optional[ExecutionTiming] = schedule.get(LiveHook.STOP_LOSS.value)
+    close_timing: Optional[ExecutionTiming] = schedule.get(LiveHook.CLOSE.value)
 
-    if hook is LiveHook.STOP_LOSS:
-        fallback: Optional[ExecutionTiming] = strategy.live_schedule.get(
-            LiveHook.CLOSE.value
-        )
-        if fallback is not None:
-            logger.debug(
-                f"{type(strategy).__name__} 未宣告 stop_loss 的段落，退回 close 的 "
-                f"{fallback.value}"
-            )
-        return fallback
+    if stop_timing is None or close_timing is None:
+        return None
 
-    return None
+    if _TIMING_ORDER[stop_timing] <= _TIMING_ORDER[close_timing]:
+        return None
+
+    return (
+        f"execution_schedule 的 stop_loss 在 {stop_timing.value}、晚於 close 的 "
+        f"{close_timing.value}：實盤會先一般平倉、後停損，回測卻固定先停損——"
+        "兩邊的部位軌跡從那天起就不同。請把 stop_loss 排在不晚於 close 的段落"
+    )

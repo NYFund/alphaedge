@@ -20,6 +20,7 @@ Python 允許任意屬性指派，策略照舊文件設 `bar_execution_order` �
         "enable_intraday",
         "bar_execution_order",
         "is_intraday",
+        "live_schedule",
     ],
 )
 def test_removed_setting_is_reported(name: str) -> None:

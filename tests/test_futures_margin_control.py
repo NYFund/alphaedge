@@ -9,6 +9,7 @@ from core.market.tw.cost_model import TwFuturesCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesPosition, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
+from core.portfolio.signal import Signal
 from core.position.futures.position_manager import FuturesPositionManager
 from core.utils import Action, MarginCallPolicy, PositionType
 from core.utils.constant import FUTURES_MULTIPLIER
@@ -163,6 +164,25 @@ def test_margin_follows_the_effective_date() -> None:
     assert after == 292000
 
 
+def lots_for(strategy, quote: FuturesQuote) -> int:
+    """策略目前的部位建構器會替這筆報價開幾口；費率歸零、口數上限放寬，只看保證金"""
+
+    strategy.cost_config = FuturesCostConfig.free()
+    strategy.max_lots = 100
+    orders = strategy.make_portfolio_constructor().build(
+        [
+            Signal(
+                quote=quote,
+                action=Action.BUY,
+                position_type=PositionType.LONG,
+                order_price=quote.close,
+            )
+        ],
+        strategy.account,
+    )
+    return orders[0].volume if orders else 0
+
+
 def test_affordable_lots_change_across_an_adjustment() -> None:
     """
     調整生效日前後的**可開口數不同**——這是本步驟的驗收條件
@@ -170,7 +190,7 @@ def test_affordable_lots_change_across_an_adjustment() -> None:
     同一筆資金在 265,000／口 時開得起 3 口，調到 292,000／口 之後只剩 2 口。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -189,8 +209,8 @@ def test_affordable_lots_change_across_an_adjustment() -> None:
     after: FuturesQuote = make_quote(date=datetime.date(2024, 8, 23))
 
     # 800,000 ÷ 265,000 = 3 口；800,000 ÷ 292,000 = 2 口
-    assert strategy.calculate_max_lots(before) == 3
-    assert strategy.calculate_max_lots(after) == 2
+    assert lots_for(strategy, before) == 3
+    assert lots_for(strategy, after) == 2
 
 
 def test_floating_profit_supports_more_lots() -> None:
@@ -200,7 +220,7 @@ def test_floating_profit_supports_more_lots() -> None:
     期貨的損益逐日結算進帳戶，賺到的錢當天就能用來開新倉。
     """
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -212,11 +232,11 @@ def test_floating_profit_supports_more_lots() -> None:
     strategy.max_capital_usage = 1.0
 
     position: FuturesPosition = manager.open_position(make_order(volume=1))
-    lots_before: int = strategy.calculate_max_lots(make_quote())
+    lots_before: int = lots_for(strategy, make_quote())
 
     # 一天大賺 1,000 點：(19000 − 18000) × 200 = 200,000 進帳戶
     manager.settle_daily(position, 19000.0)
-    lots_after: int = strategy.calculate_max_lots(make_quote(close=19000.0))
+    lots_after: int = lots_for(strategy, make_quote(close=19000.0))
 
     assert manager.account.balance == INIT_CAPITAL - 200000 + 200000
     assert lots_after == lots_before + 1
@@ -224,9 +244,7 @@ def test_floating_profit_supports_more_lots() -> None:
 
 # === 維持保證金與追繳 ===
 def test_maintenance_margin_is_a_separate_published_value() -> None:
-    """
-    維持保證金與原始保證金是**兩個獨立的公告值**，不可用比率互推
-    """
+    """維持保證金與原始保證金是**兩個獨立的公告值**，不可用比率互推"""
 
     api: StubMarginAPI = StubMarginAPI(
         initial={datetime.date(2020, 1, 1): 338000},
@@ -283,7 +301,7 @@ def test_margin_call_force_covers_until_equity_is_enough() -> None:
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
     # 跌 5,000 點：權益 3,000,000 − 2,000,000 ＝ 1,000,000 < 維持 1,200,000
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=13000.0, date=DAY_2)], account, event_counts
     )
 
@@ -315,7 +333,7 @@ def test_margin_call_warn_only_keeps_the_position() -> None:
     manager.open_position(make_order(volume=2))
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=13000.0, date=DAY_2)], account, event_counts
     )
 
@@ -339,7 +357,7 @@ def test_no_margin_call_when_equity_is_sufficient() -> None:
     manager.open_position(make_order(volume=1))
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=18100.0, date=DAY_2)], account, event_counts
     )
 
@@ -362,7 +380,7 @@ def test_margin_call_ratio_triggers_earlier() -> None:
     manager.open_position(make_order(volume=1))
 
     event_counts: Dict[str, int] = {"forced_cover_margin_call": 0}
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2, [make_quote(close=18000.0, date=DAY_2)], account, event_counts
     )
 
@@ -380,12 +398,21 @@ def isolated_futures_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     `setup()` 會以寫入模式連 `TW_FUTURES_DB_PATH`：沒有資料庫的機器上，這會在
     `data/db/` 建出 0 byte 的 `tw_futures.db`，之後「檔案存在才跑」的測試就不再
     跳過、改以 no such table 失敗——第一次跑 1 skipped、第二次 FAILED。
+
+    暫存資料庫是空的，`setup()` 建出的是空日曆，會被「區間內沒有交易日」的擋板拒絕；
+    這裡要驗的是保證金 API 的注入，擋板本身另有測試（`tests/backtest/test_empty_calendar.py`），
+    故在此關掉。
     """
 
     import core.backtest.datafeed.tw.futures_datafeed as datafeed_module
 
     db_path: Path = tmp_path / "tw_futures.db"
     monkeypatch.setattr(datafeed_module, "TW_FUTURES_DB_PATH", db_path)
+    monkeypatch.setattr(
+        datafeed_module.TwFuturesDataFeed,
+        "ensure_trading_days_in_range",
+        lambda self: None,
+    )
     return db_path
 
 
@@ -401,7 +428,7 @@ def test_datafeed_injects_the_margin_api_into_the_shared_config(
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -435,7 +462,7 @@ def test_ratio_mode_is_not_injected(isolated_futures_db: Path) -> None:
     """明確宣告比率近似時不注入 API——否則使用者的降級表態會被無聲推翻"""
 
     from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -467,9 +494,8 @@ def test_margin_table_matches_the_announced_adjustment(tmp_path: Path) -> None:
     from core.dao.tw.futures_margin_dao import FuturesMarginDAO
 
     dao: FuturesMarginDAO = FuturesMarginDAO(db_path=tmp_path / "tw_futures.db")
-    dao.ensure_tables()
+    dao.ensure_table()
     dao.insert_rows(
-        FuturesMarginDAO.TABLE_NAME,
         pd.DataFrame(
             [
                 [

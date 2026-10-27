@@ -17,7 +17,7 @@ load_dotenv()
 
 
 def get_static_resolved_path(base_dir: Path, dir_name: str) -> Path:
-    """Resolve dir_name under base_dir to an absolute path"""
+    """取得 `base_dir` 底下 `dir_name` 的絕對路徑"""
 
     return (base_dir / dir_name).resolve()
 
@@ -30,7 +30,7 @@ def get_env_path(env_key: str, default: Path) -> Path:
 
 
 # -----------------------------------------------------------------------
-# Root Directory Path
+# === Root Directory Path ===
 # -----------------------------------------------------------------------
 #
 # 兩個錨點的分工是本專案的目錄分界：
@@ -125,6 +125,16 @@ LIVE_KILL_SWITCH_PATH: Path = get_env_path(
     get_static_resolved_path(base_dir=DATA_DIR_PATH, dir_name="live") / "KILL_SWITCH",
 )
 
+# 部署端的風控設定（只能收緊策略宣告的上限，見 `core/config/live_risk.py`）。
+#
+# **放專案根的 `deploy/` 而不是 `data/`、且進版控**：風控值的每一次變更都要留在
+# git 歷史裡——事後要回答「那天的上限是多少、誰改的、為什麼」。`data/` 是執行期產物、
+# 不進版控，放那裡就只剩檔案當下的值。**目錄不叫 `config/`**：前端以 `from config import`
+# 取自己的 `frontend/config.py`，專案根多一個同名目錄會讓那行 import 解析到錯的地方
+LIVE_RISK_CONFIG_PATH: Path = get_env_path(
+    "ALPHAEDGE_LIVE_RISK_CONFIG_PATH", PROJECT_ROOT / "deploy" / "live_risk.toml"
+)
+
 
 # -----------------------------------------------------------------------
 # === Crawl Data Downloads Path ===
@@ -193,9 +203,6 @@ FUTURES_CONTINUOUS_DOWNLOADS_PATH: Path = get_static_resolved_path(
 FUTURES_UNIVERSE_DOWNLOADS_PATH: Path = get_static_resolved_path(
     base_dir=TW_FUTURES_DOWNLOADS_PATH, dir_name="universe"
 )
-FUTURES_TICK_DOWNLOADS_PATH: Path = get_static_resolved_path(
-    base_dir=TW_FUTURES_DOWNLOADS_PATH, dir_name="tick"
-)
 FUTURES_MARGIN_DOWNLOADS_PATH: Path = get_static_resolved_path(
     base_dir=TW_FUTURES_DOWNLOADS_PATH, dir_name="margin"
 )
@@ -227,12 +234,6 @@ MONTHLY_REVENUE_REPORT_META_DIR_PATH: Path = get_static_resolved_path(
 # 與上面相反：這些是「爬到哪了」的執行期狀態，重跑會被覆寫，不進版控
 DOWNLOADS_METADATA_DIR_PATH: Path = get_static_resolved_path(
     base_dir=TW_STOCK_DOWNLOADS_PATH, dir_name="meta"
-)
-TICK_METADATA_DIR_PATH: Path = get_static_resolved_path(
-    base_dir=DOWNLOADS_METADATA_DIR_PATH, dir_name="tick"
-)
-TICK_METADATA_PATH: Path = get_static_resolved_path(
-    base_dir=TICK_METADATA_DIR_PATH, dir_name="tick_metadata.json"
 )
 BROKER_TRADING_METADATA_DIR_PATH: Path = get_static_resolved_path(
     base_dir=DOWNLOADS_METADATA_DIR_PATH, dir_name="broker_trading"

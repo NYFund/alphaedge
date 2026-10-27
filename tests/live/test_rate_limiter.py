@@ -39,6 +39,8 @@ class FakeClock:
 
 @pytest.fixture
 def clock() -> FakeClock:
+    """從固定時間起算的假時鐘"""
+
     return FakeClock()
 
 

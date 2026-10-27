@@ -150,13 +150,13 @@ def test_contract_size_per_product_uses_its_own_snapshots(
 def test_margin_api_uses_per_product_contract_size(
     dao: FuturesStockUniverseDAO,
 ) -> None:
-    """`FuturesMarginAPI.get_contract_size()` 走「該商品自己的快照」那一種"""
+    """`FuturesMarginAPI.get_margin_contract_size()` 走「該商品自己的快照」那一種"""
 
     from core.api.tw.futures_margin_api import FuturesMarginAPI
 
     api: FuturesMarginAPI = FuturesMarginAPI(conn=dao.conn)
 
-    assert api.get_contract_size("OLF", datetime.date(2026, 9, 1)) == 2000
+    assert api.get_margin_contract_size("OLF", datetime.date(2026, 9, 1)) == 2000
 
 
 # === updater／loader ===
@@ -220,17 +220,28 @@ def test_empty_universe_fails_the_target(
     from core.pipeline.utils.exceptions import DataLoadError
 
     raw: pd.DataFrame = pd.DataFrame({"x": [1]})
+    from core.pipeline.shared.base_crawler import CrawlResult
+
     monkeypatch.setattr(
         updater.crawler,
         "crawl_stock_universe",
-        lambda: None if stage == "crawl" else raw,
+        lambda: (
+            CrawlResult.failed("取得標的清單頁失敗")
+            if stage == "crawl"
+            else CrawlResult.ok(raw)
+        ),
     )
     monkeypatch.setattr(
         updater.cleaner, "clean_stock_universe", lambda df, date: pd.DataFrame()
     )
 
-    with pytest.raises(DataLoadError):
+    with pytest.raises(DataLoadError) as exc_info:
         updater.update(snapshot_date=datetime.date(2026, 8, 3))
+
+    # 兩個階段都要失敗，但失敗原因要分得開：抓不到不可被記成「洗完是空的」
+    message: str = exc_info.value.failed_files[0]
+    assert ("未取得標的清單" in message) == (stage == "crawl")
+    assert ("清洗後無有效資料" in message) == (stage == "clean")
 
 
 def test_underlying_match_without_stock_db(

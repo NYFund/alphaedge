@@ -4,6 +4,7 @@ from typing import List
 import pytest
 
 from core.market.tw.futures_margin_config import FuturesMarginConfig
+from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.models import (
     BaseOrder,
     BaseQuote,
@@ -19,10 +20,12 @@ from core.portfolio.construction import (
 )
 from core.portfolio.signal import Signal
 from core.strategies.futures import BaseFuturesStrategy
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
 from core.utils import Action, PositionType
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 from tests.conftest import (
     build_futures_quote,
     build_stock_quote,
@@ -185,7 +188,7 @@ def test_futures_base_open_path_builds_orders() -> None:
 def test_stock_constructor_reads_max_holdings_set_after_init() -> None:
     """`max_holdings` 是 `super().__init__()` 之後才填的，建構器必須讀到新值"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
 
     strategy.max_holdings = 1
     assert strategy.make_portfolio_constructor().max_holdings == 1
@@ -194,28 +197,32 @@ def test_stock_constructor_reads_max_holdings_set_after_init() -> None:
     assert strategy.make_portfolio_constructor().max_holdings == 7
 
 
-def test_futures_constructor_reads_margin_config_injected_by_factory() -> None:
+def test_futures_constructor_reads_margin_model_injected_by_factory() -> None:
     """
-    `margin_config` 由 `core/backtest/factory.py` 在策略建構完成後才注入
+    保證金模型由 `core/backtest/factory.py` 在策略建構完成後才注入
 
-    快取住建構器的話，這裡會拿到 `None` 而**靜默退回比率近似**——
+    快取住建構器的話，這裡會拿到沒有 API 的模型而**靜默退回比率近似**——
     可開口數整段偏掉，且不會有任何錯誤訊息。
     """
 
     strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
-    assert strategy.make_portfolio_constructor().margin_config is None
+    assert strategy.make_portfolio_constructor().margin_model.config.api is None
 
     injected: FuturesMarginConfig = FuturesMarginConfig.default()
     strategy.margin_config = injected
+    assert strategy.make_portfolio_constructor().margin_model.config is injected
 
-    assert strategy.make_portfolio_constructor().margin_config is injected
+    model: FuturesMarginModel = FuturesMarginModel(injected)
+    strategy.margin_model = model
+    assert strategy.make_portfolio_constructor().margin_model is model
 
 
 def test_constructor_types_match_market() -> None:
     """兩個市場各自拿到對應的建構器"""
 
     assert isinstance(
-        MomentumStrategy1().make_portfolio_constructor(), StockPortfolioConstructor
+        VolumeBreakoutMomentumStrategy().make_portfolio_constructor(),
+        StockPortfolioConstructor,
     )
     assert isinstance(
         MomentumFuturesStrategy().make_portfolio_constructor(),
@@ -249,7 +256,7 @@ def test_strategy_without_signal_hook_raises_clearly() -> None:
 
 # === 平倉／停損：不經過 portfolio 層 ===
 class LayeredClose(LayeredMomentum):
-    """平倉訊號取自持倉的示範策略（對應 `MomentumStrategy1` 的 SELL 分支）"""
+    """平倉訊號取自持倉的示範策略（對應 `VolumeBreakoutMomentumStrategy` 的 SELL 分支）"""
 
     def generate_close_signals(self, quotes: List[BaseQuote]) -> List[Signal]:
         """平掉每檔的第一筆部位，價格用 cur_price——與改寫前同一組欄位"""

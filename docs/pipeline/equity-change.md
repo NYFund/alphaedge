@@ -5,7 +5,8 @@
 > 寫在 [ETL 入庫約定](etl-ingestion.md)（§二對照表），本文件不重複。
 >
 > 各項設計的理由寫在程式碼 docstring（`FinancialStatementCleaner.clean_equity_changes()` /
-> `select_equity_changes_period_table()`、`FinancialStatementUpdater.is_season_filed()`）。
+> `select_equity_changes_period_table()`、`FinancialStatementUpdater.is_season_filed()`，
+> 以及 `core/pipeline/tw/updaters/financial_statement/equity_change.py` 的 `EquityChangeMixin`）。
 
 ---
 
@@ -67,7 +68,7 @@ df = api.get(EQUITY_CHANGE_TABLE_NAME, year=2020, season=1)
 | 項目 | 說明 |
 |------|------|
 | 目標區間 | 2013Q1 起（`DEFAULT_START_YEAR`）至最新已申報年季 |
-| 尚未申報的年季 | 由 updater 以 `not yet filed, skipped` 自動跳過 |
+| 尚未申報的年季 | 以三檔長期上市的權值股試探（`EQUITY_CHANGE_PROBE_STOCK_IDS`），全部查無資料就以 `not yet filed, skipped` 跳過 |
 | 每季檔數 | 隨上市家數逐年遞增；與 `balance_sheet` 同季的檔數可當成涵蓋率的獨立對照 |
 
 確認本地涵蓋：
@@ -96,8 +97,10 @@ FROM equity_change GROUP BY year, season ORDER BY year, season;
    `data/downloads/tw_stock/meta/no_data/equity_change_season_progress.json`，重跑不再重打。
    **只有申報期已關閉的年季才記**（各行業最晚期限 ＋ 30 天寬限）：財報逐家公司申報，
    申報期間的「查無資料」多半只代表那家還沒送件，這時寫進永久名單，它送件之後再也不會被抓。
-4. **站方過載造成的暫時性失敗只在 log 尾端彙總**（`N requests unreachable after retries`）。
-   重跑即可補上，但**必須真的去看那行 log**——不看就會變成「跑完了卻莫名少了幾百檔」。
+4. **站方過載造成的暫時性失敗只在 log 尾端彙總**（`N requests unreachable after retries`），
+   不會讓 `fs` target 失敗。站方過載時回 HTTP 200 但內容只有 `Unreachable Server`，crawler 會等 30 秒重試、
+   最多 3 次（`EQUITY_CHANGE_MAX_RETRIES`），仍失敗才記為待重試。重跑即可補上，
+   但**必須真的去看那行 log**——不看就會變成「跑完了卻莫名少了幾百檔」。
 5. **少數公司的 2013~2014 年季，本端點不供應**。1107 建台、1606 歌林、2381 華宇、2396 精碟、
    3426 台興、6457 紘康的 2013~2014 年季向 `ajax_t164sb06` 查詢時，站方回 HTTP 200 並明示：
 
@@ -121,7 +124,7 @@ FROM equity_change GROUP BY year, season ORDER BY year, season;
   以該標籤比對，**比對不到就回傳空表，不做退而求其次的 fallback**——抓錯會把去年的數字記成今年，
   且因主鍵相同會安靜地佔住正確資料的位置。
 
-  **標籤只有 Q1 是「第N季」**：
+  **實際標籤只有 Q1 是「第N季」**：
 
   | 季別 | MOPS 實際標籤 |
   |:----:|---------------|
@@ -130,7 +133,8 @@ FROM equity_change GROUP BY year, season ORDER BY year, season;
   | Q3 | `民國109年前3季` |
   | Q4 | `民國109年度` |
 
-  對照表在 `FinancialStatementCleaner.EQUITY_CHANGE_PERIOD_LABELS`。
+  對照表在 `FinancialStatementCleaner.EQUITY_CHANGE_PERIOD_LABELS`；Q2~Q4 另把「第N季」列為候選，
+  站方調整措辭時才不會整季空轉（本期與去年同期仍由「民國N年」前綴區分，多列候選不會抓錯期別）。
   寫死成「第N季」會讓 Q2~Q4 全數清成空表卻不報錯——統計行的 `cleaned empty` 就是為此而加。
 - **全形／半形括號正規化**：同一項目跨年度會擺盪（「權益增加（減少）總額」與
   「權益增加(減少)總額」），一律過 `DataUtils.standardize_column_name()`，
@@ -144,37 +148,42 @@ FROM equity_change GROUP BY year, season ORDER BY year, season;
 節流直接決定回補要跑幾天。**常數為權益變動表專用**，與其他三張報表不共用——
 那三張是「全市場一次查完」，整段回補才幾十次請求，沒有放寬的必要。
 
-| 常數（`EquityChangeMixin`，`core/pipeline/tw/updaters/financial_statement/equity_change.py`；由 `FinancialStatementUpdater` 混入） | 現行值 |
+| 常數（`EquityChangeMixin`，由 `FinancialStatementUpdater` 混入） | 現行值 |
 |---|---|
-| `EQUITY_CHANGE_RANDOM_DELAY_MIN` / `_MAX` | 0.5 / 1.5 秒 |
-| `EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES` | 50 檔 |
+| `EQUITY_CHANGE_RANDOM_DELAY_MIN`／`EQUITY_CHANGE_RANDOM_DELAY_MAX` | 0.5／1.5 秒 |
+| `EQUITY_CHANGE_BATCH_SLEEP_EVERY_N_FILES` | 50 檔（以本季累計請求數取模，中途跳過的股票也算） |
 | `EQUITY_CHANGE_BATCH_SLEEP_DURATION_SECONDS` | 15 秒 |
 
-一個年季（約兩千檔）約 1.5 小時。現行值在全市場回補中實測 `unreachable = 0`，不需要調回更保守的設定。
+平均約 1.3 秒／檔，一個年季（約兩千檔）約 0.8 小時，整段 56 個年季約 42 小時。
+現行值在全市場回補中未見 `unreachable`，但「放寬到多少才會被擋」沒有實測過。
 
 ⚠️ **每個年季跑完要看收尾那行**
 `N requested / N ok / N no data / N unreachable / N cleaned empty`：
-`unreachable` 明顯大於 0 代表節流放太寬，退回中間值（1~3 秒 / 每 30 檔睡 15 秒）；
+`unreachable` 明顯大於 0 代表節流放太寬，要調嚴（例如 1~3 秒／每 30 檔睡 15 秒）；
 `cleaned empty` 大於 0 代表版面與預期不符，那是**程式要修**，不是重跑能解決的。
+
+**連續 20 檔拋出非預期例外就中止整段回補**（`EQUITY_CHANGE_MAX_CONSECUTIVE_ERRORS`）：單一頁的例外會被隔離，
+但連續的例外代表環境或程式壞了（例如缺相依套件），繼續跑只會把整段回補變成一長串失敗。
+「查無資料」不算例外，不計入。
 
 ### 中斷與續跑
 
 整段回補以十萬次請求、數十小時計，中斷是常態。**直接 Ctrl+C 或 `kill <pid>` 即可**：
 
-- 手上那批（最多 100 檔）會**先入庫**、進度存檔、印完統計行才離開，結束碼 0。
+- 手上那批（最多 100 檔）會**先入庫**、進度存檔、印完統計行才離開；中止本身不算失敗。
 - 急著離開就再按一次 Ctrl+C——那時尚未入庫的那批會遺失，下次重跑會重爬。
 - 重跑不需要任何參數：已入庫的公司（查資料表）與已確認沒資料的公司（查進度檔）
   都不會重打，已落地未入庫的 CSV 會先自動對帳補進資料庫。
 
 實作見 `core/pipeline/shared/graceful_stop.py` 與 `core/pipeline/shared/season_planner.py`。
 
-**第一批資料要等 100 檔之後才落地**（`EQUITY_CHANGE_LOAD_BATCH_SIZE`），約 3 分鐘。
+**第一批資料要等 100 檔之後才落地**（`EQUITY_CHANGE_LOAD_BATCH_SIZE`），約兩分鐘。
 啟動後前幾分鐘查 DB 是 0 列屬正常，不是失敗。
 
 ---
 
 ## 相關文件
 
-- [ETL 入庫約定](etl-ingestion.md)——§二各 updater 對照表、§四新增 updater 的檢查表
+- [ETL 入庫約定](etl-ingestion.md)——§二各 updater 對照表、§3.6 中斷與節流、§四新增 updater 的檢查表
 - [資料覆蓋範圍](../exchanges/data_coverage.md)——各資料來源的時間涵蓋與已知限制
 - [指令教學](../commands/command-usage.zh-TW.md)——`update_db --target fs` 的用法

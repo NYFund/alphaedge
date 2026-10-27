@@ -118,7 +118,7 @@ def test_position_is_rolled_to_the_next_contract() -> None:
     open_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(DAY_2, [make_quote("202404", 20100.0)], account, {})
+    settlement.settle_day(DAY_2, [make_quote("202404", 20100.0)], account, {})
 
     positions = account.get_positions()
     assert len(positions) == 1
@@ -134,7 +134,7 @@ def test_roll_keeps_short_direction() -> None:
     open_position(settlement, position_type=PositionType.SHORT)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(DAY_2, [make_quote("202404", 20100.0)], account, {})
+    settlement.settle_day(DAY_2, [make_quote("202404", 20100.0)], account, {})
 
     assert account.get_positions()[0].position_type == PositionType.SHORT
 
@@ -152,7 +152,7 @@ def test_roll_spread_is_paid_for_real() -> None:
     account: FuturesAccount = settlement.position_manager.account
 
     # 舊契約當日結算 20,050（＋50 點入帳），新契約以 20,120 開倉
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2,
         [make_quote("202403", 20050.0), make_quote("202404", 20120.0)],
         account,
@@ -171,7 +171,7 @@ def test_roll_is_counted_as_an_event() -> None:
     open_position(settlement)
     event_counts: Dict[str, int] = {}
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2,
         [make_quote("202404", 20100.0)],
         settlement.position_manager.account,
@@ -192,7 +192,7 @@ def test_no_roll_without_a_quote_for_the_new_contract() -> None:
     open_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(DAY_2, [], account, {})
+    settlement.settle_day(DAY_2, [], account, {})
 
     assert account.get_positions()[0].expiry == "202403"
 
@@ -206,7 +206,7 @@ def test_roll_can_be_disabled() -> None:
     open_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(DAY_2, [make_quote("202404", 20100.0)], account, {})
+    settlement.settle_day(DAY_2, [make_quote("202404", 20100.0)], account, {})
 
     assert account.get_positions()[0].expiry == "202403"
 
@@ -226,7 +226,7 @@ def test_rules_change_the_roll_timing(rule: FuturesRollRule, expected: str) -> N
     open_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_1,
         [
             make_quote("202403", 20000.0, date=DAY_1),
@@ -248,7 +248,7 @@ def test_open_interest_rule_rolls_on_crossover() -> None:
     open_position(settlement)
     account: FuturesAccount = settlement.position_manager.account
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         datetime.date(2024, 3, 18),
         [
             make_quote("202403", 20000.0, date=DAY_1, open_interest=100),
@@ -271,7 +271,7 @@ def test_strategy_and_settlement_share_the_roll_config() -> None:
 
     from core.backtest.backtester import Backtester
     from core.backtest.factory import build_backtester
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -293,7 +293,7 @@ def test_strategy_and_settlement_share_the_roll_config() -> None:
 def test_strategy_picks_the_contract_by_the_same_rule() -> None:
     """策略挑合約走的是同一個 `FuturesRollPlanner`，不是永遠取最近月"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -314,7 +314,7 @@ def test_strategy_picks_the_contract_by_the_same_rule() -> None:
 def test_without_calendar_falls_back_to_nearest_month() -> None:
     """尚未注入日曆時退回「取最近到期月」，即最單純的近月政策"""
 
-    from core.strategies.futures.momentum_futures_strategy import (
+    from strategies.futures.momentum_futures_strategy import (
         MomentumFuturesStrategy,
     )
 
@@ -402,7 +402,7 @@ def test_backtest_roll_dates_match_the_continuous_table() -> None:
                 continue
 
             event_counts: Dict[str, int] = {}
-            settlement.on_bar_close(date, quotes, account, event_counts)
+            settlement.settle_day(date, quotes, account, event_counts)
             if event_counts.get("rolled_contract"):
                 backtest_rolls.append(str(date))
     finally:
@@ -432,7 +432,7 @@ def test_roll_never_goes_back_to_a_nearer_month() -> None:
     account: FuturesAccount = settlement.position_manager.account
 
     # 今天近月的未沖銷量又反超：舊版會把部位換回 202403
-    settlement.on_bar_close(
+    settlement.settle_day(
         before_expiry,
         [
             make_quote("202403", 20000.0, date=before_expiry, open_interest=900),
@@ -514,7 +514,7 @@ def test_near_month_series_excludes_weekly_contracts() -> None:
 # === 期貨損益只有一條公式===
 def test_manager_pnl_delegates_to_the_cost_model() -> None:
     """
-    `calculate_pnl()` 與 `FuturesCostModel.realized_pnl()` 必須是同一條公式
+    `calculate_pnl()` 與 `BaseCostModel.realized_pnl()` 必須是同一條公式
 
     兩邊各寫一份時，哪天有人改了乘數或方向的處理，另一邊不會跟著改，
     也不會有測試失敗。
@@ -544,4 +544,11 @@ def test_manager_pnl_delegates_to_the_cost_model() -> None:
         exit_price=kwargs["exit_price"],
         volume=kwargs["volume"],
         multiplier=kwargs["multiplier"],
-    ) == cost_model.realized_pnl(**kwargs, transaction_cost=0.0)
+    ) == cost_model.realized_pnl(
+        position_type=kwargs["position_type"],
+        entry_price=kwargs["entry_price"],
+        exit_price=kwargs["exit_price"],
+        volume=kwargs["volume"],
+        unit_size=kwargs["multiplier"],
+        cost=0.0,
+    )

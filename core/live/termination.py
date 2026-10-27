@@ -54,6 +54,8 @@ def raise_on_sigterm() -> Iterator[None]:
     raised: bool = False
 
     def handle(signum: int, frame: Optional[FrameType]) -> None:
+        """第一次收到 SIGTERM 時拋 `LiveTerminated`；收尾期間再收到的只記 log"""
+
         nonlocal raised
         if raised:
             logger.warning("收尾中再次收到 SIGTERM，已忽略；要強制結束請用 SIGKILL")

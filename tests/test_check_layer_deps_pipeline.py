@@ -62,7 +62,7 @@ def test_framework_import_of_pipeline_is_flagged(
 def test_pipeline_itself_and_entry_points_are_not_restricted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`core/pipeline/` 自身、`tasks/` 可以 import 它；說明文字裡的字樣不算"""
+    """`core/pipeline/` 自身、`apps/` 可以 import 它；說明文字裡的字樣不算"""
 
     checker: ModuleType = _load_checker()
     monkeypatch.setattr(checker, "_PROJECT_ROOT", tmp_path)
@@ -74,7 +74,7 @@ def test_pipeline_itself_and_entry_points_are_not_restricted(
         ),
         _write(
             tmp_path,
-            "tasks/update_db.py",
+            "apps/update_db.py",
             "from core.pipeline.tw.updaters import x\n",
         ),
         _write(

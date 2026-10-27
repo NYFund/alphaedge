@@ -39,11 +39,12 @@ class StockTradingListCrawler(BaseDataCrawler):
         super().__init__()
 
     def setup(self) -> None:
-        """Set Up the Config of Crawler"""
+        """初始化 crawler 的設定"""
+
         pass
 
     def crawl(self, date: datetime.date) -> None:
-        """Crawl TWSE & TPEX Short Sale and Day Trade Lists"""
+        """爬取上市與上櫃的平盤下賣出名單與當沖名單"""
 
         self.crawl_twse_short_sale_list(date)
         self.crawl_tpex_short_sale_list(date)

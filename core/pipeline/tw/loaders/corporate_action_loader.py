@@ -10,7 +10,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.shared.source_priority import dedup_by_source_priority
 
 """
-Corporate Action Loader
+公司行動（減資、面額變更）loader
 
 **入庫走 `INSERT OR REPLACE`**：同一筆事件會在每次回補時再取一次（端點是區間查詢，
 一次一整年），`append` 會因主鍵衝突整批拋錯，讓「重跑」與「真的出錯」無法區分。
@@ -32,7 +32,7 @@ class CorporateActionLoader(BaseDataLoader):
     def __init__(self, dao: Optional[CorporateActionDAO] = None) -> None:
         """
         - Description:
-            建立 corporate_action loader
+            建立公司行動 loader
         - Parameters:
             - dao: Optional[CorporateActionDAO]
                 共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
@@ -45,7 +45,7 @@ class CorporateActionLoader(BaseDataLoader):
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
         self.create_missing_tables()

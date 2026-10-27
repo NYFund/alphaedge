@@ -55,7 +55,11 @@ def test_production_without_confirmation_is_refused() -> None:
     """
 
     result: subprocess.CompletedProcess = run_live_entry(
-        "--strategy", "MomentumStrategy1", "--phase", "close", "--production"
+        "--strategy",
+        "VolumeBreakoutMomentumStrategy",
+        "--phase",
+        "close",
+        "--production",
     )
 
     assert result.returncode == live_entry.EXIT_USAGE
@@ -67,7 +71,7 @@ def test_fake_broker_is_refused_in_production() -> None:
 
     result: subprocess.CompletedProcess = run_live_entry(
         "--strategy",
-        "MomentumStrategy1",
+        "VolumeBreakoutMomentumStrategy",
         "--phase",
         "close",
         "--production",
@@ -83,7 +87,7 @@ def test_phase_is_required() -> None:
     """沒有段落就不知道要跑什麼；靜默跑預設段落會在錯的時點送單"""
 
     result: subprocess.CompletedProcess = run_live_entry(
-        "--strategy", "MomentumStrategy1"
+        "--strategy", "VolumeBreakoutMomentumStrategy"
     )
 
     assert result.returncode == live_entry.EXIT_USAGE
@@ -107,7 +111,7 @@ def test_backtest_flags_are_rejected_by_the_parser() -> None:
 
     for flags in (["--show"], ["--mode", "live"]):
         result: subprocess.CompletedProcess = run_live_entry(
-            "--strategy", "MomentumStrategy1", "--phase", "close", *flags
+            "--strategy", "VolumeBreakoutMomentumStrategy", "--phase", "close", *flags
         )
         assert result.returncode == live_entry.EXIT_USAGE, flags
 

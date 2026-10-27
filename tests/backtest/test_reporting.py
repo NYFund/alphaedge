@@ -14,6 +14,7 @@ from core.dao.tw.corporate_action_dao import CorporateActionDAO
 from core.dao.tw.stock_dividend_dao import StockDividendDAO
 from core.models import StockAccount, StockOrder, StockTradeRecord
 from core.utils import Action, PositionType, ShortMethod, TradeDirection
+from tests.backtest.conftest import run_bar
 
 """每日權益、多空分開統計與事件報表的測試"""
 
@@ -56,8 +57,10 @@ def test_snapshot_daily_equity_includes_unrealized(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(
-        DAY_1, [make_quote(date=DAY_1, cur_price=100.0, high=101.0, low=99.0)]
+    run_bar(
+        backtester,
+        DAY_1,
+        [make_quote(date=DAY_1, cur_price=100.0, high=101.0, low=99.0)],
     )
 
     # 開倉當日：現金 1000000 − 90422 + 部位（保證金 90000 + 未實現 0）
@@ -65,8 +68,10 @@ def test_snapshot_daily_equity_includes_unrealized(
 
     # 次日股價上漲 5 元，未實現虧損 5000 應立刻反映在權益上
     day_2: datetime.date = datetime.date(2024, 1, 3)
-    backtester.execute_bar(
-        day_2, [make_quote(date=day_2, cur_price=105.0, high=106.0, low=104.0)]
+    run_bar(
+        backtester,
+        day_2,
+        [make_quote(date=day_2, cur_price=105.0, high=106.0, low=104.0)],
     )
 
     assert backtester.account.get_positions()[0].unrealized_pnl == -5000.0
@@ -201,7 +206,7 @@ def test_direction_summary_and_event_report(
     assert event_df[event_df["Event"] == "limit_up_cover_failed"]["Count"].iloc[0] == 1
 
 
-# === 分割調整：已由 corporate_action 經還原係數統一處理（還原價 S3）===
+# === 分割調整：已由 corporate_action 經還原係數統一處理===
 def test_adjustment_factor_covers_splits_and_reductions(
     dao_factory: Callable[..., BaseDAO],
 ) -> None:
@@ -242,22 +247,24 @@ def test_adjustment_factor_covers_splits_and_reductions(
 
 def test_reporter_no_longer_double_adjusts() -> None:
     """
-    reporter 不可再對還原價套一次分割調整
+    對標序列從報表端到圖上不可再被調整一次
 
-    **重複調整實測會讓 0050 的期間報酬由 1.82% 變成 303%**。這條釘住
-    `get_adjusted_price()` 已退化為原樣回傳——它保留只是為了讓兩處呼叫端
-    不必各自改。
+    **重複調整實測會讓 0050 的期間報酬由 1.82% 變成 303%**。還原係數已含除權息、
+    分割與減資，`load_benchmark_series()` 取出來的就是最終口徑；當年那層
+    「再調整一次」的入口（`get_adjusted_price`）已整個拿掉，渲染器直接拿序列畫。
     """
 
-    reporter: StockBacktestReporter = StockBacktestReporter.__new__(
-        StockBacktestReporter
-    )
-    raw: pd.Series = pd.Series(
-        [188.65, 47.57],
-        index=[datetime.date(2025, 6, 10), datetime.date(2025, 6, 18)],
-    )
+    import inspect
 
-    assert reporter.get_adjusted_price(raw, "0050").equals(raw)
+    from core.backtest.report import plotting
+    from core.backtest.report.base import BaseBacktestReporter
+    from core.backtest.report.futures_reporter import FuturesBacktestReporter
+
+    for cls in (BaseBacktestReporter, StockBacktestReporter, FuturesBacktestReporter):
+        assert not hasattr(cls, "get_adjusted_price"), f"{cls.__name__} 又多了一層調整"
+    assert "adjust" not in inspect.getsource(plotting).lower().replace(
+        "adjusted_close", ""
+    ), "渲染器不可自己調整對標序列"
 
 
 def test_transitional_split_table_is_gone() -> None:

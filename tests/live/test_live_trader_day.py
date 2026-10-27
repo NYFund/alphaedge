@@ -16,28 +16,33 @@ from core.live.datafeed.calendar import TradingCalendarUnavailableError
 from core.live.execution.stock import StockExecutionModel
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
-from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO, RiskConfig
+from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
-from core.live.segment import SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
+from core.market.segment import SegmentWindow
 from core.models import (
     BaseOrder,
     BaseQuote,
     OrderTicket,
     PendingAction,
+    PriceLimits,
     StockAccount,
     StockOrder,
+    StockPosition,
     StockQuote,
 )
+from core.models.risk_config import StockRiskConfig
 from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
     ExecutionStyle,
     ExecutionTiming,
+    InstrumentType,
     LiveHook,
     LiveOrderStatus,
+    Market,
     PositionType,
     Scale,
 )
@@ -58,6 +63,8 @@ from .conftest import FakeBroker
 
 NOW: datetime.datetime = datetime.datetime(2026, 9, 21, 13, 26)
 TODAY: datetime.date = NOW.date()
+# 測試用的當日漲跌停：由測試指定、不碰券商合約
+LIMITS: PriceLimits = PriceLimits(limit_up=110.0, limit_down=90.0)
 CAPITAL: float = 10_000_000.0
 
 
@@ -80,6 +87,9 @@ class FakeFeed(BaseLiveDataFeed):
 
     def setup(self, strategy: BaseStrategy) -> None:
         """測試不需要建 API"""
+
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
+        """同上"""
 
     def is_market_open(self, date: datetime.date) -> bool:
         """由測試指定；不建日曆來源（那是 `test_live_datafeed.py` 的範疇）"""
@@ -123,9 +133,12 @@ class ScriptedStrategy(BaseStrategy):
         self._orders: List[BaseOrder] = orders or []
         self._close_orders: List[BaseOrder] = close_orders or []
         self._raises: bool = raises
+        # 腳本化的委託都是台股；風控門檻依它取股票預設值（與組裝層同一條規則）
+        self.market = Market.TW
+        self.instrument_type = InstrumentType.STOCK
         self.init_capital = CAPITAL
         self.live_ready = True
-        self.live_schedule = {
+        self.execution_schedule = {
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
@@ -172,6 +185,8 @@ def make_order(
     price: float = 100.0,
     action: Action = Action.BUY,
 ) -> StockOrder:
+    """組一張台股多方委託，預設為 2330 買進一張"""
+
     return StockOrder(
         stock_id=symbol,
         date=TODAY,
@@ -183,6 +198,8 @@ def make_order(
 
 
 def make_quote(symbol: str = "2330") -> StockQuote:
+    """組一筆 2330 的日 K 報價"""
+
     return StockQuote(
         stock_id=symbol, scale=Scale.DAY, date=TODAY, cur_price=100.0, close=100.0
     )
@@ -199,8 +216,13 @@ class Harness:
         is_open: bool = True,
         latest_data_date: Optional[datetime.date] = None,
         quota: Optional[float] = None,
-        price_limits: Tuple[Optional[float], Optional[float]] = (110.0, 90.0),
+        price_limits: PriceLimits = LIMITS,
+        live_capital: Optional[float] = None,
+        risk_config: Optional[StockRiskConfig] = None,
     ) -> None:
+        # 實盤額度：與組裝層一致，帳戶與額度分配用同一個值（未指定時等於研究本金）
+        capital: float = live_capital if live_capital is not None else CAPITAL
+
         self.dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
         self.dao.ensure_tables()
 
@@ -216,11 +238,11 @@ class Harness:
             self.dao, "run1", lambda: NOW
         )
         self.ledger: PositionAttributionLedger = PositionAttributionLedger(
-            self.dao, now_provider=lambda: NOW
+            self.dao, now_provider=lambda: NOW, run_id="run1"
         )
         self.risk: PreTradeRiskManager = PreTradeRiskManager(
             self.mode_state,
-            RiskConfig(),
+            None,
             self.dao,
             "run1",
             kill_switch_path=_MissingPath(),
@@ -228,7 +250,7 @@ class Harness:
         )
         self.allocator: CapitalAllocator = CapitalAllocator(
             {
-                type(s).__name__: quota if quota is not None else CAPITAL
+                type(s).__name__: quota if quota is not None else capital
                 for s in strategies
             },
             self.dao,
@@ -242,7 +264,7 @@ class Harness:
         managers: Dict[str, StockPositionManager] = {}
         self.contexts: List[StrategyContext] = []
         for strategy in strategies:
-            account: StockAccount = StockAccount(init_capital=CAPITAL)
+            account: StockAccount = StockAccount(init_capital=capital)
             manager: StockPositionManager = StockPositionManager(account)
             managers[type(strategy).__name__] = manager
             self.contexts.append(
@@ -257,6 +279,8 @@ class Harness:
                     ),
                     symbols=["2330"],
                     calculate_notional=lambda order: order.price * order.volume * 1000,
+                    # 逐策略的風控門檻；None 時用股票預設值（與組裝層同一條規則）
+                    risk_config=risk_config,
                     # 與 `factory._build_context()` 一致；少了它，
                     # 任何需要還原訂單的路徑（帳戶同步、當沖回補）都會靜靜做不了事
                     build_filled_order=build_stock_order,
@@ -347,6 +371,8 @@ def test_full_segment_places_orders_and_updates_positions() -> None:
     """一個段落跑完：委託送出、成交回報消化、部位進到歸屬帳"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -366,6 +392,8 @@ def test_connections_are_closed_even_on_failure() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -387,6 +415,8 @@ def test_capital_is_released_after_the_segment() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -405,10 +435,14 @@ def test_one_failing_strategy_does_not_stop_the_others() -> None:
     """
 
     class Broken(ScriptedStrategy):
+        """一呼叫鉤子就拋錯的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Broken", raises=True)
 
     class Healthy(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Healthy", [make_order()])
 
@@ -429,6 +463,8 @@ def test_failed_strategy_releases_its_capital() -> None:
     """
 
     class Broken(ScriptedStrategy):
+        """一呼叫鉤子就拋錯的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Broken", raises=True)
 
@@ -443,6 +479,8 @@ def test_halted_strategy_hooks_are_not_called() -> None:
     """HALTED 的策略連鉤子都不呼叫：它的訊號不該進到任何後續步驟"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -457,6 +495,8 @@ def test_reduce_only_blocks_opening_orders() -> None:
     """`REDUCE_ONLY` 下開倉鉤子不呼叫，平倉照常"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -476,10 +516,14 @@ def test_second_strategy_is_blocked_on_the_same_symbol() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張 2330 買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
     class Beta(ScriptedStrategy):
+        """與 Alpha 下同一檔標的的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Beta", [make_order()])
 
@@ -504,6 +548,8 @@ def test_orders_are_not_sent_after_the_submit_deadline() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -519,9 +565,7 @@ def test_orders_are_not_sent_after_the_submit_deadline() -> None:
 
 
 def test_segment_window_rejects_reversed_times() -> None:
-    """
-    時點順序寫反會讓整段行為顛倒，建立時就擋下
-    """
+    """時點順序寫反會讓整段行為顛倒，建立時就擋下"""
 
     with pytest.raises(ValueError, match="順序錯誤"):
         SegmentWindow(
@@ -540,6 +584,8 @@ def test_risk_rejection_releases_the_reservation() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """送出超過風控上限張數的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order(volume=999)])
 
@@ -550,16 +596,64 @@ def test_risk_rejection_releases_the_reservation() -> None:
     assert harness.allocator.reserved["Alpha"] == 0.0
 
 
+@pytest.mark.parametrize(
+    "risk_config",
+    [
+        # 只有批次曝險（單一標的 25%）擋得住，逐筆單筆上限 40% 放行
+        StockRiskConfig(single_order_ratio=0.40, single_symbol_exposure_ratio=0.25),
+        # 只有逐筆單筆上限（25%）擋得住，批次的單一標的上限 40% 放行
+        StockRiskConfig(single_order_ratio=0.25, single_symbol_exposure_ratio=0.40),
+    ],
+    ids=["batch_exposure", "single_order"],
+)
+@pytest.mark.parametrize(
+    ("live_capital", "placed"),
+    [
+        # 30 萬的單：以實盤額度 100 萬計是 30%，兩組設定都恰好只有一道擋得住
+        (1_000_000.0, 0),
+        # 對照組：實盤額度等於研究本金 1,000 萬時只佔 3%，照常送出
+        (None, 1),
+    ],
+)
+def test_risk_limits_use_live_capital(
+    risk_config: StockRiskConfig, live_capital: Optional[float], placed: int
+) -> None:
+    """
+    批次曝險與逐筆檢查都以實盤額度為基準，不是研究回測的 `init_capital`
+
+    策略宣告較小的 `live_capital` 時，若仍拿 `init_capital` 當基準，
+    每道上限都會照較大的本金放寬（曾經寬了 2.5 倍）。兩組設定各讓一道上限
+    單獨負責擋單，任一處退回舊基準都會讓那一組的單送出去。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出三張買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order(volume=3)])
+
+    harness: Harness = Harness(
+        [Alpha()], live_capital=live_capital, risk_config=risk_config
+    )
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == placed
+
+
 def test_kill_switch_blocks_the_whole_segment() -> None:
     """kill switch 生效時一張單都不送，並把帳戶層降到 HALTED"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
     harness: Harness = Harness([Alpha()])
 
     class Present:
+        """永遠存在的 kill switch 檔案替身"""
+
         def exists(self) -> bool:
             return True
 
@@ -605,6 +699,8 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -618,18 +714,49 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     slept: List[float] = []
     harness.trader._now = lambda: NOW  # 時鐘卡死
     harness.trader._sleep = slept.append
-    harness.trader.MAX_WAIT_SECONDS = 5.0
+    harness.trader.WAIT_GRACE_SECONDS = 5.0
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
-    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：
-    # 收線前的等待 ＋ 收線後收撤單回報的固定秒數，兩段都不看時鐘
+    # 有真的睡過（代表進了等待迴圈），但總量被保險絲夾住：上限是開始等待時
+    # 離收線還有多久（13:26 → 13:35）加寬限；收線後收撤單回報的固定秒數另計，
+    # 兩段都不看時鐘
+    remaining: float = (
+        datetime.datetime.combine(TODAY, window.drain_end) - NOW
+    ).total_seconds()
     assert slept
     assert sum(slept) <= (
-        harness.trader.MAX_WAIT_SECONDS
+        remaining
+        + harness.trader.WAIT_GRACE_SECONDS
         + LiveTrader.CANCEL_REPORT_SECONDS
         + 2 * LiveTrader.POLL_INTERVAL_SECONDS
     )
+
+
+def test_long_window_does_not_hit_the_wait_cap() -> None:
+    """
+    時鐘正常前進時，比固定秒數長的時窗也要等到收線
+
+    股票開盤段 08:30～09:05 共 35 分鐘；保險絲曾寫死 1800 秒，
+    每天在 09:03 左右撞到上限、提早收線並記「請確認系統時鐘」的假警報。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 26),
+        submit_end=datetime.time(13, 27),
+        drain_end=datetime.time(14, 1),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.clock[0].time() >= window.drain_end
 
 
 def test_auction_orders_stay_open_until_the_drain_end() -> None:
@@ -641,6 +768,8 @@ def test_auction_orders_stay_open_until_the_drain_end() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -676,6 +805,8 @@ def test_after_close_writes_reports(tmp_path: Path) -> None:
     from core.live.report.live_reporter import LiveReporter
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -833,6 +964,8 @@ def test_unfilled_entry_order_is_abandoned(tmp_path: Path) -> None:
     from core.live.report.live_reporter import LiveReporter
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -859,6 +992,8 @@ def test_unfilled_exit_order_creates_a_pending_action(tmp_path: Path) -> None:
     exit_order.action = Action.SELL  # LONG 的賣出＝平倉
 
     class Alpha(ScriptedStrategy):
+        """平倉鉤子送出出場單的腳本策略"""
+
         def __init__(self) -> None:
             # **平倉單要從平倉鉤子出來**：從開倉鉤子回傳的話，委託前處理會依
             # 「開倉階段的動作應為 BUY」把它剔除——那是對的，但驗不到殘量政策
@@ -888,9 +1023,11 @@ def test_pending_action_is_covered_next_morning(tmp_path: Path) -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、自己不產生訊號的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -917,6 +1054,105 @@ def test_pending_action_is_covered_next_morning(tmp_path: Path) -> None:
     assert harness.dao.get_pending_actions(TODAY) == []
 
 
+def test_two_pending_actions_for_one_position_send_one_cover() -> None:
+    """
+    同一個部位有兩筆到期待辦時只送一張補平單
+
+    出場單連兩天沒成交時，盤後會對「補平單殘量」與「策略出場單殘量」各寫一筆待辦。
+    開盤段 08:30 送單、09:00 才撮合，第二筆若只看歸屬帳就會再送一張——
+    持有 1 張卻賣出 2 張，第二張把部位做反。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、自己不產生訊號的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    seed_holding(harness, "Alpha", 1)
+    harness.broker.fill_ratio = 0.0  # 集合競價：送出後要等 09:00 才撮合
+    for action_id in ("D-1-close-exit", "D-1-cover-from-D-2"):
+        harness.dao.insert_pending_action(
+            {
+                "action_id": action_id,
+                "strategy_name": "Alpha",
+                "symbol": "2330",
+                "action": "Sell",
+                "position_type": "LONG",
+                "volume": 1,
+                "due_date": TODAY,
+                "status": harness.dao.ACTION_PENDING,
+                "created_at": NOW,
+            }
+        )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    assert harness.broker.placed_count == 1
+    assert harness.dao.get_pending_actions(TODAY) == []  # 兩筆都已處理
+    assert (
+        harness.dao.conn.execute(
+            "SELECT COUNT(*) FROM live_risk_event "
+            "WHERE category = 'PENDING_ACTION_TRUNCATED'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def test_exit_order_that_fails_to_send_gets_one_pending_action(tmp_path: Path) -> None:
+    """
+    送單途中拋例外的出場單只排一筆次日補平
+
+    OMS 先寫 `live_order` 再送單：段落內已替它排補平（`UNSENT_EXIT`），盤後掃殘量時
+    又會掃到同一張 FAILED 列。兩筆待辦在次日開盤段會各送一張補平單，把部位做反。
+    """
+
+    from core.live.report.live_reporter import LiveReporter
+
+    exit_order: StockOrder = make_order()
+    exit_order.action = Action.SELL
+
+    class Alpha(ScriptedStrategy):
+        """平倉鉤子送出出場單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", close_orders=[exit_order])
+
+    harness: Harness = Harness([Alpha()])
+    seed_holding(harness, "Alpha", 1)
+
+    def timing_out(ticket: Any) -> Any:
+        raise TimeoutError("送單逾時（腳本化）")
+
+    harness.broker.place_order = timing_out  # type: ignore[method-assign]
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+    harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
+
+    summary: Dict[str, Any] = harness.trader.run_after_close()
+
+    pending: List[Dict[str, Any]] = harness.dao.get_pending_actions(
+        TODAY + datetime.timedelta(days=1)
+    )
+    assert [row["volume"] for row in pending] == [1]
+    assert (
+        pending[0]["action_id"] == f"{TODAY.isoformat()}-{exit_order.client_order_id}"
+    )
+    assert summary["pending_actions"] == 0  # 盤後沒有再排第二筆
+    categories: List[str] = [
+        row[0]
+        for row in harness.dao.conn.execute(
+            "SELECT category FROM live_risk_event "
+            "WHERE category IN ('UNSENT_EXIT', 'UNFILLED_EXIT')"
+        )
+    ]
+    assert categories == ["UNSENT_EXIT"]
+
+
 def test_pending_action_without_a_reference_price_is_left_for_humans(
     tmp_path: Path,
 ) -> None:
@@ -928,9 +1164,11 @@ def test_pending_action_without_a_reference_price_is_left_for_humans(
     """
 
     class NoBuilder(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、不實作補平單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("NoBuilder", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -962,9 +1200,11 @@ def make_opening_strategy() -> ScriptedStrategy:
     """開盤段才有鉤子、自己不產生訊號的策略；只用來跑跨日待辦"""
 
     class Alpha(ScriptedStrategy):
+        """兩個鉤子都排在開盤段、自己不產生訊號的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [])
-            self.live_schedule = {
+            self.execution_schedule = {
                 LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
                 LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
             }
@@ -973,6 +1213,8 @@ def make_opening_strategy() -> ScriptedStrategy:
 
 
 def insert_cover_action(harness: Harness, volume: int) -> None:
+    """寫入一筆 Alpha 的 2330 跨日補平待辦"""
+
     harness.dao.insert_pending_action(
         {
             "action_id": "P1",
@@ -989,6 +1231,8 @@ def insert_cover_action(harness: Harness, volume: int) -> None:
 
 
 def placed_volumes(harness: Harness) -> List[int]:
+    """券商替身收到的各張委託張數"""
+
     return [ticket.order.volume for ticket in harness.broker.tickets.values()]
 
 
@@ -1071,6 +1315,8 @@ def test_open_orders_are_expired_at_day_end(tmp_path: Path) -> None:
     from core.utils import LiveOrderStatus
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1112,6 +1358,8 @@ def test_stale_data_refuses_to_start() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1129,6 +1377,8 @@ def test_market_closed_does_not_enter_the_submit_path() -> None:
     """休市日只連線不送單；**不是拋例外**——沒開市不是錯誤"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1143,6 +1393,8 @@ def test_undecidable_trading_day_refuses_to_start() -> None:
     """判不出今天是不是交易日 → 拒絕啟動，**不預設為開市**"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1162,6 +1414,8 @@ def test_over_allocated_quota_refuses_to_start() -> None:
     """Σ 各策略額度超過帳戶總權益 × 安全係數 → 拒絕啟動，不等盤中被退單"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1181,6 +1435,8 @@ def test_daily_loss_degrades_the_strategy_before_submitting() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1208,6 +1464,8 @@ def test_max_holdings_blocks_the_order_beyond_the_cap() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """一次送出三檔買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__(
                 "Alpha",
@@ -1238,6 +1496,8 @@ def test_unfilled_orders_still_occupy_a_holding_slot() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """持倉上限兩檔、開倉鉤子送出 2454 買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order("2454")])
             self.max_holdings = 2
@@ -1265,6 +1525,8 @@ def test_adding_to_an_existing_holding_does_not_take_a_new_slot() -> None:
     """加碼不佔新名額：與 `get_position_count()` 的「同一檔只算一檔」語意一致"""
 
     class Alpha(ScriptedStrategy):
+        """持倉上限一檔、加碼既有持倉 2330 的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order("2330")])
             self.max_holdings = 1
@@ -1287,6 +1549,8 @@ def test_close_orders_are_not_limited_by_max_holdings() -> None:
     """平倉不受檔數上限影響——擋掉平倉單等於把部位鎖在場上"""
 
     class Alpha(ScriptedStrategy):
+        """平倉鉤子送出 2330 賣單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__(
                 "Alpha", [], close_orders=[make_order("2330", action=Action.SELL)]
@@ -1309,7 +1573,7 @@ def start_run(harness: Harness, phase: str = "close") -> None:
 
 
 def run_row(harness: Harness) -> Any:
-    """`(phase, started_at, ended_at, end_reason, account_mode)`"""
+    """取這次執行的段落紀錄：`(phase, started_at, ended_at, end_reason, account_mode)`"""
 
     return harness.dao.conn.execute(
         "SELECT phase, started_at, ended_at, end_reason, account_mode "
@@ -1328,6 +1592,8 @@ def test_finished_segment_is_recorded_as_normal() -> None:
     from scripts.live_watchdog import check_phases
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1353,6 +1619,8 @@ def test_aborted_segment_records_the_exception() -> None:
     """例外中止時結束原因要寫出例外，且例外照樣往外拋給實盤入口"""
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1374,6 +1642,8 @@ def test_kill_switch_end_is_not_recorded_as_normal() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1381,6 +1651,8 @@ def test_kill_switch_end_is_not_recorded_as_normal() -> None:
     start_run(harness)
 
     class Present:
+        """永遠存在的 kill switch 檔案替身"""
+
         def exists(self) -> bool:
             return True
 
@@ -1416,6 +1688,8 @@ def test_failed_finish_record_does_not_mask_the_real_error() -> None:
     """
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -1429,3 +1703,326 @@ def test_failed_finish_record_does_not_mask_the_real_error() -> None:
 
     with pytest.raises(ConnectionError):
         harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+
+def test_held_symbols_outside_the_universe_still_get_quotes() -> None:
+    """
+    帳上持有、卻不在標的池的標的照樣拿報價
+
+    盤中策略每天重新篩選標的池（受逐筆訂閱上限），昨天買的那一檔今天掉出池外的話，
+    平倉鉤子永遠看不到它，部位就一直留在帳上而沒有任何錯誤。
+    """
+
+    harness: Harness = Harness([ScriptedStrategy("Alpha")])
+    context: StrategyContext = harness.contexts[0]
+    context.account.positions.append(
+        StockPosition(
+            id=1,
+            stock_id="2317",
+            position_type=PositionType.LONG,
+            date=NOW.date(),
+            price=100.0,
+            volume=1,
+        )
+    )
+    requested: List[List[str]] = []
+
+    def recording(timing: ExecutionTiming, symbols: Sequence[str]) -> List[BaseQuote]:
+        requested.append(list(symbols))
+        return []
+
+    context.data_feed.get_live_quotes = recording  # type: ignore
+
+    harness.trader.collect_orders(context, ExecutionTiming.AT_CLOSE)
+
+    assert requested == [["2330", "2317"]]
+
+
+def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
+    """
+    盤中逐筆：池外持有標的的報價也要餵給策略
+
+    只訂閱、不派送的話，報價到了卻在派送那一層被「不在標的池」擋掉，
+    停損鉤子一樣看不到它。
+    """
+
+    received: List[str] = []
+
+    class Watcher(ScriptedStrategy):
+        """逐筆觸發、記下平倉鉤子收到哪些標的報價的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha")
+            self.is_tick_triggered = True
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.IMMEDIATE,
+                LiveHook.CLOSE.value: ExecutionTiming.IMMEDIATE,
+            }
+
+        def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+            received.extend(quote.symbol for quote in quotes)
+            return []
+
+    harness: Harness = Harness([Watcher()])
+    harness.trader.prepare()
+    harness.contexts[0].account.positions.append(
+        StockPosition(
+            id=1,
+            stock_id="2317",
+            position_type=PositionType.LONG,
+            date=NOW.date(),
+            price=100.0,
+            volume=1,
+        )
+    )
+
+    harness.trader._on_intraday_quote(
+        StockQuote(
+            stock_id="2317",
+            scale=Scale.TICK,
+            date=NOW,
+            cur_price=100.0,
+            volume=1,
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=100.0,
+        )
+    )
+
+    assert received == ["2317"]
+
+
+def test_segment_that_never_reaches_the_window_sends_nothing() -> None:
+    """
+    等不到送單時窗（時鐘卡在時窗之前）：逾時後零送單、寫事件
+
+    以前逾時只記一行就 `return`，`submit_segment()` 不看結果照樣收訊號送單：
+    行程提早 30 分鐘以上啟動或時鐘卡住時，尾盤單會在逐筆交易時段以掛漲停的限價
+    成交，與回測的收盤價假設分岔。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 40),  # 還沒到（now 是 13:26）
+        submit_end=datetime.time(13, 44),
+        drain_end=datetime.time(13, 50),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+    harness.trader._now = lambda: NOW  # 時鐘卡死在時窗之前
+    harness.trader._sleep = lambda seconds: None
+    harness.trader.WAIT_GRACE_SECONDS = 5.0
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert harness.dao.conn.execute(
+        "SELECT severity FROM live_risk_event WHERE category = 'SUBMIT_WINDOW_MISSED'"
+    ).fetchall() == [("CRITICAL",)]
+
+
+def test_dispatch_refuses_orders_before_the_window_opens() -> None:
+    """`dispatch()` 自己也看 `submit_start`：等待迴圈之外的呼叫端在時窗前送單一樣要擋"""
+
+    class Alpha(ScriptedStrategy):
+        """不自己出訊號的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 40),
+        submit_end=datetime.time(13, 44),
+        drain_end=datetime.time(13, 50),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+    start_run(harness)
+    harness.broker.connect()
+
+    unsent = harness.trader.dispatch(
+        [(harness.contexts[0], make_order())], window, cover_unsent_exits=True
+    )
+
+    assert len(unsent) == 1
+    assert harness.broker.placed_count == 0
+
+
+def test_strategy_exit_is_truncated_by_the_cover_already_in_flight() -> None:
+    """
+    持有 1 張、待辦 1 筆、策略 close 排在開盤段、不成交 → 只送 1 張
+
+    開盤段先送補平單，策略接著讀仍持有的帳戶再送一張平倉，兩張都在 09:00 撮合
+    就是超賣。盤中動能策略的「隔天開盤出場」部署後每天都會走到這裡。
+    """
+
+    exit_order: StockOrder = make_order()
+    exit_order.action = Action.SELL
+
+    class Alpha(ScriptedStrategy):
+        """平倉鉤子排在開盤段、每天都要平掉 2330 的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [], close_orders=[exit_order])
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fill_ratio = 0.0
+    seed_holding(harness, "Alpha", 1)
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    assert harness.broker.placed_count == 1
+    assert harness.dao.conn.execute(
+        "SELECT severity FROM live_risk_event WHERE category = 'EXIT_TRUNCATED'"
+    ).fetchall() == [("WARN",)]
+    # 截到 0 的那張不排次日補平：在途那張沒成交時由盤後殘量處理替它排
+    assert harness.dao.get_pending_actions(TODAY + datetime.timedelta(days=1)) == []
+
+
+def test_exit_larger_than_the_remaining_holding_is_cut_down_not_dropped() -> None:
+    """持有 2 張、在途出場 1 張、策略再平 2 張 → 改送 1 張"""
+
+    exit_order: StockOrder = make_order(volume=2)
+    exit_order.action = Action.SELL
+
+    class Alpha(ScriptedStrategy):
+        """平倉鉤子排在開盤段的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [], close_orders=[exit_order])
+            self.execution_schedule = {
+                LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+                LiveHook.CLOSE.value: ExecutionTiming.AT_OPEN,
+            }
+
+    harness: Harness = Harness([Alpha()])
+    harness.broker.fill_ratio = 0.0
+    seed_holding(harness, "Alpha", 2)
+    harness.dao.insert_pending_action(
+        {
+            "action_id": "P1",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "volume": 1,
+            "due_date": TODAY,
+            "status": harness.dao.ACTION_PENDING,
+            "created_at": NOW,
+        }
+    )
+
+    harness.trader.run(ExecutionTiming.AT_OPEN)
+
+    volumes: List[int] = [
+        ticket.order.volume for ticket in harness.broker.tickets.values()
+    ]
+    assert volumes == [1, 1]
+
+
+def test_open_order_dropped_outside_the_window_leaves_an_event() -> None:
+    """時窗之外被丟掉的開倉單要寫事件：只有 log 的話，parity 會把它歸成快照口徑、不推播"""
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    window: SegmentWindow = SegmentWindow(
+        submit_start=datetime.time(13, 25),
+        submit_end=datetime.time(13, 25, 30),  # 已過（now 是 13:26）
+        drain_end=datetime.time(13, 35),
+    )
+    harness: Harness = Harness([Alpha()], window=window)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.broker.placed_count == 0
+    assert harness.dao.conn.execute(
+        "SELECT symbol FROM live_risk_event WHERE category = 'SUBMIT_DEADLINE_PASSED'"
+    ).fetchall() == [("2330",)]
+
+
+def test_daily_amount_starts_from_orders_already_sent_today() -> None:
+    """
+    單日累計委託金額從紀錄庫裡當日已送出的開倉單起算
+
+    三個段落是三個行程、重啟也歸零，單日累計上限要防的正是「重啟反覆送單」。
+    被拒的不算，出場單不算。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """不送新單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [])
+
+    harness: Harness = Harness([Alpha()])
+    for index, (action, status) in enumerate(
+        [("Buy", "FILLED"), ("Buy", "REJECTED"), ("Sell", "FILLED")], start=1
+    ):
+        harness.dao.upsert_order(
+            {
+                "client_order_id": f"run0-000{index}",
+                "run_id": "run0",
+                "strategy_name": "Alpha",
+                "symbol": "2330",
+                "action": action,
+                "position_type": "LONG",
+                "price": 100.0,
+                "volume": 1,
+                "status": status,
+                "custom_field": f"00000{index}",
+                "created_at": NOW - datetime.timedelta(hours=4),
+            }
+        )
+    harness.dao.conn.commit()
+    harness.oms.order_rebuilder = lambda row: make_order(
+        volume=int(row["volume"]),
+        price=float(row["price"]),
+        action=Action(str(row["action"])),
+    )
+    start_run(harness)
+
+    harness.trader.prepare()
+
+    # 只有那張成交的買單：100 × 1 張 × 1,000 股
+    assert harness.risk.daily_amount["Alpha"] == 100_000.0
+
+
+def test_filled_amount_moves_from_reserved_to_used() -> None:
+    """成交後釋放保留的同時轉入占用：同一批內即時成交的錢不可憑空消失"""
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.allocator.reserved["Alpha"] == 0.0
+    assert harness.allocator.used["Alpha"] == 100_000.0

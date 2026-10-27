@@ -12,7 +12,7 @@ from core.pipeline.tw.updaters.finmind.stock_info_updater import StockInfoUpdate
 FinMind 更新流程按資料集分檔
 
 對外的單一入口仍是 `core.pipeline.tw.updaters.finmind_updater.FinMindUpdater`
-（門面），本套件是它的實作；`tasks/update_db.py` 不需要知道這裡的結構。
+（門面），本套件是它的實作；`apps/update_db.py` 不需要知道這裡的結構。
 """
 
 __all__ = [

@@ -27,7 +27,7 @@ normalization 屬於來源、contract 屬於核心。硬合併會讓 `core/adapt
 2. **與來源無關的規則**：`core/adapters/quote_validation.py`
    （價格有效性、重複代號）。這一層刻意吃值不吃列，三條路徑才套得上同一份。
 
-**命名一律 `from_<來源形狀>`**：`from_day_rows()`／`from_tick_rows()`／
+**命名一律 `from_<來源形狀>`**：`from_day_rows()`／`from_tick_row()`／
 `from_stock_snapshot()`／`from_tick_message()`。`to_*` 讀起來像是 `Quote`
 自己的方法，而它其實是「由某個來源建 Quote」的工廠——名字要說出來源是什麼，
 因為**來源的形狀正是兩條路徑唯一的差別**。

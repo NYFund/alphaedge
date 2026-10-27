@@ -20,7 +20,7 @@ from core.pipeline.tw.loaders.stock_day_trade_list_loader import StockDayTradeLi
 
 
 class StockDayTradeListUpdater(DailyTwoMarketUpdater):
-    """Stock DayTrade List Updater"""
+    """台股當沖名單 updater"""
 
     SOURCE: str = "day_trade_list"
     SOURCE_LABEL: str = "Day Trade List"

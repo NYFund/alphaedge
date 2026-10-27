@@ -11,8 +11,8 @@ from core.live.risk.trading_mode import TradingMode
 from core.live.termination import LiveTerminated, raise_on_sigterm
 from core.live.trader import LiveTrader
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
 from core.utils import ExecutionTiming
+from strategies.loader import StrategyLoader
 
 from ._common import EXIT_USAGE, _report_unknown_strategies
 
@@ -161,7 +161,8 @@ def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
         nargs="*",
         metavar="策略名",
         help=(
-            "人工恢復交易模式；不給策略名時恢復帳戶層。"
+            "人工恢復交易模式：不給策略名時恢復帳戶層與所有策略；"
+            "給策略名時只恢復那幾支（須在 --strategy 之中），帳戶層不動。"
             "**不要放進排程指令**——它一旦寫進 crontab 就等於自動恢復"
         ),
     )
@@ -216,6 +217,21 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
         _report_unknown_strategies(missing)
         return EXIT_STRATEGY_NOT_FOUND
 
+    # 指名恢復只能針對本次載入的策略：打錯名字的話恢復會靜默落空，而使用者以為已經放行
+    resume_names: Optional[List[str]] = (
+        _split_strategy_names(",".join(args.resume_trading))
+        if args.resume_trading
+        else None
+    )
+    if resume_names is not None:
+        outside: List[str] = [name for name in resume_names if name not in names]
+        if outside:
+            print(
+                f"--resume-trading 指定的策略 {outside} 不在 --strategy 之中",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+
     strategies: List[BaseStrategy] = [registry[name]() for name in names]
 
     try:
@@ -225,6 +241,7 @@ def run_live(args: argparse.Namespace, registry: Dict[str, Type[BaseStrategy]]) 
             simulation=args.simulation,
             dry_run=args.dry_run,
             resume_trading=args.resume_trading is not None,
+            resume_strategies=resume_names,
             phase=RESYNC_PHASE if args.resync_from_broker else args.phase,
         )
     except (UnsupportedMarketError, ValueError) as exc:

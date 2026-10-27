@@ -11,7 +11,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.utils.exceptions import PipelineError
 
 """
-Futures Stock Universe Loader
+股票期貨標的 loader
 
 **這張表是「快照序列」，不是「現況表」**——每次執行都新增一整份當日快照，
 不覆蓋也不刪除舊的。理由是來源（TAIFEX 標的一覽表）只給當下有哪些商品，
@@ -31,7 +31,7 @@ Futures Stock Universe Loader
 
 
 class FuturesStockUniverseLoader(BaseDataLoader):
-    """Futures Stock Universe Loader"""
+    """股票期貨標的 loader"""
 
     def __init__(self, dao: Optional[FuturesStockUniverseDAO] = None) -> None:
         """
@@ -44,17 +44,17 @@ class FuturesStockUniverseLoader(BaseDataLoader):
                 未指定時 loader 自行建立，入庫完成即關閉
         """
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.universe_dir: Path = FUTURES_UNIVERSE_DOWNLOADS_PATH
 
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         self.universe_dir.mkdir(parents=True, exist_ok=True)

@@ -1,5 +1,5 @@
 import datetime
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from loguru import logger
 
@@ -9,13 +9,16 @@ from core.live.attribution.position_ledger import (
     UNATTRIBUTED_STRATEGY,
     PositionAttributionLedger,
 )
+from core.live.notify.base import NotifyLevel
+from core.live.risk.event_categories import FILL_ACCOUNT_REJECTED
+from core.live.risk.event_log import RiskEventLogger
 from core.models import (
     BaseOrder,
     BrokerPositionSnapshot,
     ExecutionReport,
     StockOrder,
 )
-from core.portfolio.order_rules import resolve_close_action
+from core.portfolio.order_rules import is_closing, resolve_open_action
 from core.position.base.position_manager import BasePositionManager
 from core.utils import Action, PositionType
 
@@ -46,6 +49,52 @@ FilledOrderBuilder = Callable[
     [str, Union[datetime.date, datetime.datetime], Action, PositionType, float, int],
     BaseOrder,
 ]
+
+
+# 略過檢查入帳時暫用的餘額：要夠大到任何一筆成交都過得了，又不能是 inf——
+# inf 減掉成本仍是 inf，事後就算不出這筆花了多少
+_UNCHECKED_BALANCE: float = 1e15
+
+
+def open_unconditionally(manager: BasePositionManager, order: BaseOrder) -> Any:
+    """
+    - Description:
+        略過餘額與曝險檢查把部位開進帳戶；餘額仍照實扣
+
+        給「事實已經發生」的路徑用：成交入帳與啟動重建。部位管理的檢查是送單前的
+        守門，拿來擋已成交的東西只會讓帳戶少一口券商有的部位。
+    - Parameters:
+        - manager: BasePositionManager
+            該策略的部位管理器
+        - order: BaseOrder
+            已成交的訂單
+    - Return:
+        - Any
+            開出來的部位；部位管理仍拒絕時為 None（例如同標的已有反向部位）
+    """
+
+    account: Any = manager.account
+    constraint: Any = getattr(
+        getattr(getattr(manager, "cost_model", None), "config", None),
+        "short_constraint",
+        None,
+    )
+    original_balance: float = float(account.balance)
+    original_ratio: Any = getattr(constraint, "max_short_exposure_ratio", None)
+
+    account.balance = _UNCHECKED_BALANCE
+    if constraint is not None:
+        constraint.max_short_exposure_ratio = None
+    try:
+        position: Any = manager.open_position(order)
+    finally:
+        spent: float = _UNCHECKED_BALANCE - float(account.balance)
+        account.balance = max(original_balance - spent, 0.0)
+        if constraint is not None:
+            constraint.max_short_exposure_ratio = original_ratio
+    if position is None:
+        logger.error(f"{order.symbol} 略過檢查仍無法入帳，部位管理拒絕：{order}")
+    return position
 
 
 def build_stock_order(
@@ -89,6 +138,7 @@ class AccountSynchronizer:
         dao: LiveTradeDAO,
         now_provider: Callable[[], datetime.datetime] = now_live,
         order_builders: Optional[Dict[str, FilledOrderBuilder]] = None,
+        run_id: Optional[str] = None,
     ) -> None:
         """
         - Description:
@@ -104,6 +154,8 @@ class AccountSynchronizer:
                 取得目前時間
             - order_builders: Optional[Dict[str, FilledOrderBuilder]]
                 `{策略名: 還原訂單的建構器}`；未提供的策略退回股票訂單
+            - run_id: Optional[str]
+                本次啟動的識別碼；給了才寫風控事件（成交入帳被拒時）
         """
 
         self.position_managers: Dict[str, BasePositionManager] = position_managers
@@ -111,6 +163,11 @@ class AccountSynchronizer:
         self.dao: LiveTradeDAO = dao
         self._now: Callable[[], datetime.datetime] = now_provider
         self.order_builders: Dict[str, FilledOrderBuilder] = order_builders or {}
+        self.events: Optional[RiskEventLogger] = (
+            RiskEventLogger(dao, run_id, now_provider=now_provider)
+            if run_id is not None
+            else None
+        )
 
     def _builder(self, strategy_name: str) -> FilledOrderBuilder:
         """取得該策略的還原建構器；未注入時退回股票版"""
@@ -151,19 +208,49 @@ class AccountSynchronizer:
         direction: PositionType = self._resolve_direction(name, report)
         order: BaseOrder = self._to_order(name, report, direction)
 
-        if self._is_closing(order):
+        if is_closing(order):
             manager.close_position(order)
             self.ledger.close_lots(name, report.symbol, report.volume, direction)
         else:
-            manager.open_position(order)
+            # **券商已經成交，部位一定要進帳**。`open_position()` 的餘額與曝險檢查是給
+            # 送單前用的；集合競價成交價高於決策價、或 sizer 已把額度切滿時它會回 None，
+            # 策略帳戶沒有這口部位、歸屬帳卻照開 lot——段落內的停損鉤子看不到它，
+            # 要到下一段落重建才一致。被拒時改走略過檢查的路徑入帳，並寫 CRITICAL
+            if manager.open_position(order) is None:
+                self._report_rejected_fill(name, report)
+                open_unconditionally(manager, order)
             self.ledger.open_lot(name, report, direction)
 
         return name
 
-    def _resolve_strategy(self, report: ExecutionReport) -> Optional[str]:
-        """由委託序號反查策略；查不到回 None"""
+    def _report_rejected_fill(
+        self, strategy_name: str, report: ExecutionReport
+    ) -> None:
+        """成交入帳被部位管理拒絕：寫 CRITICAL 事件（有 run_id 時）並記 error"""
 
-        return self.dao.find_strategy_by_broker_seqno(report.broker_seqno)
+        message: str = (
+            f"{strategy_name} 的成交 {report.symbol} {report.action.value} {report.volume}"
+            f"@{report.price} 被部位管理拒絕入帳（餘額不足或曝險超限）；"
+            "券商已成交，改以略過檢查的路徑入帳，請核對額度與成交價"
+        )
+        logger.error(message)
+        if self.events is not None:
+            self.events.write(
+                category=FILL_ACCOUNT_REJECTED,
+                severity=NotifyLevel.CRITICAL,
+                message=message,
+                strategy_name=strategy_name,
+                symbol=report.symbol,
+            )
+
+    def _resolve_strategy(self, report: ExecutionReport) -> Optional[str]:
+        """由委託序號反查策略；查不到回 None。序號每天從頭配發，一律限定成交當日"""
+
+        moment: Optional[datetime.datetime] = report.ts
+        trade_date: datetime.date = (
+            moment if moment is not None else self._now()
+        ).date()
+        return self.dao.find_strategy_by_broker_seqno(report.broker_seqno, trade_date)
 
     def _resolve_direction(
         self, strategy_name: str, report: ExecutionReport
@@ -212,12 +299,6 @@ class AccountSynchronizer:
             report.price,
             report.volume,
         )
-
-    @staticmethod
-    def _is_closing(order: BaseOrder) -> bool:
-        """是否為平倉單；判定委派給共用的動作推導"""
-
-        return order.action is resolve_close_action(order.position_type)
 
     def book_backfilled_fill(
         self,
@@ -330,18 +411,19 @@ class AccountSynchronizer:
         builder: FilledOrderBuilder,
     ) -> None:
         """
-        把 lot 還原成部位，**期間停用餘額檢查**
+        把 lot 還原成部位，**期間停用餘額與曝險檢查**
 
-        作法是重建前把餘額設成無限大、重建後再設成真實值。繞過檢查而不是
-        另寫一套記帳：部位的成本、手續費與稅都由 `PositionManager` 算，
-        另寫一份必然與回測漂移。
+        繞過檢查而不是另寫一套記帳：部位的成本、手續費與稅都由 `PositionManager` 算，
+        另寫一份必然與回測漂移。曝險檢查也要繞：策略設了 `max_short_exposure_ratio` 時，
+        空單會在重建時被整筆拒絕而靜默消失。
         """
 
         original: float = manager.account.balance
-        manager.account.balance = float("inf")
         try:
             for lot in lots:
-                manager.open_position(AccountSynchronizer._lot_to_order(lot, builder))
+                open_unconditionally(
+                    manager, AccountSynchronizer._lot_to_order(lot, builder)
+                )
         finally:
             manager.account.balance = original if balance is None else balance
 
@@ -368,7 +450,7 @@ class AccountSynchronizer:
         return builder(
             str(lot["symbol"]),
             parsed,
-            Action.BUY if direction is PositionType.LONG else Action.SELL,
+            resolve_open_action(direction),
             direction,
             float(lot["open_price"]),
             int(lot["volume"]),

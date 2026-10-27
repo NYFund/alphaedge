@@ -15,8 +15,35 @@ jobs:
     # 整份約 3 分鐘；卡住時不要佔用 runner 六小時（GitHub 預設上限）
     timeout-minutes: 20
 
+    # 台股 tick 的 TimescaleDB：`tests/test_stock_tick_timescale.py` 的整合測試沒有它就整個模組 skip，
+    # 整條 tick 寫入／讀取路徑在 CI 等於沒有護欄。映像版本與 `docker-compose.yml` 同一個——
+    # extension 版本不同時，建表與壓縮的 SQL 行為可能不同。**不可換成 `-oss` 結尾的 tag**：沒有壓縮。
+    # 每個測試各用暫存 schema、結束時 drop，不需要另外清理
+    services:
+      postgres:
+        image: timescale/timescaledb:2.29.2-pg17
+        env:
+          POSTGRES_USER: alphaedge
+          POSTGRES_PASSWORD: alphaedge
+          POSTGRES_DB: alphaedge
+        ports:
+          - 5432:5432
+        # 等到可以連線才開始跑步驟；service 起得比安裝相依快，但不保證
+        options: >-
+          --health-cmd "pg_isready -U alphaedge -d alphaedge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      TICK_DATABASE_URL: postgresql://alphaedge:alphaedge@localhost:5432/alphaedge
+
     steps:
+      # `fetch-depth: 0`：文件路徑檢查要問 git 歷史「哪些檔案被刪過」，預設 depth 1 時
+      # 只看得到最後一個 commit，刪除檢查等於沒跑（`check_doc_paths.py` 在 shallow clone 會直接判紅）
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # uv 版本釘死：lock 檔格式與解析行為跟著 uv 版本走，與本機不同版時
       # 可能出現「本機 lock 有效、CI 判定過期」這類與程式碼無關的紅燈。
@@ -35,9 +62,10 @@ jobs:
       #
       # 開發工具是預設會裝的 `dev` dependency group，不必另外列。
       # `--extra frontend`：`tests/test_frontend_app_smoke.py` 要真的把 `frontend/app.py`
-      # 跑一遍，沒有 streamlit 就只會被 skip——等於沒測
+      # 跑一遍，沒有 streamlit 就只會被 skip——等於沒測。
+      # `--extra tick`：同理，沒有 psycopg 的話 tick 整合測試在 `importorskip` 就被 skip
       - name: 安裝專案與開發相依
-        run: uv sync --locked --extra frontend
+        run: uv sync --locked --extra frontend --extra tick
 
       - name: Lint（CLAUDE.md §2.5 import 排序、§2.10 行寬與引號）
         run: uv run ruff check .
@@ -88,6 +116,19 @@ jobs:
       - name: SHORT 回歸線
         run: uv run pytest tests/backtest/test_short_regression.py -q -rs
 
+      # tick 整合測試：與 SHORT 回歸線同理單獨跑一次，壞掉時一眼看到是哪條線。
+      # **任何一條被 skip 就判紅**：這個模組在少了資料庫或 psycopg 時是「整個 skip、照樣綠」，
+      # 正是要防的那種假綠燈；只看結束碼的話，service 哪天沒起來也不會有人發現。
+      # `shell: bash` 帶 `-o pipefail`，pytest 本身失敗時 tee 不會吃掉結束碼
+      - name: tick 整合測試（TimescaleDB，不得 skip）
+        shell: bash
+        run: |
+          uv run pytest tests/test_stock_tick_timescale.py -q -rs | tee tick-tests.log
+          if grep -q "skipped" tick-tests.log; then
+            echo "::error::tests/test_stock_tick_timescale.py 有測試被 skip：TimescaleDB service 或 tick extra 沒有接上"
+            exit 1
+          fi
+
       # 只跑 -m "not slow"：CI 沒有 data/db/tw_stock.db（*.db 未進版控），
       # 也沒有 Shioaji／FinMind 金鑰。需要這些的測試一律標 @pytest.mark.slow。
       # 本指令已在本機以「移除資料庫與金鑰的副本」模擬驗證過為全綠
@@ -100,7 +141,7 @@ jobs:
       # 覆蓋率只建立基線、不設門檻（覆蓋率偏低時設門檻只會鼓勵寫無效測試），
       # 而 `--cov` 本身不會讓指令失敗，故不需要 `continue-on-error`——
       # 分成兩步時那個旗標反而讓「測試紅了」與「覆蓋率收集失敗」看起來一樣
-      # `--cov=core --cov=strategies` 刻意不含入口層（`apps/`、`tasks/`），理由同
+      # `--cov=core --cov=strategies` 刻意不含入口層（`apps/`），理由同
       # `pyproject.toml` 的 `[tool.coverage.run]`
       - name: 測試與覆蓋率（略過需要資料庫與外部 API 的項目）
         run: >-

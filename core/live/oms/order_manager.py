@@ -117,10 +117,19 @@ class OrderManager:
         LiveOrderStatus.FILLED: set(),
         LiveOrderStatus.CANCELLED: set(),
         LiveOrderStatus.REJECTED: set(),
-        LiveOrderStatus.FAILED: set(),
+        # FAILED 只代表「本地不知道送到了沒」（送單途中逾時或斷線），不是券商的回覆：
+        # 券商端查到這張單、或它的成交回報進來時，以券商的事實為準往前走。
+        # 2026-10-20 換月開倉腿逾時 5 秒被標 FAILED、券商其實成交，當天就卡在這裡
+        LiveOrderStatus.FAILED: {
+            LiveOrderStatus.SUBMITTED,
+            LiveOrderStatus.PARTIALLY_FILLED,
+            LiveOrderStatus.FILLED,
+            LiveOrderStatus.CANCELLED,
+            LiveOrderStatus.REJECTED,
+        },
     }
 
-    # 恢復時模糊比對的送單時間窗（秒）
+    # 恢復時模糊比對的送單時間窗（秒）：本地建立時刻與券商端送單時刻相差超過它的候選不算
     FUZZY_MATCH_WINDOW_SECONDS: int = 600
 
     def __init__(
@@ -270,7 +279,18 @@ class OrderManager:
             logger.opt(exception=True).error(f"送單失敗：{client_order_id}")
             raise
 
-        self._sync_after_broker(ticket)
+        try:
+            self._sync_after_broker(ticket)
+        except Exception as exc:
+            # **券商已經受理，這裡的失敗不可往上拋**：呼叫端把例外當成「沒送出」，
+            # 出場單會被排成次日補平、對已在場上的單再平一次。單留在記憶體照常收回報，
+            # 紀錄庫那列少了序號則由盤後回填與對帳補救
+            message: str = (
+                f"委託 {client_order_id} 券商已受理（seqno={ticket.broker_seqno}），"
+                f"但本地紀錄寫入失敗：{type(exc).__name__}: {exc}"
+            )
+            logger.opt(exception=True).critical(message)
+            self._write_risk_event("ORDER_PERSIST_FAILED", message, ticket)
         return ticket
 
     def _sync_after_broker(self, ticket: OrderTicket) -> None:
@@ -418,6 +438,12 @@ class OrderManager:
         self._book_fill(ticket, report)
         return True
 
+    def _trade_date(self, report: ExecutionReport) -> datetime.date:
+        """成交回報所屬的交易日：券商序號每天從頭配發，查紀錄庫一律帶上它"""
+
+        moment: Optional[datetime.datetime] = report.ts
+        return (moment if moment is not None else self._now()).date()
+
     def _store_foreign_fill(self, report: ExecutionReport) -> bool:
         """
         本行程找不到委託的成交：是另一個行程的，還是真的沒人認
@@ -428,7 +454,7 @@ class OrderManager:
         """
 
         owner: Optional[Dict[str, Any]] = self.dao.find_order_by_broker_seqno(
-            report.broker_seqno
+            report.broker_seqno, self._trade_date(report)
         )
         if owner is not None:
             self.dao.insert_fill(
@@ -461,7 +487,9 @@ class OrderManager:
         本張要補套。
         """
 
+        trade_date: datetime.date = self._trade_date(report)
         if not self.dao.attribute_fill(
+            trade_date,
             report.broker_seqno,
             report.broker_trade_id,
             ticket.client_order_id,
@@ -475,7 +503,7 @@ class OrderManager:
 
         attributed: int = sum(
             int(row.get("volume") or 0)
-            for row in self.dao.get_fills_by_seqno(report.broker_seqno)
+            for row in self.dao.get_fills_by_seqno(report.broker_seqno, trade_date)
             if row.get("client_order_id") == ticket.client_order_id
         )
         if ticket.filled_volume >= attributed:
@@ -502,7 +530,14 @@ class OrderManager:
         filled: int = ticket.filled_volume + report.volume
         self._update_average_price(ticket, report)
         ticket.filled_volume = filled
-        if ticket.is_terminal and ticket.status is not LiveOrderStatus.FILLED:
+        # 撤單與拒單後的成交是交易所競態，狀態不動；FAILED 不在此列——
+        # 它是本地的猜測，成交就是「其實送到了」的證據，照狀態機推進。
+        # 已是 FILLED 的只補量：接管先依券商狀態推進、成交才由回填補進來時就是這樣
+        if ticket.status in (
+            LiveOrderStatus.CANCELLED,
+            LiveOrderStatus.REJECTED,
+            LiveOrderStatus.FILLED,
+        ):
             self._record_fill_after_terminal(ticket)
         else:
             target: LiveOrderStatus = (
@@ -512,8 +547,8 @@ class OrderManager:
             )
             self.transition(ticket, target, op_type="fill")
 
-    @staticmethod
     def _fill_row(
+        self,
         report: ExecutionReport,
         client_order_id: Optional[str],
         strategy_name: Optional[str],
@@ -521,6 +556,7 @@ class OrderManager:
         """成交回報 → `live_fill` 的一列"""
 
         return {
+            "trade_date": self._trade_date(report).isoformat(),
             "broker_seqno": report.broker_seqno,
             "broker_trade_id": report.broker_trade_id,
             "client_order_id": client_order_id,
@@ -564,8 +600,8 @@ class OrderManager:
         已終結（撤單、拒單、失敗）的委託又收到成交：**成交照收**，狀態不動
 
         成交是事實，狀態只是本地的判斷。撤單與成交在交易所是競態——撤單生效前
-        已撮合的量照樣會回報，而且可能比撤單回報晚到；送單時逾時被標成 FAILED 的單
-        也可能其實送到了。**這裡不可走狀態機**：會被判成非法轉移而把成交丟掉，
+        已撮合的量照樣會回報，而且可能比撤單回報晚到。**這裡不可走狀態機**：
+        會被判成非法轉移而把成交丟掉，
         帳戶同步收不到，盤後卻以 `live_order` 的舊成交量算出殘量、寫下隔日補平——
         對已經平掉的部位再送一次平倉，就是把部位做反。
         """
@@ -605,19 +641,39 @@ class OrderManager:
             ticket.broker_order_id = event.broker_order_id
 
         op_type: str = event.op_type.lower()
-        if event.is_failure:
+        if event.is_failure and op_type == "new":
             self.transition(
                 ticket,
                 LiveOrderStatus.REJECTED,
                 reason=event.op_msg,
                 op_type=event.op_type,
             )
+        elif event.is_failure:
+            # 撤單或改價失敗：單**仍在場上**（可能已經成交了才撤不掉）。轉成 REJECTED
+            # 會把一張活的單標成終態——釋放保留、不再核對、盤後也不會替它排補平
+            self._write_risk_event(
+                "ORDER_OP_FAILED",
+                f"委託 {ticket.client_order_id} 的 {event.op_type} 失敗：{event.op_msg}；"
+                "單仍在場上，狀態不變，以後續回報或盤後刷新為準",
+                ticket,
+            )
         elif op_type.startswith("cancel"):
             self.transition(ticket, LiveOrderStatus.CANCELLED, op_type=event.op_type)
-        elif op_type == "new" and ticket.status is LiveOrderStatus.PENDING_SUBMIT:
+        elif op_type == "new" and ticket.status in (
+            LiveOrderStatus.PENDING_SUBMIT,
+            LiveOrderStatus.FAILED,
+        ):
             # 新單確認：送單回應只帶 PendingSubmit 時，要靠這一筆才知道券商收下了。
-            # 只從 PENDING_SUBMIT 推進——確認晚於成交或撤單回報到達時不可倒退
-            self.transition(ticket, LiveOrderStatus.SUBMITTED, op_type=event.op_type)
+            # 只從 PENDING_SUBMIT 推進——確認晚於成交或撤單回報到達時不可倒退。
+            # 送單逾時被標 FAILED 之後才到的確認同樣算數：券商受理了，單是活的
+            self.transition(
+                ticket,
+                LiveOrderStatus.SUBMITTED,
+                reason="送單逾時但券商已受理"
+                if ticket.status is LiveOrderStatus.FAILED
+                else None,
+                op_type=event.op_type,
+            )
 
     # === 撤單 ===
     def cancel_open_orders(
@@ -675,6 +731,8 @@ class OrderManager:
             `live_fill` 並交給帳戶同步）。以券商的累計量覆寫之後，同一筆成交的回報
             再進來就會重複累加；券商量比本地多時代表有成交回報沒收到，
             那要寫事件讓人處理，而不是靜靜改掉數字——帳戶同步並沒有收到那些成交。
+            **狀態相同也要比成交量**：接管已把狀態推到券商的狀態，兩邊同為
+            PARTIALLY_FILLED 或 FILLED 而本地量較少，正是回報漏接的樣子。
         - Return:
             - List[OrderTicket]
                 券商端當日的委託
@@ -689,7 +747,7 @@ class OrderManager:
 
         for ticket in self.tickets.values():
             latest: Optional[OrderTicket] = by_seqno.get(ticket.broker_seqno or "")
-            if latest is None or latest.status is ticket.status:
+            if latest is None:
                 continue
             if latest.filled_volume > ticket.filled_volume:
                 self._write_risk_event(
@@ -699,6 +757,8 @@ class OrderManager:
                     "帳戶與歸屬帳都少記了這些成交，請以券商成交明細核對",
                     ticket,
                 )
+            if latest.status is ticket.status:
+                continue
             try:
                 self.transition(ticket, latest.status, op_type="refresh")
             except OrderStateError as exc:
@@ -756,6 +816,13 @@ class OrderManager:
             而帳上的總量還是對的，對帳看不出來。
 
             完整刷新一次後仍查不到的才標為 `FAILED`，**不自動重送**。
+            送單途中逾時、沒拿到序號就被標 `FAILED` 的單也在接管範圍：那只是本地的猜測，
+            券商端查到就以它的狀態為準往前走；查不到則維持 `FAILED`，不重複判定。
+
+            **成交量不從券商抄**：接管只補狀態與序號。券商的累計成交量代表「有成交」，
+            本地的 `filled_volume` 代表「已套進委託並入帳」，兩者直接畫等號會讓盤後與
+            啟動時的成交回填以為沒東西要補，那些成交就落進 `__unattributed__`。
+            接管之後由成交回填依 `live_fill` 把差額補進委託與歸屬帳。
         - Parameters:
             - run_date: datetime.date
                 交易日
@@ -765,7 +832,7 @@ class OrderManager:
         """
 
         stored: List[Dict[str, Any]] = self._own_rows(
-            self.dao.get_unfinished_orders(run_date)
+            self.dao.get_orders_to_recover(run_date)
         )
         if not stored:
             return []
@@ -786,6 +853,7 @@ class OrderManager:
         for row in stored:
             ticket: OrderTicket = self._rebuild_ticket(row)
             self.tickets[ticket.client_order_id] = ticket
+            was_failed: bool = ticket.status is LiveOrderStatus.FAILED
 
             matched: Optional[OrderTicket] = None
             if row.get("broker_seqno"):
@@ -800,18 +868,34 @@ class OrderManager:
             # 一筆舊委託的狀態問題會讓當天所有策略都送不出單
             try:
                 if matched is None:
-                    self.transition(
-                        ticket,
-                        LiveOrderStatus.FAILED,
-                        reason="重啟接管時在券商端查無此單",
-                        op_type="recover",
-                    )
+                    if was_failed:
+                        logger.info(
+                            f"委託 {ticket.client_order_id} 送單時已標 FAILED，"
+                            "券商端亦查無此單，維持 FAILED"
+                        )
+                    else:
+                        self.transition(
+                            ticket,
+                            LiveOrderStatus.FAILED,
+                            reason="重啟接管時在券商端查無此單",
+                            op_type="recover",
+                        )
                 else:
                     ticket.broker_seqno = matched.broker_seqno
                     ticket.broker_order_id = matched.broker_order_id
-                    ticket.filled_volume = matched.filled_volume
                     if matched.status is not ticket.status:
-                        self.transition(ticket, matched.status, op_type="recover")
+                        self.transition(
+                            ticket,
+                            matched.status,
+                            reason="送單逾時但券商已受理，重啟接管時對回"
+                            if was_failed
+                            else None,
+                            op_type="recover",
+                        )
+                    else:
+                        # 狀態沒變也要落地：以 `custom_field` 對回來的單原本沒有序號，
+                        # 不寫的話成交回填與下一次接管都還是對不到它
+                        self._persist(ticket)
             except OrderStateError as exc:
                 logger.warning(f"接管時與本地狀態矛盾，已跳過本筆：{exc}")
             recovered.append(ticket)
@@ -822,12 +906,19 @@ class OrderManager:
         self, row: Dict[str, Any], candidates: Sequence[OrderTicket]
     ) -> Optional[OrderTicket]:
         """
-        以「標的 ＋ 買賣別 ＋ 價格 ＋ 數量」模糊比對；**多筆時回 None 並要求人工確認**
+        以「標的 ＋ 買賣別 ＋ 價格 ＋ 數量 ＋ 送單時間窗」模糊比對；**多筆時回 None 並要求人工確認**
 
         兩支策略可能在同一秒對不同標的送出相似的單，而同一支策略也可能分批建倉——
         挑一個看起來最像的，會把兩張單的成交記到同一張上。
+
+        時間窗（`FUZZY_MATCH_WINDOW_SECONDS`）排除券商端送單時刻與本地建立時刻相差太久的候選：
+        同一支策略早上與尾盤各送一張同價同量的單，少了這道條件就是兩筆候選、永遠要人工。
+        券商端沒有時間的候選不排除——寧可多一筆候選要人確認，不可把真正的那張漏掉。
         """
 
+        created_at: Optional[datetime.datetime] = self._parse_time(
+            row.get("created_at")
+        )
         matches: List[OrderTicket] = [
             candidate
             for candidate in candidates
@@ -836,6 +927,7 @@ class OrderManager:
             and candidate.order.action.value == row.get("action")
             and abs(candidate.order.price - float(row.get("price") or 0)) < 1e-6
             and candidate.order.volume == int(row.get("volume") or 0)
+            and self._within_window(created_at, candidate.created_at)
         ]
 
         if len(matches) == 1:
@@ -849,6 +941,27 @@ class OrderManager:
             self._write_risk_event("RECOVER_AMBIGUOUS", message, None)
             self._degrade(message)
         return None
+
+    def _within_window(
+        self,
+        local_created_at: Optional[datetime.datetime],
+        broker_created_at: Optional[datetime.datetime],
+    ) -> bool:
+        """
+        兩個送單時刻是否落在 `FUZZY_MATCH_WINDOW_SECONDS` 內；任一邊沒有時間視為在窗內
+
+        本地時刻是台北 aware、券商回的可能是 naive：只有一邊帶時區時剝掉它再比，
+        不然相減直接拋 TypeError，整個接管在第一筆模糊比對就中止。
+        """
+
+        if local_created_at is None or broker_created_at is None:
+            return True
+        local: datetime.datetime = local_created_at
+        remote: datetime.datetime = broker_created_at
+        if (local.tzinfo is None) != (remote.tzinfo is None):
+            local = local.replace(tzinfo=None)
+            remote = remote.replace(tzinfo=None)
+        return abs((local - remote).total_seconds()) <= self.FUZZY_MATCH_WINDOW_SECONDS
 
     def _rebuild_ticket(self, row: Dict[str, Any]) -> OrderTicket:
         """
@@ -874,6 +987,11 @@ class OrderManager:
             custom_field=row.get("custom_field"),
             created_at=self._parse_time(row.get("created_at")),
         )
+
+    def rebuild_order(self, row: Dict[str, Any]) -> Optional[BaseOrder]:
+        """由紀錄庫的委託列還原訂單（沒有注入建構器時回 None）；給引擎算歷史委託的金額用"""
+
+        return self._rebuild_order(row)
 
     def _rebuild_order(self, row: Dict[str, Any]) -> Optional[BaseOrder]:
         """以注入的建構器還原訂單，並補回執行段落（撤單依段落篩選）與執行方式"""
@@ -1009,11 +1127,22 @@ class OrderManager:
         to_status: LiveOrderStatus,
         op_type: str,
     ) -> None:
-        """追加一筆狀態轉移歷史（append-only）"""
+        """
+        追加一筆狀態轉移歷史（append-only）
 
-        counter: itertools.count = self._event_sequence.setdefault(
-            ticket.client_order_id, itertools.count(1)
+        **序號從紀錄庫既有的最大值接著數**：每個行程都從 1 起算的話，盤後或重啟
+        行程對同一張單寫的 FILLED／CANCELLED 轉移會撞 `(client_order_id, seq)` 主鍵，
+        被 `INSERT OR IGNORE` 吞掉，事件表少掉的正是最關鍵的那幾筆。
+        """
+
+        counter: Optional[itertools.count] = self._event_sequence.get(
+            ticket.client_order_id
         )
+        if counter is None:
+            counter = itertools.count(
+                self.dao.get_max_order_event_seq(ticket.client_order_id) + 1
+            )
+            self._event_sequence[ticket.client_order_id] = counter
         self.dao.append_order_event(
             {
                 "client_order_id": ticket.client_order_id,

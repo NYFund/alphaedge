@@ -481,12 +481,15 @@ def test_tick_quote_carries_a_price() -> None:
         ask_price = 602.0
         ask_volume = 2
         tick_type = 1
+        cum_volume = 120
 
     quote: StockQuote = StockQuoteAdapter.from_tick_row(_Tick(), DATE)
 
     assert quote.close == 601.0
     assert quote.cur_price == 601.0
-    assert quote.volume == 3
+    # 報價的 volume 是當日累計量（與實盤同語意），這一筆的量留在 tick.volume
+    assert quote.volume == 120
+    assert quote.tick_quote.volume == 3
 
 
 # === 全日鎖漲跌停 ===
@@ -505,14 +508,14 @@ def test_buy_open_is_rejected_when_locked_at_limit_up() -> None:
     """
     前收 100、開高低收皆 110（全日鎖漲停）時，買進開倉被拒
 
-    整天沒有人願意在漲停以下賣出，實務上排隊也買不到。`MomentumStrategy1`
+    整天沒有人願意在漲停以下賣出，實務上排隊也買不到。`VolumeBreakoutMomentumStrategy`
     的訊號正是「當日漲幅 ≥ 9%、以收盤價買進」，這類標的大量是鎖漲停，
     照常成交會讓做多績效系統性偏樂觀且沒有任何徵兆。
     """
 
     event_counts: Dict[str, int] = make_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
-    fill_model.prev_close[STOCK_ID] = 100.0
+    fill_model.reference_prices[STOCK_ID] = 100.0
 
     locked: StockQuote = make_locked_quote(110.0, 110.0, 110.0, 110.0)
 
@@ -525,7 +528,7 @@ def test_short_open_is_rejected_when_locked_at_limit_down() -> None:
 
     event_counts: Dict[str, int] = make_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
-    fill_model.prev_close[STOCK_ID] = 100.0
+    fill_model.reference_prices[STOCK_ID] = 100.0
 
     locked: StockQuote = make_locked_quote(90.0, 90.0, 90.0, 90.0)
     order = make_order(action=Action.SELL, position_type=PositionType.SHORT, price=90.0)
@@ -543,7 +546,7 @@ def test_touching_the_limit_without_locking_is_allowed() -> None:
 
     event_counts: Dict[str, int] = make_event_counts()
     fill_model: TwStockFillModel = TwStockFillModel(event_counts=event_counts)
-    fill_model.prev_close[STOCK_ID] = 100.0
+    fill_model.reference_prices[STOCK_ID] = 100.0
 
     touched: StockQuote = make_locked_quote(105.0, 110.0, 104.0, 110.0)
 

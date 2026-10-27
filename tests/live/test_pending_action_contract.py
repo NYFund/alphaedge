@@ -132,6 +132,8 @@ class FakeLotDAO:
 
 
 def lot(volume: int, price: float, symbol: str = "2330") -> Dict[str, Any]:
+    """組一筆 Alpha 的多方 lot 資料列"""
+
     return {
         "strategy_name": "Alpha",
         "symbol": symbol,

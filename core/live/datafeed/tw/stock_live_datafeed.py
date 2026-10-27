@@ -8,12 +8,12 @@ from core.api.tw.financial_statement_api import FinancialStatementAPI
 from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.api.tw.monthly_revenue_report_api import MonthlyRevenueReportAPI
 from core.api.tw.stock_chip_api import StockChipAPI
+from core.api.tw.stock_day_trade_list_api import StockDayTradeListAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_margin_api import StockMarginAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import TW_STOCK_DB_PATH
 from core.config.settings import now_live
-from core.dao.connection import connect_sqlite
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
@@ -23,8 +23,10 @@ from core.live.datafeed.calendar import (
     WeekendCalendarSource,
 )
 from core.models import BaseQuote, PreOpenStockQuote
+from core.models.stock.trading_list import DayTradeListSnapshot
 from core.strategies.base import BaseStrategy
 from core.utils import ExecutionTiming
+from core.utils.instrument import StockUtils
 
 """
 台股的實盤資料源：歷史資料到 T−1 由 `tw_stock.db` 提供，今天由券商提供
@@ -42,6 +44,9 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
     # 交易日佐證用的合約：取一檔成交最活絡、不會下市的權值股即可，
     # 合約檔的更新日期全市場一致，換哪一檔都是同一個日期
     PROBE_SYMBOL: str = "2330"
+
+    # 當日名單未入庫時往回找最近一份的曆日範圍；跨過連假仍有餘裕
+    DAY_TRADE_LIST_LOOKBACK_DAYS: int = 14
 
     def __init__(
         self,
@@ -75,11 +80,16 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.fs: Optional[FinancialStatementAPI] = None
         # 官方開休市日曆（交易日判定的主來源）；與歷史資料同庫，共用唯讀連線
         self.market_holiday: Optional[MarketHolidayAPI] = None
+        # 現股當沖名單；盤中逐筆策略每一筆報價都會問，故逐日快取
+        self.day_trade_list: Optional[StockDayTradeListAPI] = None
+        self.day_trade_list_cache: Dict[
+            datetime.date, Optional[DayTradeListSnapshot]
+        ] = {}
 
-    def setup(self, strategy: BaseStrategy) -> None:
+    def open_data_sources(self, strategy: BaseStrategy) -> None:
         """
         - Description:
-            建立歷史資料 API（**唯讀**）與交易日來源
+            建立歷史資料 API（**唯讀**）
 
             唯讀的兩個理由：實盤行程不該寫研究庫；以及唯讀連線不會與背景 ETL
             搶寫入鎖——尾盤那 4 分鐘被一個 ETL 擋住是很難查的那種事故。
@@ -93,7 +103,7 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
                 本次要跑的策略
         """
 
-        self.conn = connect_sqlite(self.db_path, read_only=True)
+        self.conn = self.connect_db(self.db_path, read_only=True)
         self.dividend = StockDividendAPI(conn=self.conn)
         self.price = StockPriceAPI(conn=self.conn, dividend_api=self.dividend)
         self.chip = StockChipAPI(conn=self.conn)
@@ -101,6 +111,12 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
         self.mrr = MonthlyRevenueReportAPI(conn=self.conn)
         self.fs = FinancialStatementAPI(conn=self.conn)
         self.market_holiday = MarketHolidayAPI(conn=self.conn)
+        self.day_trade_list = StockDayTradeListAPI(conn=self.conn)
+
+    def setup(self, strategy: BaseStrategy) -> None:
+        """基底的外框之後：補預設的交易日來源、把資料源交給策略、補標的池"""
+
+        super().setup(strategy)
 
         if not self.calendar_sources:
             self.calendar_sources = self.build_default_calendar_sources()
@@ -111,12 +127,20 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
     def fill_default_universe(self, strategy: BaseStrategy) -> None:
         """
         - Description:
-            策略沒宣告 `symbols` 時，以「`price` 表最新交易日有行情的全部股票」為標的池
+            策略沒宣告 `symbols` 時，以「`price` 表最新交易日有行情的全部普通股」為標的池
 
             **與回測每天的標的池相同**：回測餵給策略的是當天價格表上的每一檔，
             實盤若只抓策略宣告的幾檔，全市場掃描型的策略（例如漲幅選股）
             在實盤永遠拿不到報價、永遠不出訊號，而且不會有任何錯誤。
             以前一交易日為準（今天的資料要收盤後才進來）。
+
+            **過濾與回測共用 `StockUtils.filter_common_stocks()`**：回測在報價轉換時就濾掉
+            ETF 與權證，實盤若拿價格表全部代號，槓桿型 ETF（00631L、00715L）會過漲幅門檻、
+            實盤買了回測從不會買的東西，而 parity 只看得到「實盤多出一張單」。
+            要交易 ETF 的策略自己宣告 `symbols`。
+
+            策略覆寫了 `get_live_symbols()`（例如受逐筆訂閱上限所限的盤中策略）時，
+            改用它篩出的標的池。
         - Parameters:
             - strategy: BaseStrategy
                 本次要跑的策略
@@ -139,14 +163,67 @@ class TwStockLiveDataFeed(BaseLiveDataFeed):
             )
             return
 
+        # 策略自己的篩選**不包在 try 裡**：篩選寫錯要在啟動時當場失敗，
+        # 吞掉的話只剩一行警告，盤中整天沒有標的
+        selected: Optional[List[str]] = (
+            strategy.get_live_symbols(latest) if latest is not None else None
+        )
+        if selected is not None:
+            strategy.symbols = list(selected)
+            logger.info(f"{name} 依 {latest} 的資料盤前篩選出 {len(selected)} 檔標的")
+            return
+
         if frame.empty:
             logger.warning(f"{name} 未宣告標的池，且價格表沒有資料，本次沒有任何標的")
             return
 
-        strategy.symbols = sorted(frame["stock_id"].astype(str).unique())
-        logger.info(
-            f"{name} 未宣告標的池，以 {latest} 有行情的 {len(strategy.symbols)} 檔股票為標的"
+        strategy.symbols = sorted(
+            StockUtils.filter_common_stocks(frame["stock_id"].astype(str).unique())
         )
+        logger.info(
+            f"{name} 未宣告標的池，以 {latest} 有行情的 {len(strategy.symbols)} 檔普通股為標的"
+        )
+
+    def get_day_trade_list(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:
+        """
+        - Description:
+            當日的現股當沖名單；**當日那一份還沒入庫時沿用最近一份**
+
+            名單由每日資料更新在收盤後才入庫，實盤當天盤中查不到當日那一份。
+            整天回 None 的話，以名單決定進不進場的策略會整天不進場而沒有任何錯誤。
+            沿用最近一個交易日的名單：交易所逐日公告、變動很少；當天新增或剔除的
+            那幾檔會判錯——新增的少進場，剔除的若進場，當天要當沖賣出時由券商端的
+            送單前資格檢查擋下。
+        - Parameters:
+            - date: datetime.date
+                交易日
+        - Return:
+            - Optional[DayTradeListSnapshot]
+                名單；往回 `DAY_TRADE_LIST_LOOKBACK_DAYS` 個曆日內都沒有時為 None
+        """
+
+        if date in self.day_trade_list_cache:
+            return self.day_trade_list_cache[date]
+        if self.day_trade_list is None:
+            return None
+
+        snapshot: Optional[DayTradeListSnapshot] = self.day_trade_list.get_snapshot(
+            date
+        )
+        if snapshot is None:
+            covered: List[datetime.date] = self.day_trade_list.get_covered_dates(
+                date - datetime.timedelta(days=self.DAY_TRADE_LIST_LOOKBACK_DAYS), date
+            )
+            if covered:
+                snapshot = self.day_trade_list.get_snapshot(covered[-1])
+                logger.info(f"{date} 的現股當沖名單尚未入庫，沿用 {covered[-1]} 的名單")
+            else:
+                logger.warning(
+                    f"{date} 往回 {self.DAY_TRADE_LIST_LOOKBACK_DAYS} 天都沒有現股當沖名單"
+                )
+
+        self.day_trade_list_cache[date] = snapshot
+        return snapshot
 
     def build_default_calendar_sources(self) -> List[TradingCalendarSource]:
         """

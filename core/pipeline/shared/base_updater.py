@@ -1,5 +1,4 @@
 import datetime
-import random
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -13,7 +12,13 @@ from core.dao.tw.stock_price_dao import StockPriceDAO
 from core.pipeline.shared.base_crawler import CrawlResult, CrawlStatus
 from core.pipeline.shared.date_planner import DatePlanner, DateProgressStore
 from core.pipeline.shared.graceful_stop import GracefulStop
-from core.pipeline.utils.exceptions import DataLoadError
+from core.pipeline.shared.request_utils import RateLimitPolicy
+from core.pipeline.utils.exceptions import (
+    CleanFailureError,
+    ColumnLayoutError,
+    DataLoadError,
+)
+from core.utils import TimeUtils
 from core.utils.log_manager import LogManager
 
 """
@@ -163,9 +168,9 @@ class UpdateStats:
 
 
 class BaseDataUpdater(ABC):
-    """Base Class of Data Updater"""
+    """資料 updater 的抽象基底"""
 
-    # 節流：每處理 N 個單位休息一次，其餘時候隨機短暫延遲。
+    # 節流：每處理 N 個單位休息一次，其餘時候隨機短暫延遲（`build_rate_limit_policy()`）。
     # 放在基底是因為每一支長跑 updater 都需要同一組數字；各自寫一份的話，
     # 調整節流要記得改好幾個檔案，而漏改的那支會在站方限流時先被擋下來
     BATCH_SLEEP_EVERY_N_FILES: int = 100
@@ -173,9 +178,40 @@ class BaseDataUpdater(ABC):
     BATCH_RANDOM_DELAY_MIN: int = 1
     BATCH_RANDOM_DELAY_MAX: int = 5
 
+    # 本 updater 的日誌檔名；`setup()` 據此開檔，空字串表示不另外落地
+    LOG_FILE_NAME: str = ""
+
     def __init__(self) -> None:
-        """建立 updater；連線與 log 一律由子類的 `setup()` 負責"""
+        """建立 updater；連線一律由子類的 `setup()` 負責，日誌由基底依 `LOG_FILE_NAME` 開"""
+
         pass
+
+    # === 生命週期 ===
+    def setup(self, *args, **kwargs) -> None:
+        """開日誌檔（`LOG_FILE_NAME`）；子類要建連線與 API 時先呼叫 `super().setup()`"""
+
+        if self.LOG_FILE_NAME:
+            LogManager.setup_logger(self.LOG_FILE_NAME)
+
+    def close(self) -> None:
+        """
+        關閉連線與對外資源；可重複呼叫，預設沒事可做
+
+        **每一支 updater 都有同一個收尾名字**：入口程式才能用同一個迴圈 `try/finally`
+        收尾，而不是逐支記住它叫 `close`、`cleanup` 還是 `logout`。
+        """
+
+        pass
+
+    def __enter__(self) -> "BaseDataUpdater":
+        """支援 with 語法：離開區塊即 `close()`"""
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """離開 with 區塊時關閉資源"""
+
+        self.close()
 
     @staticmethod
     def raise_if_unreachable(source: str, stats: UpdateStats) -> None:
@@ -196,48 +232,24 @@ class BaseDataUpdater(ABC):
         if reason:
             raise DataLoadError(source, [reason], succeeded=stats.ok)
 
-    def throttle_per_file(
-        self, file_cnt: int, stop: Optional[GracefulStop] = None
-    ) -> int:
+    def build_rate_limit_policy(self) -> RateLimitPolicy:
         """
         - Description:
-            以**檔案／日期**為單位的節流，回傳更新後的計數
+            以本 updater 的 `BATCH_*` 設定建出一份節流（長睡後計數歸零）
 
-            **名字帶單位是刻意的**：權益變動表那條逐檔迴圈另有一份以「請求」
-            為單位的節流（`throttle_per_request()`），兩者的判準不同
-            （這裡達門檻後計數歸零，那裡取模、計數從不歸零）。
-            都叫 `throttle` 的話子類會把基底這份遮蔽掉，而簽名不同，
-            一旦有人呼叫基底那份就是參數綁錯位置。
-
-            達到 `BATCH_SLEEP_EVERY_N_FILES` 就長睡一次並把計數歸零，
-            其餘時候隨機短睡，避免固定間隔的請求樣態。
-
-            **傳入 `stop` 時用的是可中斷的 sleep**：`time.sleep()` 被訊號打斷會
-            自動續睡（PEP 475），於是「每 100 天睡 2 分鐘」那一段按下 Ctrl+C
-            得等滿 2 分鐘才有反應。數小時～數十小時的回補按了沒反應，
-            實際上就是逼人用 `kill -9`，而那會讓手上未入庫的那批直接消失。
-        - Parameters:
-            - file_cnt: int
-                自上次長睡以來已處理的單位數
-            - stop: Optional[GracefulStop]
-                中止旗標；None 表示退化成不可中斷的 `time.sleep()`
+            **每次 `update()` 開頭各建一份**：計數是這一輪回補的狀態，
+            跨輪沿用會讓第二輪的第一次長睡提早到來；各子類也只需覆寫類別常數。
         - Return:
-            - int
-                更新後的計數；剛長睡過為 0
+            - RateLimitPolicy
+                本輪回補用的節流
         """
 
-        if file_cnt >= self.BATCH_SLEEP_EVERY_N_FILES:
-            # 訊息帶出實際秒數：`BATCH_SLEEP_DURATION_SECONDS` 由各子類覆寫，
-            # 寫死字面秒數會讓 log 與實際行為對不上
-            logger.info(f"Sleep {self.BATCH_SLEEP_DURATION_SECONDS} seconds...")
-            self.sleep(self.BATCH_SLEEP_DURATION_SECONDS, stop)
-            return 0
-
-        delay: int = random.randint(
-            self.BATCH_RANDOM_DELAY_MIN, self.BATCH_RANDOM_DELAY_MAX
+        return RateLimitPolicy(
+            delay_min=self.BATCH_RANDOM_DELAY_MIN,
+            delay_max=self.BATCH_RANDOM_DELAY_MAX,
+            long_sleep_every=self.BATCH_SLEEP_EVERY_N_FILES,
+            long_sleep_seconds=self.BATCH_SLEEP_DURATION_SECONDS,
         )
-        self.sleep(delay, stop)
-        return file_cnt
 
     @staticmethod
     def sleep(seconds: float, stop: Optional[GracefulStop] = None) -> None:
@@ -382,13 +394,10 @@ class BaseDataUpdater(ABC):
         )
 
     @abstractmethod
-    def setup(self, *args, **kwargs) -> None:
-        """Set Up the Config of Updater"""
-        pass
-
     @abstractmethod
     def update(self, *args, **kwargs) -> None:
-        """Update the Database"""
+        """更新資料庫"""
+
         pass
 
 
@@ -422,11 +431,6 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
     # 2013 起的回補有 3,300 個交易日、數小時，中途失敗要全部重來。
     # 分批之後最多只損失最後一批（未入庫的部分），重跑會自動接續。
     LOAD_BATCH_SIZE: int = 100
-
-    def setup(self) -> None:
-        """Set Up the Config of Updater"""
-
-        LogManager.setup_logger(self.LOG_FILE_NAME)
 
     def close(self) -> None:
         """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
@@ -599,7 +603,7 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
         dates: List[datetime.date] = self.plan_dates(progress, start_date, end_date)
         logger.info(f"本次待更新日期：{len(dates)} 天（{start_date} ~ {end_date}）")
 
-        file_cnt: int = 0
+        throttle: RateLimitPolicy = self.build_rate_limit_policy()
         batch_dates: List[str] = []
         stats: UpdateStats = UpdateStats()
         cleaner_failures: List[datetime.date] = []
@@ -622,7 +626,6 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
                 progress.record(date, day_status)
                 stats.mark_day(date, day_status)
 
-                file_cnt += 1
                 if day_status is CrawlStatus.FAILED:
                     self.report_partial_day(self.SOURCE, date, twse, tpex)
                 else:
@@ -641,7 +644,7 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
                     )
                     break
 
-                file_cnt = self.throttle_per_file(file_cnt, stop)
+                throttle.tick(stop)
 
         # 收尾：載入最後一批未達批量的日期
         if batch_dates:
@@ -651,4 +654,184 @@ class DailyTwoMarketUpdater(BaseDataUpdater):
         stats.report(self.SOURCE)
         self.report_cleaner_failures(cleaner_failures)
         self.report_latest_date()
+        self.raise_if_unreachable(self.SOURCE, stats)
+
+
+class YearlyRangeTwoMarketUpdater(BaseDataUpdater):
+    """
+    - Description:
+        「以年為區間爬上市＋上櫃、清洗、整批入庫」這條流程的骨架
+
+        除權息與公司行動（減資、面額變更）兩支走的是同一條路：逐年雙市場爬 →
+        清洗（版面改制逐年隔離）→ 節流 → 整批入庫 → 收尾報表。兩邊原本各抄一份，
+        差別只在方法名與檔名，**各自一份的代價是漂移**：一邊修了隔離或收尾的判斷，
+        另一邊不會跟著修，而症狀都是還原價的輸入無聲地停止更新。
+
+        子類要填的東西：`SOURCE`（同時決定 crawler／cleaner 的方法名與錯誤訊息的來源名）、
+        `SOURCE_LABEL`、`TABLE_LABEL`、`LOG_FILE_NAME`、`FILE_SUFFIX`。
+
+        **爬取與清洗一律以 `SOURCE` 組方法名取用**（`crawl_twse_{SOURCE}`、
+        `clean_twse_{SOURCE}`），與 `DailyTwoMarketUpdater` 同一種寫法。
+
+        **每次都掃整個區間，不從 `MAX(date)+1` 續跑**：兩個來源都支援區間查詢，
+        一年只要一次請求；`MAX(date)+1` 會讓中間任何一年的缺漏永遠補不回來。
+        入庫走 `INSERT OR REPLACE`，重跑是冪等的。
+    """
+
+    # 資料來源代號；同時是 crawler／cleaner 的方法名後綴與錯誤訊息的來源名
+    SOURCE: str = ""
+    # log 訊息中的顯示名稱（開頭的「Start Updating」那一行）
+    SOURCE_LABEL: str = ""
+    # 收尾「Latest available date」那一行的表名
+    TABLE_LABEL: str = ""
+    # 落地的 log 檔名
+    LOG_FILE_NAME: str = ""
+    # 清洗後 CSV 檔名的後綴。**照各來源原樣保留**：loader 依檔名挑檔，
+    # 後綴改壞了不會報錯，只會讓那個來源整批漏入庫
+    FILE_SUFFIX: str = ""
+
+    # 區間請求之間的節流（一年一次請求，不需要像逐日爬蟲那樣長時間休息）
+    YEAR_REQUEST_DELAY_MIN: int = 3
+    YEAR_REQUEST_DELAY_MAX: int = 8
+
+    def close(self) -> None:
+        """關閉資料連線（loader 共用同一個 DAO，一併結束）"""
+
+        self.dao.close()
+        self.conn = None
+
+    def clean_year(
+        self,
+        year: int,
+        period: str,
+        twse: CrawlResult,
+        tpex: CrawlResult,
+        stats: UpdateStats,
+        layout_failures: List[str],
+    ) -> None:
+        """
+        - Description:
+            清洗一年兩個市場的資料，**版面改制逐年隔離**
+
+            一年的版面改制不可中止整段回補：其餘年份照樣清洗入庫，
+            改制的年份記進 `layout_failures`，收尾時讓整批以失敗結束——
+            這兩張表是還原價的輸入，靜靜停止更新不會有任何錯誤訊息。
+        - Parameters:
+            - year: int
+                年份（只用於訊息）
+            - period: str
+                區間字串（`YYYYMMDD_YYYYMMDD`），組成落地檔名
+            - twse / tpex: CrawlResult
+                兩個市場的爬取結果
+            - stats: UpdateStats
+                本批統計
+            - layout_failures: List[str]
+                版面改制的「來源 年份」清單（就地追加）
+        """
+
+        for result, source in ((twse, "twse"), (tpex, "tpex")):
+            if not result.is_ok:
+                continue
+            clean: Callable[..., Optional[pd.DataFrame]] = getattr(
+                self.cleaner, f"clean_{source}_{self.SOURCE}"
+            )
+            try:
+                cleaned: Optional[pd.DataFrame] = clean(
+                    result.data, file_name=f"{source}_{period}{self.FILE_SUFFIX}"
+                )
+            except ColumnLayoutError as error:
+                logger.error(
+                    f"[{self.SOURCE}] {source.upper()} {year} 版面改制：{error}"
+                )
+                layout_failures.append(f"{source} {year}")
+                stats.count_clean_failure()
+                continue
+
+            if cleaned is None or cleaned.empty:
+                logger.warning(f"Cleaned {source.upper()} dataframe empty for {year}")
+
+    def report_latest_date(self) -> None:
+        """收尾印出表內最新日期；沒有任何資料時降級為 warning"""
+
+        table_latest_date: Optional[str] = self.dao.get_latest_date()
+        if table_latest_date:
+            logger.info(
+                f"{self.TABLE_LABEL} data updated. "
+                f"Latest available date: {table_latest_date}"
+            )
+        else:
+            logger.warning(f"No new {self.TABLE_LABEL.lower()} data was updated")
+
+    def update(
+        self,
+        start_date: datetime.date,
+        end_date: Optional[datetime.date] = None,
+    ) -> None:
+        """
+        - Description:
+            逐年爬取兩個市場、清洗，最後整批入庫
+
+            **先入庫再拋**：沒改制的年份已經清洗好了，不入庫等於這次白跑。
+
+            **中止訊號收在年與年之間**：按下 Ctrl+C 後，已爬好的年份照樣入庫、
+            印完統計行才離開；年與年之間的節流也可被中止打斷，不必等滿。
+        - Parameters:
+            - start_date: datetime.date
+                回補起日
+            - end_date: Optional[datetime.date]
+                回補迄日；None 取當日（預設值不可在 def 行求值）
+        """
+
+        logger.info(f"* Start Updating TWSE & TPEX {self.SOURCE_LABEL} Data...")
+
+        end_date: datetime.date = end_date or datetime.date.today()
+
+        if start_date > end_date:
+            logger.info(f"{self.TABLE_LABEL} data is already up to date")
+            return
+
+        years: List[int] = TimeUtils.generate_year_range(start_date.year, end_date.year)
+        stats: UpdateStats = UpdateStats()
+        layout_failures: List[str] = []
+        throttle: RateLimitPolicy = RateLimitPolicy(
+            delay_min=self.YEAR_REQUEST_DELAY_MIN,
+            delay_max=self.YEAR_REQUEST_DELAY_MAX,
+        )
+
+        with GracefulStop(label=self.SOURCE) as stop:
+            for year in years:
+                year_start: datetime.date = max(start_date, datetime.date(year, 1, 1))
+                year_end: datetime.date = min(end_date, datetime.date(year, 12, 31))
+                period: str = (
+                    f"{TimeUtils.format_date(year_start)}_"
+                    f"{TimeUtils.format_date(year_end)}"
+                )
+
+                twse: CrawlResult = getattr(self.crawler, f"crawl_twse_{self.SOURCE}")(
+                    year_start, year_end
+                )
+                tpex: CrawlResult = getattr(self.crawler, f"crawl_tpex_{self.SOURCE}")(
+                    year_start, year_end
+                )
+                stats.record(twse, tpex)
+                self.clean_year(year, period, twse, tpex, stats, layout_failures)
+
+                if stop.requested:
+                    logger.warning(
+                        f"[{self.SOURCE}] 收到中止要求，停在 {year} 年；"
+                        f"已爬的年份先入庫再離開，下次執行會重掃整個區間"
+                    )
+                    break
+
+                throttle.tick(stop)
+
+        # `requested` 的單位是「年」而不是「天」：本來源支援區間查詢，一年一次請求
+        stats.report(f"{self.SOURCE}（單位：年）")
+
+        self.loader.add_to_db(remove_files=False)
+        self.report_latest_date()
+
+        if layout_failures:
+            raise CleanFailureError(self.SOURCE, layout_failures)
+
         self.raise_if_unreachable(self.SOURCE, stats)

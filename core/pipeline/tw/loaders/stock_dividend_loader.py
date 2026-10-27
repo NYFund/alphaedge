@@ -10,7 +10,7 @@ from core.pipeline.shared.base_loader import BaseDataLoader
 from core.pipeline.shared.source_priority import dedup_by_source_priority
 
 """
-Stock Dividend Loader
+台股除權息 loader
 
 與其他 loader 的差異：本表的三個來源會**合法地重疊**——上櫃同一筆除權息可能同時來自
 FinMind 歷史回補與 TPEX 日更。因此入庫走 `INSERT OR REPLACE` 而非 `append`，
@@ -19,7 +19,7 @@ FinMind 歷史回補與 TPEX 日更。因此入庫走 `INSERT OR REPLACE` 而非
 
 
 class StockDividendLoader(BaseDataLoader):
-    """Stock Dividend Loader"""
+    """台股除權息 loader"""
 
     # 同一筆除權息若跨來源重複，保留優先序**最高**的那一筆。
     #
@@ -33,7 +33,7 @@ class StockDividendLoader(BaseDataLoader):
     def __init__(self, dao: Optional[StockDividendDAO] = None) -> None:
         """
         - Description:
-            建立 dividend loader
+            建立除權息 loader
         - Parameters:
             - dao: Optional[StockDividendDAO]
                 共用的 DAO（通常由 updater 傳入，讓讀寫走同一條連線）。
@@ -41,17 +41,17 @@ class StockDividendLoader(BaseDataLoader):
                 未指定時 loader 自行建立，入庫完成即關閉
         """
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.dividend_dir: Path = DIVIDEND_DOWNLOADS_PATH
 
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
         self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         self.dividend_dir.mkdir(parents=True, exist_ok=True)
@@ -83,7 +83,7 @@ class StockDividendLoader(BaseDataLoader):
         if self.dao is None:
             self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         file_cnt: int = 0
@@ -91,7 +91,7 @@ class StockDividendLoader(BaseDataLoader):
         failed_files: List[str] = []
         dfs: List[pd.DataFrame] = []
         for file_path in sorted(self.dividend_dir.iterdir()):
-            # Skip non-CSV files
+            # 只處理 CSV 檔
             if file_path.suffix != ".csv":
                 continue
             try:

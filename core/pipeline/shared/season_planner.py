@@ -1,10 +1,11 @@
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from loguru import logger
 
 from core.config import DOWNLOADS_METADATA_DIR_PATH
+from core.utils import TimeUtils
 
 """
 「這個年季還有哪些個股要向站方請求」的共用決策
@@ -265,3 +266,101 @@ class SeasonPlanner:
             if stock_id in retry
             or (stock_id not in crawled and stock_id not in no_data)
         ]
+
+
+class PeriodPlanner:
+    """
+    - Description:
+        決定「年季」或「年月」這類週期來源這次要請求哪些週期
+
+        財報三張全市場報表以年季為單位、月營收以年月為單位，兩者的規劃逐行相同，
+        只差每年幾期與申報期的判準，因此收成一份，由 `periods_per_year` 與
+        `is_settled` 回呼區分。原本各刻一份的代價是漂移：在一邊修了申報期或缺口的
+        判斷，另一邊不會跟著修，而症狀都是某一期的資料靜靜補不進來。
+    """
+
+    # 各週期在 log 裡的寫法：(申報期內的單位, 缺口的單位, 單期的格式)
+    PERIOD_WORDING: Dict[int, Tuple[str, str, Callable[[int, int], str]]] = {
+        4: ("年季", "年季", lambda year, season: f"{year}Q{season}"),
+        12: ("月份", "年月", lambda year, month: f"{year}/{month:02d}"),
+    }
+
+    @classmethod
+    def plan_pending_periods(
+        cls,
+        start: Tuple[int, int],
+        end: Tuple[int, int],
+        periods_per_year: int,
+        existing: Set[Tuple[int, int]],
+        is_settled: Callable[[int, int], bool],
+        label: str,
+    ) -> List[Tuple[int, int]]:
+        """
+        - Description:
+            算出這次要請求的週期：區間內所有週期 − 表內**已收齊**的週期
+
+            **不可用「表內最新一期 +1」起跑**：某一期失敗被跳過之後，只要下一期
+            成功入庫，`MAX` 就越過它，那一期從此不會再被請求——資產負債表 2021Q1
+            整季缺就是這樣來的。逐日來源的 `DatePlanner.plan()` 改用差集是同一個理由。
+
+            **不可用 years × periods 的笛卡兒積**：起點 2024Q3、終點 2026Q4 時
+            季別只會是 [3, 4]，中間的 Q1／Q2 不會被爬；起點期別大於終點期別時
+            甚至是空清單，整輪什麼都不做而沒有任何錯誤。
+
+            **申報期還沒關閉的週期不算收齊**：財報與月營收都是逐家公司申報的，
+            申報期內入庫的只是「當下已送件的那批公司」。當成收齊的話，差集從此跳過它，
+            後送件的公司永遠補不進來。重問的代價很小，且寫入走 `INSERT OR IGNORE`，
+            已入庫的列不會重複。
+
+            代價是來源本就沒有的週期與尚未公布的週期每輪都會再問一次。
+        - Parameters:
+            - start / end: Tuple[int, int]
+                區間起點與終點（年, 期別）
+            - periods_per_year: int
+                每年幾期；4 為年季、12 為年月
+            - existing: Set[Tuple[int, int]]
+                表內已有資料的週期
+            - is_settled: Callable[[int, int], bool]
+                該週期的申報期是否已關閉
+            - label: str
+                來源名稱，只用於 log
+        - Return:
+            - List[Tuple[int, int]]
+                由早到晚排序的 (year, period)
+        """
+
+        settled_word, gap_word, fmt = cls.PERIOD_WORDING[periods_per_year]
+        periods: List[Tuple[int, int]] = TimeUtils.generate_year_period_range(
+            start[0], start[1], end[0], end[1], periods_per_year=periods_per_year
+        )
+
+        incomplete: Set[Tuple[int, int]] = {
+            period for period in existing if not is_settled(*period)
+        }
+        if incomplete:
+            logger.info(
+                f"[{label}] {len(incomplete)} 個{settled_word}仍在申報期內"
+                f"（{sorted(fmt(*period) for period in incomplete)}），"
+                f"本次一併重問以補進後送件的公司"
+            )
+
+        settled: Set[Tuple[int, int]] = existing - incomplete
+        pending: List[Tuple[int, int]] = [
+            period for period in periods if period not in settled
+        ]
+
+        # 只有夾在表內最早與最新之間的才算缺口：早於最早的是來源本就沒有的週期
+        # （例如 2013Q1），晚於最新的是尚未公布的週期，兩者每輪都會出現，報出來只是噪音
+        if existing:
+            earliest: Tuple[int, int] = min(existing)
+            latest: Tuple[int, int] = max(existing)
+            gaps: List[str] = [
+                fmt(*period) for period in pending if earliest < period < latest
+            ]
+            if gaps:
+                logger.warning(
+                    f"[{label}] 偵測到 {len(gaps)} 個{gap_word}缺口"
+                    f"（表內最新為 {fmt(*latest)}），本次一併回補：{gaps[:10]}"
+                )
+
+        return pending

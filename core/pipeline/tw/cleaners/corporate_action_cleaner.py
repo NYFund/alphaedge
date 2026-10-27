@@ -93,7 +93,7 @@ class CorporateActionCleaner(BaseDataCleaner):
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
         self.corporate_action_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,6 +188,20 @@ class CorporateActionCleaner(BaseDataCleaner):
         if file_name:
             self.save(result, file_name)
         return result
+
+    def clean_twse_corporate_action(
+        self, df: Optional[pd.DataFrame], file_name: str = ""
+    ) -> Optional[pd.DataFrame]:
+        """清洗上市的公司行動資料；updater 以 `clean_{市場}_{SOURCE}` 取用"""
+
+        return self.clean(df, source="twse", file_name=file_name)
+
+    def clean_tpex_corporate_action(
+        self, df: Optional[pd.DataFrame], file_name: str = ""
+    ) -> Optional[pd.DataFrame]:
+        """清洗上櫃的公司行動資料；updater 以 `clean_{市場}_{SOURCE}` 取用"""
+
+        return self.clean(df, source="tpex", file_name=file_name)
 
     def save(self, df: pd.DataFrame, file_name: str) -> None:
         """把清洗結果落地為 CSV（loader 掃這個目錄入庫）"""

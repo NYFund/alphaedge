@@ -218,7 +218,7 @@ def test_update_db_exits_non_zero_when_a_target_fails(
     這是 2026-08-16 事故的核心：舊行為是結束碼 0 ＋ `✅ Database Update Completed`。
     """
 
-    import tasks.update_db as update_db
+    import apps.update_db as update_db
 
     class ExplodingUpdater:
         """模擬 loader 拋出 DataLoadError 的 updater"""
@@ -240,7 +240,7 @@ def test_update_db_exits_non_zero_when_a_target_fails(
 def test_target_guard_isolates_failure() -> None:
     """一個 target 失敗不得中斷其餘 target——否則是拿可用性換可見度"""
 
-    from tasks.update_db import target_guard
+    from apps.update_db import target_guard
 
     failed: List[str] = []
 
@@ -260,9 +260,11 @@ class _FakeArgs:
     def __init__(self, target: List[str], from_date=None) -> None:
         self.target: List[str] = target
         self.from_date = from_date
+        self.retry_failed: int = 0
+        self.retry_wait: int = 0
 
 
-# === S3：每個 loader 的「壞檔 → DataLoadError」 ===
+# === 每個 loader 的「壞檔 → DataLoadError」 ===
 def make_price_loader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """建立指向暫存 DB 與暫存 downloads 目錄的 price loader"""
 
@@ -442,8 +444,8 @@ def test_finmind_broker_trading_dataframe_path_raises(tmp_path: Path) -> None:
 
 # === 期貨線的「壞檔 → DataLoadError」===
 # 台股線（price／margin／finmind）已在上面涵蓋，期貨線原本一條都沒有。
-# **tick 線不在此列**：`stock_tick_loader.add_to_db()` 根本沒呼叫 `finish_load()`，
-# 它的失敗語意屬另一條路徑（缺口回補，不在本檔範圍）
+# **台股 tick 線不在此列**：它的壞檔與「日 K 未更新」兩種失敗由
+# `tests/test_stock_tick_loader.py` 以替身 DAO 涵蓋（不需要 TimescaleDB）
 def test_futures_price_loader_raises_on_broken_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

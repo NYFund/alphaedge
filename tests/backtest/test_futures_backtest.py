@@ -1,5 +1,5 @@
 import datetime
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import pytest
@@ -7,6 +7,7 @@ import pytest
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.factory import build_backtester
+from core.backtest.models.event_counts import FUTURES_EVENT_KEYS
 from core.backtest.models.fill_model import TwFuturesFillModel
 from core.backtest.models.settlement_model import (
     BaseSettlementModel,
@@ -21,6 +22,7 @@ from core.models import (
     FuturesOrder,
     FuturesPosition,
     FuturesQuote,
+    PriceLimits,
     StockPosition,
 )
 from core.models.cost_config import FuturesCostConfig
@@ -226,6 +228,20 @@ def test_factory_dispatches_to_the_futures_model_set(make_backtester) -> None:
     assert backtester.reporter_cls is FuturesBacktestReporter
 
 
+def test_factory_builds_the_futures_event_counter(make_backtester) -> None:
+    """
+    期貨的事件計數器只含期貨會發生的 key，且引擎、FillModel、結算模型共用同一個 dict
+
+    用台股清單的話，期貨事件報表會多出二十個永遠是 0 的信用交易列，
+    而換月轉倉的 `rolled_contract` 反而不在報表裡。
+    """
+
+    backtester: Backtester = make_backtester(ScriptedFuturesStrategy())
+
+    assert list(backtester.event_counts) == list(FUTURES_EVENT_KEYS)
+    assert backtester.fill_model.event_counts is backtester.event_counts
+
+
 def test_futures_never_uses_adjusted_price(make_backtester) -> None:
     """期貨沒有除權息還原，訊號一律用原始價"""
 
@@ -253,7 +269,7 @@ def test_engine_does_not_reject_futures_orders_by_holdings_cap(
     backtester: Backtester = make_backtester(ScriptedFuturesStrategy())
 
     assert backtester.max_holdings is None
-    assert backtester.check_max_holdings(make_order()) is True
+    assert backtester.simulator.check_max_holdings(make_order()) is True
 
 
 # === 契約乘數（股票期貨） ===
@@ -384,14 +400,44 @@ def test_index_futures_still_use_the_constant_table(make_order) -> None:
 
 
 # === InstrumentSpec ===
-def test_to_units_returns_lots_not_contract_units() -> None:
+@pytest.mark.parametrize(("product", "expected"), [("TX", 200), ("MTX", 50)])
+def test_unit_size_is_the_contract_multiplier(product: str, expected: int) -> None:
     """
-    `to_units()` 回傳口數，**不乘契約乘數**
+    期貨一口的計價單位是契約乘數，逐商品不同
 
-    乘數逐契約不同（TX 200、MTX 50），而本方法拿不到商品；乘數一律取自部位自身。
+    曾經只收數量、拿不到商品，只能原樣回傳口數，實盤的委託金額因此少乘了乘數。
     """
 
-    assert TwFuturesSpec().to_units(3) == 3
+    assert (
+        TwFuturesSpec().get_unit_size(product, datetime.date(2026, 10, 20)) == expected
+    )
+
+
+def test_unit_size_uses_the_injected_resolver() -> None:
+    """
+    注入解析器時以它為準（股期的契約單位不在常數表、且隨除權息調整）
+
+    與部位管理層同一個解析器，兩邊算出的乘數才不會分岔。
+    """
+
+    calls: List[Tuple[str, datetime.date]] = []
+
+    def resolver(product: str, date: datetime.date) -> int:
+        calls.append((product, date))
+        return 2000
+
+    spec: TwFuturesSpec = TwFuturesSpec(multiplier_resolver=resolver)
+    when: datetime.datetime = datetime.datetime(2026, 10, 20, 13, 30)
+
+    assert spec.get_unit_size("CDF", when) == 2000
+    assert calls == [("CDF", datetime.date(2026, 10, 20))]
+
+
+def test_unit_size_without_a_product_is_an_error() -> None:
+    """沒有商品代碼查不到乘數：中斷，不猜一個值"""
+
+    with pytest.raises(KeyError):
+        TwFuturesSpec().get_unit_size(None, datetime.date(2026, 10, 20))
 
 
 def test_round_to_tick_respects_direction() -> None:
@@ -448,9 +494,9 @@ def test_unregistered_product_falls_back_to_the_default() -> None:
 
 
 def test_futures_have_no_price_limits() -> None:
-    """期貨沒有固定漲跌停；`(None, None)` 的語意是「本市場無此制度」"""
+    """期貨沒有固定漲跌停；兩側皆 None 的語意是「本市場無此制度」"""
 
-    assert TwFuturesSpec().get_price_limits(18000.0) == (None, None)
+    assert TwFuturesSpec().get_price_limits(18000.0) == PriceLimits.none()
 
 
 # === FillModel ===
@@ -475,7 +521,7 @@ def test_fill_does_not_apply_price_limits(make_quote, make_order) -> None:
     """
 
     fill_model: TwFuturesFillModel = TwFuturesFillModel()
-    fill_model.on_bar_close([make_quote(close=10000)])  # 前收 10000
+    fill_model.update_reference_prices([make_quote(close=10000)])  # 前收 10000
 
     # 較前收 +80%，但落在當根 bar 區間內
     quote: FuturesQuote = make_quote(close=18000, high=18000, low=18000)
@@ -621,7 +667,7 @@ def test_daily_settlement_moves_cash_on_the_same_day(
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
     balance_before: float = account.balance
-    backtester.settlement.on_bar_close(
+    backtester.settlement.settle_day(
         DAY_1,
         [make_quote(close=18120.0, settlement_price=18100.0)],
         account,
@@ -670,7 +716,7 @@ def test_expired_contract_is_closed_at_the_last_settlement_price(
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
     # 到期前的最後一根 bar
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_1,
         [make_quote(close=18100.0, settlement_price=18100.0)],
         account,
@@ -678,15 +724,15 @@ def test_expired_contract_is_closed_at_the_last_settlement_price(
     )
 
     # 之後連續無報價：門檻之前不出場
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS - 1):
-        settlement.on_bar_close(DAY_2, [], account, backtester.event_counts)
+    for _ in range(settlement.max_no_quote_days - 1):
+        settlement.settle_day(DAY_2, [], account, backtester.event_counts)
         assert account.get_positions()
 
-    settlement.on_bar_close(DAY_2, [], account, backtester.event_counts)
+    settlement.settle_day(DAY_2, [], account, backtester.event_counts)
 
     assert account.get_positions() == []
     assert account.margin_used == 0.0
-    assert backtester.event_counts["forced_cover_no_quote"] == 1
+    assert backtester.event_counts["forced_exit_no_quote"] == 1  # 多單出場
     # 損益在到期前已逐日結清，出場那一段不再產生價差
     assert account.trade_records[0].realized_pnl == 20000.0
 
@@ -701,10 +747,10 @@ def test_no_quote_counter_resets_when_quotes_come_back(
     settlement: TwFuturesSettlementModel = backtester.settlement
     backtester.position_manager.open_position(make_order(price=18000.0, volume=1))
 
-    for _ in range(settlement.MAX_NO_QUOTE_DAYS - 1):
-        settlement.on_bar_close(DAY_1, [], account, backtester.event_counts)
+    for _ in range(settlement.max_no_quote_days - 1):
+        settlement.settle_day(DAY_1, [], account, backtester.event_counts)
 
-    settlement.on_bar_close(
+    settlement.settle_day(
         DAY_2,
         [make_quote(close=18000.0, settlement_price=18000.0)],
         account,

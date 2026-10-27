@@ -22,7 +22,7 @@ from core.utils import TimeUtils
 
 
 class StockPriceCleaner(BaseDataCleaner):
-    """Stock Price Cleaner (Transform)"""
+    """台股收盤行情 cleaner（Transform）"""
 
     # 上櫃從此日起 csv 欄位格式不同（109/4/30）
     TPEX_TABLE_CHANGE_DATE: datetime.date = datetime.date(2020, 4, 30)
@@ -46,14 +46,13 @@ class StockPriceCleaner(BaseDataCleaner):
 
         self.tpex_table_change_date: datetime.date = self.TPEX_TABLE_CHANGE_DATE
 
-        # Downloads directory Path
+        # 清洗後 CSV 的輸出目錄
         self.price_dir: Path = PRICE_DOWNLOADS_PATH
         self.setup()
 
     def setup(self) -> None:
-        """Set Up the Config of Cleaner"""
+        """初始化 cleaner 的設定"""
 
-        # Generate downloads directory
         self.price_dir.mkdir(parents=True, exist_ok=True)
 
     @staticmethod

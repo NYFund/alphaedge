@@ -17,7 +17,7 @@ from core.pipeline.utils.data_utils import DataUtils
 from core.pipeline.utils.exceptions import PipelineError
 
 """
-Monthly Revenue Report Loader（上市＋上櫃月營收）
+月營收 loader（上市＋上櫃）
 
 欄位由 cleaner 產出的 `*_cleaned_columns.json` 決定，故建表要等清洗完才做得到。
 去重交給資料庫的主鍵約束（`INSERT OR IGNORE`），同一份 CSV 重跑是冪等操作。
@@ -25,7 +25,7 @@ Monthly Revenue Report Loader（上市＋上櫃月營收）
 
 
 class MonthlyRevenueReportLoader(BaseDataLoader):
-    """TWSE & TPEX Monthly Revenue Report Loader"""
+    """上市＋上櫃月營收 loader"""
 
     def __init__(self, dao: Optional[MonthlyRevenueDAO] = None) -> None:
         """
@@ -38,10 +38,10 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
                 未指定時 loader 自行建立，入庫完成即關閉
         """
 
-        # Downloads directory Path
+        # 待入庫 CSV 的來源目錄
         self.mrr_dir: Path = MONTHLY_REVENUE_REPORT_DOWNLOADS_PATH
 
-        # MMR Cleaned Columns Path
+        # 清洗後欄名的 JSON 路徑（建表依它決定欄位）
         self.monthly_revenue_report_cleaned_cols_path: Path = (
             MONTHLY_REVENUE_REPORT_META_DIR_PATH
             / f"{DataType.MRR.lower()}_cleaned_columns.json"
@@ -50,15 +50,14 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
         super().__init__(dao)
 
     def setup(self) -> None:
-        """Set Up the Config of Loader"""
+        """初始化 loader 的設定"""
 
-        # Connect Database
+        # 連線資料庫
         self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
-        # Create the downloads directory
         self.mrr_dir.mkdir(parents=True, exist_ok=True)
 
     DAO_CLASS: Type[Any] = MonthlyRevenueDAO
@@ -76,7 +75,7 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
         )
 
     def create_db(self) -> None:
-        """Create New Database"""
+        """建立資料表（欄位依清洗後欄名）"""
 
         self.dao.create_table(self.load_cleaned_columns())
 
@@ -105,7 +104,7 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
         if self.dao is None:
             self.connect()
 
-        # Ensure Database Table Exists
+        # 確保資料表存在
         self.create_missing_tables()
 
         file_cnt: int = 0
@@ -113,7 +112,7 @@ class MonthlyRevenueReportLoader(BaseDataLoader):
 
         failed_files: List[str] = []
         for file_path in self.mrr_dir.iterdir():
-            # Skip non-CSV files
+            # 只處理 CSV 檔
             if file_path.suffix != ".csv":
                 continue
             try:

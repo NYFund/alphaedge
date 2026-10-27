@@ -9,7 +9,7 @@ from core.models.base.quote import (
 )
 from core.utils import Scale
 
-"""Quote structures: tick-level and daily-level pricing in backtesting"""
+"""台股報價結構：逐筆（tick）與日 K 報價，以及盤前報價"""
 
 
 class TickQuote:
@@ -28,8 +28,8 @@ class TickQuote:
         tick_type: int = 0,
     ) -> None:
         # Basic Info
-        self.stock_id: str = stock_id  # Stock ID
-        self.time: pd.Timestamp = time  # Quote timestamp
+        self.stock_id: str = stock_id  # 股票代號
+        self.time: pd.Timestamp = time  # 成交時間
 
         # Current Price & Volume
         self.close: float = close  # 成交價
@@ -76,7 +76,7 @@ class StockQuote(BaseQuote):
         )
 
         # Tick Data
-        self.tick_quote: TickQuote = tick  # tick quote data
+        self.tick_quote: TickQuote = tick  # 對應的單筆 tick 報價（日 K 報價為 None）
 
     @property
     def stock_id(self) -> str:

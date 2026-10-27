@@ -1,6 +1,6 @@
 import datetime
 from enum import Enum
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional, Sequence
 
 from loguru import logger
 
@@ -88,6 +88,7 @@ class TradingModeState:
         run_id: str = "",
         now_provider: Callable[[], datetime.datetime] = now_live,
         resume_trading: bool = False,
+        resume_strategies: Optional[Sequence[str]] = None,
     ) -> None:
         """
         - Description:
@@ -101,12 +102,18 @@ class TradingModeState:
                 取得目前時間
             - resume_trading: bool
                 人工恢復；由 `load()` 在讀回之後套用
+            - resume_strategies: Optional[Sequence[str]]
+                只恢復這幾支策略、帳戶層不動；None 時恢復帳戶層與所有已記錄的策略。
+                只在 `resume_trading` 為 True 時有意義
         """
 
         self.dao: Optional[LiveTradeDAO] = dao
         self.run_id: str = run_id
         self._now: Callable[[], datetime.datetime] = now_provider
         self.resume_trading: bool = resume_trading
+        self.resume_strategies: Optional[List[str]] = (
+            list(resume_strategies) if resume_strategies is not None else None
+        )
 
         self.account_mode: TradingMode = TradingMode.NORMAL
         self.strategy_modes: Dict[str, TradingMode] = {}
@@ -148,10 +155,17 @@ class TradingModeState:
         # 兩者拆開的話，每個呼叫端都得記得「先 load 再 resume」，而漏掉的那一個
         # 不會報錯——`AfterCloseRunner` 只呼叫 `load()`，拆開就會讓
         # `--phase after_close --resume-trading` 靜默無效
+        #
+        # **指名時帳戶層不動**：帳戶層的降級（對帳不一致、帳戶虧損上限）影響所有策略，
+        # 只想放行某一支時不該順手解除它；不指名維持全部恢復，既有的恢復流程照樣可用
         if self.resume_trading:
-            self.resume()
-            for name in list(self.strategy_modes):
-                self.resume(name)
+            if self.resume_strategies is None:
+                self.resume()
+                for name in list(self.strategy_modes):
+                    self.resume(name)
+            else:
+                for name in self.resume_strategies:
+                    self.resume(name)
 
     # === 查詢 ===
     def effective_mode(self, strategy_name: Optional[str] = None) -> TradingMode:

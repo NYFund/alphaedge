@@ -1,21 +1,24 @@
 import datetime
 import sqlite3
 from types import SimpleNamespace
-from typing import Any, List
+from typing import Any, List, Optional
 
 import pandas as pd
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.live.factory import build_live_trader
 from core.live.strategy_guard import inspect_strategy
 from core.live.trader import LiveTrader
 from core.market.tw.market_calendar import MarketCalendar
-from core.strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
-from core.strategies.stock.momentum_strategy_1 import MomentumStrategy1
+from core.models.stock.trading_list import DayTradeListSnapshot
+from core.utils import Action, PositionType
+from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 
 from .conftest import FakeBroker
 from .test_live_factory_and_entry import LiveStockStrategy
@@ -27,7 +30,7 @@ from .test_live_factory_and_entry import LiveStockStrategy
 
 1. 實盤只抓 `context.symbols` 的報價，而全市場掃描型的策略沒有宣告標的池——
    拿不到任何報價，永遠不會有訊號。
-2. `MomentumStrategy1` 的「前一交易日」查的是依回測區間預建的清單；實盤日期超出清單時，
+2. `VolumeBreakoutMomentumStrategy` 的「前一交易日」查的是依回測區間預建的清單；實盤日期超出清單時，
    平移會落到清單最後一天（一年多前），拿那天的收盤當「昨收」算漲幅。
 """
 
@@ -39,12 +42,15 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 # === 策略本身 ===
-@pytest.mark.parametrize("strategy_class", [MomentumStrategy1, MomentumFuturesStrategy])
+@pytest.mark.parametrize(
+    "strategy_class", [VolumeBreakoutMomentumStrategy, MomentumFuturesStrategy]
+)
 def test_rehearsal_strategies_pass_the_live_readiness_check(
     strategy_class: Any,
 ) -> None:
@@ -58,7 +64,7 @@ def test_previous_trading_date_beyond_the_prebuilt_list_asks_the_database(
 ) -> None:
     """清單依回測區間預建；實盤日期超出清單時要回頭查資料庫，不可平移到清單最後一天"""
 
-    strategy: MomentumStrategy1 = MomentumStrategy1()
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
     strategy.trading_days = [datetime.date(2025, 5, 29), datetime.date(2025, 5, 30)]
     asked: List[datetime.date] = []
 
@@ -89,11 +95,116 @@ def test_stock_feed_fills_the_previous_day_universe() -> None:
     feed.price = SimpleNamespace(
         get=lambda date: pd.DataFrame({"stock_id": ["2330", "2317", "2330"]})
     )
-    strategy: Any = SimpleNamespace(symbols=[])
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=lambda latest: None)
 
     feed.fill_default_universe(strategy)
 
     assert strategy.symbols == ["2317", "2330"]
+
+
+def test_stock_feed_default_universe_keeps_only_common_stocks() -> None:
+    """
+    預設標的池與回測共用同一個普通股過濾：ETF、槓桿 ETF、權證不進池
+
+    2026-10-16 回測池 1,972 檔、實盤 2,391 檔；回放 2026-07～10 的日 K，
+    00715L、00631L 這類非普通股過了漲幅門檻 44 次——實盤會買回測從不會買的東西。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    feed.get_latest_data_date = lambda: datetime.date(2026, 10, 16)  # type: ignore
+    feed.price = SimpleNamespace(
+        get=lambda date: pd.DataFrame(
+            {"stock_id": ["0050", "00631L", "00715L", "2330", "031234", "9962"]}
+        )
+    )
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=lambda latest: None)
+
+    feed.fill_default_universe(strategy)
+
+    assert strategy.symbols == ["2330", "9962"]
+
+
+def test_stock_feed_uses_the_strategy_screen_with_the_latest_data_date() -> None:
+    """
+    策略有盤前篩選時用它的結果，並把資料最新日傳進去
+
+    盤中策略受逐筆訂閱上限所限，不能沿用全市場；日期由資料源給而不是策略自己取今天
+    （美東主機的台北早上，`date.today()` 是前一天）。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    feed.get_latest_data_date = lambda: datetime.date(2026, 10, 8)  # type: ignore
+    feed.price = SimpleNamespace(get=lambda date: pd.DataFrame({"stock_id": ["2330"]}))
+    received: List[datetime.date] = []
+
+    def screen(latest: datetime.date) -> List[str]:
+        received.append(latest)
+        return ["2305", "2340"]
+
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=screen)
+
+    feed.fill_default_universe(strategy)
+
+    assert strategy.symbols == ["2305", "2340"]
+    assert received == [datetime.date(2026, 10, 8)]
+
+
+def test_stock_feed_does_not_swallow_a_broken_strategy_screen() -> None:
+    """篩選寫錯要在啟動時當場失敗；吞成警告的話，盤中整天沒有標的而沒人發現"""
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    feed.get_latest_data_date = lambda: datetime.date(2026, 10, 8)  # type: ignore
+    feed.price = SimpleNamespace(get=lambda date: pd.DataFrame({"stock_id": ["2330"]}))
+
+    def broken(latest: datetime.date) -> List[str]:
+        raise KeyError("成交量")
+
+    strategy: Any = SimpleNamespace(symbols=[], get_live_symbols=broken)
+
+    with pytest.raises(KeyError):
+        feed.fill_default_universe(strategy)
+
+
+class FakeDayTradeListAPI:
+    """假的當沖名單 API：只有 10/7 入庫；記錄查詢次數"""
+
+    def __init__(self) -> None:
+        self.calls: int = 0
+
+    def get_snapshot(self, date: datetime.date) -> Optional[DayTradeListSnapshot]:
+        self.calls += 1
+        if date == datetime.date(2026, 10, 7):
+            return DayTradeListSnapshot(day_tradable=frozenset({"2330"}))
+        return None
+
+    def get_covered_dates(
+        self, start: datetime.date, end: datetime.date
+    ) -> List[datetime.date]:
+        return [datetime.date(2026, 10, 6), datetime.date(2026, 10, 7)]
+
+
+def test_live_day_trade_list_falls_back_to_the_latest_list() -> None:
+    """
+    當日名單收盤後才入庫，盤中沿用最近一份；同一天只查一次
+
+    回 None 的話，依名單決定進場的策略會整天不進場而沒有任何錯誤。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(broker=SimpleNamespace())
+    api: FakeDayTradeListAPI = FakeDayTradeListAPI()
+    feed.day_trade_list = api  # type: ignore
+
+    first: Optional[DayTradeListSnapshot] = feed.get_day_trade_list(
+        datetime.date(2026, 10, 8)
+    )
+    calls_after_first: int = api.calls
+    second: Optional[DayTradeListSnapshot] = feed.get_day_trade_list(
+        datetime.date(2026, 10, 8)
+    )
+
+    assert first is not None and first.day_tradable == frozenset({"2330"})
+    assert second is first
+    assert api.calls == calls_after_first
 
 
 def test_stock_feed_keeps_a_declared_universe() -> None:
@@ -169,3 +280,28 @@ def test_context_reads_the_universe_after_setup() -> None:
     )
 
     assert trader.contexts[0].symbols == ["2330", "2317"]
+
+
+def test_parity_checker_gets_the_order_phase_lookup() -> None:
+    """
+    組裝層要把「回測委託該在哪個段落送出」交給 parity
+
+    沒接上的話，段落中止的日子回測多出的單全都落在未解釋（2026-10-14 股票尾盤段就是這樣）。
+    """
+
+    dao: LiveTradeDAO = LiveTradeDAO(conn=sqlite3.connect(":memory:"))
+    dao.ensure_tables()
+    # 開平倉都宣告在尾盤段（與演練的股票策略相同）、自帶標的池，不必讀價格表
+    strategy: LiveStockStrategy = LiveStockStrategy()
+    trader: LiveTrader = build_live_trader(
+        [strategy],
+        broker=FakeBroker(),
+        dao=dao,
+        run_id="20260922140000",
+        now_provider=lambda: datetime.datetime(2026, 9, 22, 14, 0),
+    )
+
+    checker: Any = trader.after_close.parity_checker
+    assert checker is not None and checker.order_phases is not None
+    order: Any = SimpleNamespace(action=Action.BUY, position_type=PositionType.LONG)
+    assert checker.order_phases(type(strategy).__name__, order) == {"close"}

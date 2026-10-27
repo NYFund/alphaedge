@@ -51,7 +51,7 @@ def make_fill_model(
         check_short_sale_list=check_short_sale_list,
         check_day_trade_list=check_day_trade_list,
     )
-    model.prev_close[SYMBOL] = REFERENCE
+    model.reference_prices[SYMBOL] = REFERENCE
     model.apply_trading_lists(short_sale_list, day_trade_list)
     return model
 
@@ -218,3 +218,25 @@ def test_enabled_check_without_a_list_raises() -> None:
 
     with pytest.raises(RuntimeError, match="沒有名單"):
         fill(model, short_order(ShortMethod.MARGIN))
+
+
+# === 逐筆成交 ===
+def test_tick_short_checks_below_reference_at_fill_price() -> None:
+    """
+    逐筆的市價放空以委買價成交：決策價在平盤上（101）、成交價在平盤下（99.5）時，
+    禁止平盤下的標的要拒單——平盤下的限制看的是實際成交價，不是策略的決策價
+    """
+
+    counts: Dict[str, int] = new_event_counts()
+    snapshot = ShortSaleListSnapshot(
+        listed=frozenset({SYMBOL}), below_reference_banned=frozenset({SYMBOL})
+    )
+    model = make_fill_model(counts, snapshot)
+    quote = build_stock_quote(stock_id=SYMBOL, date=DATE, cur_price=99.5)
+
+    filled: Optional[StockOrder] = model.fill_tick(
+        short_order(ShortMethod.MARGIN, price=101.0), 99.5, quote, auction=False
+    )
+
+    assert filled is None
+    assert counts["rejected_below_reference"] == 1

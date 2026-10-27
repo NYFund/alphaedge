@@ -3,7 +3,7 @@ from typing import List, Optional, Tuple
 
 from loguru import logger
 
-from core.models import BaseAccount, BaseQuote
+from core.models import BaseAccount, BaseQuote, FuturesAccount
 from core.utils import Units
 
 """
@@ -42,7 +42,7 @@ class BasePositionSizer(ABC):
             - account: BaseAccount
                 虛擬帳戶，提供餘額與現有持倉檔數
             - candidates: List[Tuple[BaseQuote, float]]
-                (報價, 該策略選定的參考價)
+                `(報價, 該策略選定的參考價)`
             - max_holdings: Optional[int]
                 最大持倉檔數；`None` 表示不限制。
 
@@ -53,7 +53,7 @@ class BasePositionSizer(ABC):
                 對方擋得住的情況
         - Return:
             - List[Tuple[BaseQuote, float, int]]
-                (報價, 參考價, 張數)；張數不足 1 張者不回傳
+                `(報價, 參考價, 張數)`；張數不足 1 張者不回傳
         """
 
         pass
@@ -72,7 +72,7 @@ class EqualWeightSizer(BasePositionSizer):
     ```
 
     **`int()` 的無條件捨去與「至少 1 張」的門檻不可改動**——它們直接決定
-    LONG 回歸 baseline（MomentumStrategy1 2024 全年，1,861 筆）的逐筆結果。
+    LONG 回歸 baseline（VolumeBreakoutMomentumStrategy 2024 全年，1,861 筆）的逐筆結果。
     """
 
     def size(
@@ -121,5 +121,66 @@ class EqualWeightSizer(BasePositionSizer):
                     f"不足一張（參考價 {ref_price} × {Units.LOT} ＝ "
                     f"{ref_price * Units.LOT:,.0f}），略過"
                 )
+
+        return sized
+
+
+class MarginSizer(BasePositionSizer):
+    """
+    保證金約束的口數：可動用餘額 × `max_capital_usage` ÷ 每口需要的資金，再與剩餘口數上限取小值
+
+    ```
+    剩餘口數 = max_lots − 帳上已開口數（多空各算、不相抵）
+    預算     = account.balance × max_capital_usage
+    口數     = min(int(預算 / 每口需要的資金), 剩餘口數)   # 無條件捨去
+    每下一單，剩餘口數 −= 口數；歸零即停止（預算不逐單扣減，與原本的演算法相同）
+    ```
+
+    候選的第二個元素是**每口需要的資金**（原始保證金 ＋ 開倉手續費與稅），由部位建構層
+    查保證金模型算好傳入——與 `EqualWeightSizer` 的參考價同一個位置，sizer 本身不查表。
+    `max_holdings` 不用：期貨限制的是總口數，不是持倉檔數。
+
+    **拿契約價值去除餘額會嚴重低估**（TX 一口契約價值 900 萬、保證金只有 70 萬），
+    那正是期貨不能沿用等權切分的理由。
+    """
+
+    def __init__(self, max_lots: int = 0, max_capital_usage: float = 0.5) -> None:
+        self.max_lots: int = max_lots  # 總口數上限（0 表示不開倉）
+        self.max_capital_usage: float = max_capital_usage  # 可動用餘額的使用上限
+
+    def size(
+        self,
+        account: BaseAccount,
+        candidates: List[Tuple[BaseQuote, float]],
+        max_holdings: Optional[int],
+    ) -> List[Tuple[BaseQuote, float, int]]:
+        """依剩餘口數與每口需要的資金算口數；`max_holdings` 對期貨沒有意義，忽略"""
+
+        open_lots: int = (
+            sum(abs(lots) for lots in account.get_open_lots().values())
+            if isinstance(account, FuturesAccount)
+            else 0
+        )
+        remaining_lots: int = self.max_lots - open_lots
+        budget: float = account.balance * self.max_capital_usage
+
+        sized: List[Tuple[BaseQuote, float, int]] = []
+        for quote, requirement in candidates:
+            if remaining_lots <= 0:
+                break
+            # 每口需要的資金無效時跳過；少了這道檢查會直接 ZeroDivisionError 中斷整場回測
+            if requirement <= 0:
+                continue
+
+            lots: int = min(int(budget // requirement), remaining_lots)
+            if lots <= 0:
+                logger.info(
+                    f"[Sizing] {quote.symbol} 預算 {budget:,.0f} 不足一口"
+                    f"（每口需要 {requirement:,.0f}），略過"
+                )
+                continue
+
+            sized.append((quote, requirement, lots))
+            remaining_lots -= lots
 
         return sized

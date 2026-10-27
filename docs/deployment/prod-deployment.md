@@ -2,7 +2,7 @@
 
 本專案以「分角色容器化」部署：
 
-- 根目錄的 `Dockerfile`：回測、資料更新與實盤共用的映像（內含 `core/`、`apps/`、`tasks/`、`strategies/`；預設入口為回測）
+- 根目錄的 `Dockerfile`：回測、資料更新與實盤共用的映像（內含 `core/`、`apps/`、`strategies/`；預設入口為回測）
 - `frontend/Dockerfile`：前端（Streamlit，相依列在 `frontend/requirements.txt`）
 
 容器映像**不含資料庫**，資料一律由主機掛入。
@@ -20,7 +20,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 
 | 項目 | 做法 | 為什麼 |
 |------|------|--------|
-| core 的 Python 相依 | 以 uv 照 `uv.lock` 安裝：先 `uv sync --frozen --no-dev --no-install-project` 裝第三方套件，COPY 原始碼後再 `uv sync --frozen --no-dev` 裝本專案；環境放在 `/opt/venv` | 與本機、CI 同一份 lock；只改原始碼時第一層仍吃快取；環境不放 `/app`，compose 掛載 `/app` 底下的目錄時不會蓋到它。`dev` 是預設會裝的 dependency group，不加 `--no-dev` 會把 ruff 等開發工具裝進正式映像。**映像裡仍有 pytest 與 pytest-timeout**：前者是 FinMind、後者是 kaleido 宣告的執行期相依，排除不掉 |
+| core 的 Python 相依 | 以 uv 照 `uv.lock` 安裝：先 `uv sync --frozen --no-dev --extra tick --no-install-project` 裝第三方套件，COPY 原始碼後再 `uv sync --frozen --no-dev --extra tick` 裝本專案；環境放在 `/opt/venv` | 與本機、CI 同一份 lock；只改原始碼時第一層仍吃快取；環境不放 `/app`，compose 掛載 `/app` 底下的目錄時不會蓋到它。`dev` 是預設會裝的 dependency group，不加 `--no-dev` 會把 ruff 等開發工具裝進正式映像。**映像裡仍有 pytest 與 pytest-timeout**：前者是 FinMind、後者是 kaleido 宣告的執行期相依，排除不掉。`--extra tick`（psycopg、ConnectorX）是因為 compose 讓 `core` 連 TimescaleDB 讀寫台股 tick；兩行都要帶，uv sync 是 exact sync，後一行沒帶會把前一行裝的拔掉 |
 | 時區 `TZ=Asia/Taipei` | 寫在根目錄 `Dockerfile` 的 `ENV` | 實盤一律用 aware datetime，但 ETL 與部分判斷（例如期貨籌碼的「今天」）仍用 `date.today()`：UTC 容器在台北 08:00 前會差一天，log 時間戳也偏八小時 |
 | editable 安裝 | 必須是 `-e`，不可一般安裝 | `core/config/paths.py` 以 `__file__` 推算專案根目錄，一般安裝會把程式複製進 site-packages，`results/`、`logs/` 就不會落在 `/app` 底下的掛載點 |
 | core 內含 `chromium` | apt 安裝並設 `BROWSER_PATH=/usr/bin/chromium` | 回測報表存 PNG 走 plotly → kaleido 1.x，它不內建瀏覽器，缺了會在報表最後一步失敗（CSV 已寫出、圖全沒有）。`plotly_get_chrome` 下載的 Chrome for Testing 沒有 linux arm64 版本，故用 Debian 套件 |
@@ -41,7 +41,7 @@ docker build -f frontend/Dockerfile -t alphaedge-frontend .
 
 - `.env`（可由 `.env.example` 複製）
 - `data/db/`（`tw_stock.db`、`tw_futures.db`）
-- `data/downloads/`（只有要在容器內跑 `tasks.update_db` 時才需要）
+- `data/downloads/`（只有要在容器內跑 `apps.update_db` 時才需要）
 - `results/`
 
 ## 3) 執行 core 容器（回測）
@@ -53,12 +53,14 @@ docker run --rm \
   -v "$(pwd)/results:/app/results" \
   -v "$(pwd)/logs:/app/logs" \
   --env-file .env \
-  alphaedge-core --strategy MomentumStrategy1
+  alphaedge-core --strategy VolumeBreakoutMomentumStrategy
 ```
 
 映像的 `ENTRYPOINT` 是 `python -m apps.backtest`（`CMD` 預設 `--help`），`docker run` 映像名稱之後的參數直接交給回測入口。
 
 只跑回測時 `data/` 以唯讀掛載：主機上的 ETL 可能正在寫同一個資料庫檔。
+`.env` 的 `TICK_DATABASE_URL` 指向 `localhost`，在容器裡連不到主機的 TimescaleDB；要跑 TICK 回測或 `--target tick` 時，
+以 `-e TICK_DATABASE_URL=...` 改成容器連得到的位址，或直接用第 5 節的 compose。
 要在容器內更新資料時才改為可寫掛載，並以 `--entrypoint` 換掉回測入口：
 
 ```bash
@@ -67,7 +69,7 @@ docker run --rm \
   -v "$(pwd)/logs:/app/logs" \
   --env-file .env \
   --entrypoint python \
-  alphaedge-core -m tasks.update_db --target price
+  alphaedge-core -m apps.update_db --target price
 ```
 
 ## 4) 執行前端容器（選用）
@@ -85,7 +87,8 @@ docker run --rm -d \
 
 ## 5) Docker Compose
 
-根目錄的 `docker-compose.yml` 一次起 `core` 與 `frontend`（實盤的 `live` service 掛在 `live` profile 下，`docker compose up` 不會帶起它，見 [實盤部署與排程](live-deployment.md)）：
+根目錄的 `docker-compose.yml` 一次起 `core`、`postgres` 與 `frontend`（實盤的 `live` service 掛在 `live` profile 下，`docker compose up` 不會帶起它，見 [實盤部署與排程](live-deployment.md)）。
+專案名稱寫死為 `alphaedge`：不寫的話 compose 以目錄名當專案名，在 git worktree 裡啟動會分出另一份具名 volume（另一份 TimescaleDB 資料）。
 
 ```bash
 docker compose up --build
@@ -94,14 +97,15 @@ STRATEGY=MomentumFuturesStrategy docker compose up core   # 換策略
 
 | 服務 | 掛載 | 說明 |
 |------|------|------|
-| `core` | `./data` → `/app/data`（唯讀）、`./logs` → `/app/logs`、具名 volume `alphaedge_results` → `/app/results` | 跑一場回測就結束；策略由 `STRATEGY` 決定（compose 解析設定檔時替換，可寫在命令列前綴或 `.env`，不設時為 `MomentumStrategy1`） |
-| `frontend` | 具名 volume `alphaedge_results` → `/results` | 開 `http://localhost:8501` |
+| `core` | `./data` → `/app/data`（唯讀）、`./logs` → `/app/logs`、具名 volume `alphaedge_results` → `/app/results` | 跑一場回測就結束；策略由 `STRATEGY` 決定（compose 解析設定檔時替換，可寫在命令列前綴或 `.env`，不設時為 `VolumeBreakoutMomentumStrategy`）。相依 `postgres` 健康後才啟動，`TICK_DATABASE_URL` 在容器內覆寫成指向 service `postgres` |
+| `postgres` | 具名 volume `alphaedge_pgdata` → `/var/lib/postgresql/data`；主機 port 5432 | 台股 tick 的 TimescaleDB（映像鎖定版本，不可換成 `-oss` tag：那一版沒有壓縮）。常駐（`restart: unless-stopped`），帳密與庫名取 `.env` 的 `POSTGRES_*`，預設皆為 `alphaedge`。實盤不讀 tick，`live` 不相依它 |
+| `frontend` | 具名 volume `alphaedge_results` → `/results` | 開 `http://localhost:8501`；有 healthcheck（`/_stcore/health`） |
 
 回測結果放在**具名 volume** 而非主機的 `results/`，要在主機上看 CSV 請改用第 3、4 節的 `docker run`。
 
 ## 6) 建議的正式環境切分
 
-- **資料更新節點**：定時執行 `python -m tasks.update_db ...`
+- **資料更新節點**：定時執行 `python -m apps.update_db ...`
 - **回測節點**：執行 `python -m apps.backtest --strategy ...`，唯讀掛載資料庫
 - **展示節點**：掛載唯讀的 `results` 給前端
 

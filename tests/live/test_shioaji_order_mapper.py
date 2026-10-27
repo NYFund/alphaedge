@@ -44,11 +44,12 @@ def make_stock_order(
     volume: int = 2,
     price_type: Optional[StockPriceType] = StockPriceType.LMT,
     order_lot: StockOrderLot = StockOrderLot.Common,
+    stock_id: str = "2330",
 ) -> StockOrder:
-    """建立測試用股票委託（預設是 1000 元、2 張的整股限價買單）"""
+    """建立測試用股票委託（預設是 2330、1000 元、2 張的整股限價買單）"""
 
     return StockOrder(
-        stock_id="2330",
+        stock_id=stock_id,
         action=action,
         position_type=position_type,
         short_method=short_method,
@@ -227,6 +228,40 @@ def test_price_alignment_is_conservative(
     """
 
     assert ShioajiOrderMapper.align_price(price, action) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "symbol, action, price, expected",
+    [
+        # ETF 50 元以上檔位 0.05：0050 掛漲停 119.9 已在檔位上，不可被普通股表對成 119.5
+        ("0050", Action.BUY, 119.9, 119.9),
+        # ETF 50 元以下檔位 0.01：00631L 44.58 不可被對成 44.55
+        ("00631L", Action.BUY, 44.58, 44.58),
+        ("00631L", Action.SELL, 44.58, 44.58),
+        # 普通股照舊
+        ("2330", Action.BUY, 123.4, 123.0),
+    ],
+)
+def test_price_alignment_uses_the_etf_tick_table_for_etfs(
+    symbol: str, action: Action, price: float, expected: float
+) -> None:
+    """帶代號才選得到 ETF 的檔位表；對錯表的委託價鎖漲跌停時排不到隊"""
+
+    assert ShioajiOrderMapper.align_price(price, action, symbol) == pytest.approx(
+        expected
+    )
+
+
+def test_aligned_price_of_an_etf_order_reaches_the_broker(
+    mapper: ShioajiOrderMapper,
+) -> None:
+    """轉成券商委託時帶著代號對齊：0050 的 119.9 原樣送出"""
+
+    converted: Any = mapper.to_shioaji_stock_order(
+        make_stock_order(stock_id="0050", action=Action.BUY, price=119.9)
+    )
+
+    assert converted.price == pytest.approx(119.9)
 
 
 def test_aligned_price_reaches_the_broker_order(mapper: ShioajiOrderMapper) -> None:

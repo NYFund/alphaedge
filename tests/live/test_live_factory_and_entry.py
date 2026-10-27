@@ -9,17 +9,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
-from core.live.datafeed.tw import futures_live_datafeed, stock_live_datafeed
 from core.live.factory import (
-    TW_FUTURES_SEGMENTS,
-    TW_STOCK_SEGMENTS,
     UnsupportedMarketError,
     _merge_schedules,
     build_live_trader,
     make_closing_limit_lookup,
 )
-from core.live.segment import SegmentSchedule, SegmentWindow
 from core.live.trader import LiveTrader, StrategyContext
+from core.market.segment import SegmentSchedule, SegmentWindow
+from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
+from core.models import PriceLimits
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
@@ -52,7 +51,7 @@ class LiveStockStrategy(BaseStrategy):
         self.instrument_type = InstrumentType.STOCK
         self.init_capital = 1_000_000.0
         self.live_ready = True
-        self.live_schedule = {
+        self.execution_schedule = {
             LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
             LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
         }
@@ -96,13 +95,16 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
     def connect_in_memory(db_path: Any, read_only: bool = False) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(stock_live_datafeed, "connect_sqlite", connect_in_memory)
-    monkeypatch.setattr(futures_live_datafeed, "connect_sqlite", connect_in_memory)
+    # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
+
+    monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
 
 
 def build(
     strategies: List[BaseStrategy], dao: LiveTradeDAO, **kwargs: Any
 ) -> LiveTrader:
+    """以替身券商組出實盤交易器"""
+
     return build_live_trader(
         strategies,
         broker=FakeBroker(),
@@ -231,8 +233,39 @@ def test_run_record_carries_the_loaded_strategies(dao: LiveTradeDAO) -> None:
 
     (raw,) = dao.conn.execute("SELECT strategy_params_json FROM live_run").fetchone()
     assert json.loads(raw) == {
-        "strategies": ["LiveStockStrategy", "AnotherLiveStockStrategy"]
+        "strategies": ["LiveStockStrategy", "AnotherLiveStockStrategy"],
+        "live_tags": {},
     }
+
+
+def test_run_record_carries_the_live_tags(dao: LiveTradeDAO) -> None:
+    """
+    有設定 `live_tag` 的策略，代號寫進啟動紀錄；沒設定的不列
+
+    `live_tag` 宣稱「只寫本地紀錄」，這裡就是它唯一落地的地方——
+    沒有讀取端的話，那句說明就是空話。
+    """
+
+    tagged: LiveStockStrategy = LiveStockStrategy()
+    tagged.live_tag = "動能A"
+
+    build([tagged, AnotherLiveStockStrategy()], dao)
+
+    (raw,) = dao.conn.execute("SELECT strategy_params_json FROM live_run").fetchone()
+    assert json.loads(raw)["live_tags"] == {"LiveStockStrategy": "動能A"}
+
+
+def test_run_record_carries_the_instrument_type(dao: LiveTradeDAO) -> None:
+    """
+    啟動紀錄寫下本次行程的商品類別
+
+    股票與期貨是兩個行程、段落名相同，存活監控靠這一欄分辨是哪一條線沒跑。
+    """
+
+    build([LiveStockStrategy()], dao)
+
+    (instrument,) = dao.conn.execute("SELECT instrument_type FROM live_run").fetchone()
+    assert instrument == "Stock"
 
 
 def test_run_record_carries_the_phase(dao: LiveTradeDAO) -> None:
@@ -279,7 +312,7 @@ def test_each_market_gets_its_own_execution_model(dao: LiveTradeDAO) -> None:
 
     assert isinstance(stock.execution_model, StockExecutionModel)
     assert isinstance(futures.execution_model, FuturesExecutionModel)
-    assert stock.execution_model.get_price_limits("2330") == (None, None)
+    assert stock.execution_model.get_price_limits("2330") == PriceLimits.none()
 
 
 def test_parity_backtest_uses_the_live_capital_and_holdings(
@@ -298,6 +331,8 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     captured: Dict[str, Any] = {}
 
     class StubBacktester:
+        """不跑真的回測、沒有委託的回測替身"""
+
         submitted_orders: List[Any] = []
 
         def run(self) -> None:
@@ -311,6 +346,8 @@ def test_parity_backtest_uses_the_live_capital_and_holdings(
     monkeypatch.setattr(live_factory, "build_backtester", fake_build)
 
     class Sized(LiveStockStrategy):
+        """實盤與回測資金、檔數設定不同的策略"""
+
         def __init__(self) -> None:
             super().__init__()
             self.init_capital = 1_000_000.0
@@ -339,10 +376,14 @@ def test_parity_backtest_starts_from_the_live_holdings(
     seeded: List[Any] = []
 
     class StubPositionManager:
+        """記下開倉種子部位的部位管理器替身"""
+
         def open_position(self, order: Any) -> None:
             seeded.append(order)
 
     class StubBacktester:
+        """開跑時檢查持倉已先種好的回測替身"""
+
         submitted_orders: List[Any] = []
         position_manager: StubPositionManager = StubPositionManager()
 
@@ -461,6 +502,26 @@ def test_mixing_markets_with_disjoint_windows_is_refused(dao: LiveTradeDAO) -> N
         build([LiveStockStrategy(), LiveFuturesStrategy()], dao)
 
 
+def test_config_error_leaves_no_unfinished_run(dao: LiveTradeDAO) -> None:
+    """
+    組裝階段的設定錯誤不可留下沒有結束時間的 `live_run`
+
+    曾經先寫 `live_run` 才合併時窗：混帶股票與期貨策略時以結束碼 2 退出，
+    那一列卻沒有 `ended_at`，下一次啟動把它標成 CRASHED、發 CRITICAL，
+    並觸發「以券商為準重建部位」——實際上根本沒連過券商。
+    """
+
+    with pytest.raises(ValueError, match="沒有交集"):
+        build([LiveStockStrategy(), LiveFuturesStrategy()], dao)
+
+    assert dao.conn.execute("SELECT COUNT(*) FROM live_run").fetchone()[0] == 0
+
+    # 接著跑一次合法的組裝：只有這一次的紀錄，沒有前一次留下的殘骸
+    build([LiveStockStrategy()], dao)
+
+    assert dao.conn.execute("SELECT COUNT(*) FROM live_run").fetchone()[0] == 1
+
+
 # === 回測不相依券商 SDK ===
 NO_SDK_PROBE: str = """
 import builtins
@@ -525,8 +586,26 @@ class FakePriceAPI:
 
     def get_close_map(self, date: datetime.date) -> Dict[str, Any]:
         if date == datetime.date(2026, 10, 7):
-            return {"2305": 58.9, "4157": 8.55, "9999": 10.0}
-        return {"2305": 64.7, "4157": 9.33, "9999": float("nan")}
+            return {"2305": 58.9, "4157": 8.55, "9999": 10.0, "2454": 953.0}
+        return {"2305": 64.7, "4157": 9.33, "9999": float("nan"), "2454": 1020.0}
+
+
+class FakeDividendAPI:
+    """假的除權息 API：10/8 只有 2454 除權息，開盤競價基準 928；記錄被開啟幾次"""
+
+    opened: int = 0
+
+    def __enter__(self) -> "FakeDividendAPI":
+        FakeDividendAPI.opened += 1
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        return None
+
+    def get_opening_reference_price_map(self, date: datetime.date) -> Dict[str, float]:
+        if date == datetime.date(2026, 10, 8):
+            return {"2454": 928.0}
+        return {}
 
 
 def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
@@ -538,7 +617,10 @@ def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
     """
 
     FakePriceAPI.opened = 0
-    lookup = make_closing_limit_lookup(api_factory=FakePriceAPI)
+    FakeDividendAPI.opened = 0
+    lookup = make_closing_limit_lookup(
+        api_factory=FakePriceAPI, dividend_api_factory=FakeDividendAPI
+    )
     day: datetime.date = datetime.date(2026, 10, 8)
 
     locked: Optional[Tuple[float, float]] = lookup("2305", "Buy", day)
@@ -549,4 +631,23 @@ def test_closing_limit_lookup_uses_the_previous_trading_day_close() -> None:
     assert lookup("4157", "Sell", day) == (9.33, 7.7)
     assert lookup("9999", "Buy", day) is None
     assert lookup("0000", "Buy", day) is None
-    assert FakePriceAPI.opened == 1
+    assert (FakePriceAPI.opened, FakeDividendAPI.opened) == (1, 1)
+
+
+def test_closing_limit_lookup_uses_the_ex_dividend_basis() -> None:
+    """
+    除權息日的漲跌停以公告的開盤競價基準算，與回測同一口徑
+
+    聯發科 2024-01-04 的公告值：開盤競價基準 928，漲停 1020、跌停 836；
+    前收 953 算出來的漲停是 1048——收在 1020 的鎖漲停單會被當成「沒鎖住」。
+    """
+
+    lookup = make_closing_limit_lookup(
+        api_factory=FakePriceAPI, dividend_api_factory=FakeDividendAPI
+    )
+    day: datetime.date = datetime.date(2026, 10, 8)
+
+    assert lookup("2454", "Buy", day) == (1020.0, 1020.0)
+    assert lookup("2454", "Sell", day) == (1020.0, 836.0)
+    # 非除權息日沒有基準可覆寫，照舊用前一交易日收盤
+    assert lookup("2305", "Buy", day) == (64.7, 64.7)

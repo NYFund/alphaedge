@@ -7,6 +7,7 @@ from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.factory import build_backtester
 from core.models import StockOrder
 from core.utils import Action, PositionType
+from tests.backtest.conftest import run_bar
 
 """引擎側 max_holdings 硬上限
 
@@ -58,7 +59,7 @@ def test_excess_open_orders_are_rejected(
         make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
         for stock_id in stock_ids
     ]
-    backtester.execute_open_signal(quotes)
+    backtester.simulator.execute_open_signal(quotes)
 
     # 上限 2 檔：第三張單被剔除
     assert backtester.account.get_position_count() == 2
@@ -78,7 +79,7 @@ def test_rejection_is_not_silent(make_strategy, make_backtester, make_quote) -> 
         make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
         for stock_id in ("2330", "2317")
     ]
-    backtester.execute_open_signal(quotes)
+    backtester.simulator.execute_open_signal(quotes)
 
     assert backtester.event_counts["rejected_max_holdings"] == 1
 
@@ -97,7 +98,7 @@ def test_within_limit_is_untouched(make_strategy, make_backtester, make_quote) -
         make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
         for stock_id in stock_ids
     ]
-    backtester.execute_open_signal(quotes)
+    backtester.simulator.execute_open_signal(quotes)
 
     assert backtester.account.get_position_count() == 2
     assert backtester.event_counts["rejected_max_holdings"] == 0
@@ -119,7 +120,7 @@ def test_none_max_holdings_means_unlimited(
         make_quote(stock_id=stock_id, date=DAY_1, cur_price=100.0)
         for stock_id in stock_ids
     ]
-    backtester.execute_open_signal(quotes)
+    backtester.simulator.execute_open_signal(quotes)
 
     assert backtester.account.get_position_count() == 3
     assert backtester.event_counts["rejected_max_holdings"] == 0
@@ -141,7 +142,7 @@ def test_adding_to_the_same_symbol_uses_one_slot(
     同一檔加碼兩次只佔一個名額
 
     `max_holdings` 的語意在 `BaseStrategy` 與各策略 docstring 都寫「檔數」，
-    舊實作回傳的卻是部位筆數：允許加碼的策略（例如 `MomentumStrategy1`）
+    舊實作回傳的卻是部位筆數：允許加碼的策略（例如 `VolumeBreakoutMomentumStrategy`）
     同一檔加碼兩次就佔掉兩個名額，實際持有檔數比設定少。
     """
 
@@ -151,7 +152,7 @@ def test_adding_to_the_same_symbol_uses_one_slot(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(DAY_1, [make_quote(stock_id="2330", date=DAY_1)])
+    run_bar(backtester, DAY_1, [make_quote(stock_id="2330", date=DAY_1)])
 
     assert backtester.account.get_position_count() == 1
     assert backtester.event_counts["rejected_max_holdings"] == 0
@@ -179,7 +180,8 @@ def test_adding_to_a_held_symbol_is_allowed_when_full(
     )
     backtester: Backtester = make_backtester(strategy)
 
-    backtester.execute_bar(
+    run_bar(
+        backtester,
         DAY_1,
         [
             make_quote(stock_id="2317", date=DAY_1),

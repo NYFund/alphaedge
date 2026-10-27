@@ -1,11 +1,13 @@
 import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
+from core.live.attribution.position_ledger import ACCOUNT_STRATEGY
+from core.live.factory import make_order_phase_lookup
 from core.live.report.parity_checker import (
     CATEGORY_CAPITAL_EXHAUSTED,
     CATEGORY_CROSS_STRATEGY_BLOCKED,
@@ -13,6 +15,7 @@ from core.live.report.parity_checker import (
     CATEGORY_LIMIT_UNFILLED,
     CATEGORY_LOCKED_AT_LIMIT,
     CATEGORY_RISK_REJECTED,
+    CATEGORY_SEGMENT_ABORTED,
     CATEGORY_SEND_FAILED,
     CATEGORY_SNAPSHOT_GAP,
     CATEGORY_UNEXPLAINED,
@@ -23,12 +26,16 @@ from core.live.report.parity_checker import (
     ClosingLimitLookup,
     ParityChecker,
     ParityDiff,
+    aborted_phases,
     compare,
     count_by_group,
     segments_ran_cleanly,
 )
 from core.models import BaseOrder, StockOrder
-from core.utils import Action, LiveOrderStatus, PositionType
+from core.utils import Action, ExecutionTiming, LiveHook, LiveOrderStatus, PositionType
+from strategies.stock.volume_breakout_momentum_strategy import (
+    VolumeBreakoutMomentumStrategy,
+)
 
 """
 訊號 parity 比對
@@ -52,6 +59,8 @@ def make_live_order(
     status: str = "FILLED",
     position_type: str = "LONG",
 ) -> Dict[str, Any]:
+    """組一筆實盤委託紀錄，預設為全部成交的 2330 買單"""
+
     return {
         "symbol": symbol,
         "action": action,
@@ -66,6 +75,8 @@ def make_live_order(
 def make_backtest_order(
     symbol: str = "2330", action: Action = Action.BUY, volume: int = 2
 ) -> BaseOrder:
+    """組一張回測委託"""
+
     return StockOrder(
         stock_id=symbol,
         date=TODAY,
@@ -77,6 +88,8 @@ def make_backtest_order(
 
 
 def make_event(category: str, symbol: str = "2317") -> Dict[str, Any]:
+    """組一筆 Alpha 的風控事件"""
+
     return {"category": category, "symbol": symbol, "strategy_name": "Alpha"}
 
 
@@ -321,7 +334,7 @@ def unfilled_order(
 
 
 def closing_at(close: float, limit: float) -> ClosingLimitLookup:
-    """假的收盤查詢：任何標的都回同一組（收盤價, 漲跌停價）"""
+    """假的收盤查詢：任何標的都回同一組（收盤價，漲跌停價）"""
 
     def lookup(symbol: str, side: str) -> Optional[Tuple[float, float]]:
         return (close, limit)
@@ -585,6 +598,8 @@ def test_loaded_strategy_without_orders_is_still_compared(
 
 # === 回測多出的開倉單（反方向的快照口徑）===
 def clean_run(phase: str = "close", end_reason: str = "正常結束") -> Dict[str, Any]:
+    """組一筆沒有異常的段落執行紀錄"""
+
     return {
         "phase": phase,
         "end_reason": end_reason,
@@ -941,3 +956,187 @@ def test_missing_checker_does_not_crash_the_after_close(dao: LiveTradeDAO) -> No
     """未注入比對器時記 warning 並回 0，不可讓盤後作業整段掛掉"""
 
     assert make_runner(dao, None, None).check_signal_parity(TODAY) == 0
+
+
+# === 段落中止與帳戶層擋單 ===
+def close_phase(order: BaseOrder) -> Set[str]:
+    """測試用：每張回測委託都該在尾盤段送出"""
+
+    return {"close"}
+
+
+def test_order_of_an_aborted_segment_is_segment_aborted() -> None:
+    """
+    回測有、實盤沒有，而該送出的段落當天非正常結束：歸段落中止，不再發 CRITICAL
+
+    2026-10-14 股票尾盤段被資料新鮮度擋下，回測的 1301、1326、1528 開倉單全落在未解釋。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order()],
+        [],
+        (),
+        False,
+        aborted_phases={"close"},
+        order_phases=close_phase,
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_SEGMENT_ABORTED]
+    assert "close" in diffs[0].note
+
+
+def test_other_aborted_segment_does_not_explain_the_order() -> None:
+    """開盤段中止不能拿來解釋尾盤段該送的單——那一段其實正常跑了，原因未知"""
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order()],
+        [],
+        (),
+        False,
+        aborted_phases={"open"},
+        order_phases=close_phase,
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNEXPLAINED]
+
+
+def test_order_spanning_a_healthy_segment_is_not_segment_aborted() -> None:
+    """該送出的段落有一個正常跑完（例如停損段落沒中止）就不歸段落中止"""
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order(action=Action.SELL)],
+        [],
+        (),
+        False,
+        aborted_phases={"close"},
+        order_phases=lambda order: {"close", "open"},
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNEXPLAINED]
+
+
+def test_without_phase_lookup_nothing_is_segment_aborted() -> None:
+    """判不出段落時不猜：維持原本的類別"""
+
+    diffs: List[ParityDiff] = compare(
+        [], [make_backtest_order()], [], (), False, aborted_phases={"close"}
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_UNEXPLAINED]
+
+
+def test_risk_event_still_wins_over_segment_aborted() -> None:
+    """有事件就以事件為準：被風控擋下的單即使段落後來中止，原因也是風控"""
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order("2317")],
+        [make_event("SINGLE_ORDER_AMOUNT", "2317")],
+        (),
+        False,
+        aborted_phases={"close"},
+        order_phases=close_phase,
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_RISK_REJECTED]
+
+
+@pytest.mark.parametrize(
+    "runs, expected",
+    [
+        ([clean_run(end_reason="例外中止：DataFreshnessError")], {"close"}),
+        ([clean_run()], set()),
+        # 重跑成功：那一段的決定還是做了
+        ([clean_run(end_reason="例外中止：X"), clean_run()], set()),
+        ([clean_run("open", "例外中止：ConnectionError"), clean_run()], {"open"}),
+        # 盤後與補比不呼叫策略鉤子
+        ([clean_run("after_close", "例外中止：X")], set()),
+        # 認不出策略的舊紀錄不算
+        ([{"phase": "close", "end_reason": "例外中止：X"}], set()),
+        ([], set()),
+    ],
+    ids=["aborted", "clean", "rerun-ok", "open-only", "after-close", "legacy", "none"],
+)
+def test_aborted_phases(runs: List[Dict[str, Any]], expected: Set[str]) -> None:
+    assert aborted_phases("Alpha", runs) == expected
+
+
+def test_account_level_block_is_attributed(dao: LiveTradeDAO, tmp_path: Path) -> None:
+    """
+    帳戶層的擋下（記在 `__account__` 名下）也要拿來歸因
+
+    2026-10-13 的 1312 被同一批委託的單一標的曝險上限擋下，事件記在 `__account__`，
+    parity 只看策略自己的事件，把它記成未解釋。
+    """
+
+    dao.insert_risk_event(
+        {
+            "run_id": "run1",
+            "strategy_name": ACCOUNT_STRATEGY,
+            "severity": "WARN",
+            "category": "BATCH_EXPOSURE",
+            "symbol": "2330",
+            "message": "2330 曝險超過單一標的上限",
+            "occurred_at": NOW,
+        }
+    )
+    checker: ParityChecker = ParityChecker(
+        dao,
+        lambda name, day: [make_backtest_order("2330")],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+    )
+
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert [diff.category for diff in result["Alpha"]] == [CATEGORY_RISK_REJECTED]
+    assert "帳戶層 BATCH_EXPOSURE" in result["Alpha"][0].note
+
+
+def test_checker_passes_aborted_segments_and_phases(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """接線：比對器把當天中止的段落與段落查詢傳進比對"""
+
+    dao.insert_run(
+        {
+            "run_id": "run-close",
+            "started_at": NOW,
+            "phase": "close",
+            "simulation": 1,
+            "end_reason": "例外中止：DataFreshnessError",
+            "strategy_params_json": '{"strategies": ["Alpha"]}',
+        }
+    )
+    dao.conn.commit()
+    checker: ParityChecker = ParityChecker(
+        dao,
+        lambda name, day: [make_backtest_order("2330")],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+        order_phases=lambda name, order: {"close"},
+    )
+
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert [diff.category for diff in result["Alpha"]] == [CATEGORY_SEGMENT_ABORTED]
+
+
+def test_order_phase_lookup_follows_the_strategy_schedule() -> None:
+    """段落沿用實盤引擎的解析：開倉看 `open` 鉤子，平倉看 `close` 與 `stop_loss`"""
+
+    strategy: VolumeBreakoutMomentumStrategy = VolumeBreakoutMomentumStrategy()
+    strategy.execution_schedule = {
+        LiveHook.OPEN.value: ExecutionTiming.AT_OPEN,
+        LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
+    }
+    lookup = make_order_phase_lookup([strategy])
+    name: str = type(strategy).__name__
+
+    assert lookup(name, make_backtest_order()) == {"open"}
+    # 沒宣告 stop_loss 時退回 close 的段落
+    assert lookup(name, make_backtest_order(action=Action.SELL)) == {"close"}
+    assert lookup("NotLoaded", make_backtest_order()) == set()

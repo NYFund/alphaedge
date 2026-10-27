@@ -15,6 +15,7 @@ from core.broker.tw.shioaji_order_mapper import ShioajiOrderMapper
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.models import ExecutionReport, FuturesOrder, OrderStatusEvent
 from core.models.futures.execution import FuturesPositionSnapshot
+from core.portfolio import order_rules
 from core.utils import Action, FuturesOCType, OrderState, PositionType
 
 from .test_shioaji_account_query import FakeApi as AccountApi
@@ -209,6 +210,8 @@ def test_octype_follows_direction_and_action(
     多單買／空單賣是開倉，多單賣／空單買是平倉
 
     平倉單送成 `New` 會開出一口反向新倉：帳上同時掛著多空兩邊、保證金照收兩份。
+    券商閘道層不能 import 部位建構層，mapper 自己留了一份判定；這裡同時對照
+    `order_rules.is_opening()`，兩邊漂移時會紅。
     """
 
     order: FuturesOrder = FuturesOrder(
@@ -221,3 +224,4 @@ def test_octype_follows_direction_and_action(
     )
 
     assert ShioajiOrderMapper.derive_octype(order) is expected
+    assert (expected is FuturesOCType.New) is order_rules.is_opening(order)

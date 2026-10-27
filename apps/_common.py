@@ -2,7 +2,7 @@ import sys
 from typing import Dict, List, Type
 
 from core.strategies.base import BaseStrategy
-from core.strategies.strategy_loader import StrategyLoader
+from strategies.loader import StrategyLoader
 
 """回測與實盤入口共用的小工具：退出碼常數與策略名解析"""
 

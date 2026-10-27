@@ -28,18 +28,21 @@
 
 | 來源 | 端點 | 日期參數 | 備註 |
 |------|------|----------|------|
-| 上市 | `www.twse.com.tw/rwd/zh/reducation/TWTAUU` | 西元 `YYYYMMDD` | 欄位：恢復買賣日期、股票代號、名稱、停止買賣前收盤價格、恢復買賣參考價、漲跌停價格、開盤競價基準、除權參考價、減資原因、詳細資料 |
-| 上櫃 | `www.tpex.org.tw/www/zh-tw/bulletin/revivt` | `YYYY/MM/DD` | 第 4 欄名為「最後交易日之收盤價格」；`詳細資料` 是一段 HTML，內含停止買賣日期與每仟股換發股數 |
+| 上市 | `www.twse.com.tw/rwd/zh/reducation/TWTAUU` | 西元 `YYYYMMDD` | 前收盤價欄名 `停止買賣前收盤價格`、參考價欄名 `恢復買賣參考價`；日期為民國年 `114/02/12` |
+| 上櫃 | `www.tpex.org.tw/www/zh-tw/bulletin/revivt` | `YYYY/MM/DD` | 前收盤價欄名 `最後交易日之收盤價格`、參考價欄名 `減資恢復買賣開始日參考價格`；日期為民國年 `1140113`；`詳細資料` 是一段 HTML，內含每仟股換發股數與每股退還股款 |
 | 偵測 | 由行情偵測候選、人工確認後寫入（`scripts/manual/manual_corporate_action_detect.py`：不帶參數唯讀列出候選（`--start`／`--threshold` 調整偵測起日與變動門檻），帶 `--date`／`--symbol`／`--reason` ＋ `--ratio` 或 `--reference-price` 列出寫入計畫，另加 `--confirm` 才寫入） | — | ETF 受益權單位分割（例如 0050 在 2025-06-18 一拆四）**不在任何結構化端點裡**，只能走這條路徑 |
 
-兩個端點回傳的日期都是民國年。兩者都直接提供「停止買賣前收盤價」與「恢復買賣參考價」，相除即為調整倍率。
+兩者都直接提供前收盤價與恢復買賣參考價，相除即為調整倍率；兩邊的欄名差異由 `CorporateActionCleaner` 收斂成同一組欄位。
 
-- **TPEx 端點會間歇回 HTTP 520**：crawler 有重試層，**重試耗盡一律回 `FAILED` 而不是 `NO_DATA`**——
+- **以年為單位做區間查詢**（`CorporateActionUpdater` 繼承 `YearlyRangeTwoMarketUpdater`，與除權息同一條流程），
+  起點 `DEFAULT_CORPORATE_ACTION_START_DATE`（2013-01-01，與除權息相同）。
+- **每次都掃整個區間**，不從 `MAX(date)+1` 續跑：這類事件是事後公告。入庫走 `INSERT OR REPLACE`，重跑是冪等的。
+- **TPEx 端點會間歇回 HTTP 520**：crawler 每 5 秒重試、最多 3 次，**重試耗盡一律回 `FAILED` 而不是 `NO_DATA`**——
   把連線失敗記成「該年沒有事件」會讓那一年再也不會被補。
-- **每次都掃整個區間**，不從 `MAX(date)+1` 續跑：這類事件是事後公告。
+- **版面改制逐年隔離**：某一年欄位數不符時其餘年份照常入庫，最後拋 `CleanFailureError` 讓 target 失敗。
 
 ```bash
-python -m tasks.update_db --target corporate_action
+python -m apps.update_db --target corporate_action
 ```
 
 ---
@@ -66,15 +69,18 @@ python -m tasks.update_db --target corporate_action
    倍率小於 1。兩個端點本身就是減資端點，分割不會出現在裡面——**端點來源的事件一律看 `原因` 欄分類**。
 2. **TPEx 的交叉驗證公式要含每股退還股款**：站方公式是 `(前收 − 退還股款) × 1000 ÷ 換發股數`。
    只用換股比例會讓「退還股款」型整批對不上，看起來像資料有問題。
-3. **站方會給重複列**：公司改名期間同一筆事件出現兩次，主鍵會撞。cleaner 先去重，
-   **價格不同才警告**（那才是真衝突，不是改名）。
+3. **站方會給重複列**：公司改名期間同一筆事件出現兩次，主鍵會撞。cleaner 先去重（保留第一筆），
+   **調整倍率不同才警告**（那才是真衝突，不是改名）。
 
-### 偵測事件的兩個規則
+### 偵測事件的確認原則
+
+`corporate_action_detector` 只產出候選（非除權息日、單日變動 > 15%，且無法以既有事件解釋），**不自動入庫**；
+寫入一律經人工確認、由 `CorporateActionUpdater.load_detected_events()` 以 `detected` 來源寫入。確認時：
 
 - **不確定的事件寧可不寫**：成交量佐證不足（分割後成交股數應呈倍數放大）的候選不入庫。
   錯的調整會直接汙染價格序列，少一筆的代價比錯一筆小。
-- **倍率用理論值 1/N，不用當日實際漲跌**：參考價是算出來的，當天的真實走勢在那之後才發生；
-  把實際漲跌當調整倍率會連那一天的真實報酬一起抹掉。
+- **倍率用理論值 1/N（`--ratio`）或官方參考價（`--reference-price`），不用當日實際漲跌**：參考價是算出來的，
+  當天的真實走勢在那之後才發生；把實際漲跌當調整倍率會連那一天的真實報酬一起抹掉。
 
 ---
 
@@ -83,6 +89,11 @@ python -m tasks.update_db --target corporate_action
 `StockDividendAPI.get_cumulative_factor()` 把 `corporate_action.調整倍率` 疊進 `dividend.還原係數` 的累乘序列。
 兩者的語意本來就一致（都是「參考價 ÷ 前收盤價」），同一套累乘直接吃得下；累的是倒數，方向由數值自己決定——
 減資倍率 9.99 的倒數會把事件後的價格往下調回來，分割 0.25 的倒數 4 會往上調。
+
+- **同日同檔兩邊都有時以除權息為準**（合併時 `dividend` 在前、去重保留第一筆）。
+- **本表是選用表**（`CorporateActionDAO.OPTIONAL_TABLE`）：尚未回補時還原係數只用除權息並記 warning，
+  減資與分割的假跳空不會被消除。
+- 係數有快取；同一個行程內更新過 `dividend` 或 `corporate_action` 後要呼叫 `StockDividendAPI.reset_factor_cache()`。
 
 - **不要在呼叫端再套一次分割調整**：分割已在累乘係數裡，再套一次就是重複調整（分割日的報酬會變成數百 %）。
   reporter 的 benchmark 還原價一律直接用 `get_adjusted_close_series()`。
@@ -105,12 +116,12 @@ python -m tasks.update_db --target corporate_action
   因為直接濾會連真正的反向分割一起藏起來；判讀時再看**停牌日數**——公司行動幾乎都伴隨停止買賣數日，跌停不會。
 - **比對不可用 `(date, stock_id)` 完全相等**：端點給的是官方恢復買賣日期，實際有成交的第一天可能因假日更晚，
   故「事件日落在停牌區間內」即視為解釋。
-- **行情重播的壞資料不靠排除清單**：`2020-04-14`、`2015-12-14` 的上市半邊曾整批是別日的內容，
-  已重爬修正，原本的排除清單也一併移除，護欄重新涵蓋這兩天。同類問題改由
-  `tests/test_trading_calendar_guard.py::test_no_stale_replayed_price_batches` 擋在 `price` 表本身。
+- **行情重播的壞資料不靠排除清單**：「某天整批是別日的內容」這類 `price` 表本身的問題由
+  `tests/test_trading_calendar_guard.py::test_no_stale_replayed_price_batches` 擋下，本護欄不另列例外日期。
 - **解釋不掉的一般個股／ETF 用基準數，不用「必須為 0」**：多數是不在減資端點裡的公司行動
   （合併換股、私募、股權轉換），少數是單日離群值。逐筆列成例外清單會變成一份沒人維護的長名單，
-  故改記基準數——**只准降不准升**，升即代表事件表過期。
+  故改記基準數（`BASELINE_UNEXPLAINED_TOTAL`、`BASELINE_UNEXPLAINED_ORDINARY`，各容許少量誤差）——
+  **只准降不准升**，升即代表事件表過期。
 
 ⚠️ **CI 跑不到這條護欄**（CI 只跑 `-m "not slow"` 且沒有資料庫）。跑完 `--target corporate_action` 後請手動執行：
 
@@ -124,6 +135,7 @@ pytest tests/test_corporate_action_guard.py -m slow
 
 - **合併換股、私募、股權轉換、股票代號變更、下市**不在本表，這些事件的價格不連續仍會留在還原序列裡。
 - 偵測來源依賴人工確認，新的 ETF 分割要等護欄紅燈後才會被補進來。
+- 起點 2013-01-01 之前的年份未驗證兩個端點的欄位結構，未回補。
 
 ## 相關文件
 

@@ -2,7 +2,7 @@ import datetime
 from typing import Dict, Optional
 
 from core.backtest.models.settlement_model import TwStockSettlementModel
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models import StockAccount, StockPosition, StockQuote
 from core.models.cost_config import CostConfig
 from core.position.stock.position_manager import StockPositionManager
@@ -40,11 +40,11 @@ def make_settlement(
 ) -> TwStockSettlementModel:
     """組出台股結算模型"""
 
-    cost_model: StockCostModel = StockCostModel(CostConfig.default())
+    cost_model: TwStockCostModel = TwStockCostModel(CostConfig.default())
     return TwStockSettlementModel(
         position_manager=StockPositionManager(account, cost_model),
         cost_model=cost_model,
-        prev_close={},
+        reference_prices={},
         max_no_quote_days=max_no_quote_days,
     )
 
@@ -123,7 +123,9 @@ def test_equity_is_continuous_across_the_ex_dividend_day() -> None:
     settlement.apply_cash_dividends({STOCK_ID: 3.0})
 
     position: StockPosition = account.positions[0]
-    units: int = settlement.instrument.to_units(position.volume)
+    units: int = position.volume * settlement.instrument.get_unit_size(
+        position.symbol, position.date
+    )
     before: float = account.balance + settlement.mark_position(position, 100.0, units)
 
     settlement.settle_cash_dividend(EX_DATE, account, new_event_counts())
@@ -182,12 +184,17 @@ def test_split_keeps_the_equity_continuous() -> None:
     settlement.apply_share_ratios({STOCK_ID: 2.0})
 
     position: StockPosition = account.positions[0]
-    units: int = settlement.instrument.to_units(position.volume)
+    units: int = position.volume * settlement.instrument.get_unit_size(
+        position.symbol, position.date
+    )
     before: float = account.balance + settlement.mark_position(position, 100.0, units)
 
     settlement.apply_corporate_actions(EX_DATE, account, new_event_counts())
     after: float = account.balance + settlement.mark_position(
-        position, 50.0, settlement.instrument.to_units(position.volume)
+        position,
+        50.0,
+        position.volume
+        * settlement.instrument.get_unit_size(position.symbol, position.date),
     )
 
     assert position.volume == 4
@@ -227,7 +234,7 @@ def test_long_position_exits_after_the_no_quote_limit() -> None:
 
     account: StockAccount = make_account()
     settlement: TwStockSettlementModel = make_settlement(account, max_no_quote_days=3)
-    settlement.prev_close[STOCK_ID] = 90.0
+    settlement.reference_prices[STOCK_ID] = 90.0
     event_counts: Dict[str, int] = new_event_counts()
 
     # 連續三天沒有報價

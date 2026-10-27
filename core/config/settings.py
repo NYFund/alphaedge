@@ -12,7 +12,7 @@ load_dotenv()
 爬取範圍、預設區間與外部服務設定
 
 與 `paths`／`schema` 的差別：這裡的每一個值都是**可調的營運參數**
-（要抓哪些商品、從哪一年開始、連哪一台 DolphinDB），
+（要抓哪些商品、從哪一年開始、連哪一台 TimescaleDB），
 不是系統的結構。改這裡不會動到任何路徑或資料表定義。
 """
 
@@ -96,8 +96,8 @@ SELL_FIRST_DAY_TRADE_START_DATE: datetime.date = datetime.date(2014, 6, 30)
 # 此處取 2015-01-01 是**刻意收窄**，不是資料限制。
 #
 # 要改回更早的起點，改這一行即可——**已入庫的資料不受影響**（loader 走
-# INSERT OR IGNORE），續跑會從表內該商品的最新日接續，
-# 故往前擴張需要另行指定區間重跑，見 `FuturesPriceUpdater.update()`。
+# INSERT OR IGNORE），但續跑只補表內該商品第一筆之後缺的日子、不會往前，
+# 故往前擴張要以 `resume=False` 另行重跑，見 `FuturesPriceUpdater.update()`。
 DEFAULT_FUTURES_START_DATE: datetime.date = datetime.date(2015, 1, 1)
 
 # 各商品在 TAIFEX 第一個有行情的日期（2026-09-02 以 crawler 逐日實測）。
@@ -166,33 +166,38 @@ FINMIND_BROKER_TRADING_START_DATE: datetime.date = datetime.date(2021, 6, 30)
 
 
 # -----------------------------------------------------------------------
-# === DolphinDB server setting ===
+# === TimescaleDB（台股 tick） ===
 # -----------------------------------------------------------------------
 #
-def get_int_env(name: str, default: int = 0) -> int:
+# 格式為 `postgresql://user:pass@host:5432/dbname`；docker compose 的 `core` 容器內
+# 會覆寫成以 service 名稱 `postgres` 為主機的版本。
+#
+# **刻意不用 `DATABASE_URL`**：那個鍵留給日頻資料遷移到 PostgreSQL，屆時「設了就切換」。
+# 若 tick 先借用它，使用者為了 tick 設定之後，日頻資料會在還沒遷移時就被切走。
+#
+# 缺值時為 `None` 而不在 import 期拋出，理由同 `require_shioaji_ca()`
+TICK_DATABASE_URL: Optional[str] = os.getenv("TICK_DATABASE_URL")
+
+
+def require_tick_database_url() -> str:
     """
-    讀取整數型環境變數；無法轉型時退回預設值
-
-    **不可直接 `int(os.getenv(...))`**：環境變數被設成任何非數字字串
-    （含誤植的空白或註解）都會在 **import 期**拋 ValueError，
-    而這個模組被全專案 import，等於整個程式無法啟動且錯誤訊息與設定無關。
+    - Description:
+        取得台股 tick 的 TimescaleDB 連線字串；未設定時當場拋出
+    - Return:
+        - str
+            `postgresql://` 開頭的連線字串
+    - Raise:
+        - RuntimeError
+            `.env` 缺少 `TICK_DATABASE_URL`
     """
 
-    raw: Optional[str] = os.getenv(name)
-    if not raw:
-        return default
-
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-DDB_PATH: str | None = os.getenv("DDB_PATH")
-DDB_HOST: str | None = os.getenv("DDB_HOST")
-DDB_PORT: int = get_int_env("DDB_PORT")
-DDB_USER: str | None = os.getenv("DDB_USER")
-DDB_PASSWORD: str | None = os.getenv("DDB_PASSWORD")
+    if not TICK_DATABASE_URL:
+        raise RuntimeError(
+            "環境變數 TICK_DATABASE_URL 未設定，無法連線台股 tick 的 TimescaleDB；"
+            "請在 .env 補上（例如 postgresql://alphaedge:alphaedge@localhost:5432/alphaedge），"
+            "並以 docker compose up -d postgres 啟動資料庫"
+        )
+    return TICK_DATABASE_URL
 
 
 # -----------------------------------------------------------------------
@@ -210,7 +215,7 @@ API_SECRET_KEY: str | None = os.getenv("API_SECRET_KEY")
 # 缺值時為 `None` 而不在 import 期拋出：`core.config` 是全專案的共用入口，
 # 沒有憑證的機器（CI、只跑回測的開發機）連 import 都會失敗，
 # 錯誤訊息還與憑證無關。真正要下單的地方呼叫 `require_shioaji_ca()`
-# （理由同 `schema.require_tick_db_path()`）
+# （理由同 `require_tick_database_url()`）
 SHIOAJI_CA_PATH: Optional[str] = os.getenv("SHIOAJI_CA_PATH")
 SHIOAJI_CA_PASSWORD: Optional[str] = os.getenv("SHIOAJI_CA_PASSWORD")
 

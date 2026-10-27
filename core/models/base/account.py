@@ -11,8 +11,8 @@ class BaseAccount:
     """
     庫存及餘額資訊的共用骨架
 
-    FIFO 取倉、方向篩選與績效彙總都與市場與商品皆無關，故全部留在此；
-    保證金佔用與空頭曝險屬台股信用交易，由 StockAccount 補上。
+    FIFO 取倉、方向篩選、績效彙總與保證金佔用都與市場與商品皆無關，故全部留在此；
+    空頭曝險屬台股信用交易，由 StockAccount 補上。
     """
 
     def __init__(self, init_capital: float = 0.0) -> None:
@@ -21,6 +21,9 @@ class BaseAccount:
 
         # Account Balances
         self.balance: float = init_capital  # 餘額
+        # 未平倉部位佔用的保證金總額（台股放空的保證金、期貨的原始保證金），平倉時釋回；
+        # 無保證金制度的市場維持 0
+        self.margin_used: float = 0.0
 
         # Account Performance
         self.realized_pnl: float = 0.0  # 總已實現損益（profit and loss）
@@ -57,7 +60,7 @@ class BaseAccount:
         取得庫存**商品檔數**（同一檔加碼多次只算一檔）
 
         `max_holdings` 的語意一律是「檔數」。**不可改回部位筆數**：允許加碼的
-        策略（例如 `MomentumStrategy1`）同一檔加碼兩次就會佔掉兩個名額，
+        策略（例如 `VolumeBreakoutMomentumStrategy`）同一檔加碼兩次就會佔掉兩個名額，
         實際持有檔數比設定少。
         """
 

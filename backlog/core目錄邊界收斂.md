@@ -182,6 +182,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 >   1. 以 `git mv` 把該策略搬到 `strategies/stock/`、測試的 import 改到新路徑（否則 Phase2-3 的 `check_strategy_contract_only()` 會擋下）。
 >   2. `_STOCK_STRATEGIES` 兩邊各有定義，衝突時以本分支的 `VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy` 為底；演練策略是否續留排程，依 `實盤下單架構規劃.md` Phase7-1 結束時的狀態決定（演練結束本來就要移除）。
 >   3. 主目錄 `rehearsal_schedule.py --install` 重裝 launchd（本機時區 2026-10-16 改過，時刻依安裝當下換算），`--status` 確認新策略名與 `stock-intraday`。
+>   **2026-10-24：第 1、2 點不必做了**——`2026-10里程碑收尾排程.md` S19 採先 revert `6cf78811`（移除股票演練策略）再合併，五條分支合併皆無衝突；第 3 點照做。
 
 ### Phase2-3. `core/strategies/` 收斂成只剩契約 🔄
 

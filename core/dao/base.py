@@ -156,12 +156,14 @@ def insert_or_replace(
     return len(df)
 
 
-def create_symbol_date_index(conn: sqlite3.Connection, table_name: str) -> None:
+def create_symbol_date_index(
+    conn: sqlite3.Connection, table_name: str, symbol_column: str = "stock_id"
+) -> None:
     """
     - Description:
-        建立 `(stock_id, date)` 索引並 commit
+        建立 `(標的, date)` 索引並 commit
 
-        日更表的主鍵都是 `(date, stock_id, ...)`，**date 在前**，所以
+        日更表的主鍵都是 `(date, 標的, ...)`，**date 在前**，所以
         「某一天的全市場」很快，「某一檔的整段歷史」卻要掃過整個 date 範圍。
         而策略研究問的幾乎都是後者。`IF NOT EXISTS` 讓既有資料庫在下次建表檢查時
         自動補上，不需要另外寫遷移腳本。
@@ -170,11 +172,13 @@ def create_symbol_date_index(conn: sqlite3.Connection, table_name: str) -> None:
             資料庫連線
         - table_name: str
             目標資料表
+        - symbol_column: str
+            標的欄名；索引名稱含它，台股表維持 `idx_<表>_stock_id_date` 不變
     """
 
     conn.execute(
-        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_stock_id_date "
-        f"ON {table_name} (stock_id, date)"
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_{symbol_column}_date "
+        f"ON {table_name} ({symbol_column}, date)"
     )
     conn.commit()
 
@@ -194,11 +198,21 @@ class BaseDAO:
     TABLE_NAME: str = ""
     DEFAULT_DB_PATH: Optional[Path] = None
 
-    # 共用查詢用的欄名。**以類別屬性而不是寫死在 SQL 裡**：日期欄與標的欄的
+    # 共用查詢用的欄名。**以類別屬性而不是寫死在 SQL 裡**：日期欄與鍵欄的
     # 名稱在不同表上可能不同（命名軸線收斂時 `stock_id` 會改成 `symbol`），
     # 改名時只動這兩行，不必回頭改每一支 DAO 的 SQL
     DATE_COLUMN: str = "date"
-    SYMBOL_COLUMN: str = "stock_id"
+
+    # 日期欄以外的鍵欄。**逐表宣告而不是寫死 `stock_id`**：期貨表的鍵是
+    # (product, expiry, session) 這種組合，根本沒有單一標的欄；沿用台股的預設
+    # 去查，一呼叫就是 SQL 錯誤。只有一個鍵欄的表才支援 `get_by_stock()`
+    KEY_COLUMNS: Tuple[str, ...] = ("stock_id",)
+
+    # 這張表可不可以不存在。**可缺的表查詢回空、不可缺的表照常拋出**：
+    # 選用資料集（名單、籌碼、保證金、公告）的回補是獨立作業，尚未執行時回測仍應能跑；
+    # 行情表缺了則整場回測沒有意義，讓 SQLite 的「no such table」直接現形。
+    # 原本缺表的處理散在 DAO 與 API 層各自判斷，同一張表在不同入口有不同答案
+    OPTIONAL_TABLE: bool = False
 
     # 建表後是否補 `(標的, 日期)` 複合索引。**逐表宣告而不是一律建**：
     # 只有一列一（標的, 日期）的明細表才吃得到它，參考表（股票基本資料、
@@ -242,6 +256,11 @@ class BaseDAO:
         """本 DAO 的資料表是否存在"""
 
         return table_exists(self.conn, self.TABLE_NAME)
+
+    def missing_optional_table(self) -> bool:
+        """表宣告為可缺且目前不存在：共用查詢據此回空，不去碰 SQLite"""
+
+        return self.OPTIONAL_TABLE and not self.table_exists()
 
     def count_rows(self) -> int:
         """本表的列數；表不存在時為 0（其他查詢錯誤往外拋）"""
@@ -299,8 +318,7 @@ class BaseDAO:
         - Description:
             取得資料表在區間內有資料的日期（已排序、去重）
 
-            **表不存在時會拋出**，與讀取端既有行為一致；需要容忍「尚未建表」的
-            呼叫端（例如 ETL 的日期規劃）應先呼叫 `table_exists()`。
+            缺表的處理依 `OPTIONAL_TABLE`：可缺的表回空 list，不可缺的表拋出。
         - Parameters:
             - start_date: datetime.date
                 起始日（含）
@@ -311,7 +329,7 @@ class BaseDAO:
                 區間內的日期；無資料或 `start_date > end_date` 時回傳空 list
         """
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return []
 
         df: pd.DataFrame = self.query_df(
@@ -371,7 +389,9 @@ class BaseDAO:
             self.create_table()
 
         if self.NEEDS_SYMBOL_DATE_INDEX:
-            create_symbol_date_index(self.conn, self.TABLE_NAME)
+            create_symbol_date_index(
+                self.conn, self.TABLE_NAME, self.single_key_column()
+            )
 
     def create_table(self) -> None:
         """
@@ -391,7 +411,10 @@ class BaseDAO:
     # 換資料庫後端時要改寫的 SQLite 專屬語法就在這裡，重複五份就得改五次，
     # 而漏改一份不會報錯——只會讓那一張表的查詢走不同的語意
     def get_by_date(self, date: datetime.date) -> pd.DataFrame:
-        """取得指定日期的全部列"""
+        """取得指定日期的全部列；可缺的表不存在時為空表"""
+
+        if self.missing_optional_table():
+            return pd.DataFrame()
 
         return self.query_df(
             f"""
@@ -410,10 +433,10 @@ class BaseDAO:
         取得日期區間內的全部列；`start_date > end_date` 時回傳空表
 
         **區間反了回空表而不是拋出**：呼叫端多半是把使用者給的兩個日期直接傳進來，
-        反了就是查無資料，不是程式錯誤。
+        反了就是查無資料，不是程式錯誤。可缺的表不存在時同樣回空表。
         """
 
-        if start_date > end_date:
+        if start_date > end_date or self.missing_optional_table():
             return pd.DataFrame()
 
         return self.query_df(
@@ -424,21 +447,41 @@ class BaseDAO:
             (start_date, end_date),
         )
 
+    def single_key_column(self) -> str:
+        """
+        唯一的鍵欄；鍵是組合（期貨）或沒有鍵欄（只有日期的表）時明確拋出
+
+        **拋 `NotImplementedError` 而不是退回 `stock_id`**：退回去的話錯誤會從 SQLite
+        以「no such column」的面貌出現，看不出是這張表根本沒有單一標的欄。
+        """
+
+        if len(self.KEY_COLUMNS) != 1:
+            raise NotImplementedError(
+                f"{type(self).__name__} 的鍵欄是 {self.KEY_COLUMNS}，"
+                f"沒有單一標的欄，不支援以標的查詢"
+            )
+        return self.KEY_COLUMNS[0]
+
     def get_by_stock(
         self,
         stock_id: str,
         start_date: datetime.date,
         end_date: datetime.date,
     ) -> pd.DataFrame:
-        """取得指定標的在區間內的全部列；`start_date > end_date` 時回傳空表"""
+        """
+        取得指定標的在區間內的全部列；`start_date > end_date` 時回傳空表
 
-        if start_date > end_date:
+        只有單一鍵欄的表（台股各表）支援；期貨表的鍵是組合，呼叫會拋 `NotImplementedError`。
+        可缺的表不存在時回空表。
+        """
+
+        if start_date > end_date or self.missing_optional_table():
             return pd.DataFrame()
 
         return self.query_df(
             f"""
             SELECT * FROM {self.TABLE_NAME}
-            WHERE {self.SYMBOL_COLUMN} = ?
+            WHERE {self.single_key_column()} = ?
               AND {self.DATE_COLUMN} BETWEEN ? AND ?
             """,
             (stock_id, start_date, end_date),
@@ -448,6 +491,31 @@ class BaseDAO:
         """表內最新的日期（`YYYY-MM-DD` 字串）；表不存在或為空時為 None"""
 
         return self._get_latest_value(self.DATE_COLUMN)
+
+    def get_latest_date_before(self, date: datetime.date) -> Optional[str]:
+        """
+        - Description:
+            **嚴格早於** `date` 的最近一個資料日；表不存在或沒有時為 None
+
+            盤後才公布的資料（籌碼、融資融券餘額）站在 `date` 早上只能知道前一次公布的
+            那份，`<=` 那一個等號就是前視偏差。API 層的 `get_available()` 以它為底。
+        - Parameters:
+            - date: datetime.date
+                回測當前日
+        - Return:
+            - Optional[str]
+                日期字串（`YYYY-MM-DD`）
+        """
+
+        if not self.table_exists():
+            return None
+
+        row: Optional[Tuple[Any, ...]] = self.fetch_one(
+            f"SELECT MAX({self.DATE_COLUMN}) FROM {self.TABLE_NAME} "
+            f"WHERE {self.DATE_COLUMN} < ?",
+            (date,),
+        )
+        return row[0] if row and row[0] else None
 
     # === 寫入與交易 ===
     def insert_or_ignore(self, df: pd.DataFrame) -> Tuple[int, int]:

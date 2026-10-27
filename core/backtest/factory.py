@@ -3,6 +3,8 @@ from typing import List, Optional
 from core.backtest.backtester import Backtester, new_event_counts
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
+from core.backtest.datafeed.tw.stock_tick_datafeed import StockTickDataFeed
+from core.backtest.models.event_counts import FUTURES_EVENT_KEYS
 from core.backtest.models.fill_model import TwFuturesFillModel, TwStockFillModel
 from core.backtest.models.settlement_model import (
     TwFuturesSettlementModel,
@@ -11,21 +13,29 @@ from core.backtest.models.settlement_model import (
 from core.backtest.overrides import BacktestOverrides
 from core.backtest.report.futures_reporter import FuturesBacktestReporter
 from core.backtest.report.reporter import StockBacktestReporter
-from core.market.tw.cost_model import StockCostModel, TwFuturesCostModel
+from core.backtest.simulator.bar_simulator import BarSimulator
+from core.backtest.simulator.tick_simulator import TickSimulator
+from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.market.tw.instrument_spec import TwFuturesSpec, TwStockSpec
+from core.market.tw.segment_schedule import TW_STOCK_SEGMENTS
 from core.models import FuturesAccount, StockAccount
-from core.models.cost_config import CostConfig, FuturesCostConfig
 from core.models.fill_config import FillConfig, FuturesFillConfig
+from core.position.assembly import (
+    TwFuturesModels,
+    TwStockModels,
+    build_tw_futures_models,
+    build_tw_stock_models,
+)
 from core.position.futures.position_manager import FuturesPositionManager
 from core.position.stock.position_manager import StockPositionManager
 from core.strategies.base import BaseStrategy, RemovedStrategySettingError
 from core.strategies.futures import BaseFuturesStrategy
 from core.strategies.stock import BaseStockStrategy
-from core.utils import InstrumentType, Market, ShortMethod
+from core.utils import InstrumentType, Market, Scale, TickUniverse
 
-"""Backtester factory: **回測路徑**唯一一處依（市場, 商品）組合分派的地方"""
+"""Backtester factory: **回測路徑**唯一一處依（市場，商品）組合分派的地方"""
 
 
 def build_backtester(
@@ -36,7 +46,7 @@ def build_backtester(
 ) -> Backtester:
     """
     - Description:
-        依策略宣告的（市場, 商品）組合組裝對應的 model 組合
+        依策略宣告的（市場，商品）組合組裝對應的 model 組合
 
         這是**回測路徑**唯一的分派點。新增一個組合只需在此加一個分支，
         `Backtester` 本身一行都不用改。
@@ -61,7 +71,7 @@ def build_backtester(
             回測區間與初始資金的覆寫；None 時沿用策略的預設
     - Return:
         - Backtester
-            已注入該（市場, 商品）組合對應 model 組合的引擎
+            已注入該（市場，商品）組合對應 model 組合的引擎
     - Raise:
         - InvalidBacktestOverridesError
             覆寫值不合法
@@ -79,12 +89,17 @@ def build_backtester(
     # 晚一步覆寫就會有元件拿到舊值
     if overrides is not None:
         overrides.apply_to(strategy)
+    tick_universe: Optional[TickUniverse] = (
+        overrides.tick_universe if overrides is not None else None
+    )
 
     if (strategy.market, strategy.instrument_type) == (
         Market.TW,
         InstrumentType.STOCK,
     ):
-        return build_tw_stock_backtester(strategy, adjusted_price, write_artifacts)
+        return build_tw_stock_backtester(
+            strategy, adjusted_price, write_artifacts, tick_universe
+        )
 
     if (strategy.market, strategy.instrument_type) == (
         Market.TW,
@@ -92,7 +107,7 @@ def build_backtester(
     ):
         # `adjusted_price` 不往下傳：期貨沒有除權息還原的概念，見
         # `build_tw_futures_backtester()`
-        return build_tw_futures_backtester(strategy, write_artifacts)
+        return build_tw_futures_backtester(strategy, write_artifacts, tick_universe)
 
     raise ValueError(
         f"尚未支援的（市場, 商品）組合：{strategy.market}, {strategy.instrument_type}"
@@ -103,19 +118,19 @@ def build_tw_stock_backtester(
     strategy: BaseStockStrategy,
     adjusted_price: bool = True,
     write_artifacts: bool = True,
+    tick_universe: Optional[TickUniverse] = None,
 ) -> Backtester:
-    """組裝台股的 model 組合"""
+    """組裝台股的 model 組合；`tick_universe` 是 TICK 回測的標的範圍（None 時由引擎決定預設）"""
 
     account: StockAccount = StockAccount(strategy.init_capital)
     strategy.setup_account(account)
 
-    cost_model: StockCostModel = StockCostModel(build_cost_config(strategy))
-
     # 事件計數由 factory 建立，引擎、FillModel 與部位管理層共用同一個 dict
     event_counts: dict = new_event_counts()
-    position_manager: StockPositionManager = StockPositionManager(
-        account, cost_model, event_counts=event_counts
-    )
+    # 成本模型與部位管理層的組法與實盤同一份（`core/position/assembly.py`）
+    stock_models: TwStockModels = build_tw_stock_models(strategy, account, event_counts)
+    cost_model: TwStockCostModel = stock_models.cost_model
+    position_manager: StockPositionManager = stock_models.position_manager
 
     instrument: TwStockSpec = TwStockSpec()
     fill_model: TwStockFillModel = TwStockFillModel(
@@ -127,10 +142,13 @@ def build_tw_stock_backtester(
         check_day_trade_list=cost_model.config.short_constraint.check_day_trade_list,
     )
 
+    # 級別在組裝前已依 `--scale` 寫回策略
+    is_tick: bool = strategy.scale == Scale.TICK
+
     settlement: TwStockSettlementModel = TwStockSettlementModel(
         position_manager=position_manager,
         cost_model=cost_model,
-        prev_close=fill_model.prev_close,
+        reference_prices=fill_model.reference_prices,
         instrument=instrument,
         day_trade_uncovered_policy=strategy.day_trade_uncovered_policy,
         margin_call_policy=strategy.margin_call_policy,
@@ -147,16 +165,25 @@ def build_tw_stock_backtester(
         fill_model=fill_model,
         cost_model=cost_model,
         settlement=settlement,
-        data_feed=TwStockDataFeed(),
+        data_feed=StockTickDataFeed() if is_tick else TwStockDataFeed(),
         reporter_cls=StockBacktestReporter,
+        # 逐筆依台股的段落時窗重放；日 K 一天一根 bar
+        build_simulator=(
+            (lambda engine: TickSimulator(engine, TW_STOCK_SEGMENTS))
+            if is_tick
+            else BarSimulator
+        ),
         event_counts=event_counts,
         adjusted_price=adjusted_price,
         write_artifacts=write_artifacts,
+        tick_universe=tick_universe,
     )
 
 
 def build_tw_futures_backtester(
-    strategy: BaseFuturesStrategy, write_artifacts: bool = True
+    strategy: BaseFuturesStrategy,
+    write_artifacts: bool = True,
+    tick_universe: Optional[TickUniverse] = None,
 ) -> Backtester:
     """
     - Description:
@@ -183,6 +210,8 @@ def build_tw_futures_backtester(
             要回測的台期貨策略
         - write_artifacts: bool
             是否寫出回測報表與 backtest log
+        - tick_universe: Optional[TickUniverse]
+            TICK 回測的標的範圍；期貨沒有逐筆資料，帶了會被引擎以級別不符拒絕
     - Return:
         - Backtester
             已注入台期貨 model 組的引擎
@@ -191,23 +220,17 @@ def build_tw_futures_backtester(
     account: FuturesAccount = FuturesAccount(strategy.init_capital)
     strategy.setup_account(account)
 
-    # 成本與保證金設定：與 PositionManager 共用同一個物件
-    cost_config: FuturesCostConfig = strategy.cost_config or FuturesCostConfig.default()
+    # 保證金設定先解出來交給 DataFeed（API 由它注入）；成本模型、保證金模型與部位
+    # 管理層的組法在 `build_tw_futures_models()`，與實盤同一份，它會再回寫同一個物件
     margin_config: FuturesMarginConfig = (
         strategy.margin_config or FuturesMarginConfig.default()
     )
-
-    # **回寫給策略**：策略層算可開口數、部位管理層算應繳保證金，
-    # 兩者必須是同一個設定物件——否則策略算得出口數、部位管理層卻開不進去，
-    # 而且不會有任何錯誤訊息。API 稍後由 DataFeed 注入這同一個物件
     strategy.margin_config = margin_config
 
     # 換月設定同理：策略挑合約與結算模型轉倉必須是同一份規則，
     # 否則會出現「訊號在次月、部位還在近月」這種不會報錯的錯配
     roll_config: FuturesRollConfig = strategy.roll_config or FuturesRollConfig()
     strategy.roll_config = roll_config
-
-    cost_model: TwFuturesCostModel = TwFuturesCostModel(cost_config)
 
     # **DataFeed 先建**：部位管理層的乘數要由它解析（見下），故建構順序與台股相反。
     # DataFeed 此時只是建好物件、還沒連線，連線在 `setup()` 才開
@@ -219,15 +242,24 @@ def build_tw_futures_backtester(
     # 標的池的契約單位（會隨除權息被交易所調整，寫死必錯）；股期的保證金走比例表，
     # 算式需要的標的股價在 `tw_stock.db`，跨庫取值同樣屬 DataFeed 的職責
     # （連線一律由它持有）。部位管理層自己查常數表的話，股期第一筆開倉就 KeyError
-    position_manager: FuturesPositionManager = FuturesPositionManager(
+    # 事件計數由 factory 建立，引擎、部位管理層與 FillModel 共用同一個 dict；
+    # 期貨用自己的 key 清單，事件報表才不會列出二十個永遠是 0 的台股列
+    event_counts: dict = new_event_counts(FUTURES_EVENT_KEYS)
+
+    futures_models: TwFuturesModels = build_tw_futures_models(
+        strategy,
         account,
-        cost_model=cost_model,
-        margin_config=margin_config,
         multiplier_resolver=data_feed.resolve_multiplier,
         underlying_price_resolver=data_feed.resolve_underlying_price,
+        event_counts=event_counts,
     )
+    cost_model: TwFuturesCostModel = futures_models.cost_model
+    position_manager: FuturesPositionManager = futures_models.position_manager
 
-    instrument: TwFuturesSpec = TwFuturesSpec()
+    # 乘數解析器與部位管理層同一個：計價單位與記帳算出的乘數不會分岔
+    instrument: TwFuturesSpec = TwFuturesSpec(
+        multiplier_resolver=data_feed.resolve_multiplier
+    )
 
     # **型別標註擋不住這件事，這道檢查才擋得住**：期貨的滑價以跳動點表達，
     # 策略若寫成基底的 `FillConfig(slippage_bps_buy=...)` 照樣跑得完，只是
@@ -243,8 +275,6 @@ def build_tw_futures_backtester(
             f"基底 FillConfig 只有基點（slippage_bps_*），兩者不可互換"
         )
 
-    # 事件計數由 factory 建立，引擎與 FillModel 共用同一個 dict
-    event_counts: dict = new_event_counts()
     fill_model: TwFuturesFillModel = TwFuturesFillModel(
         instrument=instrument,
         event_counts=event_counts,
@@ -258,6 +288,7 @@ def build_tw_futures_backtester(
         instrument=instrument,
         roll_config=roll_config,
         fill_model=fill_model,
+        max_no_quote_days=strategy.max_no_quote_days,
     )
 
     return Backtester(
@@ -270,44 +301,9 @@ def build_tw_futures_backtester(
         settlement=settlement,
         data_feed=data_feed,
         reporter_cls=FuturesBacktestReporter,
+        build_simulator=BarSimulator,
         event_counts=event_counts,
         adjusted_price=False,
         write_artifacts=write_artifacts,
+        tick_universe=tick_universe,
     )
-
-
-def build_cost_config(strategy: BaseStockStrategy) -> CostConfig:
-    """
-    - Description:
-        依策略宣告推導成本設定：允許當沖時空單一律走現股當沖沖賣
-
-        **放在 factory 而非引擎**：依策略宣告組裝 model 是 factory 的職責，
-        放進引擎會讓引擎知道台股的信用交易語意。
-    - Parameters:
-        - strategy: BaseStockStrategy
-            要回測的台股策略
-    - Return:
-        - config: CostConfig
-            本次回測使用的成本參數
-    """
-
-    # 做多的當沖稅率也由這個旗標開啟：平倉時另外比對開平倉是否同一天才減半，
-    # 見 `StockPositionManager.close_long_position()`
-    is_day_trade: bool = strategy.allow_day_trade
-    short_method: ShortMethod = (
-        ShortMethod.DAY_TRADE if is_day_trade else strategy.short_method
-    )
-
-    config: CostConfig = strategy.cost_config or CostConfig.default(
-        short_method, is_day_trade
-    )
-
-    if strategy.short_constraint is not None:
-        config.short_constraint = strategy.short_constraint
-
-    # 回測區間交給 CostModel 做稅制邊界的警示（當沖證交稅減半有實施日與落日日期）。
-    # 由 factory 注入是因為策略才知道自己要跑哪一段，而 CostModel 不該反向去問策略
-    config.backtest_start_date = strategy.start_date
-    config.backtest_end_date = strategy.end_date
-
-    return config

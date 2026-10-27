@@ -11,11 +11,14 @@ from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.notify.base import NotifyLevel
 from core.live.risk.event_log import RiskEventLogger
-from core.live.risk.risk_config import RiskConfig
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import BaseOrder
-from core.portfolio.order_rules import exceeds_symbol_exposure
-from core.utils import Action, PositionType
+from core.models.risk_config import AccountRiskConfig, BaseRiskConfig
+from core.portfolio.order_rules import (
+    exceeds_symbol_exposure,
+    is_closing,
+    symbol_exposure_cap,
+)
 
 """
 事前風控：策略或程式出錯時，損失要有硬上限
@@ -68,35 +71,35 @@ class ExposureItem:
 
 # === 純判定：只要「訂單 ＋ 帳戶快照 ＋ 設定」就算得出過或不過 ===
 def check_single_order_amount(
-    amount: float, init_capital: float, config: RiskConfig
+    amount: float, capital_limit: float, config: BaseRiskConfig
 ) -> RiskDecision:
     """
     - Description:
-        單筆委託金額上限
+        單筆委託上限
     - Parameters:
         - amount: float
-            本筆委託金額（股票：價 × 股數；期貨：保證金 × 口數）
-        - init_capital: float
-            該策略的資金額度上限
-        - config: RiskConfig
-            風控設定
+            本筆委託的資金占用（股票：價 × 股數；期貨：原始保證金）
+        - capital_limit: float
+            該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
+        - config: BaseRiskConfig
+            該策略的風控設定
     - Return:
         - RiskDecision
             判定結果
     """
 
-    cap: float = init_capital * config.single_order_amount_ratio
+    cap: float = capital_limit * config.single_order_ratio
     if amount > cap:
         return RiskDecision.reject(
             "SINGLE_ORDER_AMOUNT",
-            f"單筆委託金額 {amount:,.0f} 超過上限 {cap:,.0f}"
-            f"（額度 {init_capital:,.0f} 的 {config.single_order_amount_ratio:.0%}）",
+            f"單筆{config.AMOUNT_LABEL} {amount:,.0f} 超過上限 {cap:,.0f}"
+            f"（額度 {capital_limit:,.0f} 的 {config.single_order_ratio:.0%}）",
         )
     return RiskDecision.ok()
 
 
 def check_daily_amount(
-    used_amount: float, amount: float, init_capital: float, config: RiskConfig
+    used_amount: float, amount: float, capital_limit: float, config: BaseRiskConfig
 ) -> RiskDecision:
     """
     - Description:
@@ -107,45 +110,47 @@ def check_daily_amount(
         一天之內反覆買進賣出同一檔，曝險始終很低，累計金額卻早就爆了。
     - Parameters:
         - used_amount: float
-            今日已送出的累計委託金額
+            今日已送出的累計資金占用
         - amount: float
-            本筆委託金額
-        - init_capital: float
-            該策略的資金額度上限
-        - config: RiskConfig
-            風控設定
+            本筆委託的資金占用（股票：價 × 股數；期貨：原始保證金）
+        - capital_limit: float
+            該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
+        - config: BaseRiskConfig
+            該策略的風控設定
     - Return:
         - RiskDecision
             判定結果
     """
 
-    cap: float = init_capital * config.daily_amount_ratio
+    cap: float = capital_limit * config.daily_ratio
     if used_amount + amount > cap:
         return RiskDecision.reject(
             "DAILY_AMOUNT",
-            f"單日累計委託金額 {used_amount + amount:,.0f} 超過上限 {cap:,.0f}",
+            f"單日累計{config.AMOUNT_LABEL} {used_amount + amount:,.0f} 超過上限 {cap:,.0f}",
         )
     return RiskDecision.ok()
 
 
-def check_volume_cap(volume: int, is_futures: bool, config: RiskConfig) -> RiskDecision:
+def check_volume_cap(volume: int, config: BaseRiskConfig) -> RiskDecision:
     """
     - Description:
         單筆張數／口數上限
+
+        **單位跟著設定的類別走，不由呼叫端另外告知**：股票設定的上限是張、期貨是口。
+        由呼叫端傳「是不是期貨」的話，漏傳一次，期貨就會被套上股票的張數上限
+        （5 口上限變成 50），而那不會有任何錯誤訊息。
     - Parameters:
         - volume: int
             委託數量
-        - is_futures: bool
-            是否為期貨（口數上限與股票張數不同）
-        - config: RiskConfig
-            風控設定
+        - config: BaseRiskConfig
+            該策略的風控設定
     - Return:
         - RiskDecision
             判定結果
     """
 
-    cap: int = config.max_futures_contracts if is_futures else config.max_stock_lots
-    unit: str = "口" if is_futures else "張"
+    cap: int = config.max_order_volume
+    unit: str = config.VOLUME_UNIT
     if volume > cap:
         return RiskDecision.reject(
             "VOLUME_CAP", f"單筆數量 {volume} {unit}超過上限 {cap} {unit}"
@@ -165,7 +170,7 @@ def decision_price_of(order: BaseOrder) -> Optional[float]:
 def check_price_deviation(
     price: Optional[float],
     reference_price: float,
-    config: RiskConfig,
+    config: BaseRiskConfig,
     limit_up: Optional[float] = None,
     limit_down: Optional[float] = None,
 ) -> RiskDecision:
@@ -184,8 +189,8 @@ def check_price_deviation(
             決策價（`BaseOrder.decision_price`；沒經過執行層時為委託價）
         - reference_price: float
             基準價（盤前用參考價、盤中用最新成交價）
-        - config: RiskConfig
-            風控設定
+        - config: BaseRiskConfig
+            該策略的風控設定
         - limit_up: Optional[float]
             漲停價（交易所公告值）
         - limit_down: Optional[float]
@@ -224,8 +229,8 @@ def truncate_batch_by_exposure(
     items: Sequence[ExposureItem],
     existing_exposure: float,
     existing_symbol_exposure: Dict[str, float],
-    init_capital: float,
-    config: RiskConfig,
+    capital_limit: float,
+    config: BaseRiskConfig,
 ) -> Tuple[List[ExposureItem], List[Tuple[ExposureItem, str]]]:
     """
     - Description:
@@ -234,28 +239,32 @@ def truncate_batch_by_exposure(
         **超額時截斷而非整批拒絕**：整批拒會讓平倉單也被擋掉，那比超額更危險。
         **平倉單一律放行且不計入曝險**——它讓曝險變小，擋它沒有道理。
 
+        上限由設定決定（`exposure_limits()`）：股票是總曝險與單一標的兩條，
+        期貨是名目槓桿一條（金額為契約價值）。
+
         輸入順序即優先順序（呼叫端已依 `sort_orders()` 排好），被截斷的是後面的單。
     - Parameters:
         - items: Sequence[ExposureItem]
-            本批委託與各自的金額
+            本批委託與各自的曝險（股票：價 × 股數；期貨：契約價值）
         - existing_exposure: float
-            送出前的既有曝險（持倉市值 ＋ 在途委託）
+            送出前的既有曝險（持倉 ＋ 在途委託）
         - existing_symbol_exposure: Dict[str, float]
             各標的的既有曝險
-        - init_capital: float
-            該策略的資金額度上限
-        - config: RiskConfig
+        - capital_limit: float
+            該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
+        - config: BaseRiskConfig
             風控設定
     - Return:
         - Tuple[List[ExposureItem], List[Tuple[ExposureItem, str]]]
-            （放行清單, [(被截斷的單, 原因)]）
+            （放行清單，`[(被截斷的單, 原因)]`）
     """
 
-    total_cap: float = init_capital * config.total_exposure_ratio
-    # 單一標的上限的公式與回測共用；差異（預設值、適用方向、超限行為）
-    # 寫在 `order_rules.exceeds_symbol_exposure()` 的 docstring
-    symbol_ratio: float = config.single_symbol_exposure_ratio
-    symbol_cap: float = init_capital * symbol_ratio
+    total_cap: float
+    symbol_ratio: Optional[float]
+    total_cap, symbol_ratio = config.exposure_limits(capital_limit)
+    # 單一標的上限的公式與回測共用（判定與上限金額都由 `order_rules` 算）；
+    # 差異（預設值、適用方向、超限行為）寫在 `exceeds_symbol_exposure()` 的 docstring
+    symbol_cap: Optional[float] = symbol_exposure_cap(capital_limit, symbol_ratio)
 
     allowed: List[ExposureItem] = []
     truncated: List[Tuple[ExposureItem, str]] = []
@@ -263,7 +272,7 @@ def truncate_batch_by_exposure(
     per_symbol: Dict[str, float] = dict(existing_symbol_exposure)
 
     for item in items:
-        if is_closing_order(item.order):
+        if is_closing(item.order):
             allowed.append(item)
             continue
 
@@ -272,12 +281,13 @@ def truncate_batch_by_exposure(
             truncated.append(
                 (
                     item,
-                    f"送出後總曝險 {running + item.amount:,.0f} 超過上限 {total_cap:,.0f}",
+                    f"送出後{config.EXPOSURE_LABEL} {running + item.amount:,.0f} "
+                    f"超過上限 {total_cap:,.0f}",
                 )
             )
             continue
         if exceeds_symbol_exposure(
-            per_symbol.get(symbol, 0.0) + item.amount, init_capital, symbol_ratio
+            per_symbol.get(symbol, 0.0) + item.amount, capital_limit, symbol_ratio
         ):
             truncated.append(
                 (
@@ -295,26 +305,6 @@ def truncate_batch_by_exposure(
     return (allowed, truncated)
 
 
-def is_closing_order(order: BaseOrder) -> bool:
-    """
-    - Description:
-        判斷是否為平倉單
-
-        LONG 的賣出、SHORT 的買進都是平倉。**這條判定散在多處會漂移**，
-        而漂移的後果是平倉單被當成開倉擋掉——部位因此失去出場能力。
-    - Parameters:
-        - order: BaseOrder
-            訂單
-    - Return:
-        - bool
-            是否為平倉
-    """
-
-    if order.position_type is PositionType.LONG:
-        return order.action is Action.SELL
-    return order.action is Action.BUY
-
-
 # === 依賴行程狀態的規則 ===
 class PreTradeRiskManager:
     """
@@ -324,12 +314,16 @@ class PreTradeRiskManager:
         **`TradingMode` 由它單一持有**。對帳器、盤中事件迴圈、券商 session
         都只送降級事件過來，不自己改模式——散在各元件各自切換的話，
         沒有任何一處知道「現在到底能不能送單」。
+
+        **策略層的門檻由呼叫端逐次傳入，本類只持有帳戶層的**：每支策略有自己的
+        `StockRiskConfig`／`FuturesRiskConfig`（策略宣告、部署設定收緊），存在各自的
+        `StrategyContext` 上。本類再存一份「策略名 → 設定」的話，同一件事就有兩個來源。
     """
 
     def __init__(
         self,
         mode_state: TradingModeState,
-        config: Optional[RiskConfig] = None,
+        account_config: Optional[AccountRiskConfig] = None,
         dao: Optional[LiveTradeDAO] = None,
         run_id: str = "",
         kill_switch_path: Path = LIVE_KILL_SWITCH_PATH,
@@ -341,8 +335,8 @@ class PreTradeRiskManager:
         - Parameters:
             - mode_state: TradingModeState
                 交易模式狀態機（風控是它的唯一持有者）
-            - config: Optional[RiskConfig]
-                風控設定；None 時用預設值
+            - account_config: Optional[AccountRiskConfig]
+                帳戶層風控設定；None 時用預設值
             - dao: Optional[LiveTradeDAO]
                 紀錄庫；拒單與降級事件寫進 `live_risk_event`
             - run_id: str
@@ -354,7 +348,9 @@ class PreTradeRiskManager:
         """
 
         self.mode_state: TradingModeState = mode_state
-        self.config: RiskConfig = config if config is not None else RiskConfig()
+        self.account_config: AccountRiskConfig = (
+            account_config if account_config is not None else AccountRiskConfig()
+        )
         self.dao: Optional[LiveTradeDAO] = dao
         self.run_id: str = run_id
         self.kill_switch_path: Path = kill_switch_path
@@ -375,12 +371,12 @@ class PreTradeRiskManager:
         self,
         order: BaseOrder,
         strategy_name: str,
-        init_capital: float,
+        capital_limit: float,
         amount: float,
+        config: BaseRiskConfig,
         reference_price: float = 0.0,
         limit_up: Optional[float] = None,
         limit_down: Optional[float] = None,
-        is_futures: bool = False,
     ) -> RiskDecision:
         """
         - Description:
@@ -393,18 +389,18 @@ class PreTradeRiskManager:
                 待送出的訂單
             - strategy_name: str
                 歸屬策略
-            - init_capital: float
-                該策略的資金額度上限
+            - capital_limit: float
+                該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
             - amount: float
-                本筆委託金額
+                本筆委託的資金占用（股票：價 × 股數；期貨：原始保證金）
+            - config: BaseRiskConfig
+                該策略的風控設定
             - reference_price: float
                 基準價
             - limit_up: Optional[float]
                 漲停價
             - limit_down: Optional[float]
                 跌停價
-            - is_futures: bool
-                是否為期貨
         - Return:
             - RiskDecision
                 判定結果
@@ -415,12 +411,12 @@ class PreTradeRiskManager:
             decision = self._check_limits(
                 order,
                 strategy_name,
-                init_capital,
+                capital_limit,
                 amount,
+                config,
                 reference_price,
                 limit_up,
                 limit_down,
-                is_futures,
             )
 
         if not decision.passed:
@@ -439,7 +435,7 @@ class PreTradeRiskManager:
             )
             return RiskDecision.reject("KILL_SWITCH", "kill switch 生效，拒絕所有委託")
 
-        closing: bool = is_closing_order(order)
+        closing: bool = is_closing(order)
         if closing and not self.mode_state.allows_close(strategy_name):
             return RiskDecision.reject(
                 "MODE_HALTED",
@@ -456,12 +452,12 @@ class PreTradeRiskManager:
         self,
         order: BaseOrder,
         strategy_name: str,
-        init_capital: float,
+        capital_limit: float,
         amount: float,
+        config: BaseRiskConfig,
         reference_price: float,
         limit_up: Optional[float],
         limit_down: Optional[float],
-        is_futures: bool,
     ) -> RiskDecision:
         """
         金額、數量、價格與頻率
@@ -472,19 +468,19 @@ class PreTradeRiskManager:
         平不掉。價格（漲跌停、偏離）與頻率防的是錯價與失控，與方向無關，出場照樣檢查。
         """
 
-        closing: bool = is_closing_order(order)
+        closing: bool = is_closing(order)
         checks: List[RiskDecision] = []
         if not closing:
             checks.extend(
                 (
-                    check_single_order_amount(amount, init_capital, self.config),
+                    check_single_order_amount(amount, capital_limit, config),
                     check_daily_amount(
                         self.daily_amount.get(strategy_name, 0.0),
                         amount,
-                        init_capital,
-                        self.config,
+                        capital_limit,
+                        config,
                     ),
-                    check_volume_cap(order.volume, is_futures, self.config),
+                    check_volume_cap(order.volume, config),
                 )
             )
         checks.extend(
@@ -492,11 +488,11 @@ class PreTradeRiskManager:
                 check_price_deviation(
                     decision_price_of(order),
                     reference_price,
-                    self.config,
+                    config,
                     limit_up,
                     limit_down,
                 ),
-                self._check_order_rate(strategy_name),
+                self._check_order_rate(strategy_name, config),
             )
         )
         for decision in checks:
@@ -504,7 +500,9 @@ class PreTradeRiskManager:
                 return decision
         return RiskDecision.ok()
 
-    def _check_order_rate(self, strategy_name: str) -> RiskDecision:
+    def _check_order_rate(
+        self, strategy_name: str, config: BaseRiskConfig
+    ) -> RiskDecision:
         """
         下單頻率
 
@@ -520,16 +518,32 @@ class PreTradeRiskManager:
         while window and window[0] < cutoff:
             window.popleft()
 
-        if len(window) >= self.config.max_orders_per_minute:
+        if len(window) >= config.max_orders_per_minute:
             reason: str = (
                 f"{strategy_name} 一分鐘內送出 {len(window)} 張委託，"
-                f"超過上限 {self.config.max_orders_per_minute}"
+                f"超過上限 {config.max_orders_per_minute}"
             )
             self.mode_state.degrade(
                 TradingMode.REDUCE_ONLY, reason, strategy_name=strategy_name
             )
             return RiskDecision.reject("ORDER_RATE", reason)
         return RiskDecision.ok()
+
+    def preload_daily_amount(self, strategy_name: str, amount: float) -> None:
+        """
+        - Description:
+            啟動時以紀錄庫裡當日已送出的委託金額起算累計
+
+            三個段落是三個行程、重啟也會歸零，而單日累計上限要防的正是「重啟反覆送單」：
+            每個行程都從 0 起算，這條上限只管得住單一段落。
+        - Parameters:
+            - strategy_name: str
+                策略名
+            - amount: float
+                本行程啟動前當日已送出的委託金額
+        """
+
+        self.daily_amount[strategy_name] = amount
 
     def _record_submission(self, strategy_name: str, amount: float) -> None:
         """通過後才計入流量與頻率：被拒的單沒有送出去，不該佔額度"""
@@ -544,7 +558,8 @@ class PreTradeRiskManager:
         self,
         items: Sequence[ExposureItem],
         strategy_name: str,
-        init_capital: float,
+        capital_limit: float,
+        config: BaseRiskConfig,
         existing_exposure: float = 0.0,
         existing_symbol_exposure: Optional[Dict[str, float]] = None,
     ) -> List[ExposureItem]:
@@ -558,8 +573,10 @@ class PreTradeRiskManager:
                 本批委託（順序即優先順序）
             - strategy_name: str
                 歸屬策略
-            - init_capital: float
-                該策略的資金額度上限
+            - capital_limit: float
+                該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
+            - config: BaseRiskConfig
+                曝險上限的來源（帳戶層合計時傳該市場的預設設定）
             - existing_exposure: float
                 送出前的既有曝險
             - existing_symbol_exposure: Optional[Dict[str, float]]
@@ -573,8 +590,8 @@ class PreTradeRiskManager:
             items,
             existing_exposure,
             existing_symbol_exposure or {},
-            init_capital,
-            self.config,
+            capital_limit,
+            config,
         )
         for item, reason in truncated:
             self.record_rejection(
@@ -586,7 +603,11 @@ class PreTradeRiskManager:
 
     # === 損益與降級 ===
     def check_daily_loss(
-        self, strategy_name: str, loss: float, init_capital: float
+        self,
+        strategy_name: str,
+        loss: float,
+        capital_limit: float,
+        config: BaseRiskConfig,
     ) -> bool:
         """
         - Description:
@@ -600,14 +621,16 @@ class PreTradeRiskManager:
                 策略名
             - loss: float
                 虧損金額（正數表示虧損）
-            - init_capital: float
-                該策略的資金額度上限
+            - capital_limit: float
+                該策略的實盤資金額度（`live_capital`；未宣告時為 `init_capital`）
+            - config: BaseRiskConfig
+                該策略的風控設定
         - Return:
             - bool
                 是否觸發降級
         """
 
-        cap: float = init_capital * self.config.daily_loss_ratio
+        cap: float = capital_limit * config.daily_loss_ratio
         if loss <= cap:
             return False
 
@@ -632,7 +655,7 @@ class PreTradeRiskManager:
                 是否觸發降級
         """
 
-        cap: float = total_equity * self.config.account_daily_loss_ratio
+        cap: float = total_equity * self.account_config.daily_loss_ratio
         if loss <= cap:
             return False
 

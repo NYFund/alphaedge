@@ -47,13 +47,14 @@ class CapitalAllocator:
             建立分配器
         - Parameters:
             - quotas: Dict[str, float]
-                各策略的額度上限（`init_capital`）
+                各策略的額度上限（`live_capital`；未宣告時為 `init_capital`）
             - dao: Optional[LiveTradeDAO]
                 紀錄庫；額度不足的拒單寫進 `live_risk_event`
             - run_id: str
                 本次啟動的識別碼
             - safety_ratio: float
-                安全係數
+                安全係數：Σ 各策略額度不得超過帳戶總權益 × 它。帳戶總曝險上限
+                也是由它間接保證，空隙見 `CAPITAL_SAFETY_RATIO` 的註解
             - now_provider: Callable[[], datetime.datetime]
                 取得目前時間
         """
@@ -194,6 +195,25 @@ class CapitalAllocator:
             return
 
         self.reserved[strategy_name] = max(self.reserved[strategy_name] - amount, 0.0)
+
+    def consume(self, strategy_name: str, amount: float) -> None:
+        """
+        - Description:
+            成交的金額轉入持倉占用
+
+            占用（`used`）平常只在段落開始時由持倉刷新一次；同一批內即時成交的單
+            （期貨範圍市價＋IOC、盤中段落）釋放保留之後，那筆錢既不在保留也不在占用，
+            後面的單會以整個額度通過。
+        - Parameters:
+            - strategy_name: str
+                策略名
+            - amount: float
+                已成交部分的金額
+        """
+
+        if strategy_name not in self.used:
+            return
+        self.used[strategy_name] += max(amount, 0.0)
 
     def release_all(self, strategy_name: str) -> float:
         """

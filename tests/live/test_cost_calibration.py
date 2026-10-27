@@ -10,7 +10,7 @@ from core.broker.tw.shioaji_account_query import ShioajiAccountQuery
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.after_close import AfterCloseRunner
 from core.live.factory import make_trade_cost_estimator
-from core.market.tw.cost_model import StockCostModel
+from core.market.tw.cost_model import TwStockCostModel
 from core.models import RealizedTradeSnapshot
 from core.models.cost_config import CostConfig
 from core.utils import Action
@@ -101,10 +101,14 @@ def test_realized_trades_are_normalized_per_market() -> None:
 
 # === 估算器 ===
 def opening_fill(action: str, price: float, filled_at: str) -> Dict[str, Any]:
+    """組一筆開倉成交資料列"""
+
     return {"action": action, "price": price, "volume": 1, "filled_at": filled_at}
 
 
 def stock_trade(cover_price: float = 2475.0) -> RealizedTradeSnapshot:
+    """2330 一張的已實現交易快照，平倉價可調"""
+
     return RealizedTradeSnapshot(
         symbol="2330",
         quantity=1,
@@ -117,7 +121,7 @@ def stock_trade(cover_price: float = 2475.0) -> RealizedTradeSnapshot:
 def test_stock_long_is_taxed_on_the_cover_leg() -> None:
     """多單：證交稅課在平倉（賣出）那一腿；同一天開平倉用當沖稅率"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default())
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default())
     estimated: Optional[float] = make_trade_cost_estimator()(
         stock_trade(), [opening_fill("Buy", 2480.0, "2026-09-22T12:00:39+08:00")], TODAY
     )
@@ -133,7 +137,7 @@ def test_stock_long_is_taxed_on_the_cover_leg() -> None:
 def test_stock_short_is_taxed_on_the_opening_leg() -> None:
     """空單：賣出是開倉那一腿，稅課在開倉價"""
 
-    model: StockCostModel = StockCostModel(CostConfig.default())
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default())
     estimated: Optional[float] = make_trade_cost_estimator()(
         stock_trade(cover_price=2470.0),
         [opening_fill("Sell", 2480.0, "2026-09-21T13:25:00+08:00")],
@@ -214,6 +218,8 @@ def make_runner(
     estimate: Optional[float],
     root: Path,
 ) -> AfterCloseRunner:
+    """只接券商已實現交易與成本估算的收盤後流程"""
+
     broker: Any = SimpleNamespace(get_realized_trades=lambda run_date: trades)
     reporter: Any = SimpleNamespace(output_root=root)
     return AfterCloseRunner(
@@ -248,6 +254,8 @@ def seed_opening_fill(dao: LiveTradeDAO) -> None:
 
 
 def drift_events(dao: LiveTradeDAO) -> List[Any]:
+    """已寫入的成本模型偏差事件"""
+
     return dao.conn.execute(
         "SELECT symbol FROM live_risk_event WHERE category = 'COST_MODEL_DRIFT'"
     ).fetchall()

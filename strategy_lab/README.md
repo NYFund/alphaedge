@@ -4,14 +4,14 @@
 **分析資料、思考交易策略、做小型實驗、寫筆記** 的地方。
 
 > **這裡不負責「跑正式回測」**。AlphaEdge 已經在 `core/` 提供一套完整的策略框架與回測器（`Backtester`、`StockBacktestReporter`、`StrategyLoader`），
-> 想跑正式回測請把策略放到 `core/strategies/stock/`（股票）或 `core/strategies/futures/`（期貨），然後執行：
+> 想跑正式回測請把策略放到 `strategies/stock/`（股票）或 `strategies/futures/`（期貨），然後執行：
 >
 > ```bash
 > .venv/bin/python -m apps.backtest --strategy <StrategyName>
 > ```
 >
 > `strategy_lab/` 是它的 **上游**：把想法、資料分析、研究筆記都在這裡完成，
-> 成熟後再「**搬到 `core/strategies/stock/` 或 `core/strategies/futures/`**」就能直接接上正式框架。
+> 成熟後再「**搬到 `strategies/stock/` 或 `strategies/futures/`**」就能直接接上正式框架。
 
 ---
 
@@ -24,7 +24,7 @@
   - [研究工作流（從想法到上線）](#研究工作流從想法到上線)
   - [可直接複用的資料 API](#可直接複用的資料-api)
     - [StockPriceAPI — 日線價格資料 (SQLite)](#stockpriceapi--日線價格資料-sqlite)
-    - [StockTickAPI — 逐筆成交資料 (DolphinDB)](#stocktickapi--逐筆成交資料-dolphindb)
+    - [StockTickAPI — 逐筆成交資料 (TimescaleDB)](#stocktickapi--逐筆成交資料-timescaledb)
     - [StockChipAPI — 三大法人籌碼 (SQLite)](#stockchipapi--三大法人籌碼-sqlite)
     - [MonthlyRevenueReportAPI — 月營收 (SQLite)](#monthlyrevenuereportapi--月營收-sqlite)
     - [FinancialStatementAPI — 季報財報 (SQLite)](#financialstatementapi--季報財報-sqlite)
@@ -97,7 +97,7 @@ strategy_lab/
 ## 研究工作流（從想法到上線）
 
 ```
-ideas/           data_analysis/      strategies/<name>/      core/strategies/{stock,futures}/<name>.py
+ideas/           data_analysis/      strategies/<name>/      strategies/{stock,futures}/<name>.py
   │                  │                     │                            │
   ▼                  ▼                     ▼                            ▼
 寫一段假設     EDA、相關性、IC    寫完整 pipeline，產圖表        繼承 BaseStockStrategy
@@ -120,7 +120,7 @@ ideas/           data_analysis/      strategies/<name>/      core/strategies/{st
 
 > 這裡是**研究用法**：直接建立 API 物件、拿 `DataFrame` 自己處理欄位。搬進 `core/strategies/`
 > 寫正式策略時規則相反——API 由引擎的 `DataFeed` 建立，策略只能用具名查詢方法（`get_close_map()` 等），
-> 見 [策略撰寫指南](../core/strategies/README.md)〈資料 API 使用方式〉。
+> 見 [策略撰寫指南](../strategies/README.md)〈資料 API 使用方式〉。
 
 ### StockPriceAPI — 日線價格資料 (SQLite)
 
@@ -151,10 +151,12 @@ df_2330 = price.get_stock_price(
 
 回傳欄位（典型）：`date, stock_id, 開盤價, 最高價, 最低價, 收盤價, 成交股數, ...`（**是 `成交股數` 不是 `成交量`**——後者只存在於期貨表，單位是口。要張數請用 `StockPriceAPI.get_volume_lots_map()`）
 
-### StockTickAPI — 逐筆成交資料 (DolphinDB)
+### StockTickAPI — 逐筆成交資料 (TimescaleDB)
 
-來源：DolphinDB tick 表（需先連線；連線資訊由 `core/config` 帶入）。
-**注意：需安裝 `dolphindb` 套件且有可用的 DDB 伺服器。**
+來源：TimescaleDB 的 `stock_tick`（連線字串為 `.env` 的 `TICK_DATABASE_URL`）。
+**注意：需 `uv sync --extra tick`，並先開 Docker Desktop、`docker compose up -d postgres`；歷史資料要先以 `scripts/manual/manual_tick_history_import.py` 匯入。**
+回傳欄位固定為 `stock_id, time, close, volume, bid_price, bid_volume, ask_price, ask_volume, tick_type, cum_volume`；興櫃時期不入庫。
+`volume` 是這一筆的成交量，`cum_volume` 是該檔當日到這一筆為止的累計量（含這一筆），單位都是張——實盤 TICK 報價的 `volume` 對應的是 `cum_volume`。
 
 ```python
 import datetime
@@ -168,10 +170,11 @@ df = tick.get(
     end_date=datetime.date(2024, 5, 10),
 )
 
-# 2) 所有個股混排（模擬盤中時序）
+# 2) 所有個股混排（模擬盤中時序）；可用 stock_ids 只取部分股票，一次查完
 df_ordered = tick.get_ordered_ticks(
     start_date=datetime.date(2024, 5, 10),
     end_date=datetime.date(2024, 5, 10),
+    stock_ids=["2330", "2317"],  # 省略則為全市場
 )
 
 # 3) 指定個股 tick
@@ -241,7 +244,7 @@ df = fs.get(table_name="<your_fs_table>", year=2024, season=1)
 ```
 
 > 不同財報（資產負債表、損益表、現金流量表）會落在不同的 SQLite 表，
-> 實際表名請以 `tasks/` 內的更新腳本或 `core/config/schema.py` 為準。
+> 實際表名請以 `core/config/schema.py` 為準。
 
 ### MarketCalendar — 交易日工具
 
@@ -342,11 +345,11 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 
 | 資料種類       | 後端           | 提供 API                      | 來源 / 更新                                |
 | -------------- | -------------- | ----------------------------- | ------------------------------------------ |
-| 日線價量       | SQLite         | `StockPriceAPI`               | `tasks/` 內的爬蟲；表名見 `core/config/schema.py` |
-| 逐筆 Tick      | DolphinDB      | `StockTickAPI`                | Shioaji / 第三方；需另起 DDB 服務          |
-| 三大法人籌碼   | SQLite         | `StockChipAPI`                | `tasks/` 內的爬蟲                          |
-| 月營收         | SQLite         | `MonthlyRevenueReportAPI`     | `tasks/` 內的爬蟲                          |
-| 財報           | SQLite         | `FinancialStatementAPI`       | `tasks/` 內的爬蟲                          |
+| 日線價量       | SQLite         | `StockPriceAPI`               | `core/pipeline/` 內的爬蟲；表名見 `core/config/schema.py` |
+| 逐筆 Tick      | TimescaleDB    | `StockTickAPI`                | Shioaji 每日更新＋歷史 CSV 匯入；需執行中的 TimescaleDB |
+| 三大法人籌碼   | SQLite         | `StockChipAPI`                | `core/pipeline/` 內的爬蟲                  |
+| 月營收         | SQLite         | `MonthlyRevenueReportAPI`     | `core/pipeline/` 內的爬蟲                  |
+| 財報           | SQLite         | `FinancialStatementAPI`       | `core/pipeline/` 內的爬蟲                  |
 | 海外 ADR / FX  | yfinance       | 直接 `import yfinance as yf`  | 即時抓取（無本地表）                       |
 | 交易日／前一日 | 視 API 而定   | `MarketCalendar`              | 透過 `StockPriceAPI` 推算                 |
 
@@ -375,7 +378,7 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 先建立主題資料夾 `strategy_lab/data_analysis/<your_topic>/`，把腳本存成 `run.py` 或 `analysis.py`，就能在專案根目錄跑。
 
 > **執行一律用 `-m`**（例如 `.venv/bin/python -m strategy_lab.data_analysis.<your_topic>.run`）。
-> `strategy_lab` 不在 `pyproject` 的 `packages.find` 裡（只裝 `core*`／`tasks*`／`tests*`），
+> `strategy_lab` 不在 `pyproject` 的 `packages.find` 裡（只裝 `core*`／`apps*`／`strategies*`／`tests*`），
 > 直接跑檔案路徑時 `sys.path[0]` 是腳本自己的目錄，`import strategy_lab.…` 會失敗。
 > 舊版靠每支腳本開頭的 `sys.path.insert` 硬塞，那會遮蔽「沒安裝就跑」的 import
 > 錯誤（已清除）。
@@ -478,7 +481,7 @@ print(realistic_pnl(600.0, 620.0, 5))
 
 當 `strategy_lab/strategies/<name>/` 的研究結論穩定後，按以下步驟「**搬家**」：
 
-1. 在 `core/strategies/stock/` 建立 `<your_strategy>.py` 繼承 `BaseStockStrategy`；期貨策略則放 `core/strategies/futures/` 並繼承 `BaseFuturesStrategy`。
+1. 在 `strategies/stock/` 建立 `<your_strategy>.py` 繼承 `BaseStockStrategy`；期貨策略則放 `strategies/futures/` 並繼承 `BaseFuturesStrategy`。
 2. 把研究階段的訊號邏輯抽成 `_build_signals()`，
    並實作框架要求的 5 個 method：
    `setup_account / setup_apis / generate_open_signals / generate_close_signals / generate_stop_loss_signals`。
@@ -494,8 +497,8 @@ print(realistic_pnl(600.0, 620.0, 5))
    <策略>_metrics_summary.csv` 等標準報表（**檔名一律帶策略名前綴**，共 5 份 CSV ＋ 5 張圖；
    完整清單見 [回測引擎說明](../core/backtest/README.md#回測結果)）。
 
-> 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`core/strategies/README.md`](../core/strategies/README.md)。
-> 現成的範例是 `core/strategies/stock/` 與 `core/strategies/futures/` 底下的策略檔。
+> 詳細的「怎麼寫 `BaseStockStrategy` 子類別」請看 [`strategies/README.md`](../strategies/README.md)。
+> 現成的範例是 `strategies/stock/` 與 `strategies/futures/` 底下的策略檔。
 >
 > **搬進 `core/` 的成品可能會被刪掉**：`tsmc_overnight_signal` 的成品策略就在 2026-09-17
 > 因結論為否定而移除。研究資料夾要能獨立成立，不要把結論只寫在成品策略的 docstring 裡。

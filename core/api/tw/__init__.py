@@ -5,7 +5,7 @@
 `futures_price_api.py`），與 `core/pipeline/tw/` 一致——每層目錄只放一條軸，
 `tw_stock/`／`tw_futures/` 會把兩條軸壓成單一目錄名。
 
-**刻意不做套件層 eager import**：`core.api.tw.stock_tick_api` 會相依 DolphinDB
-（選用相依），在此 re-export 會讓沒裝的環境一 import `core.api.tw` 就壞掉。
-呼叫端一律使用完整模組路徑。
+**刻意不做套件層 eager import**：呼叫端一律使用完整模組路徑。`stock_tick_api`
+的選用相依（`psycopg`／`connectorx`）經 `core/dao/tw/stock_tick_dao.py` 在函式內才 import，
+沒裝的環境照樣 import 得進來，建立 `StockTickAPI` 時才會報缺套件。
 """

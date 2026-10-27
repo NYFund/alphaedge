@@ -1,17 +1,3 @@
-"""
-Overnight lead-signal strategy backtest module.
-
-Uses TSM, ^SOX, and TWD=X as pre-open lead features to forecast same-day
-2330.TW return and run a long-or-flat daily backtest.
-
-Exports two PnL paths on the test window: (1) run_vectorized_continuous_backtest,
-an idealized full-notional vectorization; (2) run_backtest_with_signal, a lot-based
-path with cash and Taiwan stock fees/taxes.
-
-Also writes baseline_comparison.csv for Ridge, OLS, logistic direction (IRLS),
-and TSM-sign-only rules on the same test calendar.
-"""
-
 from __future__ import annotations
 
 import datetime as dt
@@ -23,6 +9,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import yfinance as yf
 
+from core.analysis.performance_metrics import compute_annualized_sharpe
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.utils import Commission, Units
 from core.utils.instrument import StockUtils
@@ -30,6 +17,20 @@ from strategy_lab.strategies.tsmc_overnight_signal.ridge import (
     ridge_fit_predict,
     tune_alpha,
 )
+
+"""
+台積電跨市場隔夜訊號回測模組
+
+以 TSM、^SOX、TWD=X 前一個美股交易日的報酬作為開盤前的領先特徵，預測 2330.TW
+當日報酬，並以「只做多或空手」的日頻規則回測。
+
+- Features:
+    1. 測試區間輸出兩條 PnL 路徑：`run_vectorized_continuous_backtest()` 是全額名目、
+       不計張數的理想化向量回測；`run_backtest_with_signal()` 以整張、現金與台股
+       手續費／交易稅模擬可執行的結果
+    2. 在同一測試日曆上比較 Ridge、OLS、logistic 方向分類（IRLS）與「只看 TSM 正負號」
+       四種基準，寫入 `baseline_comparison.csv`
+"""
 
 # 此檔位於 strategy_lab/strategies/tsmc_overnight_signal/pipeline.py
 # parents[3] = AlphaEdge 專案根目錄
@@ -53,11 +54,13 @@ TEST_START = dt.date(2022, 1, 1)
 FEE_BUY: float = float(Commission.CommRate) * float(Commission.Discount)
 FEE_SELL_PLUS_TAX: float = FEE_BUY + float(Commission.TaxRate)
 
-# Plot export: reduce title/legend clipping in PNG
+# 匯出 PNG 時預留邊界，避免標題與圖例被裁切
 _PLOT_MARGIN = dict(l=72, r=108, t=100, b=80)
 
 
 def _apply_figure_margins(fig: go.Figure) -> None:
+    """套用統一邊界，避免匯出 PNG 時標題與圖例被裁切"""
+
     fig.update_layout(margin=_PLOT_MARGIN)
 
 
@@ -66,7 +69,8 @@ def _ols_fit_predict(
     y_train: np.ndarray,
     X_pred: np.ndarray,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Unregularized linear regression with intercept (OLS)."""
+    """不加正則化、含截距的線性迴歸（OLS），作為 Ridge 的對照基準"""
+
     n, p = X_train.shape
     X1 = np.c_[np.ones(n), X_train]
     coef, *_ = np.linalg.lstsq(X1, y_train, rcond=None)
@@ -81,9 +85,22 @@ def _logistic_irls_fit(
     tol: float = 1e-9,
 ) -> np.ndarray:
     """
-    Logistic regression via IRLS. X_design must include a leading column of ones (intercept).
-    y_binary in {0, 1}.
+    - Description:
+        以 IRLS 擬合 logistic 迴歸，只預測漲跌方向，作為迴歸類模型的對照基準
+    - Parameters:
+        - X_design: np.ndarray
+            設計矩陣，第一欄必須是全 1 的截距欄
+        - y_binary: np.ndarray
+            二元標籤，值域 {0, 1}
+        - max_iter: int
+            最大迭代次數
+        - tol: float
+            係數變動量低於此值即視為收斂
+    - Return:
+        - np.ndarray
+            含截距的係數向量
     """
+
     n, p = X_design.shape
     beta = np.zeros(p, dtype=float)
     y = y_binary.astype(float)
@@ -108,7 +125,11 @@ def _exec_with_pred_signal(
     pred: np.ndarray,
     signal: np.ndarray,
 ) -> pd.DataFrame:
-    """exec_skel: date, close_2330, r_2330 (test window)."""
+    """
+    把預測值與訊號併入執行骨架；`exec_skel` 為測試區間的 date、close_2330、r_2330，
+    沒有預測的台股交易日視為空手（pred 補 0、signal 補 0）
+    """
+
     ps = pd.DataFrame(
         {
             "date": dates,
@@ -129,6 +150,8 @@ def _evaluate_model_on_exec(
     pred: np.ndarray,
     signal: np.ndarray,
 ) -> Dict[str, float]:
+    """在同一執行骨架上算出單一模型的測試 IC，以及向量化與逐張兩種回測的績效"""
+
     ex = _exec_with_pred_signal(exec_skel, dates, pred, signal)
     ic = information_coefficient(
         ex["r_2330"].values.astype(float), ex["pred"].values.astype(float)
@@ -149,9 +172,11 @@ def _evaluate_model_on_exec(
 
 def fetch_panel(start: dt.date, end: dt.date) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """
-    2330 收盤與報酬：與 core/backtest 一致，使用 StockPriceAPI（SQLite）。
-    美股特徵：yfinance（TSM、^SOX、TWD=X）。
+    取得 2330 收盤價與對齊後的特徵面板：台股價格與正式回測同源，走 `StockPriceAPI`（SQLite）；
+    美股特徵（TSM、^SOX、TWD=X）走 yfinance。每個台股交易日只取**嚴格早於**當天的最後一個
+    美股交易日報酬，避免 look-ahead
     """
+
     tw_id = "2330"
     price_api = StockPriceAPI()
     tw_df = price_api.get_stock_price(tw_id, start, end)
@@ -235,12 +260,26 @@ def fetch_panel(start: dt.date, end: dt.date) -> Tuple[pd.DataFrame, pd.DataFram
 def run_backtest_with_signal(
     exec_df: pd.DataFrame, init_capital: float = 1_000_000.0
 ) -> pd.DataFrame:
+    """
+    - Description:
+        逐張回測：以收盤價成交、只買整張、計入台股手續費與交易稅，現金不足時少買或不買。
+        研究結論以這條路徑為準
+    - Parameters:
+        - exec_df: pd.DataFrame
+            含 date、pred、signal、close_2330、r_2330 的執行表
+        - init_capital: float
+            初始資金（元）
+    - Return:
+        - pd.DataFrame
+            每日部位、策略與買進持有的報酬、權益（起始為 1）與回撤
+    """
+
     pred = exec_df["pred"].values.astype(float)
     signal = exec_df["signal"].values.astype(int)
     close = exec_df["close_2330"].values.astype(float)
     r = exec_df["r_2330"].values.astype(float)
 
-    # Event-driven aligned simulation: close-price execution, integer lots, TW fee/tax.
+    # 事件驅動模擬：收盤價成交、整張、台股手續費與交易稅
     cash = float(init_capital)
     hold_lots = 0
     equity_series = []
@@ -248,6 +287,8 @@ def run_backtest_with_signal(
     strat_r = []
 
     def max_buyable_lots(balance: float, price: float) -> int:
+        """含手續費仍買得起的最大張數；先用不含費用的上限再逐張遞減"""
+
         lots = int(balance // (price * Units.LOT))
         while lots > 0:
             comm = StockUtils.calculate_transaction_commission(price=price, volume=lots)
@@ -304,13 +345,13 @@ def run_backtest_with_signal(
 
 def run_vectorized_continuous_backtest(exec_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Idealized daily backtest: full-notional long/flat, same-day signal times close-to-close
-    return, with fees charged only when the discrete position toggles.
+    理想化日頻回測：全額名目只做多或空手，以當日訊號乘上收盤對收盤報酬，只在部位切換時扣費用
 
-    This path intentionally abstracts lot size, partial fills, and cash drag. It is closer
-    to a research notebook vectorization and can materially overstate implementable PnL
-    versus the lot-based simulation in run_backtest_with_signal (see report reconciliation).
+    刻意忽略張數、部分成交與閒置現金的拖累，較接近研究用的向量化寫法；與
+    `run_backtest_with_signal()` 的逐張模擬相比，可能明顯高估實際可執行的 PnL，
+    只作診斷對照用
     """
+
     pred = exec_df["pred"].values.astype(float)
     signal = exec_df["signal"].values.astype(int)
     r = exec_df["r_2330"].values.astype(float)
@@ -355,26 +396,46 @@ def run_vectorized_continuous_backtest(exec_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def information_coefficient(y: np.ndarray, y_hat: np.ndarray) -> float:
+    """Pearson IC；樣本少於 3 筆時相關係數無意義，回傳 NaN"""
+
     if len(y) < 3:
         return float("nan")
     return float(np.corrcoef(y, y_hat)[0, 1])
 
 
-def annualized_sharpe(daily_r: np.ndarray, rf_daily: float = 0.02 / 252) -> float:
-    x = daily_r - rf_daily
-    s = float(np.std(x, ddof=1))
-    if s < 1e-12:
-        return float("nan")
-    return float(np.sqrt(252) * np.mean(x) / s)
+# 年化無風險利率：研究報告的 Sharpe 刻意扣 2%（約為台灣短天期利率的上緣），讓「策略比放著
+# 不動好多少」的比較偏保守；回測報表的 `core` 預設不扣（0），兩者的數字不可直接互比。
+# 滾動 Sharpe（`plot_rolling_sharpe()`）只看走勢、不扣無風險利率
+RISK_FREE_RATE: float = 0.02
+
+
+def annualized_sharpe(
+    daily_r: np.ndarray, risk_free_rate: float = RISK_FREE_RATE
+) -> float:
+    """
+    年化 Sharpe：公式共用 `compute_annualized_sharpe()`，只把研究採用的無風險利率明確傳進去
+
+    不另寫一份公式：同一個指標算在兩處，口徑遲早分岔。無法計算（樣本不足、報酬完全不變）時
+    core 回 None，這裡轉成 NaN，與報表其他欄位的缺值寫法一致。
+    """
+
+    value: Optional[float] = compute_annualized_sharpe(
+        [float(r) for r in daily_r], risk_free_rate=risk_free_rate
+    )
+    return float("nan") if value is None else value
 
 
 def max_drawdown_pct(dd: np.ndarray) -> float:
+    """回撤序列中的最大回撤（%，負值）"""
+
     return float(np.min(dd) * 100.0)
 
 
 def save_fig(fig: go.Figure, path: Path) -> None:
+    """同時輸出 PNG（放進 Word 報告）與可互動的 HTML"""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    # scale≈3 improves PNG sharpness for Word/PDF (~print-friendly dpi band)
+    # scale≈3 讓放進 Word／PDF 的 PNG 達到適合列印的解析度
     fig.write_image(str(path), scale=3)
     fig.write_html(str(path.with_suffix(".html")))
 
@@ -382,6 +443,8 @@ def save_fig(fig: go.Figure, path: Path) -> None:
 def plot_equity_curve(
     bt: pd.DataFrame, out_dir: Path, title_suffix: str, basename: str = "equity_curve"
 ) -> None:
+    """策略與 2330 買進持有的權益曲線（起始為 1）"""
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -414,6 +477,8 @@ def plot_equity_curve(
 def plot_mdd(
     bt: pd.DataFrame, out_dir: Path, title_suffix: str, basename: str = "mdd_underwater"
 ) -> None:
+    """策略與買進持有的水下回撤圖（%）"""
+
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
@@ -447,10 +512,14 @@ def plot_mdd(
 def plot_rolling_sharpe(
     bt: pd.DataFrame, out_dir: Path, window: int = 63, basename: str = "rolling_sharpe"
 ) -> None:
+    """策略與買進持有的滾動年化 Sharpe，觀察績效是否集中在特定期間"""
+
     rs = bt["r_strategy"].astype(float)
     rb = bt["r_buyhold"].astype(float)
 
     def roll_sharpe(r: pd.Series) -> pd.Series:
+        """滾動年化 Sharpe（不扣無風險利率）；樣本不足 `max(20, window // 3)` 時為 NaN"""
+
         m = r.rolling(window, min_periods=max(20, window // 3)).mean()
         s = r.rolling(window, min_periods=max(20, window // 3)).std(ddof=1)
         return np.sqrt(252) * m / s
@@ -491,7 +560,8 @@ def plot_rolling_ic(
     window: int = 126,
     basename: str = "rolling_ic",
 ) -> None:
-    """Rolling information coefficient to monitor potential alpha decay."""
+    """滾動 IC，用來觀察 alpha 是否隨時間衰減"""
+
     df = panel_with_pred.sort_values("date").reset_index(drop=True)
     ic_roll = (
         df["pred"].rolling(window, min_periods=max(30, window // 4)).corr(df["r_2330"])
@@ -514,7 +584,8 @@ def plot_rolling_ic(
 
 
 def plot_ic_by_year(panel_with_pred: pd.DataFrame, out_dir: Path) -> None:
-    """Yearly IC for signal effectiveness by year."""
+    """逐年 IC，檢查訊號是否只在少數年份有效；同時輸出長條圖與 CSV"""
+
     df = panel_with_pred.copy()
     df["year"] = pd.to_datetime(df["date"]).dt.year
     ics = []
@@ -542,6 +613,8 @@ def plot_ic_by_year(panel_with_pred: pd.DataFrame, out_dir: Path) -> None:
 def plot_monthly_returns_heatmap(
     bt: pd.DataFrame, out_dir: Path, basename: str = "monthly_returns_heatmap"
 ) -> None:
+    """策略的月報酬熱圖（%），年為列、月為欄"""
+
     d = pd.to_datetime(bt["date"])
     mret = (
         bt.assign(ym=d.dt.to_period("M"))
@@ -572,19 +645,21 @@ def plot_monthly_returns_heatmap(
 
 
 def ic_t_stat(ic: float, n: int) -> float:
-    """t-statistic for Pearson correlation IC under approximate normality (diagnostic only)."""
+    """在近似常態假設下 Pearson IC 的 t 統計量（僅供診斷，不作嚴格檢定）"""
+
     if n < 3 or np.isnan(ic) or abs(ic) >= 1.0:
         return float("nan")
     return float(ic * np.sqrt(n - 2) / np.sqrt(max(1e-12, 1.0 - ic * ic)))
 
 
 def yearly_diagnostics(bt: pd.DataFrame, exec_for_ic: pd.DataFrame) -> pd.DataFrame:
-    """Per-calendar-year strategy vs buy-hold, position switches, within-year strategy MDD, and IC."""
-    # bt already carries pred; merge only realized r for IC (avoid duplicate pred_* columns).
+    """逐曆年比較策略與買進持有的報酬、部位切換次數、年內策略最大回撤與 IC"""
+
+    # bt 已帶 pred，只併入實際報酬來算 IC，避免產生重複的 pred_* 欄位
     d = bt.merge(exec_for_ic[["date", "r_2330"]], on="date", how="left")
     d["year"] = pd.to_datetime(d["date"]).dt.year
     d["pos_prev"] = d["position"].shift(1).fillna(0.0)
-    # Half a "switch" per day the discrete position flips 0<->1 (sum ≈ round-trip count proxy).
+    # 部位在 0 與 1 之間每翻轉一次記半次，加總即約略的來回交易次數
     d["pos_switch_half"] = (d["position"] != d["pos_prev"]).astype(float) * 0.5
 
     rows = []
@@ -613,7 +688,11 @@ def yearly_diagnostics(bt: pd.DataFrame, exec_for_ic: pd.DataFrame) -> pd.DataFr
 
 
 def ic_pnl_gap_metrics(exec_df: pd.DataFrame, bt: pd.DataFrame) -> pd.DataFrame:
-    """Explain tension between ranking IC and realistic PnL (threshold, costs, cash gaps)."""
+    """
+    解釋「IC 不差但逐張 PnL 不理想」的落差來源：訊號門檻、交易成本，以及想做多卻因
+    現金不足而空手的日子
+    """
+
     m = exec_df.merge(
         bt[["date", "position", "r_strategy", "r_buyhold"]], on="date", how="inner"
     )
@@ -628,6 +707,8 @@ def ic_pnl_gap_metrics(exec_df: pd.DataFrame, bt: pd.DataFrame) -> pd.DataFrame:
     bh = m["r_buyhold"].astype(float).values
 
     def safe_mean(mask: np.ndarray) -> float:
+        """符合條件日子的平均市場報酬；沒有任何一天符合時回傳 NaN"""
+
         mask = np.asarray(mask, dtype=bool)
         if not mask.any():
             return float("nan")
@@ -672,10 +753,12 @@ def placebo_feature_shift_ic(
     panel_test: pd.DataFrame, coef: np.ndarray, x_cols: List[str]
 ) -> pd.DataFrame:
     """
-    If IC is driven by incorrect calendar alignment, mis-shifted features should destroy correlation.
-    Lag 1 TW row: pair today's TW return with previous row's US features (stale).
-    Lead 1 TW row: pair with next row's US features (misaligned).
+    對齊安慰劑檢定：若 IC 來自日曆錯位，把特徵錯開一列後相關性應該會崩掉
+
+    - 落後一列：今天的台股報酬配上前一列的美股特徵（過時資訊）
+    - 領先一列：今天的台股報酬配上下一列的美股特徵（錯位資訊）
     """
+
     pt = panel_test.sort_values("date").reset_index(drop=True)
     y = pt["r_2330"].astype(float).values
     X = pt[x_cols].astype(float).values
@@ -708,7 +791,8 @@ def placebo_feature_shift_ic(
 def capital_sensitivity_analysis(
     exec_df: pd.DataFrame, caps: List[float]
 ) -> pd.DataFrame:
-    """Realistic cumulative return vs initial cash (same signals); exposes lot-capital interaction."""
+    """相同訊號下逐張回測報酬對初始資金的敏感度，揭露整張限制與資金規模的交互影響"""
+
     rows = []
     for cap in caps:
         bt = run_backtest_with_signal(exec_df, init_capital=float(cap))
@@ -730,7 +814,8 @@ def ridge_threshold_sweep(
     pred_vec: np.ndarray,
     thresholds: List[float],
 ) -> pd.DataFrame:
-    """Realistic PnL vs forecast threshold (same Ridge scores); tau in decimal return units."""
+    """相同 Ridge 預測值下，逐張 PnL 對做多門檻的敏感度；tau 以小數報酬表示"""
+
     rows = []
     for tau in thresholds:
         sig = (pred_vec > tau).astype(int)
@@ -757,7 +842,8 @@ def write_sanity_checks_csv(
     placebo_ic_lag: Optional[float] = None,
     placebo_ic_lead: Optional[float] = None,
 ) -> None:
-    """Structured sanity checks with explicit status (not only risks)."""
+    """把合理性檢查寫成結構化 CSV，每項都標明狀態，而不是只列風險"""
+
     placebo_txt = ""
     if (
         placebo_ic_baseline is not None
@@ -810,6 +896,8 @@ def write_sanity_checks_csv(
 
 
 def summary_metrics(bt: pd.DataFrame) -> pd.Series:
+    """回測摘要指標：累積與年化報酬、波動、Sharpe、最大回撤、Calmar 與做多日勝率"""
+
     rs = bt["r_strategy"].values.astype(float)
     rb = bt["r_buyhold"].values.astype(float)
     years = max((bt["date"].max() - bt["date"].min()).days / 365.25, 0.25)
@@ -847,6 +935,21 @@ def main(
     data_start: dt.date = dt.date(2020, 1, 1),
     data_end: Optional[dt.date] = None,
 ) -> Path:
+    """
+    - Description:
+        執行完整研究流程：抓資料、以驗證集調 Ridge alpha、在測試區間回測，並輸出所有 CSV 與圖表
+    - Parameters:
+        - output_dir: Optional[Path]
+            輸出目錄；None 時用本主題的 `output/`
+        - data_start: dt.date
+            資料起始日
+        - data_end: Optional[dt.date]
+            資料結束日；None 時為今天
+    - Return:
+        - Path
+            實際輸出目錄
+    """
+
     data_end = data_end or dt.date.today()
     out = Path(output_dir or _DEFAULT_OUTPUT_DIR)
     out.mkdir(parents=True, exist_ok=True)
@@ -893,7 +996,7 @@ def main(
     pred_tsm_only = r_tsm_t.copy()
     sig_tsm = (r_tsm_t > 0.0).astype(int)
 
-    # Align with event-driven loop: evaluate every TW trading day.
+    # 與事件驅動回測對齊：每個台股交易日都要評估，不只有特徵齊全的日子
     tw_px = close_df["2330.TW"].dropna().sort_index()
     tw_ret = tw_px.pct_change()
     exec_skel = pd.DataFrame(
@@ -936,7 +1039,7 @@ def main(
     bt_real = run_backtest_with_signal(exec_df)
     bt_vec = run_vectorized_continuous_backtest(exec_df)
 
-    # metrics_summary.csv = lot-based / realistic execution (primary for conclusions)
+    # metrics_summary.csv 是逐張的可執行結果，研究結論以它為準
     summary_metrics(bt_real).to_csv(out / "metrics_summary.csv", header=["value"])
     summary_metrics(bt_vec).to_csv(
         out / "metrics_vectorized_summary.csv", header=["value"]
@@ -985,7 +1088,7 @@ def main(
         exec_df, [1_000_000.0, 3_000_000.0, 5_000_000.0, 10_000_000.0]
     ).to_csv(out / "capital_sensitivity.csv", index=False)
 
-    # Threshold robustness (predicted daily return must exceed tau to go long); tau in decimal return units.
+    # 門檻穩健性：預測日報酬須大於 tau 才做多；tau 以小數報酬表示
     tau_list = [0.0, 0.0005, 0.001, 0.002]
     ridge_threshold_sweep(exec_skel, dates_t, pred_test, tau_list).to_csv(
         out / "threshold_robustness_ridge.csv", index=False

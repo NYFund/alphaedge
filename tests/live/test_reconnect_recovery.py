@@ -20,6 +20,8 @@ LATER: datetime.datetime = datetime.datetime(2026, 9, 21, 13, 40)
 
 
 def add_run(dao: LiveTradeDAO, run_id: str, started_at: datetime.datetime) -> None:
+    """寫入一筆模擬環境的開盤段執行紀錄"""
+
     dao.insert_run(
         {
             "run_id": run_id,
@@ -33,6 +35,8 @@ def add_run(dao: LiveTradeDAO, run_id: str, started_at: datetime.datetime) -> No
 
 
 def run_row(dao: LiveTradeDAO, run_id: str) -> Dict[str, Any]:
+    """以欄位名稱取出一筆執行紀錄"""
+
     columns: List[str] = [
         str(row[1]) for row in dao.conn.execute("PRAGMA table_info(live_run)")
     ]
@@ -147,6 +151,8 @@ def make_harness(**kwargs: Any) -> Any:
     from tests.live.test_live_trader_day import Harness, ScriptedStrategy, make_order
 
     class Alpha(ScriptedStrategy):
+        """開倉鉤子送出一張預設買單的腳本策略"""
+
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
@@ -334,3 +340,29 @@ def test_routing_failure_does_not_kill_the_callback_thread() -> None:
 
     harness.broker.route_events(lambda quote: None, exploding)
     harness.broker.execution_queue.put("fake-report")
+
+
+def test_intraday_waits_for_its_window_before_subscribing() -> None:
+    """
+    盤中段落在時窗開始前不連上場
+
+    開盤段是另一個行程、共用同一個帳號；提早上場的話兩個行程同時在場上，
+    各自都會收到對方的委託回報。
+    """
+
+    from core.market.segment import SegmentWindow
+
+    harness: Any = make_harness()
+    harness.broker.connect()
+    start: datetime.time = (harness.clock[0] + datetime.timedelta(minutes=5)).time()
+    window: SegmentWindow = SegmentWindow(
+        submit_start=start, submit_end=start, drain_end=start
+    )
+    subscribed_at: List[datetime.datetime] = []
+    harness.broker.subscribe_quotes = lambda symbols: subscribed_at.append(
+        harness.clock[0]
+    )
+
+    harness.trader.run_intraday(window)
+
+    assert subscribed_at and subscribed_at[0].time() >= start

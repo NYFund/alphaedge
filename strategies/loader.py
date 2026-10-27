@@ -1,0 +1,213 @@
+import ast
+import importlib
+import inspect
+import pkgutil
+from pathlib import Path
+from types import ModuleType
+from typing import Dict, List, Type
+
+from loguru import logger
+
+import strategies as strategies_pkg
+from core.strategies.base import BaseStrategy
+
+"""
+StrategyLoader：自動載入頂層 `strategies/` 下所有商品類別的具體策略
+
+**單一模組壞掉不該讓所有策略都跑不了**：`import_module()` 一路往外拋的話，
+任何一支策略有 import 錯誤、或在 module level 做了會炸的事，入口的 `--strategy`
+就連「有哪些策略可用」都列不出來。故逐模組隔離，壞掉的只記 error 並略過。
+
+**但重複的類別名稱要當場拋出**：`strategies` 以類別名為 key，同名會靜靜
+覆蓋——跑的到底是哪一支要看掃描順序，這比壞掉更難查。
+
+**入口只載入指定的策略**（`load()`）：全掃描會 import 每一個策略模組，
+正式環境的實盤行程也就會執行研究中策略的 module-level 程式碼。`load()` 先以 AST
+讀檔找出類別定義在哪個模組（只解析、不執行），再只 import 那幾個模組。
+類別名與檔名之間沒有可靠的對應（`VolumeBreakoutMomentumStrategy` 在 `volume_breakout_momentum_strategy.py`），
+所以不靠命名慣例推算。
+"""
+
+
+class StrategyLoader:
+    """自動載入 strategies 資料夾下所有策略類別"""
+
+    @staticmethod
+    def load_strategies() -> Dict[str, Type[BaseStrategy]]:
+        """
+        - Description:
+            掃描 `strategies/` 下的所有商品類別子套件並載入其中的策略
+
+            **逐一掃描所有子套件，不寫死商品類別**：新增一個商品類別
+            （如 `strategies/futures/`）因此不需要修改本檔案。
+        - Return:
+            - Dict[str, Type[BaseStrategy]]
+                類別名稱 → 策略類別
+        """
+
+        strategies: Dict[str, Type[BaseStrategy]] = {}
+        broken_modules: List[str] = []
+
+        for _, instrument_name, is_pkg in pkgutil.iter_modules(strategies_pkg.__path__):
+            if not is_pkg:
+                continue
+
+            instrument_path: str = f"{strategies_pkg.__name__}.{instrument_name}"
+            try:
+                instrument_pkg: ModuleType = importlib.import_module(instrument_path)
+            except Exception as error:
+                logger.error(
+                    f"[StrategyLoader] 無法載入 {instrument_path}"
+                    f"（{type(error).__name__}: {error}），略過整個商品類別"
+                )
+                broken_modules.append(instrument_path)
+                continue
+
+            for _, module_name, _ in pkgutil.iter_modules(instrument_pkg.__path__):
+                module_path: str = f"{instrument_pkg.__name__}.{module_name}"
+                try:
+                    module: ModuleType = importlib.import_module(module_path)
+                except Exception as error:
+                    # 逐模組隔離：一支策略壞掉，其餘照樣列得出來
+                    logger.error(
+                        f"[StrategyLoader] 無法載入 {module_path}"
+                        f"（{type(error).__name__}: {error}），略過此模組"
+                    )
+                    broken_modules.append(module_path)
+                    continue
+
+                StrategyLoader.collect_from_module(module, strategies)
+
+        if broken_modules:
+            logger.warning(
+                f"[StrategyLoader] 有 {len(broken_modules)} 個模組載入失敗，"
+                f"其策略不會出現在清單中：{broken_modules}"
+            )
+
+        return strategies
+
+    @staticmethod
+    def load(names: List[str]) -> Dict[str, Type[BaseStrategy]]:
+        """
+        - Description:
+            只載入指定名稱的策略，不 import 其他策略模組
+
+            找不到的名稱不會出現在回傳值裡，由呼叫端比對後回報；
+            要列出全部可用策略時再呼叫 `load_strategies()`。
+            **指定策略所在的模組 import 失敗時直接往外拋**：使用者明確要跑它，
+            吞掉只會變成一句「找不到策略」，真正的錯誤反而看不到。
+        - Parameters:
+            - names: List[str]
+                策略類別名稱
+        - Return:
+            - Dict[str, Type[BaseStrategy]]
+                類別名稱 → 策略類別（只含找得到的）
+        - Raise:
+            - ValueError
+                指定的類別名稱定義在不只一個模組
+        """
+
+        index: Dict[str, List[str]] = StrategyLoader.index_class_modules()
+        strategies: Dict[str, Type[BaseStrategy]] = {}
+
+        for name in names:
+            module_paths: List[str] = index.get(name, [])
+            if len(module_paths) > 1:
+                raise ValueError(
+                    f"策略類別名稱重複：{name} 同時定義於 {module_paths}；"
+                    f"類別名即入口 `--strategy` 的識別名稱，必須唯一"
+                )
+            if not module_paths:
+                continue
+
+            found: Dict[str, Type[BaseStrategy]] = {}
+            StrategyLoader.collect_from_module(
+                importlib.import_module(module_paths[0]), found
+            )
+            # 同名但不是可實例化的策略（例如抽象類別）視同找不到
+            if name in found:
+                strategies[name] = found[name]
+
+        return strategies
+
+    @staticmethod
+    def index_class_modules() -> Dict[str, List[str]]:
+        """
+        - Description:
+            以 AST 建立「頂層類別名 → 定義它的策略模組」索引，不 import 任何策略模組
+
+            解析失敗的檔案記 error 並略過，與全掃描的逐模組隔離一致。
+        - Return:
+            - Dict[str, List[str]]
+                類別名稱 → 模組路徑清單（正常情況只有一個）
+        """
+
+        index: Dict[str, List[str]] = {}
+        for _, instrument_name, is_pkg in pkgutil.iter_modules(strategies_pkg.__path__):
+            if not is_pkg:
+                continue
+
+            for package_dir in strategies_pkg.__path__:
+                instrument_dir: Path = Path(package_dir) / instrument_name
+                for _, module_name, _ in pkgutil.iter_modules([str(instrument_dir)]):
+                    module_path: str = (
+                        f"{strategies_pkg.__name__}.{instrument_name}.{module_name}"
+                    )
+                    source_file: Path = instrument_dir / f"{module_name}.py"
+                    try:
+                        tree: ast.Module = ast.parse(
+                            source_file.read_text(encoding="utf-8")
+                        )
+                    except (OSError, SyntaxError) as error:
+                        logger.error(
+                            f"[StrategyLoader] 無法解析 {module_path}"
+                            f"（{type(error).__name__}: {error}），略過此模組"
+                        )
+                        continue
+
+                    for node in tree.body:
+                        if isinstance(node, ast.ClassDef):
+                            index.setdefault(node.name, []).append(module_path)
+
+        return index
+
+    @staticmethod
+    def collect_from_module(
+        module: ModuleType, strategies: Dict[str, Type[BaseStrategy]]
+    ) -> None:
+        """
+        - Description:
+            把模組內定義的可實例化策略收進 `strategies`
+
+            只收「在該模組內定義」且「可實例化」的：抽象基底
+            （`BaseStrategy`／`BaseStockStrategy`）與被 import 進來的其他模組
+            類別都不算策略。
+        - Parameters:
+            - module: ModuleType
+                已載入的策略模組
+            - strategies: Dict[str, Type[BaseStrategy]]
+                累積結果；就地修改
+        - Raise:
+            - ValueError
+                出現重複的策略類別名稱
+        """
+
+        for name, obj in inspect.getmembers(module, inspect.isclass):
+            if not (
+                issubclass(obj, BaseStrategy)
+                and not inspect.isabstract(obj)
+                and obj.__module__ == module.__name__
+            ):
+                continue
+
+            existing: Type[BaseStrategy] = strategies.get(name)
+            if existing is not None and existing is not obj:
+                # **同名一定要當場拋出**：key 是類別名，靜靜覆蓋之後
+                # 「跑的到底是哪一支」要看掃描順序，比模組壞掉更難查
+                raise ValueError(
+                    f"策略類別名稱重複：{name} 同時定義於 "
+                    f"{existing.__module__} 與 {obj.__module__}；"
+                    f"類別名即入口 `--strategy` 的識別名稱，必須唯一"
+                )
+
+            strategies[name] = obj  # 用類別名稱當 key
