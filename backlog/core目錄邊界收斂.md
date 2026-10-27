@@ -25,8 +25,7 @@
      `portfolio`、`position`、`analysis`、`backtest`、`live`、`datafeed`、`utils`、`config` 都屬框架本體；
      原列的 `core/execution/` 已於 2026-10-07 併入 `core/portfolio/order_rules.py`）。
   5. `datafeed` 分成 `core/datafeed/`（契約）與 `backtest/`、`live/` 各自的實作是正確模式，不動。
-- **現況（2026-10-18）**：Phase1、Phase3、Phase4 ✅ 已在 main；Phase2-1 ✅ 在 main，Phase2-2～2-4 已在 `feature/post-rehearsal` 實作（下游三條分支皆包含），
-  等 `實盤下單架構規劃.md` Phase7-1 演練結束後部署；Phase5-1 ⏸。
+- **現況（2026-10-27）**：Phase1～Phase4 ✅ 都在 main（Phase2-2～2-4 在 `feature/post-rehearsal` 實作，2026-10-27 隨 `2026-10里程碑收尾排程.md` S19 進 main）；Phase5-1 ⏸。
 - **驗收標準**：
   1. `core/` 內對 `core.pipeline` 與頂層 `strategies` 的 import 歸零，並由 `check_layer_deps.py` 守住。
   2. `core/strategies/` 只剩契約（`base.py`、`stock/base.py`、`futures/base.py` 與套件門面）。
@@ -44,9 +43,9 @@
 | Phase1-1 | 回測缺日診斷改用 `MarketHolidayAPI` | `core/backtest/datafeed/tw/stock_datafeed.py`、對應測試 | `core/backtest` 對 `core.pipeline` 的 import 歸零；2025–2026 區間的休市日可被歸因 | ✅ | 2026-09-30 完成（`fdb9967`）：import 歸零；2025 全年 18 個缺日全數歸因為官方休市（改前只報數字）；3 條新測試。順帶修掉 `tests/test_dao_futures_margin.py` 讀到本機真實 CSV 的沙箱漏洞 |
 | Phase1-2 | 分層檢查禁止框架 import `core.pipeline` | `scripts/check_layer_deps.py` | 刻意加一條違規 import，檢查要紅 | ✅ | 2026-09-30 完成（`e6d85de`）：新增 E'''' 項（專屬 AST 掃描，偏離原規劃的分層規則寫法）；突變驗證紅→綠；2 條單元測試 |
 | Phase2-1 | 建立頂層 `strategies/` 套件，並讓分層與目錄範圍護欄涵蓋它 | `strategies/__init__.py`、`scripts/check_*.py`、`.pre-commit-config.yaml`、`tests/` 四支護欄、`pyproject.toml`、`Dockerfile`、CI | `core` 內 import `strategies` 時檢查要紅；在 `strategies/` 放一個違規，每道護欄各自要紅 | ✅ | 2026-10-01 完成（`122f715`）；八項護欄以暫時檔逐一觸發皆轉紅；`test_strategy_data_access.py` 的假綠燈先行修掉 |
-| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | 🔄 | **2026-10-09 已在 `feature/post-rehearsal` 實作（`bd7662a`），未進 main**；剩 `實盤下單架構規劃.md` Phase7-1 演練結束後合併、重裝 launchd（與該文件 Phase7-10 改名、`回測與實盤入口拆分及架構收斂.md` Phase1-8 同一次部署）。**合併時要多搬一支**：`feature/stock-rehearsal`（`實盤下單架構規劃.md` Phase7-27）預定 10/21 把 `StockRoundTripRehearsalStrategy` 放進 main 的 `core/strategies/stock/`，見步驟章節 |
-| Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | 🔄 | **2026-10-09 已在 `feature/post-rehearsal` 實作（`ed29b46`），未進 main**；分層登記改為契約，另加「`core/strategies/` 只放契約」的專屬檢查。剩演練後合併（合併時該檢查會擋下留在 `core/strategies/stock/` 的演練策略，正好當驗證） |
-| Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | 🔄 | **2026-10-09 已在 `feature/post-rehearsal` 實作（`91445c1`），未進 main**。剩演練後合併；`feature/stock-rehearsal` 改了 main 的 `core/strategies/README.md`，合併時要移植到頂層 `strategies/README.md` |
+| Phase2-2 | 具體策略與 `StrategyLoader` 搬到 `strategies/` | `strategies/{stock,futures}/*.py`、`strategies/loader.py`、`apps/`、`tests/` | 回歸雙線零變動；`--strategy` 列表與改前相同；策略欄位字面值護欄仍掃得到每一支策略 | ✅ | **2026-10-09 已在 `feature/post-rehearsal` 實作（`bd7662a`），未進 main**；剩 `實盤下單架構規劃.md` Phase7-1 演練結束後合併、重裝 launchd（與該文件 Phase7-10 改名、`回測與實盤入口拆分及架構收斂.md` Phase1-8 同一次部署）。**合併時要多搬一支**：`feature/stock-rehearsal`（`實盤下單架構規劃.md` Phase7-27）預定 10/21 把 `StockRoundTripRehearsalStrategy` 放進 main 的 `core/strategies/stock/`，見步驟章節；**✅ 2026-10-27 隨 `2026-10里程碑收尾排程.md` S19 部署進 main（`14037bf1`）：主目錄全套測試、回歸、分層與文件路徑檢查全綠**；回歸零變動 |
+| Phase2-3 | `core/strategies/` 收斂成只剩契約 | `core/strategies/**`、`scripts/check_layer_deps.py` | 目錄內只剩 base 與門面；門面檢查通過 | ✅ | **2026-10-09 已在 `feature/post-rehearsal` 實作（`ed29b46`），未進 main**；分層登記改為契約，另加「`core/strategies/` 只放契約」的專屬檢查。剩演練後合併（合併時該檢查會擋下留在 `core/strategies/stock/` 的演練策略，正好當驗證）；**✅ 2026-10-27 隨 `2026-10里程碑收尾排程.md` S19 部署進 main（`14037bf1`）：主目錄全套測試、回歸、分層與文件路徑檢查全綠**；回歸零變動 |
+| Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ✅ | **2026-10-09 已在 `feature/post-rehearsal` 實作（`91445c1`），未進 main**。剩演練後合併；`feature/stock-rehearsal` 改了 main 的 `core/strategies/README.md`，合併時要移植到頂層 `strategies/README.md`；**✅ 2026-10-27 隨 `2026-10里程碑收尾排程.md` S19 部署進 main（`14037bf1`）：主目錄全套測試、回歸、分層與文件路徑檢查全綠**；回歸零變動 |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成（`08f1b44`）；回歸雙線零變動；主目錄已於 2026-10-01 盤後更新 |
 | Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ✅ | 2026-10-08 完成（`ea6b106`），**偏離原規格**：提前到 Phase2-2、Phase5-1 之前做（見該步驟）；CI `docker` job 建置與三項冒煙通過 |
 | Phase5-1 | `core/pipeline/` 搬到頂層並改名 `etl/` | `etl/**`、資料更新入口、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；資料更新入口各 target 冒煙；`core` 對 `etl` 的 import 為零；附錄護欄全數涵蓋 `etl/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次。2026-10-18 現況：`台股tick改用TimescaleDB.md` 18 步、`框架對稱化重構.md` Phase5 的 ETL 收斂（`core/pipeline/` 32 檔）都已在分支鏈完成、待演練後依序合併進 main；`PostgreSQL遷移計畫.md` 0 / 16 未動工，`框架對稱化重構.md` Phase5-7（loader 拆兩種契約）與它的 Phase2-2 同段。2026-10-01 定案：搬移時一併改名 `etl`，連同日誌桶 `logs/pipeline/` 全部改，範圍見步驟章節 |
@@ -140,7 +139,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 > - 驗證：以暫時檔逐一觸發八項護欄全數轉紅；`pytest` 2480 passed；`check_layer_deps.py` 0；`check_doc_paths.py` 0。
 >   **映像內 import 未在本機驗證**（Docker daemon 未啟動），由 CI 把關。
 
-### Phase2-2. 具體策略與 `StrategyLoader` 搬到 `strategies/` 🔄
+### Phase2-2. 具體策略與 `StrategyLoader` 搬到 `strategies/` ✅
 
 - **目的**：把具體策略從框架中移出，這是本份文件的主體。
 - **做法**：
@@ -184,7 +183,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 >   3. 主目錄 `rehearsal_schedule.py --install` 重裝 launchd（本機時區 2026-10-16 改過，時刻依安裝當下換算），`--status` 確認新策略名與 `stock-intraday`。
 >   **2026-10-24：第 1、2 點不必做了**——`2026-10里程碑收尾排程.md` S19 採先 revert `6cf78811`（移除股票演練策略）再合併，五條分支合併皆無衝突；第 3 點照做。
 
-### Phase2-3. `core/strategies/` 收斂成只剩契約 🔄
+### Phase2-3. `core/strategies/` 收斂成只剩契約 ✅
 
 - **目的**：搬完之後，`core/strategies/` 的分層登記仍把 `core.strategies` 整包當成第 7 層
   策略層，要改成只剩契約的第 4 層。
@@ -207,7 +206,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 > - 2026-10-10 實查分支：`core/strategies/` 只剩六個 `.py`，共 904 行（main 上含具體策略與 loader 為 2,809 行）。剩演練後合併。
 >   2026-10-18 複查：`feature/post-rehearsal` 仍為 904 行；`feature/framework-symmetry` 因 `supported_scales`、`execution_schedule` 等契約欄位為 963 行，仍只有六個檔。
 
-### Phase2-4. 策略相關文件與規則入口同步 🔄
+### Phase2-4. 策略相關文件與規則入口同步 ✅
 
 - **目的**：寫策略的入口文件全部指向新位置，否則下一支策略會照舊文件寫回 `core/`。
 - **做法**：更新以下檔案中的策略路徑：
