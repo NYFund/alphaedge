@@ -17,7 +17,7 @@
 ## 待辦清單
 
 
-> **分支鏈現況（2026-10-27）**：`feature/post-rehearsal` → `feature/tick-timescaledb` → `feature/tick-backtest` → `feature/framework-symmetry` → `fix/health-check-p0` 五條已於 2026-10-27 盤後隨 [2026-10里程碑收尾排程.md](2026-10里程碑收尾排程.md) S19 進 main（`〈S19部署commit〉`）：先 revert `6cf78811`（股票演練策略）再依鏈序合併、最後移除期貨演練策略，部署前另把 main 的 `docs/readme-refresh` 合進部署分支（16 檔文件衝突逐段合併）。主目錄以 `TZ=America/Chicago` 重裝 launchd（含 `stock-intraday`、`tz-guard`）。還沒進 main、等 S19 穩定後合併的：`fix/quote-date-guard`（[實盤下單架構規劃.md](實盤下單架構規劃.md) Phase7-29）、`fix/futures-cost-legs`（同文件 Phase4-9 期貨估算器）、`deps/upgrade`（Dependabot 升級與 Shioaji 1.7.9，要先 rebase、模擬環境唯讀實測）。
+> **分支鏈現況（2026-10-27）**：`feature/post-rehearsal` → `feature/tick-timescaledb` → `feature/tick-backtest` → `feature/framework-symmetry` → `fix/health-check-p0` 五條已於 2026-10-27 盤後隨 [2026-10里程碑收尾排程.md](2026-10里程碑收尾排程.md) S19 進 main（`〈S19部署commit〉`）：先 revert `6cf78811`（股票演練策略）再依鏈序合併、最後移除期貨演練策略，部署前另把 main 的 `docs/readme-refresh` 合進部署分支（16 檔文件衝突逐段合併）。主目錄以一般方式（不帶 `TZ`）重裝 launchd（含 `stock-intraday`、`tz-guard`；10/26 本機重開機後 launchd 已改用系統時區，見 [2026-10里程碑收尾排程.md](2026-10里程碑收尾排程.md) S21）。還沒進 main、等 S19 穩定後合併的：`fix/quote-date-guard`（[實盤下單架構規劃.md](實盤下單架構規劃.md) Phase7-29）、`fix/futures-cost-legs`（同文件 Phase4-9 期貨估算器）、`deps/upgrade`（Dependabot 升級與 Shioaji 1.7.9，要先 rebase、模擬環境唯讀實測）。
 
 | 優先級 | 狀態 | 檔案 | 說明 | 進度 | 相依 |
 |:------:|:----:|------|------|------|------|
