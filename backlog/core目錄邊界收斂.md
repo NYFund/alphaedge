@@ -323,7 +323,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
   5. `check_doc_paths.py` 通過（`docs/etl/` 的連結全數更新）。
   6. 跑一次資料更新入口後，新日誌出現在 `logs/etl/`；`logs/pipeline/` 不存在；日誌清理入口列得到 `etl` 桶。
 - **相依**：Phase1-2。
-- **暫緩原因與解除條件**：[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 會改寫
+- **暫緩原因與解除條件**：`台股tick改用TimescaleDB.md` 會改寫
   tick 的 loader 與 updater，[PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 會改寫
   pipeline 呼叫的 DAO 與連線。現在搬的話，那兩份計畫的產出路徑全部要改，而且施作期間
   兩邊互相衝突。**解除條件：兩份計畫中涉及 `core/pipeline/` 的步驟都完成**；若其中一份
