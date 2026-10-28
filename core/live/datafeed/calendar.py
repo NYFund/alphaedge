@@ -23,6 +23,8 @@ from core.api.tw.market_holiday_api import MarketHolidayAPI
 **主來源是官方開休市日曆**（`OfficialHolidayCalendarSource`，TWSE 公告落地成
 `market_holiday` 表，`python -m apps.update_db --target market_holiday`）。它只替
 已入庫的年度作答；年度未入庫時回 `None`，交由其他來源——平日就只剩券商合約檔。
+颱風等臨時休市不在公告上，由人工登記（`scripts/manual/manual_market_closure.py`）後
+同樣由它答「休市」，登記過的日子不受年度是否入庫影響。
 
 ⚠️ **官方日曆與券商合約檔可能衝突**：休市日若券商因系統作業更新了合約檔，
 合約檔會說「開市」、官方日曆說「休市」，依第 2 條規則拒絕啟動。這是刻意的：

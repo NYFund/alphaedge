@@ -9,6 +9,7 @@ import pytest
 
 from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
+from core.live.datafeed.base import DataFreshnessError
 from core.live.datafeed.calendar import (
     BrokerContractCalendarSource,
     OfficialHolidayCalendarSource,
@@ -189,3 +190,49 @@ def test_roll_calendar_excludes_official_closures(
     assert datetime.date(2026, 10, 8) in window
     # 30 個曆日裡 22 個平日，扣掉 3 個平日休市
     assert len(window) == 19
+
+
+# === 臨時休市 ===
+def test_typhoon_closure_lets_the_first_open_day_pass_freshness(
+    stock_db: sqlite3.Connection,
+) -> None:
+    """
+    重現 2026-10-27：資料停在 10/22，10/23 颱風休市、10/26 光復節補假
+
+    沒登記時官方日曆把 10/23 判成「確定是交易日」，新鮮度檢查以資料缺漏中止；
+    登記臨時休市後同一天通過。
+    """
+
+    feed: TwStockLiveDataFeed = TwStockLiveDataFeed(
+        broker=None, now_provider=lambda: datetime.datetime(2026, 10, 27, 8, 30)
+    )
+    feed.setup(_Strategy())
+    # `setup()` 之後才建 `price`：建了它，`setup()` 會去補預設標的池，替身策略沒有那一套
+    stock_db.execute("CREATE TABLE price (date TEXT, stock_id TEXT)")
+    stock_db.execute("INSERT INTO price VALUES ('2026-10-22', '2330')")
+
+    with pytest.raises(DataFreshnessError, match="2026, 10, 23"):
+        feed.verify_data_freshness()
+
+    dao: MarketHolidayDAO = MarketHolidayDAO(conn=stock_db)
+    dao.ensure_adhoc_table()
+    dao.add_adhoc_closure(datetime.date(2026, 10, 23), "颱風停止交易")
+
+    feed.verify_data_freshness()
+
+
+def test_registered_typhoon_day_resolves_as_closed() -> None:
+    """前一晚登記：當天盤前的交易日判定為休市，段落以非交易日結束、不送單"""
+
+    conn: sqlite3.Connection = build_stock_db()
+    dao: MarketHolidayDAO = MarketHolidayDAO(conn=conn)
+    dao.ensure_adhoc_table()
+    dao.add_adhoc_closure(datetime.date(2026, 10, 23), "颱風停止交易")
+
+    sources: List[Any] = [
+        OfficialHolidayCalendarSource(MarketHolidayAPI(conn=conn)),
+        WeekendCalendarSource(),
+    ]
+
+    assert resolve_trading_day(datetime.date(2026, 10, 23), sources) is False
+    assert resolve_trading_day(datetime.date(2026, 10, 22), sources) is True

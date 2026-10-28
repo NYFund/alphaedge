@@ -68,7 +68,8 @@
 | `futures_margin_history`、`stock_futures_margin_rate_history` | TAIFEX 保證金一覽表（CSV，日常更新）；2020-03 起的歷史取自調整公告附件（`FuturesMarginUpdater.update_history()`，不在 `update_db` 內） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
 | `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | TAIFEX 三大法人／大額交易人／選擇權 PCR | 三大法人：2023-09-04（來源只保留約三年）；大額交易人、PCR：2015-01-01（`FuturesChipUpdater.DEFAULT_START_DATE`） | `get_available()` 只回傳查詢日之前已公布者（避免前視）；三張表各自以交易日曆的差集決定要請求的月份，盤後才公布 |
 | `futures_stock_universe` | TAIFEX 標的證券一覽表（GET） | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
-| `market_holiday` | TWSE `holidaySchedule`（JSON，一年一次請求） | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
+| `market_holiday` | TWSE `holidaySchedule`（JSON，一年一次請求） | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上，改登記在 `market_adhoc_closure` |
+| `market_adhoc_closure` | 人工登記（`scripts/manual/manual_market_closure.py`） | 有登記才有列 | 颱風等臨時休市；查休市日時與 `market_holiday` 合併。**ETL 不建也不寫**，不受 `market_holiday` 整年替換影響 |
 | `stock_tick` | Shioaji（每日更新）＋歷史 CSV（一次匯入） | 歷史存檔 2020-04-01～2024-05-10（`scripts/manual/manual_tick_history_import.py` 匯入後才有資料）；Shioaji 可查區間約自 **2020-03-02**；每日更新自 2024-05-10（`TICK_UPDATE_START_DATE`）起接續 | 需執行中的 TimescaleDB（開 Docker Desktop 後 `docker compose up -d postgres`）；興櫃時期不入庫 |
 
 ## 更新入口
