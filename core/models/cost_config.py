@@ -84,6 +84,7 @@ class CostConfig:
     # 證交稅
     tax_rate: float = float(Commission.TaxRate)
     day_trade_tax_rate: float = float(Commission.DayTradeTaxRate)
+    etf_tax_rate: float = float(Commission.ETFTaxRate)
 
     # 放空管道與其成本
     short_method: ShortMethod = ShortMethod.MARGIN

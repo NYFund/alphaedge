@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import json
 import math
@@ -91,6 +92,7 @@ from core.strategies.base import BaseStrategy, resolve_hook_timing
 from core.utils import (
     FUTURES_MULTIPLIER,
     Action,
+    Commission,
     ExecutionTiming,
     FuturesRollRule,
     InstrumentType,
@@ -509,7 +511,7 @@ def build_live_trader(
         schedule=_merge_schedules(schedules),
         dry_run=dry_run,
         simulation=simulation,
-        cost_estimator=make_trade_cost_estimator(contexts),
+        cost_estimator=make_trade_cost_estimator(contexts, simulation=simulation),
         # 查哪個帳戶是商品語意，由這裡決定後注入（引擎本體不認得「股票」「期貨」）
         fetch_account=make_account_fetcher(resolved_broker, strategies, resolved_dao),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
@@ -798,6 +800,7 @@ def _build_context(
 
 def make_trade_cost_estimator(
     contexts: Optional[Sequence[StrategyContext]] = None,
+    simulation: bool = False,
 ) -> TradeCostEstimator:
     """
     - Description:
@@ -812,10 +815,15 @@ def make_trade_cost_estimator(
           平倉回報列的是平倉，故取平倉腿）。照來回估的話每筆都會被誤報 -50%。
           乘數取 `FUTURES_MULTIPLIER`，不在表內（股票期貨）時回 None。
         - 股票：手續費開平倉各一次；證交稅只課賣出那一腿——多單課在平倉價、
-          空單課在開倉價；開倉日與交易日同一天時用當沖稅率。缺開倉成交時回 None。
+          空單課在開倉價；開倉日與交易日同一天時用當沖稅率；ETF 課 ETF 稅率。缺開倉成交時回 None。
+        - **模擬環境的股票手續費改用模擬券商的折扣**（`Commission.SimulationDiscount`）：
+          模擬環境以 5 折計、記帳用的是正式帳戶的折扣，不換的話每一筆個股都會被誤報偏高。
+          只換校正用的這一份，實盤記帳的費率不動。
     - Parameters:
         - contexts: Optional[Sequence[StrategyContext]]
             已組好的策略脈絡；None 或沒有該市場的策略時用預設費率
+        - simulation: bool
+            是否為模擬環境
     - Return:
         - TradeCostEstimator
             估算器
@@ -829,6 +837,12 @@ def make_trade_cost_estimator(
         ),
         TwStockCostModel(CostConfig.default()),
     )
+    if simulation:
+        stock_cost = TwStockCostModel(
+            dataclasses.replace(
+                stock_cost.config, comm_discount=float(Commission.SimulationDiscount)
+            )
+        )
     futures_cost: TwFuturesCostModel = next(
         (
             context.cost_model
@@ -873,10 +887,16 @@ def make_trade_cost_estimator(
                 Action.SELL,
                 is_day_trade=is_day_trade,
                 date=run_date,
+                symbol=trade.symbol,
             )
         else:
             tax = stock_cost.tax(
-                entry, quantity, Action.SELL, is_day_trade=is_day_trade, date=opened_on
+                entry,
+                quantity,
+                Action.SELL,
+                is_day_trade=is_day_trade,
+                date=opened_on,
+                symbol=trade.symbol,
             )
         return float(commission + tax)
 

@@ -142,9 +142,10 @@ class TwStockCostModel(BaseCostModel):
         action: Action,
         is_day_trade: Optional[bool] = None,
         date: Optional[datetime.date] = None,
+        symbol: Optional[str] = None,
     ) -> int:
         """
-        - Description: 計算證交稅；買進恆為 0，賣出依「是否當沖 ＋ 成交日」選稅率
+        - Description: 計算證交稅；買進恆為 0，賣出依「ETF 與否、是否當沖 ＋ 成交日」選稅率
         - Parameters:
             - price: float
                 成交價格
@@ -157,6 +158,8 @@ class TwStockCostModel(BaseCostModel):
             - date: Optional[datetime.date]
                 成交日；決定當沖減半是否已實施（見 `is_day_trade_tax_effective()`）。
                 None 時視為現行制度
+            - symbol: Optional[str]
+                證券代號；ETF 課 ETF 稅率。None 時當成普通股
         - Return:
             - tax: int
                 證交稅
@@ -178,6 +181,8 @@ class TwStockCostModel(BaseCostModel):
             date=date,
             tax_rate=self.config.tax_rate,
             day_trade_tax_rate=self.config.day_trade_tax_rate,
+            symbol=symbol,
+            etf_tax_rate=self.config.etf_tax_rate,
         )
 
     # === 放空專屬 ===

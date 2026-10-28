@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import pytest
 
 from core.broker.rate_limiter import RateLimiter
 from core.broker.tw.shioaji_account_query import ShioajiAccountQuery
@@ -353,3 +354,78 @@ def test_missing_broker_query_skips_calibration(
     runner.broker = SimpleNamespace()
 
     assert runner.calibrate_costs(TODAY) == []
+
+
+# === 模擬環境的券商實際成本 ===
+@pytest.mark.parametrize(
+    ("symbol", "quantity", "entry", "cover", "opened", "closed", "actual"),
+    [
+        # 2026-10-12 經 OMS 開倉、10/13 平倉：個股隔夜
+        ("2468", 2, 44.5, 46.45, "2026-10-12", "2026-10-13", 407),
+        # 原 `MomentumStrategy1` 10/22 → 10/27：個股隔夜
+        ("2465", 1, 89.3, 94.5, "2026-10-22", "2026-10-27", 413),
+        # 演練策略 10/22 → 10/27：ETF 隔夜，證交稅 0.1%
+        ("0050", 1, 106.9, 106.5, "2026-10-22", "2026-10-27", 257),
+        # 盤中動能策略 10/28 當沖：個股當沖，證交稅 0.15%
+        ("4526", 2, 47.7, 48.1, "2026-10-28", "2026-10-28", 279),
+    ],
+)
+def test_simulation_estimate_matches_the_broker_to_the_yuan(
+    symbol: str,
+    quantity: int,
+    entry: float,
+    cover: float,
+    opened: str,
+    closed: str,
+    actual: int,
+) -> None:
+    """
+    模擬環境的四筆實際來回，估算值與券商推得的實際成本逐元相同
+
+    偏差原本全部來自兩個設定：模擬環境券商以 5 折計手續費（記帳用正式帳戶的 3 折），
+    以及 ETF 被課成股票的 0.3%。公式與取整本身是對的。
+    """
+
+    trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
+        symbol=symbol, quantity=quantity, pnl=0.0, cover_price=cover, open_seqno="S1"
+    )
+    opening: List[Dict[str, Any]] = [
+        {
+            "action": "Buy",
+            "price": entry,
+            "volume": quantity,
+            "filled_at": f"{opened}T13:30:05+08:00",
+        }
+    ]
+
+    estimated: Optional[float] = make_trade_cost_estimator(simulation=True)(
+        trade, opening, datetime.date.fromisoformat(closed)
+    )
+
+    assert estimated == float(actual)
+
+
+def test_production_estimate_keeps_the_account_discount() -> None:
+    """正式環境不換折扣：2468 那筆以 3 折估，比模擬環境的 5 折低"""
+
+    trade: RealizedTradeSnapshot = RealizedTradeSnapshot(
+        symbol="2468", quantity=2, pnl=0.0, cover_price=46.45, open_seqno="S1"
+    )
+    opening: List[Dict[str, Any]] = [
+        {
+            "action": "Buy",
+            "price": 44.5,
+            "volume": 2,
+            "filled_at": "2026-10-12T13:30:05+08:00",
+        }
+    ]
+    run_date: datetime.date = datetime.date(2026, 10, 13)
+
+    production: Optional[float] = make_trade_cost_estimator()(trade, opening, run_date)
+    simulation: Optional[float] = make_trade_cost_estimator(simulation=True)(
+        trade, opening, run_date
+    )
+
+    # 3 折：38＋39＋證交稅 278；5 折：63＋66＋278
+    assert production == 355.0
+    assert simulation == 407.0

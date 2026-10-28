@@ -55,9 +55,11 @@
 | 參數 | 常數名 | 預設值 | 依據／備註 |
 |------|--------|--------|------------|
 | 手續費率 | `Commission.CommRate` | 0.1425% | — |
-| 手續費折扣 | `Commission.Discount` | 0.3 | 約 3 折，電子下單常見 |
+| 手續費折扣 | `Commission.Discount` | 0.3 | 約 3 折，電子下單常見；回測與實盤記帳都用這一個 |
+| 模擬環境手續費折扣 | `Commission.SimulationDiscount` | 0.5 | 只給實盤盤後成本校正用：模擬環境券商以 5 折計，校正時換成它才比得準 |
 | 最低手續費 | `Commission.MinFee` | 20 元 | — |
 | 一般證交稅 | `Commission.TaxRate` | 0.3% | — |
+| ETF 證交稅 | `Commission.ETFTaxRate` | **0.1%** | 代號 `00` 開頭（`StockUtils.is_etf()`，與檔位表同一個判定）；當沖也是 0.1%，減半只適用股票。債券 ETF 的停徵期間不另外處理，一律以 0.1% 計 |
 | 現股當沖證交稅 | `Commission.DayTradeTaxRate` | **0.15%** | 減半優惠，適用區間 **2017-04-28～2027-12-31**（`DAY_TRADE_TAX_START`～`DAY_TRADE_TAX_EXPIRY`，逐筆依成交日判斷；起始日之前的當沖賣出課 0.3%） |
 | 融券保證金成數 | `ShortCost.MarginRate` | **90%** | 現行法定成數 |
 | 融券手續費（借券費） | `ShortCost.MarginBorrowFeeRate` | **0.08%** | 賣出價金一次性 |

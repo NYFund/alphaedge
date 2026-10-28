@@ -308,6 +308,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             action=Action.SELL,
             is_day_trade=False,
             date=open_date,
+            symbol=position.symbol,
         )
         day_trade_tax: int = self.cost_model.tax(
             price=position.price,
@@ -315,6 +316,7 @@ class TwStockSettlementModel(BaseSettlementModel):
             action=Action.SELL,
             is_day_trade=True,
             date=open_date,
+            symbol=position.symbol,
         )
         return max(0, full_tax - day_trade_tax)
 

@@ -1,3 +1,4 @@
+import dataclasses
 import datetime
 import sqlite3
 from pathlib import Path
@@ -26,6 +27,7 @@ from core.position.assembly import (
 from core.strategies.base import BaseStrategy
 from core.utils import (
     Action,
+    Commission,
     ExecutionStyle,
     ExecutionTiming,
     InstrumentType,
@@ -330,10 +332,12 @@ def test_cost_estimator_uses_the_strategy_cost_model(dao: LiveTradeDAO) -> None:
     校正估算器用實盤記帳的那一個成本模型，不是另一份預設
 
     策略自訂費率時，用預設費率去比對券商數字，校正出來的偏差其實是兩份設定的差。
+    唯一的例外是手續費折扣：模擬環境的券商一律以 `Commission.SimulationDiscount` 計，
+    校正時換成它，其餘設定照策略的。
     """
 
     custom: CostConfig = CostConfig.default()
-    custom.comm_discount = 1.0  # 不打折，與預設折扣分得開
+    custom.day_trade_tax_rate = 0.003  # 當沖不減半，與預設稅率分得開
     strategy: DayTradeShortStrategy = DayTradeShortStrategy()
     strategy.cost_config = custom
     trader: LiveTrader = build([strategy], dao)
@@ -355,14 +359,20 @@ def test_cost_estimator_uses_the_strategy_cost_model(dao: LiveTradeDAO) -> None:
         trade, opening, TODAY
     )
 
+    simulated: TwStockCostModel = TwStockCostModel(
+        dataclasses.replace(
+            model.config, comm_discount=float(Commission.SimulationDiscount)
+        )
+    )
     expected: int = (
-        model.commission(2480.0, 1)
-        + model.commission(2475.0, 1)
+        simulated.commission(2480.0, 1)
+        + simulated.commission(2475.0, 1)
         + model.tax(2475.0, 1, Action.SELL, is_day_trade=True, date=TODAY)
     )
-    assert model.config.comm_discount == 1.0
     assert estimated == float(expected)
-    assert estimated != make_trade_cost_estimator()(trade, opening, TODAY)
+    assert estimated != make_trade_cost_estimator(simulation=True)(
+        trade, opening, TODAY
+    )
 
 
 # === 守門：兩個 factory 都走共用組裝 ===

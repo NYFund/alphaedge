@@ -28,8 +28,13 @@ class Commission(float, Enum):
 
     CommRate = 0.001425  # 券商手續費率（commission rate）
     Discount = 0.3  # 券商手續費折扣（commission discount）
+    # 模擬環境券商的手續費折扣：**只給盤後成本校正比對用**，回測與實盤記帳一律用
+    # `Discount`。模擬環境以 5 折計，拿 3 折去比會讓每一筆個股都被誤報偏高約 14%
+    SimulationDiscount = 0.5
     MinFee = 20.0  # 券商最低手續費限制（minimum fee）
     TaxRate = 0.003  # 證券交易稅（Securities Transaction Tax Rate）
+    # ETF 證交稅（不適用現股當沖減半）。債券 ETF 的停徵期間不另外處理，一律以此計
+    ETFTaxRate = 0.001
     # 現股當沖證交稅（減半）；適用區間為 DAY_TRADE_TAX_START ~ DAY_TRADE_TAX_EXPIRY
     DayTradeTaxRate = 0.0015
 

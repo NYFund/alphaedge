@@ -127,6 +127,24 @@ class StockUtils:
         return DAY_TRADE_TAX_START <= date <= DAY_TRADE_TAX_EXPIRY
 
     @staticmethod
+    def is_etf(symbol: Optional[str]) -> bool:
+        """
+        - Description:
+            是否為 ETF：台股 ETF 的代號一律 `00` 開頭
+
+            **檔位表與證交稅共用這一個判定**：兩處各寫一份的話，新增一種 ETF
+            代號規則時只改一邊，檔位對了稅率卻錯（或反過來），而且不會有任何錯誤。
+        - Parameters:
+            - symbol: Optional[str]
+                證券代號；None 視為不是 ETF
+        - Return:
+            - bool
+                ETF 為 True
+        """
+
+        return bool(symbol) and symbol.startswith("00")
+
+    @staticmethod
     def calculate_transaction_tax(
         price: float = 0.0,
         volume: int = 0,
@@ -134,6 +152,8 @@ class StockUtils:
         date: Optional[datetime.date] = None,
         tax_rate: Optional[float] = None,
         day_trade_tax_rate: Optional[float] = None,
+        symbol: Optional[str] = None,
+        etf_tax_rate: Optional[float] = None,
     ) -> int:
         """
         - Description:
@@ -158,14 +178,27 @@ class StockUtils:
                 一般稅率；None 時取 `Commission.TaxRate`
             - day_trade_tax_rate: Optional[float]
                 當沖稅率；None 時取 `Commission.DayTradeTaxRate`
+            - symbol: Optional[str]
+                證券代號；ETF 改用 ETF 稅率。None 時當成普通股（沒有代號的研究腳本維持原本的算法）
+            - etf_tax_rate: Optional[float]
+                ETF 稅率；None 時取 `Commission.ETFTaxRate`
         - Return:
             - tax: int
                 交易稅
         - Notes:
             - 一般賣出證交稅 = 成交價 x 成交股數 x 0.3%
             - 現股當沖賣出證交稅 = 成交價 x 成交股數 x 0.15%（減半優惠）
+            - ETF 賣出證交稅 = 成交價 x 成交股數 x 0.1%，當沖也一樣（減半只適用股票）
             - 放空的證交稅課在「賣出（開倉）」這端，與做多相反
         """
+
+        if StockUtils.is_etf(symbol):
+            etf_rate: float = (
+                float(Commission.ETFTaxRate) if etf_tax_rate is None else etf_tax_rate
+            )
+            return max(
+                1, int(price * StockUtils.convert_lot_to_share(volume) * etf_rate)
+            )
 
         halved: bool = is_day_trade and StockUtils.is_day_trade_tax_effective(date)
         rate: Optional[float] = day_trade_tax_rate if halved else tax_rate
@@ -189,7 +222,7 @@ class StockUtils:
                 `(價格上限, 檔位)` 的清單
         """
 
-        if symbol and symbol.startswith("00"):
+        if StockUtils.is_etf(symbol):
             return ETF_PRICE_TICK_TABLE
         return PRICE_TICK_TABLE
 

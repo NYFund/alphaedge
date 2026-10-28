@@ -720,3 +720,31 @@ def test_rejected_order_accrues_no_slippage(make_order) -> None:
 
     assert manager.open_position(order) is None
     assert manager.account.total_slippage_cost == 0.0
+
+
+def test_long_etf_sell_records_the_etf_tax(make_order) -> None:
+    """
+    部位管理器記帳時要把代號交給成本模型：ETF 賣出記 0.1%
+
+    成本模型會分 ETF，但呼叫端沒傳代號的話，回測帳上照樣是股票的 0.3%。
+    """
+
+    manager: StockPositionManager = build_manager()
+    position: Optional[StockPosition] = manager.open_position(
+        make_order(stock_id="0050", action=Action.BUY, price=100.0, volume=1)
+    )
+    assert position is not None
+
+    record: StockTradeRecord = manager.close_long_position(
+        position=position,
+        stock_order=make_order(
+            stock_id="0050",
+            action=Action.SELL,
+            date=datetime.date(2024, 1, 9),
+            price=100.0,
+            volume=1,
+        ),
+        close_volume=1,
+    )
+
+    assert record.tax == 100

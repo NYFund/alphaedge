@@ -521,3 +521,52 @@ def test_factory_derives_day_trade_from_allow_day_trade_only(
 
     assert config.is_day_trade is allow_day_trade
     assert config.short_method is expected_method
+
+
+# === ETF 證交稅 ===
+def test_etf_sell_is_taxed_at_the_etf_rate() -> None:
+    """
+    ETF（代號 `00` 開頭）賣出課 0.1%，不是股票的 0.3%
+
+    0050 一張 106.5 元：0.3% 是 319、0.1% 是 106。實盤校正時把 ETF 誤報成偏低 37%，
+    回測交易 ETF 的策略則每一筆都多扣了兩倍的稅。
+    """
+
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default())
+
+    assert model.tax(106.5, 1, Action.SELL, symbol="0050") == 106
+    assert model.tax(106.5, 1, Action.SELL, symbol="2330") == 319
+    assert model.tax(106.5, 1, Action.BUY, symbol="0050") == 0
+
+
+def test_etf_day_trade_is_not_halved() -> None:
+    """當沖減半只適用股票：ETF 當沖照樣 0.1%，不是 0.05%"""
+
+    model: TwStockCostModel = TwStockCostModel(CostConfig.default())
+
+    assert (
+        model.tax(
+            106.5,
+            1,
+            Action.SELL,
+            is_day_trade=True,
+            date=datetime.date(2026, 10, 28),
+            symbol="0050",
+        )
+        == 106
+    )
+
+
+def test_tax_without_symbol_keeps_the_stock_rate() -> None:
+    """沒有代號（研究腳本）時維持原本的算法，當成普通股"""
+
+    assert StockUtils.calculate_transaction_tax(price=106.5, volume=1) == 319
+
+
+def test_etf_rule_is_shared_with_the_tick_table() -> None:
+    """檔位表與稅率用同一個 ETF 判定：同一個代號不會一邊是 ETF、一邊是股票"""
+
+    for symbol in ("0050", "00631L", "00679B", "2330", "6505"):
+        assert StockUtils.is_etf(symbol) == (
+            StockUtils.get_tick_table(symbol) is not StockUtils.get_tick_table("2330")
+        )

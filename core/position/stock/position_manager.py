@@ -97,6 +97,7 @@ class StockPositionManager(BasePositionManager):
             volume=stock_order.volume,
             action=Action.BUY,
             date=TimeUtils.to_date(stock_order.date),
+            symbol=stock_order.stock_id,
         )
         open_cost: int = open_commission + open_tax
 
@@ -171,6 +172,7 @@ class StockPositionManager(BasePositionManager):
             action=Action.SELL,
             is_day_trade=stock_order.is_day_trade,
             date=TimeUtils.to_date(stock_order.date),
+            symbol=stock_order.stock_id,
         )
         borrow_fee: int = self.cost_model.borrow_fee(
             price=stock_order.price,
@@ -299,6 +301,7 @@ class StockPositionManager(BasePositionManager):
             action=Action.SELL,
             is_day_trade=is_day_trade,
             date=TimeUtils.to_date(stock_order.date),
+            symbol=stock_order.stock_id,
         )
 
         # 開倉成本依平倉張數等比例攤提。
