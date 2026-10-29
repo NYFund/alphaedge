@@ -727,9 +727,17 @@ def test_fetch_runs_reads_a_database_without_the_instrument_column(
         grace_minutes=15,
     )
 
-    # 商品類別與策略集合兩欄都補不了，一律讀成 None
+    # 商品類別、策略集合與 pid 三欄都補不了，一律讀成 None
     assert rows == [
-        ("close", "2026-09-21 13:28:00", "2026-09-21 13:40:00", "正常結束", None, None)
+        (
+            "close",
+            "2026-09-21 13:28:00",
+            "2026-09-21 13:40:00",
+            "正常結束",
+            None,
+            None,
+            None,
+        )
     ]
     assert statuses[0].is_healthy is True
 

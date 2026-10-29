@@ -22,9 +22,14 @@ Use `--target` to choose one or more datasets to update; the default is `no_tick
 | `--target <target> [<target> ...]` | One or more datasets to update; default `no_tick` |
 | `--from YYYY-MM-DD` | Override the start date of **date-based** targets (see `--from` below) |
 | `--retry-failed ROUNDS` | Rerun **only the failed targets** up to this many more rounds (default `0`, no retry). Stops early once everything has succeeded; the exit code reflects the targets still failing after the last round |
-| `--retry-wait MINUTES` | Minutes to wait before each retry round (default `60`; an exchange that blocks the source IP usually takes tens of minutes to lift it). The scheduled run uses `--retry-failed 4 --retry-wait 60` |
+| `--retry-wait MINUTES` | Minutes to wait before each retry round (default `60`; an exchange that blocks the source IP usually takes tens of minutes to lift it) |
+| `--defer-failed` | Run a single pass: failed targets are recorded in `logs/update_db_deferred.json` for a later `--retry-deferred`, and this run exits 0 (exit 1 if the list cannot be written). Cannot be combined with `--retry-failed` (above 0) or `--retry-deferred` |
+| `--retry-deferred` | Skip `--target` and rerun only the targets recorded by `--defer-failed` (keeping that pass's `--from`), with rounds and waits from `--retry-failed`/`--retry-wait`. The list is deleted once read; a list from another day is ignored |
 
 Negative values for `--retry-failed` or `--retry-wait` are a usage error (exit code 2).
+
+The schedule splits the retry in two: at 06:00 it runs one `--defer-failed` pass, then the parity checks, and only then `--retry-deferred --retry-failed 4 --retry-wait 60`.
+Parity therefore never waits for up to 4 hours of retries; when a check needs data that failed in the first pass, it is rejected as stale (exit code 3) and rerun after the retry.
 
 ### Target Reference
 

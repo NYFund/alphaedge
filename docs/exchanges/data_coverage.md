@@ -64,9 +64,9 @@
 | `balance_sheet`、`comprehensive_income`、`cash_flow`、`equity_change` | MOPS | 2013 年第 1 季（`DEFAULT_START_YEAR`） | 權益變動表的資料形狀與限制見 [權益變動表](../pipeline/equity-change.md) |
 | FinMind 四表 | FinMind API | 券商分點：`2021-06-30`（`FINMIND_BROKER_TRADING_START_DATE`）；台股總覽／證券商為 API 快照 | 股票、券商、分點 |
 | `futures_price_daily` | TAIFEX 每日行情頁（POST） | 2015-01-01（`DEFAULT_FUTURES_START_DATE`） | 日盤／夜盤分列存（`session` 欄位）；指數期貨 7 檔（`FUTURES_TARGET_PRODUCTS`）＋ 股票期貨（預設流動性前 20 檔） |
-| `futures_continuous` | 由 `futures_price_daily` 衍生（不連網路） | 同上 | 3 種調整方式 × 換月規則（`--target futures_continuous` 預設只建 `LAST_TRADING_DAY`）；每次整段重建 |
-| `futures_margin_history`、`stock_futures_margin_rate_history` | TAIFEX 公告附件（CSV） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
-| `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | TAIFEX 三大法人／大額交易人／選擇權 PCR | 三大法人：2023-09-04（來源只保留約三年）；其餘以庫內最早一筆為準 | `get_available()` 只回傳查詢日之前已公布者（避免前視）；三張表各自以交易日曆的差集決定要請求的月份，盤後才公布 |
+| `futures_continuous` | 由 `futures_price_daily` 衍生（不連網路） | 同上 | 3 種調整方式 × 換月規則（`--target futures_continuous` 預設只建日盤 ＋ `LAST_TRADING_DAY`）；每次整段重建 |
+| `futures_margin_history`、`stock_futures_margin_rate_history` | TAIFEX 保證金一覽表（CSV，日常更新）；2020-03 起的歷史取自調整公告附件（`FuturesMarginUpdater.update_history()`，不在 `update_db` 內） | 2020-03（更早為掃描影像，見 [台期貨平台](../futures/tw-futures-platform.md)〈已知限制〉） | 變動序列，達門檻才有新列 |
+| `futures_institutional_chip`、`futures_large_trader`、`futures_put_call_ratio` | TAIFEX 三大法人／大額交易人／選擇權 PCR | 三大法人：2023-09-04（來源只保留約三年）；大額交易人、PCR：2015-01-01（`FuturesChipUpdater.DEFAULT_START_DATE`） | `get_available()` 只回傳查詢日之前已公布者（避免前視）；三張表各自以交易日曆的差集決定要請求的月份，盤後才公布 |
 | `futures_stock_universe` | TAIFEX 標的證券一覽表（GET） | 2026-08-29（首份快照） | **快照序列**：來源無掛牌／下市日欄位，兩者由差分推得；商品清單取用一律走 `FuturesStockUniverseAPI.get_products()` |
 | `market_holiday` | TWSE `holidaySchedule`（JSON，一年一次請求） | 每次更新去年／今年／明年（明年的公告通常 12 月才出來） | 實盤盤前判定交易日的主來源；「開始交易日／最後交易日」等提醒列標為交易日（`is_trading_day=1`），其餘（含「市場無交易，僅辦理結算交割作業」）為休市；颱風等臨時停市不在表上 |
 | `stock_tick` | Shioaji（每日更新）＋歷史 CSV（一次匯入） | 歷史存檔 2020-04-01～2024-05-10（`scripts/manual/manual_tick_history_import.py` 匯入後才有資料）；Shioaji 可查區間約自 **2020-03-02**；每日更新自 2024-05-10（`TICK_UPDATE_START_DATE`）起接續 | 需執行中的 TimescaleDB（開 Docker Desktop 後 `docker compose up -d postgres`）；興櫃時期不入庫 |
@@ -85,7 +85,8 @@ python -m apps.update_db --target <targets...>
 - `all`／`no_tick` 兩個捷徑**都不含** `futures_stock_price` 與 `finmind`（含 `stock_info`、`stock_info_with_warrant`、
   `broker_info`、`broker_trading` 四個子項）；這些 target 標為 `explicit_only`，只在明確點名時才跑。
 - `no_tick` 另外排除 `tick`（需要 Shioaji 金鑰、`[tick]` 選用相依與執行中的 TimescaleDB）。
-- `--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 與沒有區間的 target 不受影響）。
+- `--from YYYY-MM-DD` 可覆寫以日期為單位的 target 的起日（`fs`、`mrr` 與自行決定區間的 `futures_chip`、`futures_continuous`、
+  `futures_margin`、`futures_stock_universe`、`market_holiday`、`stock_info`、`stock_info_with_warrant`、`broker_info` 不受影響）。
 - `--retry-failed N` 讓失敗的 target 最多再重跑 N 輪（只重跑失敗的那幾個），每輪前等 `--retry-wait` 分鐘（預設 60）。
 
 各 target 的起始日期見上方〈資料來源與起始日期〉；請求量、回補時間與各 target 的更新行為見 [指令教學](../commands/command-usage.zh-TW.md)〈各 target 的注意事項〉。
@@ -122,7 +123,8 @@ python -m apps.update_db --target <targets...>
 
 - 專案目前無內建加密貨幣 / prediction market collectors。
 - **`equity_change`（權益變動表）的形狀與其他三張財報表不同**：長表、單位仟元。
-  爬取清單是 `taiwan_stock_info` 現況聯集當季資產負債表的公司，**當季資產負債表也沒有的已下市公司仍會漏、不含興櫃**；
+  爬取清單是 `taiwan_stock_info` 現況聯集當季資產負債表的公司，**不含興櫃**；已下市公司只補得到
+  當季資產負債表有的那些（倖存者偏誤的殘餘來源）；
   另有少數公司的 2013~2014 年季站方導向「採 IFRSs 前」的另一組端點、本表沒有。
   詳見 [權益變動表](../pipeline/equity-change.md)〈已知限制〉。
 - **`balance_sheet`、`comprehensive_income`、`cash_flow` 的主鍵含 `公司名稱`**：來源在公司名稱後加註 `*`，

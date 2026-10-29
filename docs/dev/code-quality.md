@@ -104,7 +104,7 @@ ruff check . --select B006,B904             # 看逐處位置
 | 對象 | 規則 | 理由 |
 |------|------|------|
 | `__init__.py` | `F401` | 套件的 re-export 門面，import 就是對外介面 |
-| `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
+| `tests/*`、`scripts/manual/*` | `ANN201` | 測試 helper／fixture／替身方法與手動腳本 helper 的回傳型別多半是「被 monkeypatch 過的 loader」或 `(物件, 路徑)`，標註要嘛得把類別從函式內部的 import 搬到檔頭（會讓 monkeypatch 失效），要嘛只能寫 `Any`。**`ANN204` 仍然生效**，`__init__` 一律要 `-> None` |
 
 per-file-ignores 同樣不能長期失明：`tests/test_config_consistency.py` 會檢查每一條
 指向的路徑還存在、且規則仍確實被觸發，過期的那條會讓測試紅。
@@ -115,7 +115,7 @@ per-file-ignores 同樣不能長期失明：`tests/test_config_consistency.py` �
 `core/`／`apps/`／`strategies/`／`frontend/` 都生效。沒有機器護欄時，缺漏會以百處為單位累積。
 
 只開這兩條、不開整組 `ANN`：`ANN001`（參數）另有數百處未標，
-而 `ANN002`／`ANN003`（`*args`／`**kwargs`）與 `ANN101`（`self`）跟本專案既有寫法衝突。
+而 `ANN002`／`ANN003`（`*args`／`**kwargs`）跟本專案既有寫法衝突（`ANN101`（`self`）已從 ruff 移除，不必再考慮）。
 
 > ⚠️ **批次補回傳型別時，抽象方法必須單獨挑出來人工判**。它們的 body 是 `pass`，
 > 用「函式自己有沒有 return 值」判斷必然得到 `None`——而子類回傳什麼完全看不出來

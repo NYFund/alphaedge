@@ -17,6 +17,7 @@ AlphaEdge/
 ├── data/                  # 資料
 │   ├── db/                # tw_stock.db、tw_futures.db、tw_trading.db（實盤紀錄；市場軸由檔名承載）
 │   ├── live/              # KILL_SWITCH：檔案存在即停止送單（目錄要按的時候才 mkdir）
+│   ├── records/           # 手動錄製的 Shioaji 行情回呼（scripts/manual/manual_shioaji_quote_record.py），重放與欄位核對的素材
 │   └── downloads/         # ETL 中繼檔（市場軸由目錄承載）
 │       ├── tw_stock/      # price, chip, margin, short_sale_list, day_trade_list, dividend,
 │       │                  # corporate_action, financial_statement, monthly_revenue_report,
@@ -24,13 +25,13 @@ AlphaEdge/
 │       └── tw_futures/    # price, chip, continuous, universe, margin, meta
 │
 ├── results/               # 回測產出：只放要給人看的東西（CSV ＋ PNG）
-│   ├── <strategy_name>/  # 策略的 self.strategy_name，不是類別名
+│   ├── <strategy_name>/   # 策略的 self.strategy_name（例如 Volume-Breakout-Momentum），不是類別名稱
 │   └── live/              # 實盤日報與每日 parity 比對（與回測輸出分層，避免蓋掉回歸比對基準）
 │
 └── logs/
     ├── api/               # core/api/ 的查詢日誌
     ├── pipeline/          # 爬取／清洗／入庫，以及其餘未被認領的記錄
-    ├── backtest/          # 回測（檔名＝策略名）
+    ├── backtest/          # 回測（檔名＝strategy_name）
     └── launchd/           # 演練排程的 stdout／stderr（scripts/launchd/rehearsal_schedule.py）
 ```
 
@@ -38,9 +39,10 @@ AlphaEdge/
 `ALPHAEDGE_DATA_DIR`／`ALPHAEDGE_RESULTS_DIR`／`ALPHAEDGE_LOGS_DIR`；kill switch 另可由
 `ALPHAEDGE_LIVE_KILL_SWITCH_PATH` 單獨指定。路徑在 import `core/config/paths.py` 時就算定，之後再改環境變數不會生效。
 
-兩個例外不在這三根底下：
+三個例外不在這三根底下：
 
 - `logs/launchd/` 由 launchd plist 產生器以專案根目錄寫死，不跟 `ALPHAEDGE_LOGS_DIR` 走，也不在 `apps.clean_logs` 的清理範圍內。
+- `data/records/` 由錄製腳本預設寫到工作目錄下的相對路徑，不跟 `ALPHAEDGE_DATA_DIR` 走。
 - **台股 tick 存在 TimescaleDB**，資料在 `docker-compose.yml` 的 named volume `alphaedge_pgdata`，不在 `data/` 底下；
   備份 `data/` 不會帶到它。用 named volume 而不是 bind mount，是因為 Docker Desktop on Mac 的 bind mount 大量寫入非常慢。
 
@@ -73,7 +75,7 @@ AlphaEdge/
 | 桶 | 收哪些記錄 | 誰開 sink | 性質 |
 |----|------------|-----------|------|
 | `api/` | `core.api.*` | `core/api/base.py`（`BaseDataAPI`，所有資料 API 共用；檔案 sink 只留 `API_LOG_FILE_LEVEL` 以上，目前為 WARNING） | 每次查詢都寫，量最大、純雜訊，可整桶刪 |
-| `backtest/` | `core.backtest`、`core.strategies`、`strategies`（頂層具體策略）、`core.position`、`core.models`、`core.adapters`、`strategy_lab` | 回測引擎（`LogManager.setup_backtest_logger()`，檔名＝策略名） | 單次回測的執行紀錄 |
+| `backtest/` | `core.backtest`、`core.strategies`、`strategies`（頂層具體策略）、`core.position`、`core.models`、`core.adapters`、`strategy_lab` | 回測引擎（`LogManager.setup_backtest_logger()`，檔名＝`strategy_name`） | 單次回測的執行紀錄 |
 | `pipeline/` | **其餘全收**（未被前兩桶認領的記錄） | updater（`BaseDataUpdater` 依 `LOG_FILE_NAME`）與部分 crawler；`setup_logger()` 未指定目錄時的預設 | **會回頭讀**（回補的 `N requested / N no data / N unreachable` 統計行） |
 
 只分兩桶不成立：`pipeline` 蓋不住來自 `core/api/` 的查詢日誌，而它們恰好是檔案數最多的一群。

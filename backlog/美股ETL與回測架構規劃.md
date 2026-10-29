@@ -258,7 +258,7 @@ strategies/                          # 頂層：具體策略
 
 > **儲存層現況（2026-10-18 複查，與 2026-10-10 相同）**：「SQLite 先行」是 2026-09 的前提，恢復時要重新確認。
 > - [PostgreSQL遷移計畫.md](PostgreSQL遷移計畫.md) 0 / 16 項，研究庫仍是 SQLite；`PostgreSQL遷移計畫.md` Phase2-1 要剷掉的正是 `INSERT OR IGNORE` 這類 SQLite 專屬語法。
-> - [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service（TimescaleDB image）、
+> - `台股tick改用TimescaleDB.md` 已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service（TimescaleDB image）、
 >   `psycopg`／ConnectorX（放在 `tick` extra）與獨立的 `TICK_DATABASE_URL`；它只承載 tick，日頻研究庫刻意沒有切過去。
 > - 因此美股表要「先寫 SQLite 再隨研究庫遷移」，還是「直接寫進 PostgreSQL」，是恢復時的第一個決策（見〈關聯與狀態〉的相關 backlog）；
 >   無論哪種，SQL 都只寫在 `core/dao/us/`，冪等寫入走 DAO 的 `insert_or_ignore()` 介面，不在 DAO 外寫方言語法。
@@ -493,7 +493,7 @@ strategies/                          # 頂層：具體策略
     `core/dao/us/` 一寫就讓它的工作量變大，`get_engine()` 與 fallback 也要從兩個研究庫擴到三個
     （`US_STOCK_DB_PATH` 是本文件 Phase1-2 的產出）。**該計畫若已完成或正在並行，`core/dao/us/`
     直接寫 `ON CONFLICT`，不要新增 `INSERT OR IGNORE`。**
-  - [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md)：已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service 與 driver；
+  - `台股tick改用TimescaleDB.md`：已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service 與 driver；
     美股表要不要直接寫進 PostgreSQL，恢復時與上一條一起決定（見 §3.4 的儲存層現況）。
   - [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)：回測入口已於 2026-09-30
     由 `run.py` 換成 `python -m apps.backtest`，本文件的驗收標準與 Phase1-3 驗證方式已同步改寫；
