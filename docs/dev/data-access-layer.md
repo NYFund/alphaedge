@@ -99,9 +99,10 @@ import 資料庫驅動（`sqlite3`、`psycopg`、`connectorx`），由 `scripts/
 | 跨庫只讀（期貨 ETL 讀台股交易日曆、標的池比對現股） | updater 第一次用到時以 `read_only=True` 開 | `updater.close()` | — |
 | 研究腳本、手動檢查 | `connect_sqlite(..., read_only=True)` | 腳本自己 | — |
 
-**一次執行中同一個 DB 只開一條連線**：updater 與 loader 各開一條到同一個 DB 時，兩條連線會互搶寫入鎖，
-且其中一條常常沒人關。`apps/update_db.py` 由 `TARGETS` 註冊表驅動，對每個 target 一律 `try/finally: updater.close()`，
-不分 SQLite 或 TimescaleDB（tick 的 `close()` 另會登出 Shioaji，可重複呼叫）。
+**一次執行中同一個 DB 只開一條連線**：舊版 updater 與 loader 各開一條到同一個 DB，
+updater 那條從不關閉，兩條連線還會互搶寫入鎖（券商分點曾得先 commit loader 那條才查得動）。
+`apps/update_db.py` 由 `TARGETS` 註冊表驅動，對每個 target 一律 `try/finally: updater.close()`，
+不分 SQLite 或 TimescaleDB（台股 tick 的 `close()` 另會登出 Shioaji；`StockTickUpdater.update()` 的 `finally` 已先關過一次，`close()` 可重複呼叫）。
 
 **實盤紀錄庫一律走 `connect_live_trading()`**：在 `connect_sqlite()` 之上加 `journal_mode=WAL`
 （日報、前端與存活監控會在實盤行程寫入的同時讀取，rollback journal 會讓讀寫互相阻塞）與

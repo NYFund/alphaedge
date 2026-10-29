@@ -48,6 +48,8 @@ python -m apps.backtest --strategy IntradayMomentumStrategy --scale TICK
 其他旗標：`--tick-universe strategy|all`（TICK 回測的標的範圍，預設只取策略的 `get_live_symbols()` 加持倉）、
 `--show`／`--no-show`（畫完圖要不要開瀏覽器，預設不開，也可用環境變數 `ALPHAEDGE_SHOW_FIGURES`）。
 
+退出碼：`0` 正常結束；`2` 用法錯誤（策略名找不到、未知旗標、覆寫值不合法、`--scale`／`--tick-universe` 與策略不合）；`1` 其他失敗（例如策略設了已移除的設定欄位、交易所名單缺日，原因印在 stderr）。完整對照見 [指令教學](../commands/command-usage.zh-TW.md)。
+
 策略放在 `strategies/stock/` 與 `strategies/futures/`，由 `StrategyLoader` 自動收錄；
 怎麼寫策略見 [策略開發指南](../../strategies/README.md)。
 
@@ -63,18 +65,18 @@ python -m apps.backtest --strategy IntradayMomentumStrategy --scale TICK
 
 | 檔案 | 內容 |
 |------|------|
-| `<StrategyName>_trading_report.csv` | 已平倉交易的逐筆明細與損益 |
-| `<StrategyName>_direction_summary.csv` | 多空分開的勝率、損益與成本統計 |
-| `<StrategyName>_event_report.csv` | 強制回補、斷頭、拒單等事件計數 |
-| `<StrategyName>_daily_equity.csv` | 含未實現損益的逐日權益序列 |
-| `<StrategyName>_metrics_summary.csv` | Sharpe／Sortino／IR／MDD／波動度等整體指標（`Metric`／`Value`／`Note` 長表）|
-| `<StrategyName>_balance_curve.png` | 資產曲線 |
-| `<StrategyName>_networth.png` | 策略與 benchmark 淨值比較（台股為 `0050` 還原價，期貨為所交易商品的日盤連續合約） |
-| `<StrategyName>_mdd.png` | 最大回撤 |
-| `<StrategyName>_everyday_profit.png` | 每日損益 |
-| `<StrategyName>_everyday_equity_change.png` | 每日權益變化 |
+| `<strategy_name>_trading_report.csv` | 已平倉交易的逐筆明細與損益 |
+| `<strategy_name>_direction_summary.csv` | 多空分開的勝率、損益與成本統計 |
+| `<strategy_name>_event_report.csv` | 強制回補、斷頭、拒單等事件計數 |
+| `<strategy_name>_daily_equity.csv` | 含未實現損益的逐日權益序列 |
+| `<strategy_name>_metrics_summary.csv` | Sharpe／Sortino／IR／MDD／波動度等整體指標（`Metric`／`Value`／`Note` 長表）|
+| `<strategy_name>_balance_curve.png` | 資產曲線 |
+| `<strategy_name>_networth.png` | 策略與 benchmark 淨值比較（台股為 `0050` 還原價，期貨為所交易商品的日盤連續合約） |
+| `<strategy_name>_mdd.png` | 最大回撤 |
+| `<strategy_name>_everyday_profit.png` | 每日損益 |
+| `<strategy_name>_everyday_equity_change.png` | 每日權益變化 |
 
-日誌落在 `logs/backtest/`。用前端瀏覽（需 `uv sync --extra frontend`）：
+日誌落在 `logs/backtest/<strategy_name>.log`。用前端瀏覽（需 `uv sync --extra frontend`）：
 
 ```bash
 streamlit run frontend/app.py

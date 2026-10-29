@@ -175,6 +175,8 @@ def test_main_runs_each_target_with_its_range_and_closes(monkeypatch) -> None:
             from_date=datetime.date(2024, 1, 1),
             retry_failed=0,
             retry_wait=0,
+            defer_failed=False,
+            retry_deferred=False,
         ),
     )
 

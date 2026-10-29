@@ -4,7 +4,7 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -13,6 +13,7 @@ from scripts.launchd.rehearsal_schedule import (
     _CHAINED_JOBS,
     _DAILY_JOBS,
     _ONE_OFF_JOBS,
+    ChainedJob,
     all_plists,
     build_chain_command,
 )
@@ -27,20 +28,21 @@ from scripts.launchd.rehearsal_schedule import (
 
 def test_update_db_runs_at_taipei_six_and_is_followed_by_parity() -> None:
     """
-    資料更新在台北 06:00，跑完接著補比股票、盤中與期貨
+    資料更新在台北 06:00，第一輪跑完接著補比股票、盤中與期貨，最後才重試失敗的 target
 
     補比要用前一交易日的日 K，它在資料更新之後才入庫；
     段落時窗不同的策略不可混在同一個行程，所以各跑一次。
     """
 
-    hour, minute, steps = _CHAINED_JOBS["update-db"]
+    job = _CHAINED_JOBS["update-db"]
 
-    assert (hour, minute) == (6, 0)
-    assert steps[0][:2] == ["-m", "apps.update_db"]
+    assert (job.hour, job.minute) == (6, 0)
+    assert job.first_pass[:2] == ["-m", "apps.update_db"]
+    assert job.retry[:2] == ["-m", "apps.update_db"]
     parity_strategies: List[str] = [
-        step[step.index("--strategy") + 1]
-        for step in steps[1:]
-        if step[step.index("--phase") + 1] == "parity"
+        check[check.index("--strategy") + 1]
+        for check in job.checks
+        if check[check.index("--phase") + 1] == "parity"
     ]
     assert parity_strategies == [
         "VolumeBreakoutMomentumStrategy",
@@ -51,40 +53,106 @@ def test_update_db_runs_at_taipei_six_and_is_followed_by_parity() -> None:
     assert "update-db" not in _DAILY_JOBS
 
 
-def test_chain_runs_every_step_and_reports_the_first_failure(tmp_path: Path) -> None:
+def _fake_uv(tmp_path: Path) -> Tuple[Path, Path]:
     """
-    前一步失敗不中斷後面，結束碼取第一個失敗的
+    假的 uv：記下最後一個參數（步驟代號）；代號是 `名稱=結束碼` 或 `名稱=第一次結束碼/之後結束碼`
 
-    資料更新失敗時補比仍要跑，由它的新鮮度檢查留下「為什麼沒比」的紀錄；
-    中斷的話排程只剩一個結束碼，看不出補比根本沒跑。
+    回傳 `(uv 路徑, 執行紀錄檔)`
     """
 
+    tmp_path.mkdir(parents=True, exist_ok=True)
     record: Path = tmp_path / "ran.txt"
     fake_uv: Path = tmp_path / "uv"
-    # 假的 uv：記下最後一個參數（步驟代號），再以它當結束碼離開
     fake_uv.write_text(
-        '#!/bin/sh\nfor last; do :; done\necho "$last" >> "' + str(record) + '"\n'
-        'exit "$last"\n'
+        "#!/bin/sh\n"
+        "for last; do :; done\n"
+        f'echo "$last" >> "{record}"\n'
+        'codes="${last#*=}"\n'
+        f'seen="{tmp_path}/seen-${{last%%=*}}"\n'
+        'if [ -e "$seen" ]; then exit "${codes#*/}"; fi\n'
+        'touch "$seen"\n'
+        'exit "${codes%%/*}"\n'
     )
     fake_uv.chmod(0o755)
+    return fake_uv, record
 
-    command: List[str] = build_chain_command(str(fake_uv), [["0"], ["3"], ["5"]])
-    result: subprocess.CompletedProcess = subprocess.run(command, check=False)
 
-    assert record.read_text().split() == ["0", "3", "5"]
-    assert result.returncode == 3
+def _job(first: str, checks: List[str], retry: str) -> ChainedJob:
+    """以步驟代號組一個串接排程（假 uv 只看最後一個參數）"""
+
+    return ChainedJob(0, 0, [first], [[check] for check in checks], [retry])
+
+
+def _run(fake_uv: Path, job: ChainedJob) -> int:
+    """跑一次組好的串接，回傳結束碼"""
+
+    return subprocess.run(
+        build_chain_command(str(fake_uv), job), check=False
+    ).returncode
+
+
+def test_checks_run_before_the_retry(tmp_path: Path) -> None:
+    """
+    補比排在重試之前，每一步都執行
+
+    2026-10-28 `futures_chip` 4 輪重試都失敗，排在重試之後的補比從 06:0x 拖到 10:26；
+    補比用不到那份資料，不該等它。
+    """
+
+    fake_uv, record = _fake_uv(tmp_path)
+
+    code: int = _run(fake_uv, _job("update=0", ["a=0", "b=0", "c=0"], "retry=1"))
+
+    assert record.read_text().split() == ["update=0", "a=0", "b=0", "c=0", "retry=1"]
+    assert code == 1
+
+
+def test_stale_checks_are_rerun_after_the_retry(tmp_path: Path) -> None:
+    """
+    第一次因資料太舊拒絕（結束碼 3）的補比，重試之後再跑一次；成功了就不算失敗
+
+    補比要用的資料第一輪失敗、重試才補上時，不重跑的話那天就少比一天。
+    其他原因失敗的補比不重跑：重跑也不會變好。
+    """
+
+    fake_uv, record = _fake_uv(tmp_path)
+
+    code: int = _run(fake_uv, _job("update=0", ["a=3/0", "b=0", "c=4/0"], "retry=0"))
+
+    assert record.read_text().split() == [
+        "update=0",
+        "a=3/0",
+        "b=0",
+        "c=4/0",
+        "retry=0",
+        "a=3/0",
+    ]
+    assert code == 4
+
+
+def test_status_is_the_first_failure_in_chain_order(tmp_path: Path) -> None:
+    """結束碼取第一個失敗的：第一輪更新 → 重試 → 各條補比的最終結果"""
+
+    fake_uv, _ = _fake_uv(tmp_path)
+
+    assert _run(fake_uv, _job("u1=5", ["a1=3/3"], "r1=1")) == 5
+
+    fake_uv, _ = _fake_uv(tmp_path / "second")
+    assert _run(fake_uv, _job("u2=0", ["a2=3/3"], "r2=0")) == 3
 
 
 def test_chain_exits_zero_when_every_step_succeeds(tmp_path: Path) -> None:
-    fake_uv: Path = tmp_path / "uv"
-    fake_uv.write_text("#!/bin/sh\nexit 0\n")
-    fake_uv.chmod(0o755)
+    fake_uv, _ = _fake_uv(tmp_path)
 
-    result: subprocess.CompletedProcess = subprocess.run(
-        build_chain_command(str(fake_uv), [["a"], ["b"]]), check=False
-    )
+    assert _run(fake_uv, _job("u=0", ["a=0", "b=0"], "r=0")) == 0
 
-    assert result.returncode == 0
+
+def test_stale_exit_code_matches_the_live_entry() -> None:
+    """排程端判斷「資料太舊」的結束碼要與實盤入口一致，否則重跑永遠不會觸發"""
+
+    from apps.live import EXIT_STALE_DATA
+
+    assert rehearsal_schedule._STALE_DATA_EXIT == EXIT_STALE_DATA
 
 
 def test_one_off_jobs_are_not_left_in_the_past() -> None:
