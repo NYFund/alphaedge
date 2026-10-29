@@ -85,8 +85,9 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 
 | 時間 | 指令 | 說明 |
 |------|------|------|
-| 06:00 | `uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它。失敗的 target 每 60 分鐘只重跑失敗的那幾個、最多 4 輪 |
-| 06:00（接在資料更新後） | `uv run --no-sync python -m apps.live --strategy <策略> --phase parity` | 逐條線各跑一次，補比前一交易日 |
+| 06:00 | `uv run --no-sync python -m apps.update_db --defer-failed` | 預設 `--target no_tick`，更新到前一個交易日；實盤啟動時的資料新鮮度檢查靠它。排 06:00 是留時間給 08:30 的開盤段；只跑一輪，失敗的 target 記下來交給最後的重試 |
+| 06:00（接在第一輪更新後） | `uv run --no-sync python -m apps.live --strategy <策略> --phase parity` | 逐條線各跑一次（尾盤股票策略、盤中策略、期貨策略），補比前一交易日；要用前一交易日的日 K，故接在資料更新之後，資料更新失敗時照跑，由自己的新鮮度檢查以退出碼 3 留下原因 |
+| 06:0x（接在補比後） | `uv run --no-sync python -m apps.update_db --retry-deferred --retry-failed 4 --retry-wait 60` | 只重跑第一輪失敗的 target，每 60 分鐘一輪、最多 4 輪；之後把第一次以退出碼 3 拒絕的補比再跑一次 |
 | 08:30 | `... run --rm live --strategy <股票策略> --phase open` | 台股開盤段（送單時窗 08:30～08:59）；有盤中策略時要一起載入，它的隔日出場在這一段 |
 | 08:40 | `... run --rm live --strategy <期貨策略> --phase open` | 期貨開盤段（送單時窗 08:45～08:59） |
 | 09:06 | `... run --rm live --strategy <盤中策略> --phase intraday` | 台股盤中逐筆段落（只有 `is_tick_triggered` 的策略）；開盤段 09:05 收線後才啟動 |
@@ -100,7 +101,7 @@ docker compose --profile live run --rm live --strategy VolumeBreakoutMomentumStr
 
 ```cron
 CRON_TZ=Asia/Taipei
-0  6 * * 1-5  cd /path/to/AlphaEdge && uv run --no-sync python -m apps.update_db --retry-failed 4 --retry-wait 60; for s in VolumeBreakoutMomentumStrategy IntradayMomentumStrategy MomentumFuturesStrategy; do uv run --no-sync python -m apps.live --strategy $s --phase parity; done
+0  6 * * 1-5  cd /path/to/AlphaEdge && { stale=; uv run --no-sync python -m apps.update_db --defer-failed; for s in VolumeBreakoutMomentumStrategy IntradayMomentumStrategy MomentumFuturesStrategy; do uv run --no-sync python -m apps.live --strategy $s --phase parity || [ $? -ne 3 ] || stale="$stale $s"; done; uv run --no-sync python -m apps.update_db --retry-deferred --retry-failed 4 --retry-wait 60; for s in $stale; do uv run --no-sync python -m apps.live --strategy $s --phase parity; done; }
 30 8 * * 1-5  ... run --rm live --strategy VolumeBreakoutMomentumStrategy,IntradayMomentumStrategy --phase open
 40 8 * * 1-5  ... run --rm live --strategy MomentumFuturesStrategy --phase open
 6  9 * * 1-5  ... run --rm live --strategy IntradayMomentumStrategy --phase intraday
@@ -111,7 +112,8 @@ CRON_TZ=Asia/Taipei
 */5 8-14 * * 1-5 cd /path/to/AlphaEdge && uv run --no-sync python -m scripts.live_watchdog --expect open:stock=08:30 open:futures=08:40 intraday:stock=09:06 close:stock=13:20 close:futures=13:28 after_close:stock=14:30 after_close:futures=14:35
 ```
 
-- **資料更新要帶重試**：交易所會暫時封鎖來源 IP，整批更新常常只差一兩個 target（例如上市股價），股票段落卻全被資料新鮮度檢查擋下（退出碼 3）。`--retry-failed 4 --retry-wait 60` 只重跑失敗的 target，06:00 失敗時 07:xx、08:xx 兩輪趕得上開盤段，之後兩輪趕得上尾盤段；全部補上就提前結束。補比接在資料更新之後（它要用前一交易日的日 K，資料更新後才入庫），所以會跟著延後；它用 `;` 而不是 `&&` 串接，資料更新最後仍失敗也照樣執行，由自己的新鮮度檢查拒絕（退出碼 3）並留下原因。
+- **資料更新要帶重試**：交易所會暫時封鎖來源 IP，整批更新常常只差一兩個 target（例如上市股價），股票段落卻全被資料新鮮度檢查擋下（退出碼 3）。`--retry-failed 4 --retry-wait 60` 只重跑失敗的 target，06:00 失敗時 07:xx、08:xx 兩輪趕得上開盤段，之後兩輪趕得上尾盤段；全部補上就提前結束。
+- **補比不等重試**：補比要用前一交易日的日 K，所以接在第一輪更新之後；重試拆到補比後面（`--defer-failed` 記下失敗的 target、`--retry-deferred` 只補那幾個），否則任一個 target 一直失敗，補比就跟著延後最多 4 小時，即使失敗的資料它用不到。補比要用的資料第一輪就失敗時，那條補比以退出碼 3 拒絕並留下原因，重試之後再跑一次。各步用 `;` 而不是 `&&` 串接，前一步失敗也照樣執行。
 - **排程裡的 `uv run` 一律帶 `--no-sync`**：不帶的話 `uv run` 會先同步環境，`pyproject.toml` 一變動就要連 PyPI 重建；排程時段網路不通時，段落會在進入口之前就失敗。改完相依後手動 `uv sync` 一次即可。
 - **休市日照排也沒關係**：程式會判定當天休市而不進送單路徑、正常結束。交易日的主來源是官方開休市日曆（`market_holiday` 表，`no_tick` 預設就會更新）；判斷不出來（該年度未入庫且券商合約檔也答不出）或官方日曆與券商合約檔衝突時，以退出碼 3 拒絕啟動。
 - **券商連線中斷依情況處理**：連線中斷本身不降級，只寫 `BROKER_SESSION_DOWN` 事件並推播警告；盤中段落由心跳重連並依序重新訂閱、接管委託、對帳，成功後寫 `BROKER_RECONNECTED`，斷線期間若有漏接由對帳不一致降級。重連次數用完或本機時鐘與券商回報相差過大時，帳戶層降為 `REDUCE_ONLY`（只能平倉）並推 CRITICAL，要人工以 `--resume-trading` 解除。這些偵測跑在券商的執行緒上，只入列，由主執行緒在心跳、送單前與段落收尾時處理。
@@ -166,7 +168,7 @@ uv run --no-sync python -m apps.live --strategy <策略> --phase after_close --r
 
 | 碼 | 意義 |
 |----|------|
-| 0 | 正常結束（含休市日、只跑對帳的段落） |
+| 0 | 正常結束（含休市日、只跑對帳的段落；`--phase parity` 有未解釋差異時也回 0，改以 CRITICAL 推播告警） |
 | 1 | 未預期的例外 |
 | 2 | 用法錯誤（策略名、旗標組合，例如缺 `--phase`、`--production` 沒帶 `--confirm-production`、重建旗標與 `--phase`／`--resume-trading` 併用、同一行混合兩個市場的策略） |
 | 3 | 資料未更新到前一個交易日，或判定不出是否為交易日 |

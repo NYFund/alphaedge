@@ -11,14 +11,16 @@
 `Backtester` 是**唯一的回測引擎，市場與商品皆無關，沒有子類**。兩者的差異全部下沉為五個可插拔的 model，由 factory 依策略宣告的 `market` ＋ `instrument_type` 組合組裝；「一天怎麼跑」（日 K 或逐筆）另由注入的 simulator 決定：
 
 ```
-Backtester                      ← 唯一引擎，市場無關，無子類；逐日迴圈與每日前後處理
-  ├─ InstrumentSpec             ← 乘數、tick size、漲跌停規則、報價單位換算
-  ├─ FillModel                  ← 成交價可信度（前視偏誤與不可能成交的擋板）、成交假設
-  ├─ CostModel                  ← 手續費／稅／借券費（期貨為期交稅）
-  ├─ SettlementModel            ← 每根 bar 收盤後由市場規則強制執行的動作
-  ├─ DataFeed                   ← 資料載入、報價轉換、交易日判定
-  └─ Simulator                  ← 一天怎麼跑：BarSimulator（日 K）／TickSimulator（逐筆）
+Backtester              ← 唯一引擎，市場無關，無子類；逐日迴圈與每日前後處理    core/backtest/backtester.py
+  ├─ InstrumentSpec     ← 乘數、tick size、漲跌停規則、報價單位換算             core/market/（市場規則，實盤共用）
+  ├─ FillModel          ← 成交價可信度（前視偏誤與不可能成交的擋板）、成交假設   core/backtest/models/（回測模擬）
+  ├─ CostModel          ← 手續費／稅／借券費（期貨為期交稅）                     core/market/（市場規則，實盤共用）
+  ├─ SettlementModel    ← 每根 bar 收盤後由市場規則強制執行的動作                core/backtest/models/（回測模擬）
+  ├─ DataFeed           ← 資料載入、報價轉換、交易日判定                         core/backtest/datafeed/（契約在 core/datafeed/）
+  └─ Simulator          ← 一天怎麼跑：BarSimulator（日 K）／TickSimulator（逐筆）  core/backtest/simulator/
 ```
+
+同樣注入、但不算 model 的還有 `account`、`position_manager`（`core/position/`）與 `reporter_cls`（`core/backtest/report/`），見 §2.1。
 
 這是 Backtrader `Cerebro`、Zipline `run_algorithm`、QuantConnect Lean `Engine`、Nautilus `BacktestEngine` 的一致做法：**引擎唯一，行為注入**。
 

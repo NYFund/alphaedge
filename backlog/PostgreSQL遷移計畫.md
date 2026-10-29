@@ -4,9 +4,9 @@
 
 - **背景／問題**：專案以 SQLite3 為主要儲存，分成 `data/db/tw_stock.db`（台股）、`data/db/tw_futures.db`（台期貨）兩個**研究庫**，以及實盤紀錄庫 `data/db/tw_trading.db`。資料存取層（`core/dao/`）完成後，SQL 與 SQLite 專屬語法已集中在 `BaseDAO` 與繼承它的 DAO（2026-10-18 以含全部功能分支的 `feature/framework-symmetry` 實查：20 支＝研究庫 19 支＋實盤的 `LiveTradeDAO`；main 為 18＋1），`core/`、`apps/`、`strategies/`（main 另含 `tasks/`）內 `core/dao/` 以外不再 `import sqlite3`（分層檢查強制）；`scripts/` 不在檢查範圍，研究庫 1 檔、實盤紀錄庫 1 檔（後者 main 沒有）。DAO 內部仍是 `sqlite3`（`INSERT OR IGNORE／REPLACE`、`SAVEPOINT`、`sqlite_master`、`GLOB`），研究庫有 14 處呼叫點以 `connect_sqlite()` 開連線（main 17 處；DataFeed 的開連線已在功能分支收成 `BaseDataFeed.connect_db()` 一處），67 個測試檔直接建立 SQLite 連線（main 59 檔；數字明細見下方〈2026-10-18：依現行程式重測改動面〉）。
 - **目標**：導入 SQLAlchemy Engine 作為研究庫的統一資料庫介面，分階段把讀取、寫入、測試與部署路徑遷移到 PostgreSQL（兩個研究庫併入單一 `alphaedge` 資料庫），並保留可回退方案至少一個版本週期。
-- **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：台股 tick 由 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 改落地 TimescaleDB（2026-10-10 已在 `feature/tick-timescaledb` 全部完成、尚未進 main；`feature/tick-backtest` 起的逐筆回測也從那裡讀），本計畫不碰 `stock_tick`／`stock_tick_load_log`，但要和它**共用同一個 PostgreSQL 實例與 `alphaedge` 資料庫**（見下方〈TimescaleDB 計畫先完成後的交互影響〉）。
+- **範圍界線**：**先確保功能等價，再做效能優化**；本次**不做**分區／讀寫分離、不改業務邏輯與欄位語意；除〈關聯與狀態〉列出、刻意留到本批的表名與欄名收斂外，不做其他 schema 重新設計。**tick 不在範圍**：台股 tick 由 `台股tick改用TimescaleDB.md` 改落地 TimescaleDB（2026-10-10 已在 `feature/tick-timescaledb` 全部完成、尚未進 main；`feature/tick-backtest` 起的逐筆回測也從那裡讀），本計畫不碰 `stock_tick`／`stock_tick_load_log`，但要和它**共用同一個 PostgreSQL 實例與 `alphaedge` 資料庫**（見下方〈TimescaleDB 計畫先完成後的交互影響〉）。
   **實盤紀錄庫 `tw_trading.db` 不在範圍、維持 SQLite**（2026-09-25 使用者定案，理由見下方〈決策：實盤紀錄庫維持 SQLite〉）：`connect_live_trading()`、`LiveTradeDAO` 與只讀它的 `scripts/check_overnight_positions.py` 都不改；`scripts/live_watchdog.py` 讀紀錄庫的部分不改，但它自 `實盤下單架構規劃.md` Phase7-28（尚未進 main）起另以 `connect_sqlite()` 唯讀讀研究庫的 `market_holiday` 判斷交易日，那一處屬本計畫範圍（Phase2-4）；`get_engine()` 只涵蓋兩個研究庫。
-  **實作完成後不自動遷移資料、也不自動切換 backend**（2026-09-18 使用者裁示）：Phase3-2 的一次性資料遷移與 Phase5-1 的灰度切換（把 `DATABASE_URL` 指向 PostgreSQL，日更就會寫進新庫）都**等使用者明確下指令才執行**。遷移腳本可以先寫好，並以小表或測試資料驗證；正式庫的搬遷與切換時機由使用者決定。這與 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 的同一條裁示一致。
+  **實作完成後不自動遷移資料、也不自動切換 backend**（2026-09-18 使用者裁示）：Phase3-2 的一次性資料遷移與 Phase5-1 的灰度切換（把 `DATABASE_URL` 指向 PostgreSQL，日更就會寫進新庫）都**等使用者明確下指令才執行**。遷移腳本可以先寫好，並以小表或測試資料驗證；正式庫的搬遷與切換時機由使用者決定。這與 `台股tick改用TimescaleDB.md` 的同一條裁示一致。
 - **驗收標準**（**Phase3-2 之後的項目要等使用者下令遷移才驗得到**）：主要流程（資料更新、查詢、回測讀取、實盤 DataFeed 讀研究庫）在 PostgreSQL 可完整執行；核心 smoke ＋ integration 測試在 PostgreSQL 環境通過；文件與部署配置已更新且可重現；研究庫的 SQLite 依賴已降到可移除或已完全移除（實盤紀錄庫的 SQLite 路徑刻意保留）。
 
 ---
@@ -28,7 +28,7 @@
 > 影響：`core/dao/connection.py` 的連線入口現有兩個——`connect_sqlite()`（研究庫，本計畫改造對象）與 `connect_live_trading()`（實盤紀錄庫，**維持原樣**）；後者內部呼叫 `connect_sqlite()` 再下 WAL／FULL 兩個 PRAGMA，改造 `connect_sqlite()` 時必須保住這條純 SQLite 路徑。`LiveTradeDAO` 繼承 `BaseDAO`，故 `BaseDAO` 改造後仍要能承載 `sqlite3.Connection`（見 Phase2-2）。
 > 單一 `alphaedge` 資料庫的表名前綴議題中，`tw_trading.db` 的 `live_` 前綴不再相關。
 
-> **2026-10-10：TimescaleDB 計畫先完成後的交互影響**（[台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) 18 步已在 `feature/tick-timescaledb` 完成，**尚未進 main**；合併順序是 `feature/post-rehearsal` 演練後部署 → 合併 tick 分支）。
+> **2026-10-10：TimescaleDB 計畫先完成後的交互影響**（`台股tick改用TimescaleDB.md` 18 步已在 `feature/tick-timescaledb` 完成，**尚未進 main**；合併順序是 `feature/post-rehearsal` 演練後部署 → 合併 tick 分支）。
 > 原本兩份計畫寫的是「先做的建立、後做的沿用」，現在確定是 tick 先做，本計畫改為**沿用**下列既成的基礎設施（以功能分支實查）：
 >
 > | 項目 | tick 分支已有的 | 本計畫要做的 |
@@ -131,7 +131,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
 ### Phase0-1. `docker-compose.yml` 的 `postgres` service 讓研究庫沿用 ⬜
 
 - **目的**：提供本機與 CI 一致的 PostgreSQL 環境。
-- **現況（2026-10-10，2026-10-18 複查不變）**：**service 已由 [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md) Phase0-1 建立**（`feature/tick-timescaledb`，尚未進 main）：
+- **現況（2026-10-10，2026-10-18 複查不變）**：**service 已由 `台股tick改用TimescaleDB.md` Phase0-1 建立**（`feature/tick-timescaledb`，尚未進 main）：
   image 鎖 `timescale/timescaledb:2.29.2-pg17`（不是 `-oss`，壓縮要 Timescale License）、named volume、`pg_isready` healthcheck、port 5432，compose 寫死 `name: alphaedge` 讓 worktree 與主目錄共用 volume；
   `core` 已 `depends_on` 它的 healthcheck，並以 `environment` 覆寫容器內的 `TICK_DATABASE_URL`。原本「image 用 TimescaleDB、不要先起純 `postgres`」的顧慮因此已解決。
 - **做法**：不再新增 service，只補研究庫要用的部分：
@@ -389,7 +389,7 @@ PostgreSQL 對應的是 `INSERT ... ON CONFLICT DO NOTHING`，且**必須有對�
      主鍵因此**不動**——改主鍵要遷移既有資料，換來的只是同一個問題的第二道事後防線，
      而且同一檔改名前後會被視為兩列，日頻查詢得額外去重。
 - **相關 backlog**：
-  - [台股tick改用TimescaleDB.md](台股tick改用TimescaleDB.md)：2026-09-16 立項，2026-10-10 在 `feature/tick-timescaledb` 全部完成、尚未進 main。**它先做，本計畫沿用**它建立的 `postgres` service（`台股tick改用TimescaleDB.md` Phase0-1 → 本計畫 Phase0-1）、`TICK_DATABASE_URL` 的設定寫法（`台股tick改用TimescaleDB.md` Phase0-2 → 本計畫 Phase0-2）、`[tick]` extra 裡的 `psycopg`（`台股tick改用TimescaleDB.md` Phase0-3 → 本計畫 Phase0-3 搬到主相依）與 `core/dao/timescale.py`（`台股tick改用TimescaleDB.md` Phase1-1 → 本計畫 Phase1-1 決定是否併入 `get_engine()`）；兩邊共用同一個 `alphaedge` 資料庫。
+  - `台股tick改用TimescaleDB.md`：2026-09-16 立項，2026-10-10 在 `feature/tick-timescaledb` 全部完成、尚未進 main。**它先做，本計畫沿用**它建立的 `postgres` service（`台股tick改用TimescaleDB.md` Phase0-1 → 本計畫 Phase0-1）、`TICK_DATABASE_URL` 的設定寫法（`台股tick改用TimescaleDB.md` Phase0-2 → 本計畫 Phase0-2）、`[tick]` extra 裡的 `psycopg`（`台股tick改用TimescaleDB.md` Phase0-3 → 本計畫 Phase0-3 搬到主相依）與 `core/dao/timescale.py`（`台股tick改用TimescaleDB.md` Phase1-1 → 本計畫 Phase1-1 決定是否併入 `get_engine()`）；兩邊共用同一個 `alphaedge` 資料庫。
   - [重構後全專案健檢.md](重構後全專案健檢.md) Phase3-6：原建議排在本計畫之前，2026-09-26 已完成。
   - [框架對稱化重構.md](框架對稱化重構.md)：`框架對稱化重構.md` Phase4-2～Phase4-4 先收斂 DAO 形狀（2026-10-12 完成，在 `feature/framework-symmetry`），本計畫再改寫 SQL；`框架對稱化重構.md` Phase5-7 與本計畫 Phase2-2 同段施作。
   - [tests目錄結構重整.md](tests目錄結構重整.md)：若先做，Phase4-1 的測試檔路徑以搬完後為準。

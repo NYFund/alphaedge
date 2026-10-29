@@ -9,11 +9,11 @@
 
 | 面向 | 現況 |
 |------|------|
-| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 少量股期）、連續合約（3 種調整；換月規則預設只建 `LAST_TRADING_DAY`）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池。**沒有逐筆成交** |
+| 資料 | `tw_futures.db`：日行情（7 檔指數期貨 ＋ 少量股期）、連續合約（3 種調整；預設只建日盤 ＋ `LAST_TRADING_DAY` 換月規則）、保證金歷史（金額表 ＋ 比例表）、籌碼（三大法人／大額交易人／PCR）、股期標的池。**沒有逐筆成交** |
 | 指令 | `--target futures_price`／`futures_continuous`／`futures_margin`／`futures_chip`／`futures_stock_universe`／`futures_stock_price` |
 | 回測 | 與台股**共用同一支引擎**：`(TW, FUTURE)` 的 model 組（規格／成交／成本／結算／資料源）由 `core/backtest/factory.py` 注入；Tick 級別未實作（§七） |
 | 期貨語意 | 逐日盯市、保證金查表與追繳、換月轉倉、日夜盤整併、期交稅與跳動點滑價 |
-| 策略 | `MomentumFuturesStrategy`（介面示範） |
+| 策略 | `MomentumFuturesStrategy`（介面示範），`python -m apps.backtest --strategy MomentumFuturesStrategy` |
 | 實盤 | `python -m apps.live --strategy <期貨策略> --phase ...`；成本、保證金與部位管理與回測同一組組裝（§五） |
 
 ---
@@ -76,16 +76,17 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 
 - 除 `futures_stock_price` 外都已被 `--target all`／`no_tick` 涵蓋；`futures_stock_price` 兩個捷徑都不含，只在明確點名時才跑。
 - **日常更新是差集**，以商品為單位：候選日 ＝ 平日 ＋ 補行交易日 − 表內已有 − 已確認無資料 ＋ 上次沒跑完。
-  中間被擋掉的日子下次仍會被請求；現貨日曆涵蓋範圍內現貨休市的平日直接視為期貨休市，不浪費請求。
+  中間被擋掉的日子（含表內「現貨有開市卻沒有行情」的缺口）下次仍會被請求；現貨日曆涵蓋範圍內現貨休市的平日直接視為期貨休市，不浪費請求。
 - **往前擴張回補區間不能用日常指令**：差集從表內該商品的第一筆起算（`--from` 也拉不動），
   要以明確區間呼叫 `FuturesPriceUpdater.update(start_date=..., end_date=..., resume=False)`。
-- **新商品的回補起點會被夾到它的上市日**（`FUTURES_PRODUCT_LISTING_DATES`），不可只靠 `DEFAULT_FUTURES_START_DATE`：
+- **新商品要先在 `FUTURES_PRODUCT_LISTING_DATES` 登錄上市日**：updater 會把回補起點自動夾到上市日，不可只靠 `DEFAULT_FUTURES_START_DATE`：
   上市前每一天都查無資料，連續累積到 `EMPTY_PRODUCT_ABORT_THRESHOLD`（20 天）會中止並 raise——這道保險絲是為了擋
   「代碼拼錯而每天安靜地查無資料」。沒登錄上市日的商品（股期）只靠保險絲。
 - 新商品的連續合約要等該商品的行情補完後再跑 `--target futures_continuous`。
 - 股期**不要一次爬 320 檔**：預設 `STOCK_FUTURES_TOP_N=20`，尾端有整批一天成交個位數口的商品，
-  納入回測只會製造「回測賺錢、實際掛不到單」的假訊號。排序依已入庫行情的平均日成交量，
-  第一次跑還沒有行情時會退回整份清單並提醒。
+  納入回測只會製造「回測賺錢、實際掛不到單」的假訊號。排序依已入庫行情的平均日成交量（每檔至少 5 個交易日），
+  表內行情還不夠排序時改取標的池前 N 檔（依商品代碼，非流動性）當暖身樣本並提醒，**不會放大成整份清單**；
+  暖身後再跑一次才依成交量選出前 N 檔。
 
 ### 2.4 商品與乘數
 
@@ -112,7 +113,7 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 
 | 來源 | 坑 | 處理 |
 |------|----|------|
-| TAIFEX 行情頁 | 擋流量時回 **HTTP 200 ＋ 沒有行情表的頁面**，與非交易日長得一樣 | 空產出一律等待後重試一次才算數，等待隨連續空產出遞增；請求間隔 3～6 秒隨機延遲並定期長睡。重試仍空而現貨當天有開市時記為取不到，最近一天取不到則商品失敗 |
+| TAIFEX 行情頁 | 擋流量時回 **HTTP 200 ＋ 沒有行情表的頁面**，與非交易日長得一樣 | 未取得日盤（含只拿到夜盤）一律等待後重試一次才算數，等待隨連續空產出遞增；只有夜盤的日子整天不入庫，下次重試；請求間隔 3～6 秒隨機延遲並定期長睡。重試仍空而現貨當天有開市時記為取不到，最近一天取不到則商品失敗 |
 | TAIFEX 行情頁 | 頁面第二張表是「價差對價差成交」 | 以「是否有單層 `契約` 欄」辨識，不用位置索引 |
 | TAIFEX 行情頁 | `到期月份` 被 pandas 讀成 `202609.0` | 以字串讀入 |
 | TAIFEX 行情頁 | 商品下拉選單內容不穩定，股期代碼含逗號（`EE1,EEF`） | 不以下拉當白名單；股期代碼改取自標的一覽表 |
@@ -165,8 +166,8 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 
 | 掛點 | 期貨實作 | 重點 |
 |------|----------|------|
-| `InstrumentSpec` | `TwFuturesSpec` | 契約乘數、跳動點 |
-| `FillModel` | `TwFuturesFillModel` | 成交價須落在 bar range；滑價以**跳動點**表達 |
+| `InstrumentSpec` | `TwFuturesSpec` | 跳動點逐商品查表、無固定漲跌停；乘數（`get_unit_size()`）交給注入的乘數解析器逐契約查詢，與部位管理層同一個 |
+| `FillModel` | `TwFuturesFillModel` | 成交價須落在 bar range（不做漲跌停與券源檢核）；滑價以**跳動點**表達 |
 | `CostModel` | `TwFuturesCostModel` | 期交稅 ＋ 每口手續費（§3.3） |
 | `SettlementModel` | `TwFuturesSettlementModel` | 逐日結算、保證金追繳、換月轉倉、保證金口徑的權益計價 |
 | `DataFeed` | `TwFuturesDataFeed` | `tw_futures.db`、期貨交易日曆、乘數解析、股期標的股價、日夜盤整併 |
@@ -175,7 +176,9 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 `TwFuturesSpec`、`TwFuturesCostModel` 與保證金模型放在 `core/market/tw/`；成本模型、保證金模型與部位管理層由
 `core/position/assembly.py` 的 `build_tw_futures_models()` 一次組好，回測與實盤共用同一套組法。
 
-**對標序列優先用連續合約**（`futures_continuous`，換月規則對齊策略設定），查不到才退回近月拼接；近月拼接在換月當天有一段展期價差造成的假跳空，只能當粗略參考，圖表註腳會標明用的是哪一種。
+**對標序列優先讀連續合約**（`futures_continuous` 的 `BACKWARD`，換月規則對齊策略的 `roll_config.rule`）；
+查不到該組設定時退回「近月拼接」，換月當天有一段展期價差造成的假跳空，只能當粗略參考，此時不計算 IR。
+圖表註腳會標明採用哪一種。
 
 ### 3.2 記帳：保證金交易與逐日盯市
 
@@ -217,7 +220,8 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
   兩份查表會造成「策略算得出口數、部位管理層卻開不進去」或反過來。
 - **股期走比例表**：金額表查不到時改查比例表，標的股價由 `TwFuturesDataFeed.resolve_underlying_price()` 取未還原收盤價
   （保證金是用當時的真實市價算的）。
-- **追繳判斷的是權益，不是可動用餘額**：浮動損益每日結算進帳戶，權益低於維持保證金 × `margin_call_ratio`（預設 1.0）才追繳；
+- **追繳判斷的是權益，不是可動用餘額**：浮動損益每日結算進帳戶，權益低於維持保證金總額 × `margin_call_ratio`
+  （預設 1.0，即交易所口徑；調高為自訂的提早出場）才追繳；
   浮動獲利可以支撐加碼。**維持保證金是另一個公告值**，不可由原始保證金乘比率推得（`FuturesMarginAPI.get_maintenance_margin()`）。
 - **強制平倉砍到足額為止**（`MarginCallPolicy.FORCE_COVER`，預設）：每平一筆就重算，先砍佔用保證金最多的契約。
   `WARN_ONLY` 只記 log **不計數**——`forced_cover_margin_call` 的語意是「強制平倉幾次」。
@@ -243,6 +247,7 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 - **轉倉 ＝ 平舊倉 ＋ 以相同口數與方向開新倉**，展期價差**如實入帳**。
 - 週契約不由本規則轉倉；新契約當日無報價時不轉倉；新倉開不進去（保證金調高）只記 warning 不還原。
 - 契約到期後仍拿不到報價時，以最近一次結算價強制出場（兜底，不是換月）：多單計入 `forced_exit_no_quote`、空單計入 `forced_cover_no_quote`；連續幾根 bar 才算到期由策略的 `max_no_quote_days` 決定（預設 3，`None` 表示不兜底）。零成交但有結算價的 bar 不算無報價。
+  `FuturesRollConfig.enabled=False` 時不自動轉倉，留倉部位最後都走這條。
 - 實盤的換月時點與回測不同，見 §五。
 
 ### 3.7 連續合約
@@ -340,7 +345,7 @@ python -m apps.update_db --target futures_chip            # 三大法人、大�
 | 價差部位保證金未模擬 | 同商品跨月份部位兩腿各繳全額，高估保證金、低估可開口數（保守；同契約雙向持倉已直接拒單） | 出現價差／對沖策略需求時，先確認 TAIFEX 價差保證金的收取語意（單邊全額／專屬金額／比例），再決定併入 `futures_margin_history` 或另立一張表 |
 | 三大法人籌碼只有近三年 | 來源只保留約三年，更早無法回補 | 另找歷史來源 |
 | 股期的調整型契約（`EE1` 等數字尾碼）與官方掛牌／下市日未入庫 | 契約單位與日期只能由快照差分近似；標的池建立之前的調整一律看不到 | 另抓 TAIFEX 契約調整與商品異動公告 |
-| 對標序列在缺連續合約時退回近月拼接 | `futures_continuous` 沒建過該組（商品, 調整方式, 換月規則）時，對標曲線在換月接點有展期價差造成的假跳空；圖表註腳會標明採用哪一種 | 為策略用的換月規則建出連續合約（`--target futures_continuous` 預設只建 `LAST_TRADING_DAY`，其他規則要以 `FuturesContinuousUpdater.update()` 的 `roll_rules` 參數指定） |
+| 對標序列在缺連續合約時退回近月拼接 | `futures_continuous` 沒建過該組（商品, 調整方式, 換月規則）時，對標曲線在換月接點有展期價差造成的假跳空，且不計算 IR；圖表註腳會標明採用哪一種 | 為策略用的換月規則建出連續合約（`--target futures_continuous` 預設只建日盤 ＋ `LAST_TRADING_DAY`，其他規則要以 `FuturesContinuousUpdater.update()` 的 `roll_rules` 參數指定） |
 | 實盤股期保證金 | 實盤沒有標的股價來源，股票期貨的比例表保證金算不出來 | 接上實盤的標的股價來源 |
 
 ## 相關文件
