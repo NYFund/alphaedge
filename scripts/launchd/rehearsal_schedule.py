@@ -6,7 +6,7 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, NamedTuple, Optional, Set, Tuple
 
 """
 模擬環境演練的 launchd 排程：產生、載入、移除
@@ -137,8 +137,24 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
     ),
 }
 
-# 依序執行的多步排程：標籤後綴 → (台北時, 台北分, [各步 `python` 之後的參數])
-#
+
+class ChainedJob(NamedTuple):
+    """
+    資料更新與補比的串接排程：第一輪更新 → 各條補比 → 重試第一輪失敗的 target → 重跑因資料太舊沒比成的補比
+
+    各欄位都是 `python` 之後的參數
+    """
+
+    hour: int  # 台北時
+    minute: int  # 台北分
+    first_pass: List[str]  # 第一輪資料更新：失敗的 target 先記下、不在這裡重試
+    checks: List[List[str]]  # 接著跑的各條補比
+    retry: List[str]  # 只重跑第一輪記下的 target
+
+
+# 補比因資料太舊而拒絕的結束碼（與 `apps.live.EXIT_STALE_DATA` 相同；排程端不 import 實盤入口）
+_STALE_DATA_EXIT: int = 3
+
 # 資料更新排在台北 06:00，跑完**接著**補比前一交易日的訊號 parity：
 # - 補比要用前一交易日的日 K，它在資料更新後才入庫；盤後當下比，回測一張委託都產生不出來。
 # - 接在後面而不排固定時刻：資料更新實測 8 分鐘到近 3 小時不等，固定時刻可能比到還沒入庫的資料。
@@ -146,16 +162,20 @@ _DAILY_JOBS: Dict[str, Tuple[int, int, List[str]]] = {
 # - 06:00 而不是 08:00：留兩個多小時給 08:30 的開盤段，資料更新拖長時也不會撞上。
 # - 失敗的 target 每 60 分鐘只重跑失敗的那幾個、最多 4 輪：交易所封鎖來源 IP 時整批更新
 #   只差那一兩個 target，股票段落卻全被新鮮度檢查擋下。06:0x 失敗的話 07:xx、08:xx 兩輪
-#   趕得上開盤段，之後兩輪趕收盤段；補比因此可能延後，但它本來就不急。
+#   趕得上開盤段，之後兩輪趕收盤段。
+# - **補比不等重試**：重試排在補比之後。原本重試在補比之前，任何一個 target 一直失敗，
+#   三條補比就全部延後最多 4 小時，即使失敗的資料補比根本用不到（2026-10-28 期交所法人資料
+#   4 輪都沒拿到，股票補比從 06:0x 拖到 10:26）。補比要用的資料第一輪就失敗時，那條補比會因
+#   資料太舊拒絕；重試補上之後再跑一次，所以不會因此少比一天。
 # 股票與期貨各跑一次補比：兩條線的策略不可混在同一個行程（段落時窗不同）。
 # 盤中動能策略另跑一次：它的段落（逐筆＋開盤段）與尾盤策略不同，混在同一行程會因時窗無交集而拒絕。
 # 它的當日回測是日 K 近似、實盤是逐筆，**差異是預期中的**（使用者裁示先直接比，有不一樣再檢討原因）
-_CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
-    "update-db": (
-        6,
-        0,
-        [
-            ["-m", "apps.update_db", "--retry-failed", "4", "--retry-wait", "60"],
+_CHAINED_JOBS: Dict[str, ChainedJob] = {
+    "update-db": ChainedJob(
+        hour=6,
+        minute=0,
+        first_pass=["-m", "apps.update_db", "--defer-failed"],
+        checks=[
             [
                 "-m",
                 "apps.live",
@@ -180,6 +200,15 @@ _CHAINED_JOBS: Dict[str, Tuple[int, int, List[List[str]]]] = {
                 "--phase",
                 "parity",
             ],
+        ],
+        retry=[
+            "-m",
+            "apps.update_db",
+            "--retry-deferred",
+            "--retry-failed",
+            "4",
+            "--retry-wait",
+            "60",
         ],
     ),
 }
@@ -314,11 +343,11 @@ def all_plists(uv_bin: str, offset: Optional[int] = None) -> Dict[str, Dict[str,
             uv_bin=uv_bin,
             offset=offset,
         )
-    for suffix, (hour, minute, steps) in _CHAINED_JOBS.items():
+    for suffix, job in _CHAINED_JOBS.items():
         plists[suffix] = build_plist(
             suffix,
-            build_chain_command(uv_bin, steps),
-            calendar=to_local_slots(hour, minute, _TAIPEI_WEEKDAYS, offset),
+            build_chain_command(uv_bin, job),
+            calendar=to_local_slots(job.hour, job.minute, _TAIPEI_WEEKDAYS, offset),
             uv_bin=uv_bin,
             offset=offset,
         )
@@ -422,27 +451,43 @@ def ensure_offset(now_utc: Optional[datetime.datetime] = None) -> Optional[int]:
     return measured
 
 
-def build_chain_command(uv_bin: str, steps: List[List[str]]) -> List[str]:
+def build_chain_command(uv_bin: str, job: ChainedJob) -> List[str]:
     """
     - Description:
-        把多步指令組成一個 `/bin/sh -c` 排程：**每一步都執行**，結束碼取第一個失敗的
+        把串接排程組成一個 `/bin/sh -c`：第一輪更新 → 各條補比 → 重試 → 重跑因資料太舊拒絕的補比
 
-        前一步失敗不中斷後面：資料更新失敗時補比仍要跑，由它的新鮮度檢查留下
-        「為什麼沒比」的紀錄；中斷的話就只剩一個結束碼，看不出補比沒跑。
+        **每一步都執行**：前一步失敗不中斷後面，資料更新失敗時補比仍要跑，由它的新鮮度
+        檢查留下「為什麼沒比」的紀錄；中斷的話就只剩一個結束碼，看不出補比沒跑。
+
+        **結束碼取第一個失敗的**，順序是第一輪更新、重試、各條補比的最終結果：補比第一次因
+        資料太舊拒絕、重試補上後重跑成功的，不算失敗。
     - Parameters:
         - uv_bin: str
             uv 執行檔路徑
-        - steps: List[List[str]]
-            各步 `python` 之後的參數
+        - job: ChainedJob
+            串接排程
     - Return:
         - List[str]
             `ProgramArguments`
     """
 
+    def command(args: List[str]) -> str:
+        """一步的完整指令"""
+
+        return shlex.join([uv_bin, *_UV_RUN_ARGS, *args])
+
+    keep_first_failure: str = '[ "$status" -eq 0 ] && status=$code'
     lines: List[str] = ["status=0"]
-    for step in steps:
-        command: str = shlex.join([uv_bin, *_UV_RUN_ARGS, *step])
-        lines.append(f'{command}; code=$?; [ "$status" -eq 0 ] && status=$code')
+    lines.append(f"{command(job.first_pass)}; code=$?; {keep_first_failure}")
+    for index, check in enumerate(job.checks):
+        lines.append(f"{command(check)}; check{index}=$?")
+    lines.append(f"{command(job.retry)}; code=$?; {keep_first_failure}")
+    for index, check in enumerate(job.checks):
+        lines.append(
+            f'[ "$check{index}" -eq {_STALE_DATA_EXIT} ] && '
+            f"{{ {command(check)}; check{index}=$?; }}"
+        )
+        lines.append(f"code=$check{index}; {keep_first_failure}")
     lines.append('exit "$status"')
     return ["/bin/sh", "-c", "\n".join(lines)]
 

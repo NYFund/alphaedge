@@ -1,9 +1,11 @@
 import argparse
 import datetime
+import json
 import sys
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Union
 
 from loguru import logger
@@ -20,6 +22,7 @@ from core.config import (
     DEFAULT_PRICE_START_DATE,
     DEFAULT_START_YEAR,
     FINMIND_BROKER_TRADING_START_DATE,
+    LOGS_DIR_PATH,
     SHORT_SALE_LIST_START_DATE,
     STOCK_FUTURES_TOP_N,
     TICK_UPDATE_START_DATE,
@@ -63,6 +66,10 @@ API_LOG_RETENTION_DAYS: int = 7
 # 失敗 target 重跑前的預設等待（分鐘）：交易所封鎖來源 IP 通常要數十分鐘以上才解除，
 # 等太短只會再被擋一次
 DEFAULT_RETRY_WAIT_MINUTES: int = 60
+
+# `--defer-failed` 把第一輪失敗的 target 記在這裡，交給之後的 `--retry-deferred` 重跑。
+# 兩步分屬兩個行程（中間夾著補比），清單只能落地
+DEFERRED_FAILURES_PATH: Path = LOGS_DIR_PATH / "update_db_deferred.json"
 
 """
 資料更新任務主程式（update_db）
@@ -126,6 +133,9 @@ Target 對照表
   python -m apps.update_db --target futures_stock_price     # 只能這樣點名才會跑
   python -m apps.update_db --target all --from 2024-01-01   # 覆寫起日
   python -m apps.update_db --retry-failed 4 --retry-wait 60 # 失敗的 target 每小時重跑，最多 4 輪
+  python -m apps.update_db --defer-failed                   # 只跑一輪，失敗的記下來交給下一行
+  python -m apps.update_db --retry-deferred --retry-failed 4 --retry-wait 60
+                                                            # 只重跑上一行記下的 target
 """
 
 
@@ -416,9 +426,30 @@ def parse_arguments() -> argparse.Namespace:
         metavar="MINUTES",
         help=f"每輪重跑前等幾分鐘（預設 {DEFAULT_RETRY_WAIT_MINUTES}）",
     )
+    parser.add_argument(
+        "--defer-failed",
+        dest="defer_failed",
+        action="store_true",
+        help=(
+            "只跑一輪：失敗的 target 記下來交給之後的 `--retry-deferred`，本次以 0 結束。"
+            "讓排在後面、用不到那些資料的工作不必等重試"
+        ),
+    )
+    parser.add_argument(
+        "--retry-deferred",
+        dest="retry_deferred",
+        action="store_true",
+        help="不跑 `--target`，只重跑 `--defer-failed` 記下的 target（輪數與等待依 `--retry-failed`／`--retry-wait`）",
+    )
     args: argparse.Namespace = parser.parse_args()
     if args.retry_failed < 0 or args.retry_wait < 0:
         parser.error("--retry-failed 與 --retry-wait 不可為負數")
+    if args.defer_failed and args.retry_deferred:
+        parser.error("--defer-failed 與 --retry-deferred 不可同時使用")
+    if args.defer_failed and args.retry_failed > 0:
+        parser.error(
+            "--defer-failed 不在本次重試，請改在 `--retry-deferred` 指定 `--retry-failed`"
+        )
     return args
 
 
@@ -665,25 +696,145 @@ def retry_failed_targets(
     return remaining
 
 
+def save_deferred(
+    path: Path,
+    today: datetime.date,
+    failed_targets: List[str],
+    from_date: Optional[datetime.date],
+) -> None:
+    """
+    - Description:
+        把第一輪失敗的 target 記下來，交給之後的 `--retry-deferred`
+
+        **沒有失敗也要寫（空清單）**：蓋掉上一次可能沒清掉的舊清單，
+        否則之後的重試會去補一份過時的 target。
+    - Parameters:
+        - path: Path
+            清單檔
+        - today: datetime.date
+            今天（重試時只認同一天的清單）
+        - failed_targets: List[str]
+            失敗的 target
+        - from_date: Optional[datetime.date]
+            `--from` 的覆寫起日，重試沿用
+    - Raise:
+        - OSError
+            寫不進去（呼叫端改以非零結束碼收尾，失敗才看得到）
+    """
+
+    payload: Dict[str, Any] = {
+        "date": today.isoformat(),
+        "targets": sorted(failed_targets),
+        "from_date": from_date.isoformat() if from_date is not None else None,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path: Path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    temp_path.replace(path)
+
+
+def take_deferred(
+    path: Path, today: datetime.date
+) -> Tuple[List[str], Optional[datetime.date]]:
+    """
+    - Description:
+        讀出並清掉 `--defer-failed` 記下的 target
+
+        **讀完就刪**：同一份清單只重試一次，隔天的重試不會再補一次舊的。
+        不是今天的清單（第一輪那天沒寫成、上次重試沒刪成）一律不用。
+    - Parameters:
+        - path: Path
+            清單檔
+        - today: datetime.date
+            今天
+    - Return:
+        - Tuple[List[str], Optional[datetime.date]]
+            `(要重跑的 target, 第一輪的 --from 覆寫起日)`；沒有可用的清單時為空 list
+    """
+
+    try:
+        payload: Any = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], None
+    except (OSError, ValueError) as exc:
+        logger.warning(f"第一輪失敗清單讀不了（{path}），本次不重試：{exc}")
+        payload = None
+    finally:
+        path.unlink(missing_ok=True)
+
+    if not isinstance(payload, dict):
+        return [], None
+    if payload.get("date") != today.isoformat():
+        logger.warning(
+            f"第一輪失敗清單是 {payload.get('date')} 的，不是今天，本次不重試"
+        )
+        return [], None
+    raw_from: Optional[str] = payload.get("from_date")
+    from_date: Optional[datetime.date] = (
+        datetime.date.fromisoformat(raw_from) if raw_from else None
+    )
+    return [str(name) for name in payload.get("targets", [])], from_date
+
+
 def main() -> None:
-    """依 `--target` 逐一更新；失敗的 target 依 `--retry-failed` 重跑，仍失敗就以非零結束碼收尾"""
+    """
+    - Description:
+        依 `--target` 逐一更新；失敗的 target 依 `--retry-failed` 重跑，仍失敗就以非零結束碼收尾
+
+        另有兩段式用法（排程用）：`--defer-failed` 只跑一輪、把失敗的記下來以 0 結束，
+        `--retry-deferred` 只重跑記下的那幾個。中間可以夾別的工作（補比），
+        它們不必等最多數小時的重試。
+    """
 
     args: argparse.Namespace = parse_arguments()
     targets: Set[str] = set(args.target)
     from_date: Optional[datetime.date] = args.from_date
+    today: datetime.date = datetime.date.today()
 
     if from_date is not None:
         logger.info(f"--from {from_date}：以日期為單位的 target 一律由此日起算")
 
-    targets = expand_targets(targets)
-
-    failed_targets: List[str] = run_targets(targets, from_date)
-    failed_targets = retry_failed_targets(
-        failed_targets,
-        from_date,
-        rounds=args.retry_failed,
-        wait_minutes=args.retry_wait,
-    )
+    failed_targets: List[str]
+    if args.retry_deferred:
+        deferred, from_date = take_deferred(DEFERRED_FAILURES_PATH, today)
+        if not deferred:
+            logger.info("第一輪沒有留下失敗的 target，不必重試")
+            return
+        targets = set(deferred)
+        failed_targets = retry_failed_targets(
+            deferred,
+            from_date,
+            rounds=args.retry_failed,
+            wait_minutes=args.retry_wait,
+        )
+    else:
+        targets = expand_targets(targets)
+        failed_targets = run_targets(targets, from_date)
+        if args.defer_failed:
+            try:
+                save_deferred(DEFERRED_FAILURES_PATH, today, failed_targets, from_date)
+            except OSError as exc:
+                # 記不下來就沒有人會重試：以非零結束，讓排程看得到
+                logger.error(f"第一輪失敗清單寫不進 {DEFERRED_FAILURES_PATH}：{exc}")
+            else:
+                cleanup_api_logs()
+                if failed_targets:
+                    logger.warning(
+                        f"第一輪失敗的 target 交給之後的重試："
+                        f"{', '.join(sorted(failed_targets))}"
+                    )
+                else:
+                    logger.info(
+                        f"✅ Database Update Completed. Updated: {', '.join(sorted(targets))}"
+                    )
+                return
+        else:
+            failed_targets = retry_failed_targets(
+                failed_targets,
+                from_date,
+                rounds=args.retry_failed,
+                wait_minutes=args.retry_wait,
+            )
 
     # **一定要在結束碼判斷之前**：失敗的那幾天正是 `logs/api/` 長最多的時候，
     # 放在 `sys.exit(1)` 之後等於永遠跑不到

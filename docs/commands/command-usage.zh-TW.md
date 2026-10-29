@@ -20,9 +20,14 @@
 | `--target <target> [<target> ...]` | 欲更新的資料類型，可指定一個或多個；預設 `no_tick` |
 | `--from YYYY-MM-DD` | 覆寫以**日期**為單位的 target 的起日（見下方〈`--from`〉） |
 | `--retry-failed ROUNDS` | **只重跑失敗的 target**，最多再跑幾輪（預設 `0`，不重試）；全部補上就提前結束，結束碼以最後一輪仍失敗的 target 為準 |
-| `--retry-wait MINUTES` | 每輪重跑前等幾分鐘（預設 `60`；交易所封鎖來源 IP 通常要數十分鐘以上才解除）。排程用的是 `--retry-failed 4 --retry-wait 60` |
+| `--retry-wait MINUTES` | 每輪重跑前等幾分鐘（預設 `60`；交易所封鎖來源 IP 通常要數十分鐘以上才解除） |
+| `--defer-failed` | 只跑一輪：失敗的 target 記在 `logs/update_db_deferred.json`，交給之後的 `--retry-deferred`，本次以 0 結束（寫不進清單時以 1 結束）。不可與 `--retry-failed`（大於 0）或 `--retry-deferred` 同時使用 |
+| `--retry-deferred` | 不跑 `--target`，只重跑 `--defer-failed` 記下的 target（沿用那一輪的 `--from`），輪數與等待依 `--retry-failed`／`--retry-wait`；清單讀完就刪，不是當天的清單不用 |
 
 `--retry-failed` 與 `--retry-wait` 不可為負數，否則以用法錯誤（結束碼 2）結束。
+
+排程把重試拆成兩段：06:00 先 `--defer-failed` 跑一輪，接著補比，最後才 `--retry-deferred --retry-failed 4 --retry-wait 60`。
+補比因此不必等最多 4 小時的重試；補比要用的資料第一輪就失敗時，那條補比會因資料太舊拒絕（結束碼 3），重試之後再跑一次。
 
 ### Target 對照表
 
