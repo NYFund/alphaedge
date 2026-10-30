@@ -160,7 +160,7 @@ def test_same_recording_yields_identical_signals_twice() -> None:
 
         harness.trader.execution.dispatch = recording_dispatch
         for quote in quotes:
-            harness.trader._on_intraday_quote(quote)
+            harness.trader.intraday._on_intraday_quote(quote)
         return placed
 
     first: List[Any] = collect()

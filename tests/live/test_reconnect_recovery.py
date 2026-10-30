@@ -257,7 +257,7 @@ def test_heartbeat_reconnects_without_any_quote() -> None:
 
     harness: Any = make_harness()
     harness.contexts[0].symbols = ["2330"]
-    harness.trader.INTRADAY_HEARTBEAT_SECONDS = 0.001
+    harness.trader.intraday.INTRADAY_HEARTBEAT_SECONDS = 0.001
     harness.broker.connect()
 
     # 訂閱完就斷線：迴圈開始後一筆行情都不會來

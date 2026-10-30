@@ -360,11 +360,13 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
     # 帳上留一筆未回補的當沖空單，並讓它有報價可取
     context: Any = harness.contexts[0]
     context.account.positions = [make_position("2330")]
-    harness.trader._last_quotes["2330"] = harness.broker.quotes["2330"]
+    harness.trader.intraday._last_quotes["2330"] = harness.broker.quotes["2330"]
 
     before: int = harness.broker.placed_count
-    harness.trader.session_guard = SessionGuard(lambda: at(2026, 9, 21, 13, 25))
-    harness.trader._run_session_guard()
+    harness.trader.intraday.session_guard = SessionGuard(
+        lambda: at(2026, 9, 21, 13, 25)
+    )
+    harness.trader.intraday._run_session_guard()
 
     assert harness.broker.placed_count == before + 1
     # 回補空單就是買進；送成賣出會再開一口空單而不是平掉它
@@ -387,11 +389,13 @@ def test_heartbeat_does_nothing_before_the_cover_time() -> None:
     harness: Any = Harness([Alpha()])
     harness.trader.prepare()
     harness.contexts[0].account.positions = [make_position("2330")]
-    harness.trader._last_quotes["2330"] = harness.broker.quotes["2330"]
+    harness.trader.intraday._last_quotes["2330"] = harness.broker.quotes["2330"]
 
     before: int = harness.broker.placed_count
-    harness.trader.session_guard = SessionGuard(lambda: at(2026, 9, 21, 13, 14))
-    harness.trader._run_session_guard()
+    harness.trader.intraday.session_guard = SessionGuard(
+        lambda: at(2026, 9, 21, 13, 14)
+    )
+    harness.trader.intraday._run_session_guard()
 
     assert harness.broker.placed_count == before
 
@@ -413,8 +417,10 @@ def make_cover_harness(*symbols: str) -> Any:
     harness.contexts[0].account.positions = [
         make_position(symbol) for symbol in symbols or ("2330",)
     ]
-    harness.trader._last_quotes["2330"] = harness.broker.quotes["2330"]
-    harness.trader.session_guard = SessionGuard(lambda: at(2026, 9, 21, 13, 25))
+    harness.trader.intraday._last_quotes["2330"] = harness.broker.quotes["2330"]
+    harness.trader.intraday.session_guard = SessionGuard(
+        lambda: at(2026, 9, 21, 13, 25)
+    )
     return harness
 
 
@@ -439,17 +445,17 @@ def test_failed_cover_is_retried_on_the_next_heartbeat() -> None:
     harness.broker.close()
     before: int = harness.broker.placed_count
 
-    harness.trader._run_session_guard()
+    harness.trader.intraday._run_session_guard()
 
     assert harness.broker.placed_count == before
-    assert harness.trader.session_guard.should_cover_now() is True
+    assert harness.trader.intraday.session_guard.should_cover_now() is True
     assert [row[0] for row in cover_failures(harness)] == ["CRITICAL"]
 
     harness.broker.connect()
-    harness.trader._run_session_guard()
+    harness.trader.intraday._run_session_guard()
 
     assert harness.broker.placed_count == before + 1
-    assert harness.trader.session_guard.should_cover_now() is False
+    assert harness.trader.intraday.session_guard.should_cover_now() is False
 
 
 def test_heartbeat_covers_once_the_connection_is_back() -> None:
@@ -460,11 +466,11 @@ def test_heartbeat_covers_once_the_connection_is_back() -> None:
     harness.broker.fail_connect = True
     before: int = harness.broker.placed_count
 
-    harness.trader._on_heartbeat()
+    harness.trader.intraday._on_heartbeat()
     assert harness.broker.placed_count == before
 
     harness.broker.fail_connect = False
-    harness.trader._on_heartbeat()
+    harness.trader.intraday._on_heartbeat()
     assert harness.broker.placed_count == before + 1
 
 
@@ -477,15 +483,15 @@ def test_missing_price_is_a_critical_event_until_attempts_run_out() -> None:
 
     harness: Any = make_cover_harness("2317")
 
-    for _ in range(harness.trader.MAX_COVER_ATTEMPTS + 2):
-        harness.trader._run_session_guard()
+    for _ in range(harness.trader.intraday.MAX_COVER_ATTEMPTS + 2):
+        harness.trader.intraday._run_session_guard()
 
     failures: List[Any] = cover_failures(harness)
-    assert len(failures) == harness.trader.MAX_COVER_ATTEMPTS
+    assert len(failures) == harness.trader.intraday.MAX_COVER_ATTEMPTS
     assert all(severity == "CRITICAL" for severity, _ in failures)
     assert "2317" in failures[0][1]
     assert "人工處理" in failures[-1][1]
-    assert harness.trader.session_guard.should_cover_now() is False
+    assert harness.trader.intraday.session_guard.should_cover_now() is False
 
 
 def test_retry_does_not_resend_a_cover_already_on_its_way() -> None:
@@ -500,8 +506,8 @@ def test_retry_does_not_resend_a_cover_already_on_its_way() -> None:
     harness.broker.fill_ratio = 0
     before: int = harness.broker.placed_count
 
-    harness.trader._run_session_guard()
-    harness.trader._run_session_guard()
+    harness.trader.intraday._run_session_guard()
+    harness.trader.intraday._run_session_guard()
 
     assert harness.broker.placed_count == before + 1
     assert len(cover_failures(harness)) == 2

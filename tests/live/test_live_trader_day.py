@@ -1884,7 +1884,7 @@ def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
         )
     )
 
-    harness.trader._on_intraday_quote(
+    harness.trader.intraday._on_intraday_quote(
         StockQuote(
             stock_id="2317",
             scale=Scale.TICK,

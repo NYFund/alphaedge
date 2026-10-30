@@ -119,7 +119,7 @@ def test_closing_the_loop_restores_direct_reports_and_applies_leftovers(
     broker.execution_queue.put(make_report("2330"))
     stats: LoopStats = LoopStats()
 
-    trader._close_intraday_loop(loop, stats)
+    trader.intraday._close_intraday_loop(loop, stats)
 
     assert [report.symbol for report in applied] == ["2330"]
     assert stats.executions == 1

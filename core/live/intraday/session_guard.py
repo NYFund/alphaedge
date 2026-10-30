@@ -26,7 +26,7 @@ from core.utils import (
 # 而回補單送不出去的代價是違約交割。
 # **必須落在盤中段落的送單時窗之內**（台股送單迄 13:18）：回補只掛在盤中迴圈的心跳上，
 # 迴圈收線之後才到的時點永遠不會觸發，而尾盤段是另一個行程、不跑回補。
-# 取 13:15 留 3 分鐘給失敗重試（`LiveTrader.MAX_COVER_ATTEMPTS`）
+# 取 13:15 留 3 分鐘給失敗重試（`IntradaySession.MAX_COVER_ATTEMPTS`）
 DAY_TRADE_COVER_TIME: datetime.time = datetime.time(13, 15)
 
 
@@ -184,7 +184,7 @@ class SessionGuard:
         盤中的日終強制動作
 
         **只負責產生回補單，不負責送出**：送單要走跨策略守門、曝險截斷、
-        資金保留與風控，那條管線在 `LiveTrader`。本層另寫一份必然漂移。
+        資金保留與風控，那條管線在 `ExecutionEngine`。本層另寫一份必然漂移。
     """
 
     def __init__(
