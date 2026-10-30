@@ -223,6 +223,7 @@ class Harness:
         price_limits: PriceLimits = LIMITS,
         live_capital: Optional[float] = None,
         risk_config: Optional[StockRiskConfig] = None,
+        notifier: Optional[Any] = None,
     ) -> None:
         # 實盤額度：與組裝層一致，帳戶與額度分配用同一個值（未指定時等於研究本金）
         capital: float = live_capital if live_capital is not None else CAPITAL
@@ -331,6 +332,8 @@ class Harness:
             dry_run=dry_run,
             now_provider=advancing_now,
             sleep=advancing_sleep,
+            # 推播要在組裝時就交給每個元件；建構後再換 `trader.notifier` 只會換到引擎本體那幾條
+            notifier=notifier,
         )
 
 

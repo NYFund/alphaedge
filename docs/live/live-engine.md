@@ -166,7 +166,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 事前風控 | `PreTradeRiskManager.check()` | 寫該條規則的類別（見下表） |
 
 **守門要在批次曝險之前**（被擋的單不該佔曝險額度），**資金保留要在風控之前**（風控算的是拿得到的金額）。
-逐筆盤中段落與日頻段落**走同一條**（`_submit_one_quote()` 重用 `apply_cross_checks()` 與 `dispatch()`），另寫一份必然漂移。
+逐筆盤中段落與日頻段落**走同一條**（`IntradaySession._submit_one_quote()` 重用 `CrossStrategyChecks.apply()` 與 `ExecutionEngine.dispatch()`），另寫一份必然漂移。
 
 ### 事前風控
 

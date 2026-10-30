@@ -5,8 +5,14 @@ import pytest
 
 from core.live.account_monitor import AccountMonitor
 from core.live.clock import SegmentClock
+from core.live.connection import ConnectionSupervisor
 from core.live.cross_checks import CrossStrategyChecks
+from core.live.execution_engine import ExecutionEngine
 from core.live.factory import live_capital
+from core.live.intraday.session import IntradaySession
+from core.live.pending_actions import PendingActionsRunner
+from core.live.rolls import RolloverExecutor
+from core.live.signals import SignalCollector
 from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
 from strategies.stock.volume_breakout_momentum_strategy import (
@@ -344,9 +350,20 @@ def test_every_caller_uses_the_same_basis() -> None:
 
     import inspect
 
+    # 引擎本體與每一個元件都掃：公式抄進任何一個都算
     source: str = "".join(
         inspect.getsource(cls)
-        for cls in (LiveTrader, AccountMonitor, CrossStrategyChecks)
+        for cls in (
+            LiveTrader,
+            AccountMonitor,
+            CrossStrategyChecks,
+            ExecutionEngine,
+            SignalCollector,
+            IntradaySession,
+            PendingActionsRunner,
+            RolloverExecutor,
+            ConnectionSupervisor,
+        )
     )
 
     assert "self.allocator.available_balance + sum(" not in source, (

@@ -888,8 +888,8 @@ def test_notifier_failure_does_not_stop_trading(tmp_path: Path) -> None:
         def __init__(self) -> None:
             super().__init__("Alpha", [make_order()])
 
-    harness: Harness = Harness([Alpha()])
-    harness.trader.notifier = ExplodingNotifier(blocking=True)
+    # 由組裝層注入：各元件在建構時就拿到 notifier，建構後換 `trader.notifier` 傳不到它們
+    harness: Harness = Harness([Alpha()], notifier=ExplodingNotifier(blocking=True))
     harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
 
     harness.trader.run(

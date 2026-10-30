@@ -4,7 +4,6 @@ from typing import (
     Dict,
     List,
     Optional,
-    Sequence,
     Tuple,
 )
 
@@ -85,7 +84,7 @@ class LiveTrader:
 
     def __init__(
         self,
-        contexts: Sequence[StrategyContext],
+        contexts: List[StrategyContext],
         broker: BaseBroker,
         order_manager: Any,
         risk_manager: PreTradeRiskManager,
@@ -123,8 +122,8 @@ class LiveTrader:
             跨策略檢查的權益分母）都在組裝層完成；本類只接一條：重連後的對帳結果
             要回填到 `last_reconcile`，而那個欄位屬於本類。
         - Parameters:
-            - contexts: Sequence[StrategyContext]
-                各策略的執行脈絡
+            - contexts: List[StrategyContext]
+                各策略的執行脈絡；**與各元件持有的是同一個 list**，建構後不可再複製一份
             - broker: BaseBroker
                 券商閘道（單例）
             - order_manager: Any
@@ -182,7 +181,9 @@ class LiveTrader:
                 實盤報表；None 時以紀錄庫自建
         """
 
-        self.contexts: List[StrategyContext] = list(contexts)
+        # 不另外 `list()` 一份：元件在組裝層已拿到這個 list，再複製就有兩份，
+        # 之後對 `trader.contexts` 增減策略時元件看不到
+        self.contexts: List[StrategyContext] = contexts
         self.broker: BaseBroker = broker
         self.order_manager: Any = order_manager
         self.risk_manager: PreTradeRiskManager = risk_manager

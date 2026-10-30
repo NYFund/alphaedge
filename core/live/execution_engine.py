@@ -352,7 +352,7 @@ class ExecutionEngine:
 
             「出場必補」原本只由盤後掃 `live_order` 的未成交殘量承接；被風控或執行層
             擋在送出**之前**的出場單沒有 `live_order` 列，掃不到，部位會無聲留到隔夜。
-            這裡補上同一條路：待辦交給次日開盤段的 `apply_pending_actions()`，
+            這裡補上同一條路：待辦交給次日開盤段的 `PendingActionsRunner.apply()`，
             數量到時再截到實際持有量。開倉單不補（開倉未送出一律放棄）。
 
             **送單途中才失敗的出場單已經有 `live_order` 列**（OMS 先寫 DB 再送單），
