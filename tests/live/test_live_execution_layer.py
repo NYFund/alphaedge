@@ -346,7 +346,7 @@ def test_missing_price_limits_skip_the_order_and_release_the_reservation() -> No
     order: BaseOrder = marked(
         make_order(), ExecutionTiming.AT_CLOSE, ExecutionStyle.MARKET
     )
-    unsent: List[Any] = harness.trader.dispatch([(context, order)], None)
+    unsent: List[Any] = harness.trader.execution.dispatch([(context, order)], None)
 
     assert len(unsent) == 1
     assert harness.broker.placed_count == 0
@@ -364,7 +364,7 @@ def test_unmarked_order_is_blocked_before_the_broker() -> None:
     harness: Harness = Harness([MarketAlpha()])
     harness.trader.prepare()
 
-    unsent: List[Any] = harness.trader.dispatch(
+    unsent: List[Any] = harness.trader.execution.dispatch(
         [(harness.contexts[0], make_order())], None
     )
 
@@ -569,7 +569,7 @@ def test_day_trade_cover_is_sent_with_a_protection_price() -> None:
         make_order(), ExecutionTiming.IMMEDIATE, ExecutionStyle.MARKET
     )
 
-    harness.trader.dispatch([(context, cover)], None)
+    harness.trader.execution.dispatch([(context, cover)], None)
 
     (order,) = sent_orders(harness)
     assert (order.price, order.order_type) == (102.0, OrderType.IOC)

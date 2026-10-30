@@ -216,7 +216,7 @@ def test_insufficient_margin_order_is_not_sent(dao: LiveTradeDAO) -> None:
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 10_000_000.0
 
-    unsent: List[Tuple[StrategyContext, BaseOrder]] = trader.dispatch(
+    unsent: List[Tuple[StrategyContext, BaseOrder]] = trader.execution.dispatch(
         [(context, futures_order(Action.BUY))], None
     )
 
@@ -233,7 +233,7 @@ def test_sufficient_margin_order_is_sent(dao: LiveTradeDAO) -> None:
     context.calculate_opening_requirement = lambda order: 100_000.0
     stub_margin_amount(context)
 
-    unsent: List[Tuple[StrategyContext, BaseOrder]] = trader.dispatch(
+    unsent: List[Tuple[StrategyContext, BaseOrder]] = trader.execution.dispatch(
         [(context, futures_order(Action.BUY))], None
     )
 
@@ -246,14 +246,14 @@ def test_closing_order_skips_the_margin_check(dao: LiveTradeDAO) -> None:
     平倉釋放保證金，擋下它只會讓部位留在場上
 
     測試庫沒有保證金表，出場單的資金占用也算不出來——那同樣不可擋下出場
-    （`LiveTrader._order_amount()` 記 0 照送）。
+    （`ExecutionEngine._order_amount()` 記 0 照送）。
     """
 
     trader: LiveTrader = build_futures_trader(dao, simulation=False)
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 10_000_000.0
 
-    trader.dispatch([(context, futures_order(Action.SELL))], None)
+    trader.execution.dispatch([(context, futures_order(Action.SELL))], None)
 
     assert trader.broker.placed_count == 1
     assert margin_events(dao) == []
@@ -270,7 +270,7 @@ def test_unknown_requirement_blocks_the_order(dao: LiveTradeDAO) -> None:
 
     context.calculate_opening_requirement = missing
 
-    trader.dispatch([(context, futures_order(Action.BUY))], None)
+    trader.execution.dispatch([(context, futures_order(Action.BUY))], None)
 
     assert trader.broker.placed_count == 0
     assert len(margin_events(dao)) == 1
@@ -282,9 +282,9 @@ def test_production_without_broker_margin_blocks(dao: LiveTradeDAO) -> None:
     trader: LiveTrader = build_futures_trader(dao, simulation=False)
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 100_000.0
-    trader.margin_query = lambda: snapshot(0.0, 0.0)
+    trader.execution.margin_query = lambda: snapshot(0.0, 0.0)
 
-    trader.dispatch([(context, futures_order(Action.BUY))], None)
+    trader.execution.dispatch([(context, futures_order(Action.BUY))], None)
 
     assert trader.broker.placed_count == 0
     assert len(margin_events(dao)) == 1

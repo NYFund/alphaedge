@@ -99,7 +99,7 @@ def test_dispatch_applies_pending_degrades_before_sending(dao: LiveTradeDAO) -> 
     trader: LiveTrader = make_trader(dao, broker)
 
     broker.report_degrade(BROKER_CLOCK_SKEW, "本機時鐘偏差 60 秒")
-    trader.dispatch([], None)
+    trader.execution.dispatch([], None)
 
     assert trader.mode_state.account_mode is TradingMode.REDUCE_ONLY
 

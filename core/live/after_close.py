@@ -50,7 +50,7 @@ def pending_cover_action_id(run_date: datetime.date, client_order_id: str) -> st
     一張出場單的次日補平待辦編號
 
     **段落內與盤後兩條路要算出同一個編號**：送單途中拋例外的出場單，段落內
-    （`LiveTrader._record_unsent_exit()`）與盤後掃殘量（`handle_unfilled_remainders()`）
+    （`ExecutionEngine._record_unsent_exit()`）與盤後掃殘量（`handle_unfilled_remainders()`）
     都會替它排補平，編號不同就是兩筆待辦、次日兩張補平單。
     """
 
@@ -476,7 +476,7 @@ class AfterCloseRunner:
             是直接把部位做反。
 
             **同一張單只能有一筆待辦**：送單途中拋例外的出場單已經在段落內以
-            `{日期}-{client_order_id}` 排過補平（`LiveTrader._record_unsent_exit()`），
+            `{日期}-{client_order_id}` 排過補平（`ExecutionEngine._record_unsent_exit()`），
             這裡掃到它的殘量時用同一個 `action_id`，紀錄庫會擋下第二筆；
             兩筆待辦在次日開盤段會各送一張，把部位做反。
         - Parameters:

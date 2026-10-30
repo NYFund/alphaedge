@@ -16,6 +16,7 @@ from core.live.context import StrategyContext
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
 from core.live.datafeed.calendar import TradingCalendarUnavailableError
 from core.live.execution.stock import StockExecutionModel
+from core.live.execution_engine import ExecutionEngine
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
@@ -835,7 +836,7 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     assert sum(slept) <= (
         remaining
         + harness.trader.clock.WAIT_GRACE_SECONDS
-        + LiveTrader.CANCEL_REPORT_SECONDS
+        + ExecutionEngine.CANCEL_REPORT_SECONDS
         + 2 * SegmentClock.POLL_INTERVAL_SECONDS
     )
 
@@ -1951,7 +1952,7 @@ def test_dispatch_refuses_orders_before_the_window_opens() -> None:
     start_run(harness)
     harness.broker.connect()
 
-    unsent = harness.trader.dispatch(
+    unsent = harness.trader.execution.dispatch(
         [(harness.contexts[0], make_order())], window, cover_unsent_exits=True
     )
 

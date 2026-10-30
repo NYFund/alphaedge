@@ -149,7 +149,7 @@ def test_same_recording_yields_identical_signals_twice() -> None:
         harness.trader.prepare()
 
         placed: List[Any] = []
-        original = harness.trader.dispatch
+        original = harness.trader.execution.dispatch
 
         def recording_dispatch(survivors: List[Any], window: Any) -> None:
             placed.extend(
@@ -158,7 +158,7 @@ def test_same_recording_yields_identical_signals_twice() -> None:
             )
             original(survivors, window)
 
-        harness.trader.dispatch = recording_dispatch
+        harness.trader.execution.dispatch = recording_dispatch
         for quote in quotes:
             harness.trader._on_intraday_quote(quote)
         return placed
