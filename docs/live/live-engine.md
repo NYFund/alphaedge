@@ -136,7 +136,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 | 關卡 | 位置 | 擋下時 |
 |------|------|--------|
-| 持倉檔數上限 | `LiveTrader._apply_max_holdings()` | 寫 `MAX_HOLDINGS`；未終結的委託也佔名額，否則一批 8 張同時送出時全部放行 |
+| 持倉檔數上限 | `SignalCollector._apply_max_holdings()` | 寫 `MAX_HOLDINGS`；未終結的委託也佔名額，否則一批 8 張同時送出時全部放行 |
 | 跨策略守門 | `core/live/attribution/conflict_guard.py` | 寫 `CROSS_STRATEGY_BLOCKED`；**平倉單一律放行** |
 | 批次曝險 | `PreTradeRiskManager.check_batch()` | 寫 `BATCH_EXPOSURE`；平倉單放行且不計入曝險；帳戶層事件記在 `__account__` 名下 |
 | 保證金閘 | `core/live/risk/margin_gate.py` | 寫 `MARGIN_INSUFFICIENT`；同一批開倉單逐張累計同一份可用保證金；平倉不檢查 |
@@ -217,7 +217,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 觸發 | 來源 | 範圍 → 目標 |
 |------|------|-------------|
 | kill switch 檔案存在 | 送單前的風控檢查 | 帳戶層 → `HALTED` |
-| 策略鉤子拋例外 | `LiveTrader._halt_strategy()` | 該策略 → `HALTED`，並釋放它的資金保留（否則佔住的是其他策略的可用資金） |
+| 策略鉤子拋例外 | `SignalCollector.halt_strategy()` | 該策略 → `HALTED`，並釋放它的資金保留（否則佔住的是其他策略的可用資金） |
 | 對帳不一致 | `Reconciler.check()` | 帳戶層 → `REDUCE_ONLY`（差異無法歸因到單支策略） |
 | 帳戶當日虧損 ＞ 權益 × `AccountRiskConfig.daily_loss_ratio` | `prepare()`，券商端已實現＋未實現 | 帳戶層 → `REDUCE_ONLY`；取不到損益時略過並記 warning，不當成沒虧損 |
 | 策略當日虧損 ＞ 額度 × `daily_loss_ratio` | `prepare()`，本地帳 | 該策略 → `REDUCE_ONLY`（目前恆不觸發，見第十一節） |

@@ -1841,7 +1841,7 @@ def test_held_symbols_outside_the_universe_still_get_quotes() -> None:
 
     context.data_feed.get_live_quotes = recording  # type: ignore
 
-    harness.trader.collect_orders(context, ExecutionTiming.AT_CLOSE)
+    harness.trader.signals.collect_orders(context, ExecutionTiming.AT_CLOSE)
 
     assert requested == [["2330", "2317"]]
 

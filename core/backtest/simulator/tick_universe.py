@@ -8,7 +8,7 @@ from core.strategies.base import BaseStrategy
 TICK 回測「策略清單」模式的每日標的：與實盤盤前訂閱同一套規則
 
 實盤盤前以前一交易日呼叫 `get_live_symbols()` 決定要訂閱的標的，再替帳上的持倉補訂閱
-（`LiveTrader.quote_symbols()`）；回測照抄這條規則，回測讀到的報價才會和實盤看得到的一樣。
+（`SignalCollector.quote_symbols()`）；回測照抄這條規則，回測讀到的報價才會和實盤看得到的一樣。
 """
 
 

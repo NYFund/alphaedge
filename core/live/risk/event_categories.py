@@ -28,7 +28,7 @@ BATCH_EXPOSURE: str = "BATCH_EXPOSURE"
 KILL_SWITCH: str = "KILL_SWITCH"
 MODE_HALTED: str = "MODE_HALTED"
 MODE_REDUCE_ONLY: str = "MODE_REDUCE_ONLY"
-# 委託前處理與送單流程（`core/live/trader.py`）
+# 委託前處理與送單流程（`core/live/signals.py`、`core/live/execution_engine.py`）
 MAX_HOLDINGS: str = "MAX_HOLDINGS"
 MARGIN_INSUFFICIENT: str = "MARGIN_INSUFFICIENT"
 EXECUTION_UNAVAILABLE: str = "EXECUTION_UNAVAILABLE"
@@ -36,7 +36,7 @@ EXECUTION_UNAVAILABLE: str = "EXECUTION_UNAVAILABLE"
 CAPITAL_EXHAUSTED: str = "CAPITAL_EXHAUSTED"
 # 跨策略同標的守門（`core/live/attribution/conflict_guard.py`）
 CROSS_STRATEGY_BLOCKED: str = "CROSS_STRATEGY_BLOCKED"
-# 送單時窗之外（還沒到或已過）被丟掉的開倉單（`core/live/trader.py`）：出場單另排補平並寫
+# 送單時窗之外（還沒到或已過）被丟掉的開倉單（`core/live/execution_engine.py`）：出場單另排補平並寫
 # `UNSENT_EXIT`，開倉單以前只有 log，parity 會把它歸成快照口徑而不推播
 SUBMIT_DEADLINE_PASSED: str = "SUBMIT_DEADLINE_PASSED"
 
@@ -66,7 +66,7 @@ ORDER_BLOCK_CATEGORIES: FrozenSet[str] = frozenset(
 DAILY_LOSS: str = "DAILY_LOSS"
 ACCOUNT_DAILY_LOSS: str = "ACCOUNT_DAILY_LOSS"
 DEGRADE: str = "DEGRADE"
-# 盤中與送單流程（`core/live/trader.py`）
+# 盤中、補平、送單與換月流程（`core/live/trader.py`、`core/live/execution_engine.py`、`core/live/rolls.py`）
 DAY_TRADE_COVER_FAILED: str = "DAY_TRADE_COVER_FAILED"
 PENDING_ACTION_TRUNCATED: str = "PENDING_ACTION_TRUNCATED"
 # 出場單送出前被同標的「在途出場量」截短或截到 0：開盤段先送的補平單 09:00 才撮合，

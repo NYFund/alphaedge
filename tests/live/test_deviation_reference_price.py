@@ -1,6 +1,6 @@
 from typing import List
 
-from core.live.trader import quote_prices_of
+from core.live.signals import quote_prices_of
 from core.models import StockQuote
 from core.utils import ExecutionStyle, ExecutionTiming, Scale
 

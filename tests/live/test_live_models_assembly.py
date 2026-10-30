@@ -212,7 +212,7 @@ def test_preprocess_enriches_short_orders_from_the_strategy_cost_config(
         volume=1,
     )
 
-    processed: List[Any] = trader._preprocess(context, [order], stage)
+    processed: List[Any] = trader.signals._preprocess(context, [order], stage)
 
     assert len(processed) == 1
     assert processed[0].short_method is ShortMethod.DAY_TRADE
@@ -240,7 +240,7 @@ def test_enriched_short_opens_a_day_trade_position_the_guard_can_find(
         volume=1,
     )
 
-    processed: List[Any] = trader._preprocess(context, [order], "open")
+    processed: List[Any] = trader.signals._preprocess(context, [order], "open")
     position: Any = context.position_manager.open_position(processed[0])
 
     assert position is not None and position.is_day_trade is True
@@ -257,7 +257,7 @@ def test_preprocess_leaves_orders_alone_without_a_cost_model(dao: LiveTradeDAO) 
         stock_id="2330", action=Action.SELL, position_type=PositionType.SHORT, volume=1
     )
 
-    processed: List[Any] = trader._preprocess(context, [order], "open")
+    processed: List[Any] = trader.signals._preprocess(context, [order], "open")
 
     assert processed[0].short_method is None
     assert processed[0].is_day_trade is False

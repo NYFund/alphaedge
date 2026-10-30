@@ -245,7 +245,7 @@ class TickSimulator(BaseSimulator):
         - Description:
             呼叫排在本段的鉤子，把委託放進在途委託簿
 
-            開倉與出場的先後依 `allow_day_trade`（與實盤 `LiveTrader._invoke_hooks()` 相同），
+            開倉與出場的先後依 `allow_day_trade`（與實盤 `SignalCollector.invoke_hooks()` 相同），
             它決定同一筆 tick 上兩邊委託的撮合順序。
         - Parameters:
             - timing: ExecutionTiming

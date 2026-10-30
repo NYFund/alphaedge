@@ -112,6 +112,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.rolls", 5, "實盤／期貨換月", False),
     ("core.live.connection", 5, "實盤／券商連線守門", False),
     ("core.live.execution_engine", 5, "實盤／送單與成交回報", False),
+    ("core.live.signals", 5, "實盤／策略訊號與委託前處理", False),
     # 盤後作業：與送單段落沒有共用狀態，但同樣是「組裝一堆元件層跑一條流程」，
     # 故與 `trader` 同級。放 4 會讓它對 oms／report／reconciler 產生一整排同層邊
     ("core.live.after_close", 5, "實盤／盤後作業", False),

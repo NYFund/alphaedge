@@ -97,7 +97,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
     # 實盤參數
     # 盤前篩選的標的數上限（檔）。券商單一連線的逐筆訂閱上限是 200，留 10 檔給前一天
-    # 買進、今天掉出池外的持有標的（引擎一律替持有標的訂閱，見 `LiveTrader.quote_symbols()`）
+    # 買進、今天掉出池外的持有標的（引擎一律替持有標的訂閱，見 `SignalCollector.quote_symbols()`）
     LIVE_UNIVERSE_SIZE: int = 190
 
     # 交易日清單往回多抓的曆日數；與日曆的最大回看天數對齊，
