@@ -100,6 +100,21 @@ CATEGORY_LOCKED_AT_LIMIT: str = "LOCKED_AT_LIMIT"
 # 所以踩不到。真要收掉的做法是把 `stop_loss` 納入啟動檢查（防止），
 # 而不是在這裡分類（事後解釋）
 CATEGORY_TIMING: str = "TIMING"
+
+# 回測有、實盤沒送的開倉單，因為**同一段落實盤也送了平倉單、送單當下那幾檔還算持有**。
+# 實盤的平倉與開倉同時送出，算可開檔數時平倉單還沒成交，舊倉仍佔名額；回測依
+# `CLOSE_THEN_OPEN` 先讓平倉成交、名額先空出來。這是刻意保留的差異：平倉單可能
+# 不成交（例如集合競價掛跌停沒撮到），實盤先釋出名額就會超過持倉上限。
+# 名額的取捨發生在張數切分，不經風控、不寫事件，所以只能由委託推得：
+# 同一段落缺的開倉單**檔數不超過**實盤平倉單的檔數才歸這一類——一檔平倉最多
+# 佔住一個名額，缺得更多就有別的原因，整段留在未解釋
+CATEGORY_EXIT_PENDING_SLOT: str = "EXIT_PENDING_SLOT"
+
+# 實盤多送的平倉單，是逐筆觸發的策略進場當天就在盤中出場（例如同日停損）。
+# 日 K 回測只有一根 bar 的高低收，分不出低點出現在進場之前還是之後，
+# 所以回測有那張開倉單、卻沒有同日的出場。只認盤中段（`IMMEDIATE`）的進出：
+# 日 K 策略的平倉不受盤中路徑影響，多一張就是真的差異
+CATEGORY_INTRADAY_PATH: str = "INTRADAY_PATH"
 CATEGORY_CROSS_STRATEGY_BLOCKED: str = "CROSS_STRATEGY_BLOCKED"
 CATEGORY_CAPITAL_EXHAUSTED: str = "CAPITAL_EXHAUSTED"
 CATEGORY_UNEXPLAINED: str = "UNEXPLAINED"
@@ -154,6 +169,8 @@ CATEGORY_GROUP: Dict[str, str] = {
     CATEGORY_RISK_REJECTED: GROUP_STRUCTURAL,
     CATEGORY_CROSS_STRATEGY_BLOCKED: GROUP_STRUCTURAL,
     CATEGORY_CAPITAL_EXHAUSTED: GROUP_STRUCTURAL,
+    CATEGORY_EXIT_PENDING_SLOT: GROUP_STRUCTURAL,
+    CATEGORY_INTRADAY_PATH: GROUP_STRUCTURAL,
     CATEGORY_UNFILLED: GROUP_EXECUTION,
     CATEGORY_LIMIT_UNFILLED: GROUP_EXECUTION,
     CATEGORY_LOCKED_AT_LIMIT: GROUP_EXECUTION,
@@ -555,6 +572,13 @@ def compare(
 
     blocked: Dict[str, str] = _blocked_symbols(events)
     covered: set = covered_keys(resolved_actions)
+    slot_held: Set[Tuple[str, str]] = _exit_pending_slot_keys(
+        live_orders,
+        live_by_key,
+        backtest_by_key,
+        set(blocked) | (stale_symbols or set()),
+        order_phases,
+    )
 
     diffs: List[ParityDiff] = []
     for key in sorted(set(live_by_key) | set(backtest_by_key)):
@@ -563,14 +587,19 @@ def compare(
         bt_orders: List[BaseOrder] = backtest_by_key.get(key, [])
 
         if live_rows and not bt_orders:
-            # 優先序：快照口徑 → 次日補平 → 未解釋。
-            # 兩者互斥（補平是平倉單，快照口徑只認開倉單），但仍依宣告順序判定
+            # 優先序：快照口徑 → 次日補平 → 盤中路徑 → 未解釋。
+            # 快照口徑只認開倉單、後兩者只認平倉單，但仍依宣告順序判定
             if _is_threshold_gap(live_rows):
                 extra_category: str = CATEGORY_SNAPSHOT_GAP
                 note: str = ""
             elif key in covered:
                 extra_category = CATEGORY_UNFILLED
                 note = "前一交易日的平倉或停損未成交，今天依 D7 補送"
+            elif _is_intraday_path(symbol, live_rows, live_orders, backtest_by_key):
+                extra_category = CATEGORY_INTRADAY_PATH
+                note = (
+                    "盤中當天進場又出場；日 K 回測看不出盤中先後，只有進場沒有同日出場"
+                )
             else:
                 extra_category = CATEGORY_UNEXPLAINED
                 note = ""
@@ -588,7 +617,8 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            # 優先序：風控／守門事件 → 報價過期 → 段落中止 → 快照口徑（反方向）→ 未解釋
+            # 優先序：風控／守門事件 → 報價過期 → 段落中止 → 平倉佔名額 → 快照口徑（反方向）→ 未解釋。
+            # 平倉佔名額排在快照口徑之前：它有同段平倉單為證，快照口徑只是排除法
             missing_note: str = ""
             category: Optional[str] = None
             if symbol in blocked:
@@ -617,6 +647,12 @@ def compare(
                 missing_note = (
                     f"該送出這張單的段落（{'、'.join(sorted(matched))}）"
                     "當天非正常結束，策略沒有機會做決定"
+                )
+            if category is None and key in slot_held:
+                category = CATEGORY_EXIT_PENDING_SLOT
+                missing_note = (
+                    "同一段落實盤也送了平倉單，算可開檔數時舊倉還沒賣掉、仍佔名額；"
+                    "回測先平後開，名額已空出"
                 )
             if category is None:
                 if ran_cleanly and all(order_rules.is_opening(o) for o in bt_orders):
@@ -780,6 +816,126 @@ def _is_threshold_gap(live_rows: Sequence[Dict[str, Any]]) -> bool:
         and str(row.get("action", ""))
         and order_rules.is_opening_record(str(row["position_type"]), str(row["action"]))
         for row in live_rows
+    )
+
+
+def _row_is(row: Dict[str, Any], opening: bool) -> bool:
+    """一筆 `live_order` 是不是開倉（`opening=True`）或平倉單；欄位缺或看不懂時兩者都不是"""
+
+    position_type: str = str(row.get("position_type") or "")
+    action: str = str(row.get("action") or "")
+    if not position_type or not action:
+        return False
+    try:
+        if opening:
+            return order_rules.is_opening_record(position_type, action)
+        return order_rules.is_closing_record(position_type, action)
+    except ValueError:
+        return False
+
+
+def _row_phase(row: Dict[str, Any]) -> Optional[str]:
+    """一筆 `live_order` 在哪個段落送出；沒有執行時點或看不懂時回 None"""
+
+    try:
+        return TIMING_TO_PHASE.get(ExecutionTiming(str(row.get("timing"))))
+    except ValueError:
+        return None
+
+
+def _exit_pending_slot_keys(
+    live_orders: Sequence[Dict[str, Any]],
+    live_by_key: Dict[Tuple[str, str], List[Dict[str, Any]]],
+    backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]],
+    explained_symbols: Set[str],
+    order_phases: Optional[Callable[[BaseOrder], Set[str]]],
+) -> Set[Tuple[str, str]]:
+    """
+    - Description:
+        回測多出的開倉單中，可以歸給「同段平倉單仍佔名額」的那幾張（見 `CATEGORY_EXIT_PENDING_SLOT`）
+
+        逐段落計數：該段落回測多出的開倉單檔數，不超過實盤同段平倉單的檔數，
+        該段落的這幾張才全部歸類；超過就整段不歸，留給未解釋。
+        判不出段落（沒有段落查詢、或一張單橫跨多個段落）的不算。
+    - Parameters:
+        - live_orders: Sequence[Dict[str, Any]]
+            這支策略當日的 `live_order` 列
+        - live_by_key: Dict[Tuple[str, str], List[Dict[str, Any]]]
+            實盤委託依比對鍵分組
+        - backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]]
+            回測委託依比對鍵分組
+        - explained_symbols: Set[str]
+            已有風控事件或報價過期可解釋的標的；這些不佔計數
+        - order_phases: Optional[Callable[[BaseOrder], Set[str]]]
+            回測委託 → 該送出的段落名集合
+    - Return:
+        - Set[Tuple[str, str]]
+            可歸類的比對鍵
+    """
+
+    if order_phases is None:
+        return set()
+
+    exits_by_phase: Dict[str, Set[str]] = {}
+    for row in live_orders:
+        phase: Optional[str] = _row_phase(row)
+        if phase is not None and _row_is(row, opening=False):
+            exits_by_phase.setdefault(phase, set()).add(str(row["symbol"]))
+    if not exits_by_phase:
+        return set()
+
+    missing_by_phase: Dict[str, List[Tuple[str, str]]] = {}
+    for key, orders in backtest_by_key.items():
+        if key in live_by_key or key[0] in explained_symbols:
+            continue
+        if not all(order_rules.is_opening(order) for order in orders):
+            continue
+        phases: Set[str] = set()
+        for order in orders:
+            phases |= order_phases(order)
+        if len(phases) == 1:
+            missing_by_phase.setdefault(next(iter(phases)), []).append(key)
+
+    keys: Set[Tuple[str, str]] = set()
+    for phase, missing in missing_by_phase.items():
+        exits: Set[str] = exits_by_phase.get(phase, set())
+        if exits and len({symbol for symbol, _ in missing}) <= len(exits):
+            keys.update(missing)
+    return keys
+
+
+def _is_intraday_path(
+    symbol: str,
+    live_rows: Sequence[Dict[str, Any]],
+    live_orders: Sequence[Dict[str, Any]],
+    backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]],
+) -> bool:
+    """
+    實盤多送的平倉單能不能歸給盤中路徑（見 `CATEGORY_INTRADAY_PATH`）
+
+    三個條件都要成立：多出來的全是盤中段送出的平倉單；同一標的當天在盤中段有成交的開倉單；
+    回測有這一檔的開倉單（兩邊都進場、只差出場，才是路徑問題，不是進場訊號不同）。
+    """
+
+    intraday: str = TIMING_TO_PHASE[ExecutionTiming.IMMEDIATE]
+    if not all(
+        _row_is(row, opening=False) and _row_phase(row) == intraday for row in live_rows
+    ):
+        return False
+
+    entered: bool = any(
+        str(row.get("symbol")) == symbol
+        and _row_is(row, opening=True)
+        and _row_phase(row) == intraday
+        and int(row.get("filled_volume") or 0) > 0
+        for row in live_orders
+    )
+    if not entered:
+        return False
+
+    return any(
+        key[0] == symbol and all(order_rules.is_opening(order) for order in orders)
+        for key, orders in backtest_by_key.items()
     )
 
 
