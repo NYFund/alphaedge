@@ -14,6 +14,7 @@ from core.live.report.parity_checker import (
     CATEGORY_GROUP,
     CATEGORY_LIMIT_UNFILLED,
     CATEGORY_LOCKED_AT_LIMIT,
+    CATEGORY_QUOTE_STALE,
     CATEGORY_RISK_REJECTED,
     CATEGORY_SEGMENT_ABORTED,
     CATEGORY_SEND_FAILED,
@@ -30,6 +31,7 @@ from core.live.report.parity_checker import (
     compare,
     count_by_group,
     segments_ran_cleanly,
+    stale_quote_scope,
 )
 from core.models import BaseOrder, StockOrder
 from core.utils import Action, ExecutionTiming, LiveHook, LiveOrderStatus, PositionType
@@ -1042,6 +1044,128 @@ def test_risk_event_still_wins_over_segment_aborted() -> None:
     )
 
     assert [diff.category for diff in diffs] == [CATEGORY_RISK_REJECTED]
+
+
+# === 報價日期不是今天 ===
+def test_dropped_stale_symbol_is_quote_stale_and_others_are_not() -> None:
+    """
+    部分剔除：只有被剔除的那檔歸報價過期，其他標的的差異照常判定
+
+    2026-10-23 模擬環境的收盤段快照停在前一日；剔除之後回測有、實盤沒有的單
+    原因已由 `QUOTE_STALE` 事件報過，不該再當成未解釋發一次 CRITICAL。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order("2317"), make_backtest_order("2330")],
+        [],
+        (),
+        False,
+        stale_symbols={"2317"},
+    )
+
+    assert [(diff.symbol, diff.category) for diff in diffs] == [
+        ("2317", CATEGORY_QUOTE_STALE),
+        ("2330", CATEGORY_UNEXPLAINED),
+    ]
+
+
+def test_skipped_segment_explains_only_its_own_orders() -> None:
+    """整段跳過：只解釋該在那個段落送出的單，別的段落跳過不能拿來解釋"""
+
+    skipped: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order()],
+        [],
+        (),
+        False,
+        order_phases=close_phase,
+        stale_phases={"close"},
+    )
+    other: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order()],
+        [],
+        (),
+        False,
+        order_phases=close_phase,
+        stale_phases={"open"},
+    )
+
+    assert [diff.category for diff in skipped] == [CATEGORY_QUOTE_STALE]
+    assert "close" in skipped[0].note
+    assert [diff.category for diff in other] == [CATEGORY_UNEXPLAINED]
+
+
+def test_risk_event_still_wins_over_quote_stale() -> None:
+    """有擋單事件就以事件為準"""
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order("2317")],
+        [make_event("SINGLE_ORDER_AMOUNT", "2317")],
+        (),
+        False,
+        stale_symbols={"2317"},
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_RISK_REJECTED]
+
+
+def test_stale_quote_scope() -> None:
+    """帶標的是部分剔除；不帶標的以 `run_id` 對到段落，對不到的不算；其他類別不看"""
+
+    events: List[Dict[str, Any]] = [
+        {"category": "QUOTE_STALE", "symbol": "2317", "run_id": "run-close"},
+        {"category": "QUOTE_STALE", "symbol": None, "run_id": "run-close"},
+        {"category": "QUOTE_STALE", "symbol": None, "run_id": "run-unknown"},
+        {"category": "MAX_HOLDINGS", "symbol": "2454", "run_id": "run-open"},
+    ]
+    runs: List[Dict[str, Any]] = [
+        {"run_id": "run-close", "phase": "close"},
+        {"run_id": "run-open", "phase": "open"},
+    ]
+
+    assert stale_quote_scope(events, runs) == ({"2317"}, {"close"})
+
+
+def test_checker_passes_the_stale_quote_scope(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """接線：比對器以當天的 `QUOTE_STALE` 事件與執行紀錄算出範圍並傳進比對"""
+
+    dao.insert_run(
+        {
+            "run_id": "run-close",
+            "started_at": NOW,
+            "phase": "close",
+            "simulation": 1,
+            "end_reason": "正常結束",
+            "strategy_params_json": '{"strategies": ["Alpha"]}',
+        }
+    )
+    dao.insert_risk_event(
+        {
+            "run_id": "run-close",
+            "strategy_name": "Alpha",
+            "severity": "CRITICAL",
+            "category": "QUOTE_STALE",
+            "symbol": None,
+            "message": "Alpha 有 1／1 檔報價的日期不是今天",
+            "occurred_at": NOW,
+        }
+    )
+    checker: ParityChecker = ParityChecker(
+        dao,
+        lambda name, day: [make_backtest_order("2330")],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+        order_phases=lambda name, order: {"close"},
+    )
+
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert [diff.category for diff in result["Alpha"]] == [CATEGORY_QUOTE_STALE]
 
 
 @pytest.mark.parametrize(

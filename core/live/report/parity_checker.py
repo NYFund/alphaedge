@@ -62,6 +62,12 @@ OrderPhaseLookup = Callable[[str, BaseOrder], Set[str]]
 CATEGORY_SEGMENT_ABORTED: str = "SEGMENT_ABORTED"
 CATEGORY_RISK_REJECTED: str = "RISK_REJECTED"
 
+# 回測有、實盤沒有，因為實盤當天的報價日期不是今天（行情源停在前一日），送單前就被剔除：
+# 整段都過期時那個段落不呼叫策略鉤子，只有部分標的過期時只剔除那幾檔。
+# 原因已由 `QUOTE_STALE` 的 CRITICAL 事件報過；**只認得到事件的範圍**——
+# 部分剔除只解釋被剔除的那幾檔，整段跳過只解釋該在那個段落送出的單
+CATEGORY_QUOTE_STALE: str = "QUOTE_STALE"
+
 # 送出但未成交所造成的差異，成因是「開倉未成交一律放棄、平倉與停損未成交必須補」。
 # 後果是跨日的，故判定要有當天以外的證據：
 #   平倉未成交 → 次日補平單。實盤有、回測沒有（回測那天早就平掉了）。
@@ -154,6 +160,7 @@ CATEGORY_GROUP: Dict[str, str] = {
     CATEGORY_SEND_FAILED: GROUP_EXECUTION,
     # 策略該做的決定沒機會做，屬於「沒執行到」而不是訊號漂移
     CATEGORY_SEGMENT_ABORTED: GROUP_EXECUTION,
+    CATEGORY_QUOTE_STALE: GROUP_EXECUTION,
 }
 
 
@@ -348,6 +355,7 @@ class ParityChecker:
                 # 拿來否定快照口徑的話，一筆帳戶層事件會讓所有策略的差異都升成未解釋
                 segments_ran_cleanly(name, runs, own_events),
                 aborted_phases(name, runs),
+                stale_quote_scope(own_events, runs),
             )
             result[name] = diffs
             self._persist(name, run_date, diffs)
@@ -367,6 +375,7 @@ class ParityChecker:
         resolved_actions: Sequence[Dict[str, Any]] = (),
         ran_cleanly: bool = False,
         aborted: Optional[Set[str]] = None,
+        stale: Tuple[Set[str], Set[str]] = (set(), set()),
     ) -> List[ParityDiff]:
         """比對單一策略；回測跑不起來時視為整批未解釋，不是靜靜跳過"""
 
@@ -419,6 +428,8 @@ class ParityChecker:
             closing_limit=lookup,
             aborted_phases=aborted or set(),
             order_phases=phases_of,
+            stale_symbols=stale[0],
+            stale_phases=stale[1],
         )
 
     def _persist(
@@ -494,6 +505,8 @@ def compare(
     closing_limit: Optional[ClosingLimitLookup] = None,
     aborted_phases: Optional[Set[str]] = None,
     order_phases: Optional[Callable[[BaseOrder], Set[str]]] = None,
+    stale_symbols: Optional[Set[str]] = None,
+    stale_phases: Optional[Set[str]] = None,
 ) -> List[ParityDiff]:
     """
     - Description:
@@ -521,6 +534,10 @@ def compare(
             這支策略當天非正常結束的交易段落（見 `aborted_phases()`）
         - order_phases: Optional[Callable[[BaseOrder], Set[str]]]
             回測委託 → 該送出的段落名集合；與 `aborted_phases` 一起判斷「段落中止」
+        - stale_symbols: Optional[Set[str]]
+            實盤因報價日期不是今天而剔除的標的（見 `stale_quote_scope()`）
+        - stale_phases: Optional[Set[str]]
+            報價全部不是今天、整段沒有呼叫鉤子的段落
     - Return:
         - List[ParityDiff]
             差異清單；兩邊完全一致時為空
@@ -571,13 +588,27 @@ def compare(
             continue
 
         if bt_orders and not live_rows:
-            # 優先序：風控／守門事件 → 段落中止 → 快照口徑（反方向）→ 未解釋
+            # 優先序：風控／守門事件 → 報價過期 → 段落中止 → 快照口徑（反方向）→ 未解釋
             missing_note: str = ""
             category: Optional[str] = None
             if symbol in blocked:
                 # 類別只分三種，事件名才說得出是哪一條規則擋的，寫進 note 留給人看
                 category, event_category = blocked[symbol]
                 missing_note = f"實盤在送出前被 {event_category} 擋下"
+            if category is None and symbol in (stale_symbols or set()):
+                category = CATEGORY_QUOTE_STALE
+                missing_note = "實盤當天這檔的報價日期不是今天，送單前已剔除"
+            stale_matched: Set[str] = (
+                _aborted_phases_of(bt_orders, stale_phases or set(), order_phases)
+                if category is None
+                else set()
+            )
+            if stale_matched:
+                category = CATEGORY_QUOTE_STALE
+                missing_note = (
+                    f"該送出這張單的段落（{'、'.join(sorted(stale_matched))}）"
+                    "報價日期全部不是今天，策略的鉤子沒有被呼叫"
+                )
             matched: Set[str] = _aborted_phases_of(
                 bt_orders, aborted_phases or set(), order_phases
             )
@@ -642,6 +673,44 @@ def _blocked_symbols(events: Sequence[Dict[str, Any]]) -> Dict[str, Tuple[str, s
         )
         blocked.setdefault(str(symbol), (category, label))
     return blocked
+
+
+def stale_quote_scope(
+    events: Sequence[Dict[str, Any]], runs: Sequence[Dict[str, Any]]
+) -> Tuple[Set[str], Set[str]]:
+    """
+    - Description:
+        由 `QUOTE_STALE` 事件推出這支策略當天被剔除的標的與整段跳過的段落
+
+        帶標的的事件是部分剔除；不帶標的的是整段跳過，以事件的 `run_id` 對到
+        當天的執行紀錄取段落名。對不到執行紀錄的整段事件不算：說不出是哪一段，
+        就不能拿它解釋任何一張單。
+    - Parameters:
+        - events: Sequence[Dict[str, Any]]
+            這支策略當日的 `live_risk_event` 列
+        - runs: Sequence[Dict[str, Any]]
+            當日 `live_run` 的列
+    - Return:
+        - Tuple[Set[str], Set[str]]
+            `(被剔除的標的, 整段跳過的段落名)`
+    """
+
+    phase_of_run: Dict[str, str] = {
+        str(run.get("run_id")): str(run.get("phase")) for run in runs
+    }
+    symbols: Set[str] = set()
+    phases: Set[str] = set()
+    for event in events:
+        if str(event.get("category")) != risk_events.QUOTE_STALE:
+            continue
+        symbol: Optional[str] = event.get("symbol")
+        if symbol:
+            symbols.add(str(symbol))
+            continue
+        phase: Optional[str] = phase_of_run.get(str(event.get("run_id")))
+        if phase in TRADING_PHASES:
+            phases.add(phase)
+    return symbols, phases
 
 
 def aborted_phases(strategy_name: str, runs: Sequence[Dict[str, Any]]) -> Set[str]:
