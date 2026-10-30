@@ -110,6 +110,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.context", 5, "實盤／策略執行脈絡", False),
     # 引擎元件：與引擎本體同級，由它組裝呼叫
     ("core.live.rolls", 5, "實盤／期貨換月", False),
+    ("core.live.connection", 5, "實盤／券商連線守門", False),
     # 盤後作業：與送單段落沒有共用狀態，但同樣是「組裝一堆元件層跑一條流程」，
     # 故與 `trader` 同級。放 4 會讓它對 oms／report／reconciler 產生一整排同層邊
     ("core.live.after_close", 5, "實盤／盤後作業", False),

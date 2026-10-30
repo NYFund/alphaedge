@@ -166,7 +166,7 @@ def test_connected_broker_is_left_alone() -> None:
     harness.broker.connect()
     before: int = harness.broker.placed_count
 
-    assert harness.trader.ensure_connected() is True
+    assert harness.trader.connection.ensure_connected() is True
     assert harness.broker.placed_count == before
 
 
@@ -183,7 +183,7 @@ def test_reconnect_resubscribes_and_reconciles_before_resuming() -> None:
     harness.contexts[0].symbols = ["2330"]
     harness.broker.subscribed.clear()
 
-    harness.trader.recover_after_reconnect()
+    harness.trader.connection.recover_after_reconnect()
 
     assert harness.broker.subscribed == {"2330"}
     assert harness.trader.last_reconcile is not None
@@ -203,7 +203,7 @@ def test_disconnected_broker_is_reconnected_then_recovered() -> None:
     harness.contexts[0].symbols = ["2330"]
     harness.broker.close()
 
-    assert harness.trader.ensure_connected() is True
+    assert harness.trader.connection.ensure_connected() is True
     assert harness.broker.is_connected() is True
     assert harness.broker.subscribed == {"2330"}
 
@@ -237,8 +237,8 @@ def test_reconnect_does_not_duplicate_existing_positions() -> None:
         )
     ]
     harness.broker.connect()
-    harness.trader.recover_after_reconnect()
-    harness.trader.recover_after_reconnect()
+    harness.trader.connection.recover_after_reconnect()
+    harness.trader.connection.recover_after_reconnect()
 
     assert [
         (position.stock_id, position.volume) for position in account.positions
@@ -301,7 +301,7 @@ def test_failed_reconnect_stops_submitting() -> None:
     harness.broker.close()
     harness.broker.fail_connect = True
 
-    assert harness.trader.ensure_connected() is False
+    assert harness.trader.connection.ensure_connected() is False
 
 
 # === 單一事件 queue 的接線 ===

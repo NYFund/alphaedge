@@ -377,7 +377,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 機制 | 行為 |
 |------|------|
 | 心跳 | 距上次心跳超過 1 秒就跑（處理完一個事件後檢查，queue 空等逾時也算），不另開計時器執行緒；行情連續湧入時照樣依間隔執行。心跳做「套用券商降級事件 → 確認連線 → 日終回補」 |
-| 斷線偵測 | 每筆行情與每次心跳都呼叫 `LiveTrader.ensure_connected()`；只掛在行情上的話，session 斷了行情也停，就再也不會偵測 |
+| 斷線偵測 | 每筆行情與每次心跳都呼叫 `ConnectionSupervisor.ensure_connected()`；只掛在行情上的話，session 斷了行情也停，就再也不會偵測 |
 | 重連 | `ShioajiSession.reconnect()` 指數退避（2 秒起、最長 300 秒）、單日上限 20 次；退避期間迴圈阻塞（斷線時本來就送不出單）。成功後走恢復流程，失敗推播 CRITICAL 並不送單 |
 | 靜默 | 全市場 30 秒沒有任何報價 → 帳戶層 `REDUCE_ONLY` 並推播「行情中斷」；還沒收到第一筆報價前不計算靜默 |
 | handler 例外 | 吞在迴圈裡、計入 `handler_errors`，不讓一筆壞報價擋住後面的成交回報；單一策略鉤子拋例外則該策略 `HALTED` |

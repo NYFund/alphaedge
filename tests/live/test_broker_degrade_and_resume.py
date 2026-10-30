@@ -71,7 +71,7 @@ def test_session_down_records_a_warning_but_does_not_degrade(
     trader: LiveTrader = make_trader(dao, broker)
 
     broker.report_degrade(BROKER_SESSION_DOWN, "Shioaji session 中斷")
-    trader._apply_broker_degrades()
+    trader.connection.apply_broker_degrades()
 
     assert trader.mode_state.account_mode is TradingMode.NORMAL
     assert event_categories.BROKER_SESSION_DOWN in categories(dao)
@@ -86,7 +86,7 @@ def test_persistent_faults_degrade_to_reduce_only(dao: LiveTradeDAO, kind: str) 
     trader: LiveTrader = make_trader(dao, broker)
 
     broker.report_degrade(kind, "持續性故障")
-    trader._apply_broker_degrades()
+    trader.connection.apply_broker_degrades()
 
     assert trader.mode_state.account_mode is TradingMode.REDUCE_ONLY
     assert event_categories.DEGRADE in categories(dao)
@@ -117,7 +117,7 @@ def test_events_reported_from_another_thread_are_applied_on_the_main_thread(
     )
     worker.start()
     worker.join()
-    trader._apply_broker_degrades()
+    trader.connection.apply_broker_degrades()
 
     assert trader.mode_state.account_mode is TradingMode.REDUCE_ONLY
     assert broker.drain_degrade_events() == []
@@ -131,7 +131,7 @@ def test_successful_reconnect_records_a_warning(dao: LiveTradeDAO) -> None:
     broker.connect()
     broker.close()
 
-    assert trader.ensure_connected() is True
+    assert trader.connection.ensure_connected() is True
     assert trader.mode_state.account_mode is TradingMode.NORMAL
     assert event_categories.BROKER_RECONNECTED in categories(dao)
 
