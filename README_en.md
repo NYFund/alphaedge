@@ -505,8 +505,17 @@ AlphaEdge/
 │   ├── broker/                # broker gateway: BaseBroker interface, report de-duplication, per-category rate limiting
 │   │   └── tw/                # Shioaji: login/CA, contract resolution, order mapping, report normalization, accounts, live quotes and quote replay
 │   └── live/                  # live trading engine
-│       ├── trader.py          # per-phase lifecycle (open / close / intraday / after-close); phase definitions and windows live in core/market/segment.py
-│       ├── factory.py         # assembles live components from (market, instrument_type)
+│       ├── trader.py          # coordinator: per-phase lifecycle (open / close / intraday / after-close); phase definitions and windows live in core/market/segment.py
+│       ├── context.py         # StrategyContext: per-strategy runtime state
+│       ├── clock.py           # SegmentClock: phase-window time checks and the wait fuse
+│       ├── signals.py         # SignalCollector: strategy hooks and order preprocessing
+│       ├── cross_checks.py    # CrossStrategyChecks: cross-strategy guard and batch exposure caps
+│       ├── execution_engine.py  # ExecutionEngine: order pipeline and fill reports
+│       ├── connection.py      # ConnectionSupervisor: broker degrade events, reconnect and recovery
+│       ├── rolls.py           # RolloverExecutor: the two legs of a futures roll
+│       ├── pending_actions.py # PendingActionsRunner: covers yesterday's pending actions at the open
+│       ├── account_monitor.py # AccountMonitor: equity basis, capital refresh and daily-loss checks
+│       ├── factory.py         # assembles live components from (market, instrument_type) and injects them into the engine (assemble_live_trader)
 │       ├── reconciler.py      # after-close reconciliation against broker positions
 │       ├── account_sync.py    # rebuild the attribution ledger from broker positions
 │       ├── capital_allocator.py  # multi-strategy capital quota allocation
@@ -518,7 +527,7 @@ AlphaEdge/
 │       ├── risk/              # pre-trade risk, trading-mode state machine, margin gate, risk event log and category registry
 │       ├── attribution/       # multi-strategy position ledger, cross-strategy conflict guard, rebuild from broker positions
 │       ├── datafeed/          # history up to T−1; today's quotes come from the broker; trading-day check
-│       ├── intraday/          # intraday event loop and end-of-session forced actions
+│       ├── intraday/          # intraday event loop, the tick-driven session (IntradaySession) and end-of-session forced actions
 │       ├── notify/            # alert delivery (Discord, Telegram; failures never affect the trading path)
 │       └── report/            # live daily report and live-vs-backtest signal parity
 ├── data/                      # runtime data (git-ignored): db/ (tw_stock.db, tw_futures.db, live records tw_trading.db), downloads/ (ETL intermediates), live/ (KILL_SWITCH)

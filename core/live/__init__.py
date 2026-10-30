@@ -2,8 +2,12 @@
 實盤引擎層：從委託送出到收盤對帳的完整一條路
 
 - Features:
-    1. `trader.py`：`LiveTrader` 本體，逐段落執行
-    2. `factory.py`：組裝實盤引擎，市場語意的分派只寫在這裡
+    1. `trader.py`：`LiveTrader` 協調者，逐段落執行；實際工作由協作元件做：
+       `context.py`（策略執行脈絡）、`clock.py`（段落時鐘）、`signals.py`（訊號與委託前處理）、
+       `cross_checks.py`（跨策略守門與批次曝險）、`execution_engine.py`（送單與成交回報）、
+       `connection.py`（連線降級、重連與恢復）、`intraday/session.py`（盤中逐筆段落）、
+       `rolls.py`（期貨換月）、`pending_actions.py`（跨日待辦補平）、`account_monitor.py`（權益與單日虧損）
+    2. `factory.py`：組裝實盤引擎與各元件（`assemble_live_trader()`），市場語意的分派只寫在這裡
     3. `oms/`：委託狀態機與回報正規化
     4. `risk/`：風控設定與擋單判定
     5. `execution/`：執行層，把策略的執行方式換成券商接受的委託

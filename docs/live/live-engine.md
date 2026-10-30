@@ -13,9 +13,30 @@
 
 ## 一、元件地圖
 
-引擎本體 `LiveTrader`（`core/live/trader.py`）**市場無關、沒有子類**：程式碼裡不出現任何市場或商品字樣，
-市場語意（資料源、部位管理、執行層、段落時窗、帳務查詢）全部由 `core/live/factory.py` 依
-`(market, instrument_type)` 分派後注入。`scripts/check_layer_deps.py` 會擋住市場字樣漏進引擎。
+引擎本體 `LiveTrader`（`core/live/trader.py`）**只當協調者**：負責段落流程（`run()` → `prepare()` → 各元件 →
+`finish()` → 生命週期紀錄）與人工觸發的重建、parity 補比；實際工作由下表的協作元件做。元件由
+`core/live/factory.py` 的 `assemble_live_trader()` 組裝並注入，元件之間只注入需要的介面（物件或回呼）、
+不持有 `LiveTrader`（比照 NautilusTrader 的元件拆法，先不引入 `MessageBus`；盤中已有單執行緒事件迴圈分派事件，
+匯流排只會多一層間接，元件邊界切乾淨後真的需要時再換）。
+
+| 元件 | 模組 | 職責 |
+|------|------|------|
+| `StrategyContext` | `core/live/context.py` | 每支策略的執行期狀態：帳戶、`PositionManager`、資料源、成本模型、執行層、金額換算、本段落報價 |
+| `SegmentClock` | `core/live/clock.py` | 段落時窗的時間判斷與等待的保險絲；只讀時間、不寫事件 |
+| `SignalCollector` | `core/live/signals.py` | 叫策略鉤子、收進出場單、委託前處理（方向驗證 → 補值 → 排序 → 持倉檔數上限）；鉤子失敗把該策略降到 `HALTED` 並釋放保留 |
+| `CrossStrategyChecks` | `core/live/cross_checks.py` | 跨策略同標的守門 → 策略層批次曝險 → 帳戶層批次曝險 |
+| `ExecutionEngine` | `core/live/execution_engine.py` | 送單管線（保證金 → 在途出場截短 → 資金保留 → 執行層換算 → 事前風控 → 送出）、成交回報入帳與保留釋放、收尾結算（收回報 → 撤單 → 放掉保留） |
+| `ConnectionSupervisor` | `core/live/connection.py` | 券商連線的降級事件、斷線偵測、重連與重連後恢復（重新訂閱 → 接管委託 → 對帳） |
+| `IntradaySession` | `core/live/intraday/session.py` | 盤中逐筆段落：事件迴圈、心跳、日終當沖回補、收線 |
+| `RolloverExecutor` | `core/live/rolls.py` | 期貨換月兩腿（先平後開） |
+| `PendingActionsRunner` | `core/live/pending_actions.py` | 開盤段補平昨日的跨日待辦（數量截到持有量、扣掉在途補平量） |
+| `AccountMonitor` | `core/live/account_monitor.py` | 權益口徑（正式環境取券商總權益、模擬環境以宣告額度為虛擬資金）、額度刷新、本地餘額重設、單日虧損檢查 |
+| `AfterCloseRunner` | `core/live/after_close.py` | 盤後對帳、報表、成本校正與 parity（既有） |
+
+引擎本體與每一個元件都**市場無關、沒有子類**：程式碼裡不出現任何市場或商品字樣，
+市場語意（資料源、部位管理、執行層、段落時窗、帳務查詢）全部由 `build_live_trader()` 依
+`(market, instrument_type)` 分派後注入。`scripts/check_layer_deps.py` 的 `_ENGINE_FILES` 列了本體與全部元件檔，
+會擋住市場字樣漏進任何一個。
 
 元件分成「帳戶級單例」與「逐策略一份」兩種，這條線是整個多策略設計的骨幹：
 

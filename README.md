@@ -502,8 +502,17 @@ AlphaEdge/
 │   ├── broker/                # 券商閘道：BaseBroker 介面、回報去重、分類限流
 │   │   └── tw/                # Shioaji：登入／CA、合約解析、委託轉換、回報正規化、帳務、即時行情與行情重放
 │   └── live/                  # 實盤引擎
-│       ├── trader.py          # 逐段落生命週期（開盤／尾盤／盤中／盤後）；段落定義與時窗在 core/market/segment.py
-│       ├── factory.py         # 依（market, instrument_type）組裝實盤元件
+│       ├── trader.py          # 協調者：逐段落生命週期（開盤／尾盤／盤中／盤後）；段落定義與時窗在 core/market/segment.py
+│       ├── context.py         # StrategyContext：每支策略的執行期狀態
+│       ├── clock.py           # SegmentClock：段落時窗的時間判斷與等待的保險絲
+│       ├── signals.py         # SignalCollector：策略鉤子與委託前處理
+│       ├── cross_checks.py    # CrossStrategyChecks：跨策略守門與批次曝險
+│       ├── execution_engine.py  # ExecutionEngine：送單管線與成交回報
+│       ├── connection.py      # ConnectionSupervisor：斷線降級、重連與恢復
+│       ├── rolls.py           # RolloverExecutor：期貨換月兩腿
+│       ├── pending_actions.py # PendingActionsRunner：開盤段補平跨日待辦
+│       ├── account_monitor.py # AccountMonitor：權益口徑、資金刷新與單日虧損
+│       ├── factory.py         # 依（market, instrument_type）組裝實盤元件並注入引擎（assemble_live_trader）
 │       ├── reconciler.py      # 收盤後與券商部位對帳
 │       ├── account_sync.py    # 對帳不一致時以券商部位重建歸屬帳
 │       ├── capital_allocator.py  # 多策略資金額度分配
@@ -515,7 +524,7 @@ AlphaEdge/
 │       ├── risk/              # 事前風控、交易模式狀態機、保證金閘門、風控事件紀錄與類別登錄
 │       ├── attribution/       # 多策略部位歸屬帳、跨策略衝突守門、以券商部位重建歸屬帳
 │       ├── datafeed/          # 歷史資料到 T−1，今天的報價由券商提供；交易日判定
-│       ├── intraday/          # 盤中事件迴圈與日終強制動作
+│       ├── intraday/          # 盤中事件迴圈、逐筆段落（IntradaySession）與日終強制動作
 │       ├── notify/            # 告警推播（Discord、Telegram；失敗不影響主流程）
 │       └── report/            # 實盤日報與實盤／回測訊號 parity 比對
 ├── data/                      # 執行期資料（不進版控）：db/（tw_stock.db、tw_futures.db、實盤紀錄庫 tw_trading.db）、downloads/（ETL 中繼檔）、live/（KILL_SWITCH）
