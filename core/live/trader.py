@@ -39,6 +39,7 @@ from core.live.attribution.resync import (
     plan_resync,
 )
 from core.live.capital_allocator import CapitalAllocator
+from core.live.clock import SegmentClock
 from core.live.context import StrategyContext
 from core.live.datafeed.base import DataFreshnessError, RollPlan
 from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
@@ -106,18 +107,6 @@ LiveTrader：實盤引擎本體
 
 class LiveTrader:
     """實盤引擎：市場無關，多策略共用一組券商與帳務元件"""
-
-    # 沒有回報時的輪詢間隔（秒）。太短會空轉吃 CPU，太長會讓撤單與時限判斷變遲鈍
-    POLL_INTERVAL_SECONDS: float = 0.5
-
-    # 等待的安全上限＝開始等待時離目標時點還有多久 ＋ 這段寬限（秒）。
-    # **這條是獨立於時鐘的保險絲**：時窗判斷靠 `now_provider()`，而它若因為時鐘卡住、
-    # 倒退或注入錯誤而不再前進，迴圈會永遠轉下去——段落不結束，下一個段落的行程
-    # 拿不到連線與寫入鎖，而存活監控只會看到「開始了但沒有正常結束」。故另外累計
-    # 實際睡過的秒數，超過就強制跳出並記 error。
-    # **上限跟著時窗長度走**：寫死一個秒數的話，比它長的時窗（股票開盤段 35 分鐘）
-    # 會在時鐘完全正常時撞到上限，天天記一條「請確認系統時鐘」的假警報
-    WAIT_GRACE_SECONDS: float = 300.0
 
     # 收線後撤單，再收撤單回報的時間（秒）。撤單回報通常一秒內就到；
     # 收不到也不影響正確性——日終由盤後刷新與 `expire_unfinished()` 補標
@@ -247,17 +236,17 @@ class LiveTrader:
         self.reporter: LiveReporter = (
             reporter if reporter is not None else LiveReporter(dao)
         )
-        self._now: Callable[[], datetime.datetime] = now_provider
+        # 段落時窗的時間判斷與等待；引擎本體與各元件共用同一個
+        self.clock: SegmentClock = SegmentClock(now_provider, sleep)
         # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
         # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
         # 卻要改動建構子簽名與每一個建這個類別的地方
         self.events: RiskEventLogger = RiskEventLogger(
-            self.dao, self.run_id, now_provider=self._now
+            self.dao, self.run_id, now_provider=self.clock.now
         )
         self.backfiller: FillBackfiller = FillBackfiller(
             order_manager, account_sync, dao, run_id, now_provider, notifier
         )
-        self._sleep: Callable[[float], None] = sleep
 
         # 本段落已送出的委託金額，逐策略累計；段落結束時用來釋放未成交的保留
         self._reserved_by_order: Dict[str, Tuple[str, float]] = {}
@@ -372,7 +361,7 @@ class LiveTrader:
 
         verify_strategies([context.strategy for context in self.contexts])
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
 
         # 休市日不進送單路徑；判不出來一律拒絕啟動（`is_market_open()` 會拋）
         self.is_trading_day = self._verify_trading_day(today)
@@ -449,7 +438,7 @@ class LiveTrader:
             self.mark_previous_crash()
             self.mode_state.load()
 
-            today: datetime.date = self._now().date()
+            today: datetime.date = self.clock.now().date()
             unfinished: List[Dict[str, Any]] = self.dao.get_unfinished_orders(today)
             if unfinished:
                 raise ResyncRefusedError(
@@ -467,7 +456,7 @@ class LiveTrader:
             if not confirm or not plan.actions:
                 return plan
 
-            apply_resync(self.ledger, plan, self.run_id, self._now)
+            apply_resync(self.ledger, plan, self.run_id, self.clock.now)
             self.account_sync.rebuild_from_broker(positions)
             self.last_reconcile = self.reconciler.check(positions)
             return plan
@@ -527,7 +516,7 @@ class LiveTrader:
                 被標記的 `run_id`
         """
 
-        crashed: List[str] = self.dao.mark_crashed_runs(self.run_id, self._now())
+        crashed: List[str] = self.dao.mark_crashed_runs(self.run_id, self.clock.now())
         if not crashed:
             return []
 
@@ -563,7 +552,7 @@ class LiveTrader:
             on_quote=self._on_intraday_quote,
             on_execution=self._on_intraday_execution,
             on_market_data_lost=self._on_market_data_lost,
-            now_provider=self._now,
+            now_provider=self.clock.now,
             heartbeat_seconds=self.INTRADAY_HEARTBEAT_SECONDS,
             on_heartbeat=self._on_heartbeat,
         )
@@ -639,13 +628,13 @@ class LiveTrader:
         沒給就跑到今天結束。
         """
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         if window is None or window.submit_end is None:
             return datetime.datetime.combine(
-                today, datetime.time.max, tzinfo=self._now().tzinfo
+                today, datetime.time.max, tzinfo=self.clock.now().tzinfo
             )
         return datetime.datetime.combine(
-            today, window.submit_end, tzinfo=self._now().tzinfo
+            today, window.submit_end, tzinfo=self.clock.now().tzinfo
         )
 
     def _on_heartbeat(self) -> None:
@@ -686,7 +675,7 @@ class LiveTrader:
         if not self.session_guard.should_cover_now():
             return
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         failures: List[str] = []
         stop_after: bool = False
 
@@ -818,7 +807,7 @@ class LiveTrader:
 
         return context.build_filled_order(
             position.symbol,
-            self._now(),
+            self.clock.now(),
             order_rules.resolve_close_action(position.position_type),
             position.position_type,
             float(quote.cur_price),
@@ -998,7 +987,7 @@ class LiveTrader:
         if symbols:
             self.broker.subscribe_quotes(symbols)
 
-        self.order_manager.recover(self._now().date())
+        self.order_manager.recover(self.clock.now().date())
 
         positions: List[Any] = self.broker.get_positions()
         self.last_reconcile = self.reconciler.check(positions)
@@ -1062,7 +1051,7 @@ class LiveTrader:
                 兩腿都送出的轉倉筆數
         """
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         completed: int = 0
         for context in self.contexts:
             if self.mode_state.effective_mode(context.name) is TradingMode.HALTED:
@@ -1179,9 +1168,9 @@ class LiveTrader:
             self.drain_once()
             if ticket.status is LiveOrderStatus.FILLED:
                 return True
-            if ticket.is_terminal or self._past(window, "submit_end"):
+            if ticket.is_terminal or self.clock.past(window, "submit_end"):
                 return False
-            self._sleep(self.ROLL_POLL_SECONDS)
+            self.clock.sleep(self.ROLL_POLL_SECONDS)
         return False
 
     def _write_roll_event(
@@ -1299,7 +1288,7 @@ class LiveTrader:
                 今天的報價；原本有報價、但全部都不是今天時為 None
         """
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         fresh: List[BaseQuote] = [
             quote for quote in quotes if _quote_day(quote) == today
         ]
@@ -1627,7 +1616,7 @@ class LiveTrader:
         for index, (context, order) in enumerate(candidates):
             # 時窗之外一律不送：過了時限不送，**還沒到也不送**——等待迴圈逾時後
             # 呼叫端若仍走到這裡（時鐘卡在時窗之前），這道檢查是最後一道
-            outside: Optional[str] = self._outside_window(window)
+            outside: Optional[str] = self.clock.outside_window(window)
             if outside is not None:
                 logger.warning(f"{outside}，其餘委託不再送出")
                 unsent.extend(candidates[index:])
@@ -1864,7 +1853,7 @@ class LiveTrader:
         if not order_rules.is_closing(order):
             return
 
-        now: datetime.datetime = self._now()
+        now: datetime.datetime = self.clock.now()
         today: datetime.date = now.date()
         message: str = (
             f"{order.symbol} 出場單未送出（{reason}），已成為預期外的隔夜部位；"
@@ -2042,9 +2031,9 @@ class LiveTrader:
             self.drain_once()
             return
 
-        cap: float = self._wait_cap_seconds(getattr(window, attribute))
+        cap: float = self.clock.wait_cap_seconds(getattr(window, attribute))
         waited: float = 0.0
-        while not self._past(window, attribute):
+        while not self.clock.past(window, attribute):
             if self.drain_once():
                 continue
 
@@ -2055,8 +2044,8 @@ class LiveTrader:
                 )
                 return
 
-            self._sleep(self.POLL_INTERVAL_SECONDS)
-            waited += self.POLL_INTERVAL_SECONDS
+            self.clock.sleep(self.clock.POLL_INTERVAL_SECONDS)
+            waited += self.clock.POLL_INTERVAL_SECONDS
 
     def _drain_for(self, seconds: float) -> None:
         """
@@ -2070,8 +2059,8 @@ class LiveTrader:
         while waited < seconds:
             if self.drain_once():
                 continue
-            self._sleep(self.POLL_INTERVAL_SECONDS)
-            waited += self.POLL_INTERVAL_SECONDS
+            self.clock.sleep(self.clock.POLL_INTERVAL_SECONDS)
+            waited += self.clock.POLL_INTERVAL_SECONDS
 
     def _release_finished(self) -> None:
         """終結的委託釋放保留；**走遍所有已知委託**而不只是本次成交的那幾張"""
@@ -2149,7 +2138,7 @@ class LiveTrader:
         兩者寫的是不同的表，名字混在一起會讓人以為這裡已經記了部位。
         """
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         for context in self.contexts:
             self.dao.upsert_account_snapshot(
                 {
@@ -2234,7 +2223,7 @@ class LiveTrader:
         但只要有一個還沒更新，那一天就不能拿來比。
         """
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         latest_dates: List[datetime.date] = []
         for context in self.contexts:
             if run_date is None:
@@ -2300,7 +2289,7 @@ class LiveTrader:
             end_reason: str = self.resolve_end_reason(error)
             self.dao.finish_run(
                 self.run_id,
-                self._now(),
+                self.clock.now(),
                 end_reason,
                 self.mode_state.account_mode.value,
             )
@@ -2332,7 +2321,7 @@ class LiveTrader:
                 實際送出的補平單數
         """
 
-        today: datetime.date = self._now().date()
+        today: datetime.date = self.clock.now().date()
         pending: List[PendingAction] = self._load_pending_actions(today)
         if not pending:
             return 0
@@ -2384,7 +2373,7 @@ class LiveTrader:
                 continue
 
             self.dao.resolve_pending_action(
-                action.action_id, self.dao.ACTION_DONE, self._now()
+                action.action_id, self.dao.ACTION_DONE, self.clock.now()
             )
             in_flight[key] = in_flight.get(key, 0) + volume
             submitted += 1
@@ -2466,7 +2455,7 @@ class LiveTrader:
         )
         if volume <= 0:
             self.dao.resolve_pending_action(
-                action_id, self.dao.ACTION_DONE, self._now()
+                action_id, self.dao.ACTION_DONE, self.clock.now()
             )
             return None
         return volume
@@ -2529,7 +2518,7 @@ class LiveTrader:
 
         return context.build_filled_order(
             action.symbol,
-            self._now(),
+            self.clock.now(),
             action.action,
             action.position_type,
             float(reference),
@@ -2769,7 +2758,7 @@ class LiveTrader:
             return None
 
         try:
-            trades: List[Any] = list(provider(self._now().date()))
+            trades: List[Any] = list(provider(self.clock.now().date()))
         except Exception as exc:
             # 帳務查詢失敗不該讓段落起不來；但也不可當成「今天沒有已實現損益」
             logger.opt(exception=True).warning(f"取當日已實現損益失敗：{exc}")
@@ -2910,13 +2899,13 @@ class LiveTrader:
         if window is None:
             return True
 
-        cap: float = self._wait_cap_seconds(window.submit_start)
+        cap: float = self.clock.wait_cap_seconds(window.submit_start)
         waited: float = 0.0
-        while self._now().time() < window.submit_start:
+        while self.clock.now().time() < window.submit_start:
             if waited >= cap:
                 message: str = (
                     f"等待送單時窗（{window.submit_start}）已達安全上限 {cap:.0f} 秒，"
-                    f"時鐘仍停在 {self._now().time()}；本段落放棄送單，請確認系統時鐘是否正常"
+                    f"時鐘仍停在 {self.clock.now().time()}；本段落放棄送單，請確認系統時鐘是否正常"
                 )
                 logger.error(message)
                 self.events.write(
@@ -2927,50 +2916,9 @@ class LiveTrader:
                 self._notify(NotifyLevel.CRITICAL, "等不到送單時窗", message)
                 return False
 
-            self._sleep(self.POLL_INTERVAL_SECONDS)
-            waited += self.POLL_INTERVAL_SECONDS
+            self.clock.sleep(self.clock.POLL_INTERVAL_SECONDS)
+            waited += self.clock.POLL_INTERVAL_SECONDS
         return True
-
-    def _wait_cap_seconds(self, target: datetime.time) -> float:
-        """
-        - Description:
-            這次等待的安全上限：開始等待時離目標時點的秒數 ＋ 寬限
-
-            只在開始等待時讀一次時鐘。之後時鐘卡住也不影響上限，
-            迴圈仍會在累計睡滿上限後跳出。
-        - Parameters:
-            - target: datetime.time
-                要等到的時點（同一個交易日）
-        - Return:
-            - float
-                上限秒數；目標已過時只剩寬限
-        """
-
-        now: datetime.datetime = self._now()
-        target_at: datetime.datetime = datetime.datetime.combine(
-            now.date(), target, tzinfo=now.tzinfo
-        )
-        remaining: float = (target_at - now).total_seconds()
-        return max(remaining, 0.0) + self.WAIT_GRACE_SECONDS
-
-    def _past(self, window: Optional[SegmentWindow], attribute: str) -> bool:
-        """目前時刻是否已過時窗上的某個時點"""
-
-        if window is None:
-            return False
-        return self._now().time() >= getattr(window, attribute)
-
-    def _outside_window(self, window: Optional[SegmentWindow]) -> Optional[str]:
-        """目前時刻不在送單時窗內時回原因（還沒到／已過），在時窗內回 None"""
-
-        if window is None:
-            return None
-        now: datetime.time = self._now().time()
-        if now < window.submit_start:
-            return f"尚未到送單時窗（{window.submit_start}）"
-        if now >= window.submit_end:
-            return "已過送單時限"
-        return None
 
 
 def quote_prices_of(quotes: Sequence[BaseQuote]) -> Dict[str, float]:

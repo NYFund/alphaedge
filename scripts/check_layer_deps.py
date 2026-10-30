@@ -99,6 +99,8 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     # 通知是旁路，**只可 import `core.config`／`core.utils`**：不碰模型也不碰 DAO，
     # 這樣它壞掉也不可能拖垮交易主流程
     ("core.live.notify", 4, "實盤／事件通知", False),
+    # 段落時鐘：只讀時間的判斷與等待，引擎本體與各元件共用
+    ("core.live.clock", 4, "實盤／段落時鐘", False),
     # 套件本身也要登記。沒有規則命中的模組分層為 -1，**它 import 任何東西都會被
     # 判成反向相依**；`core.backtest` 同樣登記了套件本身。
     # 另外沿用 `core/backtest/__init__.py` 的作法：套件層不 eager import

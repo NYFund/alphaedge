@@ -269,7 +269,7 @@ def build_trader(dao: LiveTradeDAO, fill_ratio: float) -> Tuple[LiveTrader, Fake
         now_provider=lambda: datetime.datetime(2026, 10, 20, 13, 30),
     )
     trader.allocator.reserve = lambda name, amount, symbol=None: True  # type: ignore[assignment]
-    trader._sleep = lambda seconds: None
+    trader.clock.sleep = lambda seconds: None
     context: StrategyContext = trader.contexts[0]
     context.calculate_opening_requirement = lambda order: 0.0
     # 測試庫沒有保證金表、測試策略的額度也撐不起一口台指期：資金占用與曝險一併放行

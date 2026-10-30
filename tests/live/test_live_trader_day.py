@@ -11,6 +11,7 @@ from core.live.account_sync import AccountSynchronizer, build_stock_order
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
+from core.live.clock import SegmentClock
 from core.live.context import StrategyContext
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
 from core.live.datafeed.calendar import TradingCalendarUnavailableError
@@ -818,9 +819,9 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     harness: Harness = Harness([Alpha()], window=window)
 
     slept: List[float] = []
-    harness.trader._now = lambda: NOW  # 時鐘卡死
-    harness.trader._sleep = slept.append
-    harness.trader.WAIT_GRACE_SECONDS = 5.0
+    harness.trader.clock.now = lambda: NOW  # 時鐘卡死
+    harness.trader.clock.sleep = slept.append
+    harness.trader.clock.WAIT_GRACE_SECONDS = 5.0
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
@@ -833,9 +834,9 @@ def test_stuck_clock_does_not_hang_the_segment() -> None:
     assert slept
     assert sum(slept) <= (
         remaining
-        + harness.trader.WAIT_GRACE_SECONDS
+        + harness.trader.clock.WAIT_GRACE_SECONDS
         + LiveTrader.CANCEL_REPORT_SECONDS
-        + 2 * LiveTrader.POLL_INTERVAL_SECONDS
+        + 2 * SegmentClock.POLL_INTERVAL_SECONDS
     )
 
 
@@ -1920,9 +1921,9 @@ def test_segment_that_never_reaches_the_window_sends_nothing() -> None:
         drain_end=datetime.time(13, 50),
     )
     harness: Harness = Harness([Alpha()], window=window)
-    harness.trader._now = lambda: NOW  # 時鐘卡死在時窗之前
-    harness.trader._sleep = lambda seconds: None
-    harness.trader.WAIT_GRACE_SECONDS = 5.0
+    harness.trader.clock.now = lambda: NOW  # 時鐘卡死在時窗之前
+    harness.trader.clock.sleep = lambda seconds: None
+    harness.trader.clock.WAIT_GRACE_SECONDS = 5.0
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 

@@ -3,6 +3,7 @@ from typing import Any, List, Optional
 
 import pytest
 
+from core.live.clock import SegmentClock
 from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
 
@@ -54,7 +55,7 @@ def make_trader(snapshot: Optional[BrokerAccountSnapshot], broker: Any) -> LiveT
     trader: LiveTrader = object.__new__(LiveTrader)
     trader.broker = broker
     trader.account_snapshot = snapshot
-    trader._now = lambda: datetime.datetime(2026, 9, 24, 13, 20)
+    trader.clock = SegmentClock(lambda: datetime.datetime(2026, 9, 24, 13, 20))
     return trader
 
 
