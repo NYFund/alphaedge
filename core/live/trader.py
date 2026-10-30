@@ -41,8 +41,12 @@ from core.live.attribution.resync import (
 from core.live.capital_allocator import CapitalAllocator
 from core.live.clock import SegmentClock
 from core.live.context import StrategyContext
-from core.live.datafeed.base import DataFreshnessError, RollPlan
-from core.live.execution.base import BaseExecutionModel, ExecutionUnavailableError
+from core.live.datafeed.base import DataFreshnessError
+from core.live.execution.base import (
+    BaseExecutionModel,
+    ExecutionUnavailableError,
+    mark_execution,
+)
 from core.live.fill_backfill import FillBackfiller
 from core.live.intraday.event_loop import IntradayEventLoop, LoopStats
 from core.live.intraday.session_guard import SessionGuard, stops_after_cover
@@ -59,6 +63,7 @@ from core.live.risk.risk_manager import (
     RiskDecision,
 )
 from core.live.risk.trading_mode import TradingMode, TradingModeState
+from core.live.rolls import RolloverExecutor
 from core.live.strategy_guard import verify_strategies
 from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.models import (
@@ -67,7 +72,6 @@ from core.models import (
     BaseQuote,
     BrokerAccountSnapshot,
     ExecutionReport,
-    OrderTicket,
     PendingAction,
     PriceLimits,
 )
@@ -118,11 +122,6 @@ class LiveTrader:
     # 日終回補失敗時最多再試幾次心跳。有上限是因為取不到報價、被風控擋下這類原因
     # 重試也不會好；每次失敗都推 CRITICAL，用完就交給人工
     MAX_COVER_ATTEMPTS: int = 3
-
-    # 換月平倉腿等成交的輪詢間隔與次數上限（秒 × 次）。**次數上限獨立於時鐘**：
-    # 段落時限靠時鐘判斷，時鐘卡住時仍要能結束等待（與段落迴圈的保險絲同一種考量）
-    ROLL_POLL_SECONDS: float = 0.5
-    ROLL_MAX_POLLS: int = 120
 
     def __init__(
         self,
@@ -271,6 +270,18 @@ class LiveTrader:
             now_provider=now_provider,
             parity_checker=parity_checker,
             cost_estimator=cost_estimator,
+        )
+
+        # 期貨換月：送單與收回報走引擎的同一條管線
+        self.rolls: RolloverExecutor = RolloverExecutor(
+            contexts=self.contexts,
+            mode_state=mode_state,
+            order_manager=order_manager,
+            events=self.events,
+            notifier=notifier,
+            clock=self.clock,
+            dispatch=self.dispatch,
+            apply_new_fills=self.drain_once,
         )
 
         # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。
@@ -1019,7 +1030,7 @@ class LiveTrader:
         # **尾盤段先換月、再收新訊號**：策略挑合約與轉倉用同一份換月規則，
         # 今天該換的部位先換過去，策略看到的持倉才與它要交易的契約一致
         if timing is ExecutionTiming.AT_CLOSE:
-            self.execute_rolls(window)
+            self.rolls.execute(window)
 
         candidates: List[Tuple[StrategyContext, BaseOrder]] = []
         for context in self.contexts:
@@ -1034,165 +1045,6 @@ class LiveTrader:
         )
         # 策略自己產生的出場單沒送出時要排次日補平；其他送單路徑各有自己的失敗處理
         self.dispatch(survivors, window, cover_unsent_exits=True)
-
-    # === 換月 ===
-    def execute_rolls(self, window: Optional[SegmentWindow]) -> int:
-        """
-        - Description:
-            執行各策略今天的轉倉；要不要轉、轉去哪由各市場的資料源決定
-
-            **交易模式不允許開新倉時不換月**：開倉腿是新曝險，`REDUCE_ONLY` 下
-            會被風控擋掉，只剩平倉腿等於提早平倉；不如整筆不動、寫事件讓人決定。
-        - Parameters:
-            - window: Optional[SegmentWindow]
-                段落時窗
-        - Return:
-            - int
-                兩腿都送出的轉倉筆數
-        """
-
-        today: datetime.date = self.clock.now().date()
-        completed: int = 0
-        for context in self.contexts:
-            if self.mode_state.effective_mode(context.name) is TradingMode.HALTED:
-                continue
-            try:
-                plans: List[RollPlan] = context.data_feed.plan_rolls(
-                    context.account.positions, today
-                )
-            except Exception as exc:
-                logger.opt(exception=True).error(f"{context.name} 換月判定失敗：{exc}")
-                self._write_roll_event(
-                    context,
-                    None,
-                    NotifyLevel.CRITICAL,
-                    "ROLL_FAILED",
-                    f"換月判定失敗：{exc}",
-                )
-                continue
-
-            for plan in plans:
-                if not self.mode_state.allows_open(context.name):
-                    self._write_roll_event(
-                        context,
-                        plan,
-                        NotifyLevel.WARN,
-                        "ROLL_SKIPPED",
-                        "交易模式不允許開新倉，本次不換月",
-                    )
-                    continue
-                if self._execute_roll(context, plan, window):
-                    completed += 1
-        return completed
-
-    def _execute_roll(
-        self, context: StrategyContext, plan: RollPlan, window: Optional[SegmentWindow]
-    ) -> bool:
-        """
-        先平後開：平倉腿成交了才送開倉腿
-
-        **平倉腿沒成交就放棄開倉腿**（次日再換）：兩腿都在場上的代價是曝險翻倍，
-        換月失敗的代價只是晚一天。反過來，平倉腿成交而開倉腿送不出去時
-        曝險直接消失——那要馬上有人知道，記 CRITICAL。
-        """
-
-        logger.info(f"[Roll] {context.name}：{plan.reason}")
-        # 換月兩腿是系統產生的委託，一律要成交；只在尾盤段執行
-        mark_execution(
-            [plan.close_order, plan.open_order],
-            ExecutionTiming.AT_CLOSE,
-            ExecutionStyle.MARKET,
-        )
-        # 偏離檢查的市場基準用計畫當下的快照價：換月先於收訊號，此時本段落還沒有
-        # 餵給策略的報價，`_reference_price()` 會退回合約檔的參考價（前一日結算）。
-        # 當日漲跌超過偏離上限時平倉腿就被擋、整筆放棄——而換月固定在最後交易日
-        # 前一天，隔天已無法再換，舊月只能被交易所結算
-        for leg in (plan.close_order, plan.open_order):
-            if leg.price and leg.price > 0:
-                context.quote_prices[leg.symbol] = float(leg.price)
-
-        if self.dispatch([(context, plan.close_order)], window):
-            self._write_roll_event(
-                context,
-                plan,
-                NotifyLevel.WARN,
-                "ROLL_ABANDONED",
-                "平倉腿未送出，本次不換月",
-            )
-            return False
-
-        ticket: Optional[OrderTicket] = self.order_manager.tickets.get(
-            plan.close_order.client_order_id or ""
-        )
-        if ticket is None or not self._wait_for_fill(ticket, window):
-            filled: int = ticket.filled_volume if ticket is not None else 0
-            if filled <= 0:
-                self._write_roll_event(
-                    context,
-                    plan,
-                    NotifyLevel.WARN,
-                    "ROLL_ABANDONED",
-                    "平倉腿未成交，開倉腿放棄，次日再換",
-                )
-                return False
-            # 部分成交（IOC 成交幾口後被取消）：已平的口數曝險已經消失，開倉腿改送
-            # 已平量補回；剩下沒平的次日再換。只記 WARN 放棄的話，曝險少了幾口沒人知道
-            remaining: int = int(plan.close_order.volume) - filled
-            plan.open_order.volume = filled
-            self._write_roll_event(
-                context,
-                plan,
-                NotifyLevel.CRITICAL,
-                "ROLL_PARTIAL",
-                f"平倉腿只成交 {filled}/{plan.close_order.volume}，"
-                f"開倉腿改送 {filled} 口補回已平部分的曝險，剩 {remaining} 口次日再換",
-            )
-
-        if self.dispatch([(context, plan.open_order)], window):
-            self._write_roll_event(
-                context,
-                plan,
-                NotifyLevel.CRITICAL,
-                "ROLL_OPEN_FAILED",
-                "舊契約已平倉、新契約未送出：這筆曝險已消失，請人工確認是否補開",
-            )
-            return False
-        return True
-
-    def _wait_for_fill(
-        self, ticket: OrderTicket, window: Optional[SegmentWindow]
-    ) -> bool:
-        """持續消化回報直到這張委託全部成交；終結、到時限或次數用完時回 False"""
-
-        for _ in range(self.ROLL_MAX_POLLS):
-            self.drain_once()
-            if ticket.status is LiveOrderStatus.FILLED:
-                return True
-            if ticket.is_terminal or self.clock.past(window, "submit_end"):
-                return False
-            self.clock.sleep(self.ROLL_POLL_SECONDS)
-        return False
-
-    def _write_roll_event(
-        self,
-        context: StrategyContext,
-        plan: Optional[RollPlan],
-        severity: NotifyLevel,
-        category: str,
-        message: str,
-    ) -> None:
-        """換月的事件：寫紀錄並推播"""
-
-        text: str = f"{plan.reason}：{message}" if plan is not None else message
-        logger.warning(f"[Roll] {context.name}：{text}")
-        self.events.write(
-            category=category,
-            severity=severity,
-            message=text,
-            strategy_name=context.name,
-            symbol=plan.close_order.symbol if plan is not None else None,
-        )
-        self._notify(severity, "換月", text)
 
     # === 訊號 ===
     @staticmethod
@@ -2938,36 +2790,6 @@ def quote_prices_of(quotes: Sequence[BaseQuote]) -> Dict[str, float]:
         if price > 0 and quote.symbol:
             prices[quote.symbol] = price
     return prices
-
-
-def mark_execution(
-    orders: List[BaseOrder],
-    timing: ExecutionTiming,
-    style: Optional[ExecutionStyle],
-) -> List[BaseOrder]:
-    """
-    - Description:
-        標註委託的執行段落與執行方式（**就地改寫**），交給執行層換算
-
-        段落以「實際在哪一段送出」為準，蓋掉委託原本的值：執行層依段落決定
-        送集合競價還是連續交易的委託，標錯段落會送出交易所不收的組合。
-        `style` 為 None（策略沒宣告）時照樣寫入，由送單前的檢查擋下並留下紀錄。
-    - Parameters:
-        - orders: List[BaseOrder]
-            委託
-        - timing: ExecutionTiming
-            送出的段落
-        - style: Optional[ExecutionStyle]
-            執行方式
-    - Return:
-        - List[BaseOrder]
-            同一批委託（方便串接）
-    """
-
-    for order in orders:
-        order.timing = timing
-        order.execution_style = style
-    return orders
 
 
 def _quote_day(quote: BaseQuote) -> Optional[datetime.date]:

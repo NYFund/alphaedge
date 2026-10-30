@@ -331,7 +331,7 @@ def test_close_leg_fills_then_open_leg_is_sent(dao: LiveTradeDAO) -> None:
 
     trader, broker = build_trader(dao, fill_ratio=1.0)
 
-    assert trader.execute_rolls(None) == 1
+    assert trader.rolls.execute(None) == 1
     assert placed_symbols(broker) == ["TX202610", "TX202611"]
     assert roll_events(dao) == []
 
@@ -348,7 +348,7 @@ def test_roll_legs_are_sent_as_must_fill_by_the_execution_layer(
 
     trader, broker = build_trader(dao, fill_ratio=1.0)
 
-    trader.execute_rolls(None)
+    trader.rolls.execute(None)
 
     legs: List[Any] = [ticket.order for ticket in broker.tickets.values()]
     assert [leg.execution_style for leg in legs] == [ExecutionStyle.MARKET] * 2
@@ -363,7 +363,7 @@ def test_unfilled_close_leg_abandons_the_open_leg(dao: LiveTradeDAO) -> None:
 
     trader, broker = build_trader(dao, fill_ratio=0.0)
 
-    assert trader.execute_rolls(None) == 0
+    assert trader.rolls.execute(None) == 0
     assert placed_symbols(broker) == ["TX202610"]
     assert roll_events(dao) == [("ROLL_ABANDONED", "WARN")]
 
@@ -382,7 +382,7 @@ def test_open_leg_failure_after_close_fill_is_critical(dao: LiveTradeDAO) -> Non
 
     trader.allocator.reserve = reserve_never  # type: ignore[assignment]
 
-    assert trader.execute_rolls(None) == 0
+    assert trader.rolls.execute(None) == 0
     assert placed_symbols(broker) == ["TX202610"]
     assert roll_events(dao) == [("ROLL_OPEN_FAILED", "CRITICAL")]
     assert len(calls) == 1
@@ -394,7 +394,7 @@ def test_reduce_only_mode_skips_the_roll(dao: LiveTradeDAO) -> None:
     trader, broker = build_trader(dao, fill_ratio=1.0)
     trader.mode_state.degrade(TradingMode.REDUCE_ONLY, "測試")
 
-    assert trader.execute_rolls(None) == 0
+    assert trader.rolls.execute(None) == 0
     assert placed_symbols(broker) == []
     assert roll_events(dao) == [("ROLL_SKIPPED", "WARN")]
 
@@ -446,7 +446,7 @@ def test_roll_legs_are_checked_against_the_snapshot_not_yesterdays_settlement(
     context: StrategyContext = trader.contexts[0]
     context.data_feed.get_reference_price = lambda symbol: 45700.0  # type: ignore
 
-    assert trader.execute_rolls(None) == 1
+    assert trader.rolls.execute(None) == 1
     assert placed_symbols(broker) == ["TX202610", "TX202611"]
     assert roll_events(dao) == []
     assert dao.conn.execute(
@@ -498,7 +498,7 @@ def test_partially_filled_close_leg_is_critical_and_rolls_the_filled_part(
         )
     ]
 
-    trader.execute_rolls(None)
+    trader.rolls.execute(None)
 
     legs: List[Any] = [ticket.order for ticket in broker.tickets.values()]
     assert [(order.symbol, order.volume) for order in legs] == [

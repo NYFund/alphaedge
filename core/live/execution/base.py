@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, FrozenSet, Optional
+from typing import Any, Callable, FrozenSet, List, Optional
 
 from core.models import BaseOrder, PriceLimits
 from core.utils import Action, ExecutionStyle, ExecutionTiming, OrderType
@@ -158,3 +158,33 @@ class BaseExecutionModel(ABC):
     @abstractmethod
     def _apply_continuous_market(self, order: BaseOrder, limits: PriceLimits) -> None:
         """連續交易時段的 `MARKET`；各市場的保護方式不同"""
+
+
+def mark_execution(
+    orders: List[BaseOrder],
+    timing: ExecutionTiming,
+    style: Optional[ExecutionStyle],
+) -> List[BaseOrder]:
+    """
+    - Description:
+        標註委託的執行段落與執行方式（**就地改寫**），交給執行層換算
+
+        段落以「實際在哪一段送出」為準，蓋掉委託原本的值：執行層依段落決定
+        送集合競價還是連續交易的委託，標錯段落會送出交易所不收的組合。
+        `style` 為 None（策略沒宣告）時照樣寫入，由送單前的檢查擋下並留下紀錄。
+    - Parameters:
+        - orders: List[BaseOrder]
+            委託
+        - timing: ExecutionTiming
+            送出的段落
+        - style: Optional[ExecutionStyle]
+            執行方式
+    - Return:
+        - List[BaseOrder]
+            同一批委託（方便串接）
+    """
+
+    for order in orders:
+        order.timing = timing
+        order.execution_style = style
+    return orders

@@ -4,10 +4,9 @@ from typing import Any, List, Tuple
 import pytest
 
 from core.broker.tw.shioaji_order_mapper import ShioajiOrderMapper
-from core.live.execution.base import ExecutionUnavailableError
+from core.live.execution.base import ExecutionUnavailableError, mark_execution
 from core.live.execution.futures import FuturesExecutionModel
 from core.live.execution.stock import StockExecutionModel
-from core.live.trader import mark_execution
 from core.models import (
     BaseOrder,
     BaseQuote,
