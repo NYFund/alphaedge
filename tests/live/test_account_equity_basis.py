@@ -3,6 +3,9 @@ from typing import Any, Dict, List
 
 import pytest
 
+from core.live.account_monitor import AccountMonitor
+from core.live.clock import SegmentClock
+from core.live.cross_checks import CrossStrategyChecks
 from core.live.factory import live_capital
 from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
@@ -26,42 +29,50 @@ from strategies.stock.volume_breakout_momentum_strategy import (
 """
 
 
-def make_trader(
+def make_monitor(
     total_equity: float,
     quotas: Dict[str, float],
     simulation: bool = False,
     has_snapshot: bool = True,
-) -> LiveTrader:
-    """只裝出 `_account_equity()` 會讀到的那幾個屬性，不建整個 trader"""
+) -> AccountMonitor:
+    """只裝出 `account_equity()` 會讀到的那幾個相依，不建整個 trader"""
 
-    trader: LiveTrader = LiveTrader.__new__(LiveTrader)
-    trader.simulation = simulation
-    trader.account_snapshot = (
+    monitor: AccountMonitor = AccountMonitor(
+        contexts=[],
+        broker=None,  # type: ignore[arg-type]
+        order_manager=None,
+        allocator=SimpleNamespace(quotas=dict(quotas)),  # type: ignore[arg-type]
+        risk_manager=None,  # type: ignore[arg-type]
+        clock=SegmentClock(),
+        simulation=simulation,
+    )
+    monitor.account_snapshot = (
         BrokerAccountSnapshot(total_equity=total_equity, available_balance=0.0)
         if has_snapshot
         else None
     )
-    trader.allocator = SimpleNamespace(quotas=dict(quotas))
-    return trader
+    return monitor
 
 
 # === 取券商算好的總權益 ===
 def test_equity_comes_from_the_broker_snapshot() -> None:
     """總權益取快照的 `total_equity`，不是可用餘額"""
 
-    trader: LiveTrader = make_trader(total_equity=514_890.0, quotas={"A": 400_000.0})
+    monitor: AccountMonitor = make_monitor(
+        total_equity=514_890.0, quotas={"A": 400_000.0}
+    )
 
-    assert trader._account_equity() == 514_890.0
+    assert monitor.account_equity() == 514_890.0
 
 
 def test_missing_snapshot_is_zero_not_a_crash() -> None:
     """還沒刷新過帳務時回 0，不是 AttributeError"""
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         total_equity=0.0, quotas={"A": 1.0}, has_snapshot=False
     )
 
-    assert trader._account_equity() == 0.0
+    assert monitor.account_equity() == 0.0
 
 
 # === 模擬環境：一律以宣告額度為虛擬資金 ===
@@ -77,14 +88,14 @@ def test_simulation_always_uses_declared_quota(paper_equity: float) -> None:
     它讓額度檢查「通過」，實際上沒有檢查到任何資金。
     """
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         total_equity=paper_equity,
         quotas={"A": 400_000.0, "B": 3_000_000.0},
         simulation=True,
     )
 
-    assert trader.uses_virtual_capital() is True
-    assert trader._account_equity() == 3_400_000.0
+    assert monitor.uses_virtual_capital() is True
+    assert monitor.account_equity() == 3_400_000.0
 
 
 def test_quota_check_is_skipped_rather_than_faked() -> None:
@@ -99,10 +110,10 @@ def test_quota_check_is_skipped_rather_than_faked() -> None:
     from core.live.capital_allocator import CapitalAllocator
     from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 
-    simulated: LiveTrader = make_trader(
+    simulated: AccountMonitor = make_monitor(
         total_equity=582_608.0, quotas={"A": 400_000.0}, simulation=True
     )
-    production: LiveTrader = make_trader(
+    production: AccountMonitor = make_monitor(
         total_equity=582_608.0, quotas={"A": 400_000.0}, simulation=False
     )
 
@@ -125,13 +136,13 @@ def test_production_with_zero_equity_stays_zero() -> None:
     一路跑到盤中被券商退單——而那時已經有部位在場上。
     """
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         total_equity=0.0,
         quotas={"A": 400_000.0},
         simulation=False,
     )
 
-    assert trader._account_equity() == 0.0
+    assert monitor.account_equity() == 0.0
 
 
 def test_simulation_allocator_gets_virtual_cash() -> None:
@@ -144,16 +155,16 @@ def test_simulation_allocator_gets_virtual_cash() -> None:
 
     from core.live.capital_allocator import CapitalAllocator
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         total_equity=616_343.0, quotas={"A": 400_000.0}, simulation=True
     )
-    trader.allocator = CapitalAllocator({"A": 400_000.0})
-    trader.contexts = []
-    trader.fetch_account = lambda: BrokerAccountSnapshot(available_balance=0.0)
+    monitor.allocator = CapitalAllocator({"A": 400_000.0})
+    monitor.contexts = []
+    monitor.fetch_account = lambda: BrokerAccountSnapshot(available_balance=0.0)
 
-    trader._refresh_capital()
+    monitor.refresh_capital()
 
-    assert trader.allocator.available("A") == 400_000.0
+    assert monitor.allocator.available("A") == 400_000.0
 
 
 # === 部位金額與本地餘額 ===
@@ -198,13 +209,13 @@ def test_local_balance_is_quota_minus_held_positions() -> None:
     部位管理層會照偏大的餘額算張數，再被額度分配整筆拒絕。
     """
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         total_equity=0.0, quotas={"SimpleNamespace": 400_000.0}, simulation=True
     )
     context = make_context([SimpleNamespace(price=45.15, volume=2, is_closed=False)])
-    trader.contexts = [context]
+    monitor.contexts = [context]
 
-    trader._reset_local_balances()
+    monitor.reset_local_balances()
 
     assert context.account.balance == pytest.approx(400_000.0 - 90_300.0)
 
@@ -325,7 +336,7 @@ def test_equity_never_goes_negative_after_exclusion() -> None:
 # === 三處共用同一個口徑 ===
 def test_every_caller_uses_the_same_basis() -> None:
     """
-    額度檢查、單日虧損與批次曝險都要呼叫 `_account_equity()`
+    額度檢查、單日虧損與批次曝險都要呼叫 `AccountMonitor.account_equity()`
 
     批次曝險那處原本**內嵌抄了一份**「可用餘額 ＋ 持倉占用」的公式，
     於是改了一邊另一邊不會跟著改——而兩邊算出不同的權益不會有任何錯誤訊息。
@@ -333,12 +344,15 @@ def test_every_caller_uses_the_same_basis() -> None:
 
     import inspect
 
-    source: str = inspect.getsource(LiveTrader)
+    source: str = "".join(
+        inspect.getsource(cls)
+        for cls in (LiveTrader, AccountMonitor, CrossStrategyChecks)
+    )
 
     assert "self.allocator.available_balance + sum(" not in source, (
         "又有人把總權益的公式內嵌抄了一份"
     )
-    # **只留負向斷言**。原本還有一條 `count("self._account_equity()") >= 3`，
+    # **只留負向斷言**。原本還有一條 `count("self.account_equity()") >= 3`，
     # 釘的是呼叫點數量——把三處抽成一個 helper 行為完全沒變，測試卻會紅。
     # 要防的是「公式被抄第二份」，上面那條就夠了
 
@@ -570,8 +584,14 @@ def test_trader_without_a_fetcher_falls_back_to_get_account() -> None:
     """未注入時退回券商的預設帳務查詢，既有呼叫端行為不變"""
 
     broker: _StubBroker = _StubBroker(stock_equity=123.0, futures_equity=0.0)
-    trader: LiveTrader = LiveTrader.__new__(LiveTrader)
-    trader.broker = broker
-    trader.fetch_account = None
+    monitor: AccountMonitor = AccountMonitor(
+        contexts=[],
+        broker=broker,
+        order_manager=None,
+        allocator=None,  # type: ignore[arg-type]
+        risk_manager=None,  # type: ignore[arg-type]
+        clock=SegmentClock(),
+        fetch_account=None,
+    )
 
-    assert trader._query_account_snapshot().total_equity == 123.0
+    assert monitor.query_account_snapshot().total_equity == 123.0

@@ -3,8 +3,8 @@ from typing import Any, List, Optional
 
 import pytest
 
+from core.live.account_monitor import AccountMonitor
 from core.live.clock import SegmentClock
-from core.live.trader import LiveTrader
 from core.models import BrokerAccountSnapshot
 
 """
@@ -49,14 +49,21 @@ class BrokerWithoutRealizedQuery:
     """沒有實作已實現損益查詢的閘道（`FakeBroker` 與舊版券商都可能如此）"""
 
 
-def make_trader(snapshot: Optional[BrokerAccountSnapshot], broker: Any) -> LiveTrader:
-    """只組出本檔要測的那兩個方法所需的最小狀態"""
+def make_monitor(
+    snapshot: Optional[BrokerAccountSnapshot], broker: Any
+) -> AccountMonitor:
+    """只組出本檔要測的那兩個方法所需的最小相依"""
 
-    trader: LiveTrader = object.__new__(LiveTrader)
-    trader.broker = broker
-    trader.account_snapshot = snapshot
-    trader.clock = SegmentClock(lambda: datetime.datetime(2026, 9, 24, 13, 20))
-    return trader
+    monitor: AccountMonitor = AccountMonitor(
+        contexts=[],
+        broker=broker,
+        order_manager=None,
+        allocator=None,  # type: ignore[arg-type]
+        risk_manager=None,  # type: ignore[arg-type]
+        clock=SegmentClock(lambda: datetime.datetime(2026, 9, 24, 13, 20)),
+    )
+    monitor.account_snapshot = snapshot
+    return monitor
 
 
 def snapshot_with(unrealized: float) -> BrokerAccountSnapshot:
@@ -76,21 +83,21 @@ def test_loss_combines_realized_and_unrealized() -> None:
     當日已實現要另外查券商的已平倉交易。
     """
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         snapshot_with(-8_000.0), FakeBroker([FakeTrade(-12_000.0)])
     )
 
-    assert trader._account_loss() == pytest.approx(20_000.0)
+    assert monitor.account_loss() == pytest.approx(20_000.0)
 
 
 def test_profit_is_a_negative_loss() -> None:
     """賺錢時虧損為負數——門檻比較是 `loss > cap`，負數自然不會觸發"""
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         snapshot_with(5_000.0), FakeBroker([FakeTrade(3_000.0)])
     )
 
-    assert trader._account_loss() == pytest.approx(-8_000.0)
+    assert monitor.account_loss() == pytest.approx(-8_000.0)
 
 
 def test_realized_sums_every_trade() -> None:
@@ -101,17 +108,17 @@ def test_realized_sums_every_trade() -> None:
         FakeTrade(-2_500.0),
         FakeTrade(500.0),
     ]
-    trader: LiveTrader = make_trader(snapshot_with(0.0), FakeBroker(trades))
+    monitor: AccountMonitor = make_monitor(snapshot_with(0.0), FakeBroker(trades))
 
-    assert trader._account_loss() == pytest.approx(3_000.0)
+    assert monitor.account_loss() == pytest.approx(3_000.0)
 
 
 def test_no_trades_today_is_zero_realized() -> None:
     """今天沒有平倉交易＝已實現為 0，**這與「查不到」是兩回事**"""
 
-    trader: LiveTrader = make_trader(snapshot_with(-4_000.0), FakeBroker([]))
+    monitor: AccountMonitor = make_monitor(snapshot_with(-4_000.0), FakeBroker([]))
 
-    assert trader._account_loss() == pytest.approx(4_000.0)
+    assert monitor.account_loss() == pytest.approx(4_000.0)
 
 
 def test_realized_query_uses_today() -> None:
@@ -126,7 +133,7 @@ def test_realized_query_uses_today() -> None:
             seen.append(date)
             return []
 
-    make_trader(snapshot_with(0.0), RecordingBroker())._account_loss()
+    make_monitor(snapshot_with(0.0), RecordingBroker()).account_loss()
 
     assert seen == [TODAY]
 
@@ -140,19 +147,19 @@ def test_missing_snapshot_returns_none_not_zero() -> None:
     看起來有在跑、實際永遠不觸發。回 `None` 才能讓呼叫端明確略過並留下紀錄。
     """
 
-    trader: LiveTrader = make_trader(None, FakeBroker([FakeTrade(-50_000.0)]))
+    monitor: AccountMonitor = make_monitor(None, FakeBroker([FakeTrade(-50_000.0)]))
 
-    assert trader._account_loss() is None
+    assert monitor.account_loss() is None
 
 
 def test_broker_without_the_query_returns_none() -> None:
     """閘道沒有實作已實現損益查詢時回 None——不可只算未實現就當成全部"""
 
-    trader: LiveTrader = make_trader(
+    monitor: AccountMonitor = make_monitor(
         snapshot_with(-30_000.0), BrokerWithoutRealizedQuery()
     )
 
-    assert trader._account_loss() is None
+    assert monitor.account_loss() is None
 
 
 def test_failed_realized_query_returns_none() -> None:
@@ -163,9 +170,11 @@ def test_failed_realized_query_returns_none() -> None:
     那會讓當日沖銷完的虧損一毛都不算。
     """
 
-    trader: LiveTrader = make_trader(snapshot_with(-30_000.0), FakeBroker(raises=True))
+    monitor: AccountMonitor = make_monitor(
+        snapshot_with(-30_000.0), FakeBroker(raises=True)
+    )
 
-    assert trader._account_loss() is None
+    assert monitor.account_loss() is None
 
 
 def test_zero_pnl_is_not_confused_with_missing_data() -> None:
@@ -175,10 +184,10 @@ def test_zero_pnl_is_not_confused_with_missing_data() -> None:
     兩者若都回 0，「資料拿不到」會被靜靜當成「今天沒虧」。
     """
 
-    real_zero: Optional[float] = make_trader(
+    real_zero: Optional[float] = make_monitor(
         snapshot_with(0.0), FakeBroker([])
-    )._account_loss()
-    missing: Optional[float] = make_trader(None, FakeBroker([]))._account_loss()
+    ).account_loss()
+    missing: Optional[float] = make_monitor(None, FakeBroker([])).account_loss()
 
     assert real_zero == 0.0
     assert missing is None
