@@ -34,7 +34,7 @@ class ConnectionSupervisor:
         events: RiskEventLogger,
         notifier: Optional[Any],
         clock: SegmentClock,
-        on_reconciled: Callable[[Any], None],
+        on_reconciled: Optional[Callable[[Any], None]] = None,
     ) -> None:
         """
         - Description:
@@ -56,9 +56,9 @@ class ConnectionSupervisor:
                 事件推播；None 時不推播
             - clock: SegmentClock
                 段落時鐘
-            - on_reconciled: Callable[[Any], None]
+            - on_reconciled: Optional[Callable[[Any], None]]
                 重連後的對帳結果交給誰保存：退出碼由最後一次對帳結果決定，
-                而那個結果屬於引擎本體，本元件不持有它
+                而那個結果屬於引擎本體，本元件不持有它；引擎本體建好後把回呼接上
         """
 
         self.contexts: Sequence[StrategyContext] = contexts
@@ -69,7 +69,7 @@ class ConnectionSupervisor:
         self.events: RiskEventLogger = events
         self.notifier: Optional[Any] = notifier
         self.clock: SegmentClock = clock
-        self.on_reconciled: Callable[[Any], None] = on_reconciled
+        self.on_reconciled: Optional[Callable[[Any], None]] = on_reconciled
 
     def apply_broker_degrades(self) -> None:
         """
@@ -178,6 +178,8 @@ class ConnectionSupervisor:
         self.order_manager.recover(self.clock.today())
 
         positions: List[Any] = self.broker.get_positions()
-        self.on_reconciled(self.reconciler.check(positions))
+        result: Any = self.reconciler.check(positions)
+        if self.on_reconciled is not None:
+            self.on_reconciled(result)
 
         logger.info("恢復完成，可以繼續送單")

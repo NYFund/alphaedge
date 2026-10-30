@@ -139,7 +139,7 @@ def test_the_scan_actually_finds_the_writers() -> None:
 
     assert sum(hits.values()) >= 30, hits
     assert "risk_manager.py" in hits, hits
-    assert "trader.py" in hits, hits
+    assert "execution_engine.py" in hits, hits
 
 
 def test_every_category_written_by_the_engine_is_registered() -> None:

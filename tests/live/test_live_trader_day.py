@@ -17,6 +17,7 @@ from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
 from core.live.datafeed.calendar import TradingCalendarUnavailableError
 from core.live.execution.stock import StockExecutionModel
 from core.live.execution_engine import ExecutionEngine
+from core.live.factory import assemble_live_trader
 from core.live.oms.order_manager import OrderManager
 from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
@@ -313,7 +314,7 @@ class Harness:
             # 假時鐘要跟著 sleep 前進，否則等待迴圈永遠等不到時窗結束
             self.clock[0] = self.clock[0] + datetime.timedelta(seconds=seconds)
 
-        self.trader: LiveTrader = LiveTrader(
+        self.trader: LiveTrader = assemble_live_trader(
             contexts=self.contexts,
             broker=self.broker,
             order_manager=self.oms,
@@ -781,18 +782,33 @@ def test_trader_contains_no_market_specific_words() -> None:
     這條由 `check_layer_deps.py` 守著，這裡再釘一次是因為它是本檔存在的前提。
     """
 
+    import importlib.util
     import re
     import tokenize
     from pathlib import Path
+    from types import ModuleType
 
-    source: Path = Path("core/live/trader.py")
+    # 引擎檔清單以分層檢查的宣告為準：拆出的元件也在裡面，兩邊不另抄一份
+    spec = importlib.util.spec_from_file_location(
+        "check_layer_deps", Path("scripts/check_layer_deps.py")
+    )
+    assert spec is not None and spec.loader is not None
+    checker: ModuleType = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    engine_files: List[str] = [
+        path for path in checker._ENGINE_FILES if path.startswith("core/live/")
+    ]
+    assert "core/live/trader.py" in engine_files
+    assert len(engine_files) >= 11, engine_files
+
     leaks: List[str] = []
-    with source.open("rb") as handle:
-        for token in tokenize.tokenize(handle.readline):
-            if token.type is tokenize.NAME and re.match(
-                r"^(Stock|Futures|Tw)[A-Za-z]*$", token.string
-            ):
-                leaks.append(token.string)
+    for relative in engine_files:
+        with Path(relative).open("rb") as handle:
+            for token in tokenize.tokenize(handle.readline):
+                if token.type is tokenize.NAME and re.match(
+                    r"^(Stock|Futures|Tw)[A-Za-z]*$", token.string
+                ):
+                    leaks.append(f"{relative}: {token.string}")
 
     assert leaks == []
 

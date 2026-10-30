@@ -1,8 +1,6 @@
 import datetime
-import time
 from typing import (
     Any,
-    Callable,
     Dict,
     List,
     Optional,
@@ -13,15 +11,12 @@ from typing import (
 from loguru import logger
 
 from core.broker.base import BaseBroker
-from core.config.settings import now_live
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_monitor import AccountMonitor
 from core.live.account_sync import AccountSynchronizer
 from core.live.after_close import (
     AfterCloseRunner,
-    TradeCostEstimator,
 )
-from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import (
     SOURCE_LOCAL,
     PositionAttributionLedger,
@@ -42,15 +37,12 @@ from core.live.execution_engine import ExecutionEngine
 from core.live.fill_backfill import FillBackfiller
 from core.live.intraday.event_loop import LoopStats
 from core.live.intraday.session import IntradaySession
-from core.live.intraday.session_guard import SessionGuard
 from core.live.notify.base import NotifyLevel, notify_safely
 from core.live.pending_actions import PendingActionsRunner
 from core.live.reconciler import Reconciler
 from core.live.report.live_reporter import LiveReporter
-from core.live.report.parity_checker import ParityChecker
 from core.live.risk import event_categories
 from core.live.risk.event_log import RiskEventLogger
-from core.live.risk.margin_gate import MarginAccountQuery
 from core.live.risk.risk_manager import (
     PreTradeRiskManager,
 )
@@ -61,7 +53,6 @@ from core.live.strategy_guard import verify_strategies
 from core.market.segment import SegmentSchedule, SegmentWindow, resolve_window
 from core.models import (
     BaseOrder,
-    BrokerAccountSnapshot,
 )
 from core.utils import (
     ExecutionTiming,
@@ -103,25 +94,34 @@ class LiveTrader:
         allocator: CapitalAllocator,
         account_sync: AccountSynchronizer,
         reconciler: Reconciler,
-        conflict_guard: CrossStrategyConflictGuard,
         dao: LiveTradeDAO,
         run_id: str,
+        clock: SegmentClock,
+        events: RiskEventLogger,
+        backfiller: FillBackfiller,
+        after_close: AfterCloseRunner,
+        connection: ConnectionSupervisor,
+        execution: ExecutionEngine,
+        account_monitor: AccountMonitor,
+        cross_checks: CrossStrategyChecks,
+        signals: SignalCollector,
+        intraday: IntradaySession,
+        pending_actions: PendingActionsRunner,
+        rolls: RolloverExecutor,
         schedule: Optional[SegmentSchedule] = None,
         dry_run: bool = False,
         resume_trading: bool = False,
         notifier: Optional[Any] = None,
         reporter: Optional[LiveReporter] = None,
-        now_provider: Callable[[], datetime.datetime] = now_live,
-        sleep: Callable[[float], None] = time.sleep,
-        parity_checker: Optional[ParityChecker] = None,
-        simulation: bool = False,
-        margin_query: Optional[MarginAccountQuery] = None,
-        cost_estimator: Optional[TradeCostEstimator] = None,
-        fetch_account: Optional[Callable[[], BrokerAccountSnapshot]] = None,
     ) -> None:
         """
         - Description:
-            建立引擎；所有相依一律由外部注入，引擎自己不 new 任何東西
+            建立引擎；所有相依與元件一律由組裝層（`factory.assemble_live_trader()`）
+            組好注入，引擎自己不 new 任何東西
+
+            元件之間的接線（送單元件的降級回呼、訊號元件的保留忘記回呼、
+            跨策略檢查的權益分母）都在組裝層完成；本類只接一條：重連後的對帳結果
+            要回填到 `last_reconcile`，而那個欄位屬於本類。
         - Parameters:
             - contexts: Sequence[StrategyContext]
                 各策略的執行脈絡
@@ -141,33 +141,45 @@ class LiveTrader:
                 帳戶同步
             - reconciler: Reconciler
                 對帳器
-            - conflict_guard: CrossStrategyConflictGuard
-                跨策略同標的守門
             - dao: LiveTradeDAO
                 實盤紀錄庫
             - run_id: str
                 本次啟動的識別碼
+            - clock: SegmentClock
+                段落時鐘；引擎本體與各元件共用同一個
+            - events: RiskEventLogger
+                風控事件的唯一寫入口；各元件共用同一個
+            - backfiller: FillBackfiller
+                啟動時依 `live_fill` 回填接管回來的委託與歸屬帳
+            - after_close: AfterCloseRunner
+                盤後作業（獨立一個類別：與送單段落沒有共用狀態，自己 connect／close）
+            - connection: ConnectionSupervisor
+                券商連線的降級、重連與恢復
+            - execution: ExecutionEngine
+                送單管線與成交回報
+            - account_monitor: AccountMonitor
+                權益口徑、額度刷新、單日虧損檢查
+            - cross_checks: CrossStrategyChecks
+                跨策略守門與兩層批次曝險
+            - signals: SignalCollector
+                策略訊號與委託前處理
+            - intraday: IntradaySession
+                盤中逐筆段落
+            - pending_actions: PendingActionsRunner
+                開盤段補平昨日待辦
+            - rolls: RolloverExecutor
+                期貨換月
             - schedule: Optional[SegmentSchedule]
                 段落時窗；None 時不做時限控制（測試與 dry-run 用）
             - dry_run: bool
                 走完整流程但不真的送出
-            - simulation: bool
-                是否連模擬環境；決定保證金查不到資料時放行還是擋單
-            - margin_query: Optional[MarginAccountQuery]
-                券商的保證金帳務查詢；由組裝層依市場注入
-            - cost_estimator: Optional[TradeCostEstimator]
-                盤後校正成本用的估算器（依市場重算一筆已平倉交易的費用與稅）
             - resume_trading: bool
                 帳戶層已人工恢復（**只能由命令列旗標傳入**）；指名只恢復部分策略時為 False，
                 帳戶層的降級仍然有效
             - notifier: Optional[Any]
                 事件推播；None 時不推播
-            - now_provider: Callable[[], datetime.datetime]
-                取得目前時間
-            - parity_checker: Optional[ParityChecker]
-                訊號 parity 比對器；只在盤後用得到，故直接轉給 `AfterCloseRunner`
-            - sleep: Callable[[float], None]
-                等待函式
+            - reporter: Optional[LiveReporter]
+                實盤報表；None 時以紀錄庫自建
         """
 
         self.contexts: List[StrategyContext] = list(contexts)
@@ -188,140 +200,24 @@ class LiveTrader:
         self.reporter: LiveReporter = (
             reporter if reporter is not None else LiveReporter(dao)
         )
-        # 段落時窗的時間判斷與等待；引擎本體與各元件共用同一個
-        self.clock: SegmentClock = SegmentClock(now_provider, sleep)
-        # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
-        # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
-        # 卻要改動建構子簽名與每一個建這個類別的地方
-        self.events: RiskEventLogger = RiskEventLogger(
-            self.dao, self.run_id, now_provider=self.clock.now
-        )
-        self.backfiller: FillBackfiller = FillBackfiller(
-            order_manager, account_sync, dao, run_id, now_provider, notifier
-        )
+        self.clock: SegmentClock = clock
+        self.events: RiskEventLogger = events
+        self.backfiller: FillBackfiller = backfiller
+        self.after_close: AfterCloseRunner = after_close
+        self.connection: ConnectionSupervisor = connection
+        self.execution: ExecutionEngine = execution
+        self.account_monitor: AccountMonitor = account_monitor
+        self.cross_checks: CrossStrategyChecks = cross_checks
+        self.signals: SignalCollector = signals
+        self.intraday: IntradaySession = intraday
+        self.pending_actions: PendingActionsRunner = pending_actions
+        self.rolls: RolloverExecutor = rolls
 
         # 最後一次對帳結果。**要留給呼叫端**：對帳不一致不拋例外（它只降級），
         # 而排程需要一個退出碼才分得出「今天剛出事」與「跑完了」
         self.last_reconcile: Optional[Any] = None
-
-        # 盤後作業。**獨立一個類別**：它與送單段落沒有共用狀態，
-        # 自己 connect／close，實盤入口（`apps/live.py`）也是走完全獨立的分支
-        self.after_close: AfterCloseRunner = AfterCloseRunner(
-            data_feeds=[context.data_feed for context in contexts],
-            broker=broker,
-            order_manager=order_manager,
-            account_sync=account_sync,
-            reconciler=reconciler,
-            reporter=self.reporter,
-            mode_state=mode_state,
-            dao=dao,
-            run_id=run_id,
-            notifier=notifier,
-            now_provider=now_provider,
-            parity_checker=parity_checker,
-            cost_estimator=cost_estimator,
-        )
-
-        # 券商連線的降級、重連與恢復；重連後的對帳結果回填到 `last_reconcile`
-        self.connection: ConnectionSupervisor = ConnectionSupervisor(
-            contexts=self.contexts,
-            broker=broker,
-            order_manager=order_manager,
-            risk_manager=risk_manager,
-            reconciler=reconciler,
-            events=self.events,
-            notifier=notifier,
-            clock=self.clock,
-            on_reconciled=self._store_reconcile,
-        )
-
-        # 送單管線與成交回報；資金保留的帳在它身上
-        self.execution: ExecutionEngine = ExecutionEngine(
-            order_manager=order_manager,
-            risk_manager=risk_manager,
-            allocator=allocator,
-            account_sync=account_sync,
-            dao=dao,
-            events=self.events,
-            notifier=notifier,
-            clock=self.clock,
-            apply_broker_degrades=self.connection.apply_broker_degrades,
-            margin_query=margin_query,
-            simulation=simulation,
-        )
-
-        # 帳戶層的錢：總權益口徑、額度刷新、單日虧損檢查
-        self.account_monitor: AccountMonitor = AccountMonitor(
-            contexts=self.contexts,
-            broker=broker,
-            order_manager=order_manager,
-            allocator=allocator,
-            risk_manager=risk_manager,
-            clock=self.clock,
-            fetch_account=fetch_account,
-            simulation=simulation,
-        )
-
-        # 跨策略守門與兩層批次曝險截斷
-        self.cross_checks: CrossStrategyChecks = CrossStrategyChecks(
-            contexts=self.contexts,
-            conflict_guard=conflict_guard,
-            risk_manager=risk_manager,
-            account_equity=self.account_monitor.account_equity,
-        )
-
-        # 策略訊號 → 經過前處理的委託；鉤子失敗時把該策略降到 HALTED
-        self.signals: SignalCollector = SignalCollector(
-            mode_state=mode_state,
-            order_manager=order_manager,
-            risk_manager=risk_manager,
-            allocator=allocator,
-            events=self.events,
-            notifier=notifier,
-            clock=self.clock,
-            forget_reservations=self.execution.forget_reservations,
-        )
-
-        # 盤中逐筆段落：迴圈、心跳、日終回補與收線
-        self.intraday: IntradaySession = IntradaySession(
-            contexts=self.contexts,
-            broker=broker,
-            order_manager=order_manager,
-            account_sync=account_sync,
-            risk_manager=risk_manager,
-            mode_state=mode_state,
-            events=self.events,
-            notifier=notifier,
-            clock=self.clock,
-            session_guard=SessionGuard(now_provider),
-            signals=self.signals,
-            cross_checks=self.cross_checks,
-            execution=self.execution,
-            connection=self.connection,
-        )
-
-        # 開盤段補平昨日的跨日待辦
-        self.pending_actions: PendingActionsRunner = PendingActionsRunner(
-            contexts=self.contexts,
-            dao=dao,
-            ledger=ledger,
-            events=self.events,
-            notifier=notifier,
-            clock=self.clock,
-            dispatch=self.execution.dispatch,
-        )
-
-        # 期貨換月：送單與收回報走引擎的同一條管線
-        self.rolls: RolloverExecutor = RolloverExecutor(
-            contexts=self.contexts,
-            mode_state=mode_state,
-            order_manager=order_manager,
-            events=self.events,
-            notifier=notifier,
-            clock=self.clock,
-            dispatch=self.execution.dispatch,
-            apply_new_fills=self.execution.apply_new_fills,
-        )
+        # 重連後的對帳結果回填到這裡：元件不持有引擎本體，由本類把回呼接上
+        self.connection.on_reconciled = self._store_reconcile
 
         # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。
         # **預設 True**：只有檢查實際判定為休市才會是 False，

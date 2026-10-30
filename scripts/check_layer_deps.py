@@ -180,6 +180,17 @@ _ENGINE_FILES: Tuple[str, ...] = (
     "core/backtest/simulator/base.py",
     "core/backtest/simulator/bar_simulator.py",
     "core/live/trader.py",
+    # 引擎本體拆出的協作元件，與本體同一條規則：市場語意只能由注入的物件承載
+    "core/live/context.py",
+    "core/live/clock.py",
+    "core/live/connection.py",
+    "core/live/execution_engine.py",
+    "core/live/account_monitor.py",
+    "core/live/cross_checks.py",
+    "core/live/signals.py",
+    "core/live/intraday/session.py",
+    "core/live/pending_actions.py",
+    "core/live/rolls.py",
 )
 _INSTRUMENT_AXIS_PACKAGES: Tuple[str, ...] = (
     "core/models",
