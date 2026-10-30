@@ -6,8 +6,9 @@ from typing import Any, List, Optional
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.context import StrategyContext
 from core.live.factory import build_live_trader
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
 
 from .conftest import FakeBroker

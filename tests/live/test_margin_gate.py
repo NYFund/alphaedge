@@ -6,9 +6,10 @@ from typing import Any, List, Optional, Tuple
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.context import StrategyContext
 from core.live.factory import build_live_trader
 from core.live.risk.margin_gate import MarginGate
-from core.live.trader import LiveTrader, StrategyContext, mark_execution
+from core.live.trader import LiveTrader, mark_execution
 from core.models import BaseOrder, FuturesOrder
 from core.utils import Action, ExecutionStyle, ExecutionTiming, PositionType
 

@@ -160,7 +160,7 @@ def test_simulation_allocator_gets_virtual_cash() -> None:
 def make_context(positions: List[Any]) -> Any:
     """帶台股換算器（張 → ×1000 股）的策略 context"""
 
-    from core.live.trader import StrategyContext
+    from core.live.context import StrategyContext
 
     account: SimpleNamespace = SimpleNamespace(positions=positions, balance=400_000.0)
     return StrategyContext(

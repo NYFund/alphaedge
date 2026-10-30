@@ -9,13 +9,14 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.context import StrategyContext
 from core.live.factory import (
     UnsupportedMarketError,
     _merge_schedules,
     build_live_trader,
     make_closing_limit_lookup,
 )
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.market.tw.segment_schedule import TW_FUTURES_SEGMENTS, TW_STOCK_SEGMENTS
 from core.models import PriceLimits

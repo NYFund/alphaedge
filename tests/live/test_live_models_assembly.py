@@ -7,10 +7,11 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.context import StrategyContext
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.factory import build_live_trader, make_trade_cost_estimator
 from core.live.intraday.session_guard import uncovered_day_trade_positions
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig

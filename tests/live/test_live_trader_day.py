@@ -11,6 +11,7 @@ from core.live.account_sync import AccountSynchronizer, build_stock_order
 from core.live.attribution.conflict_guard import CrossStrategyConflictGuard
 from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
+from core.live.context import StrategyContext
 from core.live.datafeed.base import BaseLiveDataFeed, DataFreshnessError
 from core.live.datafeed.calendar import TradingCalendarUnavailableError
 from core.live.execution.stock import StockExecutionModel
@@ -19,7 +20,7 @@ from core.live.reconciler import Reconciler
 from core.live.risk.risk_config import CAPITAL_SAFETY_RATIO
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader
 from core.market.segment import SegmentWindow
 from core.models import (
     BaseOrder,

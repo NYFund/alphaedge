@@ -36,6 +36,7 @@ from core.live.attribution.position_ledger import (
     PositionAttributionLedger,
 )
 from core.live.capital_allocator import CapitalAllocator
+from core.live.context import StrategyContext
 from core.live.datafeed.base import BaseLiveDataFeed
 from core.live.datafeed.tw.futures_live_datafeed import (
     TwFuturesLiveDataFeed,
@@ -52,7 +53,7 @@ from core.live.reconciler import Reconciler
 from core.live.report.parity_checker import TIMING_TO_PHASE, ParityChecker
 from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader
 from core.market.cost_model import BaseCostModel
 from core.market.instrument_spec import InstrumentSpec
 from core.market.segment import SegmentSchedule, SegmentWindow

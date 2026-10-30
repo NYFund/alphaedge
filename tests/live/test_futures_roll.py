@@ -6,11 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pytest
 
 from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.context import StrategyContext
 from core.live.datafeed.base import RollPlan
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.factory import build_live_trader, to_live_roll_config
 from core.live.risk.trading_mode import TradingMode
-from core.live.trader import LiveTrader, StrategyContext
+from core.live.trader import LiveTrader
 from core.market.tw.futures_calendar import FuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
