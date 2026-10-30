@@ -66,7 +66,8 @@ ORDER_BLOCK_CATEGORIES: FrozenSet[str] = frozenset(
 DAILY_LOSS: str = "DAILY_LOSS"
 ACCOUNT_DAILY_LOSS: str = "ACCOUNT_DAILY_LOSS"
 DEGRADE: str = "DEGRADE"
-# 盤中、補平、送單與換月流程（`core/live/trader.py`、`core/live/execution_engine.py`、`core/live/rolls.py`）
+# 盤中、補平、送單與換月流程（`core/live/intraday/session.py`、`core/live/pending_actions.py`、
+# `core/live/execution_engine.py`、`core/live/rolls.py`）
 DAY_TRADE_COVER_FAILED: str = "DAY_TRADE_COVER_FAILED"
 PENDING_ACTION_TRUNCATED: str = "PENDING_ACTION_TRUNCATED"
 # 出場單送出前被同標的「在途出場量」截短或截到 0：開盤段先送的補平單 09:00 才撮合，

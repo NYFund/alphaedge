@@ -28,9 +28,9 @@ from core.utils import Action, LiveOrderStatus, Units
 它自己 `connect()` / `finally: close()`，不碰資金保留、段落時窗與跨策略守門，
 實盤入口（`apps/live.py`）也是以 `--phase after_close` 走完全獨立的分支。
 
-**只負責「寫下明天要補的事」，不負責執行它**：`apply_pending_actions()` 留在
-`LiveTrader`，因為待辦是在**開盤段**被補平的。寫入端與執行端本來就不對稱，
-硬抽成一個服務會讓兩邊都得繞一層。
+**只負責「寫下明天要補的事」，不負責執行它**：執行端是 `PendingActionsRunner`，
+由引擎本體在**開盤段**呼叫。寫入端與執行端本來就不對稱（盤後寫、開盤執行），
+硬併成一個服務會讓兩邊都得繞一層。
 """
 
 

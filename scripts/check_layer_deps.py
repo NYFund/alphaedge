@@ -116,6 +116,7 @@ _LAYER_RULES: Tuple[Tuple[str, int, str, bool], ...] = (
     ("core.live.cross_checks", 5, "實盤／跨策略守門與批次曝險", False),
     # 盤中段落放在 intraday/ 套件底下，但它組合送單、訊號、連線守門等元件，與引擎本體同級
     ("core.live.intraday.session", 5, "實盤／盤中逐筆段落", False),
+    ("core.live.pending_actions", 5, "實盤／跨日待辦補平", False),
     # 盤後作業：與送單段落沒有共用狀態，但同樣是「組裝一堆元件層跑一條流程」，
     # 故與 `trader` 同級。放 4 會讓它對 oms／report／reconciler 產生一整排同層邊
     ("core.live.after_close", 5, "實盤／盤後作業", False),
