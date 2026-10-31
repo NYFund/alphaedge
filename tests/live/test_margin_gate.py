@@ -10,6 +10,7 @@ from core.live.context import StrategyContext
 from core.live.execution.base import mark_execution
 from core.live.factory import build_live_trader
 from core.live.risk.margin_gate import MarginGate
+from core.live.strategy_guard import LiveReadinessError
 from core.live.trader import LiveTrader
 from core.models import BaseOrder, FuturesOrder
 from core.utils import Action, ExecutionStyle, ExecutionTiming, PositionType
@@ -288,3 +289,34 @@ def test_production_without_broker_margin_blocks(dao: LiveTradeDAO) -> None:
 
     assert trader.broker.placed_count == 0
     assert len(margin_events(dao)) == 1
+
+
+# === 啟動時先確認保證金查得到 ===
+def test_unknown_margin_product_refuses_to_start(dao: LiveTradeDAO) -> None:
+    """
+    策略宣告的商品今天查不到保證金：組裝時就拒絕啟動，`live_run` 不留下未結束的列
+
+    不擋的話，第一筆成交入帳時才拋錯，那筆成交記不進帳。
+    """
+
+    class Unlisted(LiveFuturesStrategy):
+        """宣告了一個保證金表裡沒有的商品"""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.products = ["TX"]
+
+    broker: FakeBroker = FakeBroker()
+    broker.connect()
+
+    with pytest.raises(LiveReadinessError, match="TX"):
+        build_live_trader(
+            [Unlisted()],
+            broker=broker,
+            dao=dao,
+            simulation=True,
+            run_id="20260922133500",
+            now_provider=lambda: NOW,
+        )
+
+    assert dao.conn.execute("SELECT COUNT(*) FROM live_run").fetchone()[0] == 0

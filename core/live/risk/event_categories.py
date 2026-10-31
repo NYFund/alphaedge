@@ -112,6 +112,9 @@ ORDER_PERSIST_FAILED: str = "ORDER_PERSIST_FAILED"
 # 成交入帳時部位管理拒絕開倉（餘額不足、曝險超限）：券商已成交，部位仍要進帳，
 # 但這代表 sizer 或成交價與額度對不上，要有人看
 FILL_ACCOUNT_REJECTED: str = "FILL_ACCOUNT_REJECTED"
+# 成交入帳時拋出（例如期貨保證金表查不到該商品）：券商已成交、本地沒記帳，其餘成交照常入帳，
+# 段落結束以非 0 退出碼收尾；事件帶成交明細供人工對帳
+FILL_BOOKING_FAILED: str = "FILL_BOOKING_FAILED"
 # 以券商部位重建歸屬帳（`core/live/attribution/resync.py`）：每一筆 lot 異動一筆事件
 RESYNC_FROM_BROKER: str = "RESYNC_FROM_BROKER"
 # 啟動重建時券商有、歸屬帳查無來源的部位被收進 `__unattributed__`
@@ -151,6 +154,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         RECOVER_AMBIGUOUS,
         ORDER_PERSIST_FAILED,
         FILL_ACCOUNT_REJECTED,
+        FILL_BOOKING_FAILED,
         RESYNC_FROM_BROKER,
         POSITION_UNATTRIBUTED,
     }

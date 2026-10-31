@@ -89,6 +89,9 @@ class ExecutionEngine:
         self.dao: LiveTradeDAO = dao
         self.events: RiskEventLogger = events
         self.notifier: Optional[Any] = notifier
+
+        # 本段落入帳失敗的成交明細；非空時段落以非 0 退出碼收尾
+        self.booking_failures: List[str] = []
         self.clock: SegmentClock = clock
         self.apply_broker_degrades: Callable[[], None] = apply_broker_degrades
         self.margin_query: Optional[MarginAccountQuery] = margin_query
@@ -530,9 +533,51 @@ class ExecutionEngine:
 
         fills: List[ExecutionReport] = self.order_manager.drain_executions()
         for fill in fills:
-            self.account_sync.apply_fill(fill)
+            self.book_fill(fill)
         self._release_finished()
         return fills
+
+    def book_fill(self, fill: ExecutionReport) -> bool:
+        """
+        - Description:
+            把一筆成交套進帳戶與歸屬帳；**失敗不往外拋**
+
+            入帳會查保證金（期貨），商品在定額表與比例表都查不到時拋 `ValueError`；
+            讓它往上拋的話整個段落中止，同一批之後的成交也不處理，持倉與券商對不上，
+            要到下一段靠以券商為準重建才救得回來。成交已經在券商端發生，正確的做法是
+            記下這一筆（事件帶委託編號、商品、方向、口數、價格供人工對帳）、推播 CRITICAL，
+            其餘成交照常入帳、照常釋放保留，段落結束時以非 0 退出碼收尾。
+            **不 halt 帳戶**：halt 只會讓同段的平倉單也送不出去，風險更大。
+        - Parameters:
+            - fill: ExecutionReport
+                成交回報
+        - Return:
+            - bool
+                是否入帳成功
+        """
+
+        try:
+            self.account_sync.apply_fill(fill)
+        except Exception as exc:
+            detail: str = (
+                f"{fill.symbol} {fill.action.value} {fill.volume}@{fill.price}"
+                f"（seqno={fill.broker_seqno}, trade_id={fill.broker_trade_id}）"
+            )
+            message: str = (
+                f"成交入帳失敗：{detail}；{type(exc).__name__}: {exc}。"
+                "券商已成交、本地未記帳，其餘成交照常處理，請人工對帳"
+            )
+            logger.opt(exception=True).error(message)
+            self.booking_failures.append(detail)
+            self.events.write(
+                category="FILL_BOOKING_FAILED",
+                severity=NotifyLevel.CRITICAL,
+                message=message,
+                symbol=fill.symbol,
+            )
+            notify_safely(self.notifier, NotifyLevel.CRITICAL, "成交入帳失敗", message)
+            return False
+        return True
 
     def apply_fills_until(
         self, window: Optional[SegmentWindow], attribute: str

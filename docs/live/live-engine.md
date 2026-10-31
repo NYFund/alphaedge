@@ -130,7 +130,7 @@ flowchart TD
 | 例外或 SIGTERM | 立刻撤單 → 收回報到收線 | 引擎已不在可控狀態，留在場上的單沒人處理 |
 
 之後釋放所有資金保留、寫各策略帳務快照、關閉連線，最後 `record_finish()` 把結束原因與帳戶層模式寫進 `live_run`。
-結束原因的判定順序與入口的退出碼一致（例外 → kill switch → 對帳不一致 → 帳戶層非 NORMAL → 正常），
+結束原因的判定順序與入口的退出碼一致（例外 → kill switch → 對帳不一致 → 成交入帳失敗 → 帳戶層非 NORMAL → 正常），
 存活監控只看這一欄決定要不要推播。
 
 SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseException`）：
@@ -331,7 +331,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 函式 | 時機 | 以誰為準 |
 |------|------|----------|
 | `AccountSynchronizer.rebuild_from_broker()` | 段落啟動、盤後 | 以 lot 表重建，券商多出的收進 `__unattributed__` |
-| `AccountSynchronizer.apply_fill()` | 運行中 | 成交回報；歸屬鏈為「交易日＋`broker_seqno`」→ `live_order` → `strategy_name`（券商序號每天從頭配發，只在同一天內唯一），查不到不猜。部位管理以餘額或曝險拒絕入帳時寫 `FILL_ACCOUNT_REJECTED`（CRITICAL）並改以略過檢查的路徑入帳——券商已成交，部位一定要進帳；啟動重建同樣略過餘額與曝險檢查 |
+| `AccountSynchronizer.apply_fill()` | 運行中 | 成交回報；歸屬鏈為「交易日＋`broker_seqno`」→ `live_order` → `strategy_name`（券商序號每天從頭配發，只在同一天內唯一），查不到不猜。部位管理以餘額或曝險拒絕入帳時寫 `FILL_ACCOUNT_REJECTED`（CRITICAL）並改以略過檢查的路徑入帳——券商已成交，部位一定要進帳；啟動重建同樣略過餘額與曝險檢查。入帳本身拋錯（例如期貨保證金表查不到該商品）時由 `ExecutionEngine.book_fill()` 接住：寫 `FILL_BOOKING_FAILED`（CRITICAL，帶委託編號、商品、方向、口數、價格）並推播，其餘成交照常入帳、照常釋放保留，段落以退出碼 8 結束；不 halt 帳戶（那會讓同段的平倉單也送不出去）。組裝時另有 `verify_margin_available()` 先確認每個期貨商品今天都查得到保證金，查不到就在寫 `live_run` 之前拒絕啟動 |
 
 成交方向先看歸屬帳裡有沒有反向部位：回補空單與開多都是 BUY，只看買賣別會把回補記成新多單。
 

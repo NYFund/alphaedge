@@ -313,6 +313,7 @@ class RecordingTrader:
         "Risk", (), {"is_kill_switch_on": staticmethod(lambda: False)}
     )()
     mode_state: Any = type("Mode", (), {"account_mode": TradingMode.NORMAL})()
+    execution: Any = type("Execution", (), {"booking_failures": []})()
 
     def __init__(self) -> None:
         self.calls: List[Any] = []

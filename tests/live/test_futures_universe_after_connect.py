@@ -57,6 +57,10 @@ def in_memory_history_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # 回測與實盤的連線都經 `BaseDataFeed.connect_db()`，只要換掉基底那一個連線函式
     monkeypatch.setattr("core.datafeed.base.connect_sqlite", connect_in_memory)
+    # 本檔只驗標的池；空的歷史庫沒有保證金表，啟動時的保證金檢查另由 `test_margin_gate.py` 驗
+    monkeypatch.setattr(
+        "core.live.factory.verify_margin_available", lambda contexts, today: None
+    )
 
 
 def build_trader(dao: LiveTradeDAO, broker: LateResolverBroker) -> LiveTrader:

@@ -679,7 +679,7 @@ class LiveTrader:
             決定本次執行寫進 `live_run` 的結束原因
 
             判定順序與實盤入口（`apps/live.py`）的退出碼一致（例外 → kill switch → 對帳不一致 →
-            帳戶層非 NORMAL）：存活監控只看這一欄決定要不要推播，
+            成交入帳失敗 → 帳戶層非 NORMAL）：存活監控只看這一欄決定要不要推播，
             退出碼非 0 的執行在這裡卻寫成正常結束，推播就會漏掉。
             非交易日與只跑對帳的段落算正常結束——那是預期中的行為。
         - Parameters:
@@ -696,6 +696,8 @@ class LiveTrader:
             return "kill switch"
         if self.last_reconcile is not None and not self.last_reconcile.is_consistent:
             return "對帳不一致"
+        if self.execution.booking_failures:
+            return f"成交入帳失敗 {len(self.execution.booking_failures)} 筆"
         mode: TradingMode = self.mode_state.account_mode
         if mode is not TradingMode.NORMAL:
             return f"帳戶層交易模式 {mode.value}"

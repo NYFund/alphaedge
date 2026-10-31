@@ -72,6 +72,7 @@ from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingModeState
 from core.live.rolls import RolloverExecutor
 from core.live.signals import SignalCollector
+from core.live.strategy_guard import LiveReadinessError
 from core.live.trader import LiveTrader
 from core.market.cost_model import BaseCostModel
 from core.market.instrument_spec import InstrumentSpec
@@ -548,6 +549,9 @@ def build_live_trader(
         now_provider=now_provider,
         parity_checker=parity_checker,
     )
+    # 期貨成交入帳要查保證金，商品查不到時那筆成交記不進帳；在送出任何委託、
+    # 寫下 `live_run` 之前就先確認每個商品今天都查得到
+    verify_margin_available(contexts, now_provider().date())
     _record_run(
         resolved_dao,
         resolved_run_id,
@@ -862,6 +866,49 @@ def resolve_strategy_risk_config(
         return base.with_overrides(overrides.for_strategy(name))
     except ValueError as exc:
         raise ValueError(f"{name}：{exc}") from exc
+
+
+def verify_margin_available(
+    contexts: Sequence[StrategyContext], today: datetime.date
+) -> None:
+    """
+    - Description:
+        啟動時確認每個期貨策略宣告的商品在今天都查得到保證金
+
+        成交入帳（`AccountSynchronizer.apply_fill()`）會查保證金，商品在定額表與
+        比例表都查不到時拋錯，那筆成交就記不進帳。會發生的情況：比例表沒有的股票期貨、
+        新上市商品、保證金表為空。與其等成交後才發現，不如在送出任何委託之前就擋下，
+        而且要在寫 `live_run` 之前——否則留下一筆沒有結束時間的列，下一段會當成崩潰。
+        比率模式（沒有保證金 API）與沒有宣告 `products` 的策略不檢查。
+    - Parameters:
+        - contexts: Sequence[StrategyContext]
+            各策略的執行脈絡
+        - today: datetime.date
+            段落日期
+    - Raise:
+        - LiveReadinessError
+            任一商品查不到保證金
+    """
+
+    missing: List[str] = []
+    for context in contexts:
+        strategy: BaseStrategy = context.strategy
+        if strategy.instrument_type is not InstrumentType.FUTURE:
+            continue
+        model: Optional[Any] = getattr(context.position_manager, "margin_model", None)
+        if model is None or model.config.api is None:
+            continue
+        for product in getattr(strategy, "products", None) or []:
+            # 查表本身壞掉（資料庫開不了）直接往上拋：同樣在寫 `live_run` 之前中止
+            try:
+                model.initial_margin_per_lot(product, today, 0.0, 1)
+            except ValueError as exc:
+                missing.append(f"{context.name} 的 {product}（{today}）：{exc}")
+    if missing:
+        raise LiveReadinessError(
+            "下列商品查不到保證金，成交將無法入帳，拒絕啟動：\n  - "
+            + "\n  - ".join(missing)
+        )
 
 
 def _run_instrument_type(strategies: Sequence[BaseStrategy]) -> Optional[str]:

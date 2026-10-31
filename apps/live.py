@@ -56,6 +56,8 @@ EXIT_RECONCILE_MISMATCH: int = 4
 EXIT_KILL_SWITCH: int = 5
 EXIT_MODE_NOT_NORMAL: int = 6
 EXIT_RESYNC_PLAN_ONLY: int = 7
+# 有成交入帳失敗：券商已成交、本地沒記帳，要人工對帳
+EXIT_FILL_BOOKING_FAILED: int = 8
 EXIT_TERMINATED: int = 143
 
 # 以券商部位重建時寫進 `live_run.phase` 的值；它不是交易段落，存活監控不會等它
@@ -392,7 +394,8 @@ def _resolve_live_exit_code(trader: LiveTrader) -> int:
 
         對帳不一致與 kill switch **都不拋例外**（它們只降級），所以要在這裡
         把狀態翻譯成排程看得懂的號碼。三者的處理急迫性不同：
-        5 是有人按下了停止鍵、4 是今天剛發現不一致、6 是昨天出的事還沒人處理。
+        5 是有人按下了停止鍵、4 是今天剛發現不一致、6 是昨天出的事還沒人處理、
+        8 是有成交沒記進帳。
     - Parameters:
         - trader: LiveTrader
             跑完的引擎
@@ -407,6 +410,10 @@ def _resolve_live_exit_code(trader: LiveTrader) -> int:
     reconcile: Optional[Any] = trader.last_reconcile
     if reconcile is not None and not reconcile.is_consistent:
         return EXIT_RECONCILE_MISMATCH
+
+    # 成交已在券商端發生、本地卻沒記帳：段落其餘的事照常做完，但要讓排程知道
+    if trader.execution.booking_failures:
+        return EXIT_FILL_BOOKING_FAILED
 
     # **只看帳戶層**：策略層降級不走退出碼，那會讓一支策略的降級擋掉整個排程
     if trader.mode_state.account_mode is not TradingMode.NORMAL:

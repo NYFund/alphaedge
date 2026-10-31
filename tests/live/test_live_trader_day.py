@@ -2153,3 +2153,51 @@ def test_filled_amount_moves_from_reserved_to_used() -> None:
 
     assert harness.allocator.reserved["Alpha"] == 0.0
     assert harness.allocator.used["Alpha"] == 100_000.0
+
+
+# === 單筆成交入帳失敗不中止整段 ===
+def test_a_failed_fill_booking_does_not_stop_the_batch() -> None:
+    """
+    一批三筆成交中間那筆入帳失敗：第一、三筆照常入帳，失敗那筆寫事件與明細，退出碼非 0
+
+    成交已在券商端發生；讓例外往上拋會讓整個段落中止、同一批之後的成交也不處理，
+    持倉與券商對不上，要到下一段靠以券商為準重建才救得回來。
+    """
+
+    from apps.live import EXIT_FILL_BOOKING_FAILED, _resolve_live_exit_code
+
+    class Alpha(ScriptedStrategy):
+        """開倉鉤子送出三檔買單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__(
+                "Alpha", [make_order("2330"), make_order("2317"), make_order("2454")]
+            )
+
+    harness: Harness = Harness([Alpha()])
+    original = harness.sync.apply_fill
+
+    def flaky_apply_fill(report: Any, strategy_name: Optional[str] = None) -> Any:
+        if report.symbol == "2317":
+            raise ValueError("查無 2317 在 2026-09-21 生效的保證金")
+        return original(report, strategy_name)
+
+    harness.sync.apply_fill = flaky_apply_fill  # type: ignore[method-assign]
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.ledger.get_account_positions() == {
+        ("2330", "LONG"): 1,
+        ("2454", "LONG"): 1,
+    }
+    rows: List[Tuple[Any, ...]] = harness.dao.conn.execute(
+        "SELECT severity, symbol, message FROM live_risk_event "
+        "WHERE category = 'FILL_BOOKING_FAILED'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "CRITICAL" and rows[0][1] == "2317"
+    assert "2317 Buy 1@" in rows[0][2] and "seqno=" in rows[0][2]
+    assert harness.trader.resolve_end_reason(None) == "成交入帳失敗 1 筆"
+    assert _resolve_live_exit_code(harness.trader) == EXIT_FILL_BOOKING_FAILED
+    # 其餘委託的保留照常釋放
+    assert harness.allocator.available("Alpha") > 0

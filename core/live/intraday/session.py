@@ -469,7 +469,8 @@ class IntradaySession:
 
         fill: Optional[ExecutionReport] = self.order_manager.apply_event(event)
         if fill is not None:
-            self.account_sync.apply_fill(fill)
+            # 與日頻同一條入帳路徑：單筆失敗寫事件、不中止迴圈
+            self.execution.book_fill(fill)
 
     def _on_market_data_lost(self, reason: str) -> None:
         """
