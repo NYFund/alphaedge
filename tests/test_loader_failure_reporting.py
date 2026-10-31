@@ -262,6 +262,8 @@ class _FakeArgs:
         self.from_date = from_date
         self.retry_failed: int = 0
         self.retry_wait: int = 0
+        self.defer_failed: bool = False
+        self.retry_deferred: bool = False
 
 
 # === 每個 loader 的「壞檔 → DataLoadError」 ===

@@ -82,6 +82,9 @@ ROLL_OPEN_FAILED: str = "ROLL_OPEN_FAILED"
 ROLL_PARTIAL: str = "ROLL_PARTIAL"
 # 券商登入後仍組不出標的池：策略拿到 0 筆報價、永遠不會出訊號，而鉤子照常被呼叫、不會報錯
 UNIVERSE_EMPTY: str = "UNIVERSE_EMPTY"
+# 段落報價的日期不是今天（行情源停在前一日）：策略會把報價日當成那一天決策——
+# 「持有滿一天才平倉」的出場不成立、選股照前一日的漲幅，整段看起來完全正常
+QUOTE_STALE: str = "QUOTE_STALE"
 # 等不到送單時窗（行程提早太久啟動、或時鐘卡住）：本段落放棄送單。提早送出的尾盤單會在
 # 逐筆交易時段以掛漲停的限價成交，與回測的收盤價假設分岔，而且看起來完全正常
 SUBMIT_WINDOW_MISSED: str = "SUBMIT_WINDOW_MISSED"
@@ -131,6 +134,7 @@ OTHER_EVENT_CATEGORIES: FrozenSet[str] = frozenset(
         ROLL_OPEN_FAILED,
         ROLL_PARTIAL,
         UNIVERSE_EMPTY,
+        QUOTE_STALE,
         SUBMIT_WINDOW_MISSED,
         BROKER_SESSION_DOWN,
         BROKER_RECONNECTED,

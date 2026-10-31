@@ -11,7 +11,7 @@
   （`core/pipeline/` 日後會搬到頂層並改名 `etl/`，屆時 `core/pipeline/us/` 跟著改為 `etl/us/`，見 §二。）
 - **範圍界線**：**保留現有台股流程不動**，不做一次性大重構；本規劃**不含**日內／高頻資料、不含實盤下單路徑、
   不含選擇權與 ETF 衍生商品、不含事件驅動引擎改寫（長期方向見 [多市場回測引擎架構 §5.1](../docs/backtest/multi-market-engine.md#51-事件驅動迴圈長期方向)）。
-- **驗收標準**：`us_universe` 與 `us_price_daily` 可日更、重跑冪等、中斷可續跑；一支美股日線動能策略可經**回測入口**跑完回測（回測入口目前是 `python -m apps.backtest --strategy`，2026-09-30 由 `run.py` 拆出，見 [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)；**本條驗收不綁入口名稱，以當時的回測入口為準**），
+- **驗收標準**：`us_universe` 與 `us_price_daily` 可日更、重跑冪等、中斷可續跑；一支美股日線動能策略可經**回測入口**跑完回測（回測入口目前是 `python -m apps.backtest --strategy`，2026-09-30 由 `run.py` 拆出，見 `回測與實盤入口拆分及架構收斂.md`；**本條驗收不綁入口名稱，以當時的回測入口為準**），
   並產出資產曲線與交易明細；raw／adjusted 兩種回測模式可切換。
 
 > **2026-09-15 依現行架構改寫**：原規劃的目錄樹與產出路徑含 `core/strategies/us/`、`core/models/us/`、
@@ -27,11 +27,11 @@
 > 交易單位除了 `UsStockSpec`，還要動 `core/portfolio/sizing.py`（`EqualWeightSizer` 寫死以張計）。
 >
 > **2026-10-10 依現行程式碼（main、`feature/post-rehearsal`、`feature/tick-timescaledb`）再校正**，步驟拆分與相依不變：
-> - `InstrumentSpec`／`CostModel` 已於 2026-10-01 下沉到 `core/market/`（[回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md) Phase3-2），
+> - `InstrumentSpec`／`CostModel` 已於 2026-10-01 下沉到 `core/market/`（`回測與實盤入口拆分及架構收斂.md` Phase3-2），
 >   `UsStockSpec` 與 `UsStockCostModel` 一律放 `core/market/us/`；留在 `core/backtest/models/` 的只剩 `FillModel` 與 `settlement_model/`。
 > - 具體策略搬到頂層 `strategies/`、`core/strategies/` 只剩契約（[core目錄邊界收斂.md](core目錄邊界收斂.md) Phase2-2、Phase2-3，已在 `feature/post-rehearsal` 實作、待演練後合併）；
 >   美股策略因此放 `strategies/stock/`，§二目錄樹已同步。
-> - `tasks/` 併入 `apps/`（[回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md) Phase1-8，同樣待演練後合併）：
+> - `tasks/` 併入 `apps/`（`回測與實盤入口拆分及架構收斂.md` Phase1-8，同樣待演練後合併）：
 >   本文件寫的 `tasks/update_db.py` 合併後改為 `apps/update_db.py`。
 > - `core/pipeline/` 將搬到頂層並改名 `etl/`（[core目錄邊界收斂.md](core目錄邊界收斂.md) Phase5-1，⏸ 等 TimescaleDB 與 PostgreSQL 兩份計畫落地）：
 >   恢復時若已搬完，`core/pipeline/us/` 一律改寫成 `etl/us/`。
@@ -495,7 +495,7 @@ strategies/                          # 頂層：具體策略
     直接寫 `ON CONFLICT`，不要新增 `INSERT OR IGNORE`。**
   - `台股tick改用TimescaleDB.md`：已在 `feature/tick-timescaledb` 完成，帶進 `postgres` service 與 driver；
     美股表要不要直接寫進 PostgreSQL，恢復時與上一條一起決定（見 §3.4 的儲存層現況）。
-  - [回測與實盤入口拆分及架構收斂.md](回測與實盤入口拆分及架構收斂.md)：回測入口已於 2026-09-30
+  - `回測與實盤入口拆分及架構收斂.md`：回測入口已於 2026-09-30
     由 `run.py` 換成 `python -m apps.backtest`，本文件的驗收標準與 Phase1-3 驗證方式已同步改寫；
     `回測與實盤入口拆分及架構收斂.md` Phase3-2 把 spec／成本模型下沉到 `core/market/`（本文件的美股 spec 與成本因此放 `core/market/us/`），
     `回測與實盤入口拆分及架構收斂.md` Phase1-8 把 `tasks/` 併入 `apps/`（待演練後合併）。

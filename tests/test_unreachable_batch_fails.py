@@ -234,6 +234,8 @@ def test_update_db_lists_the_target_as_failed_and_exits_non_zero(
             from_date=datetime.date.today() - datetime.timedelta(days=10),
             retry_failed=0,
             retry_wait=0,
+            defer_failed=False,
+            retry_deferred=False,
         ),
     )
 
