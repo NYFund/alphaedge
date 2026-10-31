@@ -85,6 +85,7 @@ class ShioajiSession:
         on_degrade: Optional[Callable[[str, str], None]] = None,
         credentials: Optional[Tuple[str, str]] = None,
         verify_contract_date: bool = True,
+        is_market_closed: Optional[Callable[[datetime.date], bool]] = None,
     ) -> None:
         """
         - Description:
@@ -116,6 +117,10 @@ class ShioajiSession:
             - verify_contract_date: bool
                 是否以合約檔更新日粗略檢查本機日期。實盤一律要；只抓歷史資料的
                 ETL 可關掉——長連假期間合約檔可能超過容許天數沒更新，會擋住回補
+            - is_market_closed: Optional[Callable[[datetime.date], bool]]
+                「這一天確定休市」的判定（不連券商）；只在合約檔落差超過容許天數時才問。
+                確定休市就不當成時鐘錯誤，交給段落的交易日判定以非交易日結束。
+                判斷不出來時要回 False——寧可照原本的嚴格程度擋下。None 時不放寬
         """
 
         self.simulation: bool = simulation
@@ -134,6 +139,9 @@ class ShioajiSession:
         self._on_degrade: Optional[Callable[[str, str], None]] = on_degrade
         self._credentials: Optional[Tuple[str, str]] = credentials
         self._verify_contract_date_enabled: bool = verify_contract_date
+        self._is_market_closed: Optional[Callable[[datetime.date], bool]] = (
+            is_market_closed
+        )
 
         self.api: Optional[Any] = None
         self.connected: bool = False
@@ -267,6 +275,12 @@ class ShioajiSession:
 
             合約檔取不到更新日期時**只記 warning 不阻擋**：那代表欄位語意與這裡的
             假設不同，阻擋會讓整套系統因為一個輔助檢查而啟動不了。
+
+            **連續休市時落差超過門檻不是時鐘錯誤**：合約檔只在交易日早上更新，
+            颱風休市接週末再接補假，更新日就停在休市前（2026-10-26 停在 10/22、差 4 天，
+            八個段落全部以「校正系統時間」例外中止）。落差超過時先問 `is_market_closed`，
+            今天確定休市就放行，由段落的交易日判定以非交易日正常結束。
+            **只放寬休市日**：交易日的落差照舊擋下，判定本身出錯也照舊擋下。
         - Raise:
             - RuntimeError
                 本機日期與合約檔更新日相差超過 `MAX_CONTRACT_DATE_SKEW_DAYS` 天
@@ -280,11 +294,35 @@ class ShioajiSession:
         today: datetime.date = self._now().date()
         skew_days: int = abs((today - update_date).days)
         if skew_days > self.MAX_CONTRACT_DATE_SKEW_DAYS:
+            if self._is_closed_today(today):
+                logger.warning(
+                    f"合約檔更新日（{update_date}）與今天（{today}）相差 {skew_days} 天，"
+                    "但今天休市：連續休市時合約檔不更新，不視為本機時鐘錯誤"
+                )
+                return
             raise RuntimeError(
                 f"本機日期（{today}）與券商合約檔更新日（{update_date}）"
                 f"相差 {skew_days} 天，超過容許的 {self.MAX_CONTRACT_DATE_SKEW_DAYS} 天；"
                 "請先校正系統時間與時區（實盤一律使用 Asia/Taipei）"
             )
+
+    def _is_closed_today(self, today: datetime.date) -> bool:
+        """
+        今天是否確定休市；沒有判定或判定拋錯時一律為否
+
+        判定拋錯時不放行：這道檢查守的是「本機日期錯一天以上」，
+        判定本身壞掉不該讓它跟著失效。
+        """
+
+        if self._is_market_closed is None:
+            return False
+        try:
+            return bool(self._is_market_closed(today))
+        except Exception as exc:
+            logger.opt(exception=True).warning(
+                f"判斷 {today} 是否休市時失敗，照交易日檢查本機日期：{exc}"
+            )
+            return False
 
     # 合約檔更新日為字串時可能的格式。**實測 Shioaji 1.3.3 回的是 `YYYY/MM/DD`**
     # （2026-09-21 模擬環境實連），而不是 ISO 的 `YYYY-MM-DD`；

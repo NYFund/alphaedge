@@ -779,3 +779,73 @@ def test_read_only_sessions_skip_failed_accounts(
     assert len(sessions) == 2
     assert [api.simulation for api in created] == [False, False, False]
     assert all(api.activate_ca_kwargs == {} for api in created)
+
+
+# === 連續休市時合約檔停住 ===
+def test_stale_contract_on_a_closed_day_is_not_a_clock_error(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """
+    今天確定休市時，合約檔落差超過門檻不擋登入
+
+    2026-10-26（補假）前面接颱風休市與週末，合約檔停在 10/22、差 4 天，八個段落全部以
+    「校正系統時間」例外中止；登入放行後，段落的交易日判定會以非交易日正常結束。
+    """
+
+    asked: List[datetime.date] = []
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026-09-14"))
+    session: ShioajiSession = make_session(
+        fixed_now,
+        api=api,
+        is_market_closed=lambda date: asked.append(date) or True,
+    )
+
+    session.connect()
+
+    assert session.connected is True
+    assert asked == [fixed_now().date()]
+
+
+def test_stale_contract_on_a_trading_day_still_refuses_to_start(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """交易日照舊擋：只放寬確定休市的日子，本機日期真的錯 4 天時不可放行"""
+
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026-09-14"))
+    session: ShioajiSession = make_session(
+        fixed_now, api=api, is_market_closed=lambda date: False
+    )
+
+    with pytest.raises(RuntimeError, match="相差"):
+        session.connect()
+
+
+def test_broken_closed_day_check_does_not_loosen_the_clock_check(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """休市判定本身拋錯時照交易日擋下：這道檢查不該跟著判定一起失效"""
+
+    def broken(date: datetime.date) -> bool:
+        raise RuntimeError("研究庫壞了")
+
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026-09-14"))
+    session: ShioajiSession = make_session(fixed_now, api=api, is_market_closed=broken)
+
+    with pytest.raises(RuntimeError, match="相差"):
+        session.connect()
+
+
+def test_closed_day_check_is_only_asked_when_the_gap_is_too_large(
+    fixed_now: Callable[[], datetime.datetime],
+) -> None:
+    """落差在容許範圍內時不問：每次登入都開一次研究庫沒有必要"""
+
+    asked: List[datetime.date] = []
+    api: FakeShioaji = FakeShioaji(contract=FakeContract(update_date="2026-09-18"))
+    session: ShioajiSession = make_session(
+        fixed_now, api=api, is_market_closed=lambda date: asked.append(date) or True
+    )
+
+    session.connect()
+
+    assert asked == []

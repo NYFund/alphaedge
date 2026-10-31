@@ -5,10 +5,11 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from loguru import logger
 
+from core.api.tw.market_holiday_api import MarketHolidayAPI
 from core.api.tw.stock_dividend_api import StockDividendAPI
 from core.api.tw.stock_price_api import StockPriceAPI
 from core.backtest.backtester import Backtester
@@ -16,6 +17,7 @@ from core.backtest.factory import build_backtester
 from core.backtest.overrides import BacktestOverrides
 from core.broker.base import BaseBroker
 from core.broker.rate_limiter import RateLimiter
+from core.config import TW_STOCK_DB_PATH
 from core.config.live_risk import LiveRiskOverrides, load_live_risk_overrides
 from core.config.paths import LIVE_RISK_CONFIG_PATH
 from core.config.settings import (
@@ -24,6 +26,7 @@ from core.config.settings import (
     LIVE_NOTIFY_TOKEN,
     now_live,
 )
+from core.dao.connection import DBConnection, DBError, connect_sqlite
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.account_monitor import AccountMonitor
 from core.live.account_sync import (
@@ -47,6 +50,13 @@ from core.live.connection import ConnectionSupervisor
 from core.live.context import StrategyContext
 from core.live.cross_checks import CrossStrategyChecks
 from core.live.datafeed.base import BaseLiveDataFeed
+from core.live.datafeed.calendar import (
+    OfficialHolidayCalendarSource,
+    TradingCalendarSource,
+    TradingCalendarUnavailableError,
+    WeekendCalendarSource,
+    resolve_trading_day,
+)
 from core.live.datafeed.tw.futures_live_datafeed import (
     TwFuturesLiveDataFeed,
     split_contract_id,
@@ -952,9 +962,55 @@ def _build_broker(
     from core.broker.tw.shioaji_session import ShioajiSession
 
     session: ShioajiSession = ShioajiSession(
-        simulation=simulation, rate_limiter=rate_limiter
+        simulation=simulation,
+        rate_limiter=rate_limiter,
+        is_market_closed=make_market_closed_check(TW_STOCK_DB_PATH),
     )
     return ShioajiBroker(session, rate_limiter)
+
+
+def make_market_closed_check(
+    stock_db_path: Union[str, Path],
+) -> Callable[[datetime.date], bool]:
+    """
+    - Description:
+        「這一天確定休市」的判定，給券商 session 的本機日期檢查用
+
+        **不連券商**：登入過程中就要問，那時還沒有券商的合約檔來源可用。
+        只用週末與官方開休市日曆（研究庫的 `market_holiday`，唯讀），與存活監控
+        判斷交易日的來源相同；兩個來源都由 `resolve_trading_day()` 綜合。
+
+        **判斷不出來一律回 False**（年度未入庫、研究庫開不了、來源衝突）：呼叫端會
+        照原本的嚴格程度擋下。只有確定休市才放寬，交易日的時鐘檢查不受影響。
+        每次呼叫才開關連線——只在合約檔落差超過門檻時才會被問到。
+    - Parameters:
+        - stock_db_path: Union[str, Path]
+            研究庫路徑（`market_holiday` 表所在）
+    - Return:
+        - Callable[[datetime.date], bool]
+            `date → 是否確定休市`
+    """
+
+    def is_market_closed(date: datetime.date) -> bool:
+        sources: List[TradingCalendarSource] = [WeekendCalendarSource()]
+        conn: Optional[DBConnection] = None
+        try:
+            conn = connect_sqlite(str(stock_db_path), read_only=True)
+            sources.insert(
+                0, OfficialHolidayCalendarSource(MarketHolidayAPI(conn=conn))
+            )
+        except (DBError, OSError) as exc:
+            logger.warning(f"研究庫開不了（{stock_db_path}），只以週末判斷休市：{exc}")
+        try:
+            return not resolve_trading_day(date, sources)
+        except (TradingCalendarUnavailableError, DBError) as exc:
+            logger.warning(f"判斷不出 {date} 是否休市，照交易日處理：{exc}")
+            return False
+        finally:
+            if conn is not None:
+                conn.close()
+
+    return is_market_closed
 
 
 def _build_context(
