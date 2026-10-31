@@ -53,6 +53,9 @@ class StrategyContext:
     # 期貨是契約價值（點數 × 乘數 × 口數），與資金占用的保證金不同——
     # 曝險要反映「承擔多少風險」，保證金只反映「押了多少錢」。未注入時退回 `notional()`
     calculate_exposure: Optional[Callable[[BaseOrder], float]] = None
+    # `symbol → 計價單位`（台股每張股數、期貨契約乘數）：估算逐策略損益時把價差換成金額。
+    # 市場語意，由組裝層注入；None 時估不出損益，策略層虧損檢查略過
+    unit_size: Optional[Callable[[str], int]] = None
     # 本策略的風控門檻（策略宣告、部署設定收緊後的結果）；None 時用該市場的預設值
     risk_config: Optional[BaseRiskConfig] = None
     # 本段落餵給策略的報價：symbol → 最新成交價（盤前段為參考價）。

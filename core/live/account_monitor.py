@@ -1,16 +1,18 @@
 import datetime
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
 from core.broker.base import BaseBroker
+from core.dao.tw.live_trade_dao import LiveTradeDAO
+from core.live.attribution.position_ledger import PositionAttributionLedger
 from core.live.capital_allocator import CapitalAllocator
 from core.live.clock import SegmentClock
 from core.live.context import StrategyContext
 from core.live.risk.risk_manager import PreTradeRiskManager
-from core.models import BaseAccount, BaseOrder, BrokerAccountSnapshot
+from core.models import BaseOrder, BaseQuote, BrokerAccountSnapshot
 from core.portfolio import order_rules
-from core.utils import LiveOrderStatus
+from core.utils import LiveOrderStatus, PositionType
 
 """
 AccountMonitor：權益、資金刷新與單日虧損檢查
@@ -19,6 +21,15 @@ AccountMonitor：權益、資金刷新與單日虧損檢查
 批次曝險都拿它當分母，各處自己內嵌一份公式的話，改了一邊另一邊不會跟著改。
 正式環境取券商快照的總權益；模擬環境的帳務是假的，一律以 Σ 宣告額度為虛擬資金。
 """
+
+
+def _price_pnl(
+    direction: str, entry_price: float, exit_price: float, volume: int, unit_size: int
+) -> float:
+    """價差損益：（出場價 − 進場價）× 計價單位 × 數量 × 方向（與成本模型的公式同形，不扣成本）"""
+
+    gross: float = (exit_price - entry_price) * unit_size * volume
+    return -gross if direction == PositionType.SHORT.value else gross
 
 
 class AccountMonitor:
@@ -34,6 +45,8 @@ class AccountMonitor:
         clock: SegmentClock,
         fetch_account: Optional[Callable[[], BrokerAccountSnapshot]] = None,
         simulation: bool = False,
+        ledger: Optional[PositionAttributionLedger] = None,
+        dao: Optional[LiveTradeDAO] = None,
     ) -> None:
         """
         - Description:
@@ -57,6 +70,11 @@ class AccountMonitor:
                 是商品語意，本模組不出現任何商品字樣
             - simulation: bool
                 是否連模擬環境。**預設 False（正式環境的嚴格行為）**
+            - ledger: Optional[PositionAttributionLedger]
+                部位歸屬帳；逐策略的未平倉均價與數量由它提供（估算策略層當日損益）
+            - dao: Optional[LiveTradeDAO]
+                實盤紀錄庫；當日成交與當日平掉的 lot 由它提供。兩者任一為 None 時
+                策略層虧損檢查略過
         """
 
         self.contexts: Sequence[StrategyContext] = contexts
@@ -69,6 +87,8 @@ class AccountMonitor:
             fetch_account
         )
         self.simulation: bool = simulation
+        self.ledger: Optional[PositionAttributionLedger] = ledger
+        self.dao: Optional[LiveTradeDAO] = dao
         # 最近一次刷新的券商帳務快照；`account_equity()` 由它取總權益。
         # **不存進 `CapitalAllocator`**：總權益是券商事實，而 allocator 管的是
         # 額度與保留，兩件事放一起會讓「這個數字是誰說的」失去單一出處
@@ -184,26 +204,26 @@ class AccountMonitor:
         **放開盤前不放段落結束**：開盤前就發現昨天虧太多，這個段落直接不送新倉單；
         放在結束才判等於本段落已經白送一輪。
 
-        **兩層的損益來源不同，狀態也不同**：
+        **兩層的損益來源不同**：
 
         - **帳戶層：取券商端**（已實現 ＋ 未實現）。資料不足時**略過並記 warning**，
           不當成「沒有虧損」。
-        - **策略層：目前恆為不觸發，缺的是輸入不是接線。** `prepare()` 走到這裡時，
-          帳戶是剛由 `AccountSynchronizer._restore_positions()` 以**原始開倉價**重建的，
-          未實現損益因此是 0；而 `OrderManager.recover()` 只接管未終結的委託、
-          不回放已成交的回報，本段落之前的已實現損益也不在這個行程的 `trade_records` 裡。
-
-        **策略層刻意留著接線而不是拿掉**：判定與降級的路徑本身是對的，缺的只是損益來源。
-        券商只給得出逐標的的合併損益，拆不回策略——要逐策略判定得以歸屬帳的逐策略
-        均價自行推算，那是另一步。
+        - **策略層：以歸屬帳估算**（`strategy_loss()`）。券商只給得出逐標的的合併損益、
+          拆不回策略；本地帳在段落開始時剛由原始開倉價重建、未實現為 0，本段落之前的
+          已實現也不在這個行程裡。故以 `live_position_lot` 的逐策略均價與數量乘以段落
+          開始時的券商報價算未實現，當日已實現由當日平掉的 lot 與當日平倉成交估算。
+          精度比帳戶層差（估算成本 vs 券商實際），但從「恆不觸發」變成「會觸發」。
+          取不到報價或歸屬帳為空時回 None 並略過——**不可回 0**，理由同帳戶層。
         """
 
+        quotes: Dict[str, float] = self._segment_quotes()
         for context in self.contexts:
+            loss: Optional[float] = self.strategy_loss(context, quotes)
+            if loss is None:
+                logger.info(f"{context.name} 估不出當日損益，本段落略過策略層虧損檢查")
+                continue
             self.risk_manager.check_daily_loss(
-                context.name,
-                self._strategy_loss(context),
-                context.capital_limit,
-                context.risk_limits,
+                context.name, loss, context.capital_limit, context.risk_limits
             )
 
         account_loss: Optional[float] = self.account_loss()
@@ -269,23 +289,148 @@ class AccountMonitor:
 
         return float(sum(trade.pnl for trade in trades))
 
-    @staticmethod
-    def _strategy_loss(context: StrategyContext) -> float:
+    def strategy_loss(
+        self, context: StrategyContext, quotes: Optional[Dict[str, float]] = None
+    ) -> Optional[float]:
         """
-        本策略目前的虧損金額（正數表示虧損）：已實現 ＋ 未實現
+        - Description:
+            本策略當日虧損的估算（正數表示虧損）：未實現 ＋ 當日已實現
 
-        **一律取本地帳**（與回測同一套算法），不取券商快照：對帳不一致本身
-        會另外觸發降級，兩個來源在那個時候會給出不同的答案。
+            - 未實現：歸屬帳的逐策略加權均價與數量 × 段落開始時的券商報價，
+              以成本模型的損益公式換成金額（不含成本）。
+            - 當日已實現：當日平掉的 lot（開倉均價）對上當日的平倉成交（成交均價），
+              扣掉估算的兩腿手續費；稅不估（各市場課稅參數不同）。
+            - 估不出來回 None：沒有注入歸屬帳或紀錄庫、沒有計價單位、任一持倉
+              取不到報價、或既沒有持倉也沒有當日平倉。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - quotes: Optional[Dict[str, float]]
+                段落開始時的報價 `symbol → 價`；None 時向券商取
+        - Return:
+            - Optional[float]
+                虧損金額；估不出來為 None
         """
 
-        account: BaseAccount = context.account
-        account.update_realized_pnl()
-        unrealized: float = sum(
-            position.unrealized_pnl
-            for position in account.positions
-            if not position.is_closed
+        if self.ledger is None or self.dao is None or context.unit_size is None:
+            return None
+        if quotes is None:
+            quotes = self._segment_quotes()
+
+        name: str = context.name
+        positions: Dict[Tuple[str, str], int] = self.ledger.get_strategy_positions(name)
+        avg_prices: Dict[Tuple[str, str], float] = self.ledger.get_strategy_avg_prices(
+            name
         )
-        return -(account.realized_pnl + unrealized)
+        unrealized: float = 0.0
+        for (symbol, direction), volume in positions.items():
+            price: Optional[float] = quotes.get(symbol)
+            if price is None or volume <= 0:
+                return None
+            unrealized += _price_pnl(
+                direction,
+                avg_prices[(symbol, direction)],
+                price,
+                volume,
+                context.unit_size(symbol),
+            )
+
+        realized: Optional[float] = self._today_strategy_realized(context)
+        if not positions and realized is None:
+            return None
+        return -(unrealized + (realized or 0.0))
+
+    def _segment_quotes(self) -> Dict[str, float]:
+        """各策略未平倉標的在段落開始時的券商報價；查不到的標的不在字典裡"""
+
+        if self.ledger is None:
+            return {}
+        symbols: List[str] = sorted(
+            {
+                symbol
+                for context in self.contexts
+                for symbol, _ in self.ledger.get_strategy_positions(context.name)
+            }
+        )
+        if not symbols:
+            return {}
+        snapshots: List[BaseQuote] = self.broker.get_snapshots(symbols)
+        return {
+            quote.symbol: float(quote.cur_price)
+            for quote in snapshots
+            if quote.cur_price and quote.cur_price > 0
+        }
+
+    def _today_strategy_realized(self, context: StrategyContext) -> Optional[float]:
+        """
+        本策略當日已實現損益的估算；當天沒有平倉時回 None
+
+        逐 `(標的, 方向)` 把當日平掉的 lot 的開倉均價對上當日平倉成交的成交均價，
+        量取兩邊較小者（部分回補的 lot 不標平倉，看不到的那部分少算、不多算）。
+        """
+
+        assert self.dao is not None and context.unit_size is not None
+        today: datetime.date = self.clock.today()
+        orders: Dict[str, Dict[str, Any]] = {
+            str(row["client_order_id"]): row
+            for row in self.dao.get_orders_by_date(today)
+            if row.get("strategy_name") == context.name
+        }
+        closes: Dict[Tuple[str, str], Tuple[float, int]] = {}
+        for fill in self.dao.get_fills_by_date(today):
+            order: Optional[Dict[str, Any]] = orders.get(
+                str(fill.get("client_order_id"))
+            )
+            if order is None:
+                continue
+            position_type: str = str(order.get("position_type") or "")
+            action: str = str(fill.get("action") or order.get("action") or "")
+            if not position_type or not action:
+                continue
+            if not order_rules.is_closing_record(position_type, action):
+                continue
+            key: Tuple[str, str] = (str(fill["symbol"]), position_type)
+            amount, volume = closes.get(key, (0.0, 0))
+            closes[key] = (
+                amount + float(fill["price"]) * int(fill["volume"]),
+                volume + int(fill["volume"]),
+            )
+        if not closes:
+            return None
+
+        opens: Dict[Tuple[str, str], Tuple[float, int]] = {}
+        for lot in self.dao.get_lots_closed_on(context.name, today):
+            key = (str(lot["symbol"]), str(lot["direction"]))
+            amount, volume = opens.get(key, (0.0, 0))
+            opens[key] = (
+                amount + float(lot["open_price"]) * int(lot["volume"]),
+                volume + int(lot["volume"]),
+            )
+
+        realized: float = 0.0
+        for key, (close_amount, close_volume) in closes.items():
+            open_amount, open_volume = opens.get(key, (0.0, 0))
+            volume: int = min(close_volume, open_volume)
+            if volume <= 0:
+                continue
+            symbol, direction = key
+            avg_close: float = close_amount / close_volume
+            avg_open: float = open_amount / open_volume
+            # 估算成本只算兩腿手續費：稅的參數各市場不同（台股看方向與當沖、期貨看乘數），
+            # 這裡不認得市場；沒有成本模型時成本以 0 計
+            cost: float = 0.0
+            if context.cost_model is not None:
+                cost = float(
+                    context.cost_model.commission(avg_open, volume)
+                    + context.cost_model.commission(avg_close, volume)
+                )
+            realized += (
+                _price_pnl(
+                    direction, avg_open, avg_close, volume, context.unit_size(symbol)
+                )
+                - cost
+            )
+        return realized
 
     def refresh_capital(self) -> None:
         """刷新帳戶可用餘額與各策略的持倉占用；段落內不再逐單查帳務"""

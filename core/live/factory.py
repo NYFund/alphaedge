@@ -119,6 +119,7 @@ from core.utils import (
     PositionType,
     Units,
 )
+from core.utils.instrument import FuturesUtils
 
 """
 實盤 factory：組裝與分派只寫在這裡
@@ -729,6 +730,9 @@ def assemble_live_trader(
         clock=clock,
         fetch_account=fetch_account,
         simulation=simulation,
+        # 逐策略的當日損益由歸屬帳與當日成交估算
+        ledger=ledger,
+        dao=dao,
     )
     # 跨策略守門與兩層批次曝險截斷
     cross_checks: CrossStrategyChecks = CrossStrategyChecks(
@@ -986,6 +990,12 @@ def _build_context(
             spec, now_provider
         )
         exposure: Callable[[BaseOrder], float] = notional
+
+        def unit_size(symbol: str) -> int:
+            """台股每張股數"""
+
+            return spec.get_unit_size(None, now_provider())
+
         execution_model: BaseExecutionModel = StockExecutionModel(
             price_limits=feed.get_price_limits
         )
@@ -1033,6 +1043,14 @@ def _build_context(
             futures_manager, futures_spec, now_provider
         )
         exposure = _make_contract_value_calculator(futures_spec, now_provider)
+
+        def unit_size(symbol: str) -> int:
+            """契約乘數（元／點），以今天為準"""
+
+            return futures_spec.get_unit_size(
+                FuturesUtils.split_contract_id(symbol)[0], now_provider()
+            )
+
         schedule = TW_FUTURES_SEGMENTS
         build_order = _build_futures_order
         execution_model = FuturesExecutionModel(price_limits=feed.get_price_limits)
@@ -1056,6 +1074,7 @@ def _build_context(
         build_filled_order=build_order,
         calculate_opening_requirement=opening_requirement,
         execution_model=execution_model,
+        unit_size=unit_size,
     )
     return (context, schedule)
 

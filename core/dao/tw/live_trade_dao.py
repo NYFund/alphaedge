@@ -839,6 +839,34 @@ class LiveTradeDAO(BaseDAO):
             _to_live_params(volume, lot_id),
         )
 
+    def get_lots_closed_on(
+        self, strategy_name: str, date: datetime.date
+    ) -> List[Dict[str, Any]]:
+        """
+        - Description:
+            某支策略在某一天平掉的 lot（估算當日已實現損益用）
+
+            全部平倉只標 `closed_at`、數量不變，所以 `volume` 就是平掉的量；部分回補
+            以剩餘量計、不標 `closed_at`，那一部分這裡看不到——估算會少算，不會多算。
+        - Parameters:
+            - strategy_name: str
+                策略名
+            - date: datetime.date
+                平倉日
+        - Return:
+            - List[Dict[str, Any]]
+                lot 清單
+        """
+
+        rows: List[Tuple[Any, ...]] = self.conn.execute(
+            f"SELECT * FROM {LIVE_POSITION_LOT_TABLE_NAME} "
+            "WHERE strategy_name = ? AND volume > 0 "
+            "AND closed_at IS NOT NULL AND substr(closed_at, 1, 10) = ? "
+            "ORDER BY open_date, lot_id",
+            _to_live_params(strategy_name, date),
+        ).fetchall()
+        return self._to_dicts(LIVE_POSITION_LOT_TABLE_NAME, rows)
+
     def get_lots_held_at_start(
         self, strategy_name: str, date: datetime.date
     ) -> List[Dict[str, Any]]:

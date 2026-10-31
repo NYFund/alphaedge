@@ -289,6 +289,8 @@ class Harness:
                     # 與 `factory._build_context()` 一致；少了它，
                     # 任何需要還原訂單的路徑（帳戶同步、當沖回補）都會靜靜做不了事
                     build_filled_order=build_stock_order,
+                    # 與 `factory._build_context()` 一致：台股每張 1000 股，估算逐策略損益用
+                    unit_size=lambda symbol: 1000,
                     # 與真實組裝一致地經過執行層；漲跌停由測試指定，不碰券商合約
                     execution_model=StockExecutionModel(
                         price_limits=lambda symbol: price_limits
@@ -1568,9 +1570,9 @@ def test_daily_loss_degrades_the_strategy_before_submitting() -> None:
             super().__init__("Alpha", [make_order()])
 
     harness: Harness = Harness([Alpha()])
-    # 讓本地帳帶著超過 `daily_loss_ratio`（3%）的已實現虧損
-    harness.contexts[0].account.realized_pnl = -CAPITAL * 0.05
-    harness.contexts[0].account.update_realized_pnl = lambda: None
+    # 歸屬帳持有 2330 兩張、開倉價 1000，段落開始時報價 100：
+    # 未實現虧損 (1000 − 100) × 1000 股 × 2 張 ＝ 180 萬，超過 `daily_loss_ratio` 的門檻
+    seed_holding(harness, "Alpha", 2)
 
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
@@ -1579,6 +1581,134 @@ def test_daily_loss_degrades_the_strategy_before_submitting() -> None:
         "SELECT COUNT(*) FROM live_risk_event WHERE category = 'DAILY_LOSS'"
     ).fetchone()
     assert rows[0] == 1
+
+
+def test_only_the_losing_strategy_is_degraded() -> None:
+    """
+    兩支策略同帳戶、其中一支當日虧損超標：只有它降 `REDUCE_ONLY`，帳戶層不動
+
+    以前策略層恆不觸發（本地帳由原始開倉價重建、未實現為 0）；改以歸屬帳的逐策略
+    均價與數量乘以段落開始時的券商報價估算，才判得出是哪一支在虧。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """持有虧損部位的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    class Beta(ScriptedStrategy):
+        """沒有部位的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Beta", [make_order("2317")])
+
+    harness: Harness = Harness([Alpha(), Beta()])
+    seed_holding(harness, "Alpha", 2)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert harness.mode_state.effective_mode("Alpha") is TradingMode.REDUCE_ONLY
+    assert harness.mode_state.effective_mode("Beta") is TradingMode.NORMAL
+    assert harness.mode_state.account_mode is TradingMode.NORMAL
+
+
+def test_missing_quote_skips_the_strategy_loss_check() -> None:
+    """持倉取不到報價：估不出損益就略過，不是當成沒虧損、也不是當成虧損"""
+
+    class Alpha(ScriptedStrategy):
+        """持有部位、但券商給不出報價的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    seed_holding(harness, "Alpha", 2)
+    harness.broker.quotes.pop("2330")
+    harness.broker.connect()
+
+    assert harness.trader.account_monitor.strategy_loss(harness.contexts[0]) is None
+
+    checked: List[str] = []
+    original_check = harness.risk.check_daily_loss
+
+    def recording_check(name: str, loss: float, *args: Any, **kwargs: Any) -> Any:
+        checked.append(name)
+        return original_check(name, loss, *args, **kwargs)
+
+    harness.risk.check_daily_loss = recording_check  # type: ignore[method-assign]
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    # 略過不是「以 0 檢查」：估不出來就不該把任何數字交給風控
+    assert checked == []
+    assert harness.mode_state.effective_mode("Alpha") is TradingMode.NORMAL
+
+
+def test_realized_loss_of_the_day_counts_too() -> None:
+    """
+    當天已經平掉的虧損也算：當日平掉的 lot（開倉價）對上當日的平倉成交（成交價）
+
+    段落開始時歸屬帳沒有這個部位、本地帳也沒有這筆損益，不另外估就等於沒虧過。
+    """
+
+    class Alpha(ScriptedStrategy):
+        """當天早上已停損出場的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", [make_order()])
+
+    harness: Harness = Harness([Alpha()])
+    harness.dao.open_lot(
+        {
+            "lot_id": "lot-closed-today",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "direction": "LONG",
+            "volume": 2,
+            "open_date": TODAY - datetime.timedelta(days=1),
+            "open_price": 1000.0,
+            "client_order_id": None,
+        }
+    )
+    harness.dao.close_lot("lot-closed-today", NOW - datetime.timedelta(hours=4))
+    harness.dao.upsert_order(
+        {
+            "client_order_id": "run0-0001",
+            "run_id": "run0",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "position_type": "LONG",
+            "price": 100.0,
+            "volume": 2,
+            "status": "FILLED",
+            "custom_field": "000001",
+            "created_at": NOW - datetime.timedelta(hours=4),
+        }
+    )
+    harness.dao.insert_fill(
+        {
+            "trade_date": TODAY.isoformat(),
+            "broker_seqno": "000001",
+            "broker_trade_id": "T000001",
+            "client_order_id": "run0-0001",
+            "strategy_name": "Alpha",
+            "symbol": "2330",
+            "action": "Sell",
+            "price": 100.0,
+            "volume": 2,
+            "filled_at": NOW - datetime.timedelta(hours=4),
+            "raw_json": "{}",
+        }
+    )
+    harness.dao.conn.commit()
+
+    loss: Optional[float] = harness.trader.account_monitor.strategy_loss(
+        harness.contexts[0]
+    )
+
+    # (1000 − 100) × 1000 股 × 2 張；測試脈絡沒有成本模型以外的估算差異（手續費由成本模型算）
+    assert loss is not None and 1_800_000 <= loss <= 1_810_000
 
 
 # === 持倉檔數上限：回測與實盤共用同一份判定 ===
