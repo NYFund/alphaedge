@@ -423,7 +423,7 @@ class PreTradeRiskManager:
             self.record_rejection(order, strategy_name, decision)
             return decision
 
-        self._record_submission(strategy_name, amount)
+        self._record_submission(strategy_name, amount, closing=is_closing(order))
         return decision
 
     def _check_gates(self, order: BaseOrder, strategy_name: str) -> RiskDecision:
@@ -545,12 +545,23 @@ class PreTradeRiskManager:
 
         self.daily_amount[strategy_name] = amount
 
-    def _record_submission(self, strategy_name: str, amount: float) -> None:
-        """通過後才計入流量與頻率：被拒的單沒有送出去，不該佔額度"""
+    def _record_submission(
+        self, strategy_name: str, amount: float, closing: bool = False
+    ) -> None:
+        """
+        通過後才計入流量與頻率：被拒的單沒有送出去，不該佔額度
 
-        self.daily_amount[strategy_name] = (
-            self.daily_amount.get(strategy_name, 0.0) + amount
-        )
+        **出場單不計入當日累計金額，頻率照計**：累計上限只管開倉（`_check_limits()`
+        對出場單也不檢查它），段落啟動時以紀錄庫回補的 `preload_daily_amount()`
+        同樣跳過出場單；行程內若把出場也累計，就變成「跨行程只算開倉、行程內都算」，
+        停損越多次當天能開的新倉越少——2026-10-29 盤中段 4526 就是這樣被拒的。
+        頻率上限防的是迴圈連發，與方向無關，出場單照樣計入。
+        """
+
+        if not closing:
+            self.daily_amount[strategy_name] = (
+                self.daily_amount.get(strategy_name, 0.0) + amount
+            )
         self._recent_orders.setdefault(strategy_name, deque()).append(self._now())
 
     # === 批次 ===
