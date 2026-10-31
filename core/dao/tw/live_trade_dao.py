@@ -1,6 +1,5 @@
 import contextlib
 import datetime
-import os
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
@@ -23,6 +22,7 @@ from core.config import (
 )
 from core.dao.base import BaseDAO, to_sql_params
 from core.dao.connection import connect_live_trading
+from core.utils import process as process_utils
 
 """
 實盤交易紀錄庫（`tw_trading.db`）的資料存取
@@ -47,27 +47,6 @@ from core.dao.connection import connect_live_trading
 依日期篩選一律用 `substr(欄位, 1, 10)` 而不是 SQLite 的 `date()`：後者會先把
 帶時區的時間換算成 UTC，台北早上 08:00 以前的紀錄會被歸到前一天。
 """
-
-
-def _process_alive(pid: int) -> bool:
-    """
-    這個 pid 是否還在執行
-
-    `os.kill(pid, 0)` 不送訊號、只做存在性與權限檢查。`PermissionError`
-    代表行程存在但屬於別的使用者——那仍然是「活著」。
-    """
-
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        # 判不出來時當成「還活著」：誤放過一筆崩潰紀錄，下一次啟動還會再檢查一次；
-        # 誤標一個還在送單的段落則會當場推 CRITICAL 並觸發一次不必要的重建
-        return True
-    return True
 
 
 def _to_live_params(*values: Any) -> Tuple[Any, ...]:
@@ -565,6 +544,12 @@ class LiveTradeDAO(BaseDAO):
             誤推一則 CRITICAL，而天天誤報的告警等於沒有告警。故以 `pid` 判定
             行程是否還在，活著的跳過。
 
+            **pid 存在還要比對行程的啟動時刻**：主機重開機後 pid 從頭配發，上一段的
+            pid 可能被不相干的行程拿去用（2026-10-28 重開機後到 13:20 已編到 1 萬多），
+            只看存不存在會把已死的段落當成還活著、漏標崩潰也不以券商重建部位。
+            啟動時刻比紀錄的開始時刻晚的是別的行程（`core/utils/process.py`，與存活
+            監控同一套）；查不到啟動時刻時退回只看存不存在。
+
             **`pid` 為空的一律視為崩潰**：欄位是後加的，既有資料列都是 NULL。
             當成「還活著」的話，升級前留下的崩潰紀錄會永遠標不起來。
 
@@ -577,22 +562,26 @@ class LiveTradeDAO(BaseDAO):
             - ended_at: datetime.datetime
                 標記時間
             - is_alive: Optional[Callable[[int], bool]]
-                判定 pid 是否仍在執行；None 時以作業系統查詢
+                判定 pid 是否仍在執行；None 時以作業系統查詢（pid 存在且啟動時刻
+                不晚於紀錄的開始時刻）。給定時只看 pid，不比對啟動時刻
         - Return:
             - List[str]
                 被標記的 `run_id`；空 list 表示沒有崩潰的紀錄
         """
 
-        alive: Callable[[int], bool] = is_alive or _process_alive
         rows: List[Tuple[Any, ...]] = self.conn.execute(
-            f"SELECT run_id, pid FROM {LIVE_RUN_TABLE_NAME} "
+            f"SELECT run_id, pid, started_at FROM {LIVE_RUN_TABLE_NAME} "
             "WHERE ended_at IS NULL AND run_id != ?",
             _to_live_params(current_run_id),
         ).fetchall()
 
         crashed: List[str] = []
-        for run_id, pid in rows:
-            if pid is not None and alive(int(pid)):
+        for run_id, pid, started_at in rows:
+            if pid is not None and (
+                is_alive(int(pid))
+                if is_alive is not None
+                else self._run_alive(int(pid), str(started_at))
+            ):
                 logger.debug(f"{run_id} 的行程（pid={pid}）仍在執行，不標記為崩潰")
                 continue
             crashed.append(str(run_id))
@@ -608,6 +597,18 @@ class LiveTradeDAO(BaseDAO):
         )
         self.conn.commit()
         return crashed
+
+    @staticmethod
+    def _run_alive(pid: int, started_at: str) -> bool:
+        """
+        紀錄裡的行程是否還在：先比對啟動時刻，判不出來（`ps` 跑不起來或輸出看不懂）
+        才退回只看 pid 存不存在——與加上啟動時刻比對之前的行為相同
+        """
+
+        verdict: Optional[bool] = process_utils.run_process_alive(pid, started_at)
+        if verdict is not None:
+            return verdict
+        return process_utils.process_alive(pid)
 
     def get_last_account_mode(self) -> str:
         """

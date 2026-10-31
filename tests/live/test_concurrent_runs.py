@@ -1,8 +1,11 @@
 import datetime
 from typing import Any, List, Optional, Tuple
 
+import pytest
+
 from core.dao.tw.live_trade_dao import LiveTradeDAO
 from core.live.risk.trading_mode import TradingMode, TradingModeState
+from core.utils import process as process_utils
 
 """
 並行段落：排程刻意重疊，而崩潰判定與模式落地都假設了「不重疊」
@@ -241,3 +244,62 @@ def test_load_without_the_flag_keeps_the_halt(dao: LiveTradeDAO) -> None:
     state.load()
 
     assert state.account_mode is TradingMode.REDUCE_ONLY
+
+
+# === pid 被重用時仍要標崩潰 ===
+def _fake_started_at(
+    monkeypatch: pytest.MonkeyPatch, result: Tuple[bool, Optional[datetime.datetime]]
+) -> None:
+    """讓共用的行程啟動時刻查詢回固定結果（DAO 經模組名呼叫，替換得到）"""
+
+    monkeypatch.setattr(process_utils, "process_started_at", lambda pid: result)
+
+
+def test_pid_reused_after_reboot_is_marked_crashed(
+    dao: LiveTradeDAO, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    pid 還在，但那個行程比段落開始還晚啟動：是重開機後重用同一個 pid 的別的行程
+
+    只看 `kill(pid, 0)` 會判成「還活著」，已死的段落就不標 `CRASHED`、也不以券商重建部位。
+    2026-10-28 重開機後到 13:20 pid 已編到 1 萬多，同一類風險。
+    """
+
+    start_run(dao, "dead", pid=7768)
+    start_run(dao, "current", pid=4243)
+    _fake_started_at(
+        monkeypatch, (True, NOW.astimezone() + datetime.timedelta(minutes=10))
+    )
+    monkeypatch.setattr(process_utils, "process_alive", lambda pid: True)
+
+    assert dao.mark_crashed_runs("current", NOW) == ["dead"]
+
+
+def test_the_original_process_is_not_marked_crashed(
+    dao: LiveTradeDAO, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """行程比段落紀錄早幾秒啟動（先初始化才寫紀錄）：就是那個段落本身，還在跑"""
+
+    start_run(dao, "sibling", pid=7768)
+    start_run(dao, "current", pid=4243)
+    _fake_started_at(
+        monkeypatch, (True, NOW.astimezone() - datetime.timedelta(seconds=5))
+    )
+
+    assert dao.mark_crashed_runs("current", NOW) == []
+
+
+def test_unknown_start_time_falls_back_to_pid_existence(
+    dao: LiveTradeDAO, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`ps` 跑不起來或輸出看不懂：退回只看 pid 存不存在，與加上啟動時刻比對之前相同"""
+
+    start_run(dao, "sibling", pid=7768)
+    start_run(dao, "current", pid=4243)
+    _fake_started_at(monkeypatch, (False, None))
+    monkeypatch.setattr(process_utils, "process_alive", lambda pid: pid == 7768)
+
+    assert dao.mark_crashed_runs("current", NOW) == []
+
+    monkeypatch.setattr(process_utils, "process_alive", lambda pid: False)
+    assert dao.mark_crashed_runs("current", NOW) == ["sibling"]

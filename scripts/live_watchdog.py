@@ -1,7 +1,6 @@
 import argparse
 import datetime
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -44,7 +43,9 @@ from core.live.datafeed.calendar import (
 )
 from core.live.notify.base import BaseNotifier, NotifyLevel
 from core.live.notify.factory import build_notifier
+from core.utils import process as process_utils
 from core.utils.constant.market import InstrumentType
+from core.utils.process import process_started_at
 
 """
 存活監控：實盤最常見的失效是**該跑的沒跑、沒人發現**
@@ -124,10 +125,6 @@ CHAINED_AFTER_UPDATE_DB: FrozenSet[str] = frozenset({"parity"})
 # 資料更新串接的行程特徵：launchd 以 `/bin/sh -c` 依序跑資料更新與三條補比，
 # 整條串接跑完之前那個 sh 行程的命令列都帶著這一段
 UPDATE_DB_CHAIN_PATTERN: str = "apps[.]update_db"
-
-# 行程啟動時刻比段落紀錄的開始時刻晚這麼多，就是 pid 被別的行程重用了。
-# 實盤行程先啟動、做完初始化才寫紀錄，正常情況行程只會比紀錄早
-PID_REUSE_TOLERANCE_SECONDS: int = 60
 
 
 @dataclass(frozen=True)
@@ -470,76 +467,16 @@ def _minutes_since(started_at: Optional[str], now: datetime.datetime) -> float:
     return (now - started).total_seconds() / 60.0
 
 
-def process_started_at(pid: int) -> Tuple[bool, Optional[datetime.datetime]]:
-    """
-    - Description:
-        查詢行程的啟動時刻（`ps -o lstart=`）
-
-        `ps` 以本行程的時區（排程帶 `TZ=Asia/Taipei`）印出當地時間，
-        `astimezone()` 以同一個時區補上時區資訊，與 `live_run.started_at` 可直接相減。
-    - Parameters:
-        - pid: int
-            行程編號
-    - Return:
-        - Tuple[bool, Optional[datetime.datetime]]
-            `(查詢是否成功, 啟動時刻)`；查詢成功但行程不存在時啟動時刻為 None
-    """
-
-    try:
-        completed: subprocess.CompletedProcess = subprocess.run(
-            ["ps", "-o", "lstart=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            env={**os.environ, "LC_ALL": "C"},
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False, None
-
-    text: str = completed.stdout.strip()
-    if completed.returncode != 0 and not text:
-        # `ps -p` 找不到行程時結束碼 1、沒有輸出
-        return True, None
-    try:
-        started: datetime.datetime = datetime.datetime.strptime(
-            " ".join(text.split()), "%a %b %d %H:%M:%S %Y"
-        )
-    except ValueError:
-        return False, None
-    return True, started.astimezone()
-
-
 def run_process_alive(pid: int, started_at: str) -> Optional[bool]:
     """
-    - Description:
-        段落紀錄的行程是否還在
+    段落紀錄的行程是否還在（`core/utils/process.py` 的同一套判定）
 
-        **只看 pid 存不存在不夠**：主機重開機後 pid 從頭編，2026-10-28 盤中段的 pid 7768
-        在重開後不到兩小時就可能被別的行程拿到，`kill(pid, 0)` 會回「還活著」。
-        所以要比對行程的啟動時刻：比段落開始還晚的，是重用同一個 pid 的另一個行程。
-    - Parameters:
-        - pid: int
-            `live_run.pid`
-        - started_at: str
-            `live_run.started_at`
-    - Return:
-        - Optional[bool]
-            還在為 True、不在為 False；判不出來為 None（呼叫端退回時間上限）
+    查啟動時刻的函式以本模組的名字傳入，測試替換 `process_started_at` 就能腳本化。
     """
 
-    ok, process_start = process_started_at(pid)
-    if not ok:
-        return None
-    if process_start is None:
-        return False
-    try:
-        run_start: datetime.datetime = datetime.datetime.fromisoformat(started_at)
-    except ValueError:
-        return True
-    if run_start.tzinfo is None:
-        run_start = run_start.astimezone()
-    late: float = (process_start - run_start).total_seconds()
-    return late <= PID_REUSE_TOLERANCE_SECONDS
+    return process_utils.run_process_alive(
+        pid, started_at, started_at_of=process_started_at
+    )
 
 
 def update_db_chain_running() -> bool:
