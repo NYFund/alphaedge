@@ -1458,3 +1458,98 @@ def test_intraday_exit_without_a_backtest_entry_is_unexplained() -> None:
     diffs: List[ParityDiff] = compare(live, [], [])
 
     assert by_symbol(diffs)[("2352", "Sell")] == CATEGORY_UNEXPLAINED
+
+
+# === 同段平倉佔名額造成的張數差異（2026-10-27 的 4526）===
+def close_day_of_2026_10_27() -> Tuple[List[Dict[str, Any]], List[BaseOrder]]:
+    """
+    2026-10-27 `VolumeBreakoutMomentumStrategy` 尾盤段：持有 2465，同段送 2465 賣單；
+    實盤可開 2 檔（1569 先佔名額、再被跨策略守門擋下；4526 買 3 張；4720 沒有名額），
+    回測先平後開、可開 3 檔（1569、4526 各 2 張、4720）
+    """
+
+    live: List[Dict[str, Any]] = [
+        timed_live_order("2465", "Sell", ExecutionTiming.AT_CLOSE, "FILLED", 1),
+        timed_live_order("4526", "Buy", ExecutionTiming.AT_CLOSE, "FILLED", 3),
+    ]
+    backtest: List[BaseOrder] = [
+        make_backtest_order("2465", Action.SELL, 1),
+        make_backtest_order("1569", Action.BUY, 2),
+        make_backtest_order("4526", Action.BUY, 2),
+        make_backtest_order("4720", Action.BUY, 5),
+    ]
+    return live, backtest
+
+
+BLOCKED_1569: List[Dict[str, Any]] = [make_event("CROSS_STRATEGY_BLOCKED", "1569")]
+
+
+def test_volume_inflated_by_a_held_slot_is_explained() -> None:
+    """
+    2026-10-27 的 4526：實盤可開 2 檔、回測 3 檔，每檔資金不同，3 張對 2 張
+
+    被守門擋下的 1569 在實盤先佔了一格才被擋，算進實盤的可開檔數；4720 則是被佔走的那檔。
+    """
+
+    live, backtest = close_day_of_2026_10_27()
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, BLOCKED_1569, (), False, order_phases=close_phase
+    )
+
+    categories: Dict[Tuple[str, str], str] = by_symbol(diffs)
+    assert categories[("4526", "Buy")] == CATEGORY_EXIT_PENDING_SLOT
+    assert categories[("4720", "Buy")] == CATEGORY_EXIT_PENDING_SLOT
+    assert categories[("1569", "Buy")] == CATEGORY_CROSS_STRATEGY_BLOCKED
+    assert not any(diff.is_unexplained for diff in diffs)
+
+
+def test_volume_that_does_not_fit_the_slot_ratio_stays_unexplained() -> None:
+    """實盤 5 張、回測 2 張：2 × 3 ÷ 2 ＝ 3，容許到 4，5 張就是別的原因"""
+
+    live, backtest = close_day_of_2026_10_27()
+    live[1]["volume"] = 5
+    live[1]["filled_volume"] = 5
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, BLOCKED_1569, (), False, order_phases=close_phase
+    )
+
+    assert by_symbol(diffs)[("4526", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_volume_gap_without_a_same_segment_exit_stays_unexplained() -> None:
+    """沒有同段平倉單就沒有被佔走的名額：張數差異原因未知，不套比例"""
+
+    live, backtest = close_day_of_2026_10_27()
+    live = [row for row in live if row["action"] == "Buy"]
+    backtest = [order for order in backtest if order.action is Action.BUY]
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, BLOCKED_1569, (), False, order_phases=close_phase
+    )
+
+    assert by_symbol(diffs)[("4526", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_volume_gap_without_phase_lookup_is_not_guessed() -> None:
+    """判不出兩邊的單在哪一段送出時不猜"""
+
+    live, backtest = close_day_of_2026_10_27()
+
+    diffs: List[ParityDiff] = compare(live, backtest, BLOCKED_1569, ())
+
+    assert by_symbol(diffs)[("4526", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_rejected_volume_gap_still_wins_over_the_slot_ratio() -> None:
+    """被拒單的張數差異歸風控，不歸名額"""
+
+    live, backtest = close_day_of_2026_10_27()
+    live[1]["status"] = "REJECTED"
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, BLOCKED_1569, (), False, order_phases=close_phase
+    )
+
+    assert by_symbol(diffs)[("4526", "Buy")] == CATEGORY_RISK_REJECTED
