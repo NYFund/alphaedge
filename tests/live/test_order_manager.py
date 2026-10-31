@@ -1086,3 +1086,133 @@ def test_new_order_failure_is_still_a_rejection(
     oms.drain_executions()
 
     assert ticket.status is LiveOrderStatus.REJECTED
+
+
+# === 收到成交時當場接管送單逾時的委託 ===
+def _timed_out_submit(oms: OrderManager, fake_broker: FakeBroker) -> OrderTicket:
+    """送單逾時：本地標 FAILED、沒有序號；券商端其實已受理"""
+
+    fake_broker.timeout_symbols.add("2330")
+    with pytest.raises(TimeoutError):
+        oms.submit(make_order(), "VolumeBreakoutMomentumStrategy")
+    (ticket,) = oms.tickets.values()
+    assert ticket.status is LiveOrderStatus.FAILED
+    assert not ticket.broker_seqno
+    return ticket
+
+
+def _fill_from_broker(fake_broker: FakeBroker, symbol: str = "2330") -> ExecutionReport:
+    """券商端那張（有序號）的成交回報"""
+
+    accepted: OrderTicket = next(iter(fake_broker.tickets.values()))
+    return ExecutionReport(
+        broker_seqno=accepted.broker_seqno or "",
+        broker_trade_id="T-timeout",
+        symbol=symbol,
+        action=Action.BUY,
+        price=1000.0,
+        volume=2,
+        ts=NOW,
+    )
+
+
+def test_unmatched_fill_takes_over_a_timed_out_order_on_the_spot(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """
+    成交對不上委託、而本行程有送單逾時的同檔委託：當場向券商對回，成交套進去
+
+    2026-10-29 期貨出場單逾時、7 秒後成交；成交回報只帶序號，逾時的單沒有序號，
+    收盤段只能記 `FILL_UNMATCHED`、部位不扣，股票盤後段對帳就多一口而降級。
+    """
+
+    ticket: OrderTicket = _timed_out_submit(oms, fake_broker)
+    fake_broker.execution_queue.put(_fill_from_broker(fake_broker))
+
+    fills: List[ExecutionReport] = oms.drain_executions()
+
+    assert len(fills) == 1
+    assert ticket.status is LiveOrderStatus.FILLED
+    assert ticket.filled_volume == 2
+    assert ticket.broker_seqno == fills[0].broker_seqno
+    categories: List[str] = [
+        row[0]
+        for row in dao.conn.execute(
+            "SELECT category FROM live_risk_event ORDER BY rowid"
+        ).fetchall()
+    ]
+    assert "FILL_UNMATCHED" not in categories
+    assert categories.count("ORDER_TAKEN_OVER") == 1
+    # 序號落地：另一個行程同收這筆成交時，紀錄庫反查得到擁有者
+    assert dao.find_order_by_broker_seqno(ticket.broker_seqno, TODAY) is not None
+
+
+def test_unmatched_fill_without_timed_out_orders_does_not_refresh(
+    oms: OrderManager, dao: LiveTradeDAO, fake_broker: FakeBroker
+) -> None:
+    """沒有逾時委託就不向券商刷新：刷新算在下單類額度裡，無主成交照原路記 `FILL_UNMATCHED`"""
+
+    fake_broker.execution_queue.put(
+        ExecutionReport(
+            broker_seqno="999999",
+            broker_trade_id="T-foreign",
+            symbol="2330",
+            action=Action.BUY,
+            price=1000.0,
+            volume=1,
+            ts=NOW,
+        )
+    )
+
+    fills: List[ExecutionReport] = oms.drain_executions()
+
+    assert fake_broker.refresh_count == 0
+    # 原路：成交照樣保留、交給帳戶同步，並記 `FILL_UNMATCHED`
+    assert len(fills) == 1
+    assert dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'FILL_UNMATCHED'"
+    ).fetchone() == (1,)
+
+
+def test_takeover_is_attempted_once_per_timed_out_order(
+    oms: OrderManager, fake_broker: FakeBroker
+) -> None:
+    """
+    每張逾時委託只向券商對一次；別檔的成交也不為它刷新
+
+    券商端真的沒有這張單時，之後每一筆無主成交都再刷新一次，只是把送單額度吃掉。
+    """
+
+    ticket: OrderTicket = _timed_out_submit(oms, fake_broker)
+    fake_broker.tickets.clear()  # 券商端查無此單
+
+    fake_broker.execution_queue.put(
+        ExecutionReport(
+            broker_seqno="999999",
+            broker_trade_id="T-other-symbol",
+            symbol="2317",
+            action=Action.BUY,
+            price=100.0,
+            volume=1,
+            ts=NOW,
+        )
+    )
+    oms.drain_executions()
+    assert fake_broker.refresh_count == 0  # 不同檔，不刷新
+
+    for trade_id in ("T-1", "T-2"):
+        fake_broker.execution_queue.put(
+            ExecutionReport(
+                broker_seqno="999999",
+                broker_trade_id=trade_id,
+                symbol="2330",
+                action=Action.BUY,
+                price=1000.0,
+                volume=1,
+                ts=NOW,
+            )
+        )
+        oms.drain_executions()
+
+    assert fake_broker.refresh_count == 1
+    assert ticket.status is LiveOrderStatus.FAILED

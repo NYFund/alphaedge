@@ -76,9 +76,13 @@ class FakeBroker(BaseBroker):
         self.defer_reports: bool = False
         self.fail_connect: bool = False
         self.drop_connection_after: Optional[int] = None
+        # 送單逾時：券商端已受理（有序號、留在券商的委託清單），送單回應卻沒回來，
+        # 本地的 ticket 拿不到序號、`place_order()` 拋出（2026-10-29 TX202611 出場單）
+        self.timeout_symbols: Set[str] = set()
 
         # 觀測用
         self.placed_count: int = 0
+        self.refresh_count: int = 0
         self.cancel_requests: List[str] = []
         # 送單回應是否已帶確認。False 時與模擬環境相同（2026-10-07 實測）：
         # 回應只到 PendingSubmit，新單確認另外以 `op_type='New'` 的委託回報推來。
@@ -116,11 +120,26 @@ class FakeBroker(BaseBroker):
             self._connected = False
             raise ConnectionError("FakeBroker: 送單途中斷線（腳本化）")
 
+        symbol: str = ticket.order.symbol if ticket.order is not None else ""
+        if symbol in self.timeout_symbols:
+            # 券商端留一份有序號的副本，本地那張維持沒有序號
+            accepted: OrderTicket = OrderTicket(
+                client_order_id=ticket.client_order_id,
+                strategy_name=ticket.strategy_name,
+                order=ticket.order,
+                status=LiveOrderStatus.SUBMITTED,
+                broker_seqno=f"{next(self._seqno):06d}",
+                created_at=ticket.created_at,
+                custom_field=ticket.custom_field,
+            )
+            accepted.broker_order_id = f"A{accepted.broker_seqno}"
+            self.tickets[ticket.client_order_id] = accepted
+            raise TimeoutError("FakeBroker: Timeout Topic: api/v1/paper/place_order")
+
         ticket.broker_seqno = f"{next(self._seqno):06d}"
         ticket.broker_order_id = f"A{ticket.broker_seqno}"
         self.tickets[ticket.client_order_id] = ticket
 
-        symbol: str = ticket.order.symbol if ticket.order is not None else ""
         if symbol in self.reject_symbols:
             ticket.status = LiveOrderStatus.REJECTED
             ticket.reject_reason = "FakeBroker: 標的被腳本化為拒單"
@@ -212,6 +231,7 @@ class FakeBroker(BaseBroker):
     def refresh_order_status(self) -> List[OrderTicket]:
         self._require_connection()
 
+        self.refresh_count += 1
         return list(self.tickets.values())
 
     # === 帳務 ===

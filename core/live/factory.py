@@ -119,6 +119,7 @@ from core.utils import (
     PositionType,
     Units,
 )
+from core.utils.instrument import FuturesUtils
 
 """
 實盤 factory：組裝與分派只寫在這裡
@@ -530,6 +531,8 @@ def build_live_trader(
         dry_run=dry_run,
         simulation=simulation,
         cost_estimator=make_trade_cost_estimator(contexts),
+        # 盤後對帳只比本線（股票或期貨）的部位；哪些 symbol 屬於本線是商品語意
+        position_scope=make_position_scope(strategies),
         # 查哪個帳戶是商品語意，由這裡決定後注入（引擎本體不認得「股票」「期貨」）
         fetch_account=make_account_fetcher(resolved_broker, strategies, resolved_dao),
         # 保證金查詢是期貨特性：有期貨策略時才注入，引擎本體不認得「期貨」
@@ -600,6 +603,7 @@ def assemble_live_trader(
     margin_query: Optional[MarginAccountQuery] = None,
     cost_estimator: Optional[TradeCostEstimator] = None,
     fetch_account: Optional[Callable[[], BrokerAccountSnapshot]] = None,
+    position_scope: Optional[Callable[[str], bool]] = None,
 ) -> LiveTrader:
     """
     - Description:
@@ -660,6 +664,8 @@ def assemble_live_trader(
             盤後校正成本用的估算器（依市場重算一筆已平倉交易的費用與稅）
         - fetch_account: Optional[Callable[[], BrokerAccountSnapshot]]
             取帳務快照的方式；股票與期貨是兩個子帳戶，該看哪一筆是商品語意
+        - position_scope: Optional[Callable[[str], bool]]
+            盤後對帳只判定哪些 symbol（本行程那一線的部位）；None 時比全帳戶
     - Return:
         - LiveTrader
             組好的引擎
@@ -692,6 +698,7 @@ def assemble_live_trader(
         now_provider=now_provider,
         parity_checker=parity_checker,
         cost_estimator=cost_estimator,
+        position_scope=position_scope,
     )
 
     # 券商連線的降級、重連與恢復；重連後的對帳結果由引擎本體接上回呼
@@ -862,6 +869,45 @@ def resolve_strategy_risk_config(
         return base.with_overrides(overrides.for_strategy(name))
     except ValueError as exc:
         raise ValueError(f"{name}：{exc}") from exc
+
+
+def make_position_scope(
+    strategies: Sequence[BaseStrategy],
+) -> Optional[Callable[[str], bool]]:
+    """
+    - Description:
+        本行程那一線的部位範圍：`symbol → 是否屬於本線`，盤後對帳只判定這些標的
+
+        股票線與期貨線是兩個行程、共用券商的一本合併帳，各自的盤後段相隔 5 分鐘。
+        期貨線送單逾時但已成交的出場單要等期貨盤後段接管才對得回來；股票盤後段
+        先跑，比到全帳戶就會因為「本地多一口 TX」把整個帳戶降級。本線以外的部位
+        留給它自己的盤後段判定。
+
+        台股的分法：期貨代號是 `{商品}{YYYYMM}`（`TX202611`），股票代號最長 6 碼、
+        沒有 6 位數字的月份尾巴；`live_position_lot` 只記 symbol，兩邊都只能從代號分。
+        混合兩種商品的行程回 None（比全帳戶）；組裝時那種行程本來就會被拒絕。
+    - Parameters:
+        - strategies: Sequence[BaseStrategy]
+            本次載入的策略
+    - Return:
+        - Optional[Callable[[str], bool]]
+            範圍判定；None 為全帳戶
+    """
+
+    instruments: Set[Optional[InstrumentType]] = {
+        strategy.instrument_type for strategy in strategies
+    }
+    wants_stock: bool = InstrumentType.STOCK in instruments
+    wants_futures: bool = bool(instruments - {InstrumentType.STOCK})
+    if wants_stock == wants_futures:
+        return None
+
+    def is_futures(symbol: str) -> bool:
+        return FuturesUtils.split_contract_id(symbol)[1] != ""
+
+    if wants_futures:
+        return is_futures
+    return lambda symbol: not is_futures(symbol)
 
 
 def _run_instrument_type(strategies: Sequence[BaseStrategy]) -> Optional[str]:

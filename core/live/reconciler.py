@@ -126,16 +126,29 @@ class Reconciler:
             self.dao, self.run_id, now_provider=self._now
         )
 
-    def check(self, positions: List[BrokerPositionSnapshot]) -> ReconcileResult:
+    def check(
+        self,
+        positions: List[BrokerPositionSnapshot],
+        scope: Optional[Callable[[str], bool]] = None,
+    ) -> ReconcileResult:
         """
         - Description:
             執行一次對帳；不一致時寫事件與快照並送降級事件
+
+            `scope` 限定只判定哪些標的的差異。券商只有一本合併帳，股票線與期貨線
+            卻是兩個行程、各自的盤後段相隔 5 分鐘：期貨線送單逾時但已成交的出場單，
+            要等期貨盤後段接管才對得回來，股票盤後段先跑、比到全帳戶就會因為
+            「本地多一口 TX」而把整個帳戶降級（2026-10-21、2026-10-29 兩次）。
+            盤後段只比自己那一線的部位，另一線的留給它自己的盤後段；段落啟動與
+            重連後的對帳不帶 `scope`，仍比全帳戶。快照照樣寫全帳戶——那是事實紀錄。
         - Parameters:
             - positions: List[BrokerPositionSnapshot]
                 券商端部位
+            - scope: Optional[Callable[[str], bool]]
+                `symbol → 是否屬於本次要判定的範圍`；None 為全帳戶
         - Return:
             - ReconcileResult
-                對帳結果
+                對帳結果（只含範圍內的差異）
         """
 
         result: ReconcileResult = ReconcileResult(
@@ -143,11 +156,22 @@ class Reconciler:
             internal_differences=self._check_internal_consistency(),
             order_cond_differences=self._check_order_cond(positions),
         )
+        if scope is not None:
+            result.broker_differences = {
+                key: value
+                for key, value in result.broker_differences.items()
+                if scope(key[0])
+            }
+            result.order_cond_differences = {
+                symbol: value
+                for symbol, value in result.order_cond_differences.items()
+                if scope(symbol)
+            }
 
         self._write_snapshots(positions)
 
         if result.is_consistent:
-            logger.info("對帳一致")
+            logger.info("對帳一致" if scope is None else "對帳一致（只比本線的部位）")
             return result
 
         message: str = f"對帳不一致：{result.describe()}"

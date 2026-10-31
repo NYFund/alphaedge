@@ -91,6 +91,7 @@ class AfterCloseRunner:
         now_provider: Callable[[], datetime.datetime] = now_live,
         parity_checker: Optional[ParityChecker] = None,
         cost_estimator: Optional[TradeCostEstimator] = None,
+        position_scope: Optional[Callable[[str], bool]] = None,
     ) -> None:
         """
         - Description:
@@ -122,6 +123,9 @@ class AfterCloseRunner:
                 訊號 parity 比對器；None 時跳過比對並記 warning
             - cost_estimator: Optional[TradeCostEstimator]
                 依成本模型重算費用與稅的估算器；None 時不做成本校正
+            - position_scope: Optional[Callable[[str], bool]]
+                `symbol → 是否屬於本行程那一線（股票或期貨）`；盤後對帳只判定這些標的，
+                另一線的部位留給它自己的盤後段。None 時比全帳戶
         """
 
         self.data_feeds: Sequence[BaseLiveDataFeed] = data_feeds
@@ -136,6 +140,7 @@ class AfterCloseRunner:
         self.notifier: Optional[BaseNotifier] = notifier
         self.parity_checker: Optional[ParityChecker] = parity_checker
         self.cost_estimator: Optional[TradeCostEstimator] = cost_estimator
+        self.position_scope: Optional[Callable[[str], bool]] = position_scope
         self._now: Callable[[], datetime.datetime] = now_provider
         # 風控事件的唯一寫入口。**自建而不是注入**：本類已經持有
         # `(dao, run_id, now_provider)` 三件組，注入只是把同一組東西再傳一次，
@@ -185,10 +190,14 @@ class AfterCloseRunner:
             #    ROD 未成交單在券商端日終自動失效
             self.expire_open_orders()
 
-            # 3. 對帳與快照
+            # 3. 對帳與快照。**只判定本線的部位**：兩條線的盤後段相隔 5 分鐘，
+            #    另一線送單逾時但已成交的單要等它自己的盤後段接管才對得回來，
+            #    先跑的這一段比到全帳戶就會把整個帳戶降級（2026-10-29 的實況）
             positions: List[Any] = self.broker.get_positions()
             self.account_sync.rebuild_from_broker(positions)
-            self.last_reconcile = self.reconciler.check(positions)
+            self.last_reconcile = self.reconciler.check(
+                positions, scope=self.position_scope
+            )
 
             # 4. 以券商的已實現損益校正成本估算（差額是校正成本設定的依據）
             self.calibrate_costs(today)

@@ -204,6 +204,10 @@ class OrderManager:
         # 本地狀態要等撤單回報（或盤後刷新）才轉 CANCELLED，這份集合只用來避免重送
         self._cancel_requested: Set[str] = set()
 
+        # 收到對不上的成交時，已經向券商對過一次的「送單逾時、沒有序號」委託。
+        # 每張只對一次：對不到就是券商真的沒有這張單，再對只是多耗一次下單類額度
+        self._takeover_tried: Set[str] = set()
+
     # === 識別碼 ===
     def next_client_order_id(self) -> str:
         """產生下一個 client order id：`{run_id}-{序號}`"""
@@ -423,9 +427,14 @@ class OrderManager:
         - 另一個行程的委託：以紀錄庫查到的委託歸屬寫入成交，不動對方的狀態機，
           由對方認領或盤後回填。
         - 查不到任何委託：記事件、仍保留成交，由對帳抓出差異。
+
+        查不到時先看本行程有沒有**送單逾時、沒拿到序號**的委託（`_take_over_timed_out()`）：
+        券商其實受理了的單，它的成交只能靠序號對回來，而序號正是逾時沒拿到的東西。
         """
 
         ticket: Optional[OrderTicket] = self._find_by_seqno(report.broker_seqno)
+        if ticket is None:
+            ticket = self._take_over_timed_out(report)
         if ticket is None:
             return self._store_foreign_fill(report)
 
@@ -476,6 +485,59 @@ class OrderManager:
             None,
         )
         return self.dao.insert_fill(self._fill_row(report, None, None))
+
+    def _take_over_timed_out(self, report: ExecutionReport) -> Optional[OrderTicket]:
+        """
+        成交對不上委託時，當場把本行程「送單逾時、沒有序號」的委託向券商對一次
+
+        `place_order()` 逾時時本地標 `FAILED`、沒有序號，券商其實已受理：它的成交回報
+        只帶序號，`_find_by_seqno()` 與紀錄庫反查都落空。原本只有段落啟動與盤後的
+        `recover()` 會向券商對回這張單，收盤段當下收到的成交就只能記 `FILL_UNMATCHED`、
+        部位不扣；下一個行程（股票線的盤後段）對帳時本地就多一口，整個帳戶降級。
+        （2026-10-21 換月平新月、2026-10-29 TX202611 出場單，兩次都是這樣）
+
+        所以在這裡跑同一套接管：向券商刷新一次委託清單，以序號、壓縮碼或模糊比對
+        把逾時的委託對回來，再以序號重找本筆成交的委託。**只看同一檔的逾時委託**，
+        而且每張只對一次（`_takeover_tried`）：刷新算在下單類額度裡，對不到就是
+        券商真的沒有這張單，之後的成交不必再為它刷新。
+
+        回 None 代表對過之後仍找不到，由呼叫端照原本的跨行程與無主路徑處理。
+        """
+
+        candidates: List[OrderTicket] = [
+            ticket
+            for ticket in self.tickets.values()
+            if ticket.status is LiveOrderStatus.FAILED
+            and not ticket.broker_seqno
+            and ticket.client_order_id not in self._takeover_tried
+            and (ticket.order is None or ticket.order.symbol == report.symbol)
+        ]
+        if not candidates:
+            return None
+
+        logger.warning(
+            f"成交回報 seqno={report.broker_seqno}（{report.symbol}）找不到委託，"
+            f"本行程有 {len(candidates)} 張送單逾時的同檔委託，向券商對一次"
+        )
+        broker_tickets: List[OrderTicket] = self.broker.refresh_order_status()
+        for ticket in candidates:
+            self._takeover_tried.add(ticket.client_order_id)
+            if self._adopt_broker_state(
+                ticket, self._row_of(ticket), broker_tickets, op_type="takeover"
+            ):
+                message: str = (
+                    f"委託 {ticket.client_order_id} 送單逾時但券商已受理，"
+                    f"收到成交時對回（seqno={ticket.broker_seqno}）"
+                )
+                self.events.write(
+                    category="ORDER_TAKEN_OVER",
+                    severity=NotifyLevel.WARN,
+                    message=message,
+                    strategy_name=ticket.strategy_name,
+                    symbol=ticket.order.symbol if ticket.order is not None else None,
+                    client_order_id=ticket.client_order_id,
+                )
+        return self._find_by_seqno(report.broker_seqno)
 
     def _claim_fill(self, report: ExecutionReport, ticket: OrderTicket) -> bool:
         """
@@ -838,69 +900,109 @@ class OrderManager:
             return []
 
         broker_tickets: List[OrderTicket] = self.broker.refresh_order_status()
-        by_seqno: Dict[str, OrderTicket] = {
-            ticket.broker_seqno: ticket
-            for ticket in broker_tickets
-            if ticket.broker_seqno
-        }
-        by_custom_field: Dict[str, OrderTicket] = {
-            ticket.custom_field: ticket
-            for ticket in broker_tickets
-            if ticket.custom_field
-        }
 
         recovered: List[OrderTicket] = []
         for row in stored:
             ticket: OrderTicket = self._rebuild_ticket(row)
             self.tickets[ticket.client_order_id] = ticket
-            was_failed: bool = ticket.status is LiveOrderStatus.FAILED
-
-            matched: Optional[OrderTicket] = None
-            if row.get("broker_seqno"):
-                matched = by_seqno.get(str(row["broker_seqno"]))
-            if matched is None and row.get("custom_field"):
-                matched = by_custom_field.get(str(row["custom_field"]))
-            if matched is None:
-                matched = self._fuzzy_match(row, broker_tickets)
-
-            # **單筆矛盾不中止整個接管**：轉移不合法時狀態機已寫 CRITICAL 事件，
-            # 這裡只略過那一筆。讓例外往上拋的話，整個段落在送單之前就中止，
-            # 一筆舊委託的狀態問題會讓當天所有策略都送不出單
-            try:
-                if matched is None:
-                    if was_failed:
-                        logger.info(
-                            f"委託 {ticket.client_order_id} 送單時已標 FAILED，"
-                            "券商端亦查無此單，維持 FAILED"
-                        )
-                    else:
-                        self.transition(
-                            ticket,
-                            LiveOrderStatus.FAILED,
-                            reason="重啟接管時在券商端查無此單",
-                            op_type="recover",
-                        )
-                else:
-                    ticket.broker_seqno = matched.broker_seqno
-                    ticket.broker_order_id = matched.broker_order_id
-                    if matched.status is not ticket.status:
-                        self.transition(
-                            ticket,
-                            matched.status,
-                            reason="送單逾時但券商已受理，重啟接管時對回"
-                            if was_failed
-                            else None,
-                            op_type="recover",
-                        )
-                    else:
-                        # 狀態沒變也要落地：以 `custom_field` 對回來的單原本沒有序號，
-                        # 不寫的話成交回填與下一次接管都還是對不到它
-                        self._persist(ticket)
-            except OrderStateError as exc:
-                logger.warning(f"接管時與本地狀態矛盾，已跳過本筆：{exc}")
+            self._adopt_broker_state(ticket, row, broker_tickets, op_type="recover")
             recovered.append(ticket)
 
         return recovered
+
+    def _adopt_broker_state(
+        self,
+        ticket: OrderTicket,
+        row: Dict[str, Any],
+        broker_tickets: Sequence[OrderTicket],
+        op_type: str,
+    ) -> bool:
+        """
+        把一張本地委託對到券商端的委託，並以券商的狀態為準往前走
+
+        比對順序「序號 → 壓縮碼 → 模糊」；對到就補序號、推進狀態並落地，對不到的
+        未終結委託標 `FAILED`、原本就是 `FAILED` 的維持原狀。重啟接管（`recover()`）
+        與收到成交時的當場接管（`_take_over_timed_out()`）走同一套，差別只在
+        前者的委託由紀錄庫重建、後者是本行程手上的那張。
+
+        **單筆矛盾不中止整個接管**：轉移不合法時狀態機已寫 CRITICAL 事件，
+        這裡只略過那一筆。讓例外往上拋的話，整個段落在送單之前就中止，
+        一筆舊委託的狀態問題會讓當天所有策略都送不出單。回傳有沒有對到。
+        """
+
+        was_failed: bool = ticket.status is LiveOrderStatus.FAILED
+
+        matched: Optional[OrderTicket] = None
+        if row.get("broker_seqno"):
+            matched = next(
+                (
+                    candidate
+                    for candidate in broker_tickets
+                    if candidate.broker_seqno == str(row["broker_seqno"])
+                ),
+                None,
+            )
+        if matched is None and row.get("custom_field"):
+            matched = next(
+                (
+                    candidate
+                    for candidate in broker_tickets
+                    if candidate.custom_field == str(row["custom_field"])
+                ),
+                None,
+            )
+        if matched is None:
+            matched = self._fuzzy_match(row, broker_tickets)
+
+        try:
+            if matched is None:
+                if was_failed:
+                    logger.info(
+                        f"委託 {ticket.client_order_id} 送單時已標 FAILED，"
+                        "券商端亦查無此單，維持 FAILED"
+                    )
+                else:
+                    self.transition(
+                        ticket,
+                        LiveOrderStatus.FAILED,
+                        reason="接管時在券商端查無此單",
+                        op_type=op_type,
+                    )
+            else:
+                ticket.broker_seqno = matched.broker_seqno
+                ticket.broker_order_id = matched.broker_order_id
+                if matched.status is not ticket.status:
+                    self.transition(
+                        ticket,
+                        matched.status,
+                        reason="送單逾時但券商已受理，接管時對回"
+                        if was_failed
+                        else None,
+                        op_type=op_type,
+                    )
+                else:
+                    # 狀態沒變也要落地：以 `custom_field` 對回來的單原本沒有序號，
+                    # 不寫的話成交回填與下一次接管都還是對不到它
+                    self._persist(ticket)
+        except OrderStateError as exc:
+            logger.warning(f"接管時與本地狀態矛盾，已跳過本筆：{exc}")
+        return matched is not None
+
+    @staticmethod
+    def _row_of(ticket: OrderTicket) -> Dict[str, Any]:
+        """本行程手上的委託 → 與紀錄庫同形的一列；接管比對只認列的欄位"""
+
+        order: Optional[BaseOrder] = ticket.order
+        return {
+            "client_order_id": ticket.client_order_id,
+            "broker_seqno": ticket.broker_seqno,
+            "custom_field": ticket.custom_field,
+            "symbol": order.symbol if order is not None else None,
+            "action": order.action.value if order is not None else None,
+            "price": order.price if order is not None else None,
+            "volume": order.volume if order is not None else None,
+            "created_at": ticket.created_at,
+        }
 
     def _fuzzy_match(
         self, row: Dict[str, Any], candidates: Sequence[OrderTicket]
