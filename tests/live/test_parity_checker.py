@@ -1464,13 +1464,15 @@ def test_intraday_exit_without_a_backtest_entry_is_unexplained() -> None:
 def close_day_of_2026_10_27() -> Tuple[List[Dict[str, Any]], List[BaseOrder]]:
     """
     2026-10-27 `VolumeBreakoutMomentumStrategy` 尾盤段：持有 2465，同段送 2465 賣單；
-    實盤可開 2 檔（1569 先佔名額、再被跨策略守門擋下；4526 買 3 張；4720 沒有名額），
-    回測先平後開、可開 3 檔（1569、4526 各 2 張、4720）
+    實盤可開 2 檔（2465 賣單還沒成交仍佔一格；1569 被跨策略守門擋下、名額改給 4720），
+    每檔資金是回測的 1.5 倍（4526 買 3 張、4720 買 7 張）；回測先平後開、可開 3 檔
+    （1569、4526 各 2 張、4720 5 張）
     """
 
     live: List[Dict[str, Any]] = [
         timed_live_order("2465", "Sell", ExecutionTiming.AT_CLOSE, "FILLED", 1),
         timed_live_order("4526", "Buy", ExecutionTiming.AT_CLOSE, "FILLED", 3),
+        timed_live_order("4720", "Buy", ExecutionTiming.AT_CLOSE, "FILLED", 7),
     ]
     backtest: List[BaseOrder] = [
         make_backtest_order("2465", Action.SELL, 1),
@@ -1486,9 +1488,10 @@ BLOCKED_1569: List[Dict[str, Any]] = [make_event("CROSS_STRATEGY_BLOCKED", "1569
 
 def test_volume_inflated_by_a_held_slot_is_explained() -> None:
     """
-    2026-10-27 的 4526：實盤可開 2 檔、回測 3 檔，每檔資金不同，3 張對 2 張
+    2026-10-27 的 4526 與 4720：實盤可開 2 檔、回測 3 檔，每檔資金不同，張數跟著多
 
-    被守門擋下的 1569 在實盤先佔了一格才被擋，算進實盤的可開檔數；4720 則是被佔走的那檔。
+    被守門擋下的 1569 不算實盤的名額（實盤擋下後會剔除它重新切分），只有同段
+    2465 賣單佔走的那一格讓兩邊檔數不同。
     """
 
     live, backtest = close_day_of_2026_10_27()

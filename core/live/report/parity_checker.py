@@ -113,7 +113,7 @@ CATEGORY_TIMING: str = "TIMING"
 # （餘額 ÷ 可開檔數）就多，張數跟著多。同段有實盤平倉單、回測可開檔數多於實盤時，
 # 實盤張數落在「回測張數 ×（回測可開檔數 ÷ 實盤可開檔數）」無條件捨去後的 0～1 張內
 # 才歸這一類（2026-10-27 的 4526：實盤可開 2 檔買 3 張、回測 3 檔買 2 張）；
-# 可開檔數以兩邊同段開倉單的檔數推估，被守門擋下的單在實盤仍佔一格也算進去
+# 可開檔數以兩邊同段開倉單的檔數推估（被守門擋下的單不佔名額：守門擋下後實盤會剔除它重新切分）
 CATEGORY_EXIT_PENDING_SLOT: str = "EXIT_PENDING_SLOT"
 
 # 實盤多送的平倉單，是逐筆觸發的策略進場當天就在盤中出場（例如同日停損）。
@@ -586,7 +586,7 @@ def compare(
         order_phases,
     )
     slot_ratios: Dict[str, Tuple[int, int]] = _slot_ratio_by_phase(
-        live_orders, backtest_by_key, set(blocked), order_phases
+        live_orders, backtest_by_key, order_phases
     )
 
     diffs: List[ParityDiff] = []
@@ -947,7 +947,6 @@ def _shared_phase(
 def _slot_ratio_by_phase(
     live_orders: Sequence[Dict[str, Any]],
     backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]],
-    blocked_symbols: Set[str],
     order_phases: Optional[Callable[[BaseOrder], Set[str]]],
 ) -> Dict[str, Tuple[int, int]]:
     """
@@ -955,16 +954,14 @@ def _slot_ratio_by_phase(
         各段落「回測可開檔數、實盤可開檔數」，只列同段有實盤平倉單且回測檔數較多的段落
         （見 `CATEGORY_EXIT_PENDING_SLOT` 的張數差異）
 
-        可開檔數由同段開倉單的檔數推估：回測取該段回測開倉單的檔數；實盤取該段
-        實盤開倉單的檔數，加上被守門擋下的那幾檔——它們在實盤先佔了名額才被擋
-        （擋下的單沒有 `live_order` 列，段落以回測那張單的為準）。
+        可開檔數由同段開倉單的檔數推估：回測取該段回測開倉單的檔數，實盤取該段
+        實盤開倉單的檔數。被守門擋下的單不算：守門擋下後實盤會剔除它重新切分，
+        名額已經改給後面的候選。
     - Parameters:
         - live_orders: Sequence[Dict[str, Any]]
             這支策略當日的 `live_order` 列
         - backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]]
             回測委託依比對鍵分組
-        - blocked_symbols: Set[str]
-            被風控或守門擋在送出前的標的
         - order_phases: Optional[Callable[[BaseOrder], Set[str]]]
             回測委託 → 該送出的段落名集合
     - Return:
@@ -994,8 +991,6 @@ def _slot_ratio_by_phase(
         if phase is None:
             continue
         backtest_openings.setdefault(phase, set()).add(symbol)
-        if symbol in blocked_symbols:
-            live_openings.setdefault(phase, set()).add(symbol)
 
     ratios: Dict[str, Tuple[int, int]] = {}
     for phase in phases_with_exits:

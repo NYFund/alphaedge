@@ -79,6 +79,10 @@ class SignalCollector:
         self.clock: SegmentClock = clock
         self.forget_reservations: Callable[[str], None] = forget_reservations
 
+        # 本段落各策略鉤子收到的（段落, 報價）：守門擋下開倉單後要以同一份報價、
+        # 剔除被擋的標的重新切分名額與資金（`regenerate_entry_orders()`）
+        self._hook_inputs: Dict[str, Tuple[ExecutionTiming, List[BaseQuote]]] = {}
+
     @staticmethod
     def quote_symbols(context: StrategyContext) -> List[str]:
         """
@@ -222,6 +226,8 @@ class SignalCollector:
     ) -> List[BaseOrder]:
         """依 `get_execution_sequence()` 決定開平倉先後，與回測一致"""
 
+        self._hook_inputs[context.name] = (timing, list(quotes))
+
         strategy: BaseStrategy = context.strategy
         execution_sequence: BarExecutionSequence = order_rules.get_execution_sequence(
             strategy.allow_day_trade
@@ -233,6 +239,46 @@ class SignalCollector:
         if execution_sequence is BarExecutionSequence.OPEN_THEN_CLOSE:
             return entry_orders + exit_orders
         return exit_orders + entry_orders
+
+    def regenerate_entry_orders(
+        self, context: StrategyContext, excluded: Set[str]
+    ) -> List[BaseOrder]:
+        """
+        - Description:
+            剔除指定標的後，以本段落同一份報價重新產生開倉單
+
+            跨策略守門排在策略切分名額與資金之後：被擋的那一檔已經佔走一個名額
+            與一份資金（10/27 的 1569 佔掉可開 2 檔中的 1 檔，4720 因此沒有名額），
+            而回測沒有另一支策略的部位、三檔都進場。守門擋下開倉單後由這裡把那幾檔
+            從報價剔除、再呼叫一次開倉鉤子，名額與資金就改給後面的候選。
+
+            出場單不在這裡重做：它們由持倉決定，與名額無關。鉤子失敗時與
+            `collect_orders()` 同樣把策略降到 `HALTED` 並回空。
+        - Parameters:
+            - context: StrategyContext
+                策略脈絡
+            - excluded: Set[str]
+                要剔除的標的（本段落被守門擋下的）
+        - Return:
+            - List[BaseOrder]
+                重新切分後的開倉單
+        """
+
+        recorded: Optional[Tuple[ExecutionTiming, List[BaseQuote]]] = (
+            self._hook_inputs.get(context.name)
+        )
+        if recorded is None:
+            return []
+        timing, quotes = recorded
+        try:
+            return self._entry_orders(
+                context,
+                timing,
+                [quote for quote in quotes if quote.symbol not in excluded],
+            )
+        except Exception as exc:
+            self.halt_strategy(context, f"重新切分名額時鉤子執行失敗：{exc}")
+            return []
 
     def _entry_orders(
         self,

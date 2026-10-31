@@ -2,7 +2,7 @@ import datetime
 import sqlite3
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import pytest
 
@@ -2153,3 +2153,162 @@ def test_filled_amount_moves_from_reserved_to_used() -> None:
 
     assert harness.allocator.reserved["Alpha"] == 0.0
     assert harness.allocator.used["Alpha"] == 100_000.0
+
+
+# === 守門擋下的開倉單不佔名額與資金 ===
+class SlotSizedStrategy(ScriptedStrategy):
+    """
+    依報價順序取前 `slots` 檔、餘額均分換張數的腳本策略
+
+    模仿 `EqualWeightSizer`：名額與每檔資金在產生委託時就決定，被擋的那一檔
+    會佔走一格與一份資金——守門排在這之後，所以要靠重新切分把名額還回去。
+    張數另除以 10，讓兩張單合計落在風控的單筆與批次上限內。
+    """
+
+    def __init__(self, name: str, slots: int = 2) -> None:
+        super().__init__(name)
+        self._slots: int = slots
+        self.calls: int = 0
+
+    def check_open_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+        self.calls += 1
+        per_slot: float = CAPITAL / self._slots
+        return [
+            make_order(
+                quote.symbol,
+                volume=int(per_slot / (quote.cur_price * 1000) / 10),
+                price=quote.cur_price,
+            )
+            for quote in quotes[: self._slots]
+        ]
+
+
+def feed_symbols(harness: Harness, index: int, symbols: List[str]) -> None:
+    """把第 `index` 支策略的標的池與報價換成指定的幾檔"""
+
+    harness.contexts[index].data_feed = FakeFeed([make_quote(s) for s in symbols])
+    harness.contexts[index].symbols = list(symbols)
+    for symbol in symbols:
+        harness.broker.quotes[symbol] = make_quote(symbol)
+
+
+def seed_unattributed(harness: Harness, symbol: str, volume: int = 1) -> None:
+    """券商端與歸屬帳都放一筆 `__unattributed__` 的多單（系統外或接管來的部位）"""
+
+    from core.live.attribution.position_ledger import UNATTRIBUTED_STRATEGY
+    from core.models import BrokerPositionSnapshot
+
+    harness.dao.open_lot(
+        {
+            "lot_id": f"seed-unattributed-{symbol}",
+            "strategy_name": UNATTRIBUTED_STRATEGY,
+            "symbol": symbol,
+            "direction": "LONG",
+            "volume": volume,
+            "open_date": TODAY - datetime.timedelta(days=1),
+            "open_price": 100.0,
+            "client_order_id": None,
+        }
+    )
+    harness.broker.positions.append(
+        BrokerPositionSnapshot(
+            symbol=symbol, direction=PositionType.LONG, volume=volume, avg_price=100.0
+        )
+    )
+
+
+def placed_by_symbol(harness: Harness) -> Dict[str, int]:
+    """券商端收到的委託 `{標的: 張數}`"""
+
+    return {
+        ticket.order.symbol: ticket.order.volume
+        for ticket in harness.broker.tickets.values()
+        if ticket.order is not None
+    }
+
+
+def blocked_events(harness: Harness) -> int:
+    return harness.dao.conn.execute(
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'CROSS_STRATEGY_BLOCKED'"
+    ).fetchone()[0]
+
+
+def test_blocked_opening_gives_its_slot_to_the_next_candidate() -> None:
+    """
+    重現 2026-10-27：1569 由 `__unattributed__` 持有而被擋，名額改給 4720
+
+    原本 1569 先佔掉可開 2 檔中的 1 檔才被擋，4720 沒有名額；回測沒有那筆部位、
+    三檔都進場，差異落成未解釋。
+    """
+
+    class Alpha(SlotSizedStrategy):
+        """可開 2 檔的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", slots=2)
+
+    alpha: Alpha = Alpha()
+    harness: Harness = Harness([alpha])
+    feed_symbols(harness, 0, ["1569", "4526", "4720"])
+    seed_unattributed(harness, "1569")
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    placed: Dict[str, int] = placed_by_symbol(harness)
+    assert set(placed) == {"4526", "4720"}
+    # 兩檔都以「可開 2 檔」的每檔資金切分，張數相同
+    assert placed["4526"] == placed["4720"] == 5
+    assert blocked_events(harness) == 1
+    assert alpha.calls == 2
+
+
+def test_without_blocked_orders_the_hook_runs_once() -> None:
+    """沒有被擋的單時委託逐筆不變，開倉鉤子只呼叫一次"""
+
+    class Alpha(SlotSizedStrategy):
+        """可開 2 檔的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", slots=2)
+
+    alpha: Alpha = Alpha()
+    harness: Harness = Harness([alpha])
+    feed_symbols(harness, 0, ["1569", "4526", "4720"])
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert set(placed_by_symbol(harness)) == {"1569", "4526"}
+    assert blocked_events(harness) == 0
+    assert alpha.calls == 1
+
+
+def test_loser_of_a_same_segment_conflict_is_resized() -> None:
+    """兩支策略同段都要 1569：先搶先贏，輸的那支把名額改給下一檔，不是整段少一檔"""
+
+    class Alpha(SlotSizedStrategy):
+        """可開 1 檔、先註冊的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Alpha", slots=1)
+
+    class Beta(SlotSizedStrategy):
+        """與 Alpha 看同一組報價的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__("Beta", slots=1)
+
+    alpha: Alpha = Alpha()
+    beta: Beta = Beta()
+    harness: Harness = Harness([alpha, beta])
+    feed_symbols(harness, 0, ["1569", "4526"])
+    feed_symbols(harness, 1, ["1569", "4526"])
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    by_strategy: Dict[str, Set[str]] = {}
+    for ticket in harness.broker.tickets.values():
+        if ticket.order is not None:
+            by_strategy.setdefault(ticket.strategy_name, set()).add(ticket.order.symbol)
+    assert by_strategy == {"Alpha": {"1569"}, "Beta": {"4526"}}
+    assert blocked_events(harness) == 1
+    assert (alpha.calls, beta.calls) == (1, 2)

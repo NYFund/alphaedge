@@ -731,12 +731,6 @@ def assemble_live_trader(
         simulation=simulation,
     )
     # 跨策略守門與兩層批次曝險截斷
-    cross_checks: CrossStrategyChecks = CrossStrategyChecks(
-        contexts=contexts,
-        conflict_guard=conflict_guard,
-        risk_manager=risk_manager,
-        account_equity=account_monitor.account_equity,
-    )
     # 策略訊號 → 經過前處理的委託；鉤子失敗時把該策略降到 HALTED
     signals: SignalCollector = SignalCollector(
         mode_state=mode_state,
@@ -747,6 +741,14 @@ def assemble_live_trader(
         notifier=notifier,
         clock=clock,
         forget_reservations=execution.forget_reservations,
+    )
+    cross_checks: CrossStrategyChecks = CrossStrategyChecks(
+        contexts=contexts,
+        conflict_guard=conflict_guard,
+        risk_manager=risk_manager,
+        account_equity=account_monitor.account_equity,
+        # 守門擋下開倉單時把名額與資金還給後面的候選：請訊號元件剔除那幾檔重切
+        regenerate_entries=signals.regenerate_entry_orders,
     )
     # 盤中逐筆段落：迴圈、心跳、日終回補與收線
     intraday: IntradaySession = IntradaySession(
