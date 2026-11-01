@@ -143,7 +143,7 @@ class IntradaySession:
         """
 
         loop: IntradayEventLoop = IntradayEventLoop(
-            on_quote=self._on_intraday_quote,
+            on_quote=self._process_tick,
             on_execution=self._on_intraday_execution,
             on_market_data_lost=self._on_market_data_lost,
             now_provider=self.clock.now,
@@ -408,7 +408,7 @@ class IntradaySession:
             int(position.volume),
         )
 
-    def _on_intraday_quote(self, quote: BaseQuote) -> None:
+    def _process_tick(self, quote: BaseQuote) -> None:
         """
         一筆行情 → 逐筆觸發策略
 
