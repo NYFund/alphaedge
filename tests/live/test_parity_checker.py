@@ -11,9 +11,12 @@ from core.live.factory import make_order_phase_lookup
 from core.live.report.parity_checker import (
     CATEGORY_CAPITAL_EXHAUSTED,
     CATEGORY_CROSS_STRATEGY_BLOCKED,
+    CATEGORY_EXIT_PENDING_SLOT,
     CATEGORY_GROUP,
+    CATEGORY_INTRADAY_PATH,
     CATEGORY_LIMIT_UNFILLED,
     CATEGORY_LOCKED_AT_LIMIT,
+    CATEGORY_QUOTE_STALE,
     CATEGORY_RISK_REJECTED,
     CATEGORY_SEGMENT_ABORTED,
     CATEGORY_SEND_FAILED,
@@ -30,6 +33,7 @@ from core.live.report.parity_checker import (
     compare,
     count_by_group,
     segments_ran_cleanly,
+    stale_quote_scope,
 )
 from core.models import BaseOrder, StockOrder
 from core.utils import Action, ExecutionTiming, LiveHook, LiveOrderStatus, PositionType
@@ -1044,6 +1048,128 @@ def test_risk_event_still_wins_over_segment_aborted() -> None:
     assert [diff.category for diff in diffs] == [CATEGORY_RISK_REJECTED]
 
 
+# === 報價日期不是今天 ===
+def test_dropped_stale_symbol_is_quote_stale_and_others_are_not() -> None:
+    """
+    部分剔除：只有被剔除的那檔歸報價過期，其他標的的差異照常判定
+
+    2026-10-23 模擬環境的收盤段快照停在前一日；剔除之後回測有、實盤沒有的單
+    原因已由 `QUOTE_STALE` 事件報過，不該再當成未解釋發一次 CRITICAL。
+    """
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order("2317"), make_backtest_order("2330")],
+        [],
+        (),
+        False,
+        stale_symbols={"2317"},
+    )
+
+    assert [(diff.symbol, diff.category) for diff in diffs] == [
+        ("2317", CATEGORY_QUOTE_STALE),
+        ("2330", CATEGORY_UNEXPLAINED),
+    ]
+
+
+def test_skipped_segment_explains_only_its_own_orders() -> None:
+    """整段跳過：只解釋該在那個段落送出的單，別的段落跳過不能拿來解釋"""
+
+    skipped: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order()],
+        [],
+        (),
+        False,
+        order_phases=close_phase,
+        stale_phases={"close"},
+    )
+    other: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order()],
+        [],
+        (),
+        False,
+        order_phases=close_phase,
+        stale_phases={"open"},
+    )
+
+    assert [diff.category for diff in skipped] == [CATEGORY_QUOTE_STALE]
+    assert "close" in skipped[0].note
+    assert [diff.category for diff in other] == [CATEGORY_UNEXPLAINED]
+
+
+def test_risk_event_still_wins_over_quote_stale() -> None:
+    """有擋單事件就以事件為準"""
+
+    diffs: List[ParityDiff] = compare(
+        [],
+        [make_backtest_order("2317")],
+        [make_event("SINGLE_ORDER_AMOUNT", "2317")],
+        (),
+        False,
+        stale_symbols={"2317"},
+    )
+
+    assert [diff.category for diff in diffs] == [CATEGORY_RISK_REJECTED]
+
+
+def test_stale_quote_scope() -> None:
+    """帶標的是部分剔除；不帶標的以 `run_id` 對到段落，對不到的不算；其他類別不看"""
+
+    events: List[Dict[str, Any]] = [
+        {"category": "QUOTE_STALE", "symbol": "2317", "run_id": "run-close"},
+        {"category": "QUOTE_STALE", "symbol": None, "run_id": "run-close"},
+        {"category": "QUOTE_STALE", "symbol": None, "run_id": "run-unknown"},
+        {"category": "MAX_HOLDINGS", "symbol": "2454", "run_id": "run-open"},
+    ]
+    runs: List[Dict[str, Any]] = [
+        {"run_id": "run-close", "phase": "close"},
+        {"run_id": "run-open", "phase": "open"},
+    ]
+
+    assert stale_quote_scope(events, runs) == ({"2317"}, {"close"})
+
+
+def test_checker_passes_the_stale_quote_scope(
+    dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """接線：比對器以當天的 `QUOTE_STALE` 事件與執行紀錄算出範圍並傳進比對"""
+
+    dao.insert_run(
+        {
+            "run_id": "run-close",
+            "started_at": NOW,
+            "phase": "close",
+            "simulation": 1,
+            "end_reason": "正常結束",
+            "strategy_params_json": '{"strategies": ["Alpha"]}',
+        }
+    )
+    dao.insert_risk_event(
+        {
+            "run_id": "run-close",
+            "strategy_name": "Alpha",
+            "severity": "CRITICAL",
+            "category": "QUOTE_STALE",
+            "symbol": None,
+            "message": "Alpha 有 1／1 檔報價的日期不是今天",
+            "occurred_at": NOW,
+        }
+    )
+    checker: ParityChecker = ParityChecker(
+        dao,
+        lambda name, day: [make_backtest_order("2330")],
+        output_root=tmp_path,
+        strategy_names=["Alpha"],
+        order_phases=lambda name, order: {"close"},
+    )
+
+    result: Dict[str, List[ParityDiff]] = checker.check(TODAY)
+
+    assert [diff.category for diff in result["Alpha"]] == [CATEGORY_QUOTE_STALE]
+
+
 @pytest.mark.parametrize(
     "runs, expected",
     [
@@ -1140,3 +1266,195 @@ def test_order_phase_lookup_follows_the_strategy_schedule() -> None:
     # 沒宣告 stop_loss 時退回 close 的段落
     assert lookup(name, make_backtest_order(action=Action.SELL)) == {"close"}
     assert lookup("NotLoaded", make_backtest_order()) == set()
+
+
+# === 同段平倉仍佔名額與盤中路徑 ===
+def timed_live_order(
+    symbol: str,
+    action: str,
+    timing: ExecutionTiming,
+    status: str = "FILLED",
+    volume: int = 2,
+) -> Dict[str, Any]:
+    """帶執行時點與成交量的實盤委託；成交量依狀態填（`FILLED` 全成、其餘 0）"""
+
+    row: Dict[str, Any] = make_live_order(symbol, action, volume, status)
+    row["timing"] = timing.value
+    row["filled_volume"] = volume if status == "FILLED" else 0
+    return row
+
+
+def by_symbol(diffs: List[ParityDiff]) -> Dict[Tuple[str, str], str]:
+    """差異清單 → `{(標的, 買賣別): 類別}`"""
+
+    return {(diff.symbol, diff.side): diff.category for diff in diffs}
+
+
+def close_day_of_2026_10_29() -> Tuple[List[Dict[str, Any]], List[BaseOrder]]:
+    """
+    2026-10-29 `VolumeBreakoutMomentumStrategy` 尾盤段：持有 2465，同段送出 2465 賣單與
+    2352、2465 買單（持倉上限 3、可開檔數只剩 2）；回測先平後開，三檔都買
+    """
+
+    live: List[Dict[str, Any]] = [
+        timed_live_order("2465", "Sell", ExecutionTiming.AT_CLOSE, "CANCELLED", 1),
+        timed_live_order("2352", "Buy", ExecutionTiming.AT_CLOSE, "FILLED", 4),
+        timed_live_order("2465", "Buy", ExecutionTiming.AT_CLOSE, "FILLED", 1),
+    ]
+    backtest: List[BaseOrder] = [
+        make_backtest_order("2465", Action.SELL, 1),
+        make_backtest_order("2352", Action.BUY, 4),
+        make_backtest_order("2465", Action.BUY, 1),
+        make_backtest_order("6233", Action.BUY, 4),
+    ]
+    return live, backtest
+
+
+def test_opening_crowded_out_by_a_same_segment_exit_is_explained() -> None:
+    """
+    2026-10-29 的 6233：同段平倉單還沒成交、舊倉仍佔名額，回測先平後開多買了一檔
+
+    實盤這樣做是刻意的（那張 2465 賣單真的沒成交），不該當成訊號漂移發 CRITICAL。
+    """
+
+    live, backtest = close_day_of_2026_10_29()
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, [], (), False, order_phases=close_phase
+    )
+
+    assert by_symbol(diffs)[("6233", "Buy")] == CATEGORY_EXIT_PENDING_SLOT
+    assert CATEGORY_GROUP[CATEGORY_EXIT_PENDING_SLOT] == GROUP_STRUCTURAL
+
+
+def test_without_a_same_segment_exit_the_missing_opening_stays_unexplained() -> None:
+    """沒有平倉單就沒有被佔走的名額：少送的開倉單原因未知"""
+
+    live, backtest = close_day_of_2026_10_29()
+    live = [row for row in live if row["action"] == "Buy"]
+    backtest = [order for order in backtest if order.action is Action.BUY]
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, [], (), False, order_phases=close_phase
+    )
+
+    assert by_symbol(diffs)[("6233", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_more_missing_openings_than_exits_are_all_unexplained() -> None:
+    """一檔平倉最多佔一個名額：缺兩檔卻只有一張平倉單，就有別的原因，整段不歸類"""
+
+    live, backtest = close_day_of_2026_10_29()
+    backtest.append(make_backtest_order("1201", Action.BUY, 9))
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, [], (), False, order_phases=close_phase
+    )
+
+    categories: Dict[Tuple[str, str], str] = by_symbol(diffs)
+    assert categories[("6233", "Buy")] == CATEGORY_UNEXPLAINED
+    assert categories[("1201", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_exit_in_another_segment_does_not_hold_the_slot() -> None:
+    """開盤段的平倉早在尾盤段之前送出，不會與尾盤段的開倉搶名額"""
+
+    live, backtest = close_day_of_2026_10_29()
+    live[0]["timing"] = ExecutionTiming.AT_OPEN.value
+
+    diffs: List[ParityDiff] = compare(
+        live, backtest, [], (), False, order_phases=lambda order: {"close"}
+    )
+
+    assert by_symbol(diffs)[("6233", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_without_phase_lookup_the_slot_is_not_guessed() -> None:
+    """判不出回測單該在哪一段送出時不猜"""
+
+    live, backtest = close_day_of_2026_10_29()
+
+    diffs: List[ParityDiff] = compare(live, backtest, [], ())
+
+    assert by_symbol(diffs)[("6233", "Buy")] == CATEGORY_UNEXPLAINED
+
+
+def test_risk_event_still_wins_over_exit_pending_slot() -> None:
+    """
+    有事件就以事件為準，被擋下的那檔也不佔「缺幾檔」的計數
+
+    1201 被守門擋下、6233 被平倉單佔走名額：只有一張平倉單，但缺的只算 6233 一檔。
+    """
+
+    live, backtest = close_day_of_2026_10_29()
+    backtest.append(make_backtest_order("1201", Action.BUY, 9))
+
+    diffs: List[ParityDiff] = compare(
+        live,
+        backtest,
+        [make_event("CROSS_STRATEGY_BLOCKED", "1201")],
+        (),
+        False,
+        order_phases=close_phase,
+    )
+
+    categories: Dict[Tuple[str, str], str] = by_symbol(diffs)
+    assert categories[("1201", "Buy")] == CATEGORY_CROSS_STRATEGY_BLOCKED
+    assert categories[("6233", "Buy")] == CATEGORY_EXIT_PENDING_SLOT
+
+
+def intraday_day_of_2026_10_29() -> Tuple[List[Dict[str, Any]], List[BaseOrder]]:
+    """2026-10-29 `IntradayMomentumStrategy` 的 2352：09:21 進場、09:32 同日停損；日 K 回測只有進場"""
+
+    live: List[Dict[str, Any]] = [
+        timed_live_order("2352", "Buy", ExecutionTiming.IMMEDIATE, "FILLED", 4),
+        timed_live_order("2352", "Sell", ExecutionTiming.IMMEDIATE, "FILLED", 4),
+    ]
+    backtest: List[BaseOrder] = [make_backtest_order("2352", Action.BUY, 4)]
+    return live, backtest
+
+
+def test_same_day_intraday_exit_is_the_intraday_path() -> None:
+    """盤中進場又出場、回測只有進場：是日 K 看不到盤中先後，不是訊號漂移"""
+
+    live, backtest = intraday_day_of_2026_10_29()
+
+    diffs: List[ParityDiff] = compare(live, backtest, [])
+
+    assert [(diff.symbol, diff.side, diff.category) for diff in diffs] == [
+        ("2352", "Sell", CATEGORY_INTRADAY_PATH)
+    ]
+    assert CATEGORY_GROUP[CATEGORY_INTRADAY_PATH] == GROUP_STRUCTURAL
+
+
+def test_extra_exit_outside_the_intraday_segment_is_unexplained() -> None:
+    """盤中進場、出場卻在尾盤段：出場不在盤中，日 K 的高低收沒有看不到的先後，多一張就是真的差異"""
+
+    live, backtest = intraday_day_of_2026_10_29()
+    live[1]["timing"] = ExecutionTiming.AT_CLOSE.value
+
+    diffs: List[ParityDiff] = compare(live, backtest, [])
+
+    assert by_symbol(diffs)[("2352", "Sell")] == CATEGORY_UNEXPLAINED
+
+
+def test_intraday_exit_without_a_filled_entry_is_unexplained() -> None:
+    """當天沒有真的進場，就沒有「同日出場」可言"""
+
+    live, backtest = intraday_day_of_2026_10_29()
+    live[0]["status"] = "CANCELLED"
+    live[0]["filled_volume"] = 0
+
+    diffs: List[ParityDiff] = compare(live, backtest, [])
+
+    assert by_symbol(diffs)[("2352", "Sell")] == CATEGORY_UNEXPLAINED
+
+
+def test_intraday_exit_without_a_backtest_entry_is_unexplained() -> None:
+    """回測連進場都沒有，差異在進場訊號，不是盤中路徑"""
+
+    live, _ = intraday_day_of_2026_10_29()
+
+    diffs: List[ParityDiff] = compare(live, [], [])
+
+    assert by_symbol(diffs)[("2352", "Sell")] == CATEGORY_UNEXPLAINED
