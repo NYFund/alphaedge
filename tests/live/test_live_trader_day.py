@@ -566,6 +566,7 @@ def test_only_the_stale_symbols_are_dropped() -> None:
     strategy: QuoteRecorder = QuoteRecorder()
     harness: Harness = Harness([strategy])
     harness.contexts[0].data_feed._quotes = [make_quote("2330"), stale_quote("2317")]
+    seed_holding(harness, "QuoteRecorder", 1)  # 平倉鉤子只收有持倉的報價
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
     assert strategy.seen == [("close", ["2330"]), ("open", ["2330"])]
@@ -1129,6 +1130,7 @@ def test_unfilled_exit_order_creates_a_pending_action(tmp_path: Path) -> None:
 
     harness: Harness = Harness([Alpha()])
     harness.broker.fill_ratio = 0.0
+    seed_holding(harness, "Alpha", 1)  # 平倉鉤子只對有持倉的標的被問到
     harness.trader.run(ExecutionTiming.AT_CLOSE)
     harness.trader.reporter = LiveReporter(harness.dao, output_root=tmp_path)
 
@@ -1686,6 +1688,7 @@ def test_close_orders_are_not_limited_by_max_holdings() -> None:
             self.max_holdings = 0
 
     harness: Harness = Harness([Alpha()])
+    seed_holding(harness, "Alpha", 1)
     harness.trader.run(ExecutionTiming.AT_CLOSE)
 
     assert harness.broker.placed_count == 1
@@ -1980,12 +1983,13 @@ def test_dispatch_refuses_orders_before_the_window_opens() -> None:
     assert harness.broker.placed_count == 0
 
 
-def test_strategy_exit_is_truncated_by_the_cover_already_in_flight() -> None:
+def test_strategy_exit_is_not_asked_while_the_cover_is_in_flight() -> None:
     """
     持有 1 張、待辦 1 筆、策略 close 排在開盤段、不成交 → 只送 1 張
 
-    開盤段先送補平單，策略接著讀仍持有的帳戶再送一張平倉，兩張都在 09:00 撮合
-    就是超賣。盤中動能策略的「隔天開盤出場」部署後每天都會走到這裡。
+    開盤段先送補平單；平倉鉤子收到的報價已扣掉有在途出場單的部位（與回測的逐筆
+    路徑同一份契約），策略根本不會對 2330 再出一張。以前是靠送單時截短，
+    兩張都在 09:00 撮合就是超賣。盤中動能策略的「隔天開盤出場」每天都會走到這裡。
     """
 
     exit_order: StockOrder = make_order()
@@ -2021,15 +2025,15 @@ def test_strategy_exit_is_truncated_by_the_cover_already_in_flight() -> None:
     harness.trader.run(ExecutionTiming.AT_OPEN)
 
     assert harness.broker.placed_count == 1
+    # 沒被問到就沒有要截短的單；在途那張沒成交時由盤後殘量處理替它排補平
     assert harness.dao.conn.execute(
-        "SELECT severity FROM live_risk_event WHERE category = 'EXIT_TRUNCATED'"
-    ).fetchall() == [("WARN",)]
-    # 截到 0 的那張不排次日補平：在途那張沒成交時由盤後殘量處理替它排
+        "SELECT COUNT(*) FROM live_risk_event WHERE category = 'EXIT_TRUNCATED'"
+    ).fetchone() == (0,)
     assert harness.dao.get_pending_actions(TODAY + datetime.timedelta(days=1)) == []
 
 
-def test_exit_larger_than_the_remaining_holding_is_cut_down_not_dropped() -> None:
-    """持有 2 張、在途出場 1 張、策略再平 2 張 → 改送 1 張"""
+def test_holding_with_an_exit_in_flight_is_left_for_the_next_segment() -> None:
+    """持有 2 張、在途出場 1 張：本段落不再問策略這一檔，只送補平那 1 張；剩下的下一段再平"""
 
     exit_order: StockOrder = make_order(volume=2)
     exit_order.action = Action.SELL
@@ -2066,7 +2070,7 @@ def test_exit_larger_than_the_remaining_holding_is_cut_down_not_dropped() -> Non
     volumes: List[int] = [
         ticket.order.volume for ticket in harness.broker.tickets.values()
     ]
-    assert volumes == [1, 1]
+    assert volumes == [1]
 
 
 def test_open_order_dropped_outside_the_window_leaves_an_event() -> None:
@@ -2178,4 +2182,98 @@ def test_wrong_direction_order_writes_an_event() -> None:
         "SELECT symbol FROM live_risk_event WHERE category = 'DIRECTION_REJECTED'"
     ).fetchall()
     assert rows == [("2317",)]
+    assert harness.broker.placed_count == 1
+
+
+# === 出場鉤子收到的報價範圍與回測一致 ===
+class ExitRecorder(ScriptedStrategy):
+    """記下停損與平倉鉤子各收到哪些標的；停損可腳本化對指定標的出單"""
+
+    def __init__(self, stop_loss_symbols: Optional[List[str]] = None) -> None:
+        super().__init__("ExitRecorder")
+        self.seen: List[Tuple[str, List[str]]] = []
+        self._stop_loss_symbols: List[str] = stop_loss_symbols or []
+
+    def check_stop_loss_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+        self.seen.append(("stop_loss", [quote.symbol for quote in quotes]))
+        return [
+            make_order(quote.symbol, action=Action.SELL)
+            for quote in quotes
+            if quote.symbol in self._stop_loss_symbols
+        ]
+
+    def check_close_signal(self, quotes: List[BaseQuote]) -> List[BaseOrder]:
+        self.seen.append(("close", [quote.symbol for quote in quotes]))
+        return []
+
+
+def feed_symbols(harness: Harness, index: int, symbols: List[str]) -> None:
+    """把第 `index` 支策略的標的池與報價換成指定的幾檔"""
+
+    harness.contexts[index].data_feed = FakeFeed([make_quote(s) for s in symbols])
+    harness.contexts[index].symbols = list(symbols)
+    for symbol in symbols:
+        harness.broker.quotes[symbol] = make_quote(symbol)
+
+
+def _exit_harness(strategy: ExitRecorder) -> Harness:
+    """持倉 1 檔（2330）、標的池 3 檔，停損與平倉都排在尾盤段"""
+
+    strategy.execution_schedule = {
+        LiveHook.OPEN.value: ExecutionTiming.AT_CLOSE,
+        LiveHook.STOP_LOSS.value: ExecutionTiming.AT_CLOSE,
+        LiveHook.CLOSE.value: ExecutionTiming.AT_CLOSE,
+    }
+    harness: Harness = Harness([strategy])
+    feed_symbols(harness, 0, ["2330", "2317", "2454"])
+    seed_holding(harness, "ExitRecorder", 1)
+    return harness
+
+
+def test_exit_hooks_only_see_held_symbols() -> None:
+    """
+    持倉 1 檔、標的池 3 檔：停損與平倉鉤子都只收到那 1 檔，與回測相同
+
+    以前整份訂閱範圍（標的池＋持倉）都交給鉤子，策略在實盤看得到回測看不到的標的。
+    這是策略契約，兩邊不一致的話策略沒辦法不改程式就在回測與實盤之間切換。
+    """
+
+    strategy: ExitRecorder = ExitRecorder()
+    harness: Harness = _exit_harness(strategy)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert strategy.seen == [("stop_loss", ["2330"]), ("close", ["2330"])]
+
+
+def test_close_hook_skips_a_symbol_the_stop_loss_just_exited() -> None:
+    """同一段落停損已對 2330 出單：平倉鉤子不再被問到它（回測是停損後重掃剩餘部位）"""
+
+    strategy: ExitRecorder = ExitRecorder(stop_loss_symbols=["2330"])
+    harness: Harness = _exit_harness(strategy)
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert strategy.seen == [("stop_loss", ["2330"])]
+    assert harness.broker.placed_count == 1
+
+
+def test_close_hook_skips_a_symbol_with_an_exit_already_in_flight() -> None:
+    """2330 已有未終結的出場委託：兩個出場鉤子都不再被問到它，不會送第二張出場單"""
+
+    from core.live.factory import make_order_rebuilder
+
+    strategy: ExitRecorder = ExitRecorder()
+    harness: Harness = _exit_harness(strategy)
+    harness.broker.fill_ratio = 0.0
+    harness.broker.connect()
+    # 段落啟動的接管會由紀錄庫重建委託；與真實組裝一樣帶訂單還原器，重建的委託才帶著訂單
+    harness.oms.order_rebuilder = make_order_rebuilder(
+        {"ExitRecorder": build_stock_order}, lambda: NOW
+    )
+    harness.oms.submit(make_order("2330", action=Action.SELL), "ExitRecorder")
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    assert strategy.seen == []
     assert harness.broker.placed_count == 1

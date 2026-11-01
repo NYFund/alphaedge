@@ -278,20 +278,55 @@ class SignalCollector:
         if not self.mode_state.allows_close(context.name):
             return []
 
+        # **出場鉤子只收有持倉的報價，與回測同一份契約**：訂閱範圍是標的池＋持倉，
+        # 整份交給鉤子的話，策略在實盤看得到回測看不到的標的，兩邊的出場決定會分岔。
+        # 已有在途出場單（未終結的平倉委託）的部位也不再問：回測的逐筆路徑同樣排除
+        # 在途出場，日 K 路徑則是停損後重掃剩餘部位——重複問會對同一部位送第二張出場單
+        excluded: Set[str] = self._pending_exit_symbols(context)
         orders: List[BaseOrder] = []
         if resolve_hook_timing(context.strategy, LiveHook.STOP_LOSS) is timing:
-            stop_loss: List[BaseOrder] = self._preprocess(
-                context, context.strategy.check_stop_loss_signal(quotes), "close"
-            )
-            orders.extend(mark_execution(stop_loss, timing, ExecutionStyle.MARKET))
+            held: List[BaseQuote] = self._held_quotes(context, quotes, excluded)
+            if held:
+                stop_loss: List[BaseOrder] = self._preprocess(
+                    context, context.strategy.check_stop_loss_signal(held), "close"
+                )
+                orders.extend(mark_execution(stop_loss, timing, ExecutionStyle.MARKET))
+                excluded.update(order.symbol for order in stop_loss)
         if resolve_hook_timing(context.strategy, LiveHook.CLOSE) is timing:
-            close: List[BaseOrder] = self._preprocess(
-                context, context.strategy.check_close_signal(quotes), "close"
-            )
-            orders.extend(
-                mark_execution(close, timing, context.strategy.live_execution)
-            )
+            remaining: List[BaseQuote] = self._held_quotes(context, quotes, excluded)
+            if remaining:
+                close: List[BaseOrder] = self._preprocess(
+                    context, context.strategy.check_close_signal(remaining), "close"
+                )
+                orders.extend(
+                    mark_execution(close, timing, context.strategy.live_execution)
+                )
         return orders
+
+    @staticmethod
+    def _held_quotes(
+        context: StrategyContext, quotes: List[BaseQuote], excluded: Set[str]
+    ) -> List[BaseQuote]:
+        """本策略有持倉、且不在排除名單內的報價（順序照原報價）"""
+
+        return [
+            quote
+            for quote in quotes
+            if quote.symbol not in excluded
+            and context.account.check_has_position(quote.symbol)
+        ]
+
+    def _pending_exit_symbols(self, context: StrategyContext) -> Set[str]:
+        """本策略已有在途出場單（未終結的平倉委託）的標的"""
+
+        return {
+            ticket.order.symbol
+            for ticket in self.order_manager.tickets.values()
+            if ticket.strategy_name == context.name
+            and ticket.order is not None
+            and not ticket.is_terminal
+            and order_rules.is_closing(ticket.order)
+        }
 
     def _preprocess(
         self, context: StrategyContext, orders: List[BaseOrder], stage: str
