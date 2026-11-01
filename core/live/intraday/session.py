@@ -144,7 +144,7 @@ class IntradaySession:
 
         loop: IntradayEventLoop = IntradayEventLoop(
             on_quote=self._process_tick,
-            on_execution=self._on_intraday_execution,
+            on_execution=self._process_execution,
             on_market_data_lost=self._on_market_data_lost,
             now_provider=self.clock.now,
             heartbeat_seconds=self.INTRADAY_HEARTBEAT_SECONDS,
@@ -464,7 +464,7 @@ class IntradaySession:
         )
         self.execution.dispatch(survivors, None)
 
-    def _on_intraday_execution(self, event: Any) -> None:
+    def _process_execution(self, event: Any) -> None:
         """一筆回報 → 更新委託狀態與帳戶；與日頻走同一份判定"""
 
         fill: Optional[ExecutionReport] = self.order_manager.apply_event(event)
