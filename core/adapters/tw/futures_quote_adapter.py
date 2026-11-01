@@ -168,13 +168,13 @@ class FuturesQuoteAdapter:
             | `settlement_price` / `open_interest` | **只取日盤** | 夜盤根本沒有這兩項 |
 
             **2017-05-15 之前沒有夜盤**，此時整併結果等於日盤本身——那是制度
-            而非資料缺漏（見 `FuturesCalendar.NIGHT_SESSION_LAUNCH_DATE`）。
+            而非資料缺漏（見 `TwFuturesCalendar.NIGHT_SESSION_LAUNCH_DATE`）。
         - Parameters:
             - day_quotes: List[FuturesQuote]
                 當日日盤的報價
             - night_quotes: List[FuturesQuote]
                 同一個交易日的夜盤報價；**2017-05-15 之前給空 list**
-                （那是制度而非資料缺漏，見 `FuturesCalendar.NIGHT_SESSION_LAUNCH_DATE`）
+                （那是制度而非資料缺漏，見 `TwFuturesCalendar.NIGHT_SESSION_LAUNCH_DATE`）
         - Return:
             - List[FuturesQuote]
                 整併後的報價；日盤為空時回空 list

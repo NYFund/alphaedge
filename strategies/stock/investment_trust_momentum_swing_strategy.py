@@ -5,7 +5,7 @@ import pandas as pd
 from loguru import logger
 
 from core.datafeed.base import BaseDataFeed
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
@@ -72,7 +72,7 @@ class InvestmentTrustMomentumSwingStrategy(BaseStockStrategy):
     HOLDING_DAYS: int = 10  # 持有交易日數
     # 交易日清單往回多抓幾個曆日，理由同 `VolumeBreakoutMomentumStrategy.CALENDAR_LOOKBACK_DAYS`：
     # 窗比日曆的回推上界小，清單查不到就會退回逐日查資料庫
-    CALENDAR_LOOKBACK_DAYS: int = MarketCalendar.MAX_LOOKBACK_DAYS
+    CALENDAR_LOOKBACK_DAYS: int = TwStockCalendar.MAX_LOOKBACK_DAYS
 
     def __init__(self) -> None:
         super().__init__()
@@ -146,13 +146,13 @@ class InvestmentTrustMomentumSwingStrategy(BaseStockStrategy):
         """
 
         if self.trading_days and date <= self.trading_days[-1]:
-            previous: Optional[datetime.date] = MarketCalendar(
+            previous: Optional[datetime.date] = TwStockCalendar(
                 self.trading_days
             ).shift_trading_days(date, offset=-1)
             if previous is not None:
                 return previous
 
-        return MarketCalendar.previous_trading_day_from_api(self.price, date)
+        return TwStockCalendar.previous_trading_day_from_api(self.price, date)
 
     def count_holding_days(self, open_date: datetime.date, date: datetime.date) -> int:
         """

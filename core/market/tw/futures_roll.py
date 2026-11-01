@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.utils import FuturesRollRule
 
 """
@@ -39,12 +39,12 @@ class FuturesRollPlanner:
 
     def __init__(
         self,
-        calendar: FuturesCalendar,
+        calendar: TwFuturesCalendar,
         rule: FuturesRollRule = FuturesRollRule.LAST_TRADING_DAY,
         days_before_expiry: int = DEFAULT_DAYS_BEFORE_EXPIRY,
         include_weekly: bool = False,
     ) -> None:
-        self.calendar: FuturesCalendar = calendar
+        self.calendar: TwFuturesCalendar = calendar
         self.rule: FuturesRollRule = rule
         self.days_before_expiry: int = days_before_expiry
         self.include_weekly: bool = include_weekly
@@ -126,7 +126,7 @@ class FuturesRollPlanner:
         提前 N 個交易日換月
 
         **用交易日不是曆日**：春節前後「還有 5 天」用曆日算會差一整週，
-        換月時點跟著漂掉（見 `FuturesCalendar.get_trading_days_to_expiry()`）。
+        換月時點跟著漂掉（見 `TwFuturesCalendar.get_trading_days_to_expiry()`）。
         """
 
         for expiry in candidates:
@@ -261,7 +261,7 @@ class FuturesRollConfig:
     rule: FuturesRollRule = FuturesRollRule.LAST_TRADING_DAY
     days_before_expiry: int = 1
     enabled: bool = True  # 是否在換月時自動把未平倉部位轉到次月
-    calendar: Optional[FuturesCalendar] = None  # 由 DataFeed 注入
+    calendar: Optional[TwFuturesCalendar] = None  # 由 DataFeed 注入
 
     def build_planner(self) -> Optional[FuturesRollPlanner]:
         """建立換月規劃器；尚未注入日曆時回傳 None（呼叫端據此跳過換月）"""

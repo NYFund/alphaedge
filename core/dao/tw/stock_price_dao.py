@@ -18,7 +18,7 @@ class StockPriceDAO(BaseDAO):
         `price` 表的建表、寫入與查詢
 
         `price` 表同時是**台股交易日曆的來源**：當日有日 K 即為開盤日。
-        回測（`MarketCalendar`）、ETL 的日期規劃與公司行動偵測都讀這一份，
+        回測（`TwStockCalendar`）、ETL 的日期規劃與公司行動偵測都讀這一份，
         交易日的判準因此只有一個實作。
     """
 

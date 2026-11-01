@@ -10,7 +10,7 @@ from core.adapters.tw.futures_quote_adapter import FuturesQuoteAdapter
 from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.config import TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.models import FuturesQuote
 from core.utils import FuturesSession, Scale
 from tests.conftest import build_futures_quote
@@ -243,7 +243,7 @@ def make_feed() -> TwFuturesDataFeed:
     feed.products = ["TX"]
     feed.session = FuturesSession.COMBINED
     feed.start_date, feed.end_date = FRIDAY, DATE
-    feed.calendar = FuturesCalendar([FRIDAY, DATE])
+    feed.calendar = TwFuturesCalendar([FRIDAY, DATE])
     return feed
 
 
@@ -283,7 +283,7 @@ def test_no_night_session_before_2017() -> None:
     """
 
     feed: TwFuturesDataFeed = make_feed()
-    feed.calendar = FuturesCalendar(
+    feed.calendar = TwFuturesCalendar(
         [datetime.date(2016, 6, 1), datetime.date(2016, 6, 2)]
     )
 

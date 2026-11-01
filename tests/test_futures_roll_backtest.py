@@ -8,7 +8,7 @@ import pytest
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
 from core.market.tw.cost_model import TwFuturesCostModel
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesAccount, FuturesOrder, FuturesQuote
@@ -79,7 +79,7 @@ def make_settlement(
         margin_config=FuturesMarginConfig.ratio(),
     )
     config: FuturesRollConfig = roll_config or FuturesRollConfig()
-    config.calendar = FuturesCalendar(TRADING_DAYS)
+    config.calendar = TwFuturesCalendar(TRADING_DAYS)
     return TwFuturesSettlementModel(manager, roll_config=config)
 
 
@@ -299,7 +299,8 @@ def test_strategy_picks_the_contract_by_the_same_rule() -> None:
 
     strategy: MomentumFuturesStrategy = MomentumFuturesStrategy()
     strategy.roll_config = FuturesRollConfig(
-        rule=FuturesRollRule.DAYS_BEFORE_EXPIRY, calendar=FuturesCalendar(TRADING_DAYS)
+        rule=FuturesRollRule.DAYS_BEFORE_EXPIRY,
+        calendar=TwFuturesCalendar(TRADING_DAYS),
     )
 
     quotes: List[FuturesQuote] = [
@@ -365,7 +366,7 @@ def test_backtest_roll_dates_match_the_continuous_table() -> None:
     feed: TwFuturesDataFeed = TwFuturesDataFeed()
     api: FuturesPriceAPI = FuturesPriceAPI()
     try:
-        calendar: FuturesCalendar = FuturesCalendar.from_api(
+        calendar: TwFuturesCalendar = TwFuturesCalendar.from_api(
             api, datetime.date(2024, 1, 1), datetime.date(2025, 1, 31), product="TX"
         )
         settlement: TwFuturesSettlementModel = make_settlement()

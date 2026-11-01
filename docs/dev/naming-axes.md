@@ -23,7 +23,7 @@
 | D | `IssuerOrigin` | `DOMESTIC = "0"`／`FOREIGN = "1"` | 發行人國別（國內／國外企業，即 F 股／KY 股）。值即月營收頁 URL 末碼 | `core/pipeline/utils/constant.py` |
 
 **軸 A 命名為 `Market` 的依據**：對齊 Lean 的 `Market`（`usa`／`tw`）與 `tw_stock`／`tw_futures` 這類目錄與檔名；
-`MarketCalendar`（台股交易日判定）也因此是正確用法——交易日曆與開盤時間本來就是地區屬性。
+`TwStockCalendar`（台股交易日判定）也因此是正確用法——交易日曆與開盤時間本來就是地區屬性。
 
 **軸 B 命名為 `InstrumentType` 的依據**：與專案的 `InstrumentSpec`（`core/market/instrument_spec.py`，「商品規格」）同一個詞；
 亦對齊 Nautilus 的 `Instrument`。

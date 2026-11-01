@@ -8,7 +8,7 @@ from core.backtest.models.settlement_model import (
     TwStockSettlementModel,
 )
 from core.market.tw.cost_model import TwFuturesCostModel, TwStockCostModel
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import (
     FuturesAccount,
@@ -274,7 +274,7 @@ def make_futures_settlement(
         )
 
     config: FuturesRollConfig = roll_config or FuturesRollConfig()
-    config.calendar = FuturesCalendar(TRADING_DAYS)
+    config.calendar = TwFuturesCalendar(TRADING_DAYS)
     return TwFuturesSettlementModel(manager, roll_config=config, fill_model=fill_model)
 
 

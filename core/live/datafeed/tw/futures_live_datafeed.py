@@ -16,7 +16,7 @@ from core.live.datafeed.calendar import (
     TradingCalendarSource,
     WeekendCalendarSource,
 )
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
 from core.models import BaseQuote, FuturesOrder, PreOpenFuturesQuote
@@ -229,7 +229,7 @@ class TwFuturesLiveDataFeed(BaseLiveDataFeed):
         future: List[datetime.date] = [
             day for day in horizon if day.weekday() < 5 and day not in closures
         ]
-        self.roll_config.calendar = FuturesCalendar(past + future)
+        self.roll_config.calendar = TwFuturesCalendar(past + future)
 
     def plan_rolls(
         self, positions: Sequence[Any], today: datetime.date

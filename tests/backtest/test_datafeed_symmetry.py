@@ -7,13 +7,13 @@ from core.backtest.datafeed.tw.futures_datafeed import TwFuturesDataFeed
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.datafeed.base import BaseDataFeed
 from core.live.datafeed.base import BaseLiveDataFeed
-from core.market.tw.futures_calendar import FuturesCalendar
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 
 """
 資料源的對稱性：`setup()` 外框、交易日判定、缺日報告與 `close()` 只有基底一份
 
-原本台股用 `trading_days: Set` 加逐日查詢的 fallback、期貨 lazy build 一份 `FuturesCalendar`；
+原本台股用 `trading_days: Set` 加逐日查詢的 fallback、期貨 lazy build 一份 `TwFuturesCalendar`；
 缺日報告只有台股有；建 DB 目錄只有期貨會做；起訖日的記錄與 `close()` 兩邊重複。
 """
 
@@ -90,7 +90,7 @@ def test_frame_lives_only_in_the_base() -> None:
 
 @pytest.mark.parametrize(
     ("make_feed", "calendar_cls"),
-    [(stock_feed, MarketCalendar), (futures_feed, FuturesCalendar)],
+    [(stock_feed, TwStockCalendar), (futures_feed, TwFuturesCalendar)],
     ids=["stock", "futures"],
 )
 def test_market_open_queries_the_prebuilt_calendar(make_feed, calendar_cls) -> None:
@@ -181,7 +181,7 @@ def test_setup_frame_records_the_range_builds_the_calendar_and_reports(
 
     assert calls == ["open", "gaps"]
     assert (feed.start_date, feed.end_date) == (DAY_1, DAY_3)
-    assert isinstance(feed.calendar, FuturesCalendar)
+    assert isinstance(feed.calendar, TwFuturesCalendar)
     assert feed.roll_config.calendar is feed.calendar
 
 

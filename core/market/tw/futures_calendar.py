@@ -15,7 +15,7 @@ from core.utils import (
 )
 
 """
-FuturesCalendar: 台期貨交易日曆（交易日、時段、結算日與最後交易日）
+TwFuturesCalendar: 台期貨交易日曆（交易日、時段、結算日與最後交易日）
 
 **交易日的運算與股票 calendar 共用 `BaseTradingCalendar`，但不沿用股票的清單**，
 三個原因每一個都會算錯：
@@ -39,7 +39,7 @@ FuturesCalendar: 台期貨交易日曆（交易日、時段、結算日與最後
 """
 
 
-class FuturesCalendar(BaseTradingCalendar):
+class TwFuturesCalendar(BaseTradingCalendar):
     """台期貨交易日曆（交易日運算在 `BaseTradingCalendar`，結算日與時段在此）"""
 
     # === 交易時段（TAIFEX 現行制度）===
@@ -69,7 +69,7 @@ class FuturesCalendar(BaseTradingCalendar):
         end_date: datetime.date,
         product: Optional[str] = None,
         **kwargs,
-    ) -> "FuturesCalendar":
+    ) -> "TwFuturesCalendar":
         """
         - Description:
             由行情表建立日曆
@@ -91,7 +91,7 @@ class FuturesCalendar(BaseTradingCalendar):
             - product: Optional[str]
                 商品代碼；None 表示任一商品有資料即算開盤日
         - Return:
-            - FuturesCalendar
+            - TwFuturesCalendar
         """
 
         return cls(api.get_trading_days(start_date, end_date, product=product))

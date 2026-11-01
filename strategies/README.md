@@ -272,7 +272,7 @@ def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
         return []
 
     # 取得前一個交易日（非日曆昨日）
-    yesterday: datetime.date = MarketCalendar.previous_trading_day_from_api(
+    yesterday: datetime.date = TwStockCalendar.previous_trading_day_from_api(
         self.price, stock_quotes[0].date
     )
 

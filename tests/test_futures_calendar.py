@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 import pytest
 
 from core.config import TW_FUTURES_DB_PATH
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.utils import FuturesSession
 
 """
@@ -24,10 +24,10 @@ from core.utils import FuturesSession
 """
 
 
-def make_calendar(dates: List[str]) -> FuturesCalendar:
+def make_calendar(dates: List[str]) -> TwFuturesCalendar:
     """由日期字串建立日曆"""
 
-    return FuturesCalendar([datetime.date.fromisoformat(d) for d in dates])
+    return TwFuturesCalendar([datetime.date.fromisoformat(d) for d in dates])
 
 
 # 2024-03 的實際交易日（週一到週五，無臨時休市）
@@ -52,7 +52,7 @@ MARCH_2024: List[str] = [
 
 
 @pytest.fixture
-def calendar() -> FuturesCalendar:
+def calendar() -> TwFuturesCalendar:
     """2024-03 的日曆"""
 
     return make_calendar(MARCH_2024)
@@ -117,7 +117,7 @@ def test_settlement_postpones_over_a_long_holiday() -> None:
     最後交易日順延到 2023-01-30——這種長度推不出來，只能看實際開盤日。
     """
 
-    calendar: FuturesCalendar = make_calendar(
+    calendar: TwFuturesCalendar = make_calendar(
         [
             "2023-01-16",
             "2023-01-17",
@@ -180,7 +180,7 @@ def test_is_settlement_date(calendar) -> None:
 def test_day_session_window() -> None:
     """日盤 08:45–13:45"""
 
-    start, end = FuturesCalendar.get_session_window(
+    start, end = TwFuturesCalendar.get_session_window(
         datetime.date(2024, 3, 1), FuturesSession.DAY
     )
 
@@ -195,7 +195,7 @@ def test_night_session_crosses_midnight() -> None:
     回傳的結束時間落在下一天是刻意的，不是計算錯誤。
     """
 
-    start, end = FuturesCalendar.get_session_window(
+    start, end = TwFuturesCalendar.get_session_window(
         datetime.date(2024, 3, 1), FuturesSession.NIGHT
     )
 
@@ -207,20 +207,24 @@ def test_resolve_session_handles_after_midnight() -> None:
     """凌晨 03:00 屬於**前一天開始**的夜盤，這是最容易搞錯的一點"""
 
     assert (
-        FuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 9, 0))
+        TwFuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 9, 0))
         == FuturesSession.DAY
     )
     assert (
-        FuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 20, 0))
+        TwFuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 20, 0))
         == FuturesSession.NIGHT
     )
     assert (
-        FuturesCalendar.resolve_session(datetime.datetime(2024, 3, 2, 3, 0))
+        TwFuturesCalendar.resolve_session(datetime.datetime(2024, 3, 2, 3, 0))
         == FuturesSession.NIGHT
     )
     # 非交易時間
-    assert FuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 14, 0)) is None
-    assert FuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 7, 0)) is None
+    assert (
+        TwFuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 14, 0)) is None
+    )
+    assert (
+        TwFuturesCalendar.resolve_session(datetime.datetime(2024, 3, 1, 7, 0)) is None
+    )
 
 
 def test_night_session_did_not_exist_before_2017() -> None:
@@ -230,7 +234,7 @@ def test_night_session_did_not_exist_before_2017() -> None:
     那是制度不是資料缺漏；當成缺漏處理會一路找不到原因。
     """
 
-    calendar: FuturesCalendar = make_calendar(["2016-06-01", "2018-06-01"])
+    calendar: TwFuturesCalendar = make_calendar(["2016-06-01", "2018-06-01"])
 
     assert calendar.has_night_session(datetime.date(2016, 6, 1)) is False
     assert calendar.has_night_session(datetime.date(2018, 6, 1)) is True
@@ -271,7 +275,7 @@ def test_last_trading_dates_match_the_real_table() -> None:
     finally:
         conn.close()
 
-    calendar: FuturesCalendar = FuturesCalendar(trading_days)
+    calendar: TwFuturesCalendar = TwFuturesCalendar(trading_days)
     latest: str = str(trading_days[-1])
 
     mismatched: List[str] = []
