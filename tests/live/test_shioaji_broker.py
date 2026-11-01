@@ -651,7 +651,7 @@ def test_recovered_order_can_be_cancelled_by_a_new_broker(
     """
     送單 → 行程重啟（新的 broker 與 OMS）→ 接管 → 撤單，撤單請求要真的送出
 
-    接管後的單撤不掉的話，`finish()` 吞掉 `LookupError`，單子就留在場上過夜。
+    接管後的單撤不掉的話，`finish_segment()` 吞掉 `LookupError`，單子就留在場上過夜。
     `seqno_saved=False` 模擬在 `place_order()` 回傳前崩潰、本地沒存到 seqno——
     那時只剩 `custom_field` 能精確比對，兩邊的壓縮碼不一致就只能退回模糊比對。
     """

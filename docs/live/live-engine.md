@@ -14,7 +14,7 @@
 ## 一、元件地圖
 
 引擎本體 `LiveTrader`（`core/live/trader.py`）**只當協調者**：負責段落流程（`run()` → `prepare_segment()` → 各元件 →
-`finish()` → 生命週期紀錄）與人工觸發的重建、parity 補比；實際工作由下表的協作元件做。元件由
+`finish_segment()` → 生命週期紀錄）與人工觸發的重建、parity 補比；實際工作由下表的協作元件做。元件由
 `core/live/factory.py` 的 `assemble_live_trader()` 組裝並注入，元件之間只注入需要的介面（物件或回呼）、
 不持有 `LiveTrader`（比照 NautilusTrader 的元件拆法，先不引入 `MessageBus`；盤中已有單執行緒事件迴圈分派事件，
 匯流排只會多一層間接，元件邊界切乾淨後真的需要時再換）。
@@ -122,7 +122,7 @@ flowchart TD
 送單流程（`submit_segment()`）：等到送單起 → **開盤段先執行到期的跨日待辦**（補平前一天沒成交的出場單）→
 **尾盤段先換月**（策略看到的持倉才與它要交易的契約一致）→ 逐策略收訊號 → 跨策略檢查 → `dispatch()` 逐單送出（第三節）。換月平倉腿只成交一部分（IOC 成交幾口後被取消）時寫 `ROLL_PARTIAL`（CRITICAL），開倉腿改送已平的口數補回曝險，沒平的次日再換；完全沒成交才是 `ROLL_ABANDONED`（WARN）。
 
-收尾（`finish()`，在 `finally` 裡一定執行）：
+收尾（`finish_segment()`，在 `finally` 裡一定執行）：
 
 | 情況 | 順序 | 理由 |
 |------|------|------|
@@ -402,7 +402,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | 重連 | `ShioajiSession.reconnect()` 指數退避（2 秒起、最長 300 秒）、單日上限 20 次；退避期間迴圈阻塞（斷線時本來就送不出單）。成功後走恢復流程，失敗推播 CRITICAL 並不送單 |
 | 靜默 | 全市場 30 秒沒有任何報價 → 帳戶層 `REDUCE_ONLY` 並推播「行情中斷」；還沒收到第一筆報價前不計算靜默 |
 | handler 例外 | 吞在迴圈裡、計入 `handler_errors`，不讓一筆壞報價擋住後面的成交回報；單一策略鉤子拋例外則該策略 `HALTED` |
-| 收線 | 跑到時窗的送單迄（台股 13:18）就停，不再處理積壓的行情；接著把回報改回直接的 queue（`restore_event_routing()`）、清掉迴圈 queue 裡剩下的回報，之後到收線（13:19）的回報與撤單由 `finish()` 照日頻段落的同一套流程收。沒有時窗時跑到當天結束 |
+| 收線 | 跑到時窗的送單迄（台股 13:18）就停，不再處理積壓的行情；接著把回報改回直接的 queue（`restore_event_routing()`）、清掉迴圈 queue 裡剩下的回報，之後到收線（13:19）的回報與撤單由 `finish_segment()` 照日頻段落的同一套流程收。沒有時窗時跑到當天結束 |
 
 **日終當沖回補**（`core/live/intraday/session_guard.py`）：現股當沖先賣未回補，券商可能標借或違約交割，而實盤沒有回測的結算模型幫忙做完。
 `SessionGuard.should_cover_now()` 在 `DAY_TRADE_COVER_TIME`（13:15，必須落在盤中送單時窗迄 13:18 之內，有守門測試）之後成立，**掛在心跳而不是行情上**（行情停了也要回補）。

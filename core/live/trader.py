@@ -271,7 +271,7 @@ class LiveTrader:
             error = exc
             raise
         finally:
-            self.finish(window, aborted=error is not None)
+            self.finish_segment(window, aborted=error is not None)
             self.record_finish(error)
 
     def prepare_segment(self) -> None:
@@ -528,7 +528,9 @@ class LiveTrader:
         self.execution.dispatch(survivors, window, cover_unsent_exits=True)
 
     # === 收尾 ===
-    def finish(self, window: Optional[SegmentWindow], aborted: bool = False) -> None:
+    def finish_segment(
+        self, window: Optional[SegmentWindow], aborted: bool = False
+    ) -> None:
         """
         - Description:
             段落收尾：收回報到收線 → 撤未成交單 → 收撤單回報 → 寫快照、關連線
