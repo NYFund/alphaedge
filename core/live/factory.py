@@ -1444,7 +1444,7 @@ def _seed_positions(
             float(lot["open_price"]),
             int(lot["volume"]),
         )
-        for enriched in backtester.enrich_orders([order]):
+        for enriched in backtester.cost_model.enrich_orders([order]):
             backtester.position_manager.open_position(enriched)
 
 

@@ -14,6 +14,11 @@ from core.live.risk.risk_manager import PreTradeRiskManager
 from core.live.risk.trading_mode import TradingMode, TradingModeState
 from core.models import BaseOrder, BaseQuote
 from core.portfolio import order_rules
+from core.portfolio.order_preprocessor import (
+    STAGE_OPEN,
+    OrderPreprocessor,
+    PreprocessResult,
+)
 from core.strategies.base import BaseStrategy, resolve_hook_timing
 from core.utils import (
     BarExecutionSequence,
@@ -291,52 +296,44 @@ class SignalCollector:
     def _preprocess(
         self, context: StrategyContext, orders: List[BaseOrder], stage: str
     ) -> List[BaseOrder]:
-        """方向白名單 → 市場欄位補值 → 決定性排序 → 持倉檔數上限；與回測同一個順序、同一份實作"""
-
-        allowed = order_rules.get_allowed_directions(context.strategy.direction)
-        valid: List[BaseOrder] = order_rules.validate_orders(orders, stage, allowed)
-        # 台股空單的放空管道與當沖旗標由成本模型依策略設定補上，與回測同一步。
-        # 少了這一步，SHORT 委託到券商轉換層才因 `short_method` 為 None 被拒，
-        # 當沖空單的部位也不會被日終回補認出來
-        if context.cost_model is not None:
-            valid = context.cost_model.enrich_orders(valid)
-        sorted_orders: List[BaseOrder] = order_rules.sort_orders(valid)
-
-        # 只擋開倉，與回測一致（`Backtester` 也只在開倉分支呼叫）。
-        # **排序之後才截斷**：先排序才知道超額時該留下哪幾張
-        if stage == "open":
-            return self._apply_max_holdings(context, sorted_orders)
-        return sorted_orders
-
-    def _apply_max_holdings(
-        self, context: StrategyContext, orders: List[BaseOrder]
-    ) -> List[BaseOrder]:
         """
-        逐單套用持倉檔數上限
+        方向白名單 → 市場欄位補值 → 決定性排序 → 持倉檔數上限；與回測同一份實作
+
+        被剔除的單寫風控事件：方向剔除寫 `DIRECTION_REJECTED`、檔數上限寫 `MAX_HOLDINGS`，
+        parity 才歸因得出「回測有、實盤沒送」的原因。
 
         **未終結的委託也要佔名額**：回測在同一根 bar 內逐單成交，持倉檔數會即時
         增加；實盤是非同步的，一批 8 張單送出時全部尚未成交，只看持倉的話整批
         都會放行——`max_holdings` 等於沒有設。
-
-        已持有或已掛單的標的不佔新名額（加碼），豁免寫在共用的
-        `order_rules.check_max_holdings()`，與回測同一份。
         """
 
-        if context.strategy.max_holdings is None:
-            return orders
-
-        occupied: Set[str] = self._occupied_symbols(context)
-        kept: List[BaseOrder] = []
-        for order in orders:
-            if not order_rules.check_max_holdings(
-                order, context.strategy.max_holdings, occupied
-            ):
-                self._write_max_holdings_event(context, order)
-                continue
-
-            occupied.add(order.symbol)
-            kept.append(order)
-        return kept
+        preprocessor: OrderPreprocessor = OrderPreprocessor(
+            order_rules.get_allowed_directions(context.strategy.direction),
+            context.cost_model,
+            context.strategy.max_holdings,
+        )
+        # 只擋開倉，與回測一致：佔用集合只在開倉階段傳入
+        prepared: PreprocessResult = preprocessor.prepare_orders(
+            orders,
+            stage,
+            self._occupied_symbols(context) if stage == STAGE_OPEN else None,
+        )
+        for order in prepared.rejected_direction:
+            self._write_rejection(
+                context,
+                order,
+                "DIRECTION_REJECTED",
+                f"{order.symbol} 方向 {order.position_type.value} 或動作與策略宣告不符，已剔除",
+            )
+        for order in prepared.rejected_max_holdings:
+            self._write_rejection(
+                context,
+                order,
+                "MAX_HOLDINGS",
+                f"{order.symbol} 開倉單超過持倉檔數上限 "
+                f"{context.strategy.max_holdings}，已剔除",
+            )
+        return prepared.orders
 
     def _occupied_symbols(self, context: StrategyContext) -> Set[str]:
         """本策略已經佔住名額的標的：未平倉部位 ＋ 尚未終結的委託"""
@@ -355,23 +352,19 @@ class SignalCollector:
         )
         return symbols
 
-    def _write_max_holdings_event(
-        self, context: StrategyContext, order: BaseOrder
+    def _write_rejection(
+        self, context: StrategyContext, order: BaseOrder, category: str, message: str
     ) -> None:
         """
-        被檔數上限剔除的開倉單要留下紀錄
+        被前處理剔除的開倉單要留下紀錄
 
         **不沿用回測的 `rejected_max_holdings` 事件計數 key**：那是回測報表的欄位名，
         實盤沒有對應的計數器，兩邊硬共用一個名字只會讓報表欄位變得模稜兩可。
         """
 
-        message: str = (
-            f"{order.symbol} 開倉單超過持倉檔數上限 "
-            f"{context.strategy.max_holdings}，已剔除"
-        )
-        logger.warning(f"[Max Holdings] {context.name}：{message}")
+        logger.warning(f"[{category}] {context.name}：{message}")
         self.events.write(
-            category="MAX_HOLDINGS",
+            category=category,
             severity=NotifyLevel.WARN,
             message=message,
             strategy_name=context.name,

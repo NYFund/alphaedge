@@ -23,7 +23,7 @@
 |------|------|------|
 | `StrategyContext` | `core/live/context.py` | 每支策略的執行期狀態：帳戶、`PositionManager`、資料源、成本模型、執行層、金額換算、本段落報價 |
 | `SegmentClock` | `core/live/clock.py` | 段落時窗的時間判斷與等待的保險絲；只讀時間、不寫事件 |
-| `SignalCollector` | `core/live/signals.py` | 叫策略鉤子、收進出場單、委託前處理（方向驗證 → 補值 → 排序 → 持倉檔數上限）；鉤子失敗把該策略降到 `HALTED` 並釋放保留 |
+| `SignalCollector` | `core/live/signals.py` | 叫策略鉤子、收進出場單、委託前處理（經 `core/portfolio/order_preprocessor.py` 的 `OrderPreprocessor`，與回測同一份：方向驗證 → 補值 → 排序 → 持倉檔數上限）；鉤子失敗把該策略降到 `HALTED` 並釋放保留 |
 | `CrossStrategyChecks` | `core/live/cross_checks.py` | 跨策略同標的守門 → 策略層批次曝險 → 帳戶層批次曝險 |
 | `ExecutionEngine` | `core/live/execution_engine.py` | 送單管線（保證金 → 在途出場截短 → 資金保留 → 執行層換算 → 事前風控 → 送出）、成交回報入帳與保留釋放、收尾結算（收回報 → 撤單 → 放掉保留） |
 | `ConnectionSupervisor` | `core/live/connection.py` | 券商連線的降級事件、斷線偵測、重連與重連後恢復（重新訂閱 → 接管委託 → 對帳） |
@@ -147,7 +147,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 ```
 策略鉤子（停損 → 平倉、開倉；先後依 allow_day_trade）
-  → 前處理：方向白名單 → 成本模型補欄位（台股空單的放空管道與當沖旗標）→ 決定性排序 → 持倉檔數上限（只擋開倉）
+  → 前處理（`OrderPreprocessor`，與回測同一份）：方向白名單 → 成本模型補欄位（台股空單的放空管道與當沖旗標；開倉、停損、平倉都補）→ 決定性排序 → 持倉檔數上限（只擋開倉）；被剔除的單寫 `DIRECTION_REJECTED`／`MAX_HOLDINGS`
   → 跨策略守門（同標的只允許一個持有者）
   → 批次曝險：策略層 → 帳戶層（超額截斷後面的單，不整批拒）
   → dispatch() 逐單：
@@ -157,7 +157,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 | 關卡 | 位置 | 擋下時 |
 |------|------|--------|
-| 持倉檔數上限 | `SignalCollector._apply_max_holdings()` | 寫 `MAX_HOLDINGS`；未終結的委託也佔名額，否則一批 8 張同時送出時全部放行 |
+| 持倉檔數上限 | `SignalCollector._preprocess()`（`OrderPreprocessor.prepare_orders()`） | 寫 `MAX_HOLDINGS`；未終結的委託也佔名額，否則一批 8 張同時送出時全部放行。方向不符的單寫 `DIRECTION_REJECTED`，parity 歸 `RISK_REJECTED` |
 | 跨策略守門 | `core/live/attribution/conflict_guard.py` | 寫 `CROSS_STRATEGY_BLOCKED`；**平倉單一律放行** |
 | 批次曝險 | `PreTradeRiskManager.check_batch()` | 寫 `BATCH_EXPOSURE`；平倉單放行且不計入曝險；帳戶層事件記在 `__account__` 名下 |
 | 保證金閘 | `core/live/risk/margin_gate.py` | 寫 `MARGIN_INSUFFICIENT`；同一批開倉單逐張累計同一份可用保證金；平倉不檢查 |

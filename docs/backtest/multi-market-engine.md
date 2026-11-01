@@ -138,7 +138,7 @@ def finish_day(self, date, close_quotes):
 |------|----------|------|
 | 開倉階段 vs 平倉階段 | `BarExecutionSequence`（引擎依策略的 `allow_day_trade` 推導） | `CLOSE_THEN_OPEN`（預設）／`OPEN_THEN_CLOSE` |
 | 平倉階段內部 | simulator 寫死 | 停損 → 一般平倉；停損執行完會重掃剩餘部位 |
-| 同一階段內的多筆委託 | `sort_orders()`（`core/portfolio/order_rules.py`，經 `Backtester.sort_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
+| 同一階段內的多筆委託 | `sort_orders()`（`core/portfolio/order_rules.py`，經 `OrderPreprocessor.prepare_orders()` 呼叫） | 依 `(date, symbol)` **穩定**排序 |
 
 **為什麼第三層要由引擎自己排**：`check_max_holdings()` 的截斷與 `PositionManager` 的餘額不足檢查，都會讓「先處理誰」直接改變成交結果。而委託的到達順序完全繼承自報價順序，報價又來自 `SELECT * FROM price WHERE date = ?`——這句沒有 `ORDER BY`，實際列順序取決於 SQLite 選到哪個索引。多加一個索引就可能翻掉，且翻掉時不會報錯，只會讓回測結果無聲改變。
 
@@ -164,7 +164,7 @@ def finish_day(self, date, close_quotes):
 
 ### 2.3 方向與商品類別是兩條獨立的軸
 
-**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()`、`is_opening()`／`is_closing()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；引擎以 `Backtester.validate_orders()`／`sort_orders()`／`get_execution_sequence()`、simulator 以 `BaseSimulator.check_max_holdings()` 薄包裝呼叫。
+**方向（LONG／SHORT）與商品類別（股票／期貨）互不相干。** `validate_orders()`、`resolve_open_action()`、`resolve_close_action()`、`is_opening()`／`is_closing()` 與商品類別無關（期貨的多空語意與股票相同），不下沉到任何 model。這些委託前處理的純邏輯放在 `core/portfolio/order_rules.py`，只收純參數、不收策略與引擎，回測與實盤共用同一份；串接順序只有 `core/portfolio/order_preprocessor.py` 的 `OrderPreprocessor` 一份，回測的兩支 simulator 與實盤的訊號元件都經它。
 
 [放空回測框架規格](short-selling-framework.md) §1 原則 2「方向來自訂單，策略只做白名單」是本架構的**基礎**。
 

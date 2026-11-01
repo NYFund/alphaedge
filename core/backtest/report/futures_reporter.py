@@ -77,7 +77,6 @@ class FuturesBacktestReporter(BaseBacktestReporter):
         self,
         strategy: BaseFuturesStrategy,
         output_dir: Optional[Path] = None,
-        price: Optional[Any] = None,
         show: Optional[bool] = None,
     ) -> None:
         # 對標的換月規則與策略實際轉倉共用同一份設定：不一致的話，
@@ -105,7 +104,7 @@ class FuturesBacktestReporter(BaseBacktestReporter):
 
         # `price` 由 Backtester 統一傳入；期貨報表不查台股資料庫，收下只是為了讓
         # 兩個 reporter 的建構簽章一致，一律不持有，`close()` 因此沒有東西要關
-        super().__init__(strategy, output_dir, price=None, show=show)
+        super().__init__(strategy, output_dir, show=show)
 
     def load_benchmark_series(self) -> pd.Series:
         """建立對標序列：連續合約優先，查不到才退回近月拼接"""

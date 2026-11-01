@@ -82,16 +82,20 @@ def test_day_trade_is_off_by_default(make_strategy, make_backtester) -> None:
 def test_order_enrichment(make_strategy, make_backtester, make_order) -> None:
     """策略未填放空管道與當沖旗標時，由引擎依成本設定補值"""
 
+    # 多空都做：LONG 那張才過得了方向驗證，看得出補值沒碰它
     backtester: Backtester = make_backtester(
-        short_strategy(make_strategy, allow_day_trade=True)
+        short_strategy(
+            make_strategy, allow_day_trade=True, direction=TradeDirection.BOTH
+        )
     )
 
-    orders: List[StockOrder] = backtester.enrich_orders(
+    orders: List[StockOrder] = backtester.preprocessor.prepare_orders(
         [
             make_order(action=Action.SELL, position_type=PositionType.SHORT),
             make_order(action=Action.BUY, position_type=PositionType.LONG),
-        ]
-    )
+        ],
+        "open",
+    ).orders
 
     assert orders[0].short_method == ShortMethod.DAY_TRADE
     assert orders[0].is_day_trade is True
@@ -108,7 +112,7 @@ def test_wrong_direction_order_rejected(
 
     backtester: Backtester = make_backtester(short_strategy(make_strategy))
 
-    orders: List[StockOrder] = backtester.validate_orders(
+    prepared = backtester.preprocessor.prepare_orders(
         [
             make_order(action=Action.SELL, position_type=PositionType.SHORT),  # 合法
             make_order(
@@ -119,8 +123,9 @@ def test_wrong_direction_order_rejected(
         "open",
     )
 
-    assert len(orders) == 1
-    assert backtester.event_counts["rejected_direction"] == 2
+    assert len(prepared.orders) == 1
+    # 被剔除的由回傳值帶出，simulator 拿它計入 `rejected_direction`
+    assert len(prepared.rejected_direction) == 2
 
 
 def test_both_directions_accepts_long_and_short(
@@ -132,7 +137,7 @@ def test_both_directions_accepts_long_and_short(
         make_strategy(direction=TradeDirection.BOTH)
     )
 
-    orders: List[StockOrder] = backtester.validate_orders(
+    prepared = backtester.preprocessor.prepare_orders(
         [
             make_order(action=Action.BUY, position_type=PositionType.LONG),
             make_order(action=Action.SELL, position_type=PositionType.SHORT),
@@ -140,8 +145,8 @@ def test_both_directions_accepts_long_and_short(
         "open",
     )
 
-    assert len(orders) == 2
-    assert backtester.event_counts["rejected_direction"] == 0
+    assert len(prepared.orders) == 2
+    assert prepared.rejected_direction == []
 
 
 # === 成交價驗證（規則已下沉至 FillModel，故直接打 model）===

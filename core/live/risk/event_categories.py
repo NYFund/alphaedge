@@ -30,6 +30,8 @@ MODE_HALTED: str = "MODE_HALTED"
 MODE_REDUCE_ONLY: str = "MODE_REDUCE_ONLY"
 # 委託前處理與送單流程（`core/live/signals.py`、`core/live/execution_engine.py`）
 MAX_HOLDINGS: str = "MAX_HOLDINGS"
+# 方向不在策略宣告的白名單、或動作與方向不符的單（以前只寫 log，parity 歸因不到）
+DIRECTION_REJECTED: str = "DIRECTION_REJECTED"
 MARGIN_INSUFFICIENT: str = "MARGIN_INSUFFICIENT"
 EXECUTION_UNAVAILABLE: str = "EXECUTION_UNAVAILABLE"
 # 資金額度分配（`core/live/capital_allocator.py`）
@@ -53,6 +55,7 @@ ORDER_BLOCK_CATEGORIES: FrozenSet[str] = frozenset(
         MODE_HALTED,
         MODE_REDUCE_ONLY,
         MAX_HOLDINGS,
+        DIRECTION_REJECTED,
         MARGIN_INSUFFICIENT,
         EXECUTION_UNAVAILABLE,
         CAPITAL_EXHAUSTED,

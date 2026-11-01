@@ -57,12 +57,9 @@ class StockBacktestReporter(BaseBacktestReporter):
         self,
         strategy: BaseStockStrategy,
         output_dir: Optional[Path] = None,
-        price: Optional[StockPriceAPI] = None,
         show: Optional[bool] = None,
     ) -> None:
-        # `price` 由 Backtester 傳入 DataFeed 已開好的連線；未指定時
-        # `load_benchmark_series()` 自行建立，並由 `close()` 負責關掉
-        super().__init__(strategy, output_dir, price=price, show=show)
+        super().__init__(strategy, output_dir, show=show)
 
     def load_benchmark_series(self) -> pd.Series:
         """
@@ -81,7 +78,7 @@ class StockBacktestReporter(BaseBacktestReporter):
                 index 為 `datetime.date`、值為還原收盤價；查無資料時為空 Series
         """
 
-        # 由呼叫端注入時共用同一條連線，`close()` 不會關掉別人的
+        # 自己開的連線由 `close()` 關掉
         if self.price is None:
             self.price = StockPriceAPI()
 

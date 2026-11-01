@@ -17,6 +17,7 @@ from core.market.cost_model import BaseCostModel
 from core.market.instrument_spec import InstrumentSpec
 from core.models import BaseAccount, BaseOrder, BaseQuote
 from core.portfolio import order_rules
+from core.portfolio.order_preprocessor import OrderPreprocessor
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import (
@@ -85,6 +86,11 @@ class Backtester:
         # 回測參數
         self.scale: str = self.strategy.scale  # 回測 KBar 級別
         self.max_holdings: Optional[int] = self.strategy.max_holdings  # 最大持倉檔數
+        # 委託前處理（方向驗證 → 補值 → 排序 → 持倉檔數上限）：與實盤同一份實作，
+        # 兩支 simulator 都經它，不再各自串接
+        self.preprocessor: OrderPreprocessor = OrderPreprocessor(
+            self.get_allowed_directions(), self.cost_model, self.max_holdings
+        )
         # 本場回測「會送出的委託」，供實盤 parity 比對取用。
         # **只記錄、不參與任何判斷**：記的是通過方向白名單、檔數上限與排序之後、
         # 進入成交模擬之前的那一份——那才是實盤真正會送到券商的東西，
@@ -218,39 +224,6 @@ class Backtester:
         """單根 bar 的開平倉先後；推導表與理由見 `order_rules.get_execution_sequence()`"""
 
         return order_rules.get_execution_sequence(self.strategy.allow_day_trade)
-
-    # === Order Validation ===
-    def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
-        """
-        - Description:
-            檢查訂單方向是否合法，不合法者剔除並記錄，禁止靜默丟棄
-        - Parameters:
-            - orders: List[BaseOrder]
-                策略回傳的訂單
-            - stage: str
-                "open" 或 "close"，決定期望的動作
-        - Return:
-            - valid_orders: List[BaseOrder]
-                通過檢查的訂單
-        """
-
-        return order_rules.validate_orders(
-            orders,
-            stage,
-            self.get_allowed_directions(),
-            self.event_counts,
-        )
-
-    def enrich_orders(self, orders: List[BaseOrder]) -> List[BaseOrder]:
-        """補上市場專屬的訂單欄位；規則由 CostModel 實作"""
-
-        return self.cost_model.enrich_orders(orders)
-
-    @staticmethod
-    def sort_orders(orders: List[BaseOrder]) -> List[BaseOrder]:
-        """同一根 bar 內委託的決定性排序；為什麼要自己排見 `order_rules.sort_orders()`"""
-
-        return order_rules.sort_orders(orders)
 
     def update_reference_prices(self, quotes: List[BaseQuote]) -> None:
         """收盤後記錄當日收盤價，作為次日的漲跌停參考價；狀態由 FillModel 持有"""
@@ -390,13 +363,10 @@ class Backtester:
     def generate_backtest_report(self) -> None:
         """產生回測報表"""
 
-        # `price` 共用 DataFeed 已開好的連線，避免一次回測對同一個 SQLite
-        # 檔案開出兩條連線
+        # 對標價格由 reporter 自己開連線（`close()` 關掉）：不借 DataFeed 內部的
+        # API——期貨 DataFeed 沒有那個屬性，借不借得到靠「剛好有沒有」決定
         reporter: BaseBacktestReporter = self.reporter_cls(
-            self.strategy,
-            self.strategy_result_dir,
-            price=getattr(self.data_feed, "price", None),
-            show=self.show_figures,
+            self.strategy, self.strategy_result_dir, show=self.show_figures
         )
         reporter.trading_report = reporter.generate_trading_report()
 
@@ -423,5 +393,5 @@ class Backtester:
             reporter.plot_everyday_profit()
             reporter.plot_everyday_equity_change()
         finally:
-            # reporter 自己開的連線由它自己關；共用連線不歸它關
+            # reporter 自己開的連線由它自己關
             reporter.close()

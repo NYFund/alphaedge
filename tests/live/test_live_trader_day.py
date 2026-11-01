@@ -49,6 +49,7 @@ from core.utils import (
     Market,
     PositionType,
     Scale,
+    TradeDirection,
 )
 
 from .conftest import FakeBroker
@@ -2153,3 +2154,28 @@ def test_filled_amount_moves_from_reserved_to_used() -> None:
 
     assert harness.allocator.reserved["Alpha"] == 0.0
     assert harness.allocator.used["Alpha"] == 100_000.0
+
+
+# === 前處理剔除的單要留下紀錄 ===
+def test_wrong_direction_order_writes_an_event() -> None:
+    """方向與策略宣告不符的單以前只寫 log：parity 看到「回測有、實盤沒送」歸因不到"""
+
+    class Alpha(ScriptedStrategy):
+        """只做多，卻送出一張放空單的腳本策略"""
+
+        def __init__(self) -> None:
+            super().__init__(
+                "Alpha",
+                [make_order(), make_order("2317", action=Action.SELL)],
+            )
+
+    harness: Harness = Harness([Alpha()])
+    harness.contexts[0].strategy.direction = TradeDirection.LONG
+
+    harness.trader.run(ExecutionTiming.AT_CLOSE)
+
+    rows: List[Tuple[Any, ...]] = harness.dao.conn.execute(
+        "SELECT symbol FROM live_risk_event WHERE category = 'DIRECTION_REJECTED'"
+    ).fetchall()
+    assert rows == [("2317",)]
+    assert harness.broker.placed_count == 1

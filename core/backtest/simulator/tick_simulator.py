@@ -15,7 +15,7 @@ from core.backtest.simulator.pending_orders import (
 from core.backtest.simulator.tick_universe import resolve_strategy_symbols
 from core.market.segment import SegmentSchedule, SegmentWindow
 from core.models import BaseOrder, BaseQuote
-from core.portfolio import order_rules
+from core.portfolio.order_preprocessor import PreprocessResult
 from core.strategies.base import resolve_hook_timing
 from core.utils import (
     BarExecutionSequence,
@@ -275,24 +275,24 @@ class TickSimulator(BaseSimulator):
         submitted_at: datetime.datetime,
         opening_auction: bool,
     ) -> None:
-        """開倉：本段沒排到就不呼叫；方向驗證 → 補值 → 排序 → 重複與檔數上限"""
+        """開倉：本段沒排到就不呼叫；方向驗證 → 補值 → 排序 → 檔數上限（共用的前處理）→ 重複"""
 
         engine: SimulationEngine = self.engine
         if resolve_hook_timing(engine.strategy, LiveHook.OPEN) is not timing:
             return
 
-        orders: List[BaseOrder] = engine.sort_orders(
-            engine.enrich_orders(
-                engine.validate_orders(
-                    engine.strategy.check_open_signal(quotes), "open"
-                )
-            )
+        # 持倉檔數上限：未平倉部位之外，**在途的開倉委託也佔名額**（與實盤相同）；
+        # 同一批前面通過的單由前處理加進集合
+        prepared: PreprocessResult = engine.preprocessor.prepare_orders(
+            engine.strategy.check_open_signal(quotes), STAGE_OPEN, self._occupied()
         )
-        for order in orders:
+        engine.event_counts["rejected_direction"] += len(prepared.rejected_direction)
+        engine.event_counts["rejected_max_holdings"] += len(
+            prepared.rejected_max_holdings
+        )
+        for order in prepared.orders:
             if self.pending.has_open(order.symbol):
                 engine.event_counts["rejected_duplicate_pending"] += 1
-                continue
-            if not self.check_max_holdings(order):
                 continue
 
             engine.submitted_orders.append((engine.cur_date, STAGE_OPEN, order))
@@ -339,24 +339,24 @@ class TickSimulator(BaseSimulator):
                 if hook is LiveHook.STOP_LOSS
                 else engine.strategy.check_close_signal
             )
-            orders: List[BaseOrder] = engine.sort_orders(
-                engine.validate_orders(signal(held), "close")
+            prepared: PreprocessResult = engine.preprocessor.prepare_orders(
+                signal(held), STAGE_CLOSE
             )
-            for order in orders:
+            engine.event_counts["rejected_direction"] += len(
+                prepared.rejected_direction
+            )
+            for order in prepared.orders:
                 engine.submitted_orders.append((engine.cur_date, stage, order))
                 self.add_pending(order, stage, style, submitted_at, opening_auction)
 
-    def check_max_holdings(self, order: BaseOrder) -> bool:
-        """持倉檔數上限：未平倉部位之外，**在途的開倉委託也佔名額**（與實盤相同）"""
+    def _occupied(self) -> Set[str]:
+        """佔住名額的標的：未平倉部位 ∪ 在途的開倉委託（與實盤相同）"""
 
-        occupied: Set[str] = {
+        return {
             position.symbol
             for position in self.engine.account.positions
             if not position.is_closed
         } | set(self.pending.open_symbols())
-        return order_rules.check_max_holdings(
-            order, self.engine.max_holdings, occupied, self.engine.event_counts
-        )
 
     def add_pending(
         self,

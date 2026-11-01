@@ -111,8 +111,8 @@ sequenceDiagram
 
 | 順序 | 關卡 | 實作位置 | 擋掉時計入 |
 |:----:|------|----------|------------|
-| 1 | 方向白名單（`direction`、開平倉動作是否相符） | `Backtester.validate_orders()` → `core/portfolio/order_rules.py` | `rejected_direction` |
-| 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`），之後做決定性排序 | `CostModel.enrich_orders()`、`Backtester.sort_orders()` | —（只補值、排序不擋） |
+| 1 | 方向白名單（`direction`、開平倉動作是否相符） | `OrderPreprocessor.prepare_orders()` → `core/portfolio/order_rules.py` | `rejected_direction` |
+| 2 | 市場專屬欄位補值（`short_method`、`is_day_trade`），之後做決定性排序 | `OrderPreprocessor.prepare_orders()`（經 `CostModel.enrich_orders()`、`order_rules.sort_orders()`） | —（只補值、排序不擋） |
 | 3 | 持倉檔數硬上限（`max_holdings`） | `BaseSimulator.check_max_holdings()` → `order_rules.check_max_holdings()` | `rejected_max_holdings` |
 | 4 | 當日查不到報價（停牌、非股票池；期貨零成交的契約——有結算價沒成交的報價只交給結算模型盯市，不交給策略） | `BaseSimulator.execute_open_signal()` | `rejected_no_quote` |
 | 5 | 成交價可信度（無成交、OHLC 區間——只成交一筆、來源沒給高低價時為 `[close, close]`、漲跌停、全日鎖漲跌停；檔位未對齊只警告） | `FillModel.validate()` | `rejected_fill_price`／`rejected_limit_up_locked`／`rejected_limit_down_locked` |

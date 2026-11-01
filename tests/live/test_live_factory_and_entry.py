@@ -387,9 +387,10 @@ def test_parity_backtest_starts_from_the_live_holdings(
 
         submitted_orders: List[Any] = []
         position_manager: StubPositionManager = StubPositionManager()
-
-        def enrich_orders(self, orders: List[Any]) -> List[Any]:
-            return orders
+        # 種部位時的補值走引擎的成本模型（引擎本體不再提供補值的薄包裝）
+        cost_model: Any = type(
+            "CostModel", (), {"enrich_orders": staticmethod(lambda orders: orders)}
+        )()
 
         def run(self) -> None:
             # 部位必須在回測開始前就在帳上

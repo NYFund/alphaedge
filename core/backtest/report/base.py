@@ -68,7 +68,6 @@ class BaseBacktestReporter(ABC):
         self,
         strategy: BaseStrategy,
         output_dir: Optional[Path] = None,
-        price: Optional[Any] = None,
         show: Optional[bool] = None,
     ) -> None:
         # 欄位清單少填或漏掉累計兩欄時，交易明細會變成一張沒有欄位的空表而不是錯誤；
@@ -83,9 +82,11 @@ class BaseBacktestReporter(ABC):
         self.account: BaseAccount = self.strategy.account
         self.output_dir: Optional[Path] = output_dir
 
-        # 取對標序列用的資料 API。由呼叫端注入時共用同一條連線，`close()` 不會關掉別人的；
-        # 自建的由 `close()` 負責關掉。用不到的市場（期貨讀自己的連續合約表）維持 None
-        self.price: Optional[Any] = price
+        # 取對標序列用的資料 API：由 `load_benchmark_series()` 自己開、`close()` 關掉，
+        # 所有權清楚，台股與期貨同一條路徑。以前由 `Backtester` 把台股 DataFeed 內部的
+        # `StockPriceAPI` 借過來共用連線，期貨 DataFeed 沒有那個屬性而拿到 None——
+        # 行為靠「剛好有沒有」決定；多一條短暫的唯讀連線換掉這種鴨子型別
+        self.price: Optional[Any] = None
 
         # 畫完是否在瀏覽器開圖。預設交由環境變數決定：一次回測會產生五張圖，
         # 批次跑參數掃描時無條件開圖等於一次彈出幾十個分頁
@@ -131,8 +132,7 @@ class BaseBacktestReporter(ABC):
         """
         關閉 reporter 自己開的資料連線
 
-        不關的話，每跑一次回測就多一條不再使用的 SQLite 連線；
-        由呼叫端注入的連線不歸 reporter 關（`StockPriceAPI` 的 `owns_conn` 語意）。
+        不關的話，每跑一次回測就多一條不再使用的 SQLite 連線。
         """
 
         if self.price is not None:

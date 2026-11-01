@@ -13,7 +13,12 @@ from core.models import (
     BaseQuote,
     BaseTradeRecord,
 )
-from core.portfolio import order_rules
+from core.portfolio.order_preprocessor import (
+    STAGE_CLOSE,
+    STAGE_OPEN,
+    OrderPreprocessor,
+    PreprocessResult,
+)
 from core.position.base.position_manager import BasePositionManager
 from core.strategies.base import BaseStrategy
 from core.utils import BarExecutionSequence, TickUniverse
@@ -50,20 +55,8 @@ class SimulationEngine(Protocol):
     adjusted_price: bool
     tick_universe: Optional[TickUniverse]
 
-    def validate_orders(self, orders: List[BaseOrder], stage: str) -> List[BaseOrder]:
-        """方向白名單驗證"""
-
-        ...
-
-    def enrich_orders(self, orders: List[BaseOrder]) -> List[BaseOrder]:
-        """補上市場專屬的訂單欄位"""
-
-        ...
-
-    def sort_orders(self, orders: List[BaseOrder]) -> List[BaseOrder]:
-        """同一批委託的決定性排序"""
-
-        ...
+    # 委託前處理（方向驗證 → 補值 → 排序 → 持倉檔數上限）：與實盤同一份實作
+    preprocessor: OrderPreprocessor
 
     def get_execution_sequence(self) -> BarExecutionSequence:
         """開平倉先後"""
@@ -176,9 +169,21 @@ class BaseSimulator(ABC):
             for position in self.engine.account.positions
             if not position.is_closed
         }
-        return order_rules.check_max_holdings(
-            order, self.engine.max_holdings, held_symbols, self.engine.event_counts
+        admitted: bool = self.engine.preprocessor.admit(order, held_symbols)
+        if not admitted:
+            self.engine.event_counts["rejected_max_holdings"] += 1
+        return admitted
+
+    def _prepare_exits(self, orders: List[BaseOrder]) -> List[BaseOrder]:
+        """出場單的前處理（方向驗證 → 補值 → 排序）；被剔除的計入事件"""
+
+        prepared: PreprocessResult = self.engine.preprocessor.prepare_orders(
+            orders, STAGE_CLOSE
         )
+        self.engine.event_counts["rejected_direction"] += len(
+            prepared.rejected_direction
+        )
+        return prepared.orders
 
     # === Signal Execution ===
     def filter_tradable_quotes(self, quotes: List[BaseQuote]) -> List[BaseQuote]:
@@ -210,16 +215,17 @@ class BaseSimulator(ABC):
 
         engine: SimulationEngine = self.engine
         quotes = self.filter_tradable_quotes(quotes)
-        open_orders: List[BaseOrder] = engine.strategy.check_open_signal(quotes)
-
-        # 方向驗證 → 補值 → 決定性排序 → 成交價驗證，最後才進倉位管理器
-        open_orders = engine.sort_orders(
-            engine.enrich_orders(engine.validate_orders(open_orders, "open"))
+        # 方向驗證 → 補值 → 決定性排序（共用的前處理）→ 逐單：持倉檔數上限 →
+        # 成交價驗證，最後才進倉位管理器。**上限逐單判、不在前處理一次套**：
+        # 名額在成交後才被佔走，一批之前就判會讓沒成交的單白佔名額
+        prepared: PreprocessResult = engine.preprocessor.prepare_orders(
+            engine.strategy.check_open_signal(quotes), STAGE_OPEN
         )
+        engine.event_counts["rejected_direction"] += len(prepared.rejected_direction)
         quote_map: Dict[str, BaseQuote] = {q.symbol: q for q in quotes}
 
         open_positions: List[BasePosition] = []
-        for order in open_orders:
+        for order in prepared.orders:
             if not self.check_max_holdings(order):
                 continue
 
@@ -282,11 +288,8 @@ class BaseSimulator(ABC):
 
         quote_map: Dict[str, BaseQuote] = {q.symbol: q for q in quotes}
 
-        stop_loss_orders: List[BaseOrder] = engine.strategy.check_stop_loss_signal(
-            positions
-        )
-        stop_loss_orders = engine.sort_orders(
-            engine.validate_orders(stop_loss_orders, "close")
+        stop_loss_orders: List[BaseOrder] = self._prepare_exits(
+            engine.strategy.check_stop_loss_signal(positions)
         )
         engine.submitted_orders.extend(
             (engine.cur_date, "stop_loss", order) for order in stop_loss_orders
@@ -314,10 +317,9 @@ class BaseSimulator(ABC):
             q for q in quotes if engine.account.check_has_position(q.symbol)
         ]
 
-        close_orders: List[BaseOrder] = engine.strategy.check_close_signal(
-            remaining_positions
+        close_orders: List[BaseOrder] = self._prepare_exits(
+            engine.strategy.check_close_signal(remaining_positions)
         )
-        close_orders = engine.sort_orders(engine.validate_orders(close_orders, "close"))
         engine.submitted_orders.extend(
             (engine.cur_date, "close", order) for order in close_orders
         )

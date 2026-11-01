@@ -239,7 +239,7 @@ class TwStockCostModel:
 ### 3.5 方向中立機制
 
 以下都是**純函式，住在 `core/portfolio/order_rules.py`**（回測與實盤共用同一份）；
-`Backtester` 只以 `validate_orders()`／`sort_orders()`／`get_execution_sequence()` 薄包裝其中幾支，其餘由呼叫端直接呼叫。
+串接順序只有一份：`core/portfolio/order_preprocessor.py` 的 `OrderPreprocessor.prepare_orders()`（方向驗證 → 補值 → 排序 → 持倉檔數上限），`Backtester` 建一份給兩支 simulator、實盤的 `SignalCollector` 逐策略建一份。`Backtester` 只保留 `get_execution_sequence()` 的薄包裝。
 
 ```python
 resolve_open_action(position_type)   # LONG → BUY；SHORT → SELL
@@ -254,7 +254,7 @@ validate_orders(orders, stage)       # 白名單 + action 與方向是否相符�
 帳戶同步、日終補單與部位管理層都呼叫它，不自己寫 if（券商閘道層因分層限制保留一份，
 由測試與這裡互相釘住）。
 
-隨單欄位補值屬市場規則，住在 `TwStockCostModel`，引擎以 `Backtester.enrich_orders()` 轉呼叫：
+隨單欄位補值屬市場規則，住在 `TwStockCostModel`，由 `OrderPreprocessor` 在每個階段（開倉、停損、平倉）轉呼叫：
 
 ```python
 enrich_orders(orders)                # 依 §3.4 推導表補 short_method / is_day_trade
@@ -282,9 +282,9 @@ settlement.settle_day(date, quotes, account, event_counts)
 snapshot_daily_equity(date, quotes)
 ```
 
-日 K 開倉單處理順序固定為 **`check_*_signal` → `validate_orders` → `enrich_orders` → `sort_orders` → `check_max_holdings` → 無報價拒單 → `validate_fill_price` → `apply_fill_model`（`FillModel.fill()`：交易所名單 → 券源 → 停券 → 滑價 → 成交量上限；滑價後超出當日區間的開倉單夾回 `[low, high]`）→ `PositionManager`**。
+日 K 開倉單處理順序固定為 **`check_*_signal` → `OrderPreprocessor.prepare_orders()`（`validate_orders` → `enrich_orders` → `sort_orders`）→ 逐單 `check_max_holdings`（成交後名額才被佔走，所以逐單判）→ 無報價拒單 → `validate_fill_price` → `apply_fill_model`（`FillModel.fill()`：交易所名單 → 券源 → 停券 → 滑價 → 成交量上限；滑價後超出當日區間的開倉單夾回 `[low, high]`）→ `PositionManager`**。
 
-逐筆回測（`TickSimulator`）前四步相同，之後委託進在途委託簿，等同一檔的下一筆 tick 撮合，成交時由 `TwStockFillModel.fill_tick()` 走同一串制度擋板（交易所名單 → 券源 → 停券 → 滑價 → 成交量上限）再交給 `PositionManager`；放空開平倉、成本與結算的記帳路徑與日 K 完全相同。
+逐筆回測（`TickSimulator`）前四步相同（持倉檔數上限在前處理內一次套，佔用集合為部位 ∪ 在途開倉委託），之後委託進在途委託簿，等同一檔的下一筆 tick 撮合，成交時由 `TwStockFillModel.fill_tick()` 走同一串制度擋板（交易所名單 → 券源 → 停券 → 滑價 → 成交量上限）再交給 `PositionManager`；放空開平倉、成本與結算的記帳路徑與日 K 完全相同。
 
 **逐日權益快照是放空的必要條件**：每日部位檢查本來就要取當日收盤價算維持率，順手產出「含未實現損益的每日權益快照」成本極低但價值很高——放空最大的風險就是持倉期間的逆勢，只認已實現損益的權益曲線會把這段完全抹平。
 
@@ -292,7 +292,7 @@ snapshot_daily_equity(date, quotes)
 
 `StockPositionManager` 只拿得到 `account` 與 `StockOrder`，沒有策略物件，因此稅率／保證金所需的資訊必須**隨單帶入**：`short_method: Optional[ShortMethod] = None`、`is_day_trade: bool = False`。
 
-**策略不需要自己填**——`Backtester.enrich_orders()` 在 `validate_orders` 之後、送進 `PositionManager` 之前依 §3.4 推導表統一補值（LONG 兩欄維持預設）。這樣既符合「方向與屬性隨 order 走」（§1 原則 2），又不增加策略作者的負擔；要逐單混用不同管道也不必改介面。
+**策略不需要自己填**——`OrderPreprocessor` 在 `validate_orders` 之後、送進 `PositionManager` 之前依 §3.4 推導表統一補值（LONG 兩欄維持預設；開倉、停損、平倉三個階段都補，與實盤相同）。這樣既符合「方向與屬性隨 order 走」（§1 原則 2），又不增加策略作者的負擔；要逐單混用不同管道也不必改介面。
 
 ---
 
