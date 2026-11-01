@@ -145,7 +145,7 @@ class IntradaySession:
         loop: IntradayEventLoop = IntradayEventLoop(
             on_quote=self._process_tick,
             on_execution=self._process_execution,
-            on_market_data_lost=self._on_market_data_lost,
+            on_market_data_lost=self._handle_data_loss,
             now_provider=self.clock.now,
             heartbeat_seconds=self.INTRADAY_HEARTBEAT_SECONDS,
             on_heartbeat=self._on_heartbeat,
@@ -471,7 +471,7 @@ class IntradaySession:
         if fill is not None:
             self.account_sync.apply_fill(fill)
 
-    def _on_market_data_lost(self, reason: str) -> None:
+    def _handle_data_loss(self, reason: str) -> None:
         """
         行情中斷 → 帳戶層降到 `REDUCE_ONLY`
 
