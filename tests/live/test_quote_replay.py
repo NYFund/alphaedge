@@ -143,10 +143,10 @@ def test_same_recording_yields_identical_signals_twice() -> None:
 
         harness: Harness = Harness([Alpha()])
         harness.contexts[0].symbols = ["2330", "2317", "2454"]
-        # **一定要走 `prepare()`**：資金額度與曝險上限都在那裡才刷新，
+        # **一定要走 `prepare_segment()`**：資金額度與曝險上限都在那裡才刷新，
         # 跳過的話 `available_balance` 是 0，跨策略檢查會把每一張單都截斷，
         # 於是這條測試變成 `[] == []`
-        harness.trader.prepare()
+        harness.trader.prepare_segment()
 
         placed: List[Any] = []
         original = harness.trader.execution.dispatch

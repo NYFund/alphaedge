@@ -355,7 +355,7 @@ def test_heartbeat_actually_sends_the_cover_orders() -> None:
             super().__init__("Alpha", [make_order()])
 
     harness: Any = Harness([Alpha()])
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
 
     # 帳上留一筆未回補的當沖空單，並讓它有報價可取
     context: Any = harness.contexts[0]
@@ -387,7 +387,7 @@ def test_heartbeat_does_nothing_before_the_cover_time() -> None:
             super().__init__("Alpha", [make_order()])
 
     harness: Any = Harness([Alpha()])
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
     harness.contexts[0].account.positions = [make_position("2330")]
     harness.trader.intraday._last_quotes["2330"] = harness.broker.quotes["2330"]
 
@@ -413,7 +413,7 @@ def make_cover_harness(*symbols: str) -> Any:
             super().__init__("Alpha", [make_order()])
 
     harness: Any = Harness([Alpha()])
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
     harness.contexts[0].account.positions = [
         make_position(symbol) for symbol in symbols or ("2330",)
     ]

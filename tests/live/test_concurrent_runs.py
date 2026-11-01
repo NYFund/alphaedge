@@ -78,7 +78,7 @@ def test_inherited_halt_survives_a_crash(dao: LiveTradeDAO) -> None:
     start_run(dao, "run2")
     TradingModeState(dao, "run2", lambda: NOW).load()
 
-    # run3 啟動，先標記崩潰的舊紀錄再讀模式（`prepare()` 的順序）
+    # run3 啟動，先標記崩潰的舊紀錄再讀模式（`prepare_segment()` 的順序）
     start_run(dao, "run3")
     dao.mark_crashed_runs("run3", NOW)
     third: TradingModeState = TradingModeState(dao, "run3", lambda: NOW)

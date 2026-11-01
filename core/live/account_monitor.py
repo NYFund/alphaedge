@@ -188,7 +188,7 @@ class AccountMonitor:
 
         - **帳戶層：取券商端**（已實現 ＋ 未實現）。資料不足時**略過並記 warning**，
           不當成「沒有虧損」。
-        - **策略層：目前恆為不觸發，缺的是輸入不是接線。** `prepare()` 走到這裡時，
+        - **策略層：目前恆為不觸發，缺的是輸入不是接線。** `prepare_segment()` 走到這裡時，
           帳戶是剛由 `AccountSynchronizer._restore_positions()` 以**原始開倉價**重建的，
           未實現損益因此是 0；而 `OrderManager.recover()` 只接管未終結的委託、
           不回放已成交的回報，本段落之前的已實現損益也不在這個行程的 `trade_records` 裡。

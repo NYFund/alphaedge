@@ -95,7 +95,7 @@ def test_universe_is_filled_after_login(dao: LiveTradeDAO) -> None:
 
 
 def test_prepare_fills_the_universe_right_after_login(dao: LiveTradeDAO) -> None:
-    """`prepare()` 登入後緊接著補填，排在讀模式、對帳等任何會用到標的的步驟之前"""
+    """`prepare_segment()` 登入後緊接著補填，排在讀模式、對帳等任何會用到標的的步驟之前"""
 
     trader: LiveTrader = build_trader(dao, LateResolverBroker())
     calls: List[str] = []
@@ -115,7 +115,7 @@ def test_prepare_fills_the_universe_right_after_login(dao: LiveTradeDAO) -> None
     trader.mark_previous_crash = stop  # type: ignore[method-assign]
 
     with pytest.raises(Stop):
-        trader.prepare()
+        trader.prepare_segment()
 
     assert calls == ["connect"]
     assert all(context.symbols for context in trader.contexts)

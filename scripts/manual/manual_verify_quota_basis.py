@@ -22,7 +22,7 @@ from strategies.stock.volume_breakout_momentum_strategy import (
 
 **動機**：額度檢查的基準是券商快照的 `total_equity`。以「可用餘額 ＋ 各策略持倉
 占用」自行加總會漏掉未交割款與不屬於任何策略的持倉，帳上有接管部位時總權益
-被算成 0，每個段落都在 `prepare()` 拒絕啟動。基準對不對只有實連問得出來，
+被算成 0，每個段落都在 `prepare_segment()` 拒絕啟動。基準對不對只有實連問得出來，
 本工具連一次模擬環境把兩種算法的數字並排印出來。
 
 **唯讀**：只呼叫 `account_balance()`、`list_settlements()`、`list_positions()`，

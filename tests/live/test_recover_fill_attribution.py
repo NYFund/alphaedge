@@ -31,7 +31,7 @@ from .test_live_trader_day import Harness, ScriptedStrategy, start_run
 """
 送單後行程死掉、成交由另一個行程收下、重啟：部位要歸回原策略，而不是收進 `__unattributed__`
 
-重啟的 `prepare()` 先接管委託再以歸屬帳重建部位。以前接管把券商的累計成交量直接抄進
+重啟的 `prepare_segment()` 先接管委託再以歸屬帳重建部位。以前接管把券商的累計成交量直接抄進
 `filled_volume`，接著的重建把券商多出的部位收進 `__unattributed__`——對帳一致、不降級、
 只有一行 warning，而那口部位從此不再被策略管理。
 """
@@ -138,7 +138,7 @@ def test_restart_books_the_fill_to_the_original_strategy(dao: LiveTradeDAO) -> N
         )
     ]
 
-    # 重啟：prepare() 的順序
+    # 重啟：prepare_segment() 的順序
     oms: OrderManager = make_oms(broker, dao, "run2", 2)
     ledger: PositionAttributionLedger = PositionAttributionLedger(
         dao, now_provider=lambda: NOW, run_id="run2"
@@ -166,7 +166,7 @@ def test_restart_books_the_fill_to_the_original_strategy(dao: LiveTradeDAO) -> N
 
 
 def test_trader_startup_backfills_before_rebuilding_positions() -> None:
-    """`LiveTrader.prepare()` 本身的順序：接管 → 回填 → 重建；重建後策略帳上有那口部位"""
+    """`LiveTrader.prepare_segment()` 本身的順序：接管 → 回填 → 重建；重建後策略帳上有那口部位"""
 
     class Alpha(ScriptedStrategy):
         """不送新單的腳本策略"""
@@ -222,7 +222,7 @@ def test_trader_startup_backfills_before_rebuilding_positions() -> None:
     ]
     start_run(harness)
 
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
 
     assert harness.ledger.get_strategy_positions("Alpha") == {("2330", "LONG"): 1}
     assert harness.ledger.get_strategy_positions(UNATTRIBUTED_STRATEGY) == {}

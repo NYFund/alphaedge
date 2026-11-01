@@ -220,9 +220,9 @@ class LiveTrader:
         # 重連後的對帳結果回填到這裡：元件不持有引擎本體，由本類把回呼接上
         self.connection.on_reconciled = self._store_reconcile
 
-        # 今天是不是交易日；由 `prepare()` 的啟動檢查填入。
+        # 今天是不是交易日；由 `prepare_segment()` 的啟動檢查填入。
         # **預設 True**：只有檢查實際判定為休市才會是 False，
-        # 預設 False 會讓沒跑過 `prepare()` 的呼叫端誤以為今天休市
+        # 預設 False 會讓沒跑過 `prepare_segment()` 的呼叫端誤以為今天休市
         self.is_trading_day: bool = True
 
     # === 主流程 ===
@@ -247,7 +247,7 @@ class LiveTrader:
 
         error: Optional[BaseException] = None
         try:
-            self.prepare()
+            self.prepare_segment()
 
             if not self.is_trading_day:
                 logger.warning("今天不是交易日，本段落不進入送單路徑")
@@ -274,7 +274,7 @@ class LiveTrader:
             self.finish(window, aborted=error is not None)
             self.record_finish(error)
 
-    def prepare(self) -> None:
+    def prepare_segment(self) -> None:
         """
         - Description:
             段落開始前的五件事：連線、讀回模式、接管委託、重建帳戶、對帳
@@ -367,7 +367,7 @@ class LiveTrader:
         try:
             self.broker.connect()
 
-            # 與 `prepare()` 同一個順序：先標崩潰再讀模式。**模式一定要讀回來**——
+            # 與 `prepare_segment()` 同一個順序：先標崩潰再讀模式。**模式一定要讀回來**——
             # 本次結束時會把帳戶層模式寫進 `live_run`，沒讀的話寫進去的是預設的
             # NORMAL，等於用一次重建把先前的降級擦掉
             self.mark_previous_crash()

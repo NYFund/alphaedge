@@ -234,7 +234,7 @@ class Harness:
 
         self.broker: FakeBroker = FakeBroker()
         self.broker.quotes["2330"] = make_quote()
-        # 帳戶權益要撐得住 Σ 各策略額度 ÷ 安全係數，否則 `prepare()` 的
+        # 帳戶權益要撐得住 Σ 各策略額度 ÷ 安全係數，否則 `prepare_segment()` 的
         # `verify_quota()` 會當場拒絕啟動——那正是它要擋的事
         equity: float = CAPITAL * len(strategies) / CAPITAL_SAFETY_RATIO
         self.broker.account.available_balance = equity
@@ -349,7 +349,7 @@ def seed_holding(harness: Harness, strategy_name: str, volume: int) -> None:
     """
     在歸屬帳與券商端放一筆 2330 多單
 
-    兩邊都要放：只放歸屬帳的話，`prepare()` 對帳會判成不一致而降級；
+    兩邊都要放：只放歸屬帳的話，`prepare_segment()` 對帳會判成不一致而降級；
     只放券商端的話，部位會被收進 `__unattributed__` 而不屬於這支策略。
     """
 
@@ -1895,7 +1895,7 @@ def test_intraday_quotes_for_held_symbols_reach_the_strategy() -> None:
             return []
 
     harness: Harness = Harness([Watcher()])
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
     harness.contexts[0].account.positions.append(
         StockPosition(
             id=1,
@@ -2138,7 +2138,7 @@ def test_daily_amount_starts_from_orders_already_sent_today() -> None:
     )
     start_run(harness)
 
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
 
     # 只有那張成交的買單：100 × 1 張 × 1,000 股
     assert harness.risk.daily_amount["Alpha"] == 100_000.0

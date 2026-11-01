@@ -140,7 +140,7 @@ def build_futures_trader(dao: LiveTradeDAO, simulation: bool) -> LiveTrader:
     """
     組一個只有期貨策略的引擎
 
-    資金額度分配直接放行：本檔只驗保證金這一關，額度要跑過 `prepare()`
+    資金額度分配直接放行：本檔只驗保證金這一關，額度要跑過 `prepare_segment()`
     向券商取帳務才有值，與這裡要驗的事無關。
     """
 

@@ -93,7 +93,7 @@ CATEGORY_LOCKED_AT_LIMIT: str = "LOCKED_AT_LIMIT"
 # `ExecutionTiming` 造成的段落差異。
 # **目前不會有任何一筆落在這一類，而那是刻意的**：開倉與平倉分屬不同段落時，
 # 實際順序由段落決定、可能與 `allow_day_trade` 推導的順序相反，這個矛盾由
-# `core/live/strategy_guard.py` 的 `check_schedule_conflicts()` 在 `prepare()`
+# `core/live/strategy_guard.py` 的 `check_schedule_conflicts()` 在 `prepare_segment()`
 # 啟動時擋掉（拋 `LiveReadinessError`），跑不到 parity 比對這一步。
 # 保留這個類別是因為**檢查沒有涵蓋 `stop_loss`**——它若宣告在與 `close` 不同的段落，
 # 與回測「停損 → 一般平倉」的固定順序就會分岔，而目前三支策略都沒有實作停損，

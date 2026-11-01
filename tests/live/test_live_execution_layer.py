@@ -341,7 +341,7 @@ def test_missing_price_limits_skip_the_order_and_release_the_reservation() -> No
 
     harness: Harness = Harness([MarketAlpha()], price_limits=PriceLimits.none())
     context: Any = harness.contexts[0]
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
 
     order: BaseOrder = marked(
         make_order(), ExecutionTiming.AT_CLOSE, ExecutionStyle.MARKET
@@ -362,7 +362,7 @@ def test_unmarked_order_is_blocked_before_the_broker() -> None:
     """
 
     harness: Harness = Harness([MarketAlpha()])
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
 
     unsent: List[Any] = harness.trader.execution.dispatch(
         [(harness.contexts[0], make_order())], None
@@ -564,7 +564,7 @@ def test_day_trade_cover_is_sent_with_a_protection_price() -> None:
 
     harness: Harness = Harness([MarketAlpha()])
     context: Any = harness.contexts[0]
-    harness.trader.prepare()
+    harness.trader.prepare_segment()
     cover: BaseOrder = marked(
         make_order(), ExecutionTiming.IMMEDIATE, ExecutionStyle.MARKET
     )

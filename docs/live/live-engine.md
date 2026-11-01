@@ -13,7 +13,7 @@
 
 ## 一、元件地圖
 
-引擎本體 `LiveTrader`（`core/live/trader.py`）**只當協調者**：負責段落流程（`run()` → `prepare()` → 各元件 →
+引擎本體 `LiveTrader`（`core/live/trader.py`）**只當協調者**：負責段落流程（`run()` → `prepare_segment()` → 各元件 →
 `finish()` → 生命週期紀錄）與人工觸發的重建、parity 補比；實際工作由下表的協作元件做。元件由
 `core/live/factory.py` 的 `assemble_live_trader()` 組裝並注入，元件之間只注入需要的介面（物件或回呼）、
 不持有 `LiveTrader`（比照 NautilusTrader 的元件拆法，先不引入 `MessageBus`；盤中已有單執行緒事件迴圈分派事件，
@@ -106,7 +106,7 @@ flowchart TD
     G --> Z
 ```
 
-`prepare()` 的順序固定，每一步都有理由：
+`prepare_segment()` 的順序固定，每一步都有理由：
 
 1. 連線券商，替沒有標的池的策略補上預設標的（要靠券商查的標的池，例如期貨掛牌月份，組裝時還補不到）；補完仍為空就寫 `UNIVERSE_EMPTY` 並推播。
 2. 把上次沒有結束紀錄的 `live_run` 標成崩潰並推播——**要排在讀模式之前**，否則上次崩潰那一列的降級狀態會被跳過。
@@ -240,8 +240,8 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 | kill switch 檔案存在 | 送單前的風控檢查 | 帳戶層 → `HALTED` |
 | 策略鉤子拋例外 | `SignalCollector.halt_strategy()` | 該策略 → `HALTED`，並釋放它的資金保留（否則佔住的是其他策略的可用資金） |
 | 對帳不一致 | `Reconciler.check()` | 帳戶層 → `REDUCE_ONLY`（差異無法歸因到單支策略） |
-| 帳戶當日虧損 ＞ 權益 × `AccountRiskConfig.daily_loss_ratio` | `prepare()`，券商端已實現＋未實現 | 帳戶層 → `REDUCE_ONLY`；取不到損益時略過並記 warning，不當成沒虧損 |
-| 策略當日虧損 ＞ 額度 × `daily_loss_ratio` | `prepare()`，本地帳 | 該策略 → `REDUCE_ONLY`（目前恆不觸發，見第十一節） |
+| 帳戶當日虧損 ＞ 權益 × `AccountRiskConfig.daily_loss_ratio` | `prepare_segment()`，券商端已實現＋未實現 | 帳戶層 → `REDUCE_ONLY`；取不到損益時略過並記 warning，不當成沒虧損 |
+| 策略當日虧損 ＞ 額度 × `daily_loss_ratio` | `prepare_segment()`，本地帳 | 該策略 → `REDUCE_ONLY`（目前恆不觸發，見第十一節） |
 | 一分鐘送單數超限 | 事前風控 | 該策略 → `REDUCE_ONLY` |
 | 盤中全市場靜默 30 秒 | 盤中事件迴圈 | 帳戶層 → `REDUCE_ONLY` |
 | 重啟接管時模糊比對到多筆 | `OrderManager` | 帳戶層 → `REDUCE_ONLY` |
@@ -251,7 +251,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 各模式下引擎的行為：
 
-- 帳戶層 `HALTED`，或所有策略的有效模式都是 `HALTED`：`prepare()` 照跑（接管、重建、對帳、快照），**不進送單路徑**。
+- 帳戶層 `HALTED`，或所有策略的有效模式都是 `HALTED`：`prepare_segment()` 照跑（接管、重建、對帳、快照），**不進送單路徑**。
 - `REDUCE_ONLY`：不呼叫開倉鉤子、平倉與停損照常；尾盤段不換月（開倉腿是新曝險，只剩平倉腿等於提早平倉），寫 `ROLL_SKIPPED`。
 - 策略 `HALTED`：本段落不呼叫它的任何鉤子。
 
@@ -371,7 +371,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 
 ## 七、對帳
 
-`Reconciler.check()`（`core/live/reconciler.py`）在三個時點執行：**每個段落的 `prepare()` 最後**、**斷線重連成功後**、**盤後作業重建帳戶之後**。
+`Reconciler.check()`（`core/live/reconciler.py`）在三個時點執行：**每個段落的 `prepare_segment()` 最後**、**斷線重連成功後**、**盤後作業重建帳戶之後**。
 它比三件事，三項都沒有差異才算一致：
 
 | 比對 | 兩邊 | 不一致代表 |
