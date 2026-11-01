@@ -341,7 +341,7 @@ def test_immediate_timing_drives_the_event_loop() -> None:
     """
     `--phase intraday` 要走事件迴圈，不是日頻的一次性流程
 
-    接上之前 `run()` 一律呼叫 `submit_segment()`，`run_intraday()` 沒有任何
+    接上之前 `run()` 一律呼叫 `run_segment()`，`run_intraday()` 沒有任何
     呼叫端——逐筆段落會安靜地跑成一次性的日頻流程。
     """
 
@@ -357,7 +357,7 @@ def test_immediate_timing_drives_the_event_loop() -> None:
     harness = Harness([Alpha()])
     calls: List[str] = []
     harness.trader.run_intraday = lambda window: calls.append("intraday")
-    harness.trader.submit_segment = lambda timing, window: calls.append("segment")
+    harness.trader.run_segment = lambda timing, window: calls.append("segment")
 
     harness.trader.run(ExecutionTiming.IMMEDIATE)
     harness.trader.run(ExecutionTiming.AT_CLOSE)

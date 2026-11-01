@@ -424,7 +424,7 @@ def test_close_segment_rolls_before_collecting_signals(
 
     trader, broker = build_trader(dao, fill_ratio=1.0)
 
-    trader.submit_segment(timing, None)
+    trader.run_segment(timing, None)
 
     assert placed_symbols(broker)[: len(expected)] == expected
     if not expected:

@@ -266,7 +266,7 @@ class LiveTrader:
             if timing is ExecutionTiming.IMMEDIATE:
                 self.run_intraday(window)
             else:
-                self.submit_segment(timing, window)
+                self.run_segment(timing, window)
         except BaseException as exc:
             error = exc
             raise
@@ -486,7 +486,7 @@ class LiveTrader:
         self._wait_until_submit_window(window)
         return self.intraday.run(window)
 
-    def submit_segment(
+    def run_segment(
         self, timing: ExecutionTiming, window: Optional[SegmentWindow]
     ) -> None:
         """

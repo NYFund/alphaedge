@@ -1928,7 +1928,7 @@ def test_segment_that_never_reaches_the_window_sends_nothing() -> None:
     """
     等不到送單時窗（時鐘卡在時窗之前）：逾時後零送單、寫事件
 
-    以前逾時只記一行就 `return`，`submit_segment()` 不看結果照樣收訊號送單：
+    以前逾時只記一行就 `return`，`run_segment()` 不看結果照樣收訊號送單：
     行程提早 30 分鐘以上啟動或時鐘卡住時，尾盤單會在逐筆交易時段以掛漲停的限價
     成交，與回測的收盤價假設分岔。
     """

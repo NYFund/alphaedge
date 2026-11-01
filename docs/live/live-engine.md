@@ -100,7 +100,7 @@ flowchart TD
     C -- 是 --> D{帳戶層允許送單？}
     D -- 否 --> Z
     D -- 是 --> E{段落}
-    E -- open／close --> F[submit_segment：等時窗 → 補平／換月 → 收訊號 → 送單]
+    E -- open／close --> F[run_segment：等時窗 → 補平／換月 → 收訊號 → 送單]
     E -- intraday --> G[run_intraday：事件迴圈跑到送單迄]
     F --> Z
     G --> Z
@@ -119,7 +119,7 @@ flowchart TD
 9. 當日虧損檢查（第四節）。
 10. 對帳（第七節）。
 
-送單流程（`submit_segment()`）：等到送單起 → **開盤段先執行到期的跨日待辦**（補平前一天沒成交的出場單）→
+送單流程（`run_segment()`）：等到送單起 → **開盤段先執行到期的跨日待辦**（補平前一天沒成交的出場單）→
 **尾盤段先換月**（策略看到的持倉才與它要交易的契約一致）→ 逐策略收訊號 → 跨策略檢查 → `dispatch()` 逐單送出（第三節）。換月平倉腿只成交一部分（IOC 成交幾口後被取消）時寫 `ROLL_PARTIAL`（CRITICAL），開倉腿改送已平的口數補回曝險，沒平的次日再換；完全沒成交才是 `ROLL_ABANDONED`（WARN）。
 
 收尾（`finish_segment()`，在 `finally` 裡一定執行）：
