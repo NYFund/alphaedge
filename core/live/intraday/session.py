@@ -148,7 +148,7 @@ class IntradaySession:
             on_market_data_lost=self._handle_data_loss,
             now_provider=self.clock.now,
             heartbeat_seconds=self.INTRADAY_HEARTBEAT_SECONDS,
-            on_heartbeat=self._on_heartbeat,
+            on_heartbeat=self._handle_heartbeat,
         )
 
         symbols: List[str] = sorted(
@@ -227,7 +227,7 @@ class IntradaySession:
             today, window.submit_end, tzinfo=self.clock.now().tzinfo
         )
 
-    def _on_heartbeat(self) -> None:
+    def _handle_heartbeat(self) -> None:
         """
         - Description:
             心跳工作：先確認連線，再跑日終強制動作

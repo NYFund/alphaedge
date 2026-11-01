@@ -466,11 +466,11 @@ def test_heartbeat_covers_once_the_connection_is_back() -> None:
     harness.broker.fail_connect = True
     before: int = harness.broker.placed_count
 
-    harness.trader.intraday._on_heartbeat()
+    harness.trader.intraday._handle_heartbeat()
     assert harness.broker.placed_count == before
 
     harness.broker.fail_connect = False
-    harness.trader.intraday._on_heartbeat()
+    harness.trader.intraday._handle_heartbeat()
     assert harness.broker.placed_count == before + 1
 
 
