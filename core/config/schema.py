@@ -70,6 +70,9 @@ SECURITIES_TRADER_INFO_TABLE_NAME: str = "taiwan_securities_trader_info"
 # 市場開休市日期（TWSE 公告）。**與 `price` 表的交易日是兩件事**：`price` 是事後的
 # 「那天有成交資料」，本表是事前公告的「那天休不休市」——盤前判定交易日只能靠後者
 MARKET_HOLIDAY_TABLE_NAME: str = "market_holiday"
+# 臨時休市（颱風等，不在交易所年初公告的行事曆上）。**與 `market_holiday` 分表**：
+# 後者每次更新都整年替換，補登在那裡的列下一次更新就被洗掉；本表只由人工登記，ETL 不碰
+MARKET_ADHOC_CLOSURE_TABLE_NAME: str = "market_adhoc_closure"
 # 台期貨（皆位於 tw_futures.db）
 # **乘數不存在獨立的契約表**：指數期貨乘數是程式碼常數 `FUTURES_MULTIPLIER`，
 # 股票期貨乘數查 `futures_stock_universe.contract_size`。

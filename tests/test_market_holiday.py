@@ -313,3 +313,100 @@ def test_update_db_target_is_in_the_default_set() -> None:
 
     assert "market_holiday" in expand_targets({"no_tick"})
     assert "market_holiday" in expand_targets({"all"})
+
+
+# === 臨時休市（人工登記） ===
+TYPHOON: datetime.date = datetime.date(2026, 10, 23)
+
+
+def test_adhoc_closure_turns_a_trading_day_into_a_closure(
+    loaded_api: MarketHolidayAPI,
+) -> None:
+    """
+    2026-10-23 颱風全日休市不在官方公告上：登記前是交易日，登記後是休市
+
+    休市日查詢要把官方表與臨時休市合併，回測的缺日報告、換月日曆與實盤判定才看得到。
+    """
+
+    assert loaded_api.is_trading_day(TYPHOON) is True
+
+    loaded_api.dao.ensure_adhoc_table()
+    assert loaded_api.dao.add_adhoc_closure(TYPHOON, "颱風停止交易") is True
+
+    assert loaded_api.is_trading_day(TYPHOON) is False
+    assert loaded_api.is_closure(TYPHOON) is True
+    assert TYPHOON in loaded_api.get_closures(
+        datetime.date(2026, 10, 19), datetime.date(2026, 10, 30)
+    )
+
+
+def test_adhoc_closure_survives_the_yearly_replace(
+    loaded_api: MarketHolidayAPI,
+) -> None:
+    """
+    `update-db` 每次整年替換官方表：補登在官方表會被洗掉，登記在臨時休市表不會
+
+    2026-10-27 手動補登在官方表的 10/23，10/28 06:00 更新後就消失了。
+    """
+
+    loaded_api.dao.ensure_adhoc_table()
+    loaded_api.dao.add_adhoc_closure(TYPHOON, "颱風停止交易")
+    loaded_api.dao.commit()
+
+    MarketHolidayLoader(dao=loaded_api.dao).add_to_db(cleaned_2026(), 2026)
+
+    assert loaded_api.is_trading_day(TYPHOON) is False
+
+
+def test_adhoc_closure_answers_even_for_an_unpublished_year(
+    loaded_api: MarketHolidayAPI,
+) -> None:
+    """
+    臨時休市是確定的事實：年度未入庫也答「休市」，但不讓那一年變成「已涵蓋」
+
+    算成已涵蓋的話，那一年其餘的國定假日都會被當成交易日。
+    """
+
+    closed: datetime.date = datetime.date(2027, 7, 15)
+    loaded_api.dao.ensure_adhoc_table()
+    loaded_api.dao.add_adhoc_closure(closed, "颱風停止交易")
+
+    assert loaded_api.is_trading_day(closed) is False
+    assert loaded_api.is_trading_day(datetime.date(2027, 7, 16)) is None
+    assert loaded_api.get_covered_years() == {2026}
+
+
+def test_missing_adhoc_table_keeps_the_official_answers(
+    loaded_api: MarketHolidayAPI,
+) -> None:
+    """
+    從沒登記過（或以唯讀連線開舊庫）時沒有臨時休市表：查詢照舊，不因缺表出錯
+
+    ETL 不建這張表，watchdog 又以唯讀連線開研究庫——缺表是常態。
+    """
+
+    assert not loaded_api.dao.adhoc_table_exists()
+    assert loaded_api.get_closures(
+        datetime.date(2026, 9, 1), datetime.date(2026, 10, 31)
+    ) == {
+        datetime.date(2026, 9, 25),
+        datetime.date(2026, 9, 28),
+        datetime.date(2026, 10, 9),
+        datetime.date(2026, 10, 10),
+        datetime.date(2026, 10, 25),
+        datetime.date(2026, 10, 26),
+    }
+    assert loaded_api.dao.list_adhoc_closures().empty
+
+
+def test_removed_adhoc_closure_is_a_trading_day_again(
+    loaded_api: MarketHolidayAPI,
+) -> None:
+    """登記錯日子可以撤銷，撤銷後回到官方表的判定"""
+
+    loaded_api.dao.ensure_adhoc_table()
+    loaded_api.dao.add_adhoc_closure(TYPHOON, "颱風停止交易")
+
+    assert loaded_api.dao.remove_adhoc_closure(TYPHOON) is True
+    assert loaded_api.is_trading_day(TYPHOON) is True
+    assert loaded_api.dao.remove_adhoc_closure(TYPHOON) is False

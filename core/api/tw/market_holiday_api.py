@@ -8,18 +8,19 @@ from core.dao.base import BaseDAO
 from core.dao.tw.market_holiday_dao import MarketHolidayDAO
 
 """
-Market Holiday API：查詢 `tw_stock.db` 中 TWSE 官方公告的開休市日期
+Market Holiday API：查詢 `tw_stock.db` 中 TWSE 官方公告的開休市日期，以及人工登記的臨時休市
 
 **三種答案，`None` 不可當成 True**：
 
 | 回傳 | 意義 |
 |------|------|
-| `True` | 該年度已公告，這天是平日且不在休市列表上 |
-| `False` | 該年度已公告，這天是週末或官方列為休市（含「市場無交易，僅辦理結算交割作業」） |
-| `None` | 該年度尚未入庫——**不知道**，不是「不是假日」 |
+| `True` | 該年度已公告，這天是平日、不在休市列表上，也沒有登記臨時休市 |
+| `False` | 該年度已公告且這天是週末或官方列為休市（含「市場無交易，僅辦理結算交割作業」）；或這天登記了臨時休市 |
+| `None` | 該年度尚未入庫、也沒有登記臨時休市——**不知道**，不是「不是假日」 |
 
 「年度沒入庫」與「這天不是假日」在表裡長得一樣（都查不到列），
-所以一律先問 `get_covered_years()` 再下結論。
+所以一律先問 `get_covered_years()` 再下結論。臨時休市是確定的事實，
+登記了就答休市，不受年度是否入庫影響。
 """
 
 
@@ -42,10 +43,10 @@ class MarketHolidayAPI(BaseDataAPI):
     ) -> Set[datetime.date]:
         """
         - Description:
-            區間內的官方休市日（不含週末本身，只含表上列出者）
+            區間內的休市日（不含週末本身）：官方表上列出者，加上人工登記的臨時休市
 
-            **只回答已涵蓋的年度**：區間跨到未入庫的年度時，那一段不會有任何休市日，
-            呼叫端需要區分時請搭配 `get_covered_years()`。
+            **官方休市只回答已涵蓋的年度**：區間跨到未入庫的年度時，那一段只會有
+            登記過的臨時休市，呼叫端需要區分時請搭配 `get_covered_years()`。
         - Parameters:
             - start_date: datetime.date
                 起日（含）
@@ -61,18 +62,20 @@ class MarketHolidayAPI(BaseDataAPI):
     def is_closure(self, date: datetime.date) -> Optional[bool]:
         """
         - Description:
-            該日是否為官方列出的休市日（週末不另外判斷）
+            該日是否為休市日：官方列出或登記了臨時休市（週末不另外判斷）
         - Parameters:
             - date: datetime.date
                 查詢日
         - Return:
             - Optional[bool]
-                列為休市為 True、未列為 False；該年度未入庫為 None
+                列為休市或登記臨時休市為 True、未列為 False；該年度未入庫且未登記為 None
         """
 
+        if date in self.get_closures(date, date):
+            return True
         if date.year not in self.get_covered_years():
             return None
-        return date in self.get_closures(date, date)
+        return False
 
     def is_trading_day(self, date: datetime.date) -> Optional[bool]:
         """
@@ -81,7 +84,8 @@ class MarketHolidayAPI(BaseDataAPI):
 
             年度未入庫回 None——**週末也一樣**：本來源只替自己涵蓋的年度作答，
             週末另有 `WeekendCalendarSource` 負責，不必在這裡越界回答。
-            已涵蓋的年度內，週末與列為休市的日子為 False、其餘平日為 True。
+            已涵蓋的年度內，週末與列為休市的日子為 False、其餘平日為 True；
+            登記了臨時休市的日子不論年度是否入庫都是 False。
         - Parameters:
             - date: datetime.date
                 查詢日
