@@ -2,11 +2,9 @@
 
 ## Abstract
 
-- **背景／問題**：2026-10-18 以 `feature/framework-symmetry`（包含整條分支鏈的最新程式碼）實查，`tests/` 共
-  230 支測試檔、3,317 條測試、74,659 行，與原始碼（`core/`＋`apps/`＋`frontend/`＋`strategies/` 共 74,522 行）
-  約 1 : 1，規模本身健康。問題在組織方式：`backtest/`、`live/`、`portfolio/`、`analysis/` 四個子目錄已鏡像
-  `core/` 同名套件，**其餘 127 支直接平鋪在 `tests/` 根目錄**（main 上 104 支；分支鏈逐段增加：
-  `feature/post-rehearsal` 106、`feature/tick-timescaledb` 111、`feature/tick-backtest` 112、`feature/framework-symmetry` 127），
+- **背景／問題**：2026-11-01 以 main 實查，`tests/` 共 237 支測試檔（2026-10-18 實查時 230 支、3,317 條測試、74,659 行，
+  與原始碼 `core/`＋`apps/`＋`frontend/`＋`strategies/` 共 74,522 行約 1 : 1），規模本身健康。問題在組織方式：`backtest/`、`live/`、`portfolio/`、`analysis/` 四個子目錄已鏡像
+  `core/` 同名套件，**其餘 131 支直接平鋪在 `tests/` 根目錄**，
   對應 `core/api`、`core/dao`、`core/pipeline`、`core/models`、`core/market`、`apps/`、`frontend/`、`scripts/`
   等十幾個來源。改一個模組要找對應測試得靠檔名猜；守門測試（`test_readme_parity.py`、`test_naming_axes.py`、
   `test_check_layer_deps_*.py` 等）與業務測試混在一起，讀的人分不出哪些在測功能、哪些在掃 repo 規則。
@@ -41,7 +39,7 @@
 | Phase1-1 | 建立目標目錄骨架 | `tests/{api,dao,pipeline/*,models,market,adapters,position,strategies,strategy_lab,parity,apps,frontend,config,scripts,meta,live/sim}/__init__.py` | `pytest --collect-only -q` 數量不變 | ⬜ | — |
 | Phase2-1 | 搬資料存取層：`api/`、`dao/` | 26 支測試、對應外部引用（含 CI 的 TimescaleDB 步驟） | `pytest -m "not slow"` 全綠；grep 該批舊路徑歸零；CI 全綠 | ⬜ | `test_stock_tick_timescale.py` 被 CI 以路徑直接執行 |
 | Phase2-2 | 搬 `pipeline/` 五個子目錄 | 45 支測試、對應外部引用 | 同上 | ⬜ | 最大的一批；`docs/pipeline/*.md` 引用最多 |
-| Phase2-3 | 搬領域模型與策略層：`models/`、`market/`、`adapters/`、`position/`、`strategies/`、`strategy_lab/` | 20 支測試（`feature/stock-rehearsal` 合併後 21 支）、對應外部引用 | 同上 | ⬜ | — |
+| Phase2-3 | 搬領域模型與策略層：`models/`、`market/`、`adapters/`、`position/`、`strategies/`、`strategy_lab/` | 20 支測試（2026-11-01 main：`futures_rollover_rehearsal_strategy` 已移除、新增 `investment_trust_momentum_swing_holding_days`，仍 20 支）、對應外部引用 | 同上 | ⬜ | — |
 | Phase2-4 | 搬引擎與對稱性：`backtest/`、`parity/`、`live/sim/` | 6 支測試、對應外部引用 | 同上；`pytest -m shioaji_sim --collect-only` 仍收得到 | ⬜ | — |
 | Phase2-5 | 搬入口、介面與守門：`apps/`、`frontend/`、`config/`、`scripts/`、`meta/` | 31 支測試、CI、pre-commit、`frontend/Dockerfile`、`.env.example` | 同上；pre-commit 全套通過；CI 全綠 | ⬜ | CI 與 pre-commit 寫死的路徑大多在這批 |
 | Phase3-1 | 全 repo 引用收尾與空目錄清理 | 全 repo | grep `tests/test_` 歸零；`check_doc_paths.py` 通過；`tests/downloads/` 處置 | ⬜ | — |
@@ -58,7 +56,7 @@
   子目錄必須跟進，否則不同目錄若出現同名測試檔，pytest 的 rootdir-relative import 會互相覆蓋。
 - **產出**：約 22 個 `__init__.py`。
 - **驗證方式**：`pytest --collect-only -q | tail -1` 的數量與搬移前相同（空套件不影響收集）。
-- **相依**：見本文件〈施作時機〉——要等分支鏈全部合併後才開工。
+- **相依**：見本文件〈施作時機〉——依 `S19部署後施作排程.md` S11：等 S2（拆 `trader.py`，`refactor/trader-split`）與 S10（交易日曆改名，`refactor/calendar-rename`）合進 main 後才開工。
 
 ## Phase2：分批搬移
 
@@ -85,8 +83,8 @@
   - `test_stock_tick_api.py` 名為 API，實際只 import `StockTickDAO`（讀取端的參數與 schema 驗證），歸 `dao/`。
   - `test_stock_tick_timescale.py` 是需要真 TimescaleDB 的整合測試（沒設 `TICK_DATABASE_URL` 就整個模組 skip），
     測 `StockTickDAO` 與 `StockTickAPI` 的寫讀，歸 `dao/`。**CI 以路徑直接執行它並把任何 skip 當失敗**
-    （`.github/workflows/ci.yml` 第 122、124 行），這一批必須同步改 CI，否則 CI 那一步會找不到檔案。
-- **產出**：26 支測試的新位置；`.github/workflows/ci.yml` 第 18、122、124 行；`tests/conftest.py` 第 189 行附近
+    （`.github/workflows/ci.yml` 第 126、128 行），這一批必須同步改 CI，否則 CI 那一步會找不到檔案。
+- **產出**：26 支測試的新位置；`.github/workflows/ci.yml` 第 18、126、128 行；`tests/conftest.py` 第 204 行附近
   指向 `test_dao_live_trade.py` 的註解；`docs/dev/testing.md`、`docs/dev/code-quality.md`、`docs/dev/data-access-layer.md`
   指向 `test_stock_tick_timescale.py` 的路徑；`tests/backtest/test_stock_tick_datafeed.py`、`tests/test_stock_tick_loader.py`、
   `tests/test_tick_history_import.py`、`tests/test_stock_tick_timescale.py` 自身 docstring 的互相引用；
@@ -122,10 +120,9 @@
 
 - **目的**：`core/models`、`core/market`、`core/adapters`、`core/position`、策略（`core/strategies` 的契約與頂層
   `strategies/` 的具體策略）、`strategy_lab/` 的測試歸位。
-- **做法**：〈附二〉的 `models/`（5）、`market/`（4）、`adapters/`（3）、`position/`（1）、`strategies/`（6，
-  `feature/stock-rehearsal` 合併後 7）、`strategy_lab/`（1）。
+- **做法**：〈附二〉的 `models/`（5）、`market/`（4）、`adapters/`（3）、`position/`（1）、`strategies/`（6）、`strategy_lab/`（1）。
   - `test_futures_session_combine.py` 同時 import adapters 與 `backtest.datafeed`，測的是日夜盤合併的 adapter 行為，歸 `adapters/`。
-  - `test_futures_session_rule.py` 驗四個呼叫端（券商報價串流、實盤資料源、`session_guard`、`FuturesCalendar`）的
+  - `test_futures_session_rule.py` 驗四個呼叫端（券商報價串流、實盤資料源、`session_guard`、`FuturesCalendar`（`refactor/calendar-rename` 合併後為 `TwFuturesCalendar`，檔名不變））的
     日／夜盤判定一致，規則本身是市場結構，歸 `market/`。
   - `test_futures_margin_model.py` 測 `core/market/tw/futures_margin_model.py`，歸 `market/`（`models/` 對應的是 `core/models`）。
   - `test_model_symmetry.py`、`test_price_limits_contract.py` 釘的是 `core/models` 的欄位與回傳型別契約，歸 `models/`。
@@ -137,7 +134,7 @@
   （`test_quote_validation.py`）、`docs/dev/testing.md`（`test_model_symmetry.py`）、`tests/test_futures_position_manager.py`
   與 `tests/backtest/test_futures_backtest.py` 內指向 `test_futures_cost.py` 的註解。
 - **驗證方式**：各目錄 `pytest` 全綠；`pytest -m "not slow"` 全綠。
-- **相依**：Phase1-1。具體策略已在 `feature/post-rehearsal` 搬到頂層 `strategies/`（[core目錄邊界收斂.md](core目錄邊界收斂.md)
+- **相依**：Phase1-1。具體策略已於 2026-10-27 搬到頂層 `strategies/`（在 main，[core目錄邊界收斂.md](core目錄邊界收斂.md)
   Phase2-2），`tests/strategies/` 的名稱仍然正確，不需跟著改。
 
 ### Phase2-4. 搬引擎與對稱性：`backtest/`、`parity/`、`live/sim/` ⬜
@@ -171,7 +168,7 @@
     `scripts/check_overnight_positions.py` 的判讀邏輯，歸 `scripts/`。
   - `meta/`（9）：沒有單一被測對象、掃整個 repo 的規則檢查：模組 docstring、README 結構同步、命名軸、
     品質棘輪、暫存檔清理、`uv run --no-sync`、報表檔名有文件、API 公開介面、策略不碰 DB 欄位名。
-  - 同步改：`.github/workflows/ci.yml` 第 60 行（frontend smoke）、`.pre-commit-config.yaml` 第 38 與 44 行
+  - 同步改：`.github/workflows/ci.yml` 第 64 行（frontend smoke）、`.pre-commit-config.yaml` 第 38 與 44 行
     （`test_entrypoint_and_logging.py`）、`frontend/Dockerfile` 第 25 行、`.env.example`（`test_config_consistency.py`）、
     `frontend/config.py`、`frontend/services/*.py`、`scripts/launchd/rehearsal_schedule.py`、`docs/dev/code-quality.md`、
     `docs/dev/testing.md`、`docs/deployment/prod-deployment.md`、`docs/setup/dev-setup.md`、`docs/dev/naming-axes.md`、
@@ -201,7 +198,7 @@
 ### Phase3-2. 測試目錄說明更新 ⬜
 
 - **目的**：讓新測試有明確的歸位規則，否則根目錄會再長回來。
-- **做法**：`docs/dev/testing.md`（測試與回歸）已在 `feature/framework-symmetry` 新增並列入兩份 README 的文件索引，
+- **做法**：`docs/dev/testing.md`（測試與回歸）已在 main（2026-10-27 起）並列入兩份 README 的文件索引，
   其〈一、測試目錄配置〉目前寫「`tests/` 根目錄：資料層、具體策略、前端、設定與入口，以及大部分守門測試」。
   **改寫該節，不另開新文件**（原規劃的 `docs/dev/test-layout.md` 會與它重複）：
   1. 目錄樹（〈附一〉去掉檔案數）。
@@ -210,24 +207,23 @@
   3. 子目錄必須有 `__init__.py` 的理由。
   4. marker 與目錄的分工：目錄回答「測什麼」，marker 回答「怎麼跑」。
   同文件〈守門測試與行為測試〉表格、〈需要外部資源的測試〉表格內的路徑已在 Phase2 各批改過，這裡只複核。
-  `.claude/skills/health-check/SKILL.md` 第 134 行提到 `tests/test_*` 護欄的字樣改成新規則（例如 `tests/meta/`）。
+  `.claude/skills/health-check/SKILL.md` 第 137 行提到 `tests/test_*` 護欄的字樣改成新規則（例如 `tests/meta/`）。
 - **產出**：`docs/dev/testing.md`、`.claude/skills/health-check/SKILL.md`。
 - **驗證方式**：`check_doc_paths.py` 通過；`test_readme_parity.py`（Phase2-5 後位於 `tests/meta/`）通過。
-- **相依**：Phase3-1；`docs/dev/testing.md` 要先隨 `feature/framework-symmetry` 進 main（〈施作時機〉的開工條件已涵蓋）。
+- **相依**：Phase3-1。
 
 ---
 
 ## 施作時機
 
 本份是純搬移，但 `git mv` 一百多支檔案會讓**每一條尚未合併、且改過這些測試的分支**在合併時碰到
-rename 衝突。2026-10-18 實查有五個 worktree 分支在飛：分支鏈 `feature/post-rehearsal` → `feature/tick-timescaledb` →
-`feature/tick-backtest` → `feature/framework-symmetry`，以及 `feature/stock-rehearsal`。分支鏈在根目錄新增 24 支測試、
-刪 1 支（淨增 23），並改過多支既有根目錄測試；`feature/stock-rehearsal` 新增 `tests/test_stock_round_trip_rehearsal_strategy.py`、
-改 `tests/test_rehearsal_schedule.py`。因此：
+rename 衝突。2026-11-01 現況：分支鏈四條（`feature/post-rehearsal` → `feature/tick-timescaledb` →
+`feature/tick-backtest` → `feature/framework-symmetry`）已於 2026-10-27 進 main，`feature/stock-rehearsal` 的演練策略與其測試已隨部署 revert。
+但仍有多條未合併分支改過 `tests/`：`refactor/trader-split`、`refactor/calendar-rename`（41 檔）、`refactor/order-preprocessor`、
+`refactor/exit-quote-scope`、`refactor/live-naming`、`fix/*` 共十餘條、`deps/upgrade`。因此：
 
-- **開工條件**：[實盤下單架構規劃.md](實盤下單架構規劃.md) Phase7-1 演練結束、分支鏈四條依序合併進 main、
-  `feature/stock-rehearsal`（同文件 Phase7-27，排在 2026-10-21 期貨盤後段後合併）也已進 main；
-  開工當下若仍有其他分支在飛，先同步到 main 再開工。
+- **開工條件**（依 `S19部署後施作排程.md` S11）：拆 `trader.py` 與交易日曆改名合進 main 之後、排在該排程最後；
+  開工當下其他改過 `tests/` 的分支先合併或同步到 main。
 - **施作分支**：獨立 worktree，分支名 `refactor/tests-layout`；每個 Phase2 步驟一個 commit，
   全部做完一次 merge，中間不部署（不碰 money path，但演練期間的主目錄仍以 main 為準）。
 - **建議 model**：純搬移與改路徑，用預設 model 即可。
@@ -259,7 +255,7 @@ tests/
 ├── position/                   1 支
 │
 │   ── 策略與組合層（對應 core/strategies 與頂層 strategies/、core/portfolio、core/analysis、strategy_lab/）──
-├── strategies/                 6 支（feature/stock-rehearsal 合併後 7）
+├── strategies/                 6 支
 ├── portfolio/                  4 支（現有，不動）
 ├── analysis/                   1 支（現有，不動）
 ├── strategy_lab/               1 支
@@ -267,7 +263,7 @@ tests/
 │   ── 引擎層（對應 core/backtest、core/live）──
 ├── backtest/                   42 支（現有 40 ＋ 期貨轉倉回測、盤中動能逐筆回測）
 │   └── snapshots/              黃金檔
-├── live/                       57 支（現有 58 － 移出的 1 支；feature/stock-rehearsal 另加 2 支）
+├── live/                       60 支（main 2026-11-01 現有 61 － 移出的 1 支）
 │   ├── fixtures/
 │   └── sim/                    1 支，shioaji_sim 實連測試
 ├── parity/                     3 支，回測 vs 實盤對稱性
@@ -282,7 +278,7 @@ tests/
 └── meta/                       9 支，掃整個 repo 的規則檢查
 ```
 
-## 附二：根目錄檔案歸類表（2026-10-18，`feature/framework-symmetry` 的 127 支，依實際 import 歸類）
+## 附二：根目錄檔案歸類表（2026-11-01 main 的 131 支，依實際 import 歸類）
 
 檔名省略 `test_` 前綴與 `.py`。標 `*` 的是 2026-10-13 之後分支鏈新增的檔案；`futures_tick` 已隨 DolphinDB tick 程式
 一併刪除（`feature/tick-timescaledb` 的 `a288df4f`），不再列入。
@@ -300,7 +296,7 @@ tests/
 | `market/` | 4 | futures_calendar、futures_margin_model*、futures_session_rule*、trading_calendar_base* |
 | `adapters/` | 3 | futures_quote_adapter、quote_validation、futures_session_combine |
 | `position/` | 1 | futures_position_manager |
-| `strategies/` | 6 | futures_strategy、foreign_selling_reversal_short_strategy、intraday_momentum_strategy、futures_rollover_rehearsal_strategy、strategy_layering、strategy_loader_by_name（`feature/stock-rehearsal` 合併後另加 stock_round_trip_rehearsal_strategy） |
+| `strategies/` | 6 | futures_strategy、foreign_selling_reversal_short_strategy、intraday_momentum_strategy、investment_trust_momentum_swing_holding_days、strategy_layering、strategy_loader_by_name |
 | `strategy_lab/` | 1 | ridge |
 | `backtest/` | 2 | futures_roll_backtest、intraday_momentum_tick_backtest* |
 | `parity/` | 3 | quote_parity、order_state_parity、symbol_exposure_parity |
@@ -312,11 +308,15 @@ tests/
 
 另：`live/test_shioaji_sim.py` → `live/sim/`。
 
-## 附三：寫死 `tests/` 路徑的外部引用（2026-10-18 以 `feature/framework-symmetry` 實查，開工時重新 grep）
+2026-11-01 main 較 2026-10-18 新增的 5 支：`test_investment_trust_momentum_swing_holding_days.py` → `strategies/`（已列入上表）；
+其餘 4 支尚未計入上表支數——`test_manual_rename_live_strategy.py` → `scripts/`；`test_check_scripts_fail_on_empty_scan.py`、
+`test_doc_column_names.py`、`test_doc_paths_history.py` 依實際 import 歸 `scripts/` 或 `meta/`（開工時定）。
+
+## 附三：寫死 `tests/` 路徑的外部引用（2026-11-01 以 main 實查，開工時重新 grep）
 
 | 類別 | 位置 |
 |---|---|
-| CI | `.github/workflows/ci.yml`：第 18、122、124 行 `tests/test_stock_tick_timescale.py`（第 122 行是**實際執行**的指令）；第 60 行 `tests/test_frontend_app_smoke.py` |
+| CI | `.github/workflows/ci.yml`：第 18、126、128 行 `tests/test_stock_tick_timescale.py`（第 126 行是**實際執行**的指令）；第 64 行 `tests/test_frontend_app_smoke.py` |
 | pre-commit | `.pre-commit-config.yaml`：`tests/test_entrypoint_and_logging.py`（第 38、44 行） |
 | Docker | `frontend/Dockerfile` 第 25 行：`tests/test_frontend_metrics.py` |
 | pyproject | `pyproject.toml` 第 153 行：`tests/test_futures_continuous.py` |

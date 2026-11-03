@@ -3,9 +3,8 @@
 ## Abstract
 
 - **背景／問題**：`core/` 同時裝著三種東西：交易框架本體、使用框架的具體策略，以及另一個
-  應用程式——資料管線（`core/pipeline/`）。2026-09-26 盤點時 21,759 行；**2026-10-18 實查（只計 `.py`）
-  main 22,966 行，佔 `core/` 全部 67,740 行的 34%**，比 `live/`（12,902）加 `backtest/`（6,384）還多；
-  分支鏈上 `feature/tick-timescaledb` 移除 DolphinDB 後為 22,127 行，`feature/framework-symmetry`（`框架對稱化重構.md` Phase5 的 ETL 收斂）為 22,693 行、佔 69,254 行的 33%。業界的慣例是框架不含使用者策略
+  應用程式——資料管線（`core/pipeline/`）。2026-09-26 盤點時 21,759 行；**2026-11-01 實查（只計 `.py`）
+  main 22,707 行，佔 `core/` 全部 71,288 行的 32%**，比 `live/`（14,637）加 `backtest/`（7,685）還多。業界的慣例是框架不含使用者策略
   （freqtrade 的 `user_data/strategies/`、LEAN 的 `Engine` 與 `Algorithm.Python` 分專案），
   資料擷取也多半獨立於交易框架之外。另外盤點到三個較小的邊界問題（皆已處理）：
   1. 回測的缺日診斷 import 了 `core.pipeline.shared.date_planner`——這是 `core/` 其餘部分對
@@ -48,7 +47,7 @@
 | Phase2-4 | 策略相關文件與規則入口同步 | `.claude/skills/develop-strategy/`、`strategy_lab/CLAUDE.md`、`CLAUDE.md`、README、`docs/` | `check_doc_paths.py`；全文 grep 舊路徑只剩契約 | ✅ | **2026-10-09 已在 `feature/post-rehearsal` 實作（`91445c1`），未進 main**。剩演練後合併；`feature/stock-rehearsal` 改了 main 的 `core/strategies/README.md`，合併時要移植到頂層 `strategies/README.md`；**✅ 2026-10-27 隨 `2026-10里程碑收尾排程.md` S19 部署進 main（`14037bf1`）：主目錄全套測試、回歸、分層與文件路徑檢查全綠**；回歸零變動 |
 | Phase3-1 | `core/managers/` 改名為 `core/position/` | `core/position/**`、各 import 端、`pyproject.toml`、`scripts/check_layer_deps.py`、文件 | 回歸雙線零變動；全文 grep `core.managers` 為零 | ✅ | 2026-10-01 完成（`08f1b44`）；回歸雙線零變動；主目錄已於 2026-10-01 盤後更新 |
 | Phase4-1 | `core/Dockerfile` 移到專案根目錄 | `Dockerfile`、`docker-compose.yml`、`.github/workflows/ci.yml`、文件 | CI 的映像建置與冒煙通過；`docker compose build` 成功 | ✅ | 2026-10-08 完成（`ea6b106`），**偏離原規格**：提前到 Phase2-2、Phase5-1 之前做（見該步驟）；CI `docker` job 建置與三項冒煙通過 |
-| Phase5-1 | `core/pipeline/` 搬到頂層並改名 `etl/` | `etl/**`、資料更新入口、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；資料更新入口各 target 冒煙；`core` 對 `etl` 的 import 為零；附錄護欄全數涵蓋 `etl/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次。2026-10-18 現況：`台股tick改用TimescaleDB.md` 18 步、`框架對稱化重構.md` Phase5 的 ETL 收斂（`core/pipeline/` 32 檔）都已在分支鏈完成、待演練後依序合併進 main；`PostgreSQL遷移計畫.md` 0 / 16 未動工，`框架對稱化重構.md` Phase5-7（loader 拆兩種契約）與它的 Phase2-2 同段。2026-10-01 定案：搬移時一併改名 `etl`，連同日誌桶 `logs/pipeline/` 全部改，範圍見步驟章節 |
+| Phase5-1 | `core/pipeline/` 搬到頂層並改名 `etl/` | `etl/**`、資料更新入口、`scripts/`、`tests/`、`pyproject.toml`、目錄範圍護欄、文件 | 回歸雙線零變動；資料更新入口各 target 冒煙；`core` 對 `etl` 的 import 為零；附錄護欄全數涵蓋 `etl/` | ⏸ | 等 TimescaleDB 與 PostgreSQL 兩份計畫的 pipeline 改動落地，避免搬兩次。2026-11-01 現況：tick 計畫與 `框架對稱化重構.md` Phase5 的 ETL 收斂已於 2026-10-27 進 main（tick 文件已移出 backlog）；只剩 `PostgreSQL遷移計畫.md` 0 / 16 未動工（連帶 `框架對稱化重構.md` Phase5-7），適用「長期不動工，改由使用者裁示是否先搬」。2026-10-01 定案：搬移時一併改名 `etl`，連同日誌桶 `logs/pipeline/` 全部改，範圍見步驟章節 |
 
 ---
 
@@ -111,7 +110,7 @@ strategies/               # 具體策略：使用框架的程式，不屬於框�
     futures/momentum_futures_strategy.py
 ```
 
-main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都在 `core/strategies/`，頂層 `strategies/` 只有 Phase2-1 建立的三個空門面。
+2026-10-27 起 main 已是上述結構；`core/strategies/` 只剩六個 `.py`（968 行）。
 
 **契約為什麼留在 `core/`**：回測引擎、實盤引擎、兩邊的資料源、factory、報表等十幾個模組都要認得
 策略介面；契約搬出去，`core` 就得反過來 import 外部套件。
@@ -174,7 +173,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 > - 驗證：回歸雙線通過；全套 2,761 passed、分層 0 違規；在搬過去的策略寫入欄位字面值，`test_strategy_data_access.py` 轉紅。
 > - 剩：演練結束後合併、重啟常駐行程（與 `實盤下單架構規劃.md` Phase7-10 的紀錄庫改名、launchd 重裝同一次）。
 > - **備註（2026-10-10 複查，2026-10-18 `feature/framework-symmetry` 仍未改）**：分支上 `tests/test_strategy_data_access.py` 的 `STRATEGY_DIRS` 仍掃 `core/strategies/` ＋ `strategies/`，
->   上方註解還寫著「契約與尚未搬出的具體策略」；搬完後 `core/strategies/` 只剩契約，該註解已過時（掃描範圍保留無妨，契約也不該寫欄位字面值）。合併時順手改註解。
+>   上方註解還寫著「契約與尚未搬出的具體策略」；搬完後 `core/strategies/` 只剩契約，該註解已過時（掃描範圍保留無妨，契約也不該寫欄位字面值）。合併時順手改註解。✅ main 上該註解已改為「只剩契約基底；仍掃描是為了擋下具體策略被放回框架層」。
 > - **部署時的額外工作（2026-10-18）**：`feature/stock-rehearsal`（`實盤下單架構規劃.md` Phase7-27）預定 2026-10-21 期貨盤後段後進 main，帶進
 >   `core/strategies/stock/stock_round_trip_rehearsal_strategy.py` 與兩支測試，並把 `rehearsal_schedule.py` 的股票段落改成 `MomentumStrategy1,StockRoundTripRehearsalStrategy`。
 >   `feature/post-rehearsal` 之後合併 main 時：
@@ -253,8 +252,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 
 ### Phase4-1. `core/Dockerfile` 移到專案根目錄 ✅
 
-- **目的**：這份 Dockerfile 打包的是整個後端（main 上為 `core`、`tasks`、`apps`、`strategies`；部署 `feature/post-rehearsal` 後
-  `tasks` 併入 `apps`；Phase5 後再加 `etl`），放在 `core/` 底下會讓人以為它只打包框架。`frontend/Dockerfile` 只打包前端，留在原位。
+- **目的**：這份 Dockerfile 打包的是整個後端（main 上為 `core`、`apps`、`strategies`、`deploy`；Phase5 後再加 `etl`），放在 `core/` 底下會讓人以為它只打包框架。`frontend/Dockerfile` 只打包前端，留在原位。
 - **相依**：原訂排在 Phase2-1 與 Phase5-1 之後。
 
 > **✅ 完成紀錄（2026-10-08，`ea6b106`）**
@@ -282,9 +280,8 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
      `docs/pipeline/etl-ingestion.md`、`美股ETL與回測架構規劃.md`。
   3. `pipeline` 在量化專案裡有歧義（回測流程、訊號流程、ML pipeline），看名字分不出是「爬資料寫 DB」。
   4. 搬移本來就要改全部 import，同時改名幾乎零額外成本；單獨改名則要多搬一次。
-- **資料更新入口的位置**：main 上是 `tasks/update_db.py`、`tasks/clean_logs.py`；
-  `回測與實盤入口拆分及架構收斂.md` Phase1-8 部署後改為 `apps/update_db.py`、`apps/clean_logs.py`。
-  以下以「資料更新入口」「日誌清理入口」稱呼，施作時以當時的位置為準。
+- **資料更新入口的位置**：資料更新入口為 `apps/update_db.py`、日誌清理入口為 `apps/clean_logs.py`（2026-10-27 起在 main）。
+  以下以「資料更新入口」「日誌清理入口」稱呼。
 - **改名範圍**（2026-10-01 使用者裁示：**全部改**，不保留任何 `pipeline` 字樣）：
   1. 套件路徑與 import：`core.pipeline.*` → `etl.*`。
   2. 由套件名衍生的識別字：`check_layer_deps.py` 的 `_PIPELINE_PACKAGE`／`_PIPELINE_DIR`／
@@ -295,7 +292,7 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
   4. 日誌桶：`logs/pipeline/` → `logs/etl/`；`core/utils/log_manager.py` 的桶名、docstring 與註解；
      日誌清理入口的 `"pipeline"` 鍵；`tests/test_entrypoint_and_logging.py`、`tests/conftest.py` 中的桶路徑。
   5. 文件：`docs/pipeline/` 目錄 → `docs/etl/`；程式註解與文件散文中指這個套件或日誌桶的「pipeline」改為「ETL」。
-- **日誌桶改名的注意事項**：`logs/pipeline/` 是磁碟上的執行期產物（2026-10-01 本機約 26 MB；2026-10-18 主目錄 67 MB），
+- **日誌桶改名的注意事項**：`logs/pipeline/` 是磁碟上的執行期產物（2026-10-01 本機約 26 MB；2026-11-01 主目錄 79 MB），
   程式改名後舊目錄不會自動搬，日誌清理入口也不再掃它，會變成永遠不被清理的孤兒目錄。處理方式：
   1. 開發的 worktree 與主目錄各自執行一次 `mv logs/pipeline/* logs/etl/ && rmdir logs/pipeline`
      （先 `mkdir -p logs/etl`）。
@@ -304,12 +301,12 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
      （launchd 自己的輸出在 `logs/launchd/`），施作時再 grep 一次。
 - **做法**：
   1. `git mv core/pipeline etl`，import 由 `core.pipeline.*` 改為 `etl.*`。
-  2. 呼叫端：資料更新入口、`scripts/` 5 支（`check_layer_deps.py` 與 `scripts/manual/` 4 支）、72 個測試檔
-     （2026-10-18 於 `feature/framework-symmetry` 以 `git grep -l "core[./]pipeline"` 實查；main 為 63 個、`scripts/` 6 支；2026-09-26 時約 56 個）。
+  2. 呼叫端：資料更新入口、`scripts/` 5 支（`check_layer_deps.py` 與 `scripts/manual/` 4 支）、73 個測試檔
+     （2026-11-01 於 main 以 `git grep -l "core[./]pipeline"` 實查；2026-09-26 時約 56 個）。
   3. `pyproject.toml`：`include` 加 `etl*`；`per-file-ignores` 中 `core/pipeline/...` 的路徑改名。
   4. `check_layer_deps.py`：Phase1-2 的規則改為把 `etl` 加進 `_NON_CORE_TOPS`；
      `_MARKET_AXIS_PACKAGES` 中的 `core/pipeline` 改為 `etl`；**`_DB_DRIVER_GUARDED_DIRS` 要加上 `etl`**
-     （2026-10-18 main 為 `core`、`apps`、`strategies`、`tasks`，`feature/post-rehearsal` 起為 `core`、`apps`、`strategies`）——
+     （2026-11-01 main 為 `core`、`apps`、`strategies`）——
      ETL 是寫資料庫最多的地方，漏掉等於「`sqlite3` 只能出現在 `core/dao/`」這條規則對它失效。
   5. 附錄清單中其餘每一處都加上 `etl`。
   6. 上列「改名範圍」第 2～5 點的識別字、常數、日誌桶與 `docs/` 目錄；依「日誌桶改名的注意事項」搬移既有日誌。
@@ -328,15 +325,9 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
   pipeline 呼叫的 DAO 與連線。現在搬的話，那兩份計畫的產出路徑全部要改，而且施作期間
   兩邊互相衝突。**解除條件：兩份計畫中涉及 `core/pipeline/` 的步驟都完成**；若其中一份
   長期不動工，改由使用者裁示是否先搬。
-- **2026-10-18 解除條件現況**：
-  - `台股tick改用TimescaleDB.md`：18 步已在 `feature/tick-timescaledb` 全數完成（含移除 DolphinDB），
-    要等 `feature/post-rehearsal` 於演練後合併、再合併它，才算進 main。
-  - **新增的同類改動**：`框架對稱化重構.md` Phase5（ETL 四件組收斂：`CrawlResult`、`RateLimitPolicy`、`PeriodPlanner`、updater 生命週期進基底等）
-    已在 `feature/framework-symmetry` 改了 `core/pipeline/` 32 個檔（相對 `feature/tick-backtest`），同樣要等分支鏈依序合併。
-    該文件規定 Phase5 各步可以在搬家前做，但**不可與搬家放在同一個 commit**（否則 git 的 rename 偵測失效）；它剩下的 Phase5-7（loader 拆兩種契約）與 `PostgreSQL遷移計畫.md` Phase2-2 同段。
-  - `PostgreSQL遷移計畫.md`：0 / 16，未動工（index 列為 P3、建議在其他重構收斂後再動）。
-  - 也就是說分支鏈全數合併後，本步驟只剩 PostgreSQL（連帶 `框架對稱化重構.md` Phase5-7）一個阻擋；屆時適用上一段「長期不動工，改由使用者裁示是否先搬」。
-  - 搬家前提醒：`tests目錄結構重整.md` 約定 `tests/pipeline/` 改名 `tests/etl/` 隨本步驟做；該文件若先動工、建立了 `tests/pipeline/`，本步驟要一併改名。
+- **2026-11-01 解除條件現況**：tick 計畫與 `框架對稱化重構.md` Phase5（除 Phase5-7）已於 2026-10-27 進 main；
+  剩 `PostgreSQL遷移計畫.md`（0 / 16）與連帶的 `框架對稱化重構.md` Phase5-7 一個阻擋，適用上一段「長期不動工，改由使用者裁示是否先搬」。
+  另：`S19部署後施作排程.md` S11（tests 重整）排在拆 `trader.py`、交易日曆改名之後，`tests/pipeline/` 改名 `tests/etl/` 仍隨本步驟做。
 
 ---
 
@@ -352,9 +343,9 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 | `回測與實盤入口拆分及架構收斂.md` Phase3-3（禁止回測以外的模組 import `core.backtest.models`） | 規則若只寫「`core.*` 中非 `core.backtest`」，會漏掉頂層 `strategies` | ✅ 已滿足：規則的受限範圍是 `core/backtest/` 與 `tests/` 以外的所有檔案，涵蓋 `strategies/` |
 | `回測與實盤入口拆分及架構收斂.md` Phase3（整階段） | 會改 `core/managers` 的 import | ✅ 已依序完成：本份 Phase3-1 排在它之後 |
 | `回測與實盤入口拆分及架構收斂.md` Phase1-8（`tasks/` 併入 `apps/`） | Phase5-1 的呼叫端與驗證指令原寫 `tasks/` 的入口 | Phase5-1 已改寫成「資料更新入口」，施作時以當時位置為準；附錄的護欄範圍兩邊都列 |
-| `實盤下單架構規劃.md` Phase7-10（`MomentumStrategy1` 改名） | 與 Phase2-2 動同一批策略檔、測試與 launchd 參數 | 同一批施作、先搬家再改名（2026-10-05 決定）；兩者皆已在 `feature/post-rehearsal` 依序完成，待演練後一起部署 |
+| `實盤下單架構規劃.md` Phase7-10（`MomentumStrategy1` 改名） | 與 Phase2-2 動同一批策略檔、測試與 launchd 參數 | 同一批施作、先搬家再改名（2026-10-05 決定）；✅ 2026-10-27 一起進 main |
 | `美股ETL與回測架構規劃.md` | 美股策略落點、市場軸 `us/` 規劃開在 `core/pipeline/` | 策略落點已由 Phase2-4 改為頂層 `strategies/stock/`；`core/pipeline/` 的路徑留待 Phase5-1 施作時改 |
-| `台股tick改用TimescaleDB.md`、`PostgreSQL遷移計畫.md` | 大量產出路徑在 `core/pipeline/` 底下 | 本份 Phase5-1 暫緩到它們完成，見該步驟 |
+| `台股tick改用TimescaleDB.md`、`PostgreSQL遷移計畫.md` | 大量產出路徑在 `core/pipeline/` 底下 | tick 計畫已完成並移出；只剩 `PostgreSQL遷移計畫.md`，見本份 Phase5-1 |
 
 ---
 
@@ -365,23 +356,22 @@ main 上目前仍是舊結構：五支具體策略與 `strategy_loader.py` 都�
 都要逐一判斷是否加入。**不加入時要在該處註解寫明理由**，不要只是漏掉。
 `apps/` 已於 2026-09-30（`回測與實盤入口拆分及架構收斂.md` Phase1-1）逐項判斷完畢：覆蓋率兩處刻意不加，其餘全數加入。
 
-**下表「目前範圍」是 main 的現況**；標「＋`tasks`」者，部署 `feature/post-rehearsal`（`回測與實盤入口拆分及架構收斂.md` Phase1-8）後會移除 `tasks`，
-`apps/` 原本就在每一份清單裡，範圍不會縮小。
+**下表「目前範圍」是 main 的現況。**
 
 | 位置 | 目前範圍（main） | 守的是什麼 |
 |------|----------|------------|
-| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`frontend`、`strategy_lab`、`scripts`、`tests`＋`tasks` | 分層相依 |
+| `scripts/check_layer_deps.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`frontend`、`strategy_lab`、`scripts`、`tests` | 分層相依 |
 | `scripts/check_layer_deps.py` 的 `_NON_CORE_TOPS` | 同上去掉 `core` | `core/` 不得 import 的頂層套件 |
-| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`strategies`＋`tasks` | `sqlite3` 只能出現在 `core/dao/` |
-| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`strategy_lab` 等＋`tasks` | 文件路徑與符號引用 |
-| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`strategy_lab` 等＋`tasks` | `core/api/` 公開方法是否有呼叫端 |
-| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`strategies`、`scripts`、`strategy_lab`＋`tasks` | loguru 不得用 stdlib `exc_info=` |
-| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`strategies`、`tests`、`frontend`、`strategy_lab`＋`tasks` | 註解不得引用 backlog 步驟編號 |
-| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`strategies`、`scripts`、`strategy_lab`＋`tasks` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
-| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`strategies`、`frontend`、`scripts`＋`tasks` | 程式讀的環境變數與 `.env.example` 雙向一致 |
-| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`strategies`、`scripts`＋`tasks` | 暫存檔有清理 |
+| `scripts/check_layer_deps.py` 的 `_DB_DRIVER_GUARDED_DIRS` | `core`、`apps`、`strategies` | `sqlite3` 只能出現在 `core/dao/` |
+| `scripts/check_doc_paths.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`strategy_lab` 等 | 文件路徑與符號引用 |
+| `scripts/check_api_orphan_methods.py` 的 `_SCAN_DIRS` | `core`、`apps`、`strategies`、`strategy_lab` 等 | `core/api/` 公開方法是否有呼叫端 |
+| `.pre-commit-config.yaml` 的 `no-stdlib-exc-info` | `core`、`apps`、`strategies`、`scripts`、`strategy_lab` | loguru 不得用 stdlib `exc_info=` |
+| `.pre-commit-config.yaml` 的 `no-doc-step-refs` | `core`、`apps`、`strategies`、`tests`、`frontend`、`strategy_lab` | 註解不得引用 backlog 步驟編號 |
+| `tests/test_entrypoint_and_logging.py` 的 `_GUARDED_PACKAGES` | `core`、`apps`、`strategies`、`scripts`、`strategy_lab` | 同 `no-stdlib-exc-info`，**兩處必須同步** |
+| `tests/test_config_consistency.py` 的 `ENV_SCAN_PATHS` | `core`、`apps`、`strategies`、`frontend`、`scripts` | 程式讀的環境變數與 `.env.example` 雙向一致 |
+| `tests/test_temp_file_cleanup.py` 的 `SCAN_DIRS` | `core`、`apps`、`strategies`、`scripts` | 暫存檔有清理 |
 | `tests/test_strategy_data_access.py` 的 `STRATEGY_DIRS` | `core/strategies`、`strategies` | 策略不得寫資料庫欄位字面值；自我檢查為「載入器找得到的每支策略都在掃描範圍內」（2026-10-01），搬家不再有假綠燈 |
 | `pyproject.toml` 的 `[tool.coverage.run] source` | `core`、`strategies` | 覆蓋率報告範圍（入口層刻意不列） |
 | `.github/workflows/ci.yml` 的 `--cov` | `--cov=core --cov=strategies` | 同上（CI 端） |
-| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`strategies*`、`tests*`＋`tasks*` | editable 安裝後可 import |
-| 根目錄 `Dockerfile` 的 `COPY` | `core`、`apps`、`strategies`＋`tasks` | 映像內容 |
+| `pyproject.toml` 的 `[tool.setuptools.packages.find] include` | `core*`、`apps*`、`strategies*`、`tests*` | editable 安裝後可 import |
+| 根目錄 `Dockerfile` 的 `COPY` | `core`、`apps`、`strategies`、`deploy` | 映像內容 |
