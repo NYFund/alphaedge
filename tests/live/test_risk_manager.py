@@ -1,7 +1,7 @@
 import dataclasses
 import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 
@@ -23,6 +23,7 @@ from core.models.risk_config import (
     FuturesRiskConfig,
     StockRiskConfig,
 )
+from core.portfolio.order_rules import is_closing
 from core.utils import Action, PositionType, StockPriceType
 
 """
@@ -696,3 +697,36 @@ def test_pure_checks_need_no_manager_instance() -> None:
         [],
         [],
     )
+
+
+# === 單日累計只計開倉單 ===
+def test_exit_orders_do_not_consume_the_daily_budget(
+    mode_state: TradingModeState, dao: LiveTradeDAO, tmp_path: Path
+) -> None:
+    """
+    同一行程內開倉 → 出場 → 開倉：累計只含兩筆開倉，與段落啟動時由紀錄庫回補的口徑相同
+
+    2026-10-29 盤中段：2352 買 13.1 萬、停損賣 12.6 萬、2426 買 10.0 萬，累計 35.8 萬，
+    4526 買 10.9 萬被 `DAILY_AMOUNT` 拒掉；只計開倉為 34.0 萬，不會被拒。
+    停損越多次、當天能開的新倉越少，是口徑不一致，不是風控該有的行為。
+    """
+
+    manager: PreTradeRiskManager = make_manager(mode_state, dao, tmp_path)
+    submitted: List[Tuple[StockOrder, float]] = [
+        (make_order("2352"), 131_000.0),
+        (make_order("2352", action=Action.SELL), 126_000.0),
+        (make_order("2426"), 100_000.0),
+    ]
+    for order, amount in submitted:
+        decision: RiskDecision = manager.check(
+            order, "A", CAPITAL, amount=amount, config=STOCK, reference_price=1000.0
+        )
+        assert decision.passed is True
+
+    # 回補用同一條規則（`is_closing()` 跳過出場單），兩邊算出來要一樣
+    expected: float = sum(
+        amount for order, amount in submitted if not is_closing(order)
+    )
+    assert manager.daily_amount["A"] == expected == 231_000.0
+    # 頻率上限防的是迴圈連發，與方向無關：出場單照樣計入
+    assert len(manager._recent_orders["A"]) == 3

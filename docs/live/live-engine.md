@@ -155,7 +155,7 @@ SIGTERM 由 `core/live/termination.py` 轉成 `LiveTerminated`（繼承 `BaseExc
 |------|--------------|------|------|
 | 1 | `KILL_SWITCH` | 全部 | **每張單送出前**都檢查檔案；成立時帳戶層降到 `HALTED`。檔案系統查不了時當成生效 |
 | 2 | `MODE_HALTED`／`MODE_REDUCE_ONLY` | 平倉／開倉 | 依該策略的有效交易模式 |
-| 3 | `SINGLE_ORDER_AMOUNT`、`DAILY_AMOUNT`、`VOLUME_CAP` | 只管開倉 | 出場是釋放曝險，套用的話持倉漲價後就平不掉 |
+| 3 | `SINGLE_ORDER_AMOUNT`、`DAILY_AMOUNT`、`VOLUME_CAP` | 只管開倉 | 出場是釋放曝險，套用的話持倉漲價後就平不掉。單日累計也**只累計開倉單**（出場單不加進去，與段落啟動時由紀錄庫回補的口徑相同）；`ORDER_RATE` 的頻率則開倉出場都計 |
 | 4 | `PRICE_LIMIT`、`PRICE_DEVIATION` | 全部 | 比的是**決策價**對漲跌停與市場基準價（本段落餵給策略的報價，取不到退回合約參考價，都沒有時放行並寫 `REFERENCE_PRICE_MISSING`） |
 | 5 | `ORDER_RATE` | 全部 | 超過每分鐘上限時拒單**並**把該策略降到 `REDUCE_ONLY`——迴圈 bug 不會因為被拒一次就停 |
 
