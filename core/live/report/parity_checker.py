@@ -107,7 +107,13 @@ CATEGORY_TIMING: str = "TIMING"
 # 不成交（例如集合競價掛跌停沒撮到），實盤先釋出名額就會超過持倉上限。
 # 名額的取捨發生在張數切分，不經風控、不寫事件，所以只能由委託推得：
 # 同一段落缺的開倉單**檔數不超過**實盤平倉單的檔數才歸這一類——一檔平倉最多
-# 佔住一個名額，缺得更多就有別的原因，整段留在未解釋
+# 佔住一個名額，缺得更多就有別的原因，整段留在未解釋。
+#
+# 同一個原因也會讓**兩邊都有的開倉單張數不同**：可開檔數少一格，每檔分到的資金
+# （餘額 ÷ 可開檔數）就多，張數跟著多。同段有實盤平倉單、回測可開檔數多於實盤時，
+# 實盤張數落在「回測張數 ×（回測可開檔數 ÷ 實盤可開檔數）」無條件捨去後的 0～1 張內
+# 才歸這一類（2026-10-27 的 4526：實盤可開 2 檔買 3 張、回測 3 檔買 2 張）；
+# 可開檔數以兩邊同段開倉單的檔數推估，被守門擋下的單在實盤仍佔一格也算進去
 CATEGORY_EXIT_PENDING_SLOT: str = "EXIT_PENDING_SLOT"
 
 # 實盤多送的平倉單，是逐筆觸發的策略進場當天就在盤中出場（例如同日停損）。
@@ -579,6 +585,9 @@ def compare(
         set(blocked) | (stale_symbols or set()),
         order_phases,
     )
+    slot_ratios: Dict[str, Tuple[int, int]] = _slot_ratio_by_phase(
+        live_orders, backtest_by_key, set(blocked), order_phases
+    )
 
     diffs: List[ParityDiff] = []
     for key in sorted(set(live_by_key) | set(backtest_by_key)):
@@ -676,7 +685,12 @@ def compare(
             continue
 
         volume_diff: Optional[ParityDiff] = _compare_volume(
-            len(diffs) + 1, symbol, side, live_rows, bt_orders
+            len(diffs) + 1,
+            symbol,
+            side,
+            live_rows,
+            bt_orders,
+            slot_ratios.get(_shared_phase(live_rows, bt_orders, order_phases) or ""),
         )
         if volume_diff is not None:
             diffs.append(volume_diff)
@@ -904,6 +918,94 @@ def _exit_pending_slot_keys(
     return keys
 
 
+def _single_phase(
+    orders: Sequence[BaseOrder], order_phases: Optional[Callable[[BaseOrder], Set[str]]]
+) -> Optional[str]:
+    """幾張回測委託該在哪一個段落送出；沒有段落查詢或不只一個段落時回 None"""
+
+    if order_phases is None:
+        return None
+    phases: Set[str] = set()
+    for order in orders:
+        phases |= order_phases(order)
+    return next(iter(phases)) if len(phases) == 1 else None
+
+
+def _shared_phase(
+    live_rows: Sequence[Dict[str, Any]],
+    bt_orders: Sequence[BaseOrder],
+    order_phases: Optional[Callable[[BaseOrder], Set[str]]],
+) -> Optional[str]:
+    """兩邊同一張單都在哪一個段落送出；任一邊判不出或兩邊不同時回 None"""
+
+    phase: Optional[str] = _single_phase(bt_orders, order_phases)
+    if phase is None or any(_row_phase(row) != phase for row in live_rows):
+        return None
+    return phase
+
+
+def _slot_ratio_by_phase(
+    live_orders: Sequence[Dict[str, Any]],
+    backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]],
+    blocked_symbols: Set[str],
+    order_phases: Optional[Callable[[BaseOrder], Set[str]]],
+) -> Dict[str, Tuple[int, int]]:
+    """
+    - Description:
+        各段落「回測可開檔數、實盤可開檔數」，只列同段有實盤平倉單且回測檔數較多的段落
+        （見 `CATEGORY_EXIT_PENDING_SLOT` 的張數差異）
+
+        可開檔數由同段開倉單的檔數推估：回測取該段回測開倉單的檔數；實盤取該段
+        實盤開倉單的檔數，加上被守門擋下的那幾檔——它們在實盤先佔了名額才被擋
+        （擋下的單沒有 `live_order` 列，段落以回測那張單的為準）。
+    - Parameters:
+        - live_orders: Sequence[Dict[str, Any]]
+            這支策略當日的 `live_order` 列
+        - backtest_by_key: Dict[Tuple[str, str], List[BaseOrder]]
+            回測委託依比對鍵分組
+        - blocked_symbols: Set[str]
+            被風控或守門擋在送出前的標的
+        - order_phases: Optional[Callable[[BaseOrder], Set[str]]]
+            回測委託 → 該送出的段落名集合
+    - Return:
+        - Dict[str, Tuple[int, int]]
+            `{段落: (回測可開檔數, 實盤可開檔數)}`
+    """
+
+    if order_phases is None:
+        return {}
+
+    phases_with_exits: Set[str] = set()
+    live_openings: Dict[str, Set[str]] = {}
+    for row in live_orders:
+        phase: Optional[str] = _row_phase(row)
+        if phase is None:
+            continue
+        if _row_is(row, opening=False):
+            phases_with_exits.add(phase)
+        elif _row_is(row, opening=True):
+            live_openings.setdefault(phase, set()).add(str(row["symbol"]))
+
+    backtest_openings: Dict[str, Set[str]] = {}
+    for (symbol, _), orders in backtest_by_key.items():
+        if not all(order_rules.is_opening(order) for order in orders):
+            continue
+        phase = _single_phase(orders, order_phases)
+        if phase is None:
+            continue
+        backtest_openings.setdefault(phase, set()).add(symbol)
+        if symbol in blocked_symbols:
+            live_openings.setdefault(phase, set()).add(symbol)
+
+    ratios: Dict[str, Tuple[int, int]] = {}
+    for phase in phases_with_exits:
+        backtest_count: int = len(backtest_openings.get(phase, set()))
+        live_count: int = len(live_openings.get(phase, set()))
+        if backtest_count > live_count > 0:
+            ratios[phase] = (backtest_count, live_count)
+    return ratios
+
+
 def _is_intraday_path(
     symbol: str,
     live_rows: Sequence[Dict[str, Any]],
@@ -999,25 +1101,62 @@ def _compare_volume(
     side: str,
     live_rows: Sequence[Dict[str, Any]],
     bt_orders: Sequence[BaseOrder],
+    slot_ratio: Optional[Tuple[int, int]] = None,
 ) -> Optional[ParityDiff]:
-    """兩邊都有這張單時，比數量；相同則不算差異"""
+    """
+    兩邊都有這張單時，比數量；相同則不算差異
+
+    數量不同、不是被拒單，而且這一段的可開檔數兩邊不同（`slot_ratio`：回測、實盤）時，
+    再驗實盤張數是不是「回測張數 × 回測檔數 ÷ 實盤檔數」無條件捨去後的 0～1 張內：
+    是就歸同段平倉佔名額，不是照舊未解釋。只看開倉單——平倉張數由持倉決定，與名額無關。
+    """
 
     live_volume: int = sum(int(row.get("volume", 0)) for row in live_rows)
     bt_volume: int = sum(int(order.volume) for order in bt_orders)
     if live_volume == bt_volume:
         return None
 
+    live_detail: str = "；".join(summarize_row(row) for row in live_rows)
+    backtest_detail: str = "；".join(summarize(order) for order in bt_orders)
+    note: str = f"數量不同：實盤 {live_volume}、回測 {bt_volume}"
+
     rejected: bool = all(
         str(row.get("status")) == LiveOrderStatus.REJECTED.value for row in live_rows
     )
+    if rejected:
+        return _make_diff(
+            seq,
+            symbol,
+            side,
+            CATEGORY_RISK_REJECTED,
+            live_detail,
+            backtest_detail,
+            note,
+        )
+
+    if (
+        slot_ratio is not None
+        and all(_row_is(row, opening=True) for row in live_rows)
+        and all(order_rules.is_opening(order) for order in bt_orders)
+    ):
+        backtest_slots, live_slots = slot_ratio
+        expected: int = bt_volume * backtest_slots // live_slots
+        if expected <= live_volume <= expected + 1:
+            return _make_diff(
+                seq,
+                symbol,
+                side,
+                CATEGORY_EXIT_PENDING_SLOT,
+                live_detail,
+                backtest_detail,
+                note=(
+                    f"{note}；同段平倉單仍佔名額，實盤可開 {live_slots} 檔、"
+                    f"回測 {backtest_slots} 檔，每檔資金不同"
+                ),
+            )
+
     return _make_diff(
-        seq,
-        symbol,
-        side,
-        CATEGORY_RISK_REJECTED if rejected else CATEGORY_UNEXPLAINED,
-        "；".join(summarize_row(row) for row in live_rows),
-        "；".join(summarize(order) for order in bt_orders),
-        note=f"數量不同：實盤 {live_volume}、回測 {bt_volume}",
+        seq, symbol, side, CATEGORY_UNEXPLAINED, live_detail, backtest_detail, note
     )
 
 
