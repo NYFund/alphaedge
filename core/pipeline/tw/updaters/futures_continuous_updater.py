@@ -13,7 +13,7 @@ from core.config import (
 )
 from core.config.schema import FuturesPriceColumn
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_roll import FuturesRollPlanner
 from core.pipeline.shared.base_updater import BaseDataUpdater
 from core.pipeline.tw.loaders.futures_continuous_loader import FuturesContinuousLoader
@@ -174,7 +174,7 @@ class FuturesContinuousUpdater(BaseDataUpdater):
             logger.warning(f"[Futures Continuous] {product} 在區間內沒有行情，跳過")
             return 0
 
-        calendar: FuturesCalendar = FuturesCalendar.from_api(
+        calendar: TwFuturesCalendar = TwFuturesCalendar.from_api(
             self.price_api, start_date, end_date, product=product
         )
         planner: FuturesRollPlanner = FuturesRollPlanner(

@@ -6,7 +6,7 @@ from core.api.tw.futures_margin_api import FuturesMarginAPI
 from core.api.tw.futures_price_api import FuturesPriceAPI
 from core.datafeed.base import BaseDataFeed
 from core.market.tw.cost_model import TwFuturesCostModel
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_margin_model import FuturesMarginModel
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollPlanner
@@ -115,7 +115,7 @@ class BaseFuturesStrategy(BaseStrategy):
         self.futures_price: Optional[FuturesPriceAPI] = None  # 期貨行情
         self.margin: Optional[FuturesMarginAPI] = None  # 保證金（可選）
         # 期貨交易日曆（結算日、最後交易日、交易時段）；由 DataFeed 提供
-        self.calendar: Optional[FuturesCalendar] = None
+        self.calendar: Optional[TwFuturesCalendar] = None
 
     @property
     def price_query_session(self) -> FuturesSession:

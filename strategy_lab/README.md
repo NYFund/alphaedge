@@ -28,7 +28,7 @@
     - [StockChipAPI — 三大法人籌碼 (SQLite)](#stockchipapi--三大法人籌碼-sqlite)
     - [MonthlyRevenueReportAPI — 月營收 (SQLite)](#monthlyrevenuereportapi--月營收-sqlite)
     - [FinancialStatementAPI — 季報財報 (SQLite)](#financialstatementapi--季報財報-sqlite)
-    - [MarketCalendar — 交易日工具](#marketcalendar--交易日工具)
+    - [TwStockCalendar — 交易日工具](#marketcalendar--交易日工具)
   - [可直接複用的工具類 (Utils)](#可直接複用的工具類-utils)
     - [StockUtils — 手續費／證交稅／單位換算](#stockutils--手續費證交稅單位換算)
     - [Units / Commission — 單位與成本常數](#units--commission--單位與成本常數)
@@ -246,23 +246,23 @@ df = fs.get(table_name="<your_fs_table>", year=2024, season=1)
 > 不同財報（資產負債表、損益表、現金流量表）會落在不同的 SQLite 表，
 > 實際表名請以 `core/config/schema.py` 為準。
 
-### MarketCalendar — 交易日工具
+### TwStockCalendar — 交易日工具
 
 ```python
 import datetime
 from core.api.tw.stock_price_api import StockPriceAPI
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 
 price = StockPriceAPI()
 
 # 1) 一次取一段區間的交易日曆（判準：price 表當日有資料），之後的查詢都不再碰資料庫
-calendar = MarketCalendar.from_api(price, datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
+calendar = TwStockCalendar.from_api(price, datetime.date(2024, 1, 1), datetime.date(2024, 12, 31))
 is_open = calendar.is_trading_day(datetime.date(2024, 1, 2))
 prev_td = calendar.get_previous_trading_day(datetime.date(2024, 1, 2))  # 嚴格早於指定日；清單內沒有時為 None
 t_minus_4 = calendar.shift_trading_days(datetime.date(2024, 7, 15), -4)  # 往前推 4 個營業日
 
 # 2) 手上沒有涵蓋該日的清單時，直接向資料庫要前一個交易日（往前最多找 90 個曆日）
-prev_td = MarketCalendar.previous_trading_day_from_api(price, datetime.date(2024, 1, 2))
+prev_td = TwStockCalendar.previous_trading_day_from_api(price, datetime.date(2024, 1, 2))
 ```
 
 ---
@@ -351,7 +351,7 @@ InstrumentType.STOCK, InstrumentType.FUTURE, InstrumentType.OPTION  # 商品類�
 | 月營收         | SQLite         | `MonthlyRevenueReportAPI`     | `core/pipeline/` 內的爬蟲                  |
 | 財報           | SQLite         | `FinancialStatementAPI`       | `core/pipeline/` 內的爬蟲                  |
 | 海外 ADR / FX  | yfinance       | 直接 `import yfinance as yf`  | 即時抓取（無本地表）                       |
-| 交易日／前一日 | 視 API 而定   | `MarketCalendar`              | 透過 `StockPriceAPI` 推算                 |
+| 交易日／前一日 | 視 API 而定   | `TwStockCalendar`              | 透過 `StockPriceAPI` 推算                 |
 
 > **資料庫位置**：`data/db/tw_stock.db`（SQLite）。
 > 想知道目前 DB 內有哪些表，可以快速跑：

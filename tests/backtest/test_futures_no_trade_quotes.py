@@ -15,7 +15,7 @@ from core.backtest.models.fill_model import (
     TwStockFillModel,
 )
 from core.backtest.models.settlement_model import TwFuturesSettlementModel
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_roll import FuturesRollConfig, FuturesRollRule
 from core.models import FuturesAccount, FuturesOrder, FuturesPosition, FuturesQuote
 from core.models.cost_config import FuturesCostConfig
@@ -432,7 +432,7 @@ def test_roll_does_not_move_into_a_no_trade_contract(make_backtester) -> None:
     strategy.roll_config = FuturesRollConfig(
         rule=FuturesRollRule.OPEN_INTEREST,
         enabled=True,
-        calendar=FuturesCalendar([DATE]),
+        calendar=TwFuturesCalendar([DATE]),
     )
     backtester: Backtester = make_backtester(strategy)
     account: FuturesAccount = backtester.account

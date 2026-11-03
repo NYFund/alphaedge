@@ -292,7 +292,7 @@ def test_continuous_series_is_all_or_nothing(
         lambda *args, **kwargs: pd.DataFrame({"date": ["2026-08-28"]}),
     )
     monkeypatch.setattr(
-        "core.pipeline.tw.updaters.futures_continuous_updater.FuturesCalendar.from_api",
+        "core.pipeline.tw.updaters.futures_continuous_updater.TwFuturesCalendar.from_api",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(

@@ -5,7 +5,7 @@ import pandas as pd
 from loguru import logger
 
 from core.datafeed.base import BaseDataFeed
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.portfolio.signal import Signal
 from core.strategies.stock import BaseStockStrategy
@@ -65,10 +65,10 @@ class VolumeBreakoutMomentumStrategy(BaseStockStrategy):
     # 交易日清單往回多抓幾個曆日：第一根 bar 要的是「回測起始日之前」的交易日，
     # 只抓區間內拿不到。
     #
-    # **與 `MarketCalendar.MAX_LOOKBACK_DAYS` 對齊**：這個窗若比它小，
+    # **與 `TwStockCalendar.MAX_LOOKBACK_DAYS` 對齊**：這個窗若比它小，
     # `get_previous_trading_date()` 會在清單裡查不到而退回逐日查詢，
     # 等於把「交易日集合一次建立」的優化悄悄關掉——綁住的是這一邊，不是日曆那一邊
-    CALENDAR_LOOKBACK_DAYS: int = MarketCalendar.MAX_LOOKBACK_DAYS
+    CALENDAR_LOOKBACK_DAYS: int = TwStockCalendar.MAX_LOOKBACK_DAYS
 
     def __init__(self) -> None:
         super().__init__()
@@ -173,13 +173,13 @@ class VolumeBreakoutMomentumStrategy(BaseStockStrategy):
         # 早已超出區間；超出時平移會落到清單最後一天（一年多前），
         # 策略就拿那天的收盤當「昨收」算漲幅，而且不會有任何錯誤
         if self.trading_days and date <= self.trading_days[-1]:
-            previous: Optional[datetime.date] = MarketCalendar(
+            previous: Optional[datetime.date] = TwStockCalendar(
                 self.trading_days
             ).shift_trading_days(date, offset=-1)
             if previous is not None:
                 return previous
 
-        return MarketCalendar.previous_trading_day_from_api(self.price, date)
+        return TwStockCalendar.previous_trading_day_from_api(self.price, date)
 
     def generate_open_signals(self, stock_quotes: List[StockQuote]) -> List[Signal]:
         """開倉訊號：昨收基準漲幅達門檻且成交量達門檻，做多；張數由 portfolio 層依 max_holdings 與資金切分決定"""

@@ -39,7 +39,7 @@ class TwFuturesSettlementModel(BaseSettlementModel):
     ---
 
     **保證金追繳、換月轉倉與交易日曆**分別由本 model 的追繳檢查、`FuturesRollPlanner`
-    與 `FuturesCalendar` 處理，細節見各自的 docstring。
+    與 `TwFuturesCalendar` 處理，細節見各自的 docstring。
 
     ⚠️ **到期契約的權宜出場**：已到期的契約不會再有報價，策略因此拿不到報價、
     也就下不出那張平倉單——不處理的話該部位會一路留到回測結束並持續佔用保證金

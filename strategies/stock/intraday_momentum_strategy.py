@@ -6,7 +6,7 @@ from loguru import logger
 
 from core.datafeed.base import BaseDataFeed
 from core.market.tw.instrument_spec import TwStockSpec
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models import PreOpenStockQuote, StockAccount, StockPosition, StockQuote
 from core.models.fill_config import FillConfig, VolumeCapPolicy
 from core.models.stock.trading_list import DayTradeListSnapshot
@@ -102,7 +102,7 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
     # 交易日清單往回多抓的曆日數；與日曆的最大回看天數對齊，
     # 否則第一根 bar 在清單裡查不到前一交易日、退回逐日查資料庫
-    CALENDAR_LOOKBACK_DAYS: int = MarketCalendar.MAX_LOOKBACK_DAYS
+    CALENDAR_LOOKBACK_DAYS: int = TwStockCalendar.MAX_LOOKBACK_DAYS
 
     # 停損價要「嚴格低於」門檻：門檻剛好落在檔位上時往下退一檔。
     # 比最小檔位（0.01）小一個數量級，扣掉後捨去必定落在下一檔
@@ -196,13 +196,13 @@ class IntradayMomentumStrategy(BaseStockStrategy):
 
         # 只在清單涵蓋的範圍內平移：超出時平移會落到清單最後一天，拿錯的昨收而且不報錯
         if self.trading_days and date <= self.trading_days[-1]:
-            previous: Optional[datetime.date] = MarketCalendar(
+            previous: Optional[datetime.date] = TwStockCalendar(
                 self.trading_days
             ).shift_trading_days(date, offset=-1)
             if previous is not None:
                 return previous
 
-        return MarketCalendar.previous_trading_day_from_api(self.price, date)
+        return TwStockCalendar.previous_trading_day_from_api(self.price, date)
 
     def get_reference_price_map(self, date: datetime.date) -> Dict[str, Any]:
         """

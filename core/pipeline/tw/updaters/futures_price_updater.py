@@ -165,7 +165,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
             取得區間內實際開市的週末（補行交易日）
 
             期貨與現貨共用同一份行事曆，故直接以 `tw_stock.db` 的 `price` 表判斷，
-            不另建期貨日曆（回測用的期貨日曆見 `FuturesCalendar`）。
+            不另建期貨日曆（回測用的期貨日曆見 `TwFuturesCalendar`）。
 
             **已知限制**：`price` 表自 2013 起才有資料，故 **2013 年之前的補行
             交易日無法偵測**，那幾天的期貨資料會缺。補救方式是日後以明確日期
@@ -599,7 +599,7 @@ class FuturesPriceUpdater(BaseDataUpdater):
 
             **續跑是差集，不是 `MAX(date)+1`**：候選 ＝ 平日 ＋ 補行交易日 − 該商品表內已有
             − 已確認無資料 ＋ 上次沒跑完。中間被擋掉的日子因此下次仍會被請求；`MAX(date)+1`
-            會越過它，而 `FuturesCalendar` 的交易日取自行情表，那一天在回測裡就成了休市。
+            會越過它，而 `TwFuturesCalendar` 的交易日取自行情表，那一天在回測裡就成了休市。
 
             母集合用平日而不是現貨日曆：`price` 表自 2013 年起才有資料，拿它當日曆會讓
             更早的區間一天都不請求。但**現貨日曆涵蓋的區間內、現貨沒開市的平日就是期貨的

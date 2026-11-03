@@ -24,7 +24,7 @@ FUTURES_SESSION_NIGHT = "night"  # 盤後交易時段 15:00–次日 05:00
 FUTURES_SESSION_COMBINED = "combined"
 
 # 定義台期貨交易時段的起訖（TAIFEX 現行制度）
-# **全庫只在這裡寫一次**：市場結構（`FuturesCalendar`）、券商行情、實盤資料源與
+# **全庫只在這裡寫一次**：市場結構（`TwFuturesCalendar`）、券商行情、實盤資料源與
 # 日終日期歸屬都從這裡取。券商閘道層不可 import 市場結構層，故放在最底層的常數
 FUTURES_DAY_SESSION_OPEN: datetime.time = datetime.time(8, 45)
 FUTURES_DAY_SESSION_CLOSE: datetime.time = datetime.time(13, 45)

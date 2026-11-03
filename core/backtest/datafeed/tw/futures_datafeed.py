@@ -12,7 +12,7 @@ from core.api.tw.stock_price_api import StockPriceAPI
 from core.config import TW_FUTURES_DB_PATH, TW_STOCK_DB_PATH
 from core.dao.connection import DBConnection, connect_sqlite
 from core.datafeed.base import BaseDataFeed
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import FuturesQuote
@@ -38,7 +38,7 @@ class TwFuturesDataFeed(BaseDataFeed):
     3. **沒有還原價**：期貨沒有除權息，`get_quotes()` 的 `adjusted` 參數一律忽略。
 
     **交易日取自行情表當日有資料的日子**（颱風假、補行交易日自動涵蓋）；
-    結算日與夜盤跨日由 `FuturesCalendar` 處理。
+    結算日與夜盤跨日由 `TwFuturesCalendar` 處理。
     """
 
     # 日曆往回測結束日之後多取的曆日數：末段契約的最後交易日可能落在區間外
@@ -175,7 +175,7 @@ class TwFuturesDataFeed(BaseDataFeed):
                     f"（比率近似，TX 實測跨年份誤差 +143% ~ −38%）"
                 )
 
-    def build_calendar(self) -> Optional[FuturesCalendar]:
+    def build_calendar(self) -> Optional[TwFuturesCalendar]:
         """
         - Description:
             建立本次回測的期貨交易日曆（判準是「當日表內有行情」）
@@ -191,7 +191,7 @@ class TwFuturesDataFeed(BaseDataFeed):
             其最後交易日可能在 `end_date` 之後，只取回測區間本身會讓
             `get_last_trading_date()` 因為「日曆涵蓋不到」而失準（換月規則會用到）。
         - Return:
-            - Optional[FuturesCalendar]
+            - Optional[TwFuturesCalendar]
                 沒有行情 API（尚未 `setup()`）或沒有區間時為 None
         """
 
@@ -208,12 +208,12 @@ class TwFuturesDataFeed(BaseDataFeed):
         #
         # 這份日曆同時餵給 `roll_config.calendar`（結算日順延），聯集在那裡
         # 一樣是對的：順延依的是**交易所休市日**，不是個別商品的暫停交易。
-        # 單一商品的判準仍可用 `FuturesCalendar.from_api(product=...)`。
+        # 單一商品的判準仍可用 `TwFuturesCalendar.from_api(product=...)`。
         end: datetime.date = self.end_date + datetime.timedelta(
             days=self.CALENDAR_LOOKAHEAD_DAYS
         )
         if not self.products:
-            return FuturesCalendar.from_api(
+            return TwFuturesCalendar.from_api(
                 self.futures_price, self.start_date, end, product=None
             )
 
@@ -225,7 +225,7 @@ class TwFuturesDataFeed(BaseDataFeed):
                 )
             )
 
-        return FuturesCalendar(trading_days)
+        return TwFuturesCalendar(trading_days)
 
     def get_quotes(
         self,

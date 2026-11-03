@@ -10,7 +10,7 @@ import pytest
 from core.config import FUTURES_CONTINUOUS_TABLE_NAME, TW_FUTURES_DB_PATH
 from core.config.schema import FuturesPriceColumn
 from core.dao.tw.futures_continuous_dao import FuturesContinuousDAO
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_roll import FuturesRollPlanner
 from core.pipeline.tw.loaders.futures_continuous_loader import (
     FuturesContinuousLoader,
@@ -47,10 +47,10 @@ TRADING_DAYS: List[str] = [
 ]
 
 
-def make_calendar() -> FuturesCalendar:
+def make_calendar() -> TwFuturesCalendar:
     """涵蓋 2024-03 換月週的日曆"""
 
-    return FuturesCalendar([datetime.date.fromisoformat(d) for d in TRADING_DAYS])
+    return TwFuturesCalendar([datetime.date.fromisoformat(d) for d in TRADING_DAYS])
 
 
 def make_price_df(rows: List[Dict[str, Any]]) -> pd.DataFrame:

@@ -365,7 +365,7 @@ def test_gap_inside_the_table_is_requested_again_on_resume(
     表內中間缺的交易日，下一次續跑會再請求
 
     續跑起點是「表內最新 +1」：被擋掉、之後又有日子成功入庫的那一天被越過，
-    照預設 `resume=True` 重跑以結束碼 0 成功而缺口仍在；`FuturesCalendar` 的
+    照預設 `resume=True` 重跑以結束碼 0 成功而缺口仍在；`TwFuturesCalendar` 的
     交易日取自行情表，那一天在回測裡被當成休市。以現貨交易日曆比對才抓得到。
     """
 

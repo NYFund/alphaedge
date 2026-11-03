@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from core.datafeed.base import BaseDataFeed
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models import StockAccount, StockPosition, StockQuote
 from core.models.cost_config import ShortConstraint
 from core.models.fill_config import FillConfig, VolumeCapPolicy
@@ -207,7 +207,7 @@ class ForeignSellingReversalShortStrategy(BaseStockStrategy):
                 self.end_date,
             )
 
-        calendar: MarketCalendar = MarketCalendar(self.trading_days)
+        calendar: TwStockCalendar = TwStockCalendar(self.trading_days)
         yesterday: Optional[datetime.date] = calendar.shift_trading_days(date, -1)
         day_before: Optional[datetime.date] = calendar.shift_trading_days(date, -2)
 

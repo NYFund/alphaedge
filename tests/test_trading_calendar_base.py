@@ -4,13 +4,13 @@ from typing import List
 import pytest
 
 from core.market.calendar import BaseTradingCalendar
-from core.market.tw.futures_calendar import FuturesCalendar
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 
 """
 交易日曆的對稱性：交易日運算只有基底一份，兩個市場只決定清單從哪張表來
 
-原本 `MarketCalendar` 與 `FuturesCalendar` 沒有繼承關係，建構子、`is_trading_day`、
+原本 `TwStockCalendar` 與 `TwFuturesCalendar` 沒有繼承關係，建構子、`is_trading_day`、
 `shift_trading_days`、`get_previous_trading_day` 逐行相同；期貨多出的區間與計數方法
 對台股同樣成立。
 """
@@ -35,7 +35,7 @@ class _Api:
         return [day for day in self.days if start <= day <= end]
 
 
-@pytest.mark.parametrize("calendar_cls", [MarketCalendar, FuturesCalendar])
+@pytest.mark.parametrize("calendar_cls", [TwStockCalendar, TwFuturesCalendar])
 def test_both_calendars_share_the_base(calendar_cls: type) -> None:
     """兩個市場都繼承基底，交易日運算不可再在子類覆寫"""
 
@@ -57,7 +57,7 @@ def test_both_calendars_share_the_base(calendar_cls: type) -> None:
     assert "from_api" in calendar_cls.__dict__
 
 
-@pytest.mark.parametrize("calendar_cls", [MarketCalendar, FuturesCalendar])
+@pytest.mark.parametrize("calendar_cls", [TwStockCalendar, TwFuturesCalendar])
 def test_trading_day_arithmetic_is_identical(calendar_cls: type) -> None:
     """平移、前後一日、區間與計數在兩個市場給同一個答案"""
 
@@ -84,7 +84,7 @@ def test_base_from_api_is_left_to_the_markets() -> None:
         BaseTradingCalendar.from_api(_Api(DAYS), DAYS[0], DAYS[-1])
 
 
-@pytest.mark.parametrize("calendar_cls", [MarketCalendar, FuturesCalendar])
+@pytest.mark.parametrize("calendar_cls", [TwStockCalendar, TwFuturesCalendar])
 def test_previous_trading_day_from_api_uses_the_lookback_bound(
     calendar_cls: type,
 ) -> None:
@@ -107,8 +107,8 @@ def test_futures_from_api_still_filters_by_product() -> None:
 
     api: _Api = _Api(DAYS)
 
-    FuturesCalendar.from_api(api, DAYS[0], DAYS[-1], product="TX")
-    MarketCalendar.from_api(api, DAYS[0], DAYS[-1])
+    TwFuturesCalendar.from_api(api, DAYS[0], DAYS[-1], product="TX")
+    TwStockCalendar.from_api(api, DAYS[0], DAYS[-1])
 
     assert api.calls[0][2] == "TX"
     assert api.calls[1][2] is None

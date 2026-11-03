@@ -150,7 +150,7 @@ sequenceDiagram
 | `core/backtest/models/settlement_model/` | 一根 bar 收盤後市場規則強制執行的動作：當沖強制回補、漲停轉留倉、借券費計提、除息股利（做多收取、放空補償）、配股等股數調整、維持率追繳、停券回補、連續無報價出場 | 參照 `FillModel.reference_prices`；`force_cover_symbols`、`cash_dividends`、`share_ratios` 由 `DataFeed` 每根 bar 推入 |
 | `core/backtest/models/event_counts.py` | 事件計數 key 的唯一清單，分共用／台股／期貨三組（`SHARED_EVENT_KEYS`、`EVENT_KEYS`（台股）、`FUTURES_EVENT_KEYS`）；`new_event_counts(keys)` 由 factory 依市場建立 | 無 |
 | `core/datafeed/base.py`（契約，回測與實盤共用）／`core/backtest/datafeed/tw/stock_datafeed.py`／`tw/stock_tick_datafeed.py`／`tw/futures_datafeed.py` | 建立並持有全部資料 API、報價轉換、交易日判定（區間內沒有交易日拋 `EmptyCalendarError`）、每根 bar 的市場事件（漲跌停基準、券源、停券、交易所名單、除權息）、開跑前檢查名單涵蓋（`ensure_trading_list_coverage()`）、回測結束時關連線。`StockTickDataFeed` 繼承台股日頻資料源，另提供逐筆產生器與段落快照（盤前參考價、某時點前最後一筆、收盤），只保留一般股 | **單次回測的連線**（台股回測一條 `tw_stock.db`，TICK 再開一條 TimescaleDB；期貨回測以 `tw_futures.db` 為主，查現貨收盤時再惰性開一條 `tw_stock.db`；SQLite 皆以 `connect_sqlite()` 開啟、API 與其 DAO 共用、由 `DataFeed.close()` 關閉） |
-| `core/market/calendar.py`、`core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日、區間內交易日與計數）在 `BaseTradingCalendar` 只有一份；`MarketCalendar`／`FuturesCalendar` 繼承它，只決定清單從哪張表來（`from_api()`） | 由 `DataFeed`、策略建立；持有交易日清單 |
+| `core/market/calendar.py`、`core/market/tw/market_calendar.py` | 交易日推算（前一交易日、是否開盤、往前推 N 個營業日、區間內交易日與計數）在 `BaseTradingCalendar` 只有一份；`TwStockCalendar`／`TwFuturesCalendar` 繼承它，只決定清單從哪張表來（`from_api()`） | 由 `DataFeed`、策略建立；持有交易日清單 |
 | `core/market/segment.py`、`core/market/tw/segment_schedule.py` | 段落時窗（`SegmentWindow`：開始送單、停止送單、收線三個時點）與台股／台期貨的段落表；逐筆回測與實盤共用同一份時點 | 無（常數） |
 
 **跨 model 的共用狀態只有兩個**，皆以 dict 參照傳遞：
@@ -262,7 +262,7 @@ sequenceDiagram
    | `StockChipAPI.get_trust_net_shares_map(date)` | 單日全市場投信買賣超股數對照表 |
 
    `tests/test_strategy_data_access.py` 會在策略層出現欄位字面值時失敗——這類錯誤是**靜默**的（換資料源後策略會安靜地不開倉，報表上只表現為訊號變少）。
-4. **`core/utils/instrument.py` 只 import `core/utils/constant/`。** `StockUtils` 已不再相依 `MarketCalendar`，因此任何層都能引用它；不要再讓它 import `core/market/` 或 `core/api/`——`MarketCalendar` 相依 `StockPriceAPI`，`core/api/` 一旦反過來用 `StockUtils` 就會循環。
+4. **`core/utils/instrument.py` 只 import `core/utils/constant/`。** `StockUtils` 已不再相依 `TwStockCalendar`，因此任何層都能引用它；不要再讓它 import `core/market/` 或 `core/api/`——`TwStockCalendar` 相依 `StockPriceAPI`，`core/api/` 一旦反過來用 `StockUtils` 就會循環。
 5. **回歸雙線不經過 reporter。** `tests/backtest/make_baseline.py` 直接從 `account.trade_records` 組 `DataFrame`，改壞報表欄位兩條線都一樣綠——動 `reporter.py` 時要靠 `test_reporting.py` 與 `test_reporter_timeline.py`。
 6. **只有 `core/dao/` 可以 import 資料庫驅動**（`sqlite3`，以及 tick 用的 `psycopg`／`connectorx`）。`core/`、`apps/`、`strategies/` 其他檔案的型別標註用 `DBConnection`，由 `check_layer_deps.py` 的 E'' 項強制；SQL 要寫進 DAO，不要在 API、策略或 DataFeed 裡直接 `conn.execute()`。
 7. **框架不可 import `core/pipeline/`。** 回測、實盤、API、市場結構只讀資料庫，不碰 ETL 的中間狀態（進度檔、下載目錄）；需要休市日請用 `MarketHolidayAPI`。由 `check_layer_deps.py` 的 E'''' 項強制——分層等級擋不住它，因為 `core.pipeline` 與 `core.api` 同級，引擎往下 import 它看起來是合法的向下相依。`apps/`、`scripts/`、`tests/` 不受限。
@@ -298,7 +298,7 @@ sequenceDiagram
 - 成交與成本設定類別（`FillConfig`／`FuturesFillConfig`／`VolumeCapPolicy`、`CostConfig`／`FuturesCostConfig`）住在
   `core/models/fill_config.py`／`core/models/cost_config.py`，`fill_model.py` 只留模擬邏輯；策略層不 import 回測內部零件。
 - `FuturesMarginConfig` 取自 `core/market/tw/futures_margin_config.py`，部位建構層不從部位管理層取。
-- 策略層用到的 `BaseDataFeed`、`MarketCalendar`、`FuturesCalendar`、`FuturesRollConfig` 一律取自
+- 策略層用到的 `BaseDataFeed`、`TwStockCalendar`、`TwFuturesCalendar`、`FuturesRollConfig` 一律取自
   `core/datafeed/`、`core/market/`。
 
 ## 相關文件

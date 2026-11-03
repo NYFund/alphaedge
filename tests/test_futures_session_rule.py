@@ -7,7 +7,7 @@ import pytest
 from core.broker.tw.shioaji_quote_stream import ShioajiQuoteStream
 from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.intraday.session_guard import is_night_session, session_open_date
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.utils import FuturesSession
 
 """
@@ -53,7 +53,7 @@ def test_all_callers_agree_on_every_boundary(
     """市場結構走嚴格判定，券商行情、實盤資料源、日終日期歸屬走「空檔歸日盤」"""
 
     assert FuturesSession.resolve(moment) is strict
-    assert FuturesCalendar.resolve_session(moment) is strict
+    assert TwFuturesCalendar.resolve_session(moment) is strict
 
     assert FuturesSession.resolve_or_day(moment) is live
     assert ShioajiQuoteStream.resolve_session(moment) is live

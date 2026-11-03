@@ -15,7 +15,7 @@ from core.market.calendar import BaseTradingCalendar
     交易日（補班的週六照常開市），用「非週末」近似會整天判錯；而官方日曆
     只替已入庫的年度作答。
 
-    **與 `FuturesCalendar` 共用 `BaseTradingCalendar`**：純建構子收交易日清單，
+    **與 `TwFuturesCalendar` 共用 `BaseTradingCalendar`**：純建構子收交易日清單，
     查詢都在清單上做；要從資料庫取清單時走 `from_api()`。呼叫端手上已有清單
     （回測預建的區間）就直接建構，不必每次查詢都回頭問資料庫。
 
@@ -24,7 +24,7 @@ from core.market.calendar import BaseTradingCalendar
 """
 
 
-class MarketCalendar(BaseTradingCalendar):
+class TwStockCalendar(BaseTradingCalendar):
     """台股交易日曆：開盤日判定與營業日平移（運算在 `BaseTradingCalendar`，這裡只決定清單從哪來）"""
 
     @classmethod
@@ -34,7 +34,7 @@ class MarketCalendar(BaseTradingCalendar):
         start_date: datetime.date,
         end_date: datetime.date,
         **kwargs,
-    ) -> "MarketCalendar":
+    ) -> "TwStockCalendar":
         """
         - Description:
             由 `price` 表建立日曆（區間含頭含尾）
@@ -47,7 +47,7 @@ class MarketCalendar(BaseTradingCalendar):
             - start_date / end_date: datetime.date
                 涵蓋區間
         - Return:
-            - MarketCalendar
+            - TwStockCalendar
         """
 
         return cls(api.get_trading_days(start_date, end_date))

@@ -11,7 +11,7 @@ from core.live.datafeed.tw.futures_live_datafeed import TwFuturesLiveDataFeed
 from core.live.factory import build_live_trader, to_live_roll_config
 from core.live.risk.trading_mode import TradingMode
 from core.live.trader import LiveTrader, StrategyContext
-from core.market.tw.futures_calendar import FuturesCalendar
+from core.market.tw.futures_calendar import TwFuturesCalendar
 from core.market.tw.futures_margin_config import FuturesMarginConfig
 from core.market.tw.futures_roll import FuturesRollConfig
 from core.models import ExecutionReport, FuturesOrder, FuturesQuote
@@ -133,7 +133,7 @@ def make_feed(
     """建立指定日期、可指定各月份報價與掛牌月份的期貨實盤資料源"""
 
     config: FuturesRollConfig = to_live_roll_config(FuturesRollConfig())
-    config.calendar = FuturesCalendar(
+    config.calendar = TwFuturesCalendar(
         weekdays(datetime.date(2026, 9, 1), datetime.date(2026, 12, 31))
     )
     broker: RollBroker = RollBroker(

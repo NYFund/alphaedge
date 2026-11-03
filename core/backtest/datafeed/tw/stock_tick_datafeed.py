@@ -7,7 +7,7 @@ from loguru import logger
 from core.adapters.tw.stock_quote_adapter import StockQuoteAdapter
 from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 from core.market.tw.instrument_spec import TwStockSpec
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models import PreOpenStockQuote, PriceLimits, StockQuote
 from core.utils.instrument import StockUtils
 
@@ -97,7 +97,7 @@ class StockTickDataFeed(TwStockDataFeed):
                 前一交易日
         """
 
-        return MarketCalendar.previous_trading_day_from_api(self.price, date)
+        return TwStockCalendar.previous_trading_day_from_api(self.price, date)
 
     def iter_day_ticks(self) -> Iterator[StockQuote]:
         """

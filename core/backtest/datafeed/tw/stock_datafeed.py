@@ -21,7 +21,7 @@ from core.config import (
     TW_STOCK_DB_PATH,
 )
 from core.datafeed.base import BaseDataFeed, TradingListCoverageError
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models import DayTradeListSnapshot, ShortSaleListSnapshot, StockQuote
 from core.strategies.base import BaseStrategy
 from core.utils import Scale
@@ -98,7 +98,7 @@ class TwStockDataFeed(BaseDataFeed):
         if strategy.scale == Scale.TICK:
             self.tick = StockTickAPI()
 
-    def build_calendar(self) -> Optional[MarketCalendar]:
+    def build_calendar(self) -> Optional[TwStockCalendar]:
         """
         區間內的交易日曆：當日有日 K 資料即視為開盤
 
@@ -114,12 +114,12 @@ class TwStockDataFeed(BaseDataFeed):
             )
             return None
 
-        return MarketCalendar.from_api(self.price, self.start_date, self.end_date)
+        return TwStockCalendar.from_api(self.price, self.start_date, self.end_date)
 
     def is_market_open_without_calendar(self, date: datetime.date) -> bool:
         """沒有預建日曆時逐日向 `price` 表查"""
 
-        return MarketCalendar.from_api(self.price, date, date).is_trading_day(date)
+        return TwStockCalendar.from_api(self.price, date, date).is_trading_day(date)
 
     def get_official_closures(
         self, start_date: datetime.date, end_date: datetime.date
@@ -424,7 +424,7 @@ class TwStockDataFeed(BaseDataFeed):
             self._suspension_schedule = (trading_days, [])
             return self._suspension_schedule
 
-        calendar: MarketCalendar = MarketCalendar(trading_days)
+        calendar: TwStockCalendar = TwStockCalendar(trading_days)
         schedule: List[Tuple[str, datetime.date, datetime.date]] = []
         for ex_date, stock_id in zip(
             pd.to_datetime(ex_dividend_df["date"]).dt.date,

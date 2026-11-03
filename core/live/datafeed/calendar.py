@@ -9,7 +9,7 @@ from core.api.tw.market_holiday_api import MarketHolidayAPI
 """
 交易日判定：盤前沒有今天的資料，既有的兩種判斷都用不上
 
-`MarketCalendar` 的兩種判斷（查 `price` 表、查當日 tick）都是**事後**的——
+`TwStockCalendar` 的兩種判斷（查 `price` 表、查當日 tick）都是**事後**的——
 「爬得到資料 ⇒ 有開市」。盤前那個訊號根本還不存在，而實盤的每一天都是從盤前開始。
 
 本模組把判斷抽成可疊加的來源，規則只有兩條：

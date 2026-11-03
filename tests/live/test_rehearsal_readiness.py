@@ -12,7 +12,7 @@ from core.live.datafeed.tw.stock_live_datafeed import TwStockLiveDataFeed
 from core.live.factory import build_live_trader
 from core.live.strategy_guard import inspect_strategy
 from core.live.trader import LiveTrader
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 from core.models.stock.trading_list import DayTradeListSnapshot
 from core.utils import Action, PositionType
 from strategies.futures.momentum_futures_strategy import MomentumFuturesStrategy
@@ -73,7 +73,7 @@ def test_previous_trading_date_beyond_the_prebuilt_list_asks_the_database(
         return datetime.date(2026, 9, 21)
 
     monkeypatch.setattr(
-        MarketCalendar, "previous_trading_day_from_api", staticmethod(from_database)
+        TwStockCalendar, "previous_trading_day_from_api", staticmethod(from_database)
     )
 
     assert strategy.get_previous_trading_date(datetime.date(2026, 9, 22)) == (

@@ -149,7 +149,7 @@ class FuturesPriceAPI(BaseDataAPI):
 
             判準與 `StockPriceAPI.get_trading_days()` 相同——當日表內有資料即為
             開盤日。**但兩者不可互相替代**：期貨有夜盤、結算日與台股不完全一致，
-            期貨交易日曆見 `FuturesCalendar`，本方法只是「表內有哪些日期」的直接回答。
+            期貨交易日曆見 `TwFuturesCalendar`，本方法只是「表內有哪些日期」的直接回答。
 
             **不過濾 session**：夜盤成交的那一天同樣是交易日。
 

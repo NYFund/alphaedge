@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, List, Optional, Set
 
 import pytest
 
-from core.market.tw.market_calendar import MarketCalendar
+from core.market.tw.market_calendar import TwStockCalendar
 
 if TYPE_CHECKING:
     from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
@@ -43,12 +43,12 @@ def test_lookback_raises_after_max_days() -> None:
     date: datetime.date = datetime.date(2013, 1, 2)
 
     with pytest.raises(LookupError, match="找不到交易日"):
-        MarketCalendar.previous_trading_day_from_api(api, date)
+        TwStockCalendar.previous_trading_day_from_api(api, date)
 
     # 有界：只查一次、範圍恰好是前 MAX_LOOKBACK_DAYS 個曆日，不會一路查到 1970 年
     assert api.calls == [
         (
-            date - datetime.timedelta(days=MarketCalendar.MAX_LOOKBACK_DAYS),
+            date - datetime.timedelta(days=TwStockCalendar.MAX_LOOKBACK_DAYS),
             date - datetime.timedelta(days=1),
         )
     ]
@@ -61,7 +61,7 @@ def test_lookback_returns_the_previous_trading_day() -> None:
     friday: datetime.date = datetime.date(2024, 1, 5)
     api: _FakePriceAPI = _FakePriceAPI([friday, monday])
 
-    assert MarketCalendar.previous_trading_day_from_api(api, monday) == friday
+    assert TwStockCalendar.previous_trading_day_from_api(api, monday) == friday
 
 
 def test_from_api_builds_the_same_calendar_as_the_list() -> None:
@@ -72,11 +72,11 @@ def test_from_api_builds_the_same_calendar_as_the_list() -> None:
         datetime.date(2024, 1, 5),
         datetime.date(2024, 1, 8),
     ]
-    from_api: MarketCalendar = MarketCalendar.from_api(
+    from_api: TwStockCalendar = TwStockCalendar.from_api(
         _FakePriceAPI(days), datetime.date(2024, 1, 1), datetime.date(2024, 1, 31)
     )
 
-    assert from_api.trading_days == MarketCalendar(days).trading_days
+    assert from_api.trading_days == TwStockCalendar(days).trading_days
     assert from_api.is_trading_day(datetime.date(2024, 1, 5))
     assert not from_api.is_trading_day(datetime.date(2024, 1, 6))
     assert from_api.get_previous_trading_day(datetime.date(2024, 1, 4)) is None
@@ -85,7 +85,7 @@ def test_from_api_builds_the_same_calendar_as_the_list() -> None:
 def test_max_lookback_covers_the_longest_holiday() -> None:
     """上界要涵蓋台股史上最長的休市（2023 年春節 12 天）"""
 
-    assert MarketCalendar.MAX_LOOKBACK_DAYS >= 12
+    assert TwStockCalendar.MAX_LOOKBACK_DAYS >= 12
 
 
 # === (stock_id, date) 索引 ===
@@ -171,7 +171,7 @@ def _gap_feed(
     feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
     feed.start_date = start_date
     feed.end_date = end_date
-    feed.calendar = MarketCalendar(trading_days)
+    feed.calendar = TwStockCalendar(trading_days)
     feed.market_holiday = holiday
     return feed
 
@@ -231,7 +231,7 @@ def test_is_market_open_uses_the_prebuilt_set() -> None:
     from core.backtest.datafeed.tw.stock_datafeed import TwStockDataFeed
 
     feed: TwStockDataFeed = TwStockDataFeed.__new__(TwStockDataFeed)
-    feed.calendar = MarketCalendar({datetime.date(2024, 1, 2)})
+    feed.calendar = TwStockCalendar({datetime.date(2024, 1, 2)})
     feed.price = None  # 一旦回頭查資料庫就會 AttributeError
 
     assert feed.is_market_open(datetime.date(2024, 1, 2))
@@ -247,9 +247,9 @@ def test_shift_trading_days_gets_the_previous_day() -> None:
         datetime.date(2024, 1, 8),
     ]
 
-    previous: Optional[datetime.date] = MarketCalendar(trading_days).shift_trading_days(
-        datetime.date(2024, 1, 8), offset=-1
-    )
+    previous: Optional[datetime.date] = TwStockCalendar(
+        trading_days
+    ).shift_trading_days(datetime.date(2024, 1, 8), offset=-1)
 
     assert previous == datetime.date(2024, 1, 5)
 
@@ -263,7 +263,7 @@ def test_lookback_bound_covers_a_month_long_data_gap() -> None:
     而舊的無界迴圈反而找得到。
     """
 
-    assert MarketCalendar.MAX_LOOKBACK_DAYS >= 60
+    assert TwStockCalendar.MAX_LOOKBACK_DAYS >= 60
 
 
 def test_strategy_prefetch_window_matches_the_calendar_bound() -> None:
@@ -280,7 +280,7 @@ def test_strategy_prefetch_window_matches_the_calendar_bound() -> None:
 
     assert (
         VolumeBreakoutMomentumStrategy.CALENDAR_LOOKBACK_DAYS
-        >= MarketCalendar.MAX_LOOKBACK_DAYS
+        >= TwStockCalendar.MAX_LOOKBACK_DAYS
     )
 
 
