@@ -245,3 +245,12 @@ def test_alert_record_round_trip(tmp_path: Path) -> None:
 
     path.write_text("{not json", encoding="utf-8")
     assert watchdog.load_alerted(path, DAY) == set()
+
+
+def test_watchdog_and_the_dao_share_the_same_query() -> None:
+    """兩邊各寫一份的話，一邊認得 pid 重用、一邊不認得，而分岔不會報錯"""
+
+    from core.utils import process as process_utils
+
+    assert watchdog.process_started_at is process_utils.process_started_at
+    assert watchdog.process_utils is process_utils
